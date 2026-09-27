@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
@@ -369,6 +370,44 @@ export function BrowserPane({
     }
     // Hidden + not created: the visibility effect creates on first show.
   }, [url, navigateView, createView])
+
+  // Page title and favicon from the child webview. Standalone OAuth
+  // embeds are not tab items. Hide/show does not clear either field.
+  useEffect(() => {
+    if (standalone) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    const detach = (fn: () => void): void => {
+      try {
+        fn()
+      } catch {
+        // Tests have no Tauri event plugin.
+      }
+    }
+    void listen<{ itemId?: string; parent?: string; title?: string; icon?: string }>(
+      'browser:page-meta',
+      (event) => {
+        const payload = event.payload
+        if (!payload || payload.itemId !== itemId) return
+        if (payload.parent && payload.parent !== parentWindow) return
+        const meta: { title?: string; icon?: string | null } = {}
+        if (typeof payload.title === 'string') meta.title = payload.title
+        if (typeof payload.icon === 'string') meta.icon = payload.icon
+        if (meta.title === undefined && meta.icon === undefined) return
+        useTabsStore.getState().applyBrowserPageMeta(tabId, paneGroupId, itemId, meta)
+      },
+    ).then((fn) => {
+      if (cancelled) {
+        detach(fn)
+        return
+      }
+      unlisten = () => detach(fn)
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [standalone, itemId, parentWindow, tabId, paneGroupId])
 
   // ── Close on unmount ────────────────────────────────────────────────
   // Always attempt close for this itemId (not only when createdRef is

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PaneTabBar } from '@/components/PaneLayout/PaneTabBar'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
@@ -259,5 +259,152 @@ describe('tab file and browser icons', () => {
     )
     const zsh = screen.getByText('zsh').parentElement
     if (!zsh?.querySelector('[data-shell-tab-icon]')) throw new Error('plain shell pane has no window icon')
+  })
+
+  it('paints a 16px data favicon on the strip and the pane row', () => {
+    const icon = 'data:image/png;base64,AAAA'
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const tab = useTabsStore.getState().tabs[0]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    useTabsStore.getState().applyBrowserPageMeta(tab.id, pg.id, pg.items[0].id, {
+      title: 'Example Domain',
+      icon,
+    })
+    const root = document.querySelector(`[data-tab-id="${tab.id}"]`)
+    render(<TabBar cwd="/ws" />)
+    const strip = document.querySelector(`[data-tab-id="${tab.id}"]`)
+    if (!(strip instanceof HTMLElement)) throw new Error('browser tab did not render')
+    expect(root).toBeNull()
+    const img = strip.querySelector('img')
+    if (!(img instanceof HTMLImageElement)) throw new Error('browser tab did not render a favicon')
+    expect(img.getAttribute('src')).toBe(icon)
+    expect(img.style.width).toBe('16px')
+    expect(img.style.height).toBe('16px')
+    expect(img.style.borderRadius).toBe('0px')
+    expect(img.className).not.toContain('rounded')
+    expect(globeIn(strip)).toBeNull()
+    expect(strip.querySelector('span.truncate')?.textContent).toBe('Example Domain')
+
+    cleanup()
+    const item = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
+    render(
+      <PaneTabBar
+        items={[item]}
+        activeItemIndex={0}
+        onActivate={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    const row = screen.getByText('Example Domain').parentElement
+    if (!row) throw new Error('pane row did not render the page title')
+    const rowImg = row.querySelector('img')
+    if (!(rowImg instanceof HTMLImageElement)) throw new Error('pane row did not render a favicon')
+    expect(rowImg.getAttribute('src')).toBe(icon)
+    expect(rowImg.style.width).toBe('16px')
+    expect(rowImg.style.height).toBe('16px')
+    expect(rowImg.style.borderRadius).toBe('0px')
+    expect(globeIn(row)).toBeNull()
+  })
+
+  it('keeps the globe when the favicon is missing, https, or broken', () => {
+    const missing = showTab(makeTab('web', 'example.com', [browserItem('https://example.com')]))
+    const globe = globeIn(missing)
+    if (!globe) throw new Error('missing icon did not stay the globe')
+    const cls = globe.getAttribute('class') ?? ''
+    expect(cls).toContain('w-3')
+    expect(cls).toContain('h-3')
+    expect(missing.querySelector('img')).toBeNull()
+
+    cleanup()
+    const https = showTab(makeTab('https', 'example.com', [{
+      id: 'browser-https',
+      type: 'browser',
+      data: { url: 'https://example.com', icon: 'https://example.com/favicon.ico' },
+    }]))
+    if (!globeIn(https)) throw new Error('https favicon was not kept as the globe')
+    expect(https.querySelector('img')).toBeNull()
+
+    cleanup()
+    const broken = showTab(makeTab('bad', 'example.com', [{
+      id: 'browser-bad',
+      type: 'browser',
+      data: { url: 'https://example.com', title: 'Example', icon: 'data:image/png;base64,AAAA' },
+    }]))
+    const img = broken.querySelector('img')
+    if (!(img instanceof HTMLImageElement)) throw new Error('data favicon did not render before error')
+    fireEvent.error(img)
+    if (!globeIn(broken)) throw new Error('broken favicon did not fall back to the globe')
+    expect(broken.querySelector('img')).toBeNull()
+  })
+
+  it('does not put the favicon ahead of a file or terminal in a mixed tab', () => {
+    const icon = 'data:image/png;base64,AAAA'
+    const root = showTab(makeTab('mix', 'Notes', [
+      browserItem('https://example.com'),
+      fileItem('/work/notes.md'),
+    ]))
+    const live = useTabsStore.getState().tabs[0]
+    const pg = Array.from(live.paneGroups.values())[0]
+    const browser = pg.items.find((item) => item.type === 'browser')
+    if (!browser) throw new Error('mixed tab lost the browser item')
+    useTabsStore.getState().applyBrowserPageMeta(live.id, pg.id, browser.id, {
+      title: 'Example Domain',
+      icon,
+    })
+    cleanup()
+    const again = document.querySelector(`[data-tab-id="${live.id}"]`)
+    render(<TabBar cwd="/ws" />)
+    const strip = document.querySelector(`[data-tab-id="${live.id}"]`)
+    if (!(strip instanceof HTMLElement)) throw new Error('mixed tab did not render')
+    expect(again).toBeNull()
+    expect(strip.querySelector('img')).toBeNull()
+    expect(globeIn(strip)).toBeNull()
+    if (!setiIn(strip)) throw new Error('mixed tab did not keep the file glyph ahead of the favicon')
+    expect(strip.querySelector('span.truncate')?.textContent).toBe('Notes')
+    expect(root.querySelector('img')).toBeNull()
+  })
+
+  it('shows the page title on a locked tab pane row without changing the strip', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const tab = useTabsStore.getState().tabs[0]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    useTabsStore.getState().setTabTitle(tab.id, 'Kept', { locked: true })
+    useTabsStore.getState().applyBrowserPageMeta(tab.id, pg.id, pg.items[0].id, {
+      title: 'Example Domain',
+    })
+    render(<TabBar cwd="/ws" />)
+    const strip = document.querySelector(`[data-tab-id="${tab.id}"]`)
+    if (!(strip instanceof HTMLElement)) throw new Error('locked tab did not render')
+    expect(strip.querySelector('span.truncate')?.textContent).toBe('Kept')
+    expect(globeIn(strip)).not.toBeNull()
+
+    cleanup()
+    const item = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
+    render(
+      <PaneTabBar
+        items={[item]}
+        activeItemIndex={0}
+        onActivate={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    if (!screen.getByText('Example Domain')) throw new Error('pane row did not show the page title')
+    const row = screen.getByText('Example Domain').parentElement
+    if (!row || !globeIn(row)) throw new Error('locked pane row did not keep the globe')
+  })
+
+  it('does not put the favicon ahead of a terminal', () => {
+    const root = showTab(makeTab('mix-term', 'zsh', [
+      {
+        id: 'b',
+        type: 'browser',
+        data: { url: 'https://example.com', icon: 'data:image/png;base64,AAAA', title: 'Example Domain' },
+      },
+      termItem('zsh'),
+    ]))
+    expect(root.querySelector('img')).toBeNull()
+    expect(globeIn(root)).toBeNull()
+    if (!root.querySelector('[data-shell-tab-icon]')) throw new Error('terminal glyph lost to the favicon')
+    expect(root.querySelector('span.truncate')?.textContent).toBe('zsh')
   })
 })

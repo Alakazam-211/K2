@@ -52,6 +52,7 @@ import {
   type UnsubscribeFn,
 } from '@/stores/session-events'
 import { serverSupports } from '@/lib/server-capabilities'
+import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
 
 /** Phase 2.5 fix (finding #547) — gate for `loadWorkspaceSessionsFromDb`.
  *  Flips to true on the first successful load (regardless of whether the
@@ -758,14 +759,17 @@ export interface AgentItemData {
 }
 
 /** Embedded Browser Tab (PRD prd-browser-pane-v1.md). The renderer keeps
- *  only the URL + a display title; the page itself lives in a NATIVE child
- *  webview owned by src-tauri (browser_create / browser-<item id>), so
- *  nothing else here is canonical — no history, no scroll state. `url` is
- *  updated from `browser_current_url` polling so serialize captures where
- *  the user actually navigated, and restore re-creates the view there. */
+ *  the URL, the page title, and a favicon `data:` / `blob:` URL. The page
+ *  itself lives in a NATIVE child webview owned by src-tauri
+ *  (browser_create / browser-<item id>), so nothing else here is canonical
+ *  — no history, no scroll state. `url` is updated from `browser_current_url`
+ *  polling so serialize captures where the user actually navigated, and
+ *  restore re-creates the view there. `icon` absent on old layouts is the globe. */
 export interface BrowserItemData {
   url: string
   title?: string
+  /** Paintable favicon (`data:image/…` or `blob:`). Never an https URL. */
+  icon?: string
 }
 
 export interface Item {
@@ -910,13 +914,16 @@ export interface SerializedFileViewerItem {
  *  new optional shapes (SerializedAgentItem.sessionId, terminal
  *  `sandbox`): old layouts simply never contain a `'browser'` item, so
  *  they load unchanged, and readers that predate this type never receive
- *  one from their own saves. Only the URL (+ display title) persists —
- *  the native child webview is re-created at that URL on restore. */
+ *  one from their own saves. URL, display title, and favicon persist —
+ *  a missing `icon` on an older save is the globe. The native child
+ *  webview is re-created at that URL on restore. */
 export interface SerializedBrowserItem {
   id: string
   type: 'browser'
   url?: string
   title?: string
+  /** `data:image/…` or `blob:`. Omitted on layouts saved before favicons. */
+  icon?: string
 }
 
 /** Union of all serialized item shapes accepted by `restoreLayout`.
@@ -1080,10 +1087,21 @@ interface TabsState {
    *  browser item when present (navigate-in-place), else append a new
    *  browser item. */
   openUrlInPane: (tabId: string, url: string) => void
-  /** Browser-pane arc — stamp the polled current URL / page title back
-   *  onto a browser item so the next serialize captures where the user
-   *  actually navigated (mirrors setFileViewerState). */
+  /** Browser-pane arc — stamp the polled current URL back onto a browser
+   *  item so the next serialize captures where the user actually navigated
+   *  (mirrors setFileViewerState). Does not write `tab.title`. Page title
+   *  and favicon go through `applyBrowserPageMeta`. */
   setBrowserItemState: (tabId: string, paneGroupId: string, itemId: string, state: { url?: string; title?: string }) => void
+  /** Page title + favicon from the child webview. Writes the item always.
+   *  Writes `tab.title` only for an unlocked browser-only tab with a
+   *  non-empty trimmed title. Does not set `locked` and does not call
+   *  `setTabTitle` (that door drops harness-looking titles). */
+  applyBrowserPageMeta: (
+    tabId: string,
+    paneGroupId: string,
+    itemId: string,
+    meta: { title?: string; icon?: string | null },
+  ) => void
   /** `groupIndex` omitted or 0 appends to the primary strip. */
   openUntitledDocument: (cwd: string, groupIndex?: number) => void
   /** Set a tab's bar title.
@@ -1429,6 +1447,7 @@ function serializeTab(tab: Tab): SerializedTab {
           // actually navigated — not the URL the pane was opened with.
           url: d.url,
           title: d.title,
+          icon: d.icon,
         }
       } else {
         const d = item.data as FileViewerItemData
@@ -1828,6 +1847,67 @@ function browserTabTitle(url: string): string {
   } catch {
     return url || 'Browser'
   }
+}
+
+/** True when every pane item is a browser. A mixed tab keeps its own strip title. */
+function tabIsBrowserOnly(tab: Tab): boolean {
+  let saw = false
+  for (const pg of tab.paneGroups.values()) {
+    for (const item of pg.items) {
+      if (item.type !== 'browser') return false
+      saw = true
+    }
+  }
+  return saw
+}
+
+function browserDataWithoutIcon(data: BrowserItemData): BrowserItemData {
+  const next: BrowserItemData = { url: data.url }
+  if (data.title !== undefined) next.title = data.title
+  return next
+}
+
+/** Item title/icon always. Strip title only when unlocked, browser-only, and non-empty. */
+function withBrowserPageMeta(
+  tab: Tab,
+  paneGroupId: string,
+  itemId: string,
+  meta: { title?: string; icon?: string | null },
+): Tab {
+  const hasTitle = typeof meta.title === 'string'
+  const hasIcon = Object.prototype.hasOwnProperty.call(meta, 'icon')
+  if (!hasTitle && !hasIcon) return tab
+  const pg = tab.paneGroups.get(paneGroupId)
+  if (!pg) return tab
+  const trimmed = hasTitle ? (meta.title as string).trim() : ''
+  const nextIcon = hasIcon ? paintableBrowserIcon(meta.icon) : null
+  let itemsChanged = false
+  const items = pg.items.map((item) => {
+    if (item.id !== itemId || item.type !== 'browser') return item
+    const prev = item.data as BrowserItemData
+    let data: BrowserItemData = prev
+    if (hasTitle && prev.title !== trimmed) {
+      data = { ...data, title: trimmed }
+    }
+    if (hasIcon) {
+      if (nextIcon) {
+        if (data.icon !== nextIcon) data = { ...data, icon: nextIcon }
+      } else if (data.icon) {
+        data = browserDataWithoutIcon(data)
+      }
+    }
+    if (data === prev) return item
+    itemsChanged = true
+    return { ...item, data }
+  })
+  const paneGroups = itemsChanged ? new Map(tab.paneGroups) : tab.paneGroups
+  if (itemsChanged) paneGroups.set(paneGroupId, { ...pg, items })
+  let title = tab.title
+  if (hasTitle && trimmed && tab.locked !== true && tabIsBrowserOnly(tab)) {
+    title = trimmed
+  }
+  if (!itemsChanged && title === tab.title) return tab
+  return { ...tab, title, paneGroups }
 }
 
 /** Append `tab` to column `groupIndex`. 0 is the primary strip; a missing extra column is a no-op. */
@@ -3162,6 +3242,19 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })
   },
 
+  applyBrowserPageMeta: (tabId, paneGroupId, itemId, meta) => {
+    set((state) => {
+      let changed = false
+      const result = mapTabAcrossGroups(state, tabId, (tab) => {
+        const next = withBrowserPageMeta(tab, paneGroupId, itemId, meta)
+        if (next !== tab) changed = true
+        return next
+      })
+      if (!changed) return {}
+      return { tabs: result.tabs, extraGroups: result.extraGroups }
+    })
+  },
+
   openUntitledDocument: (cwd: string, groupIndex?: number) => {
     // Count existing untitled docs to generate a unique name
     const state = get()
@@ -3917,9 +4010,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
               },
             }
           } else if (si.type === 'browser') {
-            // Browser pane — only the URL (+ title) persists; the native
+            // Browser pane — URL, title, and favicon persist; the native
             // child webview is re-created at that URL by BrowserPane on
-            // first visibility.
+            // first visibility. A missing icon (older layouts) is the globe.
             return {
               id: crypto.randomUUID(),
               type: 'browser' as const,
@@ -3929,6 +4022,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
               data: {
                 url: si.url ?? '',
                 title: si.title,
+                icon: si.icon,
               },
             }
           } else {
@@ -4033,12 +4127,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                     data: { agentName: si.agentName ?? '', projectPath: si.projectPath ?? cwd },
                   }
                 } else if (si.type === 'browser') {
-                  // Same restore rule as group 0: URL-only, webview
-                  // re-created lazily by BrowserPane.
+                  // Same restore rule as group 0: URL, title, icon. Webview
+                  // re-created lazily by BrowserPane. Missing icon is the globe.
                   return {
                     id: crypto.randomUUID(),
                     type: 'browser' as const,
-                    data: { url: si.url ?? '', title: si.title },
+                    data: { url: si.url ?? '', title: si.title, icon: si.icon },
                   }
                 } else {
                   return {

@@ -34,10 +34,10 @@ mod real {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use tauri::webview::{NewWindowResponse, WebviewBuilder};
+    use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
 
     use tauri::{
-        AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
+        AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
     };
 
     /// Registry of live browser webviews. Keyed by composite
@@ -78,7 +78,10 @@ mod real {
             .parse()
             .map_err(|e| format!("invalid url {raw:?}: {e}"))?;
         if !scheme_allowed(&url) {
-            return Err(format!("scheme '{}' is not allowed in a browser pane", url.scheme()));
+            return Err(format!(
+                "scheme '{}' is not allowed in a browser pane",
+                url.scheme()
+            ));
         }
         Ok(url)
     }
@@ -164,11 +167,7 @@ mod real {
             .map_err(|e| e.to_string())?;
         let _ = view.show();
         view.navigate(parsed.clone()).map_err(|e| e.to_string())?;
-        views(app)
-            .0
-            .lock()
-            .unwrap()
-            .insert(key.to_string(), view);
+        views(app).0.lock().unwrap().insert(key.to_string(), view);
         Ok(())
     }
 
@@ -201,7 +200,11 @@ mod real {
     fn macos_browser_user_agent(app: &AppHandle) -> Option<String> {
         static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         if let Some(hit) = CACHED.get() {
-            return if hit.is_empty() { None } else { Some(hit.clone()) };
+            return if hit.is_empty() {
+                None
+            } else {
+                Some(hit.clone())
+            };
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let queued = app.run_on_main_thread(move || {
@@ -259,7 +262,10 @@ mod real {
 
     #[cfg(target_os = "macos")]
     fn macos_product_version() -> (i64, i64) {
-        let Ok(out) = std::process::Command::new("sw_vers").arg("-productVersion").output() else {
+        let Ok(out) = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+        else {
             return (0, 0);
         };
         let text = String::from_utf8_lossy(&out.stdout);
@@ -267,6 +273,150 @@ mod real {
         let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         (major, minor)
+    }
+
+    /// Shell `img-src` has no general `https:`. Bytes are read in the child
+    /// and only a `data:image/…` URL is emitted. Sync XHR: `eval_with_callback`
+    /// does not await a Promise on Windows or Linux. Empty means keep the globe.
+    const BROWSER_FAVICON_SCRIPT: &str = r#"(function () {
+  var MAX = 65536;
+  function sniff(bytes) {
+    if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+    if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
+    if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0x01 && bytes[3] === 0x00) return 'image/x-icon';
+    if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    var n = bytes.length < 180 ? bytes.length : 180;
+    var head = '';
+    for (var i = 0; i < n; i++) head += String.fromCharCode(bytes[i]);
+    var t = head.replace(/^\s+/, '').toLowerCase();
+    if (t.indexOf('<svg') === 0 || t.indexOf('<?xml') === 0) return 'image/svg+xml';
+    return '';
+  }
+  function fromBytes(bytes, headerMime) {
+    if (!bytes || bytes.length === 0 || bytes.length > MAX) return '';
+    var mime = sniff(bytes);
+    if (!mime && headerMime && headerMime.indexOf('image/') === 0) mime = headerMime.split(';')[0].trim();
+    if (!mime || mime.indexOf('image/') !== 0) return '';
+    var raw = '';
+    for (var i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    try { return 'data:' + mime + ';base64,' + btoa(raw); } catch (e) { return ''; }
+  }
+  function readUrl(url) {
+    if (!url) return '';
+    if (url.indexOf('data:image/') === 0) return url.length > 120000 ? '' : url;
+    if (url.indexOf('http:') !== 0 && url.indexOf('https:') !== 0) return '';
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, false);
+      xhr.overrideMimeType('text/plain; charset=x-user-defined');
+      xhr.send(null);
+      if (xhr.status < 200 || xhr.status >= 300) return '';
+      var text = xhr.responseText || '';
+      var bytes = new Uint8Array(text.length);
+      for (var i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 255;
+      var header = '';
+      try { header = xhr.getResponseHeader('Content-Type') || ''; } catch (e2) { header = ''; }
+      return fromBytes(bytes, header);
+    } catch (e3) {
+      return '';
+    }
+  }
+  function pickLink() {
+    var nodes = document.querySelectorAll('link[rel]');
+    var best = '';
+    var bestRank = 99;
+    for (var i = 0; i < nodes.length; i++) {
+      var rel = (nodes[i].getAttribute('rel') || '').toLowerCase().split(/\s+/);
+      if (rel.indexOf('icon') === -1) continue;
+      var href = nodes[i].href || '';
+      if (!href) continue;
+      var sizes = (nodes[i].getAttribute('sizes') || '').toLowerCase();
+      var rank = 3;
+      if (sizes.indexOf('32x32') !== -1) rank = 0;
+      else if (sizes.indexOf('16x16') !== -1) rank = 1;
+      else if (!sizes || sizes === 'any') rank = 2;
+      if (rank < bestRank) { bestRank = rank; best = href; }
+    }
+    return best;
+  }
+  var link = pickLink();
+  var icon = link ? readUrl(link) : '';
+  if (icon) return icon;
+  try { return readUrl(new URL('/favicon.ico', location.origin).href); } catch (e4) { return ''; }
+})()"#;
+
+    const FAVICON_DATA_URL_MAX: usize = 120_000;
+
+    /// Callback payload is a JSON string. Only `data:image/` crosses into the shell.
+    fn parse_favicon_result(raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed == "null" || trimmed == "undefined" {
+            return String::new();
+        }
+        let value = serde_json::from_str::<String>(trimmed).unwrap_or_else(|_| trimmed.to_string());
+        let value = value.trim();
+        if value.len() > FAVICON_DATA_URL_MAX || !value.starts_with("data:image/") {
+            return String::new();
+        }
+        value.to_string()
+    }
+
+    #[derive(Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct BrowserPageMeta {
+        item_id: String,
+        parent: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+    }
+
+    /// Tab label only. The callback's `Webview` is the child, not a window —
+    /// the shell title stays `K2 | <server>`.
+    fn emit_browser_page_meta(webview: &Webview, parent: &str, meta: BrowserPageMeta) {
+        if let Some(window) = webview.get_webview_window(parent) {
+            let _ = window.emit("browser:page-meta", &meta);
+            return;
+        }
+        let _ = webview
+            .app_handle()
+            .emit_to(parent, "browser:page-meta", &meta);
+    }
+
+    fn read_browser_favicon(webview: &Webview, item_id: &str, parent: &str) {
+        let item_id = item_id.to_string();
+        let parent = parent.to_string();
+        let emit_view = webview.clone();
+        let item_for_cb = item_id.clone();
+        let parent_for_cb = parent.clone();
+        if webview
+            .eval_with_callback(BROWSER_FAVICON_SCRIPT, move |raw| {
+                emit_browser_page_meta(
+                    &emit_view,
+                    &parent_for_cb,
+                    BrowserPageMeta {
+                        item_id: item_for_cb.clone(),
+                        parent: parent_for_cb.clone(),
+                        title: None,
+                        icon: Some(parse_favicon_result(&raw)),
+                    },
+                );
+            })
+            .is_err()
+        {
+            emit_browser_page_meta(
+                webview,
+                &parent,
+                BrowserPageMeta {
+                    item_id,
+                    parent: parent.clone(),
+                    title: None,
+                    icon: Some(String::new()),
+                },
+            );
+        }
     }
 
     #[tauri::command]
@@ -329,10 +479,36 @@ mod real {
         // own `navigate` calls — the return bool vetoes the load (§6.5).
         // Loopback is ordinary http here (Gmail OAuth redirects to this Mac).
         // on_new_window: Deny — never `window.open` into a window labeled `main`.
+        // Title and favicon stay on the tab. The child is not a window.
         let make_builder = |u: Url| {
+            let title_item = item_id.clone();
+            let title_parent = parent.clone();
+            let icon_item = item_id.clone();
+            let icon_parent = parent.clone();
             let builder = WebviewBuilder::new(&label, WebviewUrl::External(u))
                 .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
                 .on_new_window(|_url, _features| NewWindowResponse::Deny)
+                .on_document_title_changed(move |webview, title| {
+                    emit_browser_page_meta(
+                        &webview,
+                        &title_parent,
+                        BrowserPageMeta {
+                            item_id: title_item.clone(),
+                            parent: title_parent.clone(),
+                            title: Some(title),
+                            icon: None,
+                        },
+                    );
+                })
+                .on_page_load(move |webview, payload| {
+                    if payload.event() != PageLoadEvent::Finished {
+                        return;
+                    }
+                    if !matches!(payload.url().scheme(), "http" | "https") {
+                        return;
+                    }
+                    read_browser_favicon(&webview, &icon_item, &icon_parent);
+                })
                 .focused(false);
             // macOS WKWebView omits Safari. Windows WebView2 already says
             // Edge, and Linux WebKitGTK already names itself, so only the
@@ -509,7 +685,11 @@ mod real {
         Forward,
     }
 
-    fn browser_view(app: &AppHandle, item_id: &str, parent_window: Option<&str>) -> Option<Webview> {
+    fn browser_view(
+        app: &AppHandle,
+        item_id: &str,
+        parent_window: Option<&str>,
+    ) -> Option<Webview> {
         let parent = resolve_parent(parent_window);
         let key = registry_key(parent, item_id);
         views(app).0.lock().unwrap().get(&key).cloned()
@@ -707,6 +887,34 @@ mod real {
             Err(_) => Ok(disabled_history()),
         }
     }
+
+    #[cfg(test)]
+    mod favicon_parse_tests {
+        use super::parse_favicon_result;
+
+        #[test]
+        fn data_image_url_round_trips() {
+            let raw = serde_json::to_string("data:image/png;base64,AAAA").unwrap();
+            assert_eq!(parse_favicon_result(&raw), "data:image/png;base64,AAAA");
+        }
+
+        #[test]
+        fn https_blob_and_empty_stay_empty() {
+            assert_eq!(
+                parse_favicon_result("\"https://example.com/favicon.ico\""),
+                ""
+            );
+            assert_eq!(
+                parse_favicon_result(
+                    "\"blob:https://example.com/11111111-1111-1111-1111-111111111111\""
+                ),
+                ""
+            );
+            assert_eq!(parse_favicon_result("null"), "");
+            assert_eq!(parse_favicon_result(""), "");
+            assert_eq!(parse_favicon_result("undefined"), "");
+        }
+    }
 }
 
 #[cfg(feature = "browser-pane")]
@@ -886,7 +1094,8 @@ mod history_wire {
     fn edge_and_existing_safari_are_not_rewritten() {
         let edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0";
         assert_eq!(super::declare_browser_engine(edge, 11, 0), edge);
-        let safari = "Mozilla/5.0 AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
+        let safari =
+            "Mozilla/5.0 AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
         assert_eq!(super::declare_browser_engine(safari, 26, 0), safari);
     }
 }

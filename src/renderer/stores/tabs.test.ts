@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData, type BrowserItemData, type SerializedLayout } from './tabs'
+import * as pageTitle from '@/web/page-title'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, LAYOUT_SCHEMA_VERSION, type AgentItemData, type TerminalItemData, type BrowserItemData, type SerializedLayout } from './tabs'
 import {
   __resetNamedChatTitleCachesForTests,
   rememberChatCustomName,
@@ -874,8 +878,202 @@ describe('browser pane items', () => {
     const item = Array.from(after.paneGroups.values())[0].items[0]
     expect((item.data as BrowserItemData).url).toBe('https://example.com')
     expect((item.data as BrowserItemData).title).toBe('Example')
+    // Item title only. The strip stays the host name.
+    expect(after.title).toBe('example.com')
+    expect(after.locked).not.toBe(true)
   })
 })
+
+describe('browser page title and favicon', () => {
+  beforeEach(reset)
+
+  const ICON = 'data:image/png;base64,AAAA'
+
+  function located(): { tabId: string; pgId: string; itemId: string } {
+    const tab = useTabsStore.getState().tabs[0]
+    if (!tab) throw new Error('expected a browser tab')
+    const pg = Array.from(tab.paneGroups.values())[0]
+    if (!pg) throw new Error('expected a pane group')
+    const item = pg.items.find((i) => i.type === 'browser')
+    if (!item) throw new Error('expected a browser item')
+    return { tabId: tab.id, pgId: pg.id, itemId: item.id }
+  }
+
+  function itemData(): BrowserItemData {
+    const { tabId, itemId } = located()
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+      ?? useTabsStore.getState().extraGroups.flatMap((g) => g.tabs).find((t) => t.id === tabId)
+    if (!tab) throw new Error('tab missing')
+    for (const pg of tab.paneGroups.values()) {
+      const item = pg.items.find((i) => i.id === itemId)
+      if (item) return item.data as BrowserItemData
+    }
+    throw new Error('browser item missing')
+  }
+
+  it('replaces the host name on an unlocked browser-only tab', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    expect(useTabsStore.getState().tabs[0].title).toBe('example.com')
+    const ids = located()
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: '  Example Domain  ',
+      icon: ICON,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Example Domain')
+    expect(tab.locked).not.toBe(true)
+    expect(itemData().title).toBe('Example Domain')
+    expect(itemData().icon).toBe(ICON)
+  })
+
+  it('leaves the host name when the page title is empty', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const ids = located()
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: '   ',
+      icon: '',
+    })
+    expect(useTabsStore.getState().tabs[0].title).toBe('example.com')
+    expect(itemData().title).toBe('')
+    expect(itemData().icon).toBeUndefined()
+  })
+
+  it('does not overwrite a locked strip title and still stores the page title', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const ids = located()
+    useTabsStore.getState().setTabTitle(ids.tabId, 'Kept', { locked: true })
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: 'Example Domain',
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Kept')
+    expect(tab.locked).toBe(true)
+    expect(itemData().title).toBe('Example Domain')
+  })
+
+  it('applies a harness-looking title that setTabTitle would drop', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const ids = located()
+    useTabsStore.getState().setTabTitle(ids.tabId, 'Claude')
+    expect(useTabsStore.getState().tabs[0].title).toBe('example.com')
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: 'Claude',
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Claude')
+    expect(tab.locked).not.toBe(true)
+  })
+
+  it('does not retitle a mixed tab', () => {
+    useTabsStore.getState().addTab('/tmp/proj', { title: 'Terminal 1' })
+    const tabId = useTabsStore.getState().tabs[0].id
+    useTabsStore.getState().openUrlInPane(tabId, 'https://example.com/new')
+    const ids = located()
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: 'Example Domain',
+    })
+    expect(useTabsStore.getState().tabs[0].title).toBe('Terminal 1')
+    expect(itemData().title).toBe('Example Domain')
+  })
+
+  it('rejects an https favicon and keeps a data url across restore', () => {
+    expect(LAYOUT_SCHEMA_VERSION).toBe(2)
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const ids = located()
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      icon: 'https://example.com/favicon.ico',
+    })
+    expect(itemData().icon).toBeUndefined()
+    expect(useTabsStore.getState().tabs[0].title).toBe('example.com')
+
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: 'Example Domain',
+      icon: ICON,
+    })
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    expect(layout.version).toBe(LAYOUT_SCHEMA_VERSION)
+    const serialized = Object.values(layout.tabs[0].paneGroups)[0].items[0]
+    expect(serialized).toMatchObject({
+      type: 'browser',
+      title: 'Example Domain',
+      icon: ICON,
+    })
+
+    reset()
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+    expect(useTabsStore.getState().tabs[0].title).toBe('Example Domain')
+    const restored = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
+    expect((restored.data as BrowserItemData).icon).toBe(ICON)
+    expect((restored.data as BrowserItemData).title).toBe('Example Domain')
+  })
+
+  it('tolerates an old browser layout with no icon field', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    const serialized = Object.values(layout.tabs[0].paneGroups)[0].items[0]
+    if (serialized.type !== 'browser') throw new Error('expected a browser item')
+    delete serialized.icon
+    reset()
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+    const restored = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
+    expect((restored.data as BrowserItemData).icon).toBeUndefined()
+    expect((restored.data as BrowserItemData).url).toBe('https://example.com/docs')
+  })
+
+  it('does not call the window-title helper with the page title', () => {
+    const spy = vi.spyOn(pageTitle, 'k2PageTitle')
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const ids = located()
+    useTabsStore.getState().applyBrowserPageMeta(ids.tabId, ids.pgId, ids.itemId, {
+      title: 'Example Domain',
+      icon: ICON,
+    })
+    expect(spy).not.toHaveBeenCalled()
+    const joined = spy.mock.calls.map((args) => args.map(String).join(' ')).join('\n')
+    expect(joined).not.toContain('Example Domain')
+    spy.mockRestore()
+
+    const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
+    const tabsSrc = readFileSync(join(root, 'src/renderer/stores/tabs.ts'), 'utf8')
+    const helper = sourceBetween(tabsSrc, 'function withBrowserPageMeta(', 'function placedTab(')
+    const action = sourceBetween(tabsSrc, 'applyBrowserPageMeta: (tabId', 'openUntitledDocument:')
+    for (const body of [helper, action]) {
+      expect(body).not.toContain('setTabTitle')
+      expect(body).not.toContain('adoptTabTitle')
+      expect(body).not.toContain('applyDaemonTabTitle')
+      expect(body).not.toContain('k2PageTitle')
+      expect(body).not.toContain('setTitle')
+      expect(body).not.toContain('locked:')
+    }
+    expect(tabsSrc.match(/icon: si\.icon/g)?.length).toBe(2)
+    expect(tabsSrc).toContain('icon: d.icon')
+
+    const pane = readFileSync(join(root, 'src/renderer/components/BrowserPane/BrowserPane.tsx'), 'utf8')
+    expect(pane).toContain('browser:page-meta')
+    expect(pane).toContain('applyBrowserPageMeta')
+    expect(pane).not.toContain('k2PageTitle')
+    expect(pane).not.toContain('.setTitle(')
+
+    const rust = readFileSync(join(root, 'src-tauri/src/commands/browser_webviews.rs'), 'utf8')
+    expect(rust).toContain('on_document_title_changed')
+    expect(rust).toContain('eval_with_callback')
+    expect(rust).toContain('PageLoadEvent::Finished')
+    expect(rust).not.toContain('set_title')
+    expect(rust).not.toContain('.setTitle(')
+
+    const conf = readFileSync(join(root, 'src-tauri/tauri.conf.json'), 'utf8')
+    expect(conf).toContain("img-src 'self' asset: data: blob:")
+    expect(conf).not.toMatch(/img-src[^;]*https:/)
+  })
+})
+
+function sourceBetween(src: string, start: string, end: string): string {
+  const i = src.indexOf(start)
+  if (i < 0) throw new Error(`missing ${start}`)
+  const j = src.indexOf(end, i + start.length)
+  if (j < 0) throw new Error(`missing ${end} after ${start}`)
+  return src.slice(i, j)
+}
 
 describe('addTab / addTabToGroup locked option', () => {
   beforeEach(reset)

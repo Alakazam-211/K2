@@ -111,7 +111,7 @@ export default function TopBar({
           aria-label="Open the K2 dashboard"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onClick={() => {
-            void openUrl('https://k2.dev')
+            void openUrl('https://k2.dev/dashboard')
           }}
         >
           <img src={k2Logo} alt="" className="h-4 w-4" />

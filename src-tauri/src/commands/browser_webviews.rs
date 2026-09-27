@@ -36,10 +36,6 @@ mod real {
 
     use tauri::webview::{NewWindowResponse, WebviewBuilder};
 
-    /// WKWebView's default agent is WebKit without a Safari token. Google
-    /// then sends the old HTML homepage. This is the desktop Safari shape.
-    #[cfg(target_os = "macos")]
-    const SAFARI_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
     use tauri::{
         AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
     };
@@ -196,6 +192,83 @@ mod real {
     ///
     /// `parent_window`: Tauri window label of the invoking window (`main` or
     /// `window-{uuid}`). Empty/missing falls back to `"main"` for back-compat.
+
+    /// macOS only. Reads WKWebView's own agent on the main thread and adds
+    /// the Safari product token it leaves off. Cached. Windows and Linux
+    /// do not call this: WebView2 already says Edge, WebKitGTK already
+    /// names itself.
+    #[cfg(target_os = "macos")]
+    fn macos_browser_user_agent(app: &AppHandle) -> Option<String> {
+        static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        if let Some(hit) = CACHED.get() {
+            return if hit.is_empty() { None } else { Some(hit.clone()) };
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let queued = app.run_on_main_thread(move || {
+            let _ = tx.send(macos_default_webkit_agent());
+        });
+        let base = if queued.is_err() {
+            None
+        } else {
+            rx.recv().ok().flatten()
+        };
+        let declared = base
+            .as_deref()
+            .map(|ua| {
+                let (major, minor) = macos_product_version();
+                super::declare_browser_engine(ua, major, minor)
+            })
+            .filter(|ua| ua.contains("Safari/"));
+        let stored = declared.clone().unwrap_or_default();
+        let _ = CACHED.set(stored);
+        declared
+    }
+
+    #[cfg(target_os = "macos")]
+    #[allow(deprecated)]
+    fn macos_default_webkit_agent() -> Option<String> {
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
+        use objc::runtime::Object;
+        use objc::{class, msg_send, sel, sel_impl};
+        use std::ffi::CStr;
+
+        unsafe {
+            let config: id = msg_send![class!(WKWebViewConfiguration), new];
+            if config == nil {
+                return None;
+            }
+            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+            let alloc: id = msg_send![class!(WKWebView), alloc];
+            let view: id = msg_send![alloc, initWithFrame: frame configuration: config];
+            if view == nil {
+                return None;
+            }
+            let key = NSString::alloc(nil).init_str("userAgent");
+            let ua_obj: *mut Object = msg_send![view, valueForKey: key];
+            if ua_obj.is_null() {
+                return None;
+            }
+            let bytes: *const i8 = msg_send![ua_obj, UTF8String];
+            if bytes.is_null() {
+                return None;
+            }
+            CStr::from_ptr(bytes).to_str().ok().map(str::to_string)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_product_version() -> (i64, i64) {
+        let Ok(out) = std::process::Command::new("sw_vers").arg("-productVersion").output() else {
+            return (0, 0);
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.trim().split('.');
+        let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        (major, minor)
+    }
+
     #[tauri::command]
     pub async fn browser_create(
         app: AppHandle,
@@ -261,8 +334,14 @@ mod real {
                 .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
                 .on_new_window(|_url, _features| NewWindowResponse::Deny)
                 .focused(false);
+            // macOS WKWebView omits Safari. Windows WebView2 already says
+            // Edge, and Linux WebKitGTK already names itself, so only the
+            // Mac pane amends the engine's own string.
             #[cfg(target_os = "macos")]
-            let builder = builder.user_agent(SAFARI_USER_AGENT);
+            let builder = match macos_browser_user_agent(&app) {
+                Some(agent) => builder.user_agent(&agent),
+                None => builder,
+            };
             builder
         };
 
@@ -747,6 +826,34 @@ mod stub {
 #[cfg(not(feature = "browser-pane"))]
 pub use stub::*;
 
+/// Keep each engine's own agent. Apple WebKit omits a browser product, so
+/// add Safari using the WebKit version already in the string and the
+/// running OS for `Version/`. An agent that already names Safari, Edge,
+/// or Chrome is left alone.
+fn declare_browser_engine(default_ua: &str, os_major: i64, os_minor: i64) -> String {
+    if default_ua.contains("Safari/")
+        || default_ua.contains("Edg/")
+        || default_ua.contains("Chrome/")
+    {
+        return default_ua.to_string();
+    }
+    let Some(webkit) = default_ua
+        .split("AppleWebKit/")
+        .nth(1)
+        .and_then(|rest| rest.split([' ', ';']).next())
+        .filter(|ver| !ver.is_empty())
+    else {
+        return default_ua.to_string();
+    };
+    if os_major <= 0 {
+        return format!("{default_ua} Safari/{webkit}");
+    }
+    format!(
+        "{default_ua} Version/{os_major}.{minor} Safari/{webkit}",
+        minor = os_minor.max(0)
+    )
+}
+
 #[cfg(test)]
 mod history_wire {
     use super::BrowserHistoryState;
@@ -762,5 +869,24 @@ mod history_wire {
             v,
             serde_json::json!({ "canBack": false, "canForward": false })
         );
+    }
+
+    #[test]
+    fn webkit_without_a_product_gains_safari_from_its_own_version() {
+        let ua = super::declare_browser_engine(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            26,
+            1,
+        );
+        assert!(ua.ends_with(" Version/26.1 Safari/605.1.15"));
+        assert!(ua.contains("AppleWebKit/605.1.15"));
+    }
+
+    #[test]
+    fn edge_and_existing_safari_are_not_rewritten() {
+        let edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0";
+        assert_eq!(super::declare_browser_engine(edge, 11, 0), edge);
+        let safari = "Mozilla/5.0 AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
+        assert_eq!(super::declare_browser_engine(safari, 26, 0), safari);
     }
 }

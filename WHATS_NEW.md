@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.2 — Arch download, and quieter stoplights
+
+- **Arch updates.** On an Arch package, Settings → General no longer asks the Mac updater list for a Linux entry. A newer release offers the pacman package (`k2-<version>-x86_64.pkg.tar.zst`). The app does not install it. The same version stays quiet.
+- **Stoplights.** When the window is not selected, the square stoplights stay the same grey and become 80% translucent.
+
 ## 0.41.1 — Server switch no longer quits the app
 
 - **Square close button.** Switching to another server changes the window title. On the Square style that update asked the close button for theme-button calls it did not have (`setEditedFlag:`, `setTemporarilyDisabled:`), and the app quit. Those calls now go to the system button. The square paint stays.

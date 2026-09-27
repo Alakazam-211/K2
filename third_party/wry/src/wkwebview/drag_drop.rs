@@ -5,11 +5,11 @@
 use std::{ffi::CStr, path::PathBuf};
 
 use objc2::{
-  runtime::{Bool, ProtocolObject},
+  runtime::{AnyClass, Bool, ProtocolObject},
   DeclaredClass,
 };
-use objc2_app_kit::{NSDragOperation, NSDraggingInfo, NSFilenamesPboardType};
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSString};
+use objc2_app_kit::{NSDragOperation, NSDraggingInfo, NSFilenamesPboardType, NSPasteboardTypeFileURL};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSString, NSURL};
 
 use crate::DragDropEvent;
 
@@ -27,6 +27,30 @@ pub(crate) unsafe fn collect_paths(drag_info: &ProtocolObject<dyn NSDraggingInfo
       let path = path.downcast::<NSString>().unwrap();
       let path = CStr::from_ptr(path.UTF8String()).to_string_lossy();
       drag_drop_paths.push(PathBuf::from(path.into_owned()));
+    }
+  }
+
+  // Finder on current macOS puts public.file-url on the pasteboard and
+  // omits the deprecated filenames list. An empty list makes the drop
+  // look handled and the compose bar never sees the files.
+  if drag_drop_paths.is_empty() {
+    let file_urls = NSArray::arrayWithObject(NSPasteboardTypeFileURL);
+    if pb.availableTypeFromArray(&file_urls).is_some() {
+      if let Some(class) = AnyClass::get(c"NSURL") {
+        let classes = NSArray::from_slice(&[class]);
+        if let Some(urls) = pb.readObjectsForClasses_options(&classes, None) {
+          for obj in urls {
+            let Ok(url) = obj.downcast::<NSURL>() else {
+              continue;
+            };
+            let Some(path) = url.path() else { continue };
+            let path = CStr::from_ptr(path.UTF8String()).to_string_lossy();
+            if !path.is_empty() {
+              drag_drop_paths.push(PathBuf::from(path.into_owned()));
+            }
+          }
+        }
+      }
     }
   }
   drag_drop_paths

@@ -102,7 +102,11 @@ export default function UsageButton(): React.JSX.Element {
           {rows.map((row, index) => (
             <section
               key={row.harness}
-              className={index === 0 ? '' : 'mt-2 border-t border-[var(--color-border)] pt-2'}
+              className={
+                index === 0
+                  ? ''
+                  : 'mt-2 border-t border-[var(--color-border)] -mx-3 px-3 pt-2'
+              }
             >
               <header className="text-[12px] text-[var(--color-text-primary)]">
                 {harnessName(row.harness)}

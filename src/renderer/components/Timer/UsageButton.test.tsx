@@ -132,6 +132,7 @@ describe('UsageButton', () => {
     const rules = menu.querySelectorAll('section')
     expect(rules).toHaveLength(3)
     expect(rules[1]?.className).toContain('border-t')
+    expect(rules[1]?.className).toContain('-mx-3')
     expect(rules[2]?.className).toContain('border-t')
     expect(rules[0]?.className).not.toContain('border-t')
   })

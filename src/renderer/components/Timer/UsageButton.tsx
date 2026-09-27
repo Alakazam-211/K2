@@ -98,14 +98,27 @@ export default function UsageButton(): React.JSX.Element {
               ) : null}
               {row.windows.map((window) => {
                 const until = formatResetsIn(window.resetsAt, now)
+                const left = percentLeft(window.used)
                 return (
-                  <p
-                    key={`${row.harness}:${window.label}`}
-                    className="text-[11px] text-[var(--color-text-secondary)]"
-                  >
-                    {window.label} {percentLeft(window.used)}% left
-                    {until ? ` · ${until}` : ''}
-                  </p>
+                  <div key={`${row.harness}:${window.label}`} className="mt-1">
+                    <p className="text-[11px] text-[var(--color-text-secondary)]">
+                      {window.label} {left}% left
+                      {until ? ` · ${until}` : ''}
+                    </p>
+                    <div
+                      role="progressbar"
+                      aria-valuenow={left}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`${window.label} left`}
+                      className="mt-1 h-1.5 w-full overflow-hidden bg-[var(--color-bg)]"
+                    >
+                      <div
+                        className="h-full bg-[var(--color-accent)]"
+                        style={{ width: `${left}%` }}
+                      />
+                    </div>
+                  </div>
                 )
               })}
             </section>

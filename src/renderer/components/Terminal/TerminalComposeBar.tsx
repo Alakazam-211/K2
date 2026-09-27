@@ -42,6 +42,7 @@ import {
   type ComposeSlashCommand,
   type MsgResponse,
   applyComposeHistoryNav,
+  applyComposeTextareaAutosize,
   clearComposeCaret,
   COMPOSE_SLASH_COMMANDS,
   COMPOSE_TEXTAREA_MAX_HEIGHT,
@@ -55,7 +56,6 @@ import {
   composeSlashMenuOpenFromDraft,
   composeSlashSpaceCommit,
   composeSlashTypeaheadQuery,
-  composeTextareaHeight,
   consumeComposeSlashToken,
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
@@ -222,20 +222,7 @@ export function TerminalComposeBar({
   const autoGrow = useCallback(() => {
     const el = textareaRef.current
     if (!el || isEffectivelyHidden(el)) return
-    if (!el.value) {
-      el.style.height = `${composeTextareaHeight({
-        value: '',
-        scrollHeight: 0,
-        fontSize: editorFontSize,
-      })}px`
-      return
-    }
-    el.style.height = 'auto'
-    el.style.height = `${composeTextareaHeight({
-      value: el.value,
-      scrollHeight: el.scrollHeight,
-      fontSize: editorFontSize,
-    })}px`
+    applyComposeTextareaAutosize(el, editorFontSize)
   }, [editorFontSize])
 
   useEffect(() => {

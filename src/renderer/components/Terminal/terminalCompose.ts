@@ -527,3 +527,46 @@ export function composeTextareaHeight(opts: {
   if (!opts.value) return singleLine
   return Math.min(Math.max(opts.scrollHeight, singleLine), cap)
 }
+
+/**
+ * Scrollbar after a compose height measurement. Hidden below the cap —
+ * the box fits, and a resting gutter is what made WKWebView wrap early.
+ * `auto` only when the chosen height is the cap and the text can scroll.
+ */
+export function composeTextareaOverflowY(opts: {
+  value: string
+  scrollHeight: number
+  fontSize: number
+  maxHeight?: number
+}): 'hidden' | 'auto' {
+  const height = composeTextareaHeight(opts)
+  const cap = opts.maxHeight ?? COMPOSE_TEXTAREA_MAX_HEIGHT
+  return height >= cap ? 'auto' : 'hidden'
+}
+
+type ComposeAutosizeEl = {
+  value: string
+  readonly scrollHeight: number
+  style: { height: string; overflowY: string }
+}
+
+/**
+ * Size the compose textarea from its content.
+ * Measure with the gutter hidden and height 0 so wrap width stays the
+ * resting width (`height: auto` plus `overflow-y: auto` reserves a
+ * scrollbar before `scrollHeight` is read). Empty drafts never read
+ * `scrollHeight` — `composeTextareaHeight` ignores it on purpose.
+ */
+export function applyComposeTextareaAutosize(el: ComposeAutosizeEl, fontSize: number): void {
+  if (!el.value) {
+    const empty = { value: '', scrollHeight: 0, fontSize }
+    el.style.height = `${composeTextareaHeight(empty)}px`
+    el.style.overflowY = composeTextareaOverflowY(empty)
+    return
+  }
+  el.style.overflowY = 'hidden'
+  el.style.height = '0px'
+  const measured = { value: el.value, scrollHeight: el.scrollHeight, fontSize }
+  el.style.height = `${composeTextareaHeight(measured)}px`
+  el.style.overflowY = composeTextareaOverflowY(measured)
+}

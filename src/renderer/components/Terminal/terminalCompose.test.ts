@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   type MsgResponse,
   applyComposeHistoryNav,
+  applyComposeTextareaAutosize,
   composeHistoryKeyAction,
   composeEmptyEnterSequence,
   composeInterruptSequence,
@@ -17,6 +18,7 @@ import {
   shouldSendOnKey,
   shouldShowTerminalComposeBar,
   composeTextareaHeight,
+  composeTextareaOverflowY,
   composeMessagePlaceholder,
   composeAgentNameFromProjects,
   extractImagePathsFromDraft,
@@ -603,6 +605,65 @@ describe('composeTextareaHeight', () => {
   it('grows with real content up to the cap', () => {
     expect(composeTextareaHeight({ value: 'hi', scrollHeight: 40, fontSize: 12 })).toBe(40)
     expect(composeTextareaHeight({ value: 'hi\n\n\n', scrollHeight: 400, fontSize: 12 })).toBe(160)
+  })
+})
+
+describe('composeTextareaOverflowY', () => {
+  it('hides the gutter below the cap and restores it at the cap', () => {
+    expect(composeTextareaOverflowY({ value: 'hi', scrollHeight: 40, fontSize: 12 })).toBe(
+      'hidden',
+    )
+    expect(composeTextareaOverflowY({ value: 'hi', scrollHeight: 159, fontSize: 12 })).toBe(
+      'hidden',
+    )
+    expect(composeTextareaOverflowY({ value: 'hi\n\n\n', scrollHeight: 160, fontSize: 12 })).toBe(
+      'auto',
+    )
+    expect(composeTextareaOverflowY({ value: 'hi\n\n\n', scrollHeight: 400, fontSize: 12 })).toBe(
+      'auto',
+    )
+  })
+
+  it('keeps an empty draft hidden even when scrollHeight is already the cap', () => {
+    expect(composeTextareaOverflowY({ value: '', scrollHeight: 160, fontSize: 12 })).toBe('hidden')
+    expect(composeTextareaOverflowY({ value: '', scrollHeight: 400, fontSize: 15 })).toBe('hidden')
+  })
+})
+
+describe('applyComposeTextareaAutosize', () => {
+  it('reads scrollHeight with the gutter hidden and height 0, then restores overflow only at the cap', () => {
+    let scrollHeight = 40
+    const style = { height: '28px', overflowY: 'auto' }
+    const el = {
+      value: 'hello',
+      style,
+      get scrollHeight() {
+        expect(style.overflowY).toBe('hidden')
+        expect(style.height).toBe('0px')
+        return scrollHeight
+      },
+    }
+    applyComposeTextareaAutosize(el, 12)
+    expect(style.height).toBe('40px')
+    expect(style.overflowY).toBe('hidden')
+
+    scrollHeight = 400
+    applyComposeTextareaAutosize(el, 12)
+    expect(style.height).toBe('160px')
+    expect(style.overflowY).toBe('auto')
+  })
+
+  it('does not read scrollHeight for an empty draft', () => {
+    const el = {
+      value: '',
+      style: { height: '160px', overflowY: 'auto' },
+      get scrollHeight(): number {
+        throw new Error('empty draft must ignore scrollHeight')
+      },
+    }
+    applyComposeTextareaAutosize(el, 12)
+    expect(el.style.height).toBe(`${Math.round(12 * 1.4 + 8)}px`)
+    expect(el.style.overflowY).toBe('hidden')
   })
 })
 

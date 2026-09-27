@@ -14,7 +14,7 @@ export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
     id: 'token-usage.machine',
     section: 'token-usage',
-    label: 'Token usage',
+    label: 'Token Usage',
     description: 'Token counts for this machine, by workspace, harness, and model',
     keywords: ['tokens', 'usage', 'claude', 'codex', 'grok', 'cache', 'input', 'output'],
   },
@@ -131,7 +131,8 @@ function DailyTokenChart({ days }: { days: UsageDay[] | null | undefined }): Rea
       <p className="text-xs text-[var(--color-text-muted)] mb-1">Last 30 days</p>
       <svg
         viewBox={`0 0 ${geo.width} ${geo.height}`}
-        className="w-full h-24"
+        preserveAspectRatio="none"
+        className="block w-full h-64"
         role="img"
         aria-label="Last 30 days"
       >
@@ -190,12 +191,17 @@ function ReportBlock({
   name,
   report,
   showChart,
+  summaryHeader,
+  summaryLabel,
 }: {
   title: string
   path?: string
   name?: string
   report: UsageReport
   showChart?: boolean
+  /** When set, the totals sentence is a one-row table with this first-column header. */
+  summaryHeader?: string
+  summaryLabel?: string
 }): React.JSX.Element {
   const harnessRows = report.harnesses.map((h) => ({
     key: h.harness,
@@ -220,11 +226,21 @@ function ReportBlock({
           {path}
         </p>
       ) : null}
-      <p className="text-xs text-[var(--color-text-muted)] mb-3">
-        {fmt(report.total.turns)} turns · input {fmt(report.total.input_tokens)} · output{' '}
-        {fmt(report.total.output_tokens)} · cache read {fmt(report.total.cache_read_tokens)} · cache write{' '}
-        {fmt(report.total.cache_write_tokens)}
-      </p>
+      {summaryHeader ? (
+        <div className="mb-4">
+          <TotalsTable
+            rows={[{ key: 'summary', label: summaryLabel ?? title, totals: report.total }]}
+            labelHeader={summaryHeader}
+            label={(row) => row.label}
+          />
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--color-text-muted)] mb-3">
+          {fmt(report.total.turns)} turns · input {fmt(report.total.input_tokens)} · output{' '}
+          {fmt(report.total.output_tokens)} · cache read {fmt(report.total.cache_read_tokens)} · cache write{' '}
+          {fmt(report.total.cache_write_tokens)}
+        </p>
+      )}
       {showChart ? <DailyTokenChart days={report.days} /> : null}
       <h4 className="text-xs font-medium mb-1">Harness</h4>
       <TotalsTable rows={harnessRows} labelHeader="Harness" label={(row) => harnessLabel(row.label)} />
@@ -275,7 +291,7 @@ export function TokenUsageSection(): React.JSX.Element {
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-base font-medium text-[var(--color-text-primary)] mb-1">Token usage</h2>
+      <h2 className="text-base font-medium text-[var(--color-text-primary)] mb-1">Token Usage</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-2">
         Counts stored on this machine from Claude, Codex, and Grok transcripts. One row per counted
         turn. No prices. No subscription percents.
@@ -292,7 +308,13 @@ export function TokenUsageSection(): React.JSX.Element {
         <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
       ) : (
         <>
-          <ReportBlock title="This machine" report={machine} showChart />
+          <ReportBlock
+            title="This machine"
+            report={machine}
+            showChart
+            summaryHeader="Machine"
+            summaryLabel="This machine"
+          />
           <h4 className="text-xs font-medium mb-1">Workspace</h4>
           <TotalsTable
             rows={[

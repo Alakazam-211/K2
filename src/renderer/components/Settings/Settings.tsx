@@ -68,12 +68,12 @@ function settingsNav(): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
-    { kind: 'item', id: 'token-usage', label: 'Token usage' },
     { kind: 'item', id: 'styles', label: 'Styles' },
     { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
+    { kind: 'item', id: 'token-usage', label: 'Token Usage' },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
     ...(webFeatures.permissions

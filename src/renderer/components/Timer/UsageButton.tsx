@@ -3,7 +3,7 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
 import {
-  buttonSummary,
+  buttonChips,
   formatResetsIn,
   harnessName,
   isSignedIn,
@@ -47,7 +47,7 @@ export default function UsageButton(): React.JSX.Element {
     }
   }, [open])
 
-  const summary = buttonSummary(doc)
+  const chips = buttonChips(doc)
   const rows = doc ? visibleHarnesses(doc).filter(isSignedIn) : []
   const anySignedIn = rows.length > 0
 
@@ -62,7 +62,7 @@ export default function UsageButton(): React.JSX.Element {
         aria-expanded={open}
         aria-haspopup="menu"
         data-testid="subscription-usage"
-        className="flex h-6 items-center gap-1 px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+        className="flex h-6 items-center gap-2 px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
         style={noDrag}
         onClick={() => {
           setOpen((was) => {
@@ -71,11 +71,13 @@ export default function UsageButton(): React.JSX.Element {
           })
         }}
       >
-        {summary ? (
-          <>
-            <AgentIcon agent={summary.harness} size={14} />
-            <span>{summary.used}%</span>
-          </>
+        {chips.length > 0 ? (
+          chips.map((chip) => (
+            <span key={chip.harness} className="flex items-center gap-1" data-testid={`usage-chip-${chip.harness}`}>
+              <AgentIcon agent={chip.harness} size={14} />
+              <span>{chip.used}%</span>
+            </span>
+          ))
         ) : (
           'Usage'
         )}
@@ -97,8 +99,11 @@ export default function UsageButton(): React.JSX.Element {
               Nothing is signed in
             </p>
           ) : null}
-          {rows.map((row) => (
-            <section key={row.harness} className="mt-2 first:mt-0">
+          {rows.map((row, index) => (
+            <section
+              key={row.harness}
+              className={index === 0 ? '' : 'mt-2 border-t border-[var(--color-border)] pt-2'}
+            >
               <header className="text-[12px] text-[var(--color-text-primary)]">
                 {harnessName(row.harness)}
                 {row.plan ? ` · ${row.plan}` : ''}

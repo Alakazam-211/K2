@@ -51,30 +51,45 @@ export function percentUsed(used: number): number {
   return Math.round(clamped * 100)
 }
 
+/** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok. */
+export function buttonChips(
+  doc: SubscriptionDoc | null,
+): { harness: string; used: number }[] {
+  if (!doc) return []
+  const chips: { harness: string; used: number }[] = []
+  for (const row of visibleHarnesses(doc)) {
+    if (!isSignedIn(row) || row.windows.length === 0) continue
+    let used = 0
+    for (const window of row.windows) {
+      used = Math.max(used, percentUsed(window.used))
+    }
+    chips.push({ harness: row.harness, used })
+  }
+  const order = new Map(PROBED_HARNESSES.map((id, index) => [id, index]))
+  chips.sort((a, b) => (order.get(a.harness) ?? 99) - (order.get(b.harness) ?? 99))
+  return chips
+}
+
 /** Highest used percent among signed-in windows. Null when nobody is signed in. */
 export function buttonSummary(
   doc: SubscriptionDoc | null,
 ): { harness: string; used: number } | null {
-  if (!doc) return null
+  const chips = buttonChips(doc)
   let best: { harness: string; used: number } | null = null
-  for (const row of visibleHarnesses(doc)) {
-    if (!isSignedIn(row)) continue
-    for (const window of row.windows) {
-      const used = percentUsed(window.used)
-      if (best === null || used > best.used) best = { harness: row.harness, used }
-    }
+  for (const chip of chips) {
+    if (best === null || chip.used > best.used) best = chip
   }
   return best
 }
 
 /**
- * Highest used percent among signed-in probed windows, plus the harness
- * name. No signed-in window → "Usage".
+ * Every signed-in harness that has a window, highest window each.
+ * No signed-in window → "Usage".
  */
 export function buttonLabel(doc: SubscriptionDoc | null): string {
-  const best = buttonSummary(doc)
-  if (!best) return 'Usage'
-  return `${harnessName(best.harness)} ${best.used}%`
+  const chips = buttonChips(doc)
+  if (chips.length === 0) return 'Usage'
+  return chips.map((chip) => `${harnessName(chip.harness)} ${chip.used}%`).join(' ')
 }
 
 /** True when the menu should POST a refresh instead of only reading. */

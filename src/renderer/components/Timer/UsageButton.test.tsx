@@ -93,6 +93,49 @@ describe('UsageButton', () => {
     expect(screen.getByTestId('subscription-usage-refresh').textContent).toBe('Refresh')
   })
 
+  it('puts every signed-in harness on the top bar', async () => {
+    const checkedAt = new Date().toISOString()
+    h.daemonCliGet.mockResolvedValue({
+      harnesses: [
+        {
+          harness: 'claude',
+          plan: 'Max 20x',
+          windows: [{ label: 'Weekly', used: 0.31, resetsAt: '2026-10-03T00:00:00Z' }],
+          checkedAt,
+          status: '',
+        },
+        {
+          harness: 'codex',
+          plan: 'plus',
+          windows: [{ label: 'Weekly', used: 0.4, resetsAt: '2026-10-03T00:00:00Z' }],
+          checkedAt,
+          status: '',
+        },
+        {
+          harness: 'grok',
+          plan: 'SuperGrok Heavy',
+          windows: [{ label: 'Weekly', used: 0.05, resetsAt: '2026-10-03T00:00:00Z' }],
+          checkedAt,
+          status: '',
+        },
+      ],
+    })
+    render(<UsageButton />)
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-chip-claude').textContent).toContain('31%')
+      expect(screen.getByTestId('usage-chip-codex').textContent).toContain('40%')
+      expect(screen.getByTestId('usage-chip-grok').textContent).toContain('5%')
+    })
+    expect(screen.getByTestId('subscription-usage').querySelectorAll('svg')).toHaveLength(3)
+    fireEvent.click(screen.getByTestId('subscription-usage'))
+    const menu = await screen.findByTestId('subscription-usage-menu')
+    const rules = menu.querySelectorAll('section')
+    expect(rules).toHaveLength(3)
+    expect(rules[1]?.className).toContain('border-t')
+    expect(rules[2]?.className).toContain('border-t')
+    expect(rules[0]?.className).not.toContain('border-t')
+  })
+
   it('refresh asks the daemon to probe again', async () => {
     const checkedAt = new Date().toISOString()
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))

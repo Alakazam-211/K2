@@ -88,7 +88,7 @@ describe('subscription window math', () => {
         ],
       }),
     )
-    expect(label).toBe('Codex 82%')
+    expect(label).toBe('Claude 31% Codex 82% Grok 19%')
     const rows = visibleHarnesses(
       doc({
         harnesses: [

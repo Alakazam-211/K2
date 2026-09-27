@@ -5,6 +5,7 @@ import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
+import { useContextMenuStore } from '@/stores/context-menu'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { useConnectHostStore } from '@/stores/connect-host'
 import {
@@ -120,9 +121,12 @@ export function BrowserPane({
   // stay visible while their host window is frontmost enough to complete
   // the flow; they still hide when the host itself is covered.
   const windowFocused = useWindowFocusStore((s) => s.isFocused)
+  // The + menu and other context menus are DOM. The native page paints
+  // over them, so hide the page while a menu is open.
+  const menuOpen = useContextMenuStore((s) => s.isOpen)
   const visible = standalone
-    ? true
-    : tabVisible && !workspaceCovered && windowFocused
+    ? !menuOpen
+    : tabVisible && !workspaceCovered && windowFocused && !menuOpen
   const setBrowserItemState = useTabsStore((s) => s.setBrowserItemState)
 
   // Parent window for all browser_* invokes (main / window-{uuid}).

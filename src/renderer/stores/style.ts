@@ -145,7 +145,7 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 let lastTrafficInset = -1
 
 /** The system title bar is shorter than the 38px top bar, so the lights sit high. */
-const TRAFFIC_LIGHT_Y_NUDGE_PX = 3
+const TRAFFIC_LIGHT_Y_NUDGE_PX = 4
 
 function applyTrafficInset(inset: number): void {
   void invoke('set_traffic_light_inset', { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX }).catch(() => {})

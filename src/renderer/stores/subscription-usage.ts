@@ -11,6 +11,8 @@ interface SubscriptionUsageStore {
   load: () => Promise<void>
   /** Menu open: POST when the cache is older than 15 seconds, else GET. */
   refreshIfStale: () => Promise<void>
+  /** User asked. Always POST a fresh probe. */
+  refresh: () => Promise<void>
 }
 
 let loadInflight: Promise<void> | null = null
@@ -47,6 +49,15 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
         const doc = await daemonCliGet<SubscriptionDoc>('usage/subscriptions')
         set({ doc, error: null })
       }
+    } catch (e) {
+      set({ error: String(e) })
+    }
+  },
+
+  refresh: async () => {
+    try {
+      const doc = await daemonCliPost<SubscriptionDoc>('usage/subscriptions/refresh', {})
+      set({ doc, error: null })
     } catch (e) {
       set({ error: String(e) })
     }

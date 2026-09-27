@@ -18,8 +18,10 @@ export default function UsageButton(): React.JSX.Element {
   const doc = useSubscriptionUsageStore((s) => s.doc)
   const load = useSubscriptionUsageStore((s) => s.load)
   const refreshIfStale = useSubscriptionUsageStore((s) => s.refreshIfStale)
+  const refresh = useSubscriptionUsageStore((s) => s.refresh)
   const remote = useConnectHostStore((s) => s.activeHost !== 'local')
   const [open, setOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -77,6 +79,20 @@ export default function UsageButton(): React.JSX.Element {
           className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 shadow-lg"
           style={noDrag}
         >
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              data-testid="subscription-usage-refresh"
+              className="text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
+              disabled={refreshing}
+              onClick={() => {
+                setRefreshing(true)
+                void refresh().finally(() => setRefreshing(false))
+              }}
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
           {remote && (
             <p className="mb-2 text-[11px] text-[var(--color-text-muted)]">
               These numbers are this host&apos;s, not this laptop&apos;s.

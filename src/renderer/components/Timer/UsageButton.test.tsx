@@ -88,6 +88,23 @@ describe('UsageButton', () => {
     expect(menu.textContent).not.toContain('Grok')
     expect(menu.textContent).not.toContain('0%')
     expect(h.daemonCliPost).not.toHaveBeenCalled()
+    expect(screen.getByTestId('subscription-usage-refresh').textContent).toBe('Refresh')
+  })
+
+  it('refresh asks the daemon to probe again', async () => {
+    const checkedAt = new Date().toISOString()
+    h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
+    h.daemonCliPost.mockResolvedValue(claudeDoc(checkedAt))
+    render(<UsageButton />)
+    await waitFor(() => {
+      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
+    })
+    fireEvent.click(screen.getByTestId('subscription-usage'))
+    await screen.findByTestId('subscription-usage-menu')
+    fireEvent.click(screen.getByTestId('subscription-usage-refresh'))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('usage/subscriptions/refresh', {})
+    })
   })
 
   it('says nothing is signed in when no harness is signed in', async () => {

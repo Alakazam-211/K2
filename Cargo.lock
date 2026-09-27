@@ -3524,6 +3524,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-menubar"
+version = "0.40.150"
+dependencies = [
+ "image",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "tray-icon",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

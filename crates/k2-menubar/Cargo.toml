@@ -1,0 +1,38 @@
+[package]
+name = "k2-menubar"
+version = "0.40.150"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "macOS menu-bar helper for this Mac's K2 daemon. Bare Mach-O LaunchAgent; not the Tauri app and not k2-daemon."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-menubar"
+path = "src/main.rs"
+
+[dependencies]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# AppKit stays in this binary. k2-daemon must not link it.
+[target.'cfg(target_os = "macos")'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSDate",
+    "NSObjCRuntime",
+    "NSRunLoop",
+    "NSString",
+] }
+# No GTK / libappindicator. This target is macOS only.
+tray-icon = { version = "0.25", default-features = false }

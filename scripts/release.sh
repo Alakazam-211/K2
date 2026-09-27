@@ -213,7 +213,8 @@ sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json 
 sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" \
     src-tauri/Cargo.toml \
     crates/k2-core/Cargo.toml \
-    crates/k2-daemon/Cargo.toml
+    crates/k2-daemon/Cargo.toml \
+    crates/k2-menubar/Cargo.toml
 sed -i '' "s/K2_CLI_VERSION=\"[^\"]*\"/K2_CLI_VERSION=\"${VERSION}\"/" cli/k2
 echo "  Done."
 
@@ -292,6 +293,20 @@ cp "$DAEMON_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into K2.app/Contents/MacOS/"
 
+# Menu-bar helper. Staged out of the bundle to ~/.k2/bin on first GUI
+# open (same shape as frpc). Not executed from Contents/MacOS.
+echo ""
+echo "Step 2.6: Bundling k2-menubar helper..."
+cargo build --release -p k2-menubar
+MENUBAR_SRC="target/release/k2-menubar"
+if [ ! -x "$MENUBAR_SRC" ]; then
+    echo "  FATAL: k2-menubar not at $MENUBAR_SRC after cargo build" >&2
+    exit 1
+fi
+cp "$MENUBAR_SRC" \
+    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-menubar"
+echo "  k2-menubar copied into K2.app/Contents/MacOS/"
+
 # ── Step 3: Sign with hardened runtime ──
 echo ""
 echo "Step 3: Signing with hardened runtime..."
@@ -315,6 +330,10 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$SIGNING_IDENTITY" \
+    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-menubar"
 # frpc tunnel sidecar (Tauri externalBin → Contents/MacOS/frpc). Re-sign
 # with hardened runtime so the binary the app stages to ~/.k2/bin/frpc
 # is notarization-covered and runs without a Gatekeeper quarantine block.
@@ -693,6 +712,7 @@ echo ""
 echo "Step 8.9: Committing version bump + pushing tag ${TAG}..."
 git add package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock \
     src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml \
+    crates/k2-menubar/Cargo.toml \
     WHATS_NEW.md
 if git diff --cached --quiet; then
     echo "  (version files already committed — nothing new to commit)"

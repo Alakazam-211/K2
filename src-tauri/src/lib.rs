@@ -857,6 +857,127 @@ fn stage_bundled_frpc() {
     log_debug!("[k2so] staged bundled frpc -> {}", dest.display());
 }
 
+/// Staged helper binary, and whether this call replaced the bytes.
+#[cfg(target_os = "macos")]
+struct MenubarStage {
+    path: std::path::PathBuf,
+    replaced: bool,
+}
+
+/// Copy `k2-menubar` from beside this exe to `~/.k2/bin/k2-menubar`.
+/// Same shape as [`stage_bundled_frpc`]. The LaunchAgent points at the
+/// copy, not at `Contents/MacOS`.
+#[cfg(target_os = "macos")]
+fn stage_bundled_menubar() -> Option<MenubarStage> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
+    let sidecar = exe_dir.join(k2_core::wake::MENU_BAR_HELPER_BIN);
+    if !sidecar.exists() {
+        log_debug!(
+            "[menubar] {} not next to {} — skipping stage",
+            k2_core::wake::MENU_BAR_HELPER_BIN,
+            exe_dir.display()
+        );
+        return None;
+    }
+    let dest = k2_core::paths::k2_bin().join(k2_core::wake::MENU_BAR_HELPER_BIN);
+    let mut replaced = !dest.exists();
+    if dest.exists() {
+        match (std::fs::read(&sidecar), std::fs::read(&dest)) {
+            (Ok(a), Ok(b)) if a == b => {
+                log_debug!(
+                    "[menubar] already staged at {} (up to date)",
+                    dest.display()
+                );
+                return Some(MenubarStage {
+                    path: dest,
+                    replaced: false,
+                });
+            }
+            (Ok(_), Ok(_)) => {
+                log_debug!("[menubar] staged binary differs; re-staging");
+                replaced = true;
+            }
+            _ => {
+                replaced = true;
+            }
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log_debug!("[menubar] failed to create {}: {e}", parent.display());
+            return None;
+        }
+    }
+    if let Err(e) = std::fs::copy(&sidecar, &dest) {
+        log_debug!(
+            "[menubar] failed to stage {} -> {}: {e}",
+            sidecar.display(),
+            dest.display()
+        );
+        return None;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)) {
+        log_debug!("[menubar] failed to chmod 0755 {}: {e}", dest.display());
+        return None;
+    }
+    log_debug!(
+        "[menubar] staged {} -> {}",
+        sidecar.display(),
+        dest.display()
+    );
+    Some(MenubarStage {
+        path: dest,
+        replaced,
+    })
+}
+
+/// Write and `launchctl load -w` the helper LaunchAgent when this open
+/// is not a transient DMG / AppTranslocation launch and the staged binary
+/// exists. Does not unload `dev.k2.daemon`.
+#[cfg(target_os = "macos")]
+pub(crate) fn install_menu_bar_helper() {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log_debug!("[menubar] current_exe: {e}");
+            return;
+        }
+    };
+    if k2_core::daemon_lifecycle::is_transient_exe_location(&exe) {
+        log_debug!(
+            "[menubar] transient launch ({}); skipping helper install",
+            exe.display()
+        );
+        return;
+    }
+    let Some(staged) = stage_bundled_menubar() else {
+        return;
+    };
+    let plist = k2_core::wake::DaemonPlist::menu_bar_helper(staged.path.clone());
+    let outcome = match k2_core::wake::ensure_loaded(&plist) {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            log_debug!("[menubar] ensure_loaded failed: {e}");
+            return;
+        }
+    };
+    if !staged.replaced && outcome != k2_core::wake::LoadOutcome::NotInstalled {
+        log_debug!("[menubar] helper launch agent {outcome:?}");
+        return;
+    }
+    match k2_core::wake::install(&plist) {
+        Ok(path) => log_debug!(
+            "[menubar] installed helper plist at {} -> {}",
+            path.display(),
+            staged.path.display()
+        ),
+        Err(e) => log_debug!("[menubar] helper install failed: {e}"),
+    }
+}
+
 pub fn run() {
     // Ignore SIGPIPE so writing to a dead PTY returns EPIPE instead of
     // killing the entire process.
@@ -1240,6 +1361,16 @@ pub fn run() {
                 }
             });
 
+            // Menu-bar helper plist, same GUI open as the daemon agent.
+            // The once-only migration is already applied on upgraded
+            // machines, so this is not inside that row: a missing helper
+            // plist is installed here (and from Settings daemon_install).
+            // A transient DMG / AppTranslocation launch returns without
+            // writing it. Debug is not special-cased — there is nothing
+            // to stage until `k2-menubar` sits next to this exe.
+            #[cfg(target_os = "macos")]
+            install_menu_bar_helper();
+
             // Phase 2 Unit 4 — SKILL regeneration moved to the daemon's
             // boot sweep (`run_workspace_legacy_migrations_sweep` →
             // `ensure_all_skills_up_to_date`). The per-version
@@ -1283,23 +1414,17 @@ pub fn run() {
                         }
                         tauri::WindowEvent::CloseRequested { api, .. } => {
                         // Red close-button behavior is controlled by
-                        // the "Keep Agent & Companion server running
-                        // when K2SO quits" preference:
+                        // the "Keep server running when the window is
+                        // closed" preference:
                         //
-                        //   ON  → hide the window, keep Tauri + server
-                        //         alive. Menubar icon stays visible so
-                        //         the user can see what's still running.
-                        //         Full quit happens only via Cmd+Q or
-                        //         the menubar "Quit K2SO" item.
-                        //   OFF → behave like a normal app quit: tear
-                        //         down in-app companion + daemon plist
-                        //         (if installed), then proceed to
-                        //         destroy.
+                        //   ON  → hide the window. The app process stays.
+                        //         The daemon stays. The menu-bar helper
+                        //         is a separate LaunchAgent and stays.
+                        //   OFF → unload the daemon plist, then exit.
                         //
-                        // Cmd+Q is deliberately NOT routed through here
-                        // (NSApplication terminate: goes straight to
-                        // RunEvent::ExitRequested) — it always closes
-                        // everything regardless of the toggle.
+                        // Cmd+Q is not this path. It lands in
+                        // RunEvent::ExitRequested, which exits the app
+                        // and does not unload the daemon.
                         // Phase 2 Unit 7c — read directly from
                         // k2so-core to drop the last Tauri-side
                         // `read_settings()` call site. Daemon-owned
@@ -1450,14 +1575,20 @@ pub fn run() {
             // and polls /cli/llm/status for readiness. Tauri is no longer
             // involved in the LLM lifecycle.
 
-            // Menubar / system tray icon. Pairs with the persistent-
-            // agents feature: once Cmd+Q leaves the daemon running,
-            // users need a surface that shows what's still active.
-            // Failures here are non-fatal — the app works without a
-            // tray, users just lose visibility into the daemon from
-            // outside the main window.
-            if let Err(e) = tray::install(&app.handle().clone()) {
-                log_debug!("[tray] install failed: {e} (continuing without tray)");
+            // Linux and Windows keep the in-window tray. macOS does not
+            // call tray::install — the status item is the k2-menubar
+            // LaunchAgent, and a second icon would come from this window.
+            // The macOS binding keeps tray.rs type-checked here; it does
+            // not install an icon.
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Err(e) = tray::install(&app.handle().clone()) {
+                    log_debug!("[tray] install failed: {e} (continuing without tray)");
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                const _: fn(&tauri::AppHandle<tauri::Wry>) -> Result<(), String> = tray::install;
             }
 
             // 0.39.x (Issue #6): webview liveness watchdog. See the
@@ -1945,31 +2076,13 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = &app;
             match event {
-                // Cmd+Q / File → Quit / Menubar "Quit K2SO" /
-                // NSApplication terminate: all land here. Semantic
-                // choice ratified with rosson: these always kill
-                // everything, regardless of the keep-running toggle.
-                // That toggle ONLY controls the red close-button
-                // behavior (handled in on_window_event above).
-                //
-                // So: unconditionally unload the daemon plist (if
-                // installed), then let exit proceed. The in-app
-                // companion server dies with the Tauri process.
+                // Cmd+Q / File → Quit / NSApplication terminate land
+                // here. Exit the app. Do not unload dev.k2.daemon — the
+                // menu-bar helper is a different LaunchAgent and stays,
+                // and the row stays Running. The keep-daemon-off unload
+                // is only the red-close path above.
                 tauri::RunEvent::ExitRequested { .. } => {
                     window::save_window_state(app);
-                    #[cfg(target_os = "macos")]
-                    {
-                        let plist = k2_core::wake::DaemonPlist::canonical(
-                            std::path::PathBuf::from("/unused"),
-                        );
-                        if let Some(path) = plist.plist_path() {
-                            if path.exists() {
-                                // Best-effort — errors swallowed so a
-                                // hung launchctl can't block the quit.
-                                let _ = k2_core::wake::launchctl_unload(&path);
-                            }
-                        }
-                    }
                 }
                 tauri::RunEvent::Exit => {
                     if RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed) {

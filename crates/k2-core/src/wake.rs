@@ -6,7 +6,7 @@
 //! wake the system from sleep on a scheduled interval to fire heartbeats
 //! while the laptop lid is closed.
 //!
-//! This module owns two launchd agents:
+//! This module owns the user LaunchAgents this process writes:
 //!
 //! 1. **Daemon agent** (`dev.k2.daemon`): always-on. `RunAtLoad:
 //!    true` + `KeepAlive: true`. launchd starts it on user login and
@@ -16,6 +16,8 @@
 //!    wake-to-run setting is on, `Wake: true` makes launchd actually
 //!    wake a sleeping machine to run it. This is how Time Machine
 //!    handles battery-powered hourly backups.
+//! 3. **Menu-bar helper** (`dev.k2.menubar`): macOS status item for this
+//!    Mac's daemon. Own label. Quit-daemon unloads `dev.k2.daemon` only.
 //!
 //! Scope for this module: plist XML generation + file writes + launchctl
 //! invocation. The orchestration ("on first launch of 0.33.0, install
@@ -25,6 +27,12 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// LaunchAgent label for the macOS menu-bar helper. Not `dev.k2.daemon`.
+pub const MENU_BAR_HELPER_LABEL: &str = "dev.k2.menubar";
+
+/// Binary name staged to `~/.k2/bin/` and named in the helper plist.
+pub const MENU_BAR_HELPER_BIN: &str = "k2-menubar";
 
 /// Where user-scope launchd agents live on macOS.
 pub fn launch_agents_dir() -> Option<PathBuf> {
@@ -67,6 +75,25 @@ impl DaemonPlist {
             keep_alive: true,
             stderr_path: k2so_dir.join("daemon.stderr.log"),
             stdout_path: k2so_dir.join("daemon.stdout.log"),
+        }
+    }
+
+    /// Menu-bar helper plist. `program` is the staged `~/.k2/bin/k2-menubar`
+    /// copy, never a path inside `K2.app/Contents/MacOS` (that bundle id is
+    /// `dev.k2.app`). `RunAtLoad` so login shows the icon without opening
+    /// the window. Quit-daemon must not unload this label.
+    pub fn menu_bar_helper(program: PathBuf) -> Self {
+        let k2_dir = dirs::home_dir()
+            .map(|h| h.join(".k2"))
+            .unwrap_or_else(|| PathBuf::from("."));
+        Self {
+            label: MENU_BAR_HELPER_LABEL.to_string(),
+            program,
+            args: vec![],
+            run_at_load: true,
+            keep_alive: true,
+            stderr_path: k2_dir.join("menubar.stderr.log"),
+            stdout_path: k2_dir.join("menubar.stdout.log"),
         }
     }
 
@@ -341,6 +368,33 @@ mod tests {
         assert!(p.keep_alive);
         assert!(p.stderr_path.ends_with(".k2/daemon.stderr.log"));
         assert!(p.stdout_path.ends_with(".k2/daemon.stdout.log"));
+    }
+
+    #[test]
+    fn menu_bar_helper_is_its_own_agent() {
+        let program = PathBuf::from("/Users/x/.k2/bin/k2-menubar");
+        let p = DaemonPlist::menu_bar_helper(program.clone());
+        assert_eq!(p.label, MENU_BAR_HELPER_LABEL);
+        assert_eq!(p.label, "dev.k2.menubar");
+        assert_ne!(p.label, "dev.k2.daemon");
+        assert!(p.run_at_load);
+        assert!(p.keep_alive);
+        assert_eq!(p.program, program);
+        let xml = p.to_xml();
+        assert!(xml.contains("<string>dev.k2.menubar</string>"), "{xml}");
+        assert!(
+            xml.contains("<string>/Users/x/.k2/bin/k2-menubar</string>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<key>RunAtLoad</key>"), "{xml}");
+        assert!(xml.contains("<true/>"), "{xml}");
+        let path = p.plist_path().expect("LaunchAgents dir");
+        assert!(
+            path.ends_with("Library/LaunchAgents/dev.k2.menubar.plist"),
+            "{path:?}"
+        );
+        assert!(p.stdout_path.ends_with(".k2/menubar.stdout.log"));
+        assert!(p.stderr_path.ends_with(".k2/menubar.stderr.log"));
     }
 
     #[test]

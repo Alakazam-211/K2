@@ -106,8 +106,11 @@ fn locate_bundled_daemon() -> Result<PathBuf, String> {
 pub fn daemon_install() -> Result<String, String> {
     let daemon_bin = locate_bundled_daemon()?;
     let plist = k2_core::wake::DaemonPlist::canonical(daemon_bin);
-    k2_core::wake::install(&plist)
-        .map(|p| p.to_string_lossy().to_string())
+    let path = k2_core::wake::install(&plist)?;
+    // Same GUI moment as the daemon plist. Not `k2 daemon install`.
+    #[cfg(target_os = "macos")]
+    crate::install_menu_bar_helper();
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Unload the launch agent and delete the plist file. Does NOT delete

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { useState } from 'react'
+import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 
@@ -33,6 +34,7 @@ class FakeWS {
 }
 vi.stubGlobal('WebSocket', FakeWS)
 
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { AgentSessionChrome } from './AgentSessionChrome'
 import { useSessionViewChrome } from './sessionViewChrome'
 import { overlayViewer } from './sessionViewTab'
@@ -225,5 +227,93 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('chat')
     expect(viewButtonLabel()).toBe('Chat')
     expect(viewButtonLabel()).not.toBe('View')
+  })
+})
+
+let mountSeq = 0
+function MountProbe() {
+  const [id] = useState(() => ++mountSeq)
+  return <div data-testid="mount-probe" data-mount={String(id)} />
+}
+
+describe('sidecar refresh resumes on the server', () => {
+  beforeEach(() => {
+    cleanup()
+    mountSeq = 0
+    vi.mocked(daemonCliPost).mockReset()
+    vi.mocked(daemonCliPost).mockResolvedValue({})
+  })
+
+  afterEach(() => {
+    vi.mocked(daemonCliPost).mockReset()
+    vi.mocked(daemonCliPost).mockResolvedValue({})
+  })
+
+  function renderRefresh() {
+    return render(
+      <AgentSessionChrome
+        title="sales/reviewer"
+        addr="sales/reviewer"
+        conversationId="conv-r"
+        agentName="tab-xyz"
+        cwd="/ws/sales"
+        command="claude"
+      >
+        <MountProbe />
+      </AgentSessionChrome>,
+    )
+  }
+
+  it('posts sessions/v2/refresh and does not close-then-remount', async () => {
+    let resolveRefresh: (value: unknown) => void = () => {}
+    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+      if (route === 'sessions/v2/refresh') {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+      }
+      return Promise.resolve({})
+    })
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sessions/v2/refresh', {
+      agent_name: 'tab-xyz',
+      cwd: '/ws/sales',
+    })
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).not.toContain(
+      'sessions/v2/close',
+    )
+    expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
+    await act(async () => {
+      resolveRefresh({ sessionId: 'pty-new', conversationId: 'conv-r' })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).not.toBe(before)
+    })
+    expect(screen.queryByTestId('sidecar-refresh-error')).toBeNull()
+  })
+
+  it('a failed refresh surfaces an error and does not remount', async () => {
+    vi.mocked(daemonCliPost).mockRejectedValue(
+      new Error('sidecar refresh has no resumable session'),
+    )
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('sidecar-refresh-error').textContent).toContain(
+        'sidecar refresh has no resumable session',
+      )
+    })
+    expect(screen.getByRole('alert').textContent).toContain('sidecar refresh has no resumable session')
+    expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+      'sessions/v2/refresh',
+    ])
   })
 })

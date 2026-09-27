@@ -16,8 +16,10 @@ interface AgentSessionChromeProps {
   title: string
   addr: string
   conversationId: string | null
-  /** v2_session_map key for this PTY — refresh closes then remounts. */
+  /** v2_session_map key for this PTY — refresh resumes this key. */
   agentName: string
+  /** Workspace cwd. Refresh reads the tab row for this project. */
+  cwd?: string
   /** Spawn command. Restored tabs often only have `commandHint`. */
   command?: string
   commandHint?: string
@@ -36,6 +38,7 @@ export function AgentSessionChrome({
   addr,
   conversationId,
   agentName,
+  cwd,
   command,
   commandHint,
   provider,
@@ -69,24 +72,33 @@ export function AgentSessionChrome({
     setSplitRight,
   ])
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
   const handleRefresh = useCallback(async () => {
     if (refreshing) return
     setRefreshing(true)
+    setRefreshError(null)
     try {
       if (onRefresh) {
         onRefresh()
       } else {
-        await daemonCliPost('sessions/v2/close', { agent_name: agentName, force: true })
+        // Server kills and respawns the same provider session. The
+        // nonce bump remounts so TerminalPane attaches to that PTY;
+        // it is not a close-then-spawn.
+        await daemonCliPost('sessions/v2/refresh', {
+          agent_name: agentName,
+          ...(cwd ? { cwd } : {}),
+        })
         setNonce((n) => n + 1)
       }
     } catch (e) {
-      console.warn('[AgentSessionChrome] sidecar refresh failed:', e)
+      const message = e instanceof Error && e.message ? e.message : 'Refresh failed'
+      setRefreshError(message)
     } finally {
       setRefreshing(false)
     }
-  }, [refreshing, onRefresh, agentName])
+  }, [refreshing, onRefresh, agentName, cwd])
 
   return (
     <SessionViewChromeContext.Provider
@@ -114,6 +126,15 @@ export function AgentSessionChrome({
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
         />
+        {refreshError ? (
+          <p
+            role="alert"
+            data-testid="sidecar-refresh-error"
+            className="px-3 py-1 text-xs text-[var(--color-status-error,var(--color-text-muted))]"
+          >
+            {refreshError}
+          </p>
+        ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
           <Remount key={nonce}>{children}</Remount>
         </div>

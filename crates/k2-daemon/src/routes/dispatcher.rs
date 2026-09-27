@@ -472,6 +472,7 @@ async fn handle_one_request(
         "/cli/awareness/publish"
             | "/cli/sessions/v2/spawn"
             | "/cli/sessions/v2/close"
+            | "/cli/sessions/v2/refresh"
             // Phase 2 Unit 1 — body-bearing companion control routes.
             // Password and session-token live in the body so they
             // don't end up in URL-logged form on shared/loopback
@@ -2043,6 +2044,26 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let result = crate::v2_spawn::handle_v2_close(&body_bytes);
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // POST /cli/sessions/v2/refresh — sidecar refresh. Kill + resume
+        // the tab-row provider session under the sidecar spawn lock.
+        // Not close, and not pinned ensure-pinned-chat.
+        "/cli/sessions/v2/refresh" => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = crate::v2_spawn::handle_v2_refresh(&body_bytes);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

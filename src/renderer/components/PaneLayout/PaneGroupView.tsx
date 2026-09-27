@@ -428,6 +428,7 @@ function SidecarAgentChrome({
       addr={addr}
       conversationId={conversationId}
       agentName={agentName}
+      cwd={cwd}
       command={command}
       commandHint={commandHint}
     >

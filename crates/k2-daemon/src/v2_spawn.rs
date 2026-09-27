@@ -3,6 +3,7 @@
 //! Endpoints (registered in main.rs):
 //!   - `POST /cli/sessions/v2/spawn` — find-or-spawn by agent_name.
 //!   - `POST /cli/sessions/v2/close` — explicit session teardown.
+//!   - `POST /cli/sessions/v2/refresh` — kill + resume the same provider session.
 //!
 //! Parallel to `awareness_ws::handle_sessions_spawn` /
 //! `handle_sessions_close` which handle v1 / Kessel-T0's
@@ -570,7 +571,16 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             body: r#"{"error":"agent_name required"}"#.into(),
         };
     }
+    // Not reentrant. Sidecar refresh holds this same lock across kill +
+    // spawn and must call [`spawn_session_locked`], never this wrapper.
+    let spawn_lock = canonical_spawn_lock(&req.agent_name);
+    let _spawn_guard = spawn_lock.lock();
+    spawn_session_locked(req)
+}
 
+/// Body of [`spawn_session`]. Caller MUST already hold
+/// [`canonical_spawn_lock`] for `req.agent_name`.
+fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     let __t_total = std::time::Instant::now();
 
     // Canonical chat key = bare project_id. Empty-command attach on that
@@ -580,12 +590,6 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // on their own lanes (R22).
     let project_id = project_id_for_cwd(&req.cwd);
     let is_canonical = project_id.as_deref() == Some(req.agent_name.as_str());
-
-    // R17: per-key single-flight. Canonical keys share this lock with
-    // ensure_pinned_chat / forceRespawn so a second waiter reuses the
-    // resume PTY (never a shell, never a second --session-id).
-    let spawn_lock = canonical_spawn_lock(&req.agent_name);
-    let _spawn_guard = spawn_lock.lock();
 
     // 0.38.5 — restart-recovery: if the daemon was just restarted (app
     // update / launchctl kickstart / crash) the in-memory
@@ -684,6 +688,10 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     });
 
     if let Some(existing) = existing {
+        // Sidecar refresh: a later v2/spawn may attach to this live PTY.
+        // Do not evict a matching program because the body is the tab's
+        // old launch argv (no session identity, or a premint the row
+        // already replaced with resume). Argv is not a reason to re-exec.
         // N3 — spawn seed+lock from the caller's display name on reuse.
         // A locked session keeps its label (don't unlocked-write a harness
         // basename). An unlocked PTY label ("claude") is replaced when the
@@ -1555,6 +1563,154 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
     }
 }
 
+/// Handler for `POST /cli/sessions/v2/refresh`.
+///
+/// One call, under [`canonical_spawn_lock`] for the sidecar key: kill the
+/// live PTY, then spawn resume args from the `workspace_tab_sessions` row
+/// ([`recovered_launch`]: strip a stored premint pair, splice resume of
+/// `session_id`). Does not re-exec `--session-id`, does not mint a new
+/// provider id, does not clear the tab row, and does not call
+/// [`spawn_session`] (that lock is not reentrant). Pinned chat is a
+/// different door.
+pub fn handle_v2_refresh(body: &[u8]) -> HandlerResult {
+    #[derive(serde::Deserialize)]
+    struct RefreshRequest {
+        agent_name: String,
+        #[serde(default)]
+        cwd: String,
+        #[serde(default)]
+        cols: Option<u16>,
+        #[serde(default)]
+        rows: Option<u16>,
+    }
+
+    let req: RefreshRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return HandlerResult {
+                status: "400 Bad Request",
+                body: format!(
+                    r#"{{"error":"parse v2 RefreshRequest: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                ),
+            }
+        }
+    };
+    if req.agent_name.is_empty() {
+        return HandlerResult {
+            status: "400 Bad Request",
+            body: r#"{"error":"agent_name required"}"#.into(),
+        };
+    }
+
+    let spawn_lock = canonical_spawn_lock(&req.agent_name);
+    let _spawn_guard = spawn_lock.lock();
+
+    let existing = v2_session_map::lookup_by_agent_name(&req.agent_name);
+    let cwd = if req.cwd.trim().is_empty() {
+        existing
+            .as_ref()
+            .and_then(|s| s.cwd.as_ref())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        req.cwd.clone()
+    };
+    if cwd.trim().is_empty() {
+        return HandlerResult {
+            status: "400 Bad Request",
+            body: r#"{"error":"cwd required"}"#.into(),
+        };
+    }
+
+    // Resolve BEFORE kill. A missing row must not leave the cell dead,
+    // and must not fall through to premint.
+    let Some((cmd, args)) = recovered_launch(&req.agent_name, &cwd) else {
+        return HandlerResult {
+            status: "409 Conflict",
+            body: serde_json::json!({
+                "error": "sidecar refresh has no resumable session",
+                "agent_name": req.agent_name,
+            })
+            .to_string(),
+        };
+    };
+    let Some(provider_sid) = conversation_id_from_args(Some(&cmd), &args) else {
+        return HandlerResult {
+            status: "409 Conflict",
+            body: serde_json::json!({
+                "error": "sidecar refresh has no provider session id",
+                "agent_name": req.agent_name,
+            })
+            .to_string(),
+        };
+    };
+    // Premint (`--session-id`) starts a new conversation. Resume grammar
+    // only. Refuse rather than re-exec a stored premint pair.
+    if args.iter().any(|a| a == "--session-id") {
+        return HandlerResult {
+            status: "409 Conflict",
+            body: serde_json::json!({
+                "error": "sidecar refresh would re-exec --session-id",
+                "agent_name": req.agent_name,
+            })
+            .to_string(),
+        };
+    }
+
+    let (cols, rows) = match (req.cols.filter(|c| *c > 0), req.rows.filter(|r| *r > 0)) {
+        (Some(c), Some(r)) => (c, r),
+        _ => existing
+            .as_ref()
+            .map(|session| current_dims(session))
+            .unwrap_or((default_cols(), default_rows())),
+    };
+    let (label, label_locked) = if let Some(session) = existing.as_ref() {
+        let text = session.label();
+        let locked = session.label_source() == k2_core::terminal::LabelSource::Locked;
+        let empty = text.is_empty();
+        (
+            if empty { None } else { Some(text) },
+            if empty && !locked { None } else { Some(locked) },
+        )
+    } else {
+        (None, None)
+    };
+
+    if let Some(session) = existing {
+        log_debug!(
+            "[v2-refresh] kill agent={} pty={} resume={}",
+            req.agent_name,
+            session.session_id,
+            provider_sid,
+        );
+        v2_session_map::unregister(&req.agent_name);
+        session.kill();
+    }
+
+    // Command is set, so spawn will not call recovered_launch again and
+    // will not call resolve_resume_chat_args_ex. Resume identity is
+    // already on argv, so autoinject_premint_session_id does not mint.
+    spawn_session_locked(SpawnRequest {
+        agent_name: req.agent_name,
+        cwd,
+        command: Some(cmd),
+        args: Some(args),
+        exec_args: None,
+        cols,
+        rows,
+        env: None,
+        label,
+        label_locked,
+        sandbox: None,
+        ephemeral_cwd: None,
+        principal_key: None,
+        quota_workspace: None,
+        overlay: None,
+        forced_session_id: None,
+    })
+}
+
 /// Read the current `{cols, rows}` from a session's alacritty Term.
 /// Used to populate the response for a reused session so the caller
 /// knows the actual dimensions after any pre-snap resize.
@@ -1638,10 +1794,33 @@ fn apply_spawn_fit(session: &std::sync::Arc<DaemonPtySession>, cols: u16, rows: 
     current_dims(session)
 }
 
+/// Drop the map entry for `agent_name` only when it is still `exited`.
+/// A refresh reuses the name for a newer PTY; this ChildExit must not
+/// kill that process. Returns whether unregister ran.
+pub(crate) fn unregister_if_same_session(agent_name: &str, exited: SessionId) -> bool {
+    match v2_session_map::lookup_by_agent_name(agent_name) {
+        Some(current) if current.session_id == exited => {
+            v2_session_map::unregister(agent_name);
+            true
+        }
+        Some(current) => {
+            log_debug!(
+                "[daemon/v2-exit] ChildExit agent={} exited={} kept live session={}",
+                agent_name,
+                exited,
+                current.session_id,
+            );
+            false
+        }
+        None => false,
+    }
+}
+
 /// Subscribe to a freshly-spawned session's alacritty events on a
-/// detached tokio task and call `v2_session_map::unregister(agent)`
-/// when ChildExit arrives. The unregister hook is what handles the
-/// DB cleanup — see `v2_session_map::unregister`. Detached because
+/// detached tokio task and unregister on ChildExit only when the map
+/// entry is still that session ([`unregister_if_same_session`]). The
+/// unregister hook is what handles the DB cleanup — see
+/// `v2_session_map::unregister`. Detached because
 /// we don't have a JoinHandle to track and the task is short-lived
 /// (only runs until the child dies, which terminates the underlying
 /// broadcast channel and ends our `recv()` loop).
@@ -1701,7 +1880,7 @@ pub fn spawn_child_exit_observer(
             match rx.recv().await {
                 Ok(AlacEvent::ChildExit(status)) => {
                     log_debug!(
-                        "[daemon/v2-exit] ChildExit observed for agent={} code={:?} — unregistering",
+                        "[daemon/v2-exit] ChildExit observed for agent={} code={:?}",
                         agent_name,
                         status.code(),
                     );
@@ -1722,7 +1901,10 @@ pub fn spawn_child_exit_observer(
                     // so GUI residual tabs / workspace_tab_sessions ghosts do
                     // not survive TUI exit (ChildExit often races Grace tick).
                     crate::sandbox_reaper::on_api_host_child_exit(&session_id, &agent_name);
-                    v2_session_map::unregister(&agent_name);
+                    // Refresh reuses agent_name for a new PTY before this
+                    // ChildExit is observed. Unregister only when the map
+                    // entry is still this session.
+                    unregister_if_same_session(&agent_name, session_id);
 
                     // P3b — drop any per-session STREAM token for this session so
                     // a torn-down API session's grid/bytes token stops
@@ -2274,5 +2456,361 @@ mod tests {
             None,
             "self-minting providers with no identity argv must not invent an id"
         );
+    }
+
+    fn assert_resumes_same_id(args: &[String], sid: &str) {
+        assert!(
+            args.windows(2).any(|w| w[1] == sid),
+            "argv must resume {sid}, got {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--session-id"),
+            "refresh must not re-exec --session-id, got {args:?}"
+        );
+        for arg in args {
+            if arg != sid && is_uuid_shape(arg) {
+                panic!("refresh minted a new session id {arg} in {args:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn recovered_launch_strips_stored_premint_and_resumes_row_id() {
+        k2_core::db::init_for_tests();
+        let pid = format!("refresh-premint-{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
+        let cwd = format!("/tmp/{pid}");
+        let agent = format!("tab-{pid}");
+        let sid = "01920000-aaaa-7000-8000-000000000001";
+        let premint = "01920000-bbbb-7000-8000-0000000000aa";
+        seed_project_and_tab_row(
+            &pid,
+            &cwd,
+            &agent,
+            Some("claude"),
+            Some(sid),
+            &["--dangerously-skip-permissions", "--session-id", premint],
+        );
+        let (cmd, args) = recovered_launch(&agent, &cwd).expect("row resumes");
+        assert_eq!(cmd, "claude");
+        assert_resumes_same_id(&args, sid);
+        assert!(
+            !args.iter().any(|a| a == premint),
+            "stored premint must not be re-exec'd, got {args:?}"
+        );
+    }
+
+    #[test]
+    fn recovered_launch_self_minting_harness_resumes_same_id_without_premint() {
+        k2_core::db::init_for_tests();
+        let cases: &[(&str, &[&str], &str)] = &[
+            ("codex", &["--yolo"], "resume"),
+            ("pi", &[], "--session"),
+            ("gemini", &[], "--resume"),
+            ("cursor-agent", &[], "--resume"),
+        ];
+        for (command, base, flag) in cases {
+            let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+            let pid = format!("refresh-self-{command}-{n}");
+            let cwd = format!("/tmp/{pid}");
+            let agent = format!("tab-{pid}");
+            let sid = format!("01920000-cccc-7000-8000-{n:012}");
+            seed_project_and_tab_row(&pid, &cwd, &agent, Some(*command), Some(sid.as_str()), base);
+            let (cmd, args) = recovered_launch(&agent, &cwd)
+                .unwrap_or_else(|| panic!("{command} live argv with no identity must resume"));
+            assert_eq!(cmd, *command);
+            assert_resumes_same_id(&args, &sid);
+            assert!(
+                args.windows(2).any(|w| w[0] == *flag && w[1] == sid),
+                "{command} must splice {flag} {sid}, got {args:?}"
+            );
+        }
+    }
+
+    struct ReapAgent(String);
+    impl Drop for ReapAgent {
+        fn drop(&mut self) {
+            if let Some(session) = crate::v2_session_map::unregister(&self.0) {
+                session.kill();
+            }
+        }
+    }
+
+    fn write_agent_stub(basename: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-sidecar-refresh-{}-{}-{}",
+            basename,
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).expect("stub dir");
+        let path = dir.join(basename);
+        std::fs::write(&path, "#!/bin/sh\nexec cat\n").expect("stub script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        path
+    }
+
+    fn json_body(raw: &str) -> serde_json::Value {
+        serde_json::from_str(raw).unwrap_or_else(|e| panic!("json {e}: {raw}"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_respawns_same_provider_session_and_later_spawn_attaches() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("refresh-live-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let agent = format!("tab-{pid}");
+        let _reap = ReapAgent(agent.clone());
+        let stub = write_agent_stub("claude");
+        let stub_s = stub.to_string_lossy().into_owned();
+        let sid = "01920000-aaaa-7000-8000-000000000099";
+        let premint = "01920000-bbbb-7000-8000-0000000000bb";
+
+        // Live cell first. Its register() would overwrite a harness row
+        // with command=sleep, so the resumable row is written after.
+        let prior = handle_v2_spawn(
+            format!(r#"{{"agent_name":"{agent}","cwd":"{cwd}","command":"sleep","args":["30"]}}"#)
+                .as_bytes(),
+        );
+        assert_eq!(prior.status, "200 OK", "{}", prior.body);
+        let prior_pty = json_body(&prior.body)["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        seed_project_and_tab_row(
+            &pid,
+            &cwd,
+            &agent,
+            Some(stub_s.as_str()),
+            Some(sid),
+            &["--dangerously-skip-permissions", "--session-id", premint],
+        );
+
+        let refreshed = handle_v2_refresh(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(refreshed.status, "200 OK", "{}", refreshed.body);
+        let refreshed_json = json_body(&refreshed.body);
+        assert_eq!(refreshed_json["conversationId"].as_str(), Some(sid));
+        assert_eq!(refreshed_json["reused"].as_bool(), Some(false));
+        let refreshed_pty = refreshed_json["sessionId"]
+            .as_str()
+            .expect("sessionId")
+            .to_string();
+        assert_ne!(
+            refreshed_pty, prior_pty,
+            "refresh must replace the killed pty"
+        );
+
+        let live = crate::v2_session_map::lookup_by_agent_name(&agent).expect("refreshed pty");
+        assert_eq!(live.session_id.to_string(), refreshed_pty);
+        assert_resumes_same_id(&live.args, sid);
+        assert!(live.is_child_alive());
+
+        // Stale ChildExit from the killed sleep must not drop the new pty.
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_millis(800) {
+            let still = crate::v2_session_map::lookup_by_agent_name(&agent)
+                .expect("stale ChildExit unregistered the refreshed pty");
+            assert_eq!(still.session_id.to_string(), refreshed_pty);
+            assert!(still.is_child_alive());
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+
+        let row_sid = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(&conn, &pid, &agent)
+                .expect("row")
+                .expect("tab row kept")
+                .session_id
+        };
+        assert_eq!(
+            row_sid.as_deref(),
+            Some(sid),
+            "refresh must not clear_index"
+        );
+
+        // Later client spawn posts the old launch argv (no session
+        // identity). Attach only — do not replace the live resume.
+        let attach = handle_v2_spawn(
+            serde_json::json!({
+                "agent_name": agent,
+                "cwd": cwd,
+                "command": stub_s,
+                "args": ["--dangerously-skip-permissions"],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(attach.status, "200 OK", "{}", attach.body);
+        let attach_json = json_body(&attach.body);
+        assert_eq!(
+            attach_json["reused"].as_bool(),
+            Some(true),
+            "old launch argv must attach"
+        );
+        assert_eq!(
+            attach_json["sessionId"].as_str(),
+            Some(refreshed_pty.as_str())
+        );
+        assert_eq!(attach_json["conversationId"].as_str(), Some(sid));
+        let still = crate::v2_session_map::lookup_by_agent_name(&agent).expect("still live");
+        assert_eq!(still.session_id.to_string(), refreshed_pty);
+        assert_resumes_same_id(&still.args, sid);
+        let _ = std::fs::remove_dir_all(stub.parent().unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_self_minting_codex_does_not_mint_and_old_argv_attaches() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("refresh-codex-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let agent = format!("tab-{pid}");
+        let _reap = ReapAgent(agent.clone());
+        let stub = write_agent_stub("codex");
+        let stub_s = stub.to_string_lossy().into_owned();
+        let sid = format!("01920000-dddd-7000-8000-{n:012}");
+        seed_project_and_tab_row(
+            &pid,
+            &cwd,
+            &agent,
+            Some(stub_s.as_str()),
+            Some(sid.as_str()),
+            &["--yolo"],
+        );
+        let refreshed = handle_v2_refresh(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(refreshed.status, "200 OK", "{}", refreshed.body);
+        let refreshed_json = json_body(&refreshed.body);
+        assert_eq!(
+            refreshed_json["conversationId"].as_str(),
+            Some(sid.as_str())
+        );
+        let pty = refreshed_json["sessionId"].as_str().unwrap().to_string();
+        let live = crate::v2_session_map::lookup_by_agent_name(&agent).expect("codex pty");
+        assert_resumes_same_id(&live.args, &sid);
+        assert!(
+            live.args
+                .windows(2)
+                .any(|w| w[0] == "resume" && w[1] == sid),
+            "codex must resume, got {:?}",
+            live.args
+        );
+
+        let attach = handle_v2_spawn(
+            serde_json::json!({
+                "agent_name": agent,
+                "cwd": cwd,
+                "command": stub_s,
+                "args": ["--yolo"],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(attach.status, "200 OK", "{}", attach.body);
+        let attach_json = json_body(&attach.body);
+        assert_eq!(attach_json["reused"].as_bool(), Some(true));
+        assert_eq!(attach_json["sessionId"].as_str(), Some(pty.as_str()));
+        assert_eq!(attach_json["conversationId"].as_str(), Some(sid.as_str()));
+        let still = crate::v2_session_map::lookup_by_agent_name(&agent).expect("attached");
+        assert_resumes_same_id(&still.args, &sid);
+        let _ = std::fs::remove_dir_all(stub.parent().unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_without_a_resumable_row_does_not_kill_or_mint() {
+        k2_core::db::init_for_tests();
+        let agent = format!("tab-no-row-{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
+        let _reap = ReapAgent(agent.clone());
+        let spawned = handle_v2_spawn(
+            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
+                .as_bytes(),
+        );
+        assert_eq!(spawned.status, "200 OK", "{}", spawned.body);
+        let pty = json_body(&spawned.body)["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let failed = handle_v2_refresh(
+            serde_json::json!({ "agent_name": agent, "cwd": "/tmp" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(failed.status, "409 Conflict", "{}", failed.body);
+        assert!(
+            failed.body.contains("no resumable session"),
+            "{}",
+            failed.body
+        );
+        let still = crate::v2_session_map::lookup_by_agent_name(&agent).expect("not killed");
+        assert_eq!(still.session_id.to_string(), pty);
+        assert!(still.is_child_alive());
+        assert!(
+            !still.args.iter().any(|a| a == "--session-id"),
+            "failure must not mint, got {:?}",
+            still.args
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_spawn_failure_surfaces_an_error() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("refresh-missing-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let agent = format!("tab-{pid}");
+        let _reap = ReapAgent(agent.clone());
+        let missing = format!("/tmp/{pid}/missing/claude");
+        let sid = "01920000-eeee-7000-8000-0000000000ee";
+        seed_project_and_tab_row(&pid, &cwd, &agent, Some(missing.as_str()), Some(sid), &[]);
+        let failed = handle_v2_refresh(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert!(
+            failed.status.starts_with('5'),
+            "spawn failure must surface, got {} {}",
+            failed.status,
+            failed.body
+        );
+        assert!(failed.body.contains("error"), "{}", failed.body);
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(&agent).is_none(),
+            "failed refresh must not leave a stand-in pty"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_exit_for_a_different_session_does_not_unregister_current() {
+        k2_core::db::init_for_tests();
+        let agent = uniq_agent_name();
+        let _reap = ReapAgent(agent.clone());
+        let spawned = handle_v2_spawn(
+            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
+                .as_bytes(),
+        );
+        assert_eq!(spawned.status, "200 OK", "{}", spawned.body);
+        let current = crate::v2_session_map::lookup_by_agent_name(&agent).expect("live");
+        let current_id = current.session_id;
+        let stale = SessionId::new();
+        assert_ne!(stale, current_id);
+        assert!(!unregister_if_same_session(&agent, stale));
+        let still = crate::v2_session_map::lookup_by_agent_name(&agent).expect("kept");
+        assert_eq!(still.session_id, current_id);
+        assert!(still.is_child_alive());
+        assert!(unregister_if_same_session(&agent, current_id));
+        assert!(crate::v2_session_map::lookup_by_agent_name(&agent).is_none());
     }
 }

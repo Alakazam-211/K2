@@ -48,8 +48,8 @@ export default function UsageButton(): React.JSX.Element {
   }, [open])
 
   const summary = buttonSummary(doc)
-  const rows = doc ? visibleHarnesses(doc) : []
-  const anySignedIn = rows.some(isSignedIn)
+  const rows = doc ? visibleHarnesses(doc).filter(isSignedIn) : []
+  const anySignedIn = rows.length > 0
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const noDrag = { WebkitAppRegion: 'no-drag' } as any

@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
+import { resetSubscriptionUsageForTests } from '@/stores/subscription-usage'
 import type { SubscriptionDoc } from '@/lib/subscription-usage'
 
 const h = vi.hoisted(() => ({
@@ -46,10 +46,10 @@ function claudeDoc(checkedAt: string, extra: Partial<SubscriptionDoc['harnesses'
       },
       {
         harness: 'grok',
-        plan: 'Super',
-        windows: [{ label: 'Weekly', used: 0.99, resetsAt: '2026-10-03T00:00:00Z' }],
+        plan: 'SuperGrok',
+        windows: [],
         checkedAt,
-        status: '',
+        status: 'Not signed in',
       },
     ],
   }
@@ -60,7 +60,7 @@ beforeEach(() => {
   h.remote = false
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
-  useSubscriptionUsageStore.setState({ doc: null, error: null })
+  resetSubscriptionUsageForTests()
 })
 
 describe('UsageButton', () => {
@@ -85,7 +85,8 @@ describe('UsageButton', () => {
     expect(bars).toHaveLength(2)
     expect(bars[0]?.getAttribute('aria-valuenow')).toBe('31')
     expect(bars[1]?.getAttribute('aria-valuenow')).toBe('12')
-    expect(menu.textContent).toContain('Not signed in')
+    expect(menu.textContent).not.toContain('Not signed in')
+    expect(menu.textContent).not.toContain('Codex')
     expect(menu.textContent).not.toContain('Grok')
     expect(menu.textContent).not.toContain('0%')
     expect(h.daemonCliPost).not.toHaveBeenCalled()
@@ -136,14 +137,16 @@ describe('UsageButton', () => {
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')
     expect(menu.textContent).toContain('Nothing is signed in')
-    expect(menu.textContent).toContain('Not signed in')
-    expect(menu.textContent).toContain('Sign-in expired')
+    expect(menu.textContent).not.toContain('Claude')
+    expect(menu.textContent).not.toContain('Codex')
+    expect(menu.textContent).not.toContain('Not signed in')
+    expect(menu.textContent).not.toContain('Sign-in expired')
     expect(menu.textContent).not.toContain('0%')
   })
 
   it('shows No usage window without inventing a percent', async () => {
     const checkedAt = new Date().toISOString()
-    h.daemonCliGet.mockResolvedValue({
+    const noWindow = {
       harnesses: [
         {
           harness: 'claude',
@@ -160,14 +163,20 @@ describe('UsageButton', () => {
           status: 'Not signed in',
         },
       ],
-    })
+    }
+    h.daemonCliGet.mockResolvedValue(noWindow)
+    h.daemonCliPost.mockResolvedValue(noWindow)
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Usage')
+      expect(h.daemonCliGet).toHaveBeenCalled()
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')
-    expect(menu.textContent).toContain('No usage window')
+    await waitFor(() => {
+      expect(menu.textContent).toContain('No usage window')
+    })
+    expect(menu.textContent).toContain('Claude')
+    expect(menu.textContent).not.toContain('Codex')
     expect(menu.textContent).not.toContain('% left')
   })
 

@@ -16,6 +16,14 @@ interface SubscriptionUsageStore {
 }
 
 let loadInflight: Promise<void> | null = null
+let loadEpoch = 0
+
+/** Drop an in-flight load so a later test or caller is not stuck on it. */
+export function resetSubscriptionUsageForTests(): void {
+  loadEpoch += 1
+  loadInflight = null
+  useSubscriptionUsageStore.setState({ doc: null, error: null })
+}
 
 export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, get) => ({
   doc: null,
@@ -23,14 +31,15 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
 
   load: () => {
     if (loadInflight) return loadInflight
+    const epoch = loadEpoch
     loadInflight = (async () => {
       try {
         const doc = await daemonCliGet<SubscriptionDoc>('usage/subscriptions')
-        set({ doc, error: null })
+        if (epoch === loadEpoch) set({ doc, error: null })
       } catch (e) {
-        set({ error: String(e) })
+        if (epoch === loadEpoch) set({ error: String(e) })
       } finally {
-        loadInflight = null
+        if (epoch === loadEpoch) loadInflight = null
       }
     })()
     return loadInflight

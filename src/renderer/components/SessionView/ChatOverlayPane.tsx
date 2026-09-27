@@ -1,4 +1,7 @@
 import { useLayoutEffect, useRef, type JSX } from 'react'
+import { ChatMessage } from '@/components/common/ChatMessage'
+import { formatRelativeTime } from '@/lib/format-relative-time'
+import { chatHarnessLabel } from './chatHarness'
 import type { ChatBlock, ChatTurn } from './chatTranscript'
 import type { SessionViewTab } from './sessionViewTab'
 import { useChatTranscript } from './useChatTranscript'
@@ -47,77 +50,64 @@ export function ChatOverlayPane({
       ) : turns.length === 0 ? (
         <div className="text-[11px] text-[var(--color-text-muted)]">No messages yet.</div>
       ) : (
-        turns.map((turn) => <ChatTurnRow key={turn.id} turn={turn} />)
+        <ChatTurnList turns={turns} harnessLabel={chatHarnessLabel(provider)} />
       )}
     </div>
   )
 }
 
-function ChatTurnRow({ turn }: { turn: ChatTurn }): JSX.Element {
-  const label = turnLabel(turn)
-  const copyText = turn.blocks
-    .map((block) => blockPlain(block))
-    .filter((part) => part.length > 0)
-    .join('\n')
+/** User and assistant text share Thread's ChatMessage. A tool call is its name, not its input. */
+export function ChatTurnList({
+  turns,
+  harnessLabel,
+}: {
+  turns: ChatTurn[]
+  harnessLabel: string
+}): JSX.Element {
+  const nowSec = Math.floor(Date.now() / 1000)
   return (
-    <article className="flex flex-col gap-1 min-w-0" data-testid="chat-turn" data-turn-id={turn.id}>
-      <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
-        <span className="font-medium text-[var(--color-text-secondary)]">{label}</span>
-        {turn.time ? <time dateTime={turn.time}>{turn.time}</time> : null}
-        {copyText ? (
-          <button
-            type="button"
-            className="ml-auto cursor-pointer hover:text-[var(--color-text-primary)]"
-            onClick={() => {
-              void navigator.clipboard?.writeText(copyText)
-            }}
-          >
-            Copy
-          </button>
-        ) : null}
-      </div>
-      {turn.blocks.map((block, index) => (
-        <ChatBlockView key={`${turn.id}:${index}`} block={block} />
-      ))}
-    </article>
+    <>
+      {turns.map((turn) => {
+        const owner = isOwnerTurn(turn)
+        return (
+          <div key={turn.id} data-testid="chat-turn" data-turn-id={turn.id} data-role={turn.role}>
+            <ChatMessage
+              author={owner ? 'You' : harnessLabel}
+              isOwner={owner}
+              timeLabel={chatTimeLabel(turn.time, nowSec)}
+              body={chatTurnBody(turn)}
+            />
+          </div>
+        )
+      })}
+    </>
   )
 }
 
-function turnLabel(turn: ChatTurn): string {
-  if (turn.blocks.length > 0 && turn.blocks.every((block) => block.type === 'tool_result')) {
-    return 'Tool'
-  }
-  if (turn.role === 'assistant') return 'Agent'
-  if (turn.role === 'tool') return 'Tool'
-  if (turn.role === 'user') return 'You'
-  return turn.role
+function isOwnerTurn(turn: ChatTurn): boolean {
+  if (turn.role !== 'user') return false
+  if (turn.blocks.length > 0 && turn.blocks.every((block) => block.type === 'tool_result')) return false
+  return true
 }
 
-function blockPlain(block: ChatBlock): string {
+export function chatTurnBody(turn: ChatTurn): string {
+  const lines: string[] = []
+  for (const block of turn.blocks) {
+    const line = blockLine(block)
+    if (line) lines.push(line)
+  }
+  return lines.join('\n')
+}
+
+function blockLine(block: ChatBlock): string {
   if (block.type === 'text') return block.text
-  if (block.type === 'tool_call') return `${block.name}\n${block.input}`
+  if (block.type === 'tool_call') return block.name
   return block.content
 }
 
-function ChatBlockView({ block }: { block: ChatBlock }): JSX.Element {
-  if (block.type === 'text') {
-    return (
-      <p className="text-[12px] text-[var(--color-text-primary)] whitespace-pre-wrap break-words m-0">
-        {block.text}
-      </p>
-    )
-  }
-  if (block.type === 'tool_call') {
-    return (
-      <pre className="text-[11px] text-[var(--color-text-secondary)] whitespace-pre-wrap break-words m-0 font-mono">
-        {block.name}
-        {block.input ? `\n${block.input}` : ''}
-      </pre>
-    )
-  }
-  return (
-    <pre className="text-[11px] text-[var(--color-text-secondary)] whitespace-pre-wrap break-words m-0 font-mono">
-      {block.content}
-    </pre>
-  )
+function chatTimeLabel(time: string | null | undefined, nowSec: number): string {
+  if (!time) return '—'
+  const ms = Date.parse(time)
+  if (Number.isNaN(ms)) return time
+  return formatRelativeTime(Math.floor(ms / 1000), nowSec)
 }

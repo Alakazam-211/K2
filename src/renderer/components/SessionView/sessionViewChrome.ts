@@ -1,9 +1,11 @@
 import { createContext, useContext } from 'react'
-import type { SessionViewTab } from './sessionViewTab'
+import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
-/** Chrome around an agent session: tabs pick the compose send destination. */
+/** Chrome around an agent session: the view menu picks the compose send destination. */
 export interface SessionViewChromeValue {
   viewTab: SessionViewTab
+  splitLeft: SplitPaneView
+  splitRight: SplitPaneView
   overlayAddr: string
   conversationId: string | null
   /** Provider conversation id for the chat face. Never the PTY uuid. */

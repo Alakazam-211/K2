@@ -8,7 +8,6 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 
 import { ChatOverlayColumn } from './ChatOverlayColumn'
-import { ChatViewControl } from './ChatViewControl'
 
 describe('chat overlay dock', () => {
   afterEach(() => cleanup())
@@ -41,26 +40,5 @@ describe('chat overlay dock', () => {
     expect(screen.getByTestId('message-compose').getAttribute('data-compose-destination')).toBe('pty')
     expect(screen.getByTestId('message-compose').getAttribute('data-session-id')).toBe('pty-1')
     HTMLElement.prototype.getBoundingClientRect = original
-  })
-})
-
-describe('ChatViewControl', () => {
-  afterEach(() => cleanup())
-
-  it('is not a tab and does not select chat when the harness is not v1', () => {
-    let next = ''
-    render(<ChatViewControl value="terminal" eligible={false} onChange={(tab) => { next = tab }} />)
-    const button = screen.getByTestId('session-view-chat')
-    expect(button.getAttribute('role')).toBeNull()
-    expect(button.hasAttribute('disabled')).toBe(true)
-    button.click()
-    expect(next).toBe('')
-  })
-
-  it('selects chat for a v1 harness without calling close or spawn', () => {
-    let next = ''
-    render(<ChatViewControl value="terminal" eligible onChange={(tab) => { next = tab }} />)
-    screen.getByTestId('session-view-chat').click()
-    expect(next).toBe('chat')
   })
 })

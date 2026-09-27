@@ -33,6 +33,20 @@ export function chatHarnessName(input: {
   return null
 }
 
+const HARNESS_LABEL: Record<ChatHarness, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  grok: 'Grok',
+  gemini: 'Gemini',
+}
+
+/** Author line on the assistant chat message. Not a model switcher. */
+export function chatHarnessLabel(provider: string | null | undefined): string {
+  const name = provider?.trim() ?? ''
+  if (CHAT_HARNESS_SET.has(name)) return HARNESS_LABEL[name as ChatHarness]
+  return 'Agent'
+}
+
 export function harnessFieldsKnown(input: {
   command?: string | null
   commandHint?: string | null

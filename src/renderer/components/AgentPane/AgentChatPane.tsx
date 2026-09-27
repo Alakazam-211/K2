@@ -15,9 +15,9 @@ import { useActiveStore } from '@/stores/active'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
-import { SessionViewTabs } from '@/components/SessionView/SessionViewTabs'
-import { ChatViewControl } from '@/components/SessionView/ChatViewControl'
+import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import { chatHarnessName } from '@/components/SessionView/chatHarness'
+import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, type SplitPaneView } from '@/components/SessionView/sessionViewTab'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -173,7 +173,11 @@ interface ChatHeaderProps {
    *  session's agent may differ from the workspace default). */
   onSwitchSession: (newSessionId: string, provider: string) => void
   viewTab: SessionViewTab
+  splitLeft: SplitPaneView
+  splitRight: SplitPaneView
   onViewTabChange: (tab: SessionViewTab) => void
+  onSplitLeft: (view: SplitPaneView) => void
+  onSplitRight: (view: SplitPaneView) => void
   /** v1 harness from ensure or the launch command. Null when known but not v1. */
   chatProvider: string | null
   /** False until ensure/launch has named the program. Does not grey a fresh Codex. */
@@ -198,13 +202,29 @@ function ChatHeader({
   refreshing,
   onSwitchSession,
   viewTab,
+  splitLeft,
+  splitRight,
   onViewTabChange,
+  onSplitLeft,
+  onSplitRight,
   chatProvider,
   harnessReady,
 }: ChatHeaderProps): React.JSX.Element {
   useEffect(() => {
-    if (harnessReady && viewTab === 'chat' && !chatProvider) onViewTabChange('terminal')
-  }, [harnessReady, viewTab, chatProvider, onViewTabChange])
+    if (!harnessReady || chatProvider) return
+    if (viewTab === 'chat') onViewTabChange('terminal')
+    if (splitLeft === 'chat') onSplitLeft(DEFAULT_SPLIT_LEFT)
+    if (splitRight === 'chat') onSplitRight(DEFAULT_SPLIT_RIGHT)
+  }, [
+    harnessReady,
+    viewTab,
+    splitLeft,
+    splitRight,
+    chatProvider,
+    onViewTabChange,
+    onSplitLeft,
+    onSplitRight,
+  ])
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyEpoch, setHistoryEpoch] = useState(0)
@@ -275,8 +295,15 @@ function ChatHeader({
       data-testid="pinned-chat-header"
     >
     <div className="px-3 flex items-stretch gap-2">
-      <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
-      <ChatViewControl value={viewTab} eligible={Boolean(chatProvider)} onChange={onViewTabChange} />
+      <SessionViewMenu
+        value={viewTab}
+        splitLeft={splitLeft}
+        splitRight={splitRight}
+        chatEligible={Boolean(chatProvider)}
+        onChange={onViewTabChange}
+        onSplitLeft={onSplitLeft}
+        onSplitRight={onSplitRight}
+      />
       <span className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0 flex items-center">
         {displayName}
       </span>
@@ -531,7 +558,14 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   if (phase.kind === 'ready' && phase.canonicalSessionId) {
     lastOverlayConvRef.current = phase.canonicalSessionId
   }
-  const [viewTab, setViewTab] = useSessionViewTab(overlayConv)
+  const {
+    viewTab,
+    setViewTab,
+    splitLeft,
+    splitRight,
+    setSplitLeft,
+    setSplitRight,
+  } = useSessionViewTab(overlayConv)
   const [chatProvider, setChatProvider] = useState<string | null>(null)
   const [harnessReady, setHarnessReady] = useState(false)
   const [chatConversationId, setChatConversationId] = useState<string | null>(null)
@@ -566,8 +600,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // Codex and Gemini mint the provider id after the first turn. Do not
   // open the transcript socket until that id exists. This poll reads the
   // list row; it does not spawn, close, or tail a file.
+  const chatFaceOn =
+    viewTab === 'chat' ||
+    (viewTab === 'split' && (splitLeft === 'chat' || splitRight === 'chat'))
   useEffect(() => {
-    if (viewTab !== 'chat' || !harnessReady || !chatProvider || chatConversationId) return
+    if (!chatFaceOn || !harnessReady || !chatProvider || chatConversationId) return
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
@@ -590,7 +627,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       cancelled = true
       clearInterval(timer)
     }
-  }, [viewTab, harnessReady, chatProvider, chatConversationId, projectPath, projectId])
+  }, [chatFaceOn, harnessReady, chatProvider, chatConversationId, projectPath, projectId])
 
   // ── ensure() — the one daemon RPC this component leans on ────────────
   // Idempotent on the daemon side. `forceRespawn` kills + respawns. The
@@ -755,7 +792,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       refreshing={refreshing}
       onSwitchSession={(sid, provider) => void handleSwitchSession(sid, provider)}
       viewTab={viewTab}
+      splitLeft={splitLeft}
+      splitRight={splitRight}
       onViewTabChange={setViewTab}
+      onSplitLeft={setSplitLeft}
+      onSplitRight={setSplitRight}
       chatProvider={chatProvider}
       harnessReady={harnessReady}
     />
@@ -813,6 +854,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {header}
       <PinnedSessionBody
         viewTab={viewTab}
+        splitLeft={splitLeft}
+        splitRight={splitRight}
         addr={overlayAddr}
         conversationId={overlayConv}
         chatConversationId={chatConversationId}
@@ -967,7 +1010,14 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const lastOverlayConvRef = useRef<string | null>(restoredSessionId ?? null)
   if (currentSessionId) lastOverlayConvRef.current = currentSessionId
   const overlayConv = currentSessionId ?? lastOverlayConvRef.current
-  const [viewTab, setViewTab] = useSessionViewTab(overlayConv)
+  const {
+    viewTab,
+    setViewTab,
+    splitLeft,
+    splitRight,
+    setSplitLeft,
+    setSplitRight,
+  } = useSessionViewTab(overlayConv)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
@@ -1259,7 +1309,11 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       refreshing={refreshing}
       onSwitchSession={(sid, provider) => void switchToSession(sid, provider)}
       viewTab={viewTab}
+      splitLeft={splitLeft}
+      splitRight={splitRight}
       onViewTabChange={setViewTab}
+      onSplitLeft={setSplitLeft}
+      onSplitRight={setSplitRight}
       chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
       harnessReady={launchConfig != null}
     />
@@ -1298,6 +1352,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       {header}
       <PinnedSessionBody
         viewTab={viewTab}
+        splitLeft={splitLeft}
+        splitRight={splitRight}
         addr={overlayAddr}
         conversationId={overlayConv}
         chatConversationId={currentSessionId}

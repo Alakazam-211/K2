@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatHarnessName, commandBasename } from './chatHarness'
+import { chatHarnessLabel, chatHarnessName, commandBasename } from './chatHarness'
 
 describe('chat harness eligibility', () => {
   it('accepts path-qualified claude, codex, grok, and gemini', () => {
@@ -27,6 +27,15 @@ describe('chat harness eligibility', () => {
     expect(chatHarnessName({ provider: 'cursor' })).toBeNull()
     expect(chatHarnessName({ command: null, commandHint: null, provider: null })).toBeNull()
     expect(chatHarnessName({})).toBeNull()
+  })
+
+  it('labels the four harnesses and nothing else', () => {
+    expect(chatHarnessLabel('claude')).toBe('Claude')
+    expect(chatHarnessLabel('codex')).toBe('Codex')
+    expect(chatHarnessLabel('grok')).toBe('Grok')
+    expect(chatHarnessLabel('gemini')).toBe('Gemini')
+    expect(chatHarnessLabel('pi')).toBe('Agent')
+    expect(chatHarnessLabel(null)).toBe('Agent')
   })
 
   it('does not let a hint override a known non-v1 provider', () => {

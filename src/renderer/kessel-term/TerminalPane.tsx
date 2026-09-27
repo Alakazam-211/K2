@@ -89,8 +89,14 @@ import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalComp
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ChatOverlayColumn } from '@/components/SessionView/ChatOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
+import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
-import { overlayViewer } from '@/components/SessionView/sessionViewTab'
+import {
+  DEFAULT_SPLIT_LEFT,
+  DEFAULT_SPLIT_RIGHT,
+  overlayViewer,
+  type SplitPaneView,
+} from '@/components/SessionView/sessionViewTab'
 import {
   bracketPaste,
   isImagePath,
@@ -572,11 +578,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
+  const splitLeft = sessionChrome?.splitLeft ?? DEFAULT_SPLIT_LEFT
+  const splitRight = sessionChrome?.splitRight ?? DEFAULT_SPLIT_RIGHT
+  const showSplit = viewTab === 'split'
   const { thread: showThreadOverlay, chatter: showChatterOverlay, chat: showChat, hidePty } =
-    overlayViewer(viewTab)
+    overlayViewer(viewTab, { left: splitLeft, right: splitRight })
   const showThreadOnly = viewTab === 'thread'
   const showChatterOnly = viewTab === 'chatter'
-  const showSplit = viewTab === 'split'
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -5372,37 +5380,31 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     minHeight: 0,
   }
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        height: '100%',
-        overflow: 'hidden',
-        minWidth: 0,
-      }}
-      data-terminal-pane-wrapper=""
-    >
-    <div
-      style={{
-        flex: 1,
-        minHeight: 0,
-        minWidth: 0,
-        position: 'relative',
-        display: 'flex',
-        flexDirection: showSplit ? 'row' : 'column',
-      }}
-    >
-    <div
-      style={{
-        flex: hidePty ? undefined : 1,
-        minWidth: 0,
-        minHeight: 0,
-        display: hidePty ? 'none' : 'flex',
-        flexDirection: 'column',
-      }}
-    >
+  const sessionIdForCompose =
+    'sessionId' in phase && phase.sessionId ? phase.sessionId : ''
+  const composePty = (): React.ReactNode => {
+    if (!showComposeBar || !shouldShowTerminalComposeBar(phase)) return null
+    return (
+      <TerminalComposeBar
+        sessionId={sessionIdForCompose}
+        workspacePath={cwd}
+        onInjectInput={sendInput}
+        sendDestination="pty"
+      />
+    )
+  }
+  const composeThread = (): React.ReactNode => {
+    if (!showComposeBar || !shouldShowTerminalComposeBar(phase)) return null
+    return (
+      <TerminalComposeBar
+        sessionId={sessionIdForCompose}
+        workspacePath={cwd}
+        onInjectInput={sendInput}
+        sendDestination="thread"
+      />
+    )
+  }
+  const grid = (
     <div
       ref={containerRef}
       className="kessel-pane"
@@ -5747,68 +5749,113 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         </div>
       )}
     </div>
-      {showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
-        <TerminalComposeBar
-          sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
-          workspacePath={cwd}
-          onInjectInput={sendInput}
-          sendDestination="pty"
-        />
-      )}
-    </div>
-      {sessionChrome && showThreadOverlay && (
-        <ThreadOverlayColumn
-          addr={sessionChrome.overlayAddr}
-          conversationId={sessionChrome.conversationId}
-          active={showThreadOverlay}
-          split={showSplit}
-          composeBar={
-            showComposeBar && shouldShowTerminalComposeBar(phase) ? (
-              <TerminalComposeBar
-                sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
-                workspacePath={cwd}
-                onInjectInput={sendInput}
-                sendDestination="thread"
-              />
-            ) : null
-          }
-        />
-      )}
-      {sessionChrome && showChat && (
-        <ChatOverlayColumn
-          view={viewTab}
-          visible={isTabVisible}
-          provider={sessionChrome.chatProvider}
-          conversationId={sessionChrome.chatConversationId}
-          agentName={sessionChrome.agentName}
-          composeBar={
-            showComposeBar && shouldShowTerminalComposeBar(phase) ? (
-              <TerminalComposeBar
-                sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
-                workspacePath={cwd}
-                onInjectInput={sendInput}
-                sendDestination="pty"
-              />
-            ) : null
-          }
-        />
-      )}
-      {sessionChrome && showChatterOverlay && (
-        <div
-          className="flex-1 min-w-0 min-h-0 flex flex-col"
-          data-testid="agent-session-chatter"
-        >
-          <div className="flex-1 min-h-0 min-w-0">
-            <ChatterOverlayPane
+  )
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        minWidth: 0,
+      }}
+      data-terminal-pane-wrapper=""
+    >
+    <SplitSessionColumns
+      showSplit={showSplit}
+      hidePty={hidePty}
+      left={splitLeft}
+      right={splitRight}
+      terminal={
+        <>
+          {grid}
+          {showSplit ? composePty() : null}
+        </>
+      }
+      sharedTerminal={
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-testid="split-terminal-shared">
+          <div className="flex-1 min-h-0" />
+          {composePty()}
+        </div>
+      }
+      renderView={(view: Exclude<SplitPaneView, 'terminal'>) => {
+        if (!sessionChrome) return null
+        if (view === 'thread') {
+          return (
+            <ThreadOverlayColumn
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}
-              active={showChatterOverlay}
+              active
+              composeBar={composeThread()}
             />
+          )
+        }
+        if (view === 'chat') {
+          return (
+            <ChatOverlayColumn
+              view="chat"
+              visible={isTabVisible}
+              provider={sessionChrome.chatProvider}
+              conversationId={sessionChrome.chatConversationId}
+              agentName={sessionChrome.agentName}
+              composeBar={composePty()}
+            />
+          )
+        }
+        return (
+          <div
+            className="flex-1 min-w-0 min-h-0 flex flex-col"
+            data-testid="agent-session-chatter"
+          >
+            <div className="flex-1 min-h-0 min-w-0">
+              <ChatterOverlayPane
+                addr={sessionChrome.overlayAddr}
+                conversationId={sessionChrome.conversationId}
+                active
+              />
+            </div>
           </div>
-        </div>
-      )}
-    </div>
-
+        )
+      }}
+      single={
+        <>
+          {sessionChrome && showThreadOverlay && (
+            <ThreadOverlayColumn
+              addr={sessionChrome.overlayAddr}
+              conversationId={sessionChrome.conversationId}
+              active={showThreadOverlay}
+              composeBar={composeThread()}
+            />
+          )}
+          {sessionChrome && showChat && (
+            <ChatOverlayColumn
+              view={viewTab}
+              visible={isTabVisible}
+              provider={sessionChrome.chatProvider}
+              conversationId={sessionChrome.chatConversationId}
+              agentName={sessionChrome.agentName}
+              composeBar={composePty()}
+            />
+          )}
+          {sessionChrome && showChatterOverlay && (
+            <div
+              className="flex-1 min-w-0 min-h-0 flex flex-col"
+              data-testid="agent-session-chatter"
+            >
+              <div className="flex-1 min-h-0 min-w-0">
+                <ChatterOverlayPane
+                  addr={sessionChrome.overlayAddr}
+                  conversationId={sessionChrome.conversationId}
+                  active={showChatterOverlay}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      }
+    />
       {/* Terminal-tab composer docks under the PTY column (in-flow). Thread
        *  tab uses the overlay column above so DevTools/viewport shrinks
        *  chat + Message-the-agent together. Split keeps one bar per column.

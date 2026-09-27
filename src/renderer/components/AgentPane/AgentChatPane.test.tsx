@@ -20,7 +20,8 @@
 // args, onChildExit).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useEffect } from 'react'
 
 // ── Hoisted spies / controllable state ───────────────────────────────────
@@ -573,22 +574,40 @@ describe('#683 capability gate — fallback to legacy renderer-orchestrated path
 
 describe('S2 overlay chrome (C3/C4/C10)', () => {
   it('defaults to Terminal and keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    render(
+      <>
+        <AgentChatPane agentName="agent" projectPath="/ws" />
+        <ContextMenu />
+      </>,
+    )
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
-    expect(screen.getByTestId('session-view-tab-terminal').getAttribute('aria-selected')).toBe(
-      'true',
-    )
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
+    expect(screen.queryByTestId('session-view-tabs')).toBeNull()
+    expect(screen.queryByTestId('session-view-chat')).toBeNull()
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByTestId('pinned-chat-header')).not.toBeNull()
     const header = screen.getByTestId('pinned-chat-header')
-    const tabs = screen.getByTestId('session-view-tabs')
-    expect(tabs.parentElement?.parentElement).toBe(header)
-    const rowKids = Array.from(tabs.parentElement!.children)
-    expect(rowKids.indexOf(tabs)).toBe(0)
+    const menu = screen.getByTestId('session-view-menu')
+    expect(menu.parentElement?.parentElement).toBe(header)
+    const rowKids = Array.from(menu.parentElement!.children)
+    expect(rowKids.indexOf(menu)).toBe(0)
 
-    fireEvent.click(screen.getByTestId('session-view-tab-thread'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('session-view-button'))
+    })
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
+    const thread = document.querySelector('[data-context-menu] button')
+    expect(thread).toBeTruthy()
+    const threadRow = Array.from(document.querySelectorAll('[data-context-menu] button')).find((button) =>
+      Array.from(button.querySelectorAll('span')).some((span) => span.textContent === 'Thread'),
+    )
+    expect(threadRow).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(threadRow!)
+    })
 
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('thread')
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
     expect(screen.getByTestId('message-compose')).not.toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
@@ -596,6 +615,5 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(h.terminalProps.current!.showComposeBar).toBe(true)
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
-    expect(screen.getByTestId('session-view-tab-thread').textContent).toBe('Thread')
   })
 })

@@ -4,12 +4,12 @@ import {
   copyableAddressFromDaemonRow,
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
-import { SessionViewTabs } from './SessionViewTabs'
-import { ChatViewControl } from './ChatViewControl'
+import { SessionViewMenu } from './SessionViewMenu'
 import { chatHarnessName, harnessFieldsKnown } from './chatHarness'
+import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT } from './sessionViewTab'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
-import type { SessionViewTab } from './sessionViewTab'
+import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -43,12 +43,31 @@ export function AgentSessionChrome({
   children,
 }: AgentSessionChromeProps): JSX.Element {
   const sessionKey = conversationId || addr || agentName
-  const [viewTab, setViewTab] = useSessionViewTab(sessionKey)
+  const {
+    viewTab,
+    setViewTab,
+    splitLeft,
+    splitRight,
+    setSplitLeft,
+    setSplitRight,
+  } = useSessionViewTab(sessionKey)
   const chatProvider = chatHarnessName({ command, commandHint, provider })
   const harnessKnown = harnessFieldsKnown({ command, commandHint, provider })
   useEffect(() => {
-    if (viewTab === 'chat' && harnessKnown && !chatProvider) setViewTab('terminal')
-  }, [viewTab, harnessKnown, chatProvider, setViewTab])
+    if (!harnessKnown || chatProvider) return
+    if (viewTab === 'chat') setViewTab('terminal')
+    if (splitLeft === 'chat') setSplitLeft(DEFAULT_SPLIT_LEFT)
+    if (splitRight === 'chat') setSplitRight(DEFAULT_SPLIT_RIGHT)
+  }, [
+    viewTab,
+    splitLeft,
+    splitRight,
+    harnessKnown,
+    chatProvider,
+    setViewTab,
+    setSplitLeft,
+    setSplitRight,
+  ])
   const [refreshing, setRefreshing] = useState(false)
   const [nonce, setNonce] = useState(0)
 
@@ -73,6 +92,8 @@ export function AgentSessionChrome({
     <SessionViewChromeContext.Provider
       value={{
         viewTab,
+        splitLeft,
+        splitRight,
         overlayAddr: addr,
         conversationId,
         chatConversationId: conversationId,
@@ -84,7 +105,11 @@ export function AgentSessionChrome({
         <SidecarSessionHeader
           title={title}
           viewTab={viewTab}
+          splitLeft={splitLeft}
+          splitRight={splitRight}
           onViewTabChange={setViewTab}
+          onSplitLeft={setSplitLeft}
+          onSplitRight={setSplitRight}
           chatEligible={Boolean(chatProvider)}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
@@ -104,14 +129,22 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
 export function SidecarSessionHeader({
   title,
   viewTab,
+  splitLeft,
+  splitRight,
   onViewTabChange,
+  onSplitLeft,
+  onSplitRight,
   chatEligible = false,
   onRefresh,
   refreshing,
 }: {
   title: string
   viewTab: SessionViewTab
+  splitLeft: SplitPaneView
+  splitRight: SplitPaneView
   onViewTabChange: (tab: SessionViewTab) => void
+  onSplitLeft: (view: SplitPaneView) => void
+  onSplitRight: (view: SplitPaneView) => void
   chatEligible?: boolean
   onRefresh: () => void
   refreshing: boolean
@@ -121,8 +154,15 @@ export function SidecarSessionHeader({
       className="border-b border-[var(--color-border)] flex-shrink-0 px-3 flex items-stretch gap-2"
       data-testid="sidecar-session-header"
     >
-        <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
-        <ChatViewControl value={viewTab} eligible={chatEligible} onChange={onViewTabChange} />
+        <SessionViewMenu
+          value={viewTab}
+          splitLeft={splitLeft}
+          splitRight={splitRight}
+          chatEligible={chatEligible}
+          onChange={onViewTabChange}
+          onSplitLeft={onSplitLeft}
+          onSplitRight={onSplitRight}
+        />
         <span
           className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
           data-testid="sidecar-session-title"
@@ -163,6 +203,8 @@ export function SidecarSessionHeader({
 
 export function PinnedSessionBody({
   viewTab,
+  splitLeft,
+  splitRight,
   addr,
   conversationId,
   chatConversationId,
@@ -171,6 +213,8 @@ export function PinnedSessionBody({
   children,
 }: {
   viewTab: SessionViewTab
+  splitLeft: SplitPaneView
+  splitRight: SplitPaneView
   addr: string
   conversationId: string | null
   chatConversationId?: string | null
@@ -182,6 +226,8 @@ export function PinnedSessionBody({
     <SessionViewChromeContext.Provider
       value={{
         viewTab,
+        splitLeft,
+        splitRight,
         overlayAddr: addr,
         conversationId,
         chatConversationId: chatConversationId ?? conversationId,

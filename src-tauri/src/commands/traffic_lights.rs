@@ -60,6 +60,8 @@ mod imp {
     static ORIGINAL_CELL: u8 = 0;
     static ORIGINAL_TARGET: u8 = 0;
     static ORIGINAL_ACTION: u8 = 0;
+    /// `setDocumentEdited:` on the close button calls this on the cell.
+    static EDITED_FLAG: u8 = 0;
 
     #[link(name = "AppKit", kind = "framework")]
     extern "C" {
@@ -400,6 +402,17 @@ mod imp {
                 sel!(accessibilityLabel),
                 ax_label as extern "C" fn(&Object, Sel) -> id,
             );
+            // Title changes (server switch) make AppKit call this on the
+            // close button's cell. The system cell implements it. NSButtonCell
+            // does not, so a missing method aborts the process.
+            decl.add_method(
+                sel!(setEditedFlag:),
+                set_edited_flag as extern "C" fn(&Object, Sel, BOOL),
+            );
+            decl.add_method(
+                sel!(editedFlag),
+                edited_flag as extern "C" fn(&Object, Sel) -> BOOL,
+            );
             decl.register() as *const Class
         })
     }
@@ -437,6 +450,33 @@ mod imp {
             }
         });
         ptr as id
+    }
+
+    extern "C" fn set_edited_flag(this: &Object, _: Sel, flag: BOOL) {
+        let n: i64 = if flag == YES { 1 } else { 0 };
+        unsafe {
+            let num: id = msg_send![class!(NSNumber), numberWithLongLong: n];
+            objc_setAssociatedObject(
+                this as *const Object as id,
+                std::ptr::addr_of!(EDITED_FLAG) as *const c_void,
+                num,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+        }
+    }
+
+    extern "C" fn edited_flag(this: &Object, _: Sel) -> BOOL {
+        unsafe {
+            let num: id = objc_getAssociatedObject(
+                this as *const Object as id,
+                std::ptr::addr_of!(EDITED_FLAG) as *const c_void,
+            );
+            if num == nil {
+                return NO;
+            }
+            let v: i64 = msg_send![num, longLongValue];
+            if v != 0 { YES } else { NO }
+        }
     }
 
     extern "C" fn draw_with_frame(_this: &Object, _: Sel, frame: NSRect, view: id) {

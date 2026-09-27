@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.1 — Server switch no longer quits the app
+
+- **Square close button.** Switching to another server changes the window title. On the Square style that update asked the close button for a flag it did not have, and the app quit. The button answers that call now.
+
 ## 0.41.0 — Usage, chat continuation, and a desktop that stays put
 
 Everything since 0.40.150. The window, the browser, usage, and how a chat continues.

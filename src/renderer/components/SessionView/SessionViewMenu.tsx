@@ -11,8 +11,8 @@ const PANE_LABEL: Record<SplitPaneView, string> = {
 
 function viewMenuItems(chatEligible: boolean): ContextMenuItemDef[] {
   return [
-    { id: 'chat', label: 'Chat', badge: 'New', enabled: chatEligible },
     { id: 'terminal', label: 'Terminal' },
+    { id: 'chat', label: 'Chat', badge: 'Beta', enabled: chatEligible },
     { id: 'thread', label: 'Thread' },
     { id: 'chatter', label: 'Chatter' },
     { id: 'split', label: 'Split view' },
@@ -21,8 +21,8 @@ function viewMenuItems(chatEligible: boolean): ContextMenuItemDef[] {
 
 function sideMenuItems(chatEligible: boolean): ContextMenuItemDef[] {
   return [
-    { id: 'chat', label: 'Chat', enabled: chatEligible },
     { id: 'terminal', label: 'Terminal' },
+    { id: 'chat', label: 'Chat', enabled: chatEligible },
     { id: 'thread', label: 'Thread' },
     { id: 'chatter', label: 'Chatter' },
   ]

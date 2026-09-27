@@ -83,13 +83,13 @@ describe('View menu', () => {
     expect(useContextMenuStore.getState().x).toBe(40)
     expect(useContextMenuStore.getState().y).toBe(36)
     expect(useContextMenuStore.getState().items.map((item) => item.label)).toEqual([
-      'Chat',
       'Terminal',
+      'Chat',
       'Thread',
       'Chatter',
       'Split view',
     ])
-    expect(useContextMenuStore.getState().items[0]?.badge).toBe('New')
+    expect(useContextMenuStore.getState().items[1]?.badge).toBe('Beta')
 
     await act(async () => {
       fireEvent.keyDown(window, { key: 'Escape' })
@@ -173,8 +173,8 @@ describe('View menu', () => {
     })
     expect(menuRow('Chat').disabled).toBe(true)
     expect(useContextMenuStore.getState().items.map((item) => item.label)).toEqual([
-      'Chat',
       'Terminal',
+      'Chat',
       'Thread',
       'Chatter',
     ])

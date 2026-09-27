@@ -219,7 +219,9 @@ describe('Continue in a new chat', () => {
     const dialog = await screen.findByTestId('continue-new-chat')
     expect(dialog.textContent).toContain('Finish the editor refactor')
     expect(dialog.textContent).toContain('From Claude')
-    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude')
+    const harness = screen.getByLabelText('Harness')
+    expect(harness.tagName).not.toBe('SELECT')
+    expect(harness.textContent).toContain('Claude')
     const recent = screen.getByRole('radio', { name: /Recent turns/ }) as HTMLInputElement
     expect(recent.checked).toBe(true)
     expect(h.posts).toEqual([])
@@ -402,5 +404,40 @@ describe('Continue in a new chat', () => {
     expect(screen.queryByRole('button', { name: 'Copy text' })).toBeNull()
     expect(h.posts.some((post) => post.route === 'terminal/send-message')).toBe(false)
     expect(useTabsStore.getState().tabs.find((tab) => tab.title.includes('(from Claude)'))).toBeUndefined()
+  })
+
+  it('opens a themed harness menu and updates the trigger when another harness is chosen', async () => {
+    h.sessions.push(session())
+    render(<ChatHistory projectPath={PROJECT} />)
+    await screen.findByText('Finish the editor refactor')
+    await openMenu('Finish the editor refactor')
+    fireEvent.click(screen.getByText('Continue in a new chat…'))
+    const dialog = await screen.findByTestId('continue-new-chat')
+    expect(dialog.querySelector('select')).toBeNull()
+
+    const trigger = screen.getByLabelText('Harness')
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger.textContent).toContain('Claude')
+    fireEvent.click(trigger)
+
+    const menu = trigger.parentElement?.querySelector(':scope > div') ?? null
+    expect(menu).toBeTruthy()
+    expect(menu!.tagName).toBe('DIV')
+    expect(menu!.className).toContain('bg-[var(--color-bg-surface)]')
+    expect(menu!.className).toContain('border-[var(--color-border)]')
+    expect(menu!.querySelector('select')).toBeNull()
+    expect(menu!.querySelector('option')).toBeNull()
+    const choices = Array.from(menu!.querySelectorAll('button'))
+    expect(choices.length).toBeGreaterThan(1)
+    for (const label of ['Claude', 'Cursor', 'Grok', 'Gemini', 'Pi', 'Codex', 'Hermes']) {
+      const choice = choices.find((btn) => btn.textContent?.includes(label))
+      expect(choice, label).toBeTruthy()
+      expect(choice!.tagName).toBe('BUTTON')
+    }
+    fireEvent.click(choices.find((btn) => btn.textContent?.includes('Grok'))!)
+    const updated = screen.getByLabelText('Harness')
+    expect(updated.textContent).toContain('Grok')
+    expect(updated.textContent).not.toContain('Claude')
+    expect(h.posts).toEqual([])
   })
 })

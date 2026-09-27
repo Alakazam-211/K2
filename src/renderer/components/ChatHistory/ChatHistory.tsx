@@ -6,6 +6,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore, openApiHostSessionTab } from '@/stores/tabs'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { Button, DialogFrame, DialogScrim } from '@/components/ui'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import {
   mapMsgResponseToStatus,
   type ComposeStatus,
@@ -1466,20 +1467,19 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
             <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 14 }}>
               From {PROVIDER_CONFIG[continueSession.provider]?.label ?? continueSession.provider}
             </div>
-            <label style={{ display: 'block', fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 12 }}>
-              Harness
-              <select
-                aria-label="Harness"
-                value={continueTarget}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>Harness</div>
+              <SettingDropdown
+                ariaLabel="Harness"
+                fullWidth
+                menuAlign="left"
+                className="mt-1"
                 disabled={continueInFlight}
-                onChange={(e) => setContinueTarget(e.target.value)}
-                style={{ display: 'block', width: '100%', marginTop: 4, font: 'inherit' }}
-              >
-                {Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => (
-                  <option key={key} value={key}>{cfg.label}</option>
-                ))}
-              </select>
-            </label>
+                value={continueTarget}
+                onChange={setContinueTarget}
+                options={Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => ({ value: key, label: cfg.label }))}
+              />
+            </div>
             <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 4 }}>Context</div>
             <label style={{ display: 'block', fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
               <input

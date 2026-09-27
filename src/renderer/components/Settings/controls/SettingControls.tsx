@@ -85,6 +85,8 @@ export function SettingDropdown({
   menuAlign = 'right',
   menuPlacement = 'auto',
   fullWidth = false,
+  disabled = false,
+  ariaLabel,
 }: {
   value: string
   options: { value: string; label: string; disabled?: boolean }[]
@@ -115,6 +117,10 @@ export function SettingDropdown({
   placeholder?: string
   /** Stretch the trigger across the container (federated server picker, etc.). */
   fullWidth?: boolean
+  /** Block opening and dim the trigger. Omitted callers stay enabled. */
+  disabled?: boolean
+  /** Accessible name for the trigger. Omitted callers are unchanged. */
+  ariaLabel?: string
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [openUp, setOpenUp] = useState(false)
@@ -122,6 +128,11 @@ export function SettingDropdown({
 
   const match = options.find((o) => o.value === value)
   const selected = match ?? (placeholder !== undefined ? undefined : options[0])
+
+  useEffect(() => {
+    if (!disabled) return
+    setIsOpen(false)
+  }, [disabled])
 
   useEffect(() => {
     if (!isOpen) return
@@ -135,6 +146,7 @@ export function SettingDropdown({
   }, [isOpen])
 
   const toggleOpen = (): void => {
+    if (disabled) return
     if (!isOpen) {
       const up =
         menuPlacement === 'up'
@@ -154,9 +166,13 @@ export function SettingDropdown({
       <button
         type="button"
         onClick={toggleOpen}
-        className={`flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-primary)] transition-colors cursor-pointer ${
-          fullWidth ? 'w-full justify-between' : ''
-        }`}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        className={`flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
+          disabled
+            ? 'opacity-50 cursor-not-allowed'
+            : 'hover:border-[var(--color-text-muted)] cursor-pointer'
+        } ${fullWidth ? 'w-full justify-between' : ''}`}
       >
         <span className={`truncate ${selected ? '' : 'text-[var(--color-text-muted)]'}`}>
           {selected?.label ?? placeholder ?? ''}
@@ -180,7 +196,7 @@ export function SettingDropdown({
                 type="button"
                 disabled={isDisabled}
                 onClick={() => {
-                  if (isDisabled) return
+                  if (disabled || isDisabled) return
                   onChange(option.value)
                   setIsOpen(false)
                 }}

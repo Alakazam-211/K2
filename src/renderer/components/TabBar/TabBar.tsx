@@ -862,7 +862,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     break
                   }
                   if (fileName) {
-                    icon = <SetiFileIcon name={fileName} size={14} />
+                    icon = <SetiFileIcon name={fileName} size={16} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // Same mute as the worktree glyph. Not a Seti name, not the URL.
                     icon = (

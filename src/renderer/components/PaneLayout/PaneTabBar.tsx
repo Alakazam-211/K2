@@ -80,7 +80,7 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
     const filePath = (item.data as FileViewerItemData).filePath
     if (!filePath) return null
     const name = filePath.split(/[/\\]/).pop() || filePath
-    return <SetiFileIcon name={name} size={14} />
+    return <SetiFileIcon name={name} size={16} />
   }
   if (item.type === 'browser') {
     return (

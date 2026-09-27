@@ -44,7 +44,7 @@ export interface SetiFileIconProps {
   title?: string
   /** Override scheme (tests). Default: live style store resolved scheme. */
   scheme?: SetiScheme
-  /** Box in pixels. Default 16 (Files drawer). Tabs pass 12. */
+  /** Box in pixels. Default 16, the same size as the Files drawer. */
   size?: number
 }
 

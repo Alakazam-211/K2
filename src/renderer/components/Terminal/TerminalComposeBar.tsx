@@ -77,6 +77,9 @@ import {
 } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 
+/** Shown when Thread Send runs before this cell has its own address. The draft stays. */
+const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
+
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
   sessionId: string
@@ -145,6 +148,10 @@ export function TerminalComposeBar({
     sendDestination === 'thread' ||
     (sendDestination !== 'pty' && sessionChrome?.viewTab === 'thread')
   const threadAddr = sessionChrome?.overlayAddr ?? ''
+  const [threadAddrError, setThreadAddrError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sendOnThread || threadAddr.trim()) setThreadAddrError(null)
+  }, [sendOnThread, threadAddr])
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
   // and back it with localStorage so switching workspaces/tabs restores each
@@ -440,7 +447,10 @@ export function TerminalComposeBar({
     if (!composeCanSend({ draft, sending, command }) || sending) return
     if (sessionChrome?.viewTab === 'chatter') return
     if (sendOnThread) {
-      if (!threadAddr.trim()) return
+      if (!threadAddr.trim()) {
+        setThreadAddrError(THREAD_ADDR_NOT_READY)
+        return
+      }
     } else if (!sessionId) {
       return
     }
@@ -722,6 +732,15 @@ export function TerminalComposeBar({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {threadAddrError ? (
+        <p
+          role="alert"
+          data-testid="compose-thread-addr-error"
+          className="text-[11px] text-[var(--color-status-error-soft)]"
+        >
+          {threadAddrError}
+        </p>
+      ) : null}
       <input
         ref={fileInputRef}
         type="file"

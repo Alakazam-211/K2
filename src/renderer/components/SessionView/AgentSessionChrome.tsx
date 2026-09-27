@@ -245,6 +245,21 @@ export function PinnedSessionBody({
   )
 }
 
+/** Re-ask until this cell's own address is in the session list. */
+export const SIDECAR_OVERLAY_ADDR_RETRY_MS = 400
+
+/**
+ * Clipboard only when it is this sidecar (`sales/reviewer`, `sales/1`).
+ * A slash-less handle is the workspace name — pinned Chat, not this cell —
+ * so one early miss or a not-yet-stamped row must not stick.
+ */
+function sidecarOwnClipboard(row: DaemonHandleRow | undefined): string {
+  if (!row) return ''
+  const clipboard = copyableAddressFromDaemonRow(row)?.clipboard.trim() ?? ''
+  if (!clipboard.includes('/')) return ''
+  return clipboard
+}
+
 /** Resolve overlay addr for a sidecar pane (handle clipboard). */
 export function useSidecarOverlayAddr(
   projectPath: string,
@@ -255,7 +270,17 @@ export function useSidecarOverlayAddr(
 
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const schedule = (): void => {
+      if (cancelled) return
+      timer = setTimeout(() => {
+        void lookup()
+      }, SIDECAR_OVERLAY_ADDR_RETRY_MS)
+    }
+
+    const lookup = async (): Promise<void> => {
+      let found = ''
       try {
         const rows = await daemonCliGet<DaemonHandleRow[]>('sessions/list-for-workspace', {
           path: projectPath,
@@ -266,17 +291,23 @@ export function useSidecarOverlayAddr(
         const row =
           list.find((r) => r.agentName === name) ||
           list.find((r) => r.agentName === `tab-${paneGroupId}`)
-        const addr = row ? copyableAddressFromDaemonRow(row) : null
-        setState({
-          title: addr?.clipboard || '',
-          addr: addr?.clipboard || '',
-        })
+        found = sidecarOwnClipboard(row)
       } catch {
-        if (!cancelled) setState({ title: '', addr: '' })
+        if (cancelled) return
       }
-    })()
+      if (cancelled) return
+      if (found) {
+        setState({ title: found, addr: found })
+        return
+      }
+      schedule()
+    }
+
+    setState({ title: '', addr: '' })
+    void lookup()
     return () => {
       cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
     }
   }, [projectPath, paneGroupId, attachAgentName])
 

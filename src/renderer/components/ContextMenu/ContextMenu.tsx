@@ -294,9 +294,9 @@ export default function ContextMenu(): React.JSX.Element | null {
                   lineHeight: 1.2,
                   padding: '2px 5px',
                   borderRadius: 3,
-                  color: 'var(--color-text-muted)',
-                  background: 'var(--color-wash-3, rgba(255,255,255,0.06))',
-                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-on-accent, #ffffff)',
+                  background: 'var(--color-accent, #3b82f6)',
+                  border: '1px solid var(--color-accent, #3b82f6)',
                 }}
               >
                 {item.badge}

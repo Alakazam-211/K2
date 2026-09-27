@@ -848,7 +848,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 } else if (cliAgent) {
                   // Any shell command, including one AgentIcon does not
                   // know, owns this slot and blocks the file and browser glyphs.
-                  icon = <AgentIcon agent={cliAgent} size={12} />
+                  icon = <AgentIcon agent={cliAgent} size={14} />
                 } else {
                   // First file-viewer path in pane-group order. Basename
                   // only — open and copy keep filePath. Not the tab title.
@@ -862,7 +862,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     break
                   }
                   if (fileName) {
-                    icon = <SetiFileIcon name={fileName} size={12} />
+                    icon = <SetiFileIcon name={fileName} size={14} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // Same mute as the worktree glyph. Not a Seti name, not the URL.
                     icon = (
@@ -876,7 +876,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
 
                 if (icon) {
                   return (
-                    <span className="flex-shrink-0 mr-1.5">
+                    <span className="mr-1.5 flex h-full flex-shrink-0 items-center self-stretch">
                       {icon}
                     </span>
                   )

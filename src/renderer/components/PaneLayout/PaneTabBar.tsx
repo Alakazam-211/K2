@@ -80,7 +80,7 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
     const filePath = (item.data as FileViewerItemData).filePath
     if (!filePath) return null
     const name = filePath.split(/[/\\]/).pop() || filePath
-    return <SetiFileIcon name={name} size={12} />
+    return <SetiFileIcon name={name} size={14} />
   }
   if (item.type === 'browser') {
     return (
@@ -301,8 +301,10 @@ export function PaneTabBar({
               onMouseDown={(e) => handleItemMouseDown(e, item.id)}
               onContextMenu={(e) => void handleItemContextMenu(e, item, pinSessionId)}
             >
-              {glyph && <span className="flex-shrink-0 mr-1.5">{glyph}</span>}
-              <span className="truncate" style={{ lineHeight: '24px' }}>
+              {glyph && (
+                <span className="mr-1.5 flex h-full flex-shrink-0 items-center self-stretch">{glyph}</span>
+              )}
+              <span className="truncate self-center" style={{ lineHeight: '1' }}>
                 {getTabLabel(item)}
               </span>
 

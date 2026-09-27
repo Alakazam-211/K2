@@ -99,7 +99,11 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             &MenuItem::with_id(handle, "running-agents", "Running Agents", true, Some("CmdOrCtrl+J"))?,
             &MenuItem::with_id(handle, "projects", "Projects", true, Some("CmdOrCtrl+P"))?,
             &MenuItem::with_id(handle, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+B"))?,
-            &MenuItem::with_id(handle, "server-switcher", "Switch Server", true, Some("CmdOrCtrl+L"))?,
+            // No Cmd+L accelerator. App.tsx keydown is the only keyboard
+            // owner on every platform (Win/Linux menus have none). A menu
+            // accelerator and that keydown both toggled and the second
+            // call closed the switcher. The item stays clickable.
+            &MenuItem::with_id(handle, "server-switcher", "Switch Server", true, None::<&str>)?,
             &MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+Shift+L"))?,
             &MenuItem::with_id(handle, "focus-window", "Open in Focus Window", true, Some("CmdOrCtrl+Shift+F"))?,
             &PredefinedMenuItem::separator(handle)?,

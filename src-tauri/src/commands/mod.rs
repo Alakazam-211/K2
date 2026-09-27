@@ -73,6 +73,8 @@ pub mod oauth_loopback;
 pub mod traffic_lights;
 // Square style — macOS window corner radius. Non-mac is a no-op.
 pub mod window_corners;
+// Cmd+L — BOOL from `makeFirstResponder:` on the invoking UI webview.
+pub mod ui_webview_focus;
 
 // 0.40.48 connection resilience — out-of-webview boot-status arbiter
 // (`remote_boot_probe`, a fresh never-pooled socket that tiebreaks

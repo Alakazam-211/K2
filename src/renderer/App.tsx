@@ -56,7 +56,7 @@ import { initProjectGroupEvents } from './stores/project-groups'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
-import { useServerSwitcherStore } from './stores/server-switcher'
+import { applyCmdL } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
 import { menuNewTab } from './lib/menu-new-tab'
 import { useSidebarStore } from './stores/sidebar'
@@ -475,8 +475,11 @@ function AppRoot(): React.JSX.Element {
       }
       if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
-        if (e.shiftKey) toggleAssistant()
-        else if (!focusVisibleBrowserAddress()) useServerSwitcherStore.getState().toggle()
+        applyCmdL({
+          shift: e.shiftKey,
+          focusAddress: focusVisibleBrowserAddress,
+          toggleAssistant,
+        })
       }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
@@ -777,7 +780,11 @@ function AppRoot(): React.JSX.Element {
         toggleAssistant()
       }).then(track)
       listen('menu:server-switcher', () => {
-        if (!focusVisibleBrowserAddress()) useServerSwitcherStore.getState().toggle()
+        applyCmdL({
+          shift: false,
+          focusAddress: focusVisibleBrowserAddress,
+          toggleAssistant,
+        })
       }).then(track)
       listen('menu:focus-window', () => {
         const projectId = useProjectsStore.getState().activeProjectId

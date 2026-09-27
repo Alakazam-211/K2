@@ -22,8 +22,17 @@ export function SidebarCollapseButton(): JSX.Element {
         strokeLinejoin="round"
         aria-hidden
       >
-        <rect x="1" y="2" width="12" height="10" rx="0" />
-        <line x1="5" y1="2" x2="5" y2="12" strokeDasharray={collapsed ? '1.5 1.5' : undefined} />
+        {collapsed ? (
+          <>
+            <path d="M4.5 3.5 L8 7 L4.5 10.5" />
+            <path d="M8 3.5 L11.5 7 L8 10.5" />
+          </>
+        ) : (
+          <>
+            <path d="M9.5 3.5 L6 7 L9.5 10.5" />
+            <path d="M6 3.5 L2.5 7 L6 10.5" />
+          </>
+        )}
       </svg>
     </button>
   )

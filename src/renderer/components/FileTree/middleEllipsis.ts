@@ -1,8 +1,11 @@
 /** One ellipsis character (U+2026), never three dots. */
 export const ELLIPSIS = '\u2026'
 
-/** Cap on stem characters kept in front of the extension. Not a floor. */
-const TAIL_CAP = 12
+/**
+ * Cap on stem characters kept in front of the extension. Not a floor.
+ * Six keeps a suffix like `_v2` and leaves the rest of the row for the start.
+ */
+const TAIL_CAP = 6
 
 /**
  * Tree-row name slot.
@@ -73,7 +76,7 @@ export function middleEllipsis(
   const stemKeep = Math.min(TAIL_CAP, stem.length)
   const preferredTail = stem.slice(stem.length - stemKeep) + ext
 
-  // Extra width goes to the head. The 12-character stem keep is a cap.
+  // Extra width goes to the head. The stem keep is a cap.
   // Head + tail must omit at least one character or we would rather show
   // the whole name (already rejected above when it fits).
   if (preferredTail.length < name.length && fits(ELLIPSIS + preferredTail, maxWidthPx, measure)) {

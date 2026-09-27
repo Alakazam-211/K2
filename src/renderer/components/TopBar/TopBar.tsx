@@ -3,8 +3,6 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
-import { useRunningAgentsStore } from '@/stores/running-agents'
-import { useActiveAgentsStore } from '@/stores/active-agents'
 import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -116,8 +114,6 @@ export default function TopBar({
         <ServerSwitcher />
         {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
         <PageTabs />
-        {/* Running Agents */}
-        <RunningAgentsTopBarButton />
       </div>
 
       {/* Center: workspace + worktree name */}
@@ -255,31 +251,6 @@ export default function TopBar({
         </div>
       </DesktopChromeRight>
     </Surface>
-  )
-}
-
-function RunningAgentsTopBarButton(): React.JSX.Element {
-  const agentCount = useActiveAgentsStore((s) => s.getActiveAgentsList().length)
-  return (
-    <button
-      onClick={() => useRunningAgentsStore.getState().toggle()}
-      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag'
-      }}
-      title="Running Agents (⌘J)"
-    >
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M7 8L12 12L7 16" />
-        <path d="M13 17H18" />
-      </svg>
-      {agentCount > 0 && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] bg-[var(--color-status-ok)] rounded-full px-0.5">
-          {agentCount > 99 ? '99+' : agentCount}
-        </span>
-      )}
-    </button>
   )
 }
 

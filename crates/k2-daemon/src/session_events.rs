@@ -426,6 +426,15 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "chat_history_changed" }`.
     ChatHistoryChanged {},
 
+    /// 0.40.150 — the token-usage ledger gained rows (a background scan
+    /// wrote new turns). APP-LEVEL refetch signal (no payload — the
+    /// ProjectsChanged convention). The Settings → Token usage live log
+    /// re-fetches its newest page and prepends genuinely-new turns.
+    /// Deliberately payload-free: the ledger is a separate sqlite file
+    /// and consumers re-query it rather than trust a diff on the bus.
+    /// Wire: `{ "kind": "token_usage_changed" }`.
+    TokenUsageChanged {},
+
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
     /// deregistered, or — from S4 on — an edit grant toggled).
@@ -683,6 +692,14 @@ pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<Se
         record_agent_status(pane_id, status);
     }
     sender().send(event)
+}
+
+/// 0.40.150 — best-effort broadcast that the token-usage ledger gained
+/// rows. Called from the ledger scanner after a pass that read files;
+/// the `let _ =` swallows the no-subscribers case. Payload-free (the
+/// ProjectsChanged convention): consumers re-query the ledger.
+pub fn emit_token_usage_changed() {
+    let _ = emit(SessionEvent::TokenUsageChanged {});
 }
 
 /// 0.39.39 (#677.1) — best-effort broadcast that a heartbeat session's

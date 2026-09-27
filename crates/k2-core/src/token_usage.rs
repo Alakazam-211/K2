@@ -111,6 +111,41 @@ pub struct UsageReport {
     pub days: Vec<DayTotals>,
 }
 
+/// One raw ledger turn, newest-ingested first. Unlike [`UsageReport`]
+/// (aggregated), this is a single `turns` row for the live log. `rowid`
+/// is the sqlite implicit rowid — a stable, monotonically increasing
+/// keyset cursor (an `ON CONFLICT` update never changes it), so paging
+/// by `rowid < before` is immune to the offset drift a `LIMIT/OFFSET`
+/// scan would suffer as new rows arrive at the head.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TurnRow {
+    pub rowid: i64,
+    pub workspace_path: String,
+    /// Not one of this daemon's known workspaces (or a sentinel).
+    pub outside: bool,
+    pub harness: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    /// The raw ledger value, kept verbatim (mixed formats exist).
+    pub recorded_at: String,
+    /// `recorded_at` normalized to unix milliseconds when parseable
+    /// (RFC3339, unix s/ms digits, or a bare `YYYY-MM-DD` at UTC
+    /// midnight); `None` when it cannot be placed. Never errors.
+    pub recorded_ms: Option<i64>,
+}
+
+/// A page of [`TurnRow`]s plus the keyset cursor for the next page.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TurnPage {
+    pub rows: Vec<TurnRow>,
+    /// Pass as `before` to fetch the next (older) page. `None` when the
+    /// last page returned fewer rows than the limit (no more rows).
+    pub next_cursor: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanStats {
     pub files_seen: u64,
@@ -1064,6 +1099,37 @@ fn utc_day(raw: &str) -> Option<String> {
     ))
 }
 
+/// Unix milliseconds for a ledger `recorded_at`, or `None` when it cannot
+/// be placed. Accepts RFC3339, all-digit unix seconds (`>= 1e9`) or
+/// milliseconds (`>= 1e12`), and a bare `YYYY-MM-DD` (UTC midnight). This
+/// is the millisecond sibling of [`utc_day`]; it never errors, so an
+/// unparseable stamp just yields `None` and the row still lists.
+fn epoch_ms(raw: &str) -> Option<i64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.bytes().all(|b| b.is_ascii_digit()) {
+        let n: i64 = s.parse().ok()?;
+        if n >= 1_000_000_000_000 {
+            return Some(n);
+        }
+        if n >= 1_000_000_000 {
+            return Some(n * 1000);
+        }
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp_millis());
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() >= 10 && is_ymd_prefix(&bytes[..10]) {
+        let date = chrono::NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()?;
+        return Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis());
+    }
+    None
+}
+
 fn bucket_days(stamps: &[TurnStamp]) -> Vec<DayTotals> {
     let mut by_day: BTreeMap<String, TokenTotals> = BTreeMap::new();
     for stamp in stamps {
@@ -1172,6 +1238,91 @@ pub fn query_host(workspace: Option<&str>, known: &[String]) -> Result<UsageRepo
     query(&ledger_path(), workspace, known)
 }
 
+/// Clamp bounds for a turn-log page. `limit` is capped so one request can
+/// never scan the whole ledger; the daemon route defaults an absent limit
+/// to [`DEFAULT_TURNS_LIMIT`] before calling.
+pub const MAX_TURNS_LIMIT: i64 = 200;
+pub const DEFAULT_TURNS_LIMIT: i64 = 50;
+
+/// Raw newest-first turns for the live log. `workspace` is an exact path
+/// (canonicalized here); `None` is machine-wide. `before` is an exclusive
+/// `rowid` keyset cursor (`None` = newest page). `limit` is clamped to
+/// `1..=`[`MAX_TURNS_LIMIT`]. `known` marks each row's `outside` flag the
+/// same way [`query`] does. Rows are ordered by `rowid DESC` (ingestion
+/// order), which for the ledger tracks arrival of new turns.
+pub fn query_turns(
+    ledger: &Path,
+    workspace: Option<&str>,
+    known: &[String],
+    before: Option<i64>,
+    limit: i64,
+) -> Result<TurnPage, String> {
+    let filter = workspace.map(canonical_workspace).filter(|s| !s.is_empty());
+    let known_set: BTreeSet<String> = known
+        .iter()
+        .filter(|p| !is_sentinel_workspace(p))
+        .map(|p| canonical_workspace(p))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let limit = limit.clamp(1, MAX_TURNS_LIMIT);
+    let rows = with_ledger(ledger, |conn| {
+        let sql = "SELECT rowid, workspace_path, harness, model,
+                COALESCE(input_tokens, 0),
+                COALESCE(output_tokens, 0),
+                COALESCE(cache_read_tokens, 0),
+                COALESCE(cache_write_tokens, 0),
+                recorded_at
+             FROM turns
+             WHERE (?1 IS NULL OR workspace_path = ?1)
+               AND (?2 IS NULL OR rowid < ?2)
+             ORDER BY rowid DESC
+             LIMIT ?3";
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("ledger turns: {e}"))?;
+        let mapped = stmt
+            .query_map(params![filter, before, limit], |r| {
+                let workspace_path: String = r.get(1)?;
+                let recorded_at = recorded_text(r, 8)?;
+                Ok(TurnRow {
+                    rowid: r.get(0)?,
+                    outside: is_sentinel_workspace(&workspace_path)
+                        || !known_set.contains(&workspace_path),
+                    workspace_path,
+                    harness: r.get(2)?,
+                    model: r.get(3)?,
+                    input_tokens: r.get(4)?,
+                    output_tokens: r.get(5)?,
+                    cache_read_tokens: r.get(6)?,
+                    cache_write_tokens: r.get(7)?,
+                    recorded_ms: epoch_ms(&recorded_at),
+                    recorded_at,
+                })
+            })
+            .map_err(|e| format!("ledger turns: {e}"))?;
+        let mut out = Vec::new();
+        for row in mapped {
+            out.push(row.map_err(|e| format!("ledger turn row: {e}"))?);
+        }
+        Ok(out)
+    })?;
+    // A short page means the ledger is exhausted; a full page hands back
+    // the last rowid so the next call resumes strictly below it.
+    let next_cursor = if (rows.len() as i64) < limit {
+        None
+    } else {
+        rows.last().map(|r| r.rowid)
+    };
+    Ok(TurnPage { rows, next_cursor })
+}
+
+pub fn query_turns_host(
+    workspace: Option<&str>,
+    known: &[String],
+    before: Option<i64>,
+    limit: i64,
+) -> Result<TurnPage, String> {
+    query_turns(&ledger_path(), workspace, known, before, limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1233,6 +1384,48 @@ mod tests {
         let path = root.join(name);
         fs::create_dir_all(&path).expect("workspace dir");
         canonical_workspace(&path.to_string_lossy())
+    }
+
+    #[test]
+    fn turns_paged_newest_first_with_keyset() {
+        let tmp = tmp();
+        let ledger = tmp.0.join("tokens.sqlite");
+        let a = canon_dir(&tmp.0, "ws-a");
+        let b = canon_dir(&tmp.0, "ws-b");
+        // Inserted oldest→newest, so rowid ascends k1<k2<k3<k4.
+        insert_turns(
+            &ledger,
+            &[
+                ("k1", &a, "2026-09-26T00:00:00Z", 1, 1, 0, 0),
+                ("k2", &a, "2026-09-26T00:01:00Z", 2, 2, 0, 0),
+                ("k3", &b, "1758844800", 3, 3, 0, 0), // unix seconds
+                ("k4", &a, "2026-09-26T00:03:00Z", 4, 4, 0, 0),
+            ],
+        );
+        let known = vec![a.clone()];
+
+        // Rows are identified by their distinct input_tokens (1..=4).
+        let ins = |rows: &[TurnRow]| -> Vec<i64> { rows.iter().map(|r| r.input_tokens).collect() };
+
+        // Page 1: newest two, full page → a cursor comes back.
+        let p1 = query_turns(&ledger, None, &known, None, 2).expect("page 1");
+        assert_eq!(ins(&p1.rows), vec![4, 3], "newest first");
+        assert!(p1.next_cursor.is_some(), "full page yields a cursor");
+        assert!(p1.rows[0].recorded_ms.is_some(), "rfc3339 parsed to ms");
+        assert!(p1.rows[1].recorded_ms.is_some(), "unix seconds parsed to ms");
+        // `outside` reflects the known set: ws-b is not known.
+        assert!(p1.rows[1].outside, "ws-b turn is outside");
+        assert!(!p1.rows[0].outside, "ws-a turn is not outside");
+
+        // Page 2 resumes strictly below the cursor; short page → no cursor.
+        let p2 = query_turns(&ledger, None, &known, p1.next_cursor, 2).expect("page 2");
+        assert_eq!(ins(&p2.rows), vec![2, 1]);
+        assert!(p2.next_cursor.is_none(), "exhausted ledger clears the cursor");
+
+        // Workspace filter narrows to ws-a's three turns, newest first.
+        let only_a = query_turns(&ledger, Some(&a), &known, None, 50).expect("ws-a");
+        assert_eq!(ins(&only_a.rows), vec![4, 2, 1]);
+        assert!(only_a.rows.iter().all(|r| !r.outside));
     }
 
     struct Stored {

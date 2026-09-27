@@ -35,6 +35,11 @@ fn run_full() {
                 stats.files_read,
                 stats.files_skipped
             );
+            // A pass that read at least one file may have written new
+            // turns; nudge the live log. A skip-only pass changes nothing.
+            if stats.files_read > 0 {
+                crate::session_events::emit_token_usage_changed();
+            }
         }
         Err(e) => k2_core::log_debug!("[token-usage] full scan failed: {e}"),
     }
@@ -49,6 +54,9 @@ fn run_workspace(cwd: String) {
                 stats.files_read,
                 stats.files_skipped
             );
+            if stats.files_read > 0 {
+                crate::session_events::emit_token_usage_changed();
+            }
         }
         Err(e) => k2_core::log_debug!("[token-usage] idle scan failed: {e}"),
     }

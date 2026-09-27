@@ -1,8 +1,10 @@
 //! `GET /cli/usage/tokens` — machine total, or one workspace path.
+//! `GET /cli/usage/turns` — the raw per-turn ledger log, newest first,
+//! keyset-paged for the Settings → Token usage live log.
 //!
-//! An arm of `cli::dispatch`. Not in `post_allowed` (a POST is 405 at the
+//! Arms of `cli::dispatch`. Not in `post_allowed` (a POST is 405 at the
 //! dispatcher). The `/cli/` catchall only checks `token_ok`, which would
-//! let a Member read every workspace, so this arm gates again with
+//! let a Member read every workspace, so these arms gate again with
 //! [`crate::routes::http::owner_role_identity`].
 
 use std::collections::HashMap;
@@ -17,13 +19,16 @@ pub fn usage_allowed(query: &str, owner_token: &str) -> bool {
 }
 
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
-    if path != "/cli/usage/tokens" {
+    if path != "/cli/usage/tokens" && path != "/cli/usage/turns" {
         return None;
     }
     let token = params.get("token").map(String::as_str).unwrap_or("");
     let owner = k2_core::hook_config::get_token();
     if !usage_allowed(&format!("token={token}"), owner) {
         return Some(CliResponse::forbidden());
+    }
+    if path == "/cli/usage/turns" {
+        return Some(handle_turns(params));
     }
     Some(handle_tokens(params))
 }
@@ -45,6 +50,44 @@ pub(crate) fn handle_tokens(params: &HashMap<String, String>) -> CliResponse {
         Ok(report) => match serde_json::to_string(&report) {
             Ok(body) => CliResponse::ok_json(body),
             Err(e) => CliResponse::internal_error(format!("token usage json: {e}")),
+        },
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+pub(crate) fn handle_turns(params: &HashMap<String, String>) -> CliResponse {
+    // Optional workspace filter. An explicit empty string is a client
+    // bug, not "machine-wide" — reject it (parity with handle_tokens).
+    // Absent = machine-wide (every workspace), which is the log default.
+    let workspace = match params.get("workspace") {
+        None => None,
+        Some(s) if s.is_empty() => {
+            return CliResponse::bad_request("workspace must not be empty");
+        }
+        Some(s) => Some(s.as_str()),
+    };
+    let before = match params.get("before") {
+        None => None,
+        Some(s) => match s.parse::<i64>() {
+            Ok(n) => Some(n),
+            Err(_) => return CliResponse::bad_request("before must be an integer rowid"),
+        },
+    };
+    let limit = match params.get("limit") {
+        None => k2_core::token_usage::DEFAULT_TURNS_LIMIT,
+        Some(s) => match s.parse::<i64>() {
+            Ok(n) => n,
+            Err(_) => return CliResponse::bad_request("limit must be an integer"),
+        },
+    };
+    let known = match known_workspace_paths() {
+        Ok(v) => v,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    match k2_core::token_usage::query_turns_host(workspace, &known, before, limit) {
+        Ok(page) => match serde_json::to_string(&page) {
+            Ok(body) => CliResponse::ok_json(body),
+            Err(e) => CliResponse::internal_error(format!("token turns json: {e}")),
         },
         Err(e) => CliResponse::internal_error(e),
     }

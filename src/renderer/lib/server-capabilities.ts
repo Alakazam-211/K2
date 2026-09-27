@@ -100,6 +100,11 @@ export const FEATURES = {
    *  Gates Settings → Logs → Access Audit so a pre-144 remote shows the
    *  update copy instead of hammering 404s. Local is always true. */
   'users-audit': '0.40.144',
+  /** GET /cli/usage/turns — owner-only raw per-turn ledger log, keyset-paged
+   *  (0.40.150). Gates the Settings → Token usage live log so a pre-150
+   *  remote hides the panel instead of hammering 404s. Local is always
+   *  true via serverSupports. */
+  'usage-turns': '0.40.150',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

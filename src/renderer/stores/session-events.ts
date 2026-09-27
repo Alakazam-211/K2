@@ -347,6 +347,13 @@ export interface ChatHistoryChangedEvent {
   kind: 'chat_history_changed'
 }
 
+/** APP-LEVEL — the token-usage ledger gained rows (0.40.150). Payload-free
+ *  refetch signal (ProjectsChanged convention); the Settings → Token usage
+ *  live log re-fetches its newest page and prepends new turns. */
+export interface TokenUsageChangedEvent {
+  kind: 'token_usage_changed'
+}
+
 /** APP-LEVEL — files under a workspace changed (multi-writer Files-drawer
  *  live refresh). Agent shell writes on the daemon machine, other clients'
  *  `/cli/fs/*` mutations, and compress/upload completions all land here so
@@ -384,6 +391,7 @@ export type SessionEventMessage =
   | ProjectGroupsChangedEvent
   | FeedbackChangedEvent
   | ChatHistoryChangedEvent
+  | TokenUsageChangedEvent
   | FsChangedEvent
 
 export interface SessionEventHandlers {
@@ -629,6 +637,7 @@ export function subscribeToWorkspaceSessionEvents(
         case 'project_groups_changed':
         case 'feedback_changed':
         case 'chat_history_changed':
+        case 'token_usage_changed':
         case 'session_activity_changed':
         case 'publish_services_changed':
         case 'workspace_resources_changed':
@@ -818,6 +827,7 @@ type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
 type ProjectGroupsChangedHandler = (reason: string) => void
 type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
+type TokenUsageChangedHandler = () => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 
 const _llmStatusHandlers = new Set<LlmStatusHandler>()
@@ -835,6 +845,7 @@ const _openUrlHandlers = new Set<OpenUrlHandler>()
 const _projectGroupsChangedHandlers = new Set<ProjectGroupsChangedHandler>()
 const _feedbackChangedHandlers = new Set<FeedbackChangedHandler>()
 const _chatHistoryChangedHandlers = new Set<ChatHistoryChangedHandler>()
+const _tokenUsageChangedHandlers = new Set<TokenUsageChangedHandler>()
 const _fsChangedHandlers = new Set<FsChangedHandler>()
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
@@ -968,6 +979,14 @@ export function onChatHistoryChanged(fn: ChatHistoryChangedHandler): Unsubscribe
   return () => void _chatHistoryChangedHandlers.delete(fn)
 }
 
+/** 0.40.150 — subscribe to APP-LEVEL `token_usage_changed` (the ledger
+ *  scanner wrote new turns). Payload-free refetch signal; module-level
+ *  registry survives host-switch WS teardown/reopen. Returns an unsub fn. */
+export function onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn {
+  _tokenUsageChangedHandlers.add(fn)
+  return () => void _tokenUsageChangedHandlers.delete(fn)
+}
+
 /** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
  *  `fs_changed` (paths under a workspace mutated on the host by agents,
  *  other clients, or `/cli/fs/*`). Module-level registry survives
@@ -1024,6 +1043,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'chat_history_changed':
       for (const h of _chatHistoryChangedHandlers) h()
+      break
+    case 'token_usage_changed':
+      for (const h of _tokenUsageChangedHandlers) h()
       break
     case 'fs_changed':
       for (const h of _fsChangedHandlers) h(msg)
@@ -1196,6 +1218,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
         msg.kind === 'project_groups_changed' ||
         msg.kind === 'feedback_changed' ||
         msg.kind === 'chat_history_changed' ||
+        msg.kind === 'token_usage_changed' ||
         // Files-drawer multi-writer live refresh — APP-LEVEL with paths.
         msg.kind === 'fs_changed'
       ) {

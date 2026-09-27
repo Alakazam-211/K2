@@ -2,8 +2,10 @@
 // Numbers come from GET /cli/usage/tokens. The renderer does not read
 // transcript files. No prices and no subscription percents.
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { useServerSupports } from '@/lib/server-capabilities'
+import { onTokenUsageChanged } from '@/stores/session-events'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import type { SettingEntry } from '../searchManifest'
@@ -48,8 +50,47 @@ const EMPTY: TokenTotals = {
   turns: 0,
 }
 
+/** One raw ledger turn from GET /cli/usage/turns (newest first). */
+interface UsageTurn {
+  rowid: number
+  workspace_path: string
+  outside: boolean
+  harness: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  recorded_at: string
+  /** unix ms when the daemon could parse `recorded_at`, else null. */
+  recorded_ms: number | null
+}
+
+interface UsageTurnsPage {
+  rows: UsageTurn[]
+  /** rowid to pass as `before` for the next (older) page; null at the end. */
+  next_cursor: number | null
+}
+
+const TURNS_PAGE = 50
+
 function fmt(n: number): string {
   return n.toLocaleString()
+}
+
+/** Compact relative time for the live log; absolute goes in the title. */
+function relTime(ms: number | null, now: number): string {
+  if (ms == null) return '—'
+  const diff = Math.max(0, now - ms)
+  const s = Math.floor(diff / 1000)
+  if (s < 5) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
 }
 
 function harnessLabel(harness: string): string {
@@ -250,6 +291,176 @@ function ReportBlock({
   )
 }
 
+/** Right-hand live log: the raw per-turn ledger across every workspace,
+ *  newest first, keyset-paged (50/page) and lazy-loaded on scroll. Refetches
+ *  its newest page on the `token_usage_changed` broadcast and prepends only
+ *  genuinely-new turns (rowid greater than the current head), so a scan
+ *  landing while you read older rows never yanks your position. */
+function UsageLog({
+  hostKey,
+  projects,
+}: {
+  hostKey: string
+  projects: readonly UsageNameProject[]
+}): React.JSX.Element {
+  const [rows, setRows] = useState<UsageTurn[]>([])
+  const [cursor, setCursor] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // `now` ticks so relative times stay fresh without a fetch.
+  const [now, setNow] = useState(() => Date.now())
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  // Latest head rowid, read by the change handler without re-subscribing.
+  const headRef = useRef<number | null>(null)
+  headRef.current = rows.length > 0 ? rows[0].rowid : null
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 15_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Initial page (and full reset) on host switch.
+  useEffect(() => {
+    const ac = new AbortController()
+    setLoading(true)
+    setError(null)
+    setRows([])
+    setCursor(null)
+    void (async () => {
+      try {
+        const page = await daemonCliGet<UsageTurnsPage>('usage/turns', { limit: TURNS_PAGE })
+        if (ac.signal.aborted) return
+        setRows(page.rows)
+        setCursor(page.next_cursor)
+      } catch (err) {
+        if (ac.signal.aborted) return
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!ac.signal.aborted) setLoading(false)
+      }
+    })()
+    return () => ac.abort()
+  }, [hostKey])
+
+  const loadMore = useCallback(() => {
+    setCursor((cur) => {
+      if (cur == null) return cur
+      setLoadingMore(true)
+      void (async () => {
+        try {
+          const page = await daemonCliGet<UsageTurnsPage>('usage/turns', {
+            limit: TURNS_PAGE,
+            before: cur,
+          })
+          // Guard against overlap if a new row landed at the head meanwhile.
+          setRows((prev) => {
+            const seen = new Set(prev.map((r) => r.rowid))
+            return [...prev, ...page.rows.filter((r) => !seen.has(r.rowid))]
+          })
+          setCursor(page.next_cursor)
+        } catch {
+          // Leave the cursor; a later scroll retries.
+        } finally {
+          setLoadingMore(false)
+        }
+      })()
+      return cur
+    })
+  }, [])
+
+  // Live refetch of the newest page; prepend only rows above the head.
+  useEffect(() => {
+    return onTokenUsageChanged(() => {
+      void (async () => {
+        try {
+          const page = await daemonCliGet<UsageTurnsPage>('usage/turns', { limit: TURNS_PAGE })
+          const head = headRef.current
+          setRows((prev) => {
+            if (prev.length === 0) return page.rows
+            const fresh = page.rows.filter((r) => head == null || r.rowid > head)
+            return fresh.length > 0 ? [...fresh, ...prev] : prev
+          })
+          setNow(Date.now())
+        } catch {
+          // Best-effort live update; the next scan or remount recovers.
+        }
+      })()
+    })
+  }, [])
+
+  const onScroll = useCallback(() => {
+    const el = scrollerRef.current
+    if (!el || loadingMore || cursor == null) return
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) loadMore()
+  }, [cursor, loadingMore, loadMore])
+
+  return (
+    <aside className="lg:w-[24rem] lg:shrink-0">
+      <h3 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Live activity</h3>
+      <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
+        Every counted turn across all workspaces, newest first. Updates as transcripts are scanned.
+      </p>
+      <div
+        ref={scrollerRef}
+        onScroll={onScroll}
+        className="border border-[var(--color-border)] rounded max-h-[70vh] overflow-auto"
+      >
+        {loading ? (
+          <p className="text-xs text-[var(--color-text-muted)] p-3">Loading…</p>
+        ) : error ? (
+          <p className="text-xs text-[var(--color-text-muted)] p-3">{error}</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)] p-3">No turns recorded yet.</p>
+        ) : (
+          <ul className="divide-y divide-[var(--color-border)]">
+            {rows.map((row) => {
+              const label = workspaceUsageLabel(
+                { path: row.workspace_path, outside: row.outside },
+                projects,
+              )
+              const absolute = row.recorded_ms != null ? new Date(row.recorded_ms).toLocaleString() : row.recorded_at
+              return (
+                <li key={row.rowid} className="px-3 py-2 text-xs">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-medium text-[var(--color-text-primary)] truncate" title={row.outside ? undefined : row.workspace_path}>
+                      {label.name}
+                    </span>
+                    <span className="text-[11px] text-[var(--color-text-muted)] shrink-0 tabular-nums" title={absolute}>
+                      {relTime(row.recorded_ms, now)}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                    {harnessLabel(row.harness)} · {modelLabel(row.model)}
+                  </div>
+                  <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 tabular-nums">
+                    in {fmt(row.input_tokens)} · out {fmt(row.output_tokens)} · cache r {fmt(row.cache_read_tokens)} · w{' '}
+                    {fmt(row.cache_write_tokens)}
+                  </div>
+                </li>
+              )
+            })}
+            <li className="px-3 py-2 text-center">
+              {cursor != null ? (
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                >
+                  {loadingMore ? 'Loading…' : 'Load older'}
+                </button>
+              ) : (
+                <span className="text-[11px] text-[var(--color-text-muted)]">End of log</span>
+              )}
+            </li>
+          </ul>
+        )}
+      </div>
+    </aside>
+  )
+}
+
 export function TokenUsageSection(): React.JSX.Element {
   const hostKey = useConnectHostStore((s) => (s.activeHost === 'local' ? 'local' : s.activeHost.id))
   const projects = useProjectsStore((s) => s.projects)
@@ -262,6 +473,7 @@ export function TokenUsageSection(): React.JSX.Element {
   const [machine, setMachine] = useState<UsageReport | null>(null)
   const [openReport, setOpenReport] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const supportsTurns = useServerSupports('usage-turns')
 
   useEffect(() => {
     const ac = new AbortController()
@@ -290,7 +502,8 @@ export function TokenUsageSection(): React.JSX.Element {
   const ownerOnly = error != null && /auth token|forbidden/i.test(error)
 
   return (
-    <div className="max-w-3xl">
+    <div className="flex flex-col lg:flex-row gap-8">
+      <div className="max-w-3xl flex-1 min-w-0">
       <h2 className="text-base font-medium text-[var(--color-text-primary)] mb-1">Token Usage</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-2">
         Counts stored on this machine from Claude, Codex, and Grok transcripts. One row per counted
@@ -358,6 +571,10 @@ export function TokenUsageSection(): React.JSX.Element {
           </div>
         </>
       )}
+      </div>
+      {supportsTurns && machine != null && !ownerOnly ? (
+        <UsageLog hostKey={hostKey} projects={projects} />
+      ) : null}
     </div>
   )
 }

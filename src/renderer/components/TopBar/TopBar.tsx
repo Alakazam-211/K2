@@ -7,7 +7,9 @@ import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
+import k2Logo from '../../assets/k2-logo.png'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
@@ -102,8 +104,18 @@ export default function TopBar({
         style={{ minWidth: leftMinWidth }}
       >
         <DesktopChromeLeft />
-        {/* App name (in-app wordmark) */}
-        <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
+        <button
+          type="button"
+          className="no-drag flex h-5 w-5 items-center justify-center flex-shrink-0"
+          title="K2 dashboard"
+          aria-label="Open the K2 dashboard"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          onClick={() => {
+            void openUrl('https://k2.dev')
+          }}
+        >
+          <img src={k2Logo} alt="" className="h-4 w-4" />
+        </button>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher />
         {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}

@@ -304,7 +304,7 @@ function ChatHeader({
         onSplitLeft={onSplitLeft}
         onSplitRight={onSplitRight}
       />
-      <span className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0 flex items-center">
+      <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0 flex items-center">
         {displayName}
       </span>
       {/* spacer pushes the dropdown + refresh to the right. */}

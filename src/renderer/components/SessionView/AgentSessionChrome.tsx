@@ -164,7 +164,7 @@ export function SidecarSessionHeader({
           onSplitRight={onSplitRight}
         />
         <span
-          className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
+          className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
           data-testid="sidecar-session-title"
         >
           {title}

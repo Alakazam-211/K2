@@ -7,6 +7,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 
+import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ChatOverlayColumn } from './ChatOverlayColumn'
 
 describe('chat overlay dock', () => {
@@ -40,5 +41,21 @@ describe('chat overlay dock', () => {
     expect(screen.getByTestId('message-compose').getAttribute('data-compose-destination')).toBe('pty')
     expect(screen.getByTestId('message-compose').getAttribute('data-session-id')).toBe('pty-1')
     HTMLElement.prototype.getBoundingClientRect = original
+  })
+
+  it('is an image compose-drop surface for the chat overlay', () => {
+    render(
+      <ChatOverlayColumn
+        view="chat"
+        visible={false}
+        provider="claude"
+        conversationId={null}
+        agentName="tab-1"
+        composeBar={null}
+      />,
+    )
+    const root = screen.getByTestId('chat-overlay-column')
+    expect(root.matches(COMPOSE_DROP_SURFACE_SELECTOR)).toBe(true)
+    expect(root.getAttribute('data-compose-drop-surface')).toBe('chat')
   })
 })

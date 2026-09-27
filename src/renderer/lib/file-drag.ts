@@ -15,6 +15,11 @@
 
 import { startDrag } from '@crabnebula/tauri-plugin-drag'
 import { terminalWrite } from '@/lib/terminal-daemon'
+import {
+  COMPOSE_BAR_SELECTOR,
+  pathsAreComposeSurfaceImages,
+  surfaceComposeBar,
+} from '@/lib/compose-surface-drop'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -139,6 +144,32 @@ export function getFileDragPaths(): string[] {
   return dragPaths
 }
 
+/** Draft text for an in-app file drop on a compose bar. No bracketed paste. */
+export function formatInAppComposeInsert(paths: string[]): string {
+  return (
+    paths
+      .map((p) => (isImagePath(p) ? quotePathForImageDrop(p) : shellEscape(p)))
+      .join(' ') + ' '
+  )
+}
+
+/**
+ * Compose bar that should receive an in-app FileTree drop.
+ * The bar itself accepts every file. A thread/chat surface accepts images
+ * only and inserts into the bar inside that surface — not a PTY, not the
+ * files drawer.
+ */
+export function inAppComposeDropElement(
+  el: HTMLElement | null,
+  paths: string[],
+): HTMLElement | null {
+  if (!el?.closest) return null
+  const direct = el.closest(COMPOSE_BAR_SELECTOR) as HTMLElement | null
+  if (direct) return direct
+  if (!pathsAreComposeSurfaceImages(paths)) return null
+  return surfaceComposeBar(el)
+}
+
 export interface FileDragCallbacks {
   /** Called during mousemove with the directory path under the cursor (or null). */
   onDragOver?: (dirPath: string | null) => void
@@ -195,15 +226,15 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
 
     // Hit-test: agent compose bar first — insert host paths into the draft
     // (FileTree paths are already on the active host; no re-upload).
+    // An image dropped on the thread/chat surface (not the bar) uses that
+    // same insert. Other files keep the terminal / directory fallthrough.
     if (el) {
-      const composeBar = (el as HTMLElement).closest('[data-compose-bar]') as HTMLElement | null
+      const composeBar = inAppComposeDropElement(el as HTMLElement, dragPaths)
       if (composeBar) {
-        const formatted =
-          dragPaths.map((p) =>
-            isImagePath(p) ? quotePathForImageDrop(p) : shellEscape(p),
-          ).join(' ') + ' '
         composeBar.dispatchEvent(
-          new CustomEvent('k2so:compose-insert', { detail: { data: formatted } }),
+          new CustomEvent('k2so:compose-insert', {
+            detail: { data: formatInAppComposeInsert(dragPaths) },
+          }),
         )
         dragPaths = []
         return

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
+import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
 
 const threadHook = vi.hoisted(() => ({
@@ -80,6 +81,13 @@ describe('ThreadOverlayColumn', () => {
 
     Element.prototype.getBoundingClientRect = orig
     vi.unstubAllGlobals()
+  })
+
+  it('is an image compose-drop surface for the thread column', () => {
+    render(<ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} />)
+    const root = screen.getByTestId('agent-session-thread')
+    expect(root.matches(COMPOSE_DROP_SURFACE_SELECTOR)).toBe(true)
+    expect(root.getAttribute('data-compose-drop-surface')).toBe('thread')
   })
 
   it('clicking empty compose-slot padding focuses the textarea', () => {

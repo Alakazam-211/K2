@@ -1,7 +1,9 @@
-// Composer Phase 1b — pure, dependency-free helpers for the compose bar.
+// Composer Phase 1b — pure helpers for the compose bar.
 // Kept in their own module (no React, no daemon client, no stores) so the
 // keybinding + MsgResponse→status mapping are unit-testable in isolation
 // (fail-loud) without dragging in the host-aware fetch client.
+
+import { isComposeSurfaceImagePath } from '@/lib/compose-surface-drop'
 
 // ── Wire shape — mirrors `crates/k2-daemon/src/workspace_msg.rs::MsgResponse`
 // (the canonical `{success, target_session_id, attempts, reason, hint}`
@@ -154,11 +156,8 @@ export function shouldShowTerminalComposeBar(phase: {
 }
 
 /** Raster/vector stills we can thumbnail in the composer (not PDF). */
-const COMPOSE_IMAGE_PREVIEW_RE =
-  /\.(png|jpe?g|gif|webp|bmp|heic|heif|svg)$/i
-
 export function isComposePreviewImagePath(path: string): boolean {
-  return COMPOSE_IMAGE_PREVIEW_RE.test(path.trim())
+  return isComposeSurfaceImagePath(path)
 }
 
 /** Strip compose-drop quoting (`'path with space.png'` or backslash escapes). */

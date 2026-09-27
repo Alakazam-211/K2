@@ -6,6 +6,9 @@ import type { SessionViewTab } from './sessionViewTab'
  * Message list + the existing Message-the-agent bar. Absolute inset so the
  * bar's height shortens the list (same dock as Thread). The parent passes
  * `TerminalComposeBar` with `sendDestination="pty"` and the daemon PTY id.
+ *
+ * `data-compose-drop-surface` is the image-drop hit region for the bar
+ * inside this overlay. Non-image drops are not claimed.
  */
 export function ChatOverlayColumn({
   view,
@@ -46,6 +49,7 @@ export function ChatOverlayColumn({
     <div
       className="relative flex-1 min-w-0 min-h-0 overflow-hidden"
       data-testid="chat-overlay-column"
+      data-compose-drop-surface="chat"
     >
       <div
         className="absolute left-0 right-0 top-0 overflow-hidden flex flex-col"

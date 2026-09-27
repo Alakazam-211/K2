@@ -13,7 +13,9 @@
 // File drops: local paths are inserted into the draft; on a remote host the
 // same `.k2/downloads` upload path as terminal drops runs first, then the
 // host path is inserted. Window-level routing is external-drop-router
-// (`[data-compose-bar]`); HTML5 File drops also land here via onDrop.
+// (`[data-compose-bar]`, plus an image drop anywhere on the thread/chat
+// surface that owns this bar). HTML5 File drops on the bar also land here
+// via onDrop. Draft paths are the attachment list (`extractImagePathsFromDraft`).
 //
 // Condensed UI: just the input + its placeholder hint — no title, no send
 // button, no status lane, no collapse control. A successful send clears the

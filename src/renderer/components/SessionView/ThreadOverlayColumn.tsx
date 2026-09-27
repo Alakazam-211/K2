@@ -7,6 +7,10 @@ import { ThreadOverlayPane } from './ThreadOverlayPane'
  * Thread list + Message-the-agent bar. Absolute inset so the bar's
  * used height always shortens the list — WKWebView does not shrink a
  * flex-1 / height:100% scrollport when a sibling textarea grows.
+ *
+ * `data-compose-drop-surface` is the image-drop hit region for the bar
+ * inside this column (external-drop-router / file-drag). Non-image drops
+ * are not claimed.
  */
 export function ThreadOverlayColumn({
   addr,
@@ -49,6 +53,7 @@ export function ThreadOverlayColumn({
           : 'relative flex-1 min-w-0 min-h-0 overflow-hidden'
       }
       data-testid="agent-session-thread"
+      data-compose-drop-surface="thread"
     >
       <div
         className="absolute left-0 right-0 top-0 overflow-hidden flex flex-col"

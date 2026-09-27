@@ -15,6 +15,7 @@
 //
 // This module owns the ONE subscriber per webview. Hit-test order matches product rules:
 //   0. Compose bar → remote upload + insert path into draft; local path insert
+//   0b. Thread / chat-overlay surface, image drops only → that surface's compose bar
 //   1. Terminal  → remote upload + inject path; local path paste
 //   2. Files     → remote folder upload; local fs/copy plan
 //   3. Remote miss → "Save to…" picker
@@ -38,6 +39,12 @@ import {
   bracketPaste,
 } from './file-drag'
 import { isWebClient } from './is-web'
+import {
+  filesAreComposeSurfaceImages,
+  pathsAreComposeSurfaceImages,
+  surfaceComposeBar,
+  COMPOSE_BAR_SELECTOR,
+} from './compose-surface-drop'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
@@ -197,12 +204,20 @@ export function panelOwnsFolderPath(rootPath: string, folderPath: string): boole
 export function hitTestExternalDrop(
   position: { x: number; y: number },
   doc: Document = document,
+  options?: {
+    /**
+     * Image-only drop on a thread or chat-overlay surface routes to the
+     * compose bar inside that surface. Off (and any non-image drop) leaves
+     * terminal, files-drawer, and miss behavior unchanged.
+     */
+    composeSurfaceImages?: boolean
+  },
 ): ExternalDropTarget {
   const el = doc.elementFromPoint(position.x, position.y) as HTMLElement | null
 
   // 0. Agent compose bar — insert host path into the draft (remote: upload
-  //    first, same `.k2/downloads` as terminal drops).
-  const composeEl = el?.closest?.('[data-compose-bar]') as HTMLElement | null
+  //    first, same `.k2/downloads` as terminal drops). Any file type.
+  const composeEl = el?.closest?.(COMPOSE_BAR_SELECTOR) as HTMLElement | null
   if (composeEl) {
     return classifyExternalDrop({
       compose: {
@@ -213,6 +228,24 @@ export function hitTestExternalDrop(
       terminal: null,
       fileTreeFolder: null,
     })
+  }
+
+  // 0b. Image dropped on the thread list or chat overlay (not the bar).
+  //     Same compose insert. Non-images fall through so a nested terminal
+  //     or the files drawer still wins.
+  if (options?.composeSurfaceImages) {
+    const surfaceBar = surfaceComposeBar(el)
+    if (surfaceBar) {
+      return classifyExternalDrop({
+        compose: {
+          sessionId: surfaceBar.dataset.sessionId,
+          workspacePath: surfaceBar.dataset.workspacePath ?? '',
+          element: surfaceBar,
+        },
+        terminal: null,
+        fileTreeFolder: null,
+      })
+    }
   }
 
   // 1. Terminal — prefer the id-bearing container; fall back to the focus
@@ -370,7 +403,9 @@ export async function routeExternalDrop(
 ): Promise<void> {
   if (!paths || paths.length === 0) return
 
-  const target = hitTestExternalDrop(position, doc)
+  const target = hitTestExternalDrop(position, doc, {
+    composeSurfaceImages: pathsAreComposeSurfaceImages(paths),
+  })
   const isRemote = useConnectHostStore.getState().activeHost !== 'local'
 
   switch (target.kind) {
@@ -461,7 +496,9 @@ export async function routeBrowserFileDrop(
 ): Promise<void> {
   if (!files || files.length === 0) return
 
-  const target = hitTestExternalDrop(position, doc)
+  const target = hitTestExternalDrop(position, doc, {
+    composeSurfaceImages: filesAreComposeSurfaceImages(files),
+  })
 
   switch (target.kind) {
     case 'terminal': {

@@ -161,6 +161,7 @@ vi.mock('@/stores/tabs', () => ({
       addTabToGroup: h.addTabToGroup,
     }),
   },
+  registerPresetsStore: () => {},
 }))
 vi.mock('@/lib/terminal-id', () => ({
   agentChatId: (pid: string, agent: string) => `agent-chat:${pid}:${agent}`,
@@ -175,8 +176,10 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 
 vi.mock('@/stores/connect-host', () => ({
-  useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) =>
-    sel({ activeHost: 'local' }),
+  useConnectHostStore: Object.assign(
+    (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
+    { getState: () => ({ activeHost: 'local' as const }) },
+  ),
   activeHostKey: () => 'local',
   // settings.ts registers a host-switch listener at module scope; Thread
   // overlay pulls that store in through this pane.
@@ -894,7 +897,10 @@ describe('Continue in a new chat — pinned session switcher', () => {
       expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(true)
     })
     const send = h.daemonCliPost.mock.calls.find((call) => call[0] === 'terminal/send-message')
-    expect(send?.[1]).toEqual({ session_id: 'pty-new', text: 'SEED TEXT from the daemon' })
+    expect(send?.[1]).toEqual({
+      session_id: 'pty-new',
+      text: 'SEED TEXT from the daemon\n\nPrevious session file: /ws',
+    })
     await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', PREMINT, 'claude'))
     expect(h.setChatSession.mock.calls.some((call) => call[1] === 'claude-1')).toBe(false)
     expect(h.stampAgentSessionId).toHaveBeenCalledWith('agent', '/ws', PREMINT, 'proj-1')

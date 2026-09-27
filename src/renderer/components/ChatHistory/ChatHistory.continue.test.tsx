@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
+import { continueHarnessKeys } from './ContinueNewChatDialog'
 
 const PROJECT = '/work/continue-new-chat'
 
@@ -18,8 +19,9 @@ const h = vi.hoisted(() => {
   }
   let sendThrows: Error | null = null
   let seedThrows: Error | null = null
+  let sessionPath: { path?: string | null } | null = null
   const seedText = 'SEED TEXT from the daemon'
-  return { posts, sessions, sandbox, api, sendResult, sendThrows, seedThrows, seedText }
+  return { posts, sessions, sandbox, api, sendResult, sendThrows, seedThrows, seedText, sessionPath }
 })
 
 vi.mock('@/lib/daemon-cli', () => ({
@@ -29,6 +31,7 @@ vi.mock('@/lib/daemon-cli', () => ({
     if (route === 'host-sessions/list') return h.api
     if (route === 'chat/custom-names') return {}
     if (route === 'chat/pinned') return []
+    if (route === 'chat/session-path') return h.sessionPath
     return []
   }),
   daemonCliPost: vi.fn(async (route: string, body: unknown) => {
@@ -119,6 +122,7 @@ beforeEach(() => {
   h.sendThrows = null
   h.seedThrows = null
   h.seedText = 'SEED TEXT from the daemon'
+  h.sessionPath = null
   useTabsStore.setState({
     tabs: [],
     activeTabId: null,
@@ -223,6 +227,8 @@ describe('Continue in a new chat', () => {
     expect(dialog.textContent).not.toContain('From Claude')
     expect(dialog.querySelector('[data-continue-source] svg')).toBeTruthy()
     expect(dialog.textContent).toContain('Claude')
+    const includePath = screen.getByRole('checkbox', { name: /include previous session filepath for reference/i }) as HTMLInputElement
+    expect(includePath.checked).toBe(true)
     const harness = screen.getByLabelText('Harness')
     expect(harness.tagName).not.toBe('SELECT')
     expect(harness.textContent).toContain('Claude')
@@ -324,7 +330,10 @@ describe('Continue in a new chat', () => {
       expect(h.posts.some((post) => post.route === 'terminal/send-message')).toBe(true)
     })
     const send = h.posts.find((post) => post.route === 'terminal/send-message')
-    expect(send?.body).toEqual({ session_id: 'pty-live-1', text: h.seedText })
+    expect(send?.body).toEqual({
+      session_id: 'pty-live-1',
+      text: `${h.seedText}\n\nPrevious session file: ${PROJECT}`,
+    })
     expect(String((send?.body as { text: string }).text).startsWith('[from')).toBe(false)
     await waitFor(() => {
       expect(screen.queryByTestId('continue-new-chat')).toBeNull()
@@ -419,6 +428,14 @@ describe('Continue in a new chat', () => {
     const dialog = await screen.findByTestId('continue-new-chat')
     expect(dialog.querySelector('select')).toBeNull()
 
+    usePresetsStore.setState({
+      presets: [
+        { id: 'g', label: 'Grok', command: 'grok', icon: null, enabled: 1, sortOrder: 0, isBuiltIn: 1, createdAt: 0 },
+        { id: 'c', label: 'Claude', command: 'claude', icon: null, enabled: 1, sortOrder: 1, isBuiltIn: 1, createdAt: 0 },
+        { id: 'x', label: 'Codex', command: 'codex', icon: null, enabled: 1, sortOrder: 2, isBuiltIn: 1, createdAt: 0 },
+        { id: 'off', label: 'Gemini', command: 'gemini', icon: null, enabled: 0, sortOrder: 3, isBuiltIn: 1, createdAt: 0 },
+      ],
+    })
     const trigger = screen.getByLabelText('Harness')
     expect(trigger.tagName).toBe('BUTTON')
     expect(trigger.textContent).toContain('Claude')
@@ -432,16 +449,29 @@ describe('Continue in a new chat', () => {
     expect(menu!.querySelector('select')).toBeNull()
     expect(menu!.querySelector('option')).toBeNull()
     const choices = Array.from(menu!.querySelectorAll('button'))
-    expect(choices.length).toBeGreaterThan(1)
-    for (const label of ['Claude', 'Cursor', 'Grok', 'Gemini', 'Pi', 'Codex', 'Hermes']) {
-      const choice = choices.find((btn) => btn.textContent?.includes(label))
-      expect(choice, label).toBeTruthy()
-      expect(choice!.tagName).toBe('BUTTON')
-    }
+    const names = choices.map((btn) => ['Grok', 'Claude', 'Codex', 'Gemini'].find((label) => btn.textContent?.includes(label)))
+    expect(names).toEqual(['Grok', 'Claude', 'Codex'])
     fireEvent.click(choices.find((btn) => btn.textContent?.includes('Grok'))!)
     const updated = screen.getByLabelText('Harness')
     expect(updated.textContent).toContain('Grok')
     expect(updated.textContent).not.toContain('Claude')
     expect(h.posts).toEqual([])
+  })
+})
+
+describe('continue harness order', () => {
+  it('follows enabled preset order and skips a disabled harness', () => {
+    expect(continueHarnessKeys([
+      { command: 'grok', enabled: 1 },
+      { command: '/opt/homebrew/bin/claude', enabled: 1 },
+      { command: 'gemini', enabled: 0 },
+      { command: 'codex --yolo', enabled: 1 },
+    ])).toEqual(['grok', 'claude', 'codex'])
+  })
+
+  it('keeps the built-in list when no preset is enabled', () => {
+    expect(continueHarnessKeys([])).toEqual([
+      'claude', 'cursor', 'grok', 'gemini', 'pi', 'codex', 'hermes',
+    ])
   })
 })

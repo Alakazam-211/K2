@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { usePresetsStore } from '@/stores/presets'
 import { Button, DialogFrame, DialogScrim } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
@@ -32,6 +33,48 @@ export function providerKeyForCommand(command: string | null | undefined): strin
     if (cfg.command === base) return key
   }
   return null
+}
+
+/** Enabled launch-bar presets, in the order the user set. Empty store keeps the built-in list. */
+export function continueHarnessKeys(
+  presets: Array<{ command: string; enabled: number }>,
+): string[] {
+  const seen = new Set<string>()
+  const keys: string[] = []
+  for (const preset of presets) {
+    if (preset.enabled === 0) continue
+    const key = providerKeyForCommand(preset.command)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    keys.push(key)
+  }
+  if (keys.length === 0) return Object.keys(PROVIDER_CONFIG)
+  return keys
+}
+
+/** Append the source session file so the new chat can refer to it. */
+export function withPreviousSessionPath(text: string, filePath: string): string {
+  const path = filePath.trim()
+  if (!path) return text
+  return `${text}\n\nPrevious session file: ${path}`
+}
+
+async function previousSessionFilePath(source: ContinueNewChatSource): Promise<string> {
+  const project = source.projectPath.trim()
+  try {
+    const res = await daemonCliGet<{ path?: string | null }>('chat/session-path', {
+      provider: source.provider,
+      session_id: source.sessionId,
+      project_path: project,
+    })
+    if (res && typeof res === 'object' && !Array.isArray(res)) {
+      const path = typeof res.path === 'string' ? res.path.trim() : ''
+      if (path) return path
+    }
+  } catch {
+    /* project path below */
+  }
+  return project
 }
 
 export type ContinueMode = 'recent' | 'full'
@@ -96,6 +139,7 @@ export function ContinueNewChatDialog({
     PROVIDER_CONFIG[source.provider] ? source.provider : 'claude',
   )
   const [mode, setMode] = useState<ContinueMode>('recent')
+  const [includePath, setIncludePath] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [seed, setSeed] = useState<string | null>(null)
   const [inFlight, setInFlight] = useState(false)
@@ -135,7 +179,12 @@ export function ContinueNewChatDialog({
       if (!seeded || typeof seeded.text !== 'string' || seeded.text.length === 0) {
         throw new Error('continue-seed returned no text')
       }
-      const text = seeded.text
+      let text = seeded.text
+      if (includePath) {
+        const filePath = await previousSessionFilePath(source)
+        if (!stillOpen()) return
+        text = withPreviousSessionPath(text, filePath)
+      }
       setSeed(text)
       await onSpawn({ text, targetProvider: target, mode }, stillOpen)
       if (!stillOpen()) return
@@ -145,9 +194,14 @@ export function ContinueNewChatDialog({
       setError(err instanceof Error ? err.message : String(err))
       setInFlight(false)
     }
-  }, [inFlight, mode, onSpawn, requestClose, source.projectPath, source.provider, source.sessionId, target])
+  }, [includePath, inFlight, mode, onSpawn, requestClose, source, target])
 
   const sourceLabel = PROVIDER_CONFIG[source.provider]?.label ?? source.provider
+  const presets = usePresetsStore((s) => s.presets)
+  const harnessKeys = continueHarnessKeys(presets)
+  const optionKeys = harnessKeys.includes(target)
+    ? harnessKeys
+    : [...harnessKeys, target].filter((key) => !!PROVIDER_CONFIG[key])
 
   return (
     <>
@@ -190,9 +244,9 @@ export function ContinueNewChatDialog({
             disabled={inFlight}
             value={target}
             onChange={setTarget}
-            options={Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => ({
+            options={optionKeys.map((key) => ({
               value: key,
-              label: cfg.label,
+              label: PROVIDER_CONFIG[key].label,
               leading: <AgentIcon agent={key} size={14} />,
             }))}
           />
@@ -224,6 +278,15 @@ export function ContinueNewChatDialog({
         <div style={{ fontSize: 10, color: 'var(--color-text-muted)', margin: '0 0 14px 18px' }}>
           The saved history. It uses more context.
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--color-text-primary)', margin: '4px 0 14px' }}>
+          <input
+            type="checkbox"
+            checked={includePath}
+            disabled={inFlight}
+            onChange={(e) => setIncludePath(e.target.checked)}
+          />
+          include previous session filepath for reference.
+        </label>
         {error && (
           <div role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>
             {error}

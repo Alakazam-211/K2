@@ -762,15 +762,21 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               )
             })()
 
+            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent).length
             return (
               <div
                 key={tab.id}
                 data-tab-id={tab.id}
-                className={`group relative flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
+                data-tab-rail=""
+                className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
                   isActive
-                    ? 'bg-white/[0.08] text-[var(--color-accent)]'
-                    : 'text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-[var(--color-text-secondary)]'
+                    ? 'text-[var(--color-accent)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
                 }`}
+                style={{
+                  left: railIndex * 36,
+                  background: isActive ? 'var(--color-bg-elevated)' : 'var(--color-bg)',
+                }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
                 // Pin-to-size for the pinned agent Chat tab (its
                 // AgentChatPane hosts a Kessel TerminalPane) — the

@@ -19,6 +19,7 @@ mod imp {
   #[derive(Clone, Copy)]
   struct Defaults {
     button_x: f64,
+    button_y: f64,
     titlebar_h: f64,
   }
 
@@ -59,12 +60,14 @@ mod imp {
       let tb_rect: NSRect = msg_send![title_bar_container, frame];
       Defaults {
         button_x: close_rect.origin.x,
+        button_y: close_rect.origin.y,
         titlebar_h: tb_rect.size.height,
       }
     });
 
-    // Grow the title-bar container downward from the top edge; the buttons
-    // ride down with it (AppKit vertically centers them in the container).
+    // Grow the title-bar container downward from the top edge. The buttons
+    // are pinned back to the captured y so a later call can move them up
+    // again; leaving AppKit's autoresize in place kept them at the first drop.
     let title_bar_h = defaults.titlebar_h + extra_y;
     let win_frame: NSRect = msg_send![ns_window, frame];
     let mut tb_rect: NSRect = msg_send![title_bar_container, frame];
@@ -79,6 +82,7 @@ mod imp {
     for (i, btn) in [close, mini, zoom].iter().enumerate() {
       let mut r: NSRect = msg_send![*btn, frame];
       r.origin.x = defaults.button_x + extra_x + (i as f64) * spacing;
+      r.origin.y = defaults.button_y;
       let _: () = msg_send![*btn, setFrameOrigin: r.origin];
     }
   }

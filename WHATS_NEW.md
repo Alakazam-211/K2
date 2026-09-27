@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.0 — Desktop chrome, a browser tab that stays, sidecar refresh
+
+The Mac app’s window, browser, and extra chats caught up with how you actually use them. This is that cut, off the 0.40 line.
+
+- **Square window.** On the Square style, the stoplights and the window corners are square. Status marks in Active and beside the server switcher are square too.
+- **Top bar.** Signed-in Claude, Codex, and Grok show a usage chip. The nav collapse button sits at the bottom of the sidebar. The collapsed rail uses the same Active list as the open sidebar, without the old corner dots.
+- **Menu bar.** On a Mac, a helper stays in the menu bar after you close the window and says whether this Mac’s daemon is running.
+- **Browser.** The tab shows the site’s name and icon. The page stays up when another app is in front, and still steps aside for other K2 tabs, Settings, and open menus. ⌘L selects the address on a browser tab, and opens the server switcher otherwise. ⇧⌘L is still the workspace assistant. A new browser tab starts with the address selected. Dragging a file in from Finder works. The Mac pane tells sites which WebKit it is, so they serve the normal page.
+- **Server switcher.** A click no longer dies because Settings left a hidden copy of the switcher open.
+- **Sidecar refresh.** Refresh keeps the same tab and the same conversation. The terminal inside redraws. Closing the session still removes the tab.
+- **Sidecar Thread.** Send waits until that extra chat has an address, and your draft stays if it is not ready yet.
+- **Heartbeats.** Clicking a heartbeat opens the session that is already running. After the first fire, Own session points at the session it opened.
+- **Chat.** Continue a chat in a new harness. Claude, Codex, Grok, and Gemini can show the session as chat. Drop an image on Thread or chat compose. The plus menu can open the preset you clicked in a sandbox. A plain shell tab does not wear agent chrome.
+- **Files.** Long names in the drawer keep the end of the name visible.
+- **`k2 workspace resources`.** `list`, `add`, and `remove` for a workspace’s resource files.
+
+Not in this build: Gemini’s subscription meter.
+
 ## 0.40.150 — People, grants, and mail an agent can stand up
 
 A skin user can have a full name, and Settings shows that list as People. Who may open an app is a grant. An agent on the box can bring hosted mail up with the CLI.

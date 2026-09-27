@@ -726,7 +726,10 @@ mod imp {
     }
 
     fn square_rect(frame: NSRect) -> NSRect {
-        let side = frame.size.width.min(frame.size.height);
+        // 2px smaller than the button frame, still centered. The frame
+        // stays the hit target.
+        let full = frame.size.width.min(frame.size.height);
+        let side = (full - 2.0).max(1.0);
         NSRect::new(
             NSPoint::new(
                 frame.origin.x + (frame.size.width - side) / 2.0,

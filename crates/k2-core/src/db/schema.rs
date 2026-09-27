@@ -4805,6 +4805,12 @@ mod unit_tests {
 
         let h = AgentHeartbeat::get_by_name(&conn, &pid, "triage").unwrap().unwrap();
         assert_eq!(h.last_session_id.as_deref(), Some("claude-xyz"));
+        // An automatic fire stamps the conversation id only. session_provider
+        // stays null so the next fire still probes the default-agent adapter.
+        assert!(
+            h.session_provider.is_none(),
+            "save_session_id must not stamp session_provider"
+        );
     }
 
     // ── 0036: active_terminal_id + surfaced flag (heartbeat-active-session PRD) ──

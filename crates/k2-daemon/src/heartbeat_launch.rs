@@ -626,7 +626,7 @@ fn run_workspace_session_delivery(
 }
 
 fn run_inject(
-    _project_path: &str,
+    project_path: &str,
     project_id: &str,
     agent_name: &str,
     hb: &AgentHeartbeat,
@@ -677,7 +677,9 @@ fn run_inject(
         );
     }
     // #677.1 — heartbeat is now live (injected into an existing PTY).
-    crate::session_events::emit_heartbeat_live("", project_id, &hb.name, true);
+    // Pass the project path: an empty workspacePath is not delivered
+    // to a `?path=` subscriber.
+    crate::session_events::emit_heartbeat_live(project_path, project_id, &hb.name, true);
 
     let decision = write_fired_audit(project_id, agent_name, hb,
         &format!("smart_launch: injected into live session {target_id}"), catchup_of);
@@ -1427,6 +1429,24 @@ mod decision_tests {
         assert_eq!(
             resolve_session_provider_command(Some("aider"), &default),
             default
+        );
+    }
+}
+
+#[cfg(test)]
+mod emit_path_tests {
+    /// H2 — a later inject must carry the project path. An empty
+    /// workspacePath is dropped by event_matches_workspace.
+    #[test]
+    fn inject_emits_project_path() {
+        let src = include_str!("heartbeat_launch.rs");
+        assert!(
+            src.contains("emit_heartbeat_live(project_path, project_id, &hb.name, true)"),
+            "inject must emit heartbeat_state_changed with the project path"
+        );
+        assert!(
+            !src.contains("emit_heartbeat_live(\"\""),
+            "empty workspacePath is dropped by event_matches_workspace"
         );
     }
 }

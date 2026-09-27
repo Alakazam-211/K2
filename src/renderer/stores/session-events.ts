@@ -238,8 +238,8 @@ export interface TabOrderChangedEvent {
  *  flipped (#677). The daemon owns the PTY lifecycle and emits this when a
  *  heartbeat's `active_terminal_id` is stamped (live=true) or nulled
  *  (live=false). `project` is the projectId; `agent` is the heartbeat name.
- *  `workspacePath` may be empty (the spawn path doesn't always resolve it)
- *  — the renderer then matches on `project`. */
+ *  `workspacePath` is the project path the `?path=` filter matches.
+ *  The event has no session id — settings refetches `heartbeat/list`. */
 export interface HeartbeatStateChangedEvent {
   kind: 'heartbeat_state_changed'
   workspacePath: string
@@ -1281,10 +1281,10 @@ export function subscribeToActiveState(): UnsubscribeFn {
 // (`tab_title_changed`, `tab_order_changed`, `heartbeat_state_changed`,
 // `heartbeat_roster_changed`) are
 // forwarded only to subscribers whose `?path=` matches the carried
-// `workspacePath` (cwd-prefix rule), EXCEPT heartbeat events whose spawn
-// path didn't resolve a `workspacePath` (empty string) — those are
-// broadcast to every subscriber and the consumer matches on `project`
-// (the project_id). This helper opens that per-workspace socket and invokes
+// `workspacePath` (cwd-prefix rule). An empty `workspacePath` matches
+// no workspace subscriber — `event_matches_workspace` does not
+// special-case an empty cwd, so emitters pass the project path.
+// This helper opens that per-workspace socket and invokes
 // the caller's handlers; consumers (`stores/tabs.ts`,
 // `stores/heartbeat-sessions.ts`) re-snapshot their truth on each
 // (re)connect (`onHello`) to backfill anything missed during a drop.

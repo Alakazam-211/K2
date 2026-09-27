@@ -59,13 +59,15 @@ export interface HeartbeatSessionCandidate {
 
 /** Derive the drop-down's current value from a heartbeat row.
  *  `useWorkspaceSession` wins (pinned mode leaves the saved-session
- *  columns untouched, matching the old checkbox semantics); an
- *  explicitly-trained session is recognized by `sessionProvider`
- *  riding alongside `lastSessionId` (auto fires stamp only the id). */
+ *  columns untouched). A non-empty `lastSessionId` displays as that
+ *  session even when `sessionProvider` is null — an automatic fire
+ *  stamps only the id. Own session is the menu choice that clears
+ *  the id (`mode: 'auto'`), not the fallback for a missing provider. */
 export function deriveDeliveryTarget(row: HeartbeatDeliveryFields): HeartbeatDeliveryTarget {
   if (row.useWorkspaceSession) return { mode: 'pinned' }
-  if (row.lastSessionId && row.sessionProvider) {
-    return { mode: 'session', sessionId: row.lastSessionId, provider: row.sessionProvider }
+  const sessionId = row.lastSessionId?.trim()
+  if (sessionId) {
+    return { mode: 'session', sessionId, provider: row.sessionProvider ?? null }
   }
   return { mode: 'auto' }
 }

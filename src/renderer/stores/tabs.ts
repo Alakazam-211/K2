@@ -11,6 +11,7 @@ import {
   collectStoreTabs,
   conversationIdFromTab,
   conversationIdFromTerminal,
+  findChatSessionInTab,
   pickConversationId,
   rememberLiveNamedChatTitles,
   rememberTabTitleSnapshot,
@@ -1059,15 +1060,15 @@ interface TabsState {
    *  projects-active id, which raced and dropped legit stamps). */
   stampAgentSessionId: (agentName: string, projectPath: string, sessionId: string, ownerProjectId: string) => void
   openAgentPane: (agentName: string, projectPath: string, title?: string) => void
-  /** Open a tab bound to a specific heartbeat's chat session, or focus
-   *  the existing tab if one is already open. Resolves the launch
-   *  config (incl. --resume on agent_heartbeats.last_session_id) via
-   *  k2so_agents_build_launch with the heartbeat name. Returns the
-   *  tab id that was opened or focused. */
+  /** Focus the chat this heartbeat is already running in, or attach
+   *  the live PTY. Pinned chat is decided by the caller
+   *  (`openHeartbeatTarget`) before this runs — pinned mode leaves
+   *  `last_session_id` set, and a conversation search first would
+   *  focus that leftover chat. Returns the tab id that was focused
+   *  or attached, or null when there is nothing to open yet. */
   openHeartbeatTab: (
     projectPath: string,
     heartbeatName: string,
-    options?: { existingTerminalId?: string },
   ) => Promise<string | null>
   openFileAsTab: (filePath: string) => void
   openFileInPaneGroup: (tabId: string, paneGroupId: string, filePath: string) => void
@@ -2482,15 +2483,86 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   openHeartbeatTab: async (
     projectPath: string,
     heartbeatName: string,
-    _options?: { existingTerminalId?: string },
   ): Promise<string | null> => {
-    // Phase 4 of the heartbeat-active-session-tracking PRD: ask the
-    // daemon for the heartbeat's current live PTY. If one exists,
-    // flip the `surfaced` flag → daemon emits `session:surfaced`
-    // → renderer's listener attaches a tab to the existing PTY (no
-    // duplicate `claude --resume`, single canonical session). If no
-    // live PTY (column was null OR pointed at a corpse), fall through
-    // to the legacy fresh-resume path.
+    // Pinned chat is the caller's branch (drawer row and open icon)
+    // before this runs. Pinned mode leaves last_session_id set, so a
+    // conversation search here would focus that leftover chat.
+    //
+    // 1. Conversation id on the main strip and every extra strip
+    //    (Chat history's walk). findChatSessionInTab skips heartbeat
+    //    surfaces; a second pass focuses a tab we already attached.
+    // 2. A live PTY with no tab is attached by its v2 map name
+    //    (`<project>:hb:<name>` or `tab-*`). Do not post
+    //    session/set-surfaced — that flag is one bit for the whole
+    //    project, and the listener would append a companion.
+    // 3. Cold: the id active-session already returned, else the host
+    //    heartbeat list. Never the local k2so_heartbeat_list invoke.
+    const nonempty = (id: string | null | undefined): string | null => {
+      if (typeof id !== 'string') return null
+      const trimmed = id.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+
+    const focusAt = (groupIndex: number, tabId: string): string => {
+      if (groupIndex === 0) get().setActiveTab(tabId)
+      else get().setActiveTabInGroup(groupIndex, tabId)
+      return tabId
+    }
+
+    const strips = (): Array<{ tabs: Tab[]; idx: number }> => {
+      const state = get()
+      return [
+        { tabs: state.tabs, idx: 0 },
+        ...state.extraGroups.map((g, i) => ({ tabs: g.tabs, idx: i + 1 })),
+      ]
+    }
+
+    const focusOpenSession = (
+      sessionId: string | null,
+      activeTerminalId: string | null,
+      activeAgentName: string | null,
+    ): string | null => {
+      const ids = sessionId ? new Set([sessionId]) : null
+      if (ids) {
+        for (const { tabs, idx } of strips()) {
+          for (const tab of tabs) {
+            if (findChatSessionInTab(tab, ids)) return focusAt(idx, tab.id)
+          }
+        }
+      }
+      const rendererId = activeAgentName?.startsWith('tab-')
+        ? activeAgentName.slice('tab-'.length)
+        : null
+      for (const { tabs, idx } of strips()) {
+        for (const tab of tabs) {
+          if (tab.isSystemAgent) continue
+          for (const [, pg] of tab.paneGroups) {
+            for (const item of pg.items) {
+              if (item.type !== 'terminal') continue
+              const td = item.data as TerminalItemData
+              if (td.fromApi) continue
+              if (ids && td.conversationId?.trim() && ids.has(td.conversationId.trim())) {
+                return focusAt(idx, tab.id)
+              }
+              if (ids && td.heartbeatName && td.args?.some((arg) => ids.has(arg))) {
+                return focusAt(idx, tab.id)
+              }
+              if (activeAgentName && td.attachAgentName === activeAgentName) {
+                return focusAt(idx, tab.id)
+              }
+              if (rendererId && td.terminalId === rendererId) {
+                return focusAt(idx, tab.id)
+              }
+              if (activeTerminalId && td.terminalId === activeTerminalId) {
+                return focusAt(idx, tab.id)
+              }
+            }
+          }
+        }
+      }
+      return null
+    }
+
     let active: {
       name: string
       claudeSessionId: string | null
@@ -2500,11 +2572,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       isV2: boolean
     } | null = null
     try {
-      // 0.40.48 host-aware: resolve the live PTY on the ACTIVE host (the
-      // pre-existing /cli/heartbeat/active-session route). The old Tauri
-      // bridge asked THIS Mac's daemon, so clicking a LIVE remote
-      // heartbeat silently fell through to the spawn-fresh path and
-      // opened a duplicate session instead of attaching.
+      // Host-aware: the live PTY is on the ACTIVE host. A local
+      // invoke would miss a remote heartbeat and fall through to spawn.
       const raw = await daemonCliGetText('heartbeat/active-session', {
         project: projectPath,
         name: heartbeatName,
@@ -2514,197 +2583,147 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       console.warn('[openHeartbeatTab] active-session lookup failed:', err)
     }
 
-    if (active?.sessionAlive && active.activeTerminalId) {
-      // Live PTY exists — surface it. The daemon's listener for the
-      // surfaced flag emits `session:surfaced` which triggers
-      // `createCompanionTab` in active-agents.ts to attach a tab
-      // (with the heartbeat-named title) to the existing terminal.
-      // First check whether the renderer already has a tab for this
-      // session — if so, just focus it instead of round-tripping
-      // through SessionSurfaced and creating a duplicate.
-      //
-      // Match key reasoning: the daemon's `active_terminal_id` is the
-      // session.session_id (e.g. `009bcb4c…`), NOT the renderer's
-      // terminalId. The bridge is the agent_name (`tab-<rendererId>`
-      // for tabs the renderer spawned). Strip the `tab-` prefix to
-      // get the renderer-side id and match against that. For
-      // daemon-spawned sessions registered under a non-`tab-` name
-      // (e.g. just the workspace agent name), there's no renderer
-      // tab yet — fall through to the surface path.
-      const state = get()
-      const rendererId = active.activeAgentName?.startsWith('tab-')
-        ? active.activeAgentName.slice('tab-'.length)
-        : null
-      if (rendererId) {
-        for (const tab of state.tabs) {
-          for (const [, pg] of tab.paneGroups) {
-            for (const item of pg.items) {
-              if (item.type !== 'terminal') continue
-              const td = item.data as TerminalItemData
-              if (td.terminalId === rendererId) {
-                set({ activeTabId: tab.id })
-                return tab.id
-              }
-            }
-          }
-        }
-      }
-      // Not yet a tab — flip surfaced. Resolve the agent name first;
-      // for daemon-spawned heartbeat sessions the agent name on the
-      // agent_sessions row is the workspace's primary agent (the one
-      // with type custom / manager / k2so). Fall back to listing if
-      // needed.
-      let agentName: string | null = null
+    const sessionFromActive = nonempty(active?.claudeSessionId)
+    const live = !!(active?.sessionAlive && nonempty(active.activeTerminalId))
+    const mapName = live ? nonempty(active?.activeAgentName) : null
+    const liveTerminalId = live ? nonempty(active?.activeTerminalId) : null
+
+    const focused = focusOpenSession(sessionFromActive, liveTerminalId, mapName)
+    if (focused) return focused
+
+    if (live && liveTerminalId && mapName) {
+      // Same tab shape the session:surfaced listener builds, so
+      // TerminalPane attaches via attachAgentName instead of spawning.
+      const launch = await resolveSessionResumeLaunch(projectPath, sessionFromActive)
+      let surfacedAgentName: string | undefined
       try {
-        // 0.40.48 host-aware: the primary agent must come from the same
-        // host the live PTY runs on (same core fn as the old Tauri
-        // bridge, via the pre-existing /cli/agents/list route).
         const agents = asArray<{ name: string; agentType: string }>(
           await daemonCliGet('agents/list', { project: projectPath }).catch(() => []),
         )
-        agentName = agents.find((a) =>
-          a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType)
-        )?.name ?? agents[0]?.name ?? null
-      } catch { /* fall back to spawn-fresh path */ }
-      if (agentName) {
-        try {
-          // S4 — the live PTY may run ANY provider's harness (the
-          // daemon's wake path resolves the workspace default agent),
-          // so resolve the session's own provider grammar instead of
-          // hardcoding claude argv. These ride along as tab METADATA —
-          // the tab attaches to the EXISTING PTY via attach_agent_name.
-          const launch = await resolveSessionResumeLaunch(projectPath, active.claudeSessionId)
-          await daemonCliPost('session/set-surfaced', {
-            project_path: projectPath,
-            agent_name: agentName,
-            surfaced: true,
-            terminal_id: active.activeTerminalId,
-            command: launch.command,
-            args: launch.args,
-            heartbeat_name: heartbeatName,
-            // The daemon's v2_session_map key for the existing PTY.
-            // TerminalPane uses this to attach via /cli/sessions/v2/spawn
-            // instead of spawning a fresh resume — see the PRD.
-            attach_agent_name: active.activeAgentName,
-          })
-          // The session:surfaced listener will create the tab
-          // asynchronously; don't return a tab id yet.
-          return null
-        } catch (err) {
-          console.warn('[openHeartbeatTab] surfaced flag flip failed; spawning fresh:', err)
-        }
+        surfacedAgentName = agents.find((a) =>
+          a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType),
+        )?.name ?? agents[0]?.name
+      } catch { /* the map name is what reuses the PTY */ }
+
+      const cmd = launch.command.split(' ')[0] || 'shell'
+      const tabId = crypto.randomUUID()
+      const paneGroupId = liveTerminalId
+      const itemId = crypto.randomUUID()
+      const newTab: Tab = {
+        id: tabId,
+        title: `${heartbeatName} (heartbeat)`,
+        isSystemAgent: false,
+        paneGroups: new Map([
+          [
+            paneGroupId,
+            {
+              id: paneGroupId,
+              items: [
+                {
+                  id: itemId,
+                  type: 'terminal',
+                  data: {
+                    terminalId: liveTerminalId,
+                    cwd: projectPath,
+                    command: cmd,
+                    args: launch.args,
+                    renderer: 'kessel',
+                    spawnedAt: performance.now(),
+                    heartbeatName,
+                    projectPath,
+                    surfacedAgentName,
+                    attachAgentName: mapName,
+                  },
+                },
+              ],
+              activeItemIndex: 0,
+            },
+          ],
+        ]),
+        mosaicTree: paneGroupId,
       }
+      set((s) => ({
+        tabs: [...s.tabs, newTab],
+        activeTabId: tabId,
+      }))
+      return tabId
     }
 
-    // No live PTY (or the surface path bailed) — legacy fresh-resume.
-    const list = await invoke<Array<{
-      name: string
-      lastSessionId: string | null
-      enabled: boolean
-    }>>('k2so_heartbeat_list', { projectPath }).catch(() => [])
-    const hb = list.find((h) => h.name === heartbeatName)
-    if (!hb) {
-      console.warn('[openHeartbeatTab] heartbeat not found:', heartbeatName)
-      return null
-    }
-    if (!hb.lastSessionId) {
-      // Scheduled (no fire yet). Caller should fire it first; we
-      // don't auto-launch here because it'd surprise the user (the
-      // Launch button is the explicit fire action).
-      console.info('[openHeartbeatTab] heartbeat has no saved session yet; click Launch first')
+    if (live) {
+      // Alive, but no map name to attach by. A fresh spawn would be
+      // a second process against the session that is already running.
+      console.warn('[openHeartbeatTab] live PTY has no map name; not spawning a second process')
       return null
     }
 
-    // S4 — resolve which provider owns the saved session and build ITS
-    // resume grammar (heartbeat wakes spawn the workspace default agent
-    // since Slice 3b, so the saved session may belong to any harness).
-    // Sessions chat/list doesn't know degrade to claude — pre-S4 argv.
-    const launch = await resolveSessionResumeLaunch(projectPath, hb.lastSessionId)
+    let sessionId = sessionFromActive
+    if (!sessionId) {
+      const listed = asArray<{ name: string; lastSessionId?: string | null }>(
+        await daemonCliGet('heartbeat/list', { project: projectPath }).catch(() => []),
+      )
+      const hb = listed.find((row) => row.name === heartbeatName)
+      if (!hb) {
+        console.warn('[openHeartbeatTab] heartbeat not found:', heartbeatName)
+        return null
+      }
+      sessionId = nonempty(hb.lastSessionId ?? null)
+      if (!sessionId) {
+        console.info('[openHeartbeatTab] heartbeat has no saved session yet; click Launch first')
+        return null
+      }
+      const again = focusOpenSession(sessionId, null, null)
+      if (again) return again
+    }
 
-    // Verify the conversation exists on disk before resuming.
-    //  - claude: probe chat/session-exists. wake_headless saves
-    //    last_session_id synchronously at spawn time, but claude doesn't
-    //    write the JSONL until it's processed input. A daemon restart in
-    //    that window leaves a "ghost" id pointing at a missing file —
-    //    `claude --resume <ghost>` fails with "No conversation found"
-    //    and locks the user into a broken tab on every retry. The next
-    //    heartbeat fire self-heals via smart_launch's JSONL check, so we
-    //    just surface the wait state here.
-    //  - non-claude: the chat/list row that named the provider (above)
-    //    IS the on-disk proof — rows are parsed from each provider's
-    //    session store, so no second probe exists or is needed.
+    const launch = await resolveSessionResumeLaunch(projectPath, sessionId)
     if (launch.provider === 'claude') {
       const jsonlExists = await daemonCliGet<{ exists: boolean }>('chat/session-exists', {
         project_path: projectPath,
-        session_id: hb.lastSessionId,
+        session_id: sessionId,
       })
         .then((r) => r.exists)
         .catch(() => true)
       if (!jsonlExists) {
         console.info(
           '[openHeartbeatTab] saved session %s has no JSONL on disk yet; click Launch to refire',
-          hb.lastSessionId,
+          sessionId,
         )
         return null
       }
     }
 
-    const title = `${heartbeatName} (heartbeat)`
-
-    // Focus an existing tab that's already running this resume if
-    // one is open — match by command + sessionId in args, the same
-    // hook ChatHistory's tab-search uses for chat resumes.
-    {
-      const state = get()
-      for (const tab of state.tabs) {
-        for (const [, pg] of tab.paneGroups) {
-          for (const item of pg.items) {
-            if (item.type !== 'terminal') continue
-            const td = item.data as TerminalItemData
-            if (td.command !== launch.command) continue
-            if (td.args?.includes(hb.lastSessionId)) {
-              set({ activeTabId: tab.id })
-              return tab.id
-            }
-          }
-        }
-      }
-    }
-
-    // Open a new tab. addTabToGroup handles the rest — auto-generates
-    // a terminal id, registers in the active group, broadcasts the
-    // tab-add event, etc.
     const targetGroup = get().splitCount > 1 ? get().splitCount - 1 : 0
-    const tabId = get().addTabToGroup(targetGroup, projectPath, {
-      title,
+    const paneGroupId = get().addTabToGroup(targetGroup, projectPath, {
+      title: `${heartbeatName} (heartbeat)`,
       command: launch.command,
       args: launch.args,
+      conversationId: sessionId,
     })
+    const created = [...get().tabs, ...get().extraGroups.flatMap((g) => g.tabs)]
+      .find((t) => t.paneGroups.has(paneGroupId))
+    if (!created) return null
 
-    // Force the Kessel renderer for heartbeat tabs regardless of the
-    // user's workspace renderer choice — heartbeat-spawned PTYs already
-    // only live in v2_session_map, so a tab attached to that session must
-    // use the Kessel path. See `.k2so/prds/heartbeat-active-session-tracking.md`.
-    if (tabId) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId) return t
-          const updatedGroups = new Map(t.paneGroups)
-          for (const [pgId, pg] of updatedGroups) {
-            const updatedItems = pg.items.map((item) => {
-              if (item.type !== 'terminal') return item
-              return {
-                ...item,
-                data: { ...item.data, renderer: 'kessel' as const },
-              }
-            })
-            updatedGroups.set(pgId, { ...pg, items: updatedItems })
-          }
-          return { ...t, paneGroups: updatedGroups }
-        }),
-      }))
+    // Heartbeat PTYs live in v2_session_map, so the tab must use Kessel
+    // even when the workspace renderer preference is legacy.
+    const stampKessel = (tab: Tab): Tab => {
+      if (tab.id !== created.id) return tab
+      const updatedGroups = new Map(tab.paneGroups)
+      for (const [pgId, pg] of updatedGroups) {
+        updatedGroups.set(pgId, {
+          ...pg,
+          items: pg.items.map((item) => {
+            if (item.type !== 'terminal') return item
+            return { ...item, data: { ...item.data, renderer: 'kessel' as const } }
+          }),
+        })
+      }
+      return { ...tab, paneGroups: updatedGroups }
     }
-    return tabId
+    set((s) => ({
+      tabs: s.tabs.map(stampKessel),
+      extraGroups: s.extraGroups.map((g) => ({ ...g, tabs: g.tabs.map(stampKessel) })),
+    }))
+    return created.id
   },
 
   ensureSystemAgentTabs: (agentName: string, projectPath: string, _title: string) => {

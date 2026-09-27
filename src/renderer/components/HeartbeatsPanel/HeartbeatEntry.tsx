@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
+import { openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import {
   type HeartbeatEntry,
   useHeartbeatSessionsStore,
 } from '@/stores/heartbeat-sessions'
-import { useTabsStore } from '@/stores/tabs'
 import { useToastStore } from '@/stores/toast'
 
 /**
@@ -18,8 +19,10 @@ import { useToastStore } from '@/stores/toast'
  *   [toggle]                          [Launch]
  *
  * Click semantics:
- *   - Click row body → openHeartbeatTab (focus live, spawn-and-resume
- *     otherwise) — connects the user to the actual chat session.
+ *   - Click row body → the session this heartbeat is firing in.
+ *     Pinned chat is decided first (`useWorkspaceSession`) and focuses
+ *     the pinned Chat tab. Own session / a picked session focus an
+ *     open tab or attach the live process.
  *   - Click `Launch` → `/cli/heartbeat/launch?force=1` (test-fire even
  *     when the toggle is off). Archived rows cannot launch.
  */
@@ -30,7 +33,6 @@ export function HeartbeatEntryRow({
   entry: HeartbeatEntry
   projectPath: string
 }): React.JSX.Element {
-  const openHeartbeatTab = useTabsStore((s) => s.openHeartbeatTab)
   const [busy, setBusy] = useState(false)
 
   // 1Hz re-render so the "Next run: in Xs" countdown ticks smoothly.
@@ -50,15 +52,16 @@ export function HeartbeatEntryRow({
       console.warn('[heartbeats-panel] click ignored — projectPath missing')
       return
     }
-    // The store handles all four states:
-    //  - live      : focus existing tab via existingTerminalId match
-    //  - resumable : build_launch reads agent_heartbeats.last_session_id
-    //  - scheduled : build_launch finds no resume target, spawns fresh
-    //  - archived  : build_launch resumes if the saved session still exists
-    openHeartbeatTab(projectPath, entry.row.name, {
-      existingTerminalId: entry.liveTerminalId ?? undefined,
-    }).catch((err) => {
-      console.warn('[heartbeats-panel] openHeartbeatTab failed:', err)
+    // Pinned before any conversation search. Pinned mode leaves
+    // last_session_id set; searching first would focus that leftover
+    // chat and never reach the pinned Chat tab.
+    const mode = deriveDeliveryTarget({
+      useWorkspaceSession: !!entry.row.useWorkspaceSession,
+      lastSessionId: entry.row.lastSessionId,
+      sessionProvider: entry.row.sessionProvider,
+    }).mode
+    void openHeartbeatTarget(projectPath, entry.row.name, mode).catch((err) => {
+      console.warn('[heartbeats-panel] open heartbeat failed:', err)
     })
   }
 

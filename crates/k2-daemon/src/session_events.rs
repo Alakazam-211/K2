@@ -370,9 +370,9 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "heartbeat_state_changed", "workspacePath":
     /// string, "project": string, "agent": string, "live": bool }`.
     /// `project` is the project_id; `agent` is the heartbeat name;
-    /// `workspacePath` is the project path used by the prefix filter
-    /// (empty string when the spawn path doesn't have it resolved — the
-    /// renderer then matches on `project`).
+    /// `workspacePath` is the project path used by the prefix filter.
+    /// An empty string is not delivered to a `?path=` subscriber —
+    /// `event_matches_workspace` does not special-case an empty cwd.
     HeartbeatStateChanged {
         #[serde(rename = "workspacePath")]
         workspace_path: String,
@@ -707,8 +707,8 @@ pub fn emit_token_usage_changed() {
 /// stamping `active_terminal_id` on a heartbeat spawn, and `live=false`
 /// when the PTY exits (the unregister chokepoint does the latter). The
 /// broadcast `let _ =`-swallows the no-subscribers case. `workspace_path`
-/// may be empty when the spawn path doesn't have it resolved — the
-/// renderer then matches on `project` (the project_id).
+/// is the project path. Do not pass "" — an empty cwd is not delivered
+/// to a workspace subscriber.
 pub fn emit_heartbeat_live(workspace_path: &str, project_id: &str, agent: &str, live: bool) {
     let _ = emit(SessionEvent::HeartbeatStateChanged {
         workspace_path: workspace_path.to_string(),

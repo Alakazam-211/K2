@@ -119,9 +119,9 @@ function createRelation(sourceProjectId: string, targetProjectId: string) {
   })
 }
 
-// Mirrors tabs.ts openHeartbeatTab: the 8-field surfaced=true body that
-// hands the existing PTY to the surfaced flow. Every camelCase arg the
-// old Tauri command took maps to a snake_case body field.
+// Wire shape for POST /cli/session/set-surfaced. Tab close still posts
+// surfaced:false. Opening a live heartbeat does not — that flag is one
+// bit for the whole project. Every field stays snake_case.
 // Mirrors RestartHostRow.handleRestart (#661): the host-aware "Restart
 // connected host" control posts an EMPTY body to `daemon/restart` against
 // the ACTIVE host. The route takes no JSON body (the owner token rides the

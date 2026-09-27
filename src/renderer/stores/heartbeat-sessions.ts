@@ -61,7 +61,7 @@ export interface HeartbeatEntry {
   /** Derived display state. */
   state: HeartbeatSessionState
   /** Live PTY terminal id when state === 'live'; null otherwise.
-   *  Used by the click-to-focus handler in the sidebar. */
+   *  Display-only. The row click does not read it. */
   liveTerminalId: string | null
 }
 
@@ -402,8 +402,8 @@ export function subscribeHeartbeatLive(projectPath: string | null): void {
   if (!projectPath) return
   hbEventsUnsub = subscribeToWorkspaceTabEvents(projectPath, {
     onHeartbeatStateChanged: (e: HeartbeatStateChangedEvent) => {
-      // `project` is the project_id; the live-event's `project` is the
-      // authoritative key (workspacePath may be empty on the spawn path).
+      // `project` is the project id. The event has no session id;
+      // this only flips the live dot (settings refetches the list).
       useHeartbeatSessionsStore
         .getState()
         .applyHeartbeatLive(e.project, e.agent, e.live)

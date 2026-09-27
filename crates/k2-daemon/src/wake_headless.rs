@@ -302,7 +302,9 @@ pub fn spawn_wake_headless(
                 &conn, pid, hb_name, &terminal_id,
             );
             // #677.1 — heartbeat just went live (PTY attached).
-            crate::session_events::emit_heartbeat_live("", pid, hb_name, true);
+            // Pass the project path: an empty workspacePath is not
+            // delivered to a `?path=` subscriber.
+            crate::session_events::emit_heartbeat_live(project_path, pid, hb_name, true);
         }
         log_debug!(
             "[daemon/wake] pinned heartbeat '{}' session id: {} terminal: {}",
@@ -445,4 +447,22 @@ pub fn defer_stamp_adopted_session(
             ),
         }
     });
+}
+
+#[cfg(test)]
+mod emit_path_tests {
+    /// H2 — the first Own-session fire must carry the project path.
+    /// An empty workspacePath is dropped by event_matches_workspace.
+    #[test]
+    fn own_session_fire_emits_project_path() {
+        let src = include_str!("wake_headless.rs");
+        assert!(
+            src.contains("emit_heartbeat_live(project_path, pid, hb_name, true)"),
+            "first own-session fire must emit heartbeat_state_changed with the project path"
+        );
+        assert!(
+            !src.contains("emit_heartbeat_live(\"\""),
+            "empty workspacePath is dropped by event_matches_workspace"
+        );
+    }
 }

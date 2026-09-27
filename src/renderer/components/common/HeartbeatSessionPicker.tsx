@@ -295,15 +295,18 @@ export function HeartbeatSessionPicker({
 }
 
 /**
- * Open the heartbeat's current delivery target as a tab:
+ * Open the heartbeat's current delivery target as a tab.
  *
- *   - `pinned` → the workspace's pinned/agent-chat tab, via the tabs
- *     store's existing `openAgentPane` (which redirects to the pinned
- *     system-agent tab). The primary agent name is resolved the same
- *     way `openHeartbeatTab`'s surface path resolves it.
- *   - `auto` / `session` → the heartbeat's saved-session tab via
- *     `openHeartbeatTab` — the exact flow of the sidebar drawer's row
- *     click (focus live PTY, spawn-and-resume otherwise).
+ * Pinned is decided here, before `openHeartbeatTab` searches by
+ * conversation id. Pinned mode leaves `last_session_id` set; that
+ * search would focus the leftover chat and never reach the pinned
+ * Chat tab.
+ *
+ *   - `pinned` → `openAgentPane`, which focuses the first system-agent
+ *     tab when the agent name matches (Chat is ordered before Inbox)
+ *     and does not append.
+ *   - `auto` / `session` → `openHeartbeatTab` (focus an open conversation,
+ *     attach a live `<project>:hb:<name>` PTY, or cold-resume).
  */
 export async function openHeartbeatTarget(
   projectPath: string,

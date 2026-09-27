@@ -113,14 +113,33 @@ describe('deriveDeliveryTarget', () => {
     ).toEqual({ mode: 'session', sessionId: 'x', provider: 'codex' })
   })
 
-  it('auto-stamped lastSessionId WITHOUT a provider stays "own session"', () => {
+  it('a non-empty lastSessionId with no provider displays as that session', () => {
     expect(
       deriveDeliveryTarget({ useWorkspaceSession: false, lastSessionId: 'x', sessionProvider: null }),
-    ).toEqual({ mode: 'auto' })
-    // Rows from older daemons omit the key entirely.
+    ).toEqual({ mode: 'session', sessionId: 'x', provider: null })
+    // Rows from older daemons omit the provider key entirely.
     expect(
       deriveDeliveryTarget({ useWorkspaceSession: false, lastSessionId: 'x' }),
+    ).toEqual({ mode: 'session', sessionId: 'x', provider: null })
+    expect(
+      deriveDeliveryTarget({ useWorkspaceSession: false, lastSessionId: '  x  ', sessionProvider: null }),
+    ).toEqual({ mode: 'session', sessionId: 'x', provider: null })
+  })
+
+  it('own session is the cleared-id state, not a missing provider', () => {
+    expect(
+      deriveDeliveryTarget({ useWorkspaceSession: false, lastSessionId: null, sessionProvider: null }),
     ).toEqual({ mode: 'auto' })
+    expect(
+      deriveDeliveryTarget({ useWorkspaceSession: false, lastSessionId: '   ' }),
+    ).toEqual({ mode: 'auto' })
+    // Choosing Own session clears the id so the next fire can mint fresh.
+    expect(
+      applyDeliveryTarget(
+        { useWorkspaceSession: false, lastSessionId: 'x', sessionProvider: null },
+        { mode: 'auto' },
+      ),
+    ).toEqual({ useWorkspaceSession: false, lastSessionId: null, sessionProvider: null })
   })
 })
 

@@ -271,7 +271,18 @@ export default function ContextMenu(): React.JSX.Element | null {
             >
               {item.label}
             </span>
-            {item.shortcut ? (
+            {item.hint ? (
+              <span
+                style={{
+                  flexShrink: 0,
+                  marginLeft: 12,
+                  color: 'var(--color-text-muted)',
+                  fontSize: '10px',
+                }}
+              >
+                {item.hint}
+              </span>
+            ) : item.shortcut ? (
               <span
                 style={{
                   flexShrink: 0,

@@ -11,12 +11,20 @@ import { AGENTS_MANIFEST, AgentsSection } from '@/components/Settings/sections/A
 import { scoreEntry } from '@/components/Settings/searchManifest'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { menuNewTab } from '@/lib/menu-new-tab'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { showLaunchBarStorageKey, usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
-import { useTabsStore, type BrowserItemData } from '@/stores/tabs'
+import {
+  adoptApiSandboxSession,
+  registerProjectsPathIndex,
+  useTabsStore,
+  type BrowserItemData,
+  type TerminalItemData,
+} from '@/stores/tabs'
+import { useToastStore } from '@/stores/toast'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => null),
@@ -26,6 +34,17 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => {}),
   listen: vi.fn(async () => () => {}),
 }))
+
+vi.mock('@/lib/daemon-cli', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
+  return {
+    ...actual,
+    daemonCliPost: vi.fn(async (route: string) => {
+      if (route === 'agents/ensure-cli') return { ok: true, installed: false }
+      return {}
+    }),
+  }
+})
 
 if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
   Element.prototype.scrollIntoView = () => {}
@@ -123,6 +142,13 @@ describe('tab bar plus menu', () => {
     cleanup()
     useContextMenuStore.getState().close()
     resetTabs()
+    registerProjectsPathIndex(() => [])
+    useProjectsStore.setState({
+      projects: [],
+      activeProjectId: null,
+      activeWorkspaceId: null,
+    })
+    useToastStore.setState({ toasts: [] })
     usePresetsStore.setState({
       presets: [],
       showPresetsBar: true,
@@ -186,7 +212,7 @@ describe('tab bar plus menu', () => {
 
     await openPlus()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+      fireEvent.click(screen.getByRole('button', { name: /^New File/ }))
     })
     expect(useTabsStore.getState().tabs.map((t) => t.title)).not.toContain('Untitled')
     const afterFile = useTabsStore.getState().extraGroups[0].tabs
@@ -232,7 +258,7 @@ describe('tab bar plus menu', () => {
     expect(items.some((item) => item.type === 'separator')).toBe(true)
     expect(items.map((item) => item.label)).not.toContain('Off')
     expect(screen.getByText('⚡')).toBeTruthy()
-    const claude = screen.getByRole('button', { name: 'Claude' })
+    const claude = screen.getByRole('button', { name: /^Claude/ })
     expect(claude.querySelector('svg')).toBeTruthy()
 
     const enabled = usePresetsStore.getState().presets.filter((p) => p.enabled)
@@ -411,8 +437,208 @@ describe('tab bar plus menu', () => {
     seedTabs(0, 1)
     renderBar(0)
     await openPlus()
-    expect(screen.getByRole('button', { name: 'Zed' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Zed/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Off' })).toBeNull()
+  })
+
+  function llmPresets(): void {
+    useSettingsStore.setState({ defaultAgent: 'claude' })
+    usePresetsStore.setState({
+      presets: [
+        preset({ id: 'claude', label: 'Claude', command: 'claude', icon: 'C' }),
+        preset({ id: 'codex', label: 'Codex', command: 'codex', icon: 'X' }),
+        preset({ id: 'off', label: 'Off', command: 'grok', enabled: 0 }),
+      ],
+    })
+  }
+
+  async function openHeld(altKey: boolean): Promise<void> {
+    const add = document.querySelector('[data-tab-add]') as HTMLButtonElement
+    await act(async () => {
+      fireEvent.click(add, { altKey })
+    })
+  }
+
+  it('replaceItems swaps rows without closing the menu', async () => {
+    seedTabs(0, 1)
+    renderBar(0)
+    await openPlus()
+    const onSelect = useContextMenuStore.getState().onSelect
+    const focused = useContextMenuStore.getState().focusedIndex
+    useContextMenuStore.getState().replaceItems([{ id: 'only', label: 'Only' }])
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(useContextMenuStore.getState().onSelect).toBe(onSelect)
+    expect(useContextMenuStore.getState().focusedIndex).toBe(focused)
+    expect(useContextMenuStore.getState().items.map((item) => item.id)).toEqual(['only'])
+  })
+
+  it('Option down adds open in sandbox and Beta on enabled presets only, and keyup restores the shortcut', async () => {
+    seedTabs(0, 1)
+    llmPresets()
+    renderBar(0)
+    await openHeld(false)
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(screen.queryByText('open in sandbox')).toBeNull()
+
+    const before = useContextMenuStore.getState().items.length
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Alt' })
+      fireEvent.keyDown(window, { key: 'Alt' })
+    })
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(useContextMenuStore.getState().items).toHaveLength(before)
+    expect(screen.getAllByText('open in sandbox')).toHaveLength(2)
+    expect(screen.getAllByText('Beta')).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: 'Off' })).toBeNull()
+    const held = useContextMenuStore.getState().items
+    for (const id of ['terminal', 'new-file', 'browser']) {
+      const row = held.find((item) => item.id === id)
+      expect(row?.hint).toBeUndefined()
+      expect(row?.badge).toBeUndefined()
+    }
+    expect(held.find((item) => item.id === 'terminal')?.shortcut).toBe('⌘T')
+    expect(held.find((item) => item.id === 'new-file')?.shortcut).toBe('⌘N')
+    const claude = held.find((item) => item.id === 'preset:claude')
+    const codex = held.find((item) => item.id === 'preset:codex')
+    expect(claude?.hint).toBe('open in sandbox')
+    expect(claude?.badge).toBe('Beta')
+    expect(claude?.shortcut).toBeUndefined()
+    expect(codex?.hint).toBe('open in sandbox')
+    expect(codex?.badge).toBe('Beta')
+    expect(codex?.shortcut).toBeUndefined()
+
+    await act(async () => {
+      fireEvent.keyUp(window, { key: 'Alt' })
+    })
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(screen.queryByText('open in sandbox')).toBeNull()
+    expect(screen.queryByText('Beta')).toBeNull()
+    const restored = useContextMenuStore.getState().items
+    expect(restored.find((item) => item.id === 'preset:claude')?.shortcut).toBe('⇧⌘T')
+    expect(restored.find((item) => item.id === 'preset:codex')?.shortcut).toBeUndefined()
+    expect(restored.find((item) => item.id === 'terminal')?.shortcut).toBe('⌘T')
+  })
+
+  it('opening with Option already held starts in that picture, and blur clears only the hint', async () => {
+    seedTabs(0, 1)
+    llmPresets()
+    renderBar(0)
+    await openHeld(true)
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(screen.getAllByText('open in sandbox')).toHaveLength(2)
+    expect(screen.getAllByText('Beta')).toHaveLength(2)
+
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+    })
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(screen.queryByText('open in sandbox')).toBeNull()
+    expect(useContextMenuStore.getState().items.find((item) => item.id === 'preset:claude')?.shortcut).toBe('⇧⌘T')
+  })
+
+  it('a preset click without Option calls launchPreset and does not post sandbox/open', async () => {
+    seedTabs(0, 1)
+    llmPresets()
+    const launch = vi.fn(async () => {})
+    usePresetsStore.setState({ launchPreset: launch })
+    vi.mocked(daemonCliPost).mockClear()
+    renderBar(0)
+    await openHeld(false)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    })
+    expect(launch).toHaveBeenCalledTimes(1)
+    expect(launch).toHaveBeenCalledWith('codex', '/ws', 'tab', 0)
+    expect(vi.mocked(daemonCliPost).mock.calls.some((call) => call[0] === 'sandbox/open')).toBe(false)
+  })
+
+  it('Option-click posts sandbox/open and does not call launchPreset; 409 adds no tab', async () => {
+    seedTabs(1, 1)
+    llmPresets()
+    const launch = vi.fn(async () => {})
+    usePresetsStore.setState({ launchPreset: launch })
+    vi.mocked(daemonCliPost).mockClear()
+    vi.mocked(daemonCliPost).mockRejectedValueOnce(
+      new Error('this daemon cannot sandbox (microVM backend unavailable)'),
+    )
+    useToastStore.setState({ toasts: [] })
+    const beforeRoot = useTabsStore.getState().tabs.length
+    const beforeExtra = useTabsStore.getState().extraGroups[0].tabs.length
+    renderBar(1)
+    await openHeld(true)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Codex/ }), { altKey: true })
+      await Promise.resolve()
+    })
+    expect(launch).not.toHaveBeenCalled()
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sandbox/open', {
+      project_path: '/ws',
+      preset_id: 'codex',
+    })
+    expect(useTabsStore.getState().tabs).toHaveLength(beforeRoot)
+    expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(beforeExtra)
+    expect(
+      useToastStore.getState().toasts.some((toast) =>
+        toast.message.includes('this daemon cannot sandbox (microVM backend unavailable)'),
+      ),
+    ).toBe(true)
+  })
+
+  it('a 200 places the microvm tab in the clicked group even when hideApiSessions is on', async () => {
+    seedTabs(1, 1)
+    llmPresets()
+    registerProjectsPathIndex(() => [
+      { id: 'p', path: '/ws', primaryWorkspaceId: 'w', hideApiSessions: true },
+    ])
+    const hidden = adoptApiSandboxSession({
+      kind: 'session_added',
+      workspace_path: '/ws',
+      pane_group_id: null,
+      agent_name: 'api-owner-broadcast',
+      command: 'codex',
+      args: [],
+      session_id: 'sess-broadcast',
+      isV2: true,
+      sandbox_backend: 'microvm',
+    })
+    expect(hidden).toBe(false)
+    const beforeRoot = useTabsStore.getState().tabs.length
+    const launch = vi.fn(async () => {})
+    usePresetsStore.setState({ launchPreset: launch })
+    vi.mocked(daemonCliPost).mockResolvedValueOnce({
+      sessionId: 'sess-clicked',
+      agentName: 'api-owner-clicked',
+      sandbox: 'microvm',
+    })
+    renderBar(1)
+    await openHeld(false)
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Alt' })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Claude/ }), { altKey: true })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(launch).not.toHaveBeenCalled()
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sandbox/open', {
+      project_path: '/ws',
+      preset_id: 'claude',
+    })
+    expect(useTabsStore.getState().tabs).toHaveLength(beforeRoot)
+    const column = useTabsStore.getState().extraGroups[0]
+    const added = column.tabs.find((tab) =>
+      [...tab.paneGroups.values()].some((pg) =>
+        pg.items.some((item) => {
+          if (item.type !== 'terminal') return false
+          const data = item.data as TerminalItemData
+          return data.attachAgentName === 'api-owner-clicked' && data.sandboxBackend === 'microvm'
+        }),
+      ),
+    )
+    expect(added).toBeTruthy()
+    expect(column.activeTabId).toBe(added!.id)
+    expect(useTabsStore.getState().tabs.some((tab) => tab.id === added!.id)).toBe(false)
   })
 })
 

@@ -651,20 +651,90 @@ fn provision_work_scratch(ws_slug: &str, session_id: &str) -> Result<PathBuf, Po
 ///   `K2_SESSION_ID` so the guest-init can splice the provider's session flag
 ///   (`claude --session-id <it>`); the returned/addressable `sessionId`
 ///   therefore equals the `.jsonl` key → resume + audit resolve the real path.
-/// - `command`/`args` = the workspace's CONFIGURED agent (agent_resolve seam),
-///   auto-approved inside the jail — see step (6b). NEVER a caller command.
+/// - `command`/`args` = caller-finalized argv (workspace door: configured
+///   agent via `resolve_agent_command` then [`finalize_jail_argv`]; plus-menu
+///   door: the enabled preset row, same finalize). NEVER a raw body command.
 /// - `cwd` = `ws_path` (the REAL mirrored path). It is a SUBDIR of the in-cell
 ///   HOME (`/home/k2`), never `== $HOME`, never a caller path (the `$HOME`-
 ///   narrowing invariant is preserved + debug-asserted).
 /// - FAIL-CLOSED: a provisioning failure returns `Err` → the route 5xxs; we
 ///   NEVER fall back to `$HOME` or an ephemeral dir. `ephemeral_cwd` is left
 ///   `None` so the child-exit observer does NOT delete the RW dirs (persistence).
+fn command_is_claude(command: &str) -> bool {
+    command
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name == "claude")
+}
+
+/// Claude skip-permissions ensure + the workspace model splice. Shared by the
+/// workspace door (after `resolve_agent_command`) and the plus-menu door
+/// (after an enabled `agent_presets` row). Does not pick an agent.
+pub(crate) fn finalize_jail_argv(
+    command: &str,
+    mut args: Vec<String>,
+    ws_path: &str,
+    api_model: Option<&str>,
+) -> (String, Vec<String>) {
+    if command_is_claude(command) {
+        k2_core::workspace::agent_resolve::ensure_flag(&mut args, CLAUDE_SKIP_PERMISSIONS_FLAG);
+    }
+    let (ws_default, force_on_resume) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::model_splice::load_workspace_model(&conn, ws_path)
+    };
+    let args = k2_core::workspace::model_splice::decide_and_apply(
+        command,
+        &args,
+        api_model,
+        ws_default.as_deref(),
+        false,
+        force_on_resume,
+    )
+    .args;
+    (command.to_string(), args)
+}
+
 pub(crate) fn resolve_workspace_session(
     ws_path: &str,
     ws_slug: &str,
     session_id: &SessionId,
     principal: &V1Principal,
     req: &ApiSandboxRequest,
+) -> Result<SpawnRequest, PolicyError> {
+    let resolved = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, ws_path)
+    };
+    let (command, args) = finalize_jail_argv(
+        &resolved.command,
+        resolved.args,
+        ws_path,
+        req.model.as_deref(),
+    );
+    resolve_workspace_mirror_with_argv(
+        ws_path,
+        ws_slug,
+        session_id,
+        principal,
+        req,
+        command,
+        args,
+    )
+}
+
+/// Mirror provision + spawn request for an already-finalized argv.
+/// Does not call `resolve_agent_command`.
+pub(crate) fn resolve_workspace_mirror_with_argv(
+    ws_path: &str,
+    ws_slug: &str,
+    session_id: &SessionId,
+    principal: &V1Principal,
+    req: &ApiSandboxRequest,
+    command: String,
+    args: Vec<String>,
 ) -> Result<SpawnRequest, PolicyError> {
     let sid = session_id.to_string();
 
@@ -742,49 +812,9 @@ pub(crate) fn resolve_workspace_session(
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
 
-    // (6b) The WORKSPACE'S CONFIGURED agent command — the de-generalization
-    // seam (`projects.default_agent` → global default → literal claude), the
-    // same resolution the host-sessions door uses. The caller has NO say in
-    // the command (any body command/args were dropped at parse time).
-    //
-    // CELL PHILOSOPHY (unlike the host door): the microVM jail IS the
-    // security boundary, so the in-cell agent runs AUTO-APPROVED. For claude
-    // we ENSURE `--dangerously-skip-permissions` (the built-in preset already
-    // carries it → byte-identical argv to the pre-resolution hardcode; a
-    // user-customized preset that dropped it gets it back). Other presets
-    // spawn their own command+args exactly as configured — their auto-approve
-    // flags are already in the preset args (e.g. `gemini --yolo`,
-    // `codex … --dangerously-bypass-approvals-and-sandbox`); we never strip
-    // and never invent flags for providers we don't own.
-    //
-    // Session identity stays ENV-carried (`K2_SESSION_ID`, spliced by the
-    // guest-init for claude argv) — never argv here, so non-claude presets
-    // run bare-but-correct (degraded resume) until their in-cell resume
-    // grammar exists.
-    let resolved = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, ws_path)
-    };
-    let command = resolved.command.clone();
-    let mut args = resolved.args.clone();
-    if resolved.is_claude() {
-        k2_core::workspace::agent_resolve::ensure_flag(&mut args, CLAUDE_SKIP_PERMISSIONS_FLAG);
-    }
-    let (ws_default, force_on_resume) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::model_splice::load_workspace_model(&conn, ws_path)
-    };
-    args = k2_core::workspace::model_splice::decide_and_apply(
-        &command,
-        &args,
-        req.model.as_deref(),
-        ws_default.as_deref(),
-        false,
-        force_on_resume,
-    )
-    .args;
+    // Argv is already finalized by the caller (`finalize_jail_argv`). This
+    // function does not consult `resolve_agent_command` and does not read a
+    // body command.
 
     // (7) The workspace-scoped MIRROR mount spec — carried to the worker.
     let overlay = WorkspaceMountSpec {

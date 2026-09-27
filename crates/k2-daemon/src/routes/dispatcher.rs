@@ -649,6 +649,7 @@ async fn handle_one_request(
             | "/cli/chat/restore"
             | "/cli/chat/migrate-ide"
             | "/cli/chat/continue-seed"
+            | "/cli/sandbox/open"
             | "/cli/sandbox/reopen"
             | "/cli/themes/create-template"
             | "/cli/themes/delete"
@@ -4984,6 +4985,30 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
+        }
+        // Plus-menu sandbox. Owner token only — ahead of the `/cli/sandbox/`
+        // prefix, which is `token_ok` (a connect-user must not create a cell).
+        p if is_post && post_allowed && p == "/cli/sandbox/open" => {
+            if !super::http::token_is_owner(&query, state.token.as_str()) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = crate::sandbox_chat_routes::handle_sandbox_open(&body_bytes);
+            super::http::send_response(
+                &mut *stream,
+                result.status,
+                result.content_type,
+                &result.body,
+            )
+            .await;
         }
         p if is_post && post_allowed && (
             p.starts_with("/cli/fs/")

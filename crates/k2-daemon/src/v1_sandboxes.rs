@@ -26,7 +26,9 @@ use crate::cli_response::CliResponse;
 use crate::routes::http::{V1Capability, V1Principal};
 use crate::{sandbox_quota, stream_token, v2_spawn};
 
-use policy::{resolve_spawn, resolve_workspace_session, ApiSandboxRequest};
+use policy::{
+    resolve_spawn, resolve_workspace_mirror_with_argv, resolve_workspace_session, ApiSandboxRequest,
+};
 
 use k2_core::log_debug;
 use k2_core::session::SessionId;
@@ -635,6 +637,38 @@ fn spawn_for_workspace_slice1(
     req: WorkspaceSessionRequest,
     body: &[u8],
 ) -> CliResponse {
+    spawn_for_workspace_inner(principal, req, body, None)
+}
+
+/// Plus-menu door. `command`/`args` are the enabled preset row after
+/// [`policy::finalize_jail_argv`], not the workspace default and not a body
+/// command. `V1Principal::Owner` is the spawn identity only.
+pub(crate) fn spawn_workspace_preset(
+    workspace_path: String,
+    workspace_slug: String,
+    command: String,
+    args: Vec<String>,
+    body: &[u8],
+) -> CliResponse {
+    let req = WorkspaceSessionRequest {
+        workspace_slug,
+        workspace_path,
+        op: WsSessionOp::New,
+    };
+    spawn_for_workspace_inner(
+        &V1Principal::Owner,
+        req,
+        body,
+        Some((command, args)),
+    )
+}
+
+fn spawn_for_workspace_inner(
+    principal: &V1Principal,
+    req: WorkspaceSessionRequest,
+    body: &[u8],
+    preset_argv: Option<(String, Vec<String>)>,
+) -> CliResponse {
     // (1) REFUSE if this daemon cannot deliver a real microVM (never degrade to
     // an unsandboxed cell) — identical to the ephemeral door.
     if !v2_spawn::can_sandbox() {
@@ -695,13 +729,25 @@ fn spawn_for_workspace_slice1(
     // (5) Resolve → host-trusted SpawnRequest carrying the RO workspace base +
     // the PERSISTENT per-session layer. Fail-CLOSED: a provisioning failure
     // 5xxs (NEVER a $HOME/ephemeral fallback); release the slot we acquired.
-    let mut spawn_req = match resolve_workspace_session(
-        &req.workspace_path,
-        &req.workspace_slug,
-        &session_id,
-        principal,
-        &api_req,
-    ) {
+    let resolved = match preset_argv {
+        Some((command, args)) => resolve_workspace_mirror_with_argv(
+            &req.workspace_path,
+            &req.workspace_slug,
+            &session_id,
+            principal,
+            &api_req,
+            command,
+            args,
+        ),
+        None => resolve_workspace_session(
+            &req.workspace_path,
+            &req.workspace_slug,
+            &session_id,
+            principal,
+            &api_req,
+        ),
+    };
+    let mut spawn_req = match resolved {
         Ok(r) => r,
         Err(e) => {
             sandbox_quota::release(&principal_key);

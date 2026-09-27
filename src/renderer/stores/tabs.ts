@@ -5651,6 +5651,76 @@ function isApiOriginTerminal(data: TerminalItemData): boolean {
   return typeof agent === 'string' && agent.startsWith('api-')
 }
 
+/**
+ * Plus-menu Option-click. Places the orange microvm tab in `groupIndex` and
+ * focuses it there. A SessionAdded that already parked the cell on the primary
+ * strip is moved. `hideApiSessions` does not apply — this is the click the
+ * user just made. Broadcast adoption stays on `adoptApiSandboxSession`.
+ */
+export function placeClickedSandboxTab(args: {
+  groupIndex: number
+  cwd: string
+  sessionId: string
+  agentName: string
+}): void {
+  const found = locateClickedSandboxTab(args.agentName, args.sessionId)
+  if (found) {
+    const state = useTabsStore.getState()
+    const destOk =
+      args.groupIndex === 0 || args.groupIndex - 1 < state.extraGroups.length
+    if (found.group !== args.groupIndex && destOk) {
+      state.moveTabToGroup(found.group, args.groupIndex, found.tabId)
+    }
+    useTabsStore.getState().setActiveTabInGroup(args.groupIndex, found.tabId)
+    return
+  }
+
+  const paneGroupId = crypto.randomUUID()
+  const tab = buildAdoptedTerminalTab({
+    paneGroupId,
+    cwd: args.cwd,
+    sessionId: args.sessionId,
+    attachAgentName: args.agentName,
+    sandbox: true,
+    sandboxBackend: 'microvm',
+  })
+  const firstItem = [...tab.paneGroups.values()][0]?.items[0]
+  if (firstItem?.type === 'terminal') {
+    (firstItem.data as TerminalItemData).renderer = 'kessel'
+  }
+  const state = useTabsStore.getState()
+  if (args.groupIndex <= 0) {
+    useTabsStore.setState({ tabs: [...state.tabs, tab] })
+  } else {
+    const gi = args.groupIndex - 1
+    if (gi < 0 || gi >= state.extraGroups.length) return
+    const groups = state.extraGroups.slice()
+    groups[gi] = { ...groups[gi], tabs: [...groups[gi].tabs, tab] }
+    useTabsStore.setState({ extraGroups: groups })
+  }
+  useTabsStore.getState().setActiveTabInGroup(args.groupIndex, tab.id)
+}
+
+function locateClickedSandboxTab(
+  agentName: string,
+  sessionId: string,
+): { group: number; tabId: string } | null {
+  const state = useTabsStore.getState()
+  for (const tab of state.tabs) {
+    if (tabMatchesApiSession(tab, agentName, sessionId)) {
+      return { group: 0, tabId: tab.id }
+    }
+  }
+  for (let i = 0; i < state.extraGroups.length; i++) {
+    for (const tab of state.extraGroups[i].tabs) {
+      if (tabMatchesApiSession(tab, agentName, sessionId)) {
+        return { group: i + 1, tabId: tab.id }
+      }
+    }
+  }
+  return null
+}
+
 export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
   // Scope: only adopt API-labelled cells. Daemon stamps sandbox_backend for
   // real sandboxes (`microvm`) and host-sessions (`host`); bare PTYs omit it.

@@ -12,8 +12,10 @@ export interface ContextMenuItemDef {
   badge?: string
   /** Leading icon. Omitted rows stay text-only. */
   icon?: ReactNode
-  /** Trailing shortcut hint (e.g. "⌘T"). Not a badge. */
+  /** Trailing shortcut hint (e.g. "⌘T"). Not a badge. Hidden while `hint` is set. */
   shortcut?: string
+  /** Plain trailing words (e.g. "open in sandbox"). Not a key combo. */
+  hint?: string
 }
 
 /**
@@ -35,6 +37,8 @@ interface ContextMenuState {
   focusedIndex: number
 
   show: (x: number, y: number, items: ContextMenuItemDef[]) => Promise<string | null>
+  /** Swap rows on an open menu. Leaves `isOpen` and `onSelect` alone. */
+  replaceItems: (items: ContextMenuItemDef[]) => void
   close: () => void
   selectItem: (id: string) => void
   setFocusedIndex: (index: number) => void
@@ -65,6 +69,11 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
         focusedIndex: -1
       })
     })
+  },
+
+  replaceItems: (items) => {
+    if (!get().isOpen) return
+    set({ items })
   },
 
   close: () => {

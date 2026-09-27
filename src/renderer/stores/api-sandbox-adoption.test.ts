@@ -102,6 +102,7 @@ import {
   dropApiSpawnedSession,
   hydrateApiSandboxSessions,
   initApiSandboxTabAdoption,
+  placeClickedSandboxTab,
   registerProjectsPathIndex,
   type Tab,
   type TerminalItemData,
@@ -504,5 +505,88 @@ describe('dropApiSpawnedSession', () => {
     await Promise.resolve(ev.hello[0]?.())
     expect(useTabsStore.getState().tabs).toHaveLength(1)
     unsub()
+  })
+})
+
+describe('placeClickedSandboxTab', () => {
+  function terminalOf(tab: Tab): TerminalItemData | null {
+    for (const pg of tab.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type === 'terminal') return item.data as TerminalItemData
+      }
+    }
+    return null
+  }
+
+  it('moves a primary-strip SessionAdded into the clicked group and focuses it', () => {
+    useTabsStore.setState({
+      tabs: [],
+      activeTabId: null,
+      splitCount: 2,
+      extraGroups: [{ tabs: [], activeTabId: null }],
+    })
+    const keep = useTabsStore.getState().addTab('/ws', { title: 'Keep' })
+    // addTab returns the pane group id, not the tab id. The primary tab is active.
+    const primaryId = useTabsStore.getState().activeTabId
+    expect(primaryId).toBeTruthy()
+    expect(keep).toBeTruthy()
+
+    const event = apiSandboxEvent({ workspace_path: '/ws' })
+    expect(adoptApiSandboxSession(event)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(2)
+    expect(useTabsStore.getState().activeTabId).toBe(primaryId)
+
+    placeClickedSandboxTab({
+      groupIndex: 1,
+      cwd: '/ws',
+      sessionId: event.session_id,
+      agentName: event.agent_name,
+    })
+
+    expect(useTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([primaryId])
+    const column = useTabsStore.getState().extraGroups[0]
+    expect(column.tabs).toHaveLength(1)
+    expect(column.activeTabId).toBe(column.tabs[0].id)
+    expect(terminalOf(column.tabs[0])?.sandboxBackend).toBe('microvm')
+    expect(terminalOf(column.tabs[0])?.sessionId).toBe(event.session_id)
+
+    expect(adoptApiSandboxSession(event)).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(1)
+    expect(useTabsStore.getState().extraGroups[0].activeTabId).toBe(column.tabs[0].id)
+  })
+
+  it('places the click when hideApiSessions dropped the broadcast, and later broadcasts stay hidden', () => {
+    registerProjectsPathIndex(() => [
+      { id: 'p', path: '/ws', primaryWorkspaceId: 'w', hideApiSessions: true },
+    ])
+    useTabsStore.setState({
+      splitCount: 2,
+      extraGroups: [{ tabs: [], activeTabId: null }],
+    })
+    const broadcast = apiSandboxEvent({
+      workspace_path: '/ws',
+      agent_name: 'api-owner-other',
+      session_id: 'sess-other',
+    })
+    expect(adoptApiSandboxSession(broadcast)).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(0)
+
+    placeClickedSandboxTab({
+      groupIndex: 1,
+      cwd: '/ws',
+      sessionId: 'sess-clicked',
+      agentName: 'api-owner-clicked',
+    })
+    const column = useTabsStore.getState().extraGroups[0]
+    expect(column.tabs).toHaveLength(1)
+    expect(column.activeTabId).toBe(column.tabs[0].id)
+    expect(terminalOf(column.tabs[0])?.sandboxBackend).toBe('microvm')
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+
+    expect(adoptApiSandboxSession(broadcast)).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(1)
   })
 })

@@ -1,5 +1,5 @@
 import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
-import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
+import { placeClickedSandboxTab, useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useProjectsStore } from '@/stores/projects'
@@ -40,6 +40,7 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
 function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
+  sandboxHint: boolean,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -54,10 +55,38 @@ function buildPlusMenuItems(
       id: `preset:${preset.id}`,
       label: preset.label,
       icon: presetMenuIcon(preset),
-      shortcut: preset.id === defaultPresetId ? '⇧⌘T' : undefined,
+      shortcut: sandboxHint || preset.id !== defaultPresetId ? undefined : '⇧⌘T',
+      hint: sandboxHint ? 'open in sandbox' : undefined,
+      badge: sandboxHint ? 'Beta' : undefined,
     })
   }
   return items
+}
+
+async function openPresetInSandbox(
+  presetId: string,
+  projectPath: string,
+  groupIndex: number,
+): Promise<void> {
+  try {
+    const resp = await daemonCliPost<{ sessionId?: string; agentName?: string }>('sandbox/open', {
+      project_path: projectPath,
+      preset_id: presetId,
+    })
+    if (!resp?.sessionId || !resp.agentName) {
+      useToastStore.getState().addToast('Sandbox did not return a session', 'error')
+      return
+    }
+    placeClickedSandboxTab({
+      groupIndex,
+      cwd: projectPath,
+      sessionId: resp.sessionId,
+      agentName: resp.agentName,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    useToastStore.getState().addToast(message, 'error')
+  }
 }
 
 /** Same resolution as ⌘⇧T: this folder's workspace default, then the global default, then the first enabled preset. */
@@ -217,23 +246,82 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const barCwd = cwd
     const rect = e.currentTarget.getBoundingClientRect()
     const presets = usePresetsStore.getState().presets
-    const items = buildPlusMenuItems(presets, defaultPresetIdForCwd(barCwd, presets))
-    const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
-    if (!picked) return
-    if (picked === 'terminal') {
-      useTabsStore.getState().addTabToGroup(group, barCwd)
-      return
+    const defaultId = defaultPresetIdForCwd(barCwd, presets)
+    // Snapshot Option. selectItem resolves an id only, so the click and Enter
+    // that call it have to record altKey before that promise continues.
+    let optionHeld = e.altKey
+    let shown = optionHeld
+    const paint = (): void => {
+      if (!useContextMenuStore.getState().isOpen) return
+      if (shown === optionHeld) return
+      shown = optionHeld
+      useContextMenuStore.getState().replaceItems(
+        buildPlusMenuItems(presets, defaultId, optionHeld),
+      )
     }
-    if (picked === 'new-file') {
-      useTabsStore.getState().openUntitledDocument(barCwd, group)
-      return
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Alt') {
+        optionHeld = true
+        paint()
+        return
+      }
+      if (ev.key === 'Enter') {
+        optionHeld = ev.altKey
+        return
+      }
+      if (ev.altKey !== optionHeld) {
+        optionHeld = ev.altKey
+        paint()
+      }
     }
-    if (picked === 'browser') {
-      useTabsStore.getState().openUrlInNewTab('', group)
-      return
+    const onKeyUp = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Alt') return
+      optionHeld = false
+      paint()
     }
-    if (picked.startsWith('preset:')) {
-      usePresetsStore.getState().launchPreset(picked.slice('preset:'.length), barCwd, 'tab', group)
+    const onClick = (ev: MouseEvent): void => {
+      optionHeld = ev.altKey
+    }
+    const onBlur = (): void => {
+      optionHeld = false
+      paint()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('click', onClick, true)
+    window.addEventListener('blur', onBlur)
+    const stop = (): void => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('click', onClick, true)
+      window.removeEventListener('blur', onBlur)
+    }
+    try {
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld)
+      const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
+      if (!picked) return
+      if (picked === 'terminal') {
+        useTabsStore.getState().addTabToGroup(group, barCwd)
+        return
+      }
+      if (picked === 'new-file') {
+        useTabsStore.getState().openUntitledDocument(barCwd, group)
+        return
+      }
+      if (picked === 'browser') {
+        useTabsStore.getState().openUrlInNewTab('', group)
+        return
+      }
+      if (picked.startsWith('preset:')) {
+        const id = picked.slice('preset:'.length)
+        if (optionHeld) {
+          await openPresetInSandbox(id, barCwd, group)
+          return
+        }
+        usePresetsStore.getState().launchPreset(id, barCwd, 'tab', group)
+      }
+    } finally {
+      stop()
     }
   }, [groupIndex, cwd])
 

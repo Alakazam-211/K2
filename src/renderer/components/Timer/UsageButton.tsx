@@ -62,7 +62,7 @@ export default function UsageButton(): React.JSX.Element {
         aria-expanded={open}
         aria-haspopup="menu"
         data-testid="subscription-usage"
-        className="flex h-6 items-center gap-[11px] px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+        className="flex h-6 items-center gap-[13px] px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
         style={noDrag}
         onClick={() => {
           setOpen((was) => {

@@ -410,12 +410,12 @@ function ActiveBarItem({
           the user views the pane. */}
       {!isAgentWorking && hasUnseenDone ? (
         <span
-          className="flex-shrink-0 w-1.5 h-1.5 rounded-[1px] bg-[var(--color-status-warn-amber)]"
+          className="flex-shrink-0 w-1.5 h-1.5 bg-[var(--color-status-warn-amber)]"
           title="Agent finished — not yet viewed"
         />
       ) : (
         <span
-          className={`flex-shrink-0 w-1.5 h-1.5 rounded-[1px] ${
+          className={`flex-shrink-0 w-1.5 h-1.5 ${
             hasLiveSession ? 'bg-[var(--color-status-ok)]' : 'bg-[var(--color-wash-3)]'
           }`}
           title={hasLiveSession ? 'Live session running' : 'No live session'}

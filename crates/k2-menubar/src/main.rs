@@ -5,11 +5,10 @@
 mod macos {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
-    use std::time::Duration;
 
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventMask};
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
     use tray_icon::menu::{Menu, MenuEvent, MenuItem};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -62,11 +61,16 @@ mod macos {
                     }
                 }
             }
-            let until = NSDate::dateWithTimeIntervalSinceNow(0.2);
-            let ran = NSRunLoop::currentRunLoop()
-                .runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &until);
-            if !ran {
-                std::thread::sleep(Duration::from_millis(200));
+            // Status-item clicks are app events. A bare NSRunLoop does not
+            // deliver them, so the menu never opens.
+            let until = NSDate::dateWithTimeIntervalSinceNow(0.05);
+            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&until),
+                unsafe { NSDefaultRunLoopMode },
+                true,
+            ) {
+                app.sendEvent(&event);
             }
         }
     }

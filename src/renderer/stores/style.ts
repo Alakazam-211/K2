@@ -151,12 +151,25 @@ function applyTrafficInset(inset: number): void {
   void invoke('set_traffic_light_inset', { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX }).catch(() => {})
 }
 
+function readTrafficInset(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--inset-window').trim()
+  return Number.parseFloat(raw) || 0
+}
+
 function syncTrafficLights(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return
   if (!navigator.platform.toLowerCase().includes('mac')) return
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--inset-window').trim()
-  const inset = Number.parseFloat(raw) || 0
+  const inset = readTrafficInset()
   if (inset === lastTrafficInset) return
+  lastTrafficInset = inset
+  applyTrafficInset(inset)
+}
+
+/** AppKit puts the buttons back at the top when the window title changes. */
+export function reapplyTrafficLights(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  if (!navigator.platform.toLowerCase().includes('mac')) return
+  const inset = readTrafficInset()
   lastTrafficInset = inset
   applyTrafficInset(inset)
 }

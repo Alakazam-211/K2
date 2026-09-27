@@ -39,6 +39,7 @@ import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from '
 // panes) across default/focus/settings switches.
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
 import { k2PageTitle } from './web/page-title'
+import { reapplyTrafficLights } from './stores/style'
 import { mountExternalDropRouter } from './lib/external-drop-router'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
@@ -246,6 +247,8 @@ function missionControlServerLabel(): string {
   return (fresh?.label ?? activeHost.label).trim()
 }
 
+let lastWindowTitle = ''
+
 function applyK2SOZoom(): void {
   // Hosted web: `z3thon | K2`. Desktop Mission Control: `K2 | <server>`.
   // Zoom suffix shared: `… — 125%`.
@@ -259,9 +262,12 @@ function applyK2SOZoom(): void {
   }
   const title = k2PageTitle(z, undefined, isWebClient() ? undefined : missionControlServerLabel())
   document.title = title
-  if (!isWebClient()) {
-    void getCurrentTauriWindow().setTitle(title).catch(() => {})
-  }
+  if (isWebClient() || title === lastWindowTitle) return
+  lastWindowTitle = title
+  // setTitle relayouts the macOS title bar and parks the stoplights at the top.
+  void getCurrentTauriWindow().setTitle(title).then(() => {
+    requestAnimationFrame(() => reapplyTrafficLights())
+  }).catch(() => {})
 }
 
 if (typeof window !== 'undefined') {

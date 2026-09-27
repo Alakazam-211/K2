@@ -997,14 +997,31 @@ fn grok_line(id: i64, method: &str, params: Value) -> Result<String, GrokFail> {
     .map_err(|e| GrokFail::Transport(e.to_string()))
 }
 
+fn grok_notification(method: &str) -> Result<String, GrokFail> {
+    serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "method": method,
+    }))
+    .map_err(|e| GrokFail::Transport(e.to_string()))
+}
+
 /// One-shot `grok agent stdio` exchange. Initialize, then `_x.ai/billing`.
 /// Stdin closes after that request. No login refresh and no billing URL.
+///
+/// grok 1.0.41 rejects `clientInfo` alone (`Invalid params`) and rejects
+/// `--no-leader`. The handshake that returns `creditUsagePercent` is ACP
+/// `protocolVersion` 1, then `notifications/initialized`, then billing.
 fn grok_exchange(io: &mut dyn GrokTransport) -> Result<GrokParsed, GrokFail> {
     let timeout = Duration::from_secs(8);
     io.write_line(&grok_line(
         1,
         "initialize",
         json!({
+            "protocolVersion": 1,
+            "clientCapabilities": {
+                "fs": {"readTextFile": false, "writeTextFile": false},
+                "terminal": false
+            },
             "clientInfo": {"name": "k2", "title": "K2", "version": "0"}
         }),
     )?)
@@ -1016,6 +1033,8 @@ fn grok_exchange(io: &mut dyn GrokTransport) -> Result<GrokParsed, GrokFail> {
     if init.get("error").is_some() {
         return Err(GrokFail::Transport("grok initialize failed".into()));
     }
+    io.write_line(&grok_notification("notifications/initialized")?)
+        .map_err(GrokFail::Transport)?;
     io.write_line(&grok_line(2, "_x.ai/billing", json!({}))?)
         .map_err(GrokFail::Transport)?;
     io.close_stdin().map_err(GrokFail::Transport)?;
@@ -1171,7 +1190,7 @@ fn grok_auth_words(text: &str) -> bool {
 
 fn grok_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
-    cmd.args(["agent", "stdio", "--no-leader"])
+    cmd.args(["agent", "stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -2386,14 +2405,8 @@ mod tests {
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(
-            args,
-            vec![
-                "agent".to_string(),
-                "stdio".to_string(),
-                "--no-leader".to_string()
-            ]
-        );
+        assert_eq!(args, vec!["agent".to_string(), "stdio".to_string()]);
+        assert!(!args.iter().any(|a| a == "--no-leader"));
         assert!(!args
             .iter()
             .any(|a| { a == "--reauth" || a.contains("auth.json") || a == "usage" }));
@@ -2422,13 +2435,18 @@ mod tests {
         assert_eq!(parsed.windows[0].resets_at, "2026-09-26T00:00:00Z");
         let joined = io.lines.join("\n");
         assert!(joined.contains("\"method\":\"initialize\""));
+        assert!(joined.contains("\"protocolVersion\":1"));
+        assert!(joined.contains("\"method\":\"notifications/initialized\""));
         assert!(joined.contains("\"method\":\"_x.ai/billing\""));
         let init_at = joined.find("\"method\":\"initialize\"").expect("init");
+        let ready_at = joined
+            .find("\"method\":\"notifications/initialized\"")
+            .expect("initialized");
         let bill_at = joined
             .find("\"method\":\"_x.ai/billing\"")
             .expect("billing");
-        assert!(init_at < bill_at);
-        assert_eq!(io.closed_after, Some(2));
+        assert!(init_at < ready_at && ready_at < bill_at);
+        assert_eq!(io.closed_after, Some(3));
         assert!(!joined.contains("\"method\":\"initialized\""));
         assert!(!joined.contains("--reauth"));
         assert!(!joined.contains("auth.json"));

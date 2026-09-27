@@ -776,7 +776,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 }`}
                 style={{
                   left: railIndex * 36,
-                  background: isActive ? 'var(--color-bg-elevated)' : 'var(--color-bg)',
+                  background: isActive
+                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
+                    : 'var(--color-bg-surface)',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
                 // Pin-to-size for the pinned agent Chat tab (its

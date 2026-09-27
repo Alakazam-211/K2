@@ -8,6 +8,10 @@ import { chatHarnessName } from './chatHarness'
 import { SessionViewMenu } from './SessionViewMenu'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
+function viewButtonLabel(): string {
+  return (screen.getByTestId('session-view-button').textContent ?? '').replace(/\s+/g, ' ').trim()
+}
+
 function menuRow(label: string): HTMLButtonElement {
   const menu = document.querySelector('[data-context-menu]')
   if (!menu) throw new Error(`view menu is closed, wanted ${label}`)
@@ -115,6 +119,69 @@ describe('View menu', () => {
     })
     expect(screen.getByTestId('current').textContent).toBe('thread')
     expect(screen.queryByTestId('session-view-split-left')).toBeNull()
+    expect(viewButtonLabel()).toBe('Thread')
+    expect(viewButtonLabel()).not.toBe('View')
+  })
+
+  it('names the button after the active mode instead of View', async () => {
+    render(<Harness command="claude" />)
+    expect(viewButtonLabel()).toBe('Terminal')
+    expect(viewButtonLabel()).not.toBe('View')
+
+    const picks: Array<[string, string]> = [
+      ['Chat', 'Chat'],
+      ['Thread', 'Thread'],
+      ['Chatter', 'Chatter'],
+      ['Split view', 'Split view'],
+      ['Terminal', 'Terminal'],
+    ]
+    for (const [row, expected] of picks) {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('session-view-button'))
+      })
+      await act(async () => {
+        fireEvent.click(menuRow(row))
+      })
+      expect(viewButtonLabel()).toBe(expected)
+      expect(viewButtonLabel()).not.toBe('View')
+    }
+    expect(screen.getByTestId('current').textContent).toBe('terminal')
+  })
+
+  it('follows value when the mode changes without opening the menu', () => {
+    const modes: Array<[SessionViewTab, string]> = [
+      ['terminal', 'Terminal'],
+      ['chat', 'Chat'],
+      ['thread', 'Thread'],
+      ['chatter', 'Chatter'],
+      ['split', 'Split view'],
+    ]
+    const { rerender } = render(
+      <SessionViewMenu
+        value="terminal"
+        splitLeft="terminal"
+        splitRight="thread"
+        chatEligible
+        onChange={() => {}}
+        onSplitLeft={() => {}}
+        onSplitRight={() => {}}
+      />,
+    )
+    for (const [value, expected] of modes) {
+      rerender(
+        <SessionViewMenu
+          value={value}
+          splitLeft="terminal"
+          splitRight="thread"
+          chatEligible
+          onChange={() => {}}
+          onSplitLeft={() => {}}
+          onSplitRight={() => {}}
+        />,
+      )
+      expect(viewButtonLabel()).toBe(expected)
+      expect(viewButtonLabel()).not.toBe('View')
+    }
   })
 
   it('greys Chat for a shell command and enables it for claude, including commandHint', async () => {

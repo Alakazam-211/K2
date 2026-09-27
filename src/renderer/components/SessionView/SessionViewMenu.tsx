@@ -9,13 +9,22 @@ const PANE_LABEL: Record<SplitPaneView, string> = {
   chatter: 'Chatter',
 }
 
+/** Button text for the active mode. Same words as the menu rows. */
+const VIEW_LABEL: Record<SessionViewTab, string> = {
+  terminal: PANE_LABEL.terminal,
+  chat: PANE_LABEL.chat,
+  thread: PANE_LABEL.thread,
+  chatter: PANE_LABEL.chatter,
+  split: 'Split view',
+}
+
 function viewMenuItems(chatEligible: boolean): ContextMenuItemDef[] {
   return [
-    { id: 'terminal', label: 'Terminal' },
-    { id: 'chat', label: 'Chat', badge: 'Beta', enabled: chatEligible },
-    { id: 'thread', label: 'Thread' },
-    { id: 'chatter', label: 'Chatter' },
-    { id: 'split', label: 'Split view' },
+    { id: 'terminal', label: VIEW_LABEL.terminal },
+    { id: 'chat', label: VIEW_LABEL.chat, badge: 'Beta', enabled: chatEligible },
+    { id: 'thread', label: VIEW_LABEL.thread },
+    { id: 'chatter', label: VIEW_LABEL.chatter },
+    { id: 'split', label: VIEW_LABEL.split },
   ]
 }
 
@@ -40,9 +49,10 @@ const BUTTON_CLASS =
   'self-center inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded flex-shrink-0 cursor-pointer text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
 
 /**
- * One View button. The menu is anchored under the button.
+ * One view button. Its label is the active mode, not the word View.
+ * The menu is anchored under the button.
  * Esc and a click outside leave the current view alone.
- * Split choosers sit to the right of View and are hidden otherwise.
+ * Split choosers sit to the right and are hidden otherwise.
  */
 export function SessionViewMenu({
   value,
@@ -99,7 +109,7 @@ export function SessionViewMenu({
           })
         }}
       >
-        View
+        {VIEW_LABEL[value]}
         <svg
           width="10"
           height="10"

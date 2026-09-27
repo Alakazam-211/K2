@@ -37,6 +37,10 @@ import { AgentSessionChrome } from './AgentSessionChrome'
 import { useSessionViewChrome } from './sessionViewChrome'
 import { overlayViewer } from './sessionViewTab'
 
+function viewButtonLabel(): string {
+  return (screen.getByTestId('session-view-button').textContent ?? '').replace(/\s+/g, ' ').trim()
+}
+
 function menuRow(label: string): HTMLButtonElement {
   const menu = document.querySelector('[data-context-menu]')
   if (!menu) throw new Error(`view menu is closed, wanted ${label}`)
@@ -112,7 +116,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByLabelText('Refresh session')).not.toBeNull()
     expect(screen.queryByTestId('session-view-tabs')).toBeNull()
     expect(screen.queryByTestId('session-view-chat')).toBeNull()
-    expect(screen.getByTestId('session-view-button').textContent).toContain('View')
+    expect(viewButtonLabel()).toBe('Terminal')
+    expect(viewButtonLabel()).not.toBe('View')
     const header = screen.getByTestId('sidecar-session-header')
     const title = screen.getByTestId('sidecar-session-title')
     const menu = screen.getByTestId('session-view-menu')
@@ -142,6 +147,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
     expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
+    expect(viewButtonLabel()).toBe('Thread')
+    expect(viewButtonLabel()).not.toBe('View')
     await act(async () => {
       fireEvent.click(screen.getByTestId('session-view-button'))
     })
@@ -151,6 +158,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
     expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
+    expect(viewButtonLabel()).toBe('Terminal')
   })
 
   it('shows Chatter overlay only after switching to Chatter', async () => {
@@ -165,6 +173,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
     expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
     expect(screen.getByTestId('chatter-overlay-pane')).not.toBeNull()
+    expect(viewButtonLabel()).toBe('Chatter')
+    expect(viewButtonLabel()).not.toBe('View')
   })
 
   it('split shows two Message-the-agent bars with different destinations', async () => {
@@ -185,6 +195,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByTestId('message-compose-thread').getAttribute('data-compose-destination')).toBe(
       'thread',
     )
+    expect(viewButtonLabel()).toBe('Split view')
+    expect(viewButtonLabel()).not.toBe('View')
   })
 
   it('disables Chat for a shell command and enables it for claude', async () => {
@@ -208,5 +220,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
       fireEvent.click(menuRow('Chat'))
     })
     expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('chat')
+    expect(viewButtonLabel()).toBe('Chat')
+    expect(viewButtonLabel()).not.toBe('View')
   })
 })

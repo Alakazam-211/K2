@@ -71,7 +71,8 @@ import { useCursorMigrationCheck } from './hooks/useCursorMigrationCheck'
 import { prewarmDaemonWs } from './kessel/daemon-ws'
 // #672 — app-level canonical Active mirror (daemon-owned Active set).
 import { subscribeToActiveState, refreshActiveSnapshot } from './stores/session-events'
-import { onActiveHostChange } from './stores/connect-host'
+import { onActiveHostChange, useConnectHostStore } from './stores/connect-host'
+import { isWebClient } from './lib/is-web'
 // Style System P3 — terminal color bridge (style store → KesselConfig).
 import { KesselConfigProvider } from './kessel/config-context'
 import { useStyleStore } from './stores/style'
@@ -231,11 +232,22 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
 // Terminals opt out via [data-k2-exclude-app-zoom] (inverse zoom) so
 // cell size stays under Cmd+Shift+=/- only — not Cmd+=/-.
 declare global {
-  interface Window { __k2soZoom?: number }
+  interface Window {
+    __k2soZoom?: number
+    __k2ApplyPageTitle?: () => void
+  }
+}
+
+/** Nickname of the server this window is on. Local daemon is `local`. */
+function missionControlServerLabel(): string {
+  const { activeHost, hosts } = useConnectHostStore.getState()
+  if (activeHost === 'local') return 'local'
+  const fresh = hosts.find((h) => h.id === activeHost.id)
+  return (fresh?.label ?? activeHost.label).trim()
 }
 
 function applyK2SOZoom(): void {
-  // Hosted web: `z3thon | K2` (subdomain from location); desktop: `K2`.
+  // Hosted web: `z3thon | K2`. Desktop Mission Control: `K2 | <server>`.
   // Zoom suffix shared: `… — 125%`.
   const z = window.__k2soZoom ?? 1
   document.documentElement.style.setProperty('--k2-app-zoom', String(z))
@@ -245,7 +257,15 @@ function applyK2SOZoom(): void {
   } else {
     document.documentElement.style.zoom = String(z)
   }
-  document.title = k2PageTitle(z)
+  const title = k2PageTitle(z, undefined, isWebClient() ? undefined : missionControlServerLabel())
+  document.title = title
+  if (!isWebClient()) {
+    void getCurrentTauriWindow().setTitle(title).catch(() => {})
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.__k2ApplyPageTitle = applyK2SOZoom
 }
 
 /** Style System P3 — the terminal color bridge. Derives the active
@@ -358,6 +378,13 @@ function AppRoot(): React.JSX.Element {
   // behind the rest of the initial render.
   useEffect(() => {
     prewarmDaemonWs()
+  }, [])
+
+  // Mission Control reads the native window title. Restamp it when this
+  // window's server changes, including a nickname edit on the active host.
+  useEffect(() => {
+    applyK2SOZoom()
+    return useConnectHostStore.subscribe(() => applyK2SOZoom())
   }, [])
 
   // Focus has no PageTabs until an overlay opens, so wire the feedback

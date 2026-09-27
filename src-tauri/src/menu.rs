@@ -168,9 +168,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             if let Some(win) = app.get_webview_window("main") {
                 let scale = next as f64 / 100.0;
                 let js = format!(
-                    "document.documentElement.style.zoom='{}';document.title='{}'",
-                    scale,
-                    if next == 100 { "K2".to_string() } else { format!("K2 — {}%", next) }
+                    "window.__k2soZoom={scale};if(typeof window.__k2ApplyPageTitle==='function')window.__k2ApplyPageTitle();"
                 );
                 let _ = win.eval(&js);
             }
@@ -237,7 +235,7 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
     let label = format!("window-{}", uuid::Uuid::new_v4());
     let webview_url = crate::k2_app_window::k2_app_webview_url(app, None);
     let builder = crate::k2_app_window::k2_app_window_builder(app, &label, webview_url)
-        .title("K2")
+        .title("K2 | local")
         .inner_size(1400.0, 900.0)
         .min_inner_size(800.0, 600.0);
     // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.

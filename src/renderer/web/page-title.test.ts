@@ -40,9 +40,11 @@ describe('k2BasePageTitle / k2PageTitle', () => {
     expect(k2PageTitle(1.25, 'z3thon.app.k2.dev')).toBe('z3thon | K2 — 125%')
   })
 
-  it('desktop stays plain K2', () => {
+  it('desktop names the server, and local when there is no nickname', () => {
     isWebMock.mockReturnValue(false)
-    expect(k2BasePageTitle('z3thon.app.k2.dev')).toBe('K2')
-    expect(k2PageTitle(1.1, 'z3thon.app.k2.dev')).toBe('K2 — 110%')
+    expect(k2BasePageTitle('z3thon.app.k2.dev')).toBe('K2 | local')
+    expect(k2BasePageTitle(undefined, 'RPM box')).toBe('K2 | RPM box')
+    expect(k2BasePageTitle(undefined, '  ')).toBe('K2 | local')
+    expect(k2PageTitle(1.1, 'z3thon.app.k2.dev', 'RPM box')).toBe('K2 | RPM box — 110%')
   })
 })

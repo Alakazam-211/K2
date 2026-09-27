@@ -6,7 +6,7 @@ import {
   buttonLabel,
   formatResetsIn,
   isStale,
-  percentLeft,
+  percentUsed,
   visibleHarnesses,
   type SubscriptionDoc,
 } from './subscription-usage'
@@ -27,8 +27,8 @@ function doc(partial: SubscriptionDoc): SubscriptionDoc {
 }
 
 describe('subscription window math', () => {
-  it('turns weekly used 0.31 into 69% left and labels Claude', () => {
-    expect(percentLeft(0.31)).toBe(69)
+  it('turns weekly used 0.31 into 31% used and labels Claude', () => {
+    expect(percentUsed(0.31)).toBe(31)
     const label = buttonLabel(
       doc({
         harnesses: [
@@ -45,10 +45,10 @@ describe('subscription window math', () => {
         ],
       }),
     )
-    expect(label).toBe('Claude 69%')
+    expect(label).toBe('Claude 31%')
   })
 
-  it('picks the lowest remaining signed-in window and ignores an unprobed harness', () => {
+  it('picks the highest used signed-in window and ignores an unprobed harness', () => {
     const label = buttonLabel(
       doc({
         harnesses: [
@@ -76,7 +76,7 @@ describe('subscription window math', () => {
         ],
       }),
     )
-    expect(label).toBe('Codex 18%')
+    expect(label).toBe('Codex 82%')
     const rows = visibleHarnesses(
       doc({
         harnesses: [

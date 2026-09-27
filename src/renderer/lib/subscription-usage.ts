@@ -42,29 +42,30 @@ export function isSignedIn(row: HarnessUsage): boolean {
   return row.status !== 'Not signed in' && row.status !== 'Sign-in expired'
 }
 
-export function percentLeft(used: number): number {
+/** Claude `utilization` and Codex `usedPercent`, as a whole percent used. */
+export function percentUsed(used: number): number {
   const clamped = Math.min(1, Math.max(0, used))
-  return Math.round((1 - clamped) * 100)
+  return Math.round(clamped * 100)
 }
 
 /**
- * Lowest remaining percent among signed-in probed windows, plus the
- * harness name. No signed-in window → "Usage".
+ * Highest used percent among signed-in probed windows, plus the harness
+ * name. No signed-in window → "Usage".
  */
 export function buttonLabel(doc: SubscriptionDoc | null): string {
   if (!doc) return 'Usage'
-  let best: { name: string; left: number } | null = null
+  let best: { name: string; used: number } | null = null
   for (const row of visibleHarnesses(doc)) {
     if (!isSignedIn(row)) continue
     for (const window of row.windows) {
-      const left = percentLeft(window.used)
-      if (best === null || left < best.left) {
-        best = { name: harnessName(row.harness), left }
+      const used = percentUsed(window.used)
+      if (best === null || used > best.used) {
+        best = { name: harnessName(row.harness), used }
       }
     }
   }
   if (!best) return 'Usage'
-  return `${best.name} ${best.left}%`
+  return `${best.name} ${best.used}%`
 }
 
 /** True when the menu should POST a refresh instead of only reading. */

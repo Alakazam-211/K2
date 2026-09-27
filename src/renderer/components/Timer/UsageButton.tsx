@@ -6,7 +6,7 @@ import {
   formatResetsIn,
   harnessName,
   isSignedIn,
-  percentLeft,
+  percentUsed,
   visibleHarnesses,
 } from '@/lib/subscription-usage'
 
@@ -98,24 +98,24 @@ export default function UsageButton(): React.JSX.Element {
               ) : null}
               {row.windows.map((window) => {
                 const until = formatResetsIn(window.resetsAt, now)
-                const left = percentLeft(window.used)
+                const used = percentUsed(window.used)
                 return (
                   <div key={`${row.harness}:${window.label}`} className="mt-1">
                     <p className="text-[11px] text-[var(--color-text-secondary)]">
-                      {window.label} {left}% left
+                      {window.label} {used}%
                       {until ? ` · ${until}` : ''}
                     </p>
                     <div
                       role="progressbar"
-                      aria-valuenow={left}
+                      aria-valuenow={used}
                       aria-valuemin={0}
                       aria-valuemax={100}
-                      aria-label={`${window.label} left`}
+                      aria-label={`${window.label} used`}
                       className="mt-1 h-1.5 w-full overflow-hidden bg-[var(--color-bg)]"
                     >
                       <div
                         className="h-full bg-[var(--color-accent)]"
-                        style={{ width: `${left}%` }}
+                        style={{ width: `${used}%` }}
                       />
                     </div>
                   </div>

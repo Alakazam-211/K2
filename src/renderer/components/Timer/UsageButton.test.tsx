@@ -64,12 +64,12 @@ beforeEach(() => {
 })
 
 describe('UsageButton', () => {
-  it('shows Claude 69% and keeps the model-scoped row, not Grok', async () => {
+  it('shows Claude 31% used and keeps the model-scoped row, not Grok', async () => {
     const checkedAt = new Date().toISOString()
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 69%')
+      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
     })
     expect(screen.getByTestId('subscription-usage').getAttribute('aria-label')).toBe(
       'Subscription usage',
@@ -77,12 +77,13 @@ describe('UsageButton', () => {
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')
     expect(menu.textContent).toContain('Claude · Max 20x')
-    expect(menu.textContent).toContain('Weekly 69% left')
-    expect(menu.textContent).toContain('Opus Weekly 88% left')
+    expect(menu.textContent).toContain('Weekly 31%')
+    expect(menu.textContent).toContain('Opus Weekly 12%')
+    expect(menu.textContent).not.toContain('% left')
     const bars = menu.querySelectorAll('[role="progressbar"]')
     expect(bars).toHaveLength(2)
-    expect(bars[0]?.getAttribute('aria-valuenow')).toBe('69')
-    expect(bars[1]?.getAttribute('aria-valuenow')).toBe('88')
+    expect(bars[0]?.getAttribute('aria-valuenow')).toBe('31')
+    expect(bars[1]?.getAttribute('aria-valuenow')).toBe('12')
     expect(menu.textContent).toContain('Not signed in')
     expect(menu.textContent).not.toContain('Grok')
     expect(menu.textContent).not.toContain('0%')
@@ -158,7 +159,7 @@ describe('UsageButton', () => {
     h.daemonCliPost.mockResolvedValue(claudeDoc(fresh))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 69%')
+      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     await waitFor(() => {
@@ -172,7 +173,7 @@ describe('UsageButton', () => {
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 69%')
+      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')

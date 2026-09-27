@@ -322,7 +322,7 @@ export default function ServerSwitcher(): React.JSX.Element {
     return (
       <div
         className="relative no-drag"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
           className="flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)]"
@@ -350,7 +350,7 @@ export default function ServerSwitcher(): React.JSX.Element {
     <div
       ref={rootRef}
       className="relative no-drag"
-      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       <button
         onClick={() => toggle()}

@@ -14105,8 +14105,8 @@ cmd_schema() {
     },
     {
       "name": "workspace",
-      "usage": "k2 workspace <list|status|...> [...]",
-      "description": "Workspace registry + status verbs (list, status, profile, etc.).",
+      "usage": "k2 workspace <list|resources|...> [...]",
+      "description": "Workspace registry, status, and Files-drawer resources (list|add|remove).",
       "args": [],
       "flags": []
     },
@@ -16690,6 +16690,12 @@ LIFECYCLE (less common)
   remove <path>                     Deregister (files stay)
   triage                            This workspace's inbox list (same as k2 inbox list)
 
+WORKSPACE RESOURCES
+  resources list [--json]           Files pinned in the Files drawer for this workspace
+  resources add <file> [--json]     Pin an existing file (absolute path from this cwd)
+  resources remove <file> [--json]  Unpin that file
+  --workspace / --project <path>    Override the workspace (default: this one)
+
 API / HOST-SESSIONS
   api-guest-policy get <ws>         Show owner guest policy (default if unset)
   api-guest-policy set <ws> <text>  Set policy re-injected every /v1 turn
@@ -16719,6 +16725,9 @@ EXAMPLES
   k2 workspace host-session-cell-cap get sales-interview
   k2 workspace host-session-cell-cap set sales-interview 64
   k2 workspace host-session-cell-cap set sales-interview default
+  k2 workspace resources add docs/brief.md
+  k2 workspace resources list
+  k2 workspace resources remove docs/brief.md
 EOF
 }
 
@@ -20231,6 +20240,156 @@ except: pass' 2>/dev/null)
         "value=$(urlencode "$value")"
 }
 
+# BEGIN_WORKSPACE_RESOURCES
+# Absolute path from the caller's cwd. Does not require the file to exist
+# and does not resolve symlinks — the daemon does the tree check.
+_workspace_resources_abs() {
+    python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$1"
+}
+
+# stdin: daemon JSON. MODE=list|add|remove. WANT_JSON=1 prints the body unchanged.
+_workspace_resources_emit() {
+    MODE="${MODE}" WANT_JSON="${WANT_JSON:-0}" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % raw[:300])
+    sys.exit(1)
+if not isinstance(data, dict) or data.get("ok") is not True:
+    err = data.get("error") if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        code = err.get("code") or "error"
+        hint = err.get("hint") or code
+        # Daemon hints already include the code (not_a_file: …). Print the
+        # hint once so ok:false is not a success line.
+        sys.stderr.write("%s\n" % hint)
+    else:
+        sys.stderr.write("Error: %s\n" % raw[:300])
+    sys.exit(1)
+if os.environ.get("WANT_JSON") == "1":
+    sys.stdout.write(raw)
+    if not raw.endswith("\n"):
+        sys.stdout.write("\n")
+    sys.exit(0)
+mode = os.environ.get("MODE") or ""
+if mode == "list":
+    docs = data.get("docs")
+    if not isinstance(docs, list):
+        sys.stderr.write("Error: list response missing docs\n")
+        sys.exit(1)
+    for row in docs:
+        if not isinstance(row, dict):
+            sys.stderr.write("Error: list row is not an object\n")
+            sys.exit(1)
+        name = row.get("fileName") if isinstance(row.get("fileName"), str) else ""
+        path = row.get("filePath") if isinstance(row.get("filePath"), str) else ""
+        sys.stdout.write("%s\t%s\n" % (name, path))
+elif mode in ("add", "remove"):
+    path = data.get("filePath") if isinstance(data.get("filePath"), str) else ""
+    if not path:
+        sys.stderr.write("Error: response missing filePath\n")
+        sys.exit(1)
+    sys.stdout.write(path + "\n")
+else:
+    sys.stderr.write("Error: unknown resources mode\n")
+    sys.exit(1)
+'
+}
+
+cmd_workspace_resources() {
+    local sub="${1:-}"
+    if [ $# -gt 0 ]; then
+        shift
+    fi
+    local json=0
+    local ws=""
+    local file=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            --workspace|--project)
+                if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+                    echo "Usage: k2 workspace resources ${sub:-<list|add|remove>} --workspace <path>" >&2
+                    exit 2
+                fi
+                ws="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                echo "Unknown flag: $1" >&2
+                echo "Usage: k2 workspace resources <list|add|remove> [--workspace <path>] [--json] [file]" >&2
+                exit 2
+                ;;
+            *)
+                if [ -n "$file" ]; then
+                    echo "Usage: k2 workspace resources <list|add|remove> [--workspace <path>] [--json] [file]" >&2
+                    exit 2
+                fi
+                file="$1"
+                shift
+                ;;
+        esac
+    done
+    # One file after `--`. A second positional is usage, not a silent drop.
+    if [ $# -gt 1 ] || { [ $# -eq 1 ] && [ -n "$file" ]; }; then
+        echo "Usage: k2 workspace resources <list|add|remove> [--workspace <path>] [--json] [file]" >&2
+        exit 2
+    fi
+    if [ $# -eq 1 ]; then
+        file="$1"
+    fi
+    case "$sub" in
+        list|add|remove) ;;
+        "")
+            echo "Usage: k2 workspace resources <list|add|remove> [--workspace <path>] [--json] [file]" >&2
+            exit 2
+            ;;
+        *)
+            echo "Unknown 'workspace resources' subcommand: $sub" >&2
+            echo "Usage: k2 workspace resources <list|add|remove> [--workspace <path>] [--json] [file]" >&2
+            exit 2
+            ;;
+    esac
+    if [ -z "$ws" ]; then
+        ws="$PROJECT"
+    fi
+    if [ -z "$ws" ]; then
+        echo "workspace: missing workspace (name | path | UUID)" >&2
+        exit 1
+    fi
+    local mode="$sub"
+    local raw=""
+    case "$sub" in
+        list)
+            if [ -n "$file" ]; then
+                echo "Usage: k2 workspace resources list [--workspace <path>] [--json]" >&2
+                exit 2
+            fi
+            raw=$(cli_send cli_request "/cli/workspace/resources" "workspace=$(urlencode "$ws")")
+            ;;
+        add|remove)
+            if [ -z "$file" ]; then
+                echo "Usage: k2 workspace resources $sub <file> [--workspace <path>] [--json]" >&2
+                exit 2
+            fi
+            local abs
+            abs="$(_workspace_resources_abs "$file")"
+            local endpoint="/cli/workspace/resources/${sub}"
+            raw=$(cli_send cli_post_form "$endpoint" \
+                "workspace=$(urlencode "$ws")" \
+                "path=$(urlencode "$abs")")
+            ;;
+    esac
+    printf '%s' "$raw" | MODE="$mode" WANT_JSON="$json" _workspace_resources_emit
+}
+# END_WORKSPACE_RESOURCES
+
 cmd_workspace_list() {
     # 0.39.45 (#26d): this used to hit /cli/workspaces/list, which is a
     # PER-PROJECT branch-workspace lookup requiring project_id — the
@@ -20378,6 +20537,7 @@ WORKSPACE
   workspace profile [<path>]            Read workspace agent's AGENT.md
   workspace update --field <f> --value <v>
                                         Edit workspace agent profile
+  workspace resources list|add|remove   Pin an existing file in the Files drawer
 
 REVIEW IN-FLIGHT WORK
   reviews                               Pending merge reviews for worktrees
@@ -32644,6 +32804,7 @@ EOF
             create)            shift 2; cmd_workspace_create "$@" ;;
             open)              shift 2; cmd_workspace_open "$@" ;;
             remove)            shift 2; cmd_workspace_remove "$@" ;;
+            resources)         shift 2; cmd_workspace_resources "$@" ;;
             preview)           shift 2; cmd_workspace_preview "$@" ;;
             cleanup)           cmd_workspace_cleanup ;;
             agent-name)        shift 2; cmd_workspace_get_agent_display_name "$@" ;;
@@ -32660,7 +32821,7 @@ EOF
             host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
             default-model)     shift 2; cmd_workspace_default_model "$@" ;;
             force-model-on-resume) shift 2; cmd_workspace_force_model_on_resume "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|...> [args]" >&2; exit 1 ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

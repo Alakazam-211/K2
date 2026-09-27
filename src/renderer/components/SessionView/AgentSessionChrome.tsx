@@ -114,7 +114,7 @@ export function AgentSessionChrome({
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
         />
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
+        <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
           <Remount key={nonce}>{children}</Remount>
         </div>
       </div>
@@ -235,7 +235,7 @@ export function PinnedSessionBody({
         agentName: agentName ?? '',
       }}
     >
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
+      <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
         {children}
       </div>
     </SessionViewChromeContext.Provider>

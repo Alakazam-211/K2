@@ -167,7 +167,7 @@ function TabGroupColumn({
       data-tab-group-index={groupIndex}
     >
       <TabBar cwd={cwd} groupIndex={groupIndex} />
-      <div className="relative flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden" data-toast-host="workspace">
         {/*
           Retained-view model (see Zed/VS Code): every open tab's tree
           stays mounted so scroll/cursor/focus state lives naturally on

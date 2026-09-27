@@ -211,7 +211,10 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
         {activeProject ? (
           <TerminalArea cwd={cwd} />
         ) : (
-          <div className="flex-1 flex items-center justify-center h-full">
+          <div
+            className="relative flex h-full w-full flex-1 items-center justify-center overflow-hidden"
+            data-toast-host="workspace"
+          >
             <div className="text-center">
               <h2 className="text-lg font-medium text-[var(--color-text-muted)]">Loading...</h2>
             </div>
@@ -988,7 +991,10 @@ function AppRoot(): React.JSX.Element {
             {activeProject && activeWorkspace ? (
               <TerminalArea cwd={cwd} />
             ) : (
-              <div className="flex-1 flex items-center justify-center h-full">
+              <div
+                className="relative flex h-full w-full flex-1 items-center justify-center overflow-hidden"
+                data-toast-host="workspace"
+              >
                 <div className="text-center">
                   <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
                   <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">

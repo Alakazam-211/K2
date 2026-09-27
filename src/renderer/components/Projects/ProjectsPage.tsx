@@ -472,6 +472,11 @@ export default function ProjectsPage(): React.JSX.Element | null {
           )}
         </div>
       </div>
+      <div
+        data-toast-host="projects"
+        className="pointer-events-none overflow-hidden"
+        style={{ position: 'absolute', top: TOPBAR_HEIGHT, right: 0, bottom: 0, left: 0, zIndex: 40 }}
+      />
     </div>
     </PageLiveContext.Provider>
   )

@@ -35,6 +35,11 @@ mod real {
     use std::sync::Mutex;
 
     use tauri::webview::{NewWindowResponse, WebviewBuilder};
+
+    /// WKWebView's default agent is WebKit without a Safari token. Google
+    /// then sends the old HTML homepage. This is the desktop Safari shape.
+    #[cfg(target_os = "macos")]
+    const SAFARI_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
     use tauri::{
         AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
     };
@@ -252,10 +257,13 @@ mod real {
         // Loopback is ordinary http here (Gmail OAuth redirects to this Mac).
         // on_new_window: Deny — never `window.open` into a window labeled `main`.
         let make_builder = |u: Url| {
-            WebviewBuilder::new(&label, WebviewUrl::External(u))
+            let builder = WebviewBuilder::new(&label, WebviewUrl::External(u))
                 .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
                 .on_new_window(|_url, _features| NewWindowResponse::Deny)
-                .focused(false)
+                .focused(false);
+            #[cfg(target_os = "macos")]
+            let builder = builder.user_agent(SAFARI_USER_AGENT);
+            builder
         };
 
         let view = match window.add_child(

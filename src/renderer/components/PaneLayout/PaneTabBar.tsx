@@ -8,6 +8,8 @@ import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
 import PinDimensionsModal from './PinDimensionsModal'
 import { Surface } from '@/components/ui'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
+import { isAgentPtyTerminalItem } from '@/lib/chat-session-tab'
+import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -73,14 +75,17 @@ function getTabLabel(item: Item): string {
   return 'Unknown'
 }
 
-/** Leading glyph for a split pane row. Terminal and agent stay text —
- *  the top strip already has the model or robot mark. */
+/** Leading glyph for a split pane row. An agent PTY stays text — the top
+ *  strip already has the model mark. A plain shell gets the window icon. */
 function paneItemIcon(item: Item): React.JSX.Element | null {
   if (item.type === 'file-viewer') {
     const filePath = (item.data as FileViewerItemData).filePath
     if (!filePath) return null
     const name = filePath.split(/[/\\]/).pop() || filePath
     return <SetiFileIcon name={name} size={16} />
+  }
+  if (item.type === 'terminal' && !isAgentPtyTerminalItem(item)) {
+    return <ShellTabIcon />
   }
   if (item.type === 'browser') {
     return (

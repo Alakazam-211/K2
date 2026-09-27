@@ -20,7 +20,8 @@ import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Surface } from '@/components/ui'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
-import { persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
+import { isAgentPtyTerminalItem, persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
+import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { useToastStore } from '@/stores/toast'
 
 interface TabBarProps {
@@ -851,10 +852,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                       <path d="M8 2v3" /><circle cx="8" cy="1.5" r="0.8" />
                     </svg>
                   )
-                } else if (cliAgent) {
-                  // Any shell command, including one AgentIcon does not
-                  // know, owns this slot and blocks the file and browser glyphs.
+                } else if (cliAgent && Array.from(tab.paneGroups.values()).some((pg) =>
+                  pg.items.some((item) => item.type === 'terminal' && isAgentPtyTerminalItem(item)),
+                )) {
                   icon = <AgentIcon agent={cliAgent} size={14} />
+                } else if (cliAgent) {
+                  icon = <ShellTabIcon />
                 } else {
                   // First file-viewer path in pane-group order. Basename
                   // only — open and copy keep filePath. Not the tab title.
@@ -869,6 +872,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   }
                   if (fileName) {
                     icon = <SetiFileIcon name={fileName} size={16} />
+                  } else if (items.some((item) => item.type === 'terminal')) {
+                    icon = <ShellTabIcon />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // Same mute as the worktree glyph. Not a Seti name, not the URL.
                     icon = (

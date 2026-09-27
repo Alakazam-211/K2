@@ -179,6 +179,22 @@ describe('tab file and browser icons', () => {
     expect(root.querySelector('span.truncate')?.textContent).toBe('example.com')
   })
 
+  it('uses a window icon for a plain shell and keeps the harness mark for Claude', () => {
+    const shell = showTab(makeTab('sh', 'zsh', [termItem('zsh')]))
+    if (!shell.querySelector('[data-shell-tab-icon]')) throw new Error('plain shell tab has no window icon')
+    expect(agentIconsIn(shell)).toHaveLength(0)
+    cleanup()
+
+    const empty = showTab(makeTab('empty', 'Terminal', [termItem()]))
+    if (!empty.querySelector('[data-shell-tab-icon]')) throw new Error('empty shell tab has no window icon')
+    cleanup()
+
+    const claude = showTab(makeTab('c', 'Claude', [termItem('claude')]))
+    expect(claude.querySelector('[data-shell-tab-icon]')).toBeNull()
+    expect(agentIconsIn(claude).length).toBeGreaterThan(0)
+    cleanup()
+  })
+
   it('renders the pin for a pinned HTML tab', () => {
     const root = showTab(
       makeTab('pin', 'page.html', [fileItem('/work/page.html', true)], { isPinnedFile: true }),
@@ -222,6 +238,7 @@ describe('tab file and browser icons', () => {
     if (!termRow) throw new Error('terminal pane row did not render')
     expect(setiIn(termRow)).toBeNull()
     expect(agentIconsIn(termRow)).toHaveLength(0)
+    expect(termRow.querySelector('[data-shell-tab-icon]')).toBeNull()
     expect(globeIn(termRow)).toBeNull()
 
     const webLabel = screen.getByText('example.com')
@@ -230,5 +247,17 @@ describe('tab file and browser icons', () => {
     if (!globeIn(webRow)) throw new Error('browser pane tab did not render a globe')
     expect(setiIn(webRow)).toBeNull()
     expect(agentIconsIn(webRow)).toHaveLength(0)
+
+    cleanup()
+    render(
+      <PaneTabBar
+        items={[{ id: 'z', type: 'terminal', data: { terminalId: 'z1', cwd: '/ws', command: 'zsh' } }]}
+        activeItemIndex={0}
+        onActivate={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    const zsh = screen.getByText('zsh').parentElement
+    if (!zsh?.querySelector('[data-shell-tab-icon]')) throw new Error('plain shell pane has no window icon')
   })
 })

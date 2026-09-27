@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
+import { KeyCombo } from '@/components/KeySymbol'
 import { clientToCssPx, useContextMenuStore } from '../../stores/context-menu'
 
 export default function ContextMenu(): React.JSX.Element | null {
@@ -279,7 +280,7 @@ export default function ContextMenu(): React.JSX.Element | null {
                   fontSize: '10px',
                 }}
               >
-                {item.shortcut}
+                <KeyCombo combo={item.shortcut} />
               </span>
             ) : null}
             {item.badge ? (

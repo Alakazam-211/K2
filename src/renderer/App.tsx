@@ -38,6 +38,7 @@ import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from '
 // index-based reconciliation preserves the instance (and its retained
 // panes) across default/focus/settings switches.
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
+import { focusVisibleBrowserAddress } from './components/BrowserPane/BrowserPane'
 import { k2PageTitle } from './web/page-title'
 import { reapplyTrafficLights } from './stores/style'
 import { mountExternalDropRouter } from './lib/external-drop-router'
@@ -471,7 +472,7 @@ function AppRoot(): React.JSX.Element {
       if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
         if (e.shiftKey) toggleAssistant()
-        else useServerSwitcherStore.getState().toggle()
+        else if (!focusVisibleBrowserAddress()) useServerSwitcherStore.getState().toggle()
       }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
@@ -772,7 +773,7 @@ function AppRoot(): React.JSX.Element {
         toggleAssistant()
       }).then(track)
       listen('menu:server-switcher', () => {
-        useServerSwitcherStore.getState().toggle()
+        if (!focusVisibleBrowserAddress()) useServerSwitcherStore.getState().toggle()
       }).then(track)
       listen('menu:focus-window', () => {
         const projectId = useProjectsStore.getState().activeProjectId

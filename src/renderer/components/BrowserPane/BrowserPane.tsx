@@ -16,6 +16,18 @@ import { normalizeUrl } from './normalizeUrl'
 
 export { normalizeUrl }
 
+/** Cmd+L on a visible browser tab. Hidden panes stay mounted, so skip those. */
+export function focusVisibleBrowserAddress(): boolean {
+  const inputs = document.querySelectorAll<HTMLInputElement>('[data-browser-address]')
+  for (const input of inputs) {
+    if (input.closest('[aria-hidden="true"]')) continue
+    input.focus()
+    input.select()
+    return true
+  }
+  return false
+}
+
 /**
  * Embedded Browser Tab pane (PRD .k2/prds/prd-browser-pane-v1.md).
  *
@@ -440,8 +452,6 @@ export function BrowserPane({
   }, [])
 
   // ── Render ──────────────────────────────────────────────────────────
-  const chromeButtonClass =
-    'px-1.5 py-0.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex-shrink-0'
   const historyReady = webFeatures.browserPane && !unavailable && created
   const historyButtonClass = (enabled: boolean): string =>
     `flex h-5 w-5 items-center justify-center flex-shrink-0 ${
@@ -466,34 +476,33 @@ export function BrowserPane({
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 flex-shrink-0">
-        <div className="flex items-center gap-0.5 flex-shrink-0">
-          <button
-            type="button"
-            className={historyButtonClass(historyReady && canBack)}
-            disabled={!historyReady || !canBack}
-            onClick={() => stepHistory('browser_back')}
-            title="Back"
-            aria-label="Back"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 2 3 5 6 8" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={historyButtonClass(historyReady && canForward)}
-            disabled={!historyReady || !canForward}
-            onClick={() => stepHistory('browser_forward')}
-            title="Forward"
-            aria-label="Forward"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 2 7 5 4 8" />
-            </svg>
-          </button>
-        </div>
+        <button
+          type="button"
+          className={historyButtonClass(historyReady && canBack)}
+          disabled={!historyReady || !canBack}
+          onClick={() => stepHistory('browser_back')}
+          title="Back"
+          aria-label="Back"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 2 3 5 6 8" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={historyButtonClass(historyReady && canForward)}
+          disabled={!historyReady || !canForward}
+          onClick={() => stepHistory('browser_forward')}
+          title="Forward"
+          aria-label="Forward"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="4 2 7 5 4 8" />
+          </svg>
+        </button>
         <input
           ref={addressRef}
+          data-browser-address=""
           type="text"
           value={address}
           spellCheck={false}
@@ -548,7 +557,7 @@ export function BrowserPane({
         </button>
         {import.meta.env.DEV && (
           <button
-            className={`${chromeButtonClass} inline-flex items-center justify-center`}
+            className="inline-flex items-center justify-center h-5 w-5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex-shrink-0"
             onClick={() =>
               void invoke('browser_devtools', { itemId, parentWindow }).catch(() => {})
             }

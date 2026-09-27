@@ -206,8 +206,9 @@ export default function TopBar({
               alone or when the host predates the presence routes) */}
           <PresenceRoster />
 
-          {/* Subscription allowance, then the stopwatch. */}
+          {/* Subscription allowance, a pipe, then the stopwatch. */}
           <UsageButton />
+          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
           <TimerButton />
 
           <K2NounsCheatSheet />

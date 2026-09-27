@@ -293,7 +293,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [showPinned, setShowPinned] = useState(true)
   const [showGeneral, setShowGeneral] = useState(true)
   const [showArchived, setShowArchived] = useState(true)
-  const [showApi, setShowApi] = useState(true)
+  const [showApi, setShowApi] = useState(false)
   const [showSandbox, setShowSandbox] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)

@@ -179,6 +179,8 @@ describe('Continue in a new chat', () => {
     render(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await screen.findByText('Old archived chat')
+    expect(screen.queryByText('Api Agent')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /API/ }))
     await screen.findByText('Api Agent')
     await screen.findByText('Sandbox chat')
 

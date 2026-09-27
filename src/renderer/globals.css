@@ -681,6 +681,11 @@ a,
   color: var(--color-text-primary);
 }
 
+/* Meslo "10." is about 3em. The box hides overflow, so a tighter pad clips the digits. */
+.chat-markdown ol {
+  padding-left: 3em;
+}
+
 .chat-markdown li {
   margin: 2px 0;
 }

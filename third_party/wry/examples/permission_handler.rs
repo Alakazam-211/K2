@@ -2,39 +2,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use tao::{
-  event::{Event, WindowEvent},
-  event_loop::{ControlFlow, EventLoop},
-  window::WindowBuilder,
-};
-use wry::WebViewBuilder;
+//! Example demonstrating the permission handler API.
+//!
+//! Run:  cargo run --example permission_handler
+//! Then click the buttons and watch the terminal output.
 
 fn main() -> wry::Result<()> {
+  use tao::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+  };
+  use wry::{PermissionKind, PermissionResponse, WebViewBuilder};
+
   let event_loop = EventLoop::new();
-  let window = WindowBuilder::new().build(&event_loop).unwrap();
+  let window = WindowBuilder::new()
+    .with_title("Permission Handler Example")
+    .with_inner_size(tao::dpi::LogicalSize::new(800, 600))
+    .build(&event_loop)
+    .unwrap();
 
   let builder = WebViewBuilder::new()
-    .with_url("http://tauri.app")
-    .with_new_window_req_handler(|url, features| {
-      println!("new window req: {url} {features:?}");
-      wry::NewWindowResponse::Allow
+    .with_url("https://permission.site/")
+    .with_permission_handler(|kind| {
+      let response = match kind {
+        PermissionKind::Geolocation => PermissionResponse::Default,
+        _ => PermissionResponse::Allow,
+      };
+      println!("[permission] {kind} → {response}");
+      response
     });
-
-  let builder = builder.with_drag_drop_handler(|e| {
-    match e {
-      wry::DragDropEvent::Enter { paths, position } => {
-        println!("DragEnter: {position:?} {paths:?} ")
-      }
-      wry::DragDropEvent::Over { position } => println!("DragOver: {position:?} "),
-      wry::DragDropEvent::Drop { paths, position } => {
-        println!("DragDrop: {position:?} {paths:?} ")
-      }
-      wry::DragDropEvent::Leave => println!("DragLeave"),
-      _ => {}
-    }
-
-    true
-  });
 
   #[cfg(any(
     target_os = "windows",
@@ -58,7 +55,6 @@ fn main() -> wry::Result<()> {
 
   event_loop.run(move |event, _, control_flow| {
     *control_flow = ControlFlow::Wait;
-
     if let Event::WindowEvent {
       event: WindowEvent::CloseRequested,
       ..

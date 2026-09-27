@@ -22,5 +22,7 @@ strip = true
 lto = true
 codegen-units = 1
 
+# wry 0.57 still unwraps a nil NSURL (URLWithString / IPC / nav). The
+# path patch skips those instead of aborting the macOS main thread.
 [patch.crates-io]
 wry = { path = "third_party/wry" }

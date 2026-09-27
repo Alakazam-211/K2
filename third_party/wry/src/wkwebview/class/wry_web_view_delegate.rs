@@ -49,12 +49,10 @@ define_class!(
 
           let frame_info = msg.frameInfo();
           let request = frame_info.request();
-          if let (Some(url), Some(abs)) = (
-            request.URL(),
-            request.URL().and_then(|u| u.absoluteString()),
-          ) {
+          // about:srcdoc and some macOS 27 callbacks hand a nil NSURL.
+          // Unwrapping aborts the main thread inside didReceiveScriptMessage.
+          if let Some(abs) = request.URL().and_then(|u| u.absoluteString()) {
             let url_utf8 = abs.UTF8String();
-            let _ = url;
             if let (Ok(url), Ok(js)) = (
               CStr::from_ptr(url_utf8).to_str(),
               CStr::from_ptr(js_utf8).to_str(),

@@ -46,7 +46,25 @@ pub(crate) fn handle_tokens(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::internal_error(e),
     };
-    match k2_core::token_usage::query_host(workspace, &known) {
+    let harness = match params.get("harness") {
+        None => None,
+        Some(s) if s.is_empty() => {
+            return CliResponse::bad_request("harness must not be empty");
+        }
+        Some(s) if matches!(s.as_str(), "claude" | "codex" | "grok") => Some(s.as_str()),
+        Some(_) => {
+            return CliResponse::bad_request("harness must be claude, codex, or grok");
+        }
+    };
+    let outside_only = match params.get("outside") {
+        None => false,
+        Some(s) if s == "1" => true,
+        Some(_) => return CliResponse::bad_request("outside must be 1"),
+    };
+    if outside_only && workspace.is_some() {
+        return CliResponse::bad_request("workspace and outside cannot both be set");
+    }
+    match k2_core::token_usage::query_host(workspace, harness, outside_only, &known) {
         Ok(report) => match serde_json::to_string(&report) {
             Ok(body) => CliResponse::ok_json(body),
             Err(e) => CliResponse::internal_error(format!("token usage json: {e}")),

@@ -472,6 +472,9 @@ export function TokenUsageSection(): React.JSX.Element {
 
   const [machine, setMachine] = useState<UsageReport | null>(null)
   const [openReport, setOpenReport] = useState<UsageReport | null>(null)
+  const [chartReport, setChartReport] = useState<UsageReport | null>(null)
+  const [chartWs, setChartWs] = useState('all')
+  const [chartHarness, setChartHarness] = useState('all')
   const [error, setError] = useState<string | null>(null)
   const supportsTurns = useServerSupports('usage-turns')
 
@@ -499,6 +502,33 @@ export function TokenUsageSection(): React.JSX.Element {
     return () => ac.abort()
   }, [hostKey, openCwd])
 
+  useEffect(() => {
+    if (!machine) {
+      setChartReport(null)
+      return
+    }
+    if (chartWs === 'all' && chartHarness === 'all') {
+      setChartReport(machine)
+      return
+    }
+    const ac = new AbortController()
+    const params: Record<string, string> = {}
+    if (chartWs === 'outside') params.outside = '1'
+    else params.workspace = chartWs
+    if (chartHarness !== 'all') params.harness = chartHarness
+    void (async () => {
+      try {
+        const report = await daemonCliGet<UsageReport>('usage/tokens', params)
+        if (!ac.signal.aborted) setChartReport(report)
+      } catch (err) {
+        if (ac.signal.aborted) return
+        const message = err instanceof Error ? err.message : String(err)
+        setError(message)
+      }
+    })()
+    return () => ac.abort()
+  }, [machine, chartWs, chartHarness])
+
   const ownerOnly = error != null && /auth token|forbidden/i.test(error)
 
   return (
@@ -521,9 +551,42 @@ export function TokenUsageSection(): React.JSX.Element {
         <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
       ) : (
         <>
+          <div className="flex flex-wrap gap-3 mb-3">
+            <label className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1.5">
+              Workspace
+              <select
+                value={chartWs}
+                onChange={(e) => setChartWs(e.target.value)}
+                className="bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs px-1.5 py-1"
+              >
+                <option value="all">All workspaces</option>
+                {machine.workspaces
+                  .filter((w) => !w.outside)
+                  .map((w) => (
+                    <option key={w.path} value={w.path}>
+                      {workspaceUsageLabel({ path: w.path, outside: false }, projects).name}
+                    </option>
+                  ))}
+                <option value="outside">Outside workspaces</option>
+              </select>
+            </label>
+            <label className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1.5">
+              LLM
+              <select
+                value={chartHarness}
+                onChange={(e) => setChartHarness(e.target.value)}
+                className="bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs px-1.5 py-1"
+              >
+                <option value="all">All</option>
+                <option value="claude">Claude</option>
+                <option value="codex">Codex</option>
+                <option value="grok">Grok</option>
+              </select>
+            </label>
+          </div>
           <ReportBlock
             title="This machine"
-            report={machine}
+            report={chartReport ?? machine}
             showChart
             summaryHeader="Machine"
             summaryLabel="This machine"

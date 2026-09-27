@@ -980,7 +980,11 @@ fn add_totals(into: &mut TokenTotals, add: &TokenTotals) {
     into.turns += add.turns;
 }
 
-fn load_groups(conn: &Connection, workspace: Option<&str>) -> Result<Vec<Group>, String> {
+fn load_groups(
+    conn: &Connection,
+    workspace: Option<&str>,
+    harness: Option<&str>,
+) -> Result<Vec<Group>, String> {
     let sql = "SELECT workspace_path, harness, model,
             COALESCE(SUM(input_tokens), 0),
             COALESCE(SUM(output_tokens), 0),
@@ -989,12 +993,13 @@ fn load_groups(conn: &Connection, workspace: Option<&str>) -> Result<Vec<Group>,
             COUNT(*)
          FROM turns
          WHERE (?1 IS NULL OR workspace_path = ?1)
+           AND (?2 IS NULL OR harness = ?2)
          GROUP BY workspace_path, harness, model";
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("ledger query: {e}"))?;
     let rows = stmt
-        .query_map(params![workspace], |r| {
+        .query_map(params![workspace, harness], |r| {
             Ok(Group {
                 workspace: r.get(0)?,
                 harness: r.get(1)?,
@@ -1018,6 +1023,7 @@ fn load_groups(conn: &Connection, workspace: Option<&str>) -> Result<Vec<Group>,
 
 struct TurnStamp {
     recorded_at: String,
+    workspace: String,
     totals: TokenTotals,
 }
 
@@ -1029,24 +1035,30 @@ fn recorded_text(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String
     })
 }
 
-fn load_turn_stamps(conn: &Connection, workspace: Option<&str>) -> Result<Vec<TurnStamp>, String> {
-    let sql = "SELECT recorded_at,
+fn load_turn_stamps(
+    conn: &Connection,
+    workspace: Option<&str>,
+    harness: Option<&str>,
+) -> Result<Vec<TurnStamp>, String> {
+    let sql = "SELECT recorded_at, workspace_path,
             COALESCE(input_tokens, 0),
             COALESCE(output_tokens, 0),
             COALESCE(cache_read_tokens, 0),
             COALESCE(cache_write_tokens, 0)
          FROM turns
-         WHERE (?1 IS NULL OR workspace_path = ?1)";
+         WHERE (?1 IS NULL OR workspace_path = ?1)
+           AND (?2 IS NULL OR harness = ?2)";
     let mut stmt = conn.prepare(sql).map_err(|e| format!("ledger days: {e}"))?;
     let rows = stmt
-        .query_map(params![workspace], |r| {
+        .query_map(params![workspace, harness], |r| {
             Ok(TurnStamp {
                 recorded_at: recorded_text(r, 0)?,
+                workspace: r.get(1)?,
                 totals: TokenTotals {
-                    input_tokens: r.get(1)?,
-                    output_tokens: r.get(2)?,
-                    cache_read_tokens: r.get(3)?,
-                    cache_write_tokens: r.get(4)?,
+                    input_tokens: r.get(2)?,
+                    output_tokens: r.get(3)?,
+                    cache_read_tokens: r.get(4)?,
+                    cache_write_tokens: r.get(5)?,
                     turns: 1,
                 },
             })
@@ -1160,18 +1172,41 @@ pub fn query(
     workspace: Option<&str>,
     known: &[String],
 ) -> Result<UsageReport, String> {
-    let filter = workspace.map(canonical_workspace).filter(|s| !s.is_empty());
+    query_filtered(ledger, workspace, None, false, known)
+}
+
+/// `harness` limits every total and the daily chart to that CLI.
+/// `outside_only` keeps turns that are not a known workspace. It is not
+/// combined with `workspace`.
+pub fn query_filtered(
+    ledger: &Path,
+    workspace: Option<&str>,
+    harness: Option<&str>,
+    outside_only: bool,
+    known: &[String],
+) -> Result<UsageReport, String> {
+    let filter = if outside_only {
+        None
+    } else {
+        workspace.map(canonical_workspace).filter(|s| !s.is_empty())
+    };
+    let harness = harness.map(str::trim).filter(|s| !s.is_empty());
     let known_set: BTreeSet<String> = known
         .iter()
         .filter(|p| !is_sentinel_workspace(p))
         .map(|p| canonical_workspace(p))
         .filter(|p| !p.is_empty())
         .collect();
-    let (groups, stamps) = with_ledger(ledger, |conn| {
-        let groups = load_groups(conn, filter.as_deref())?;
-        let stamps = load_turn_stamps(conn, filter.as_deref())?;
+    let (mut groups, mut stamps) = with_ledger(ledger, |conn| {
+        let groups = load_groups(conn, filter.as_deref(), harness)?;
+        let stamps = load_turn_stamps(conn, filter.as_deref(), harness)?;
         Ok((groups, stamps))
     })?;
+    if outside_only {
+        let is_out = |path: &str| is_sentinel_workspace(path) || !known_set.contains(path);
+        groups.retain(|g| is_out(&g.workspace));
+        stamps.retain(|s| is_out(&s.workspace));
+    }
     let days = bucket_days(&stamps);
     let mut total = TokenTotals::default();
     let mut outside = TokenTotals::default();
@@ -1234,8 +1269,13 @@ pub fn query(
     })
 }
 
-pub fn query_host(workspace: Option<&str>, known: &[String]) -> Result<UsageReport, String> {
-    query(&ledger_path(), workspace, known)
+pub fn query_host(
+    workspace: Option<&str>,
+    harness: Option<&str>,
+    outside_only: bool,
+    known: &[String],
+) -> Result<UsageReport, String> {
+    query_filtered(&ledger_path(), workspace, harness, outside_only, known)
 }
 
 /// Clamp bounds for a turn-log page. `limit` is capped so one request can
@@ -1417,10 +1457,17 @@ mod tests {
         assert!(p1.rows[1].outside, "ws-b turn is outside");
         assert!(!p1.rows[0].outside, "ws-a turn is not outside");
 
-        // Page 2 resumes strictly below the cursor; short page → no cursor.
+        // Page 2 resumes strictly below the cursor. It returns exactly the
+        // limit (2 rows), so keyset still hands back a cursor — exhaustion
+        // is only known once a page comes back short.
         let p2 = query_turns(&ledger, None, &known, p1.next_cursor, 2).expect("page 2");
         assert_eq!(ins(&p2.rows), vec![2, 1]);
-        assert!(p2.next_cursor.is_none(), "exhausted ledger clears the cursor");
+        assert!(p2.next_cursor.is_some(), "a full page always yields a cursor");
+
+        // Page 3 is empty (nothing below rowid 1) → the cursor clears.
+        let p3 = query_turns(&ledger, None, &known, p2.next_cursor, 2).expect("page 3");
+        assert!(p3.rows.is_empty(), "no rows below the smallest rowid");
+        assert!(p3.next_cursor.is_none(), "exhausted ledger clears the cursor");
 
         // Workspace filter narrows to ws-a's three turns, newest first.
         let only_a = query_turns(&ledger, Some(&a), &known, None, 50).expect("ws-a");

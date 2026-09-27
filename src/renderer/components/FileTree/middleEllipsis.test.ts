@@ -15,7 +15,7 @@ const GLYPH = 7.83
 const measure = (text: string): number => text.length * GLYPH
 
 const MEETING = 'notes_from_the_monday_meeting_v2.md'
-const PREFERRED_TAIL = 'ing_v2.md'
+const PREFERRED_TAIL = 'eting_v2.md'
 
 function ellipsisCount(text: string): number {
   return text.split(ELLIPSIS).length - 1
@@ -32,12 +32,12 @@ function assertKeepsEnd(name: string, shown: string): void {
 }
 
 describe('middleEllipsis', () => {
-  it('keeps a 6-character stem plus the extension when that tail fits', () => {
+  it('keeps an 8-character stem plus the extension when that tail fits', () => {
     expect(MEETING.endsWith(PREFERRED_TAIL)).toBe(true)
-    expect(PREFERRED_TAIL.slice(0, -'.md'.length)).toHaveLength(6)
+    expect(PREFERRED_TAIL.slice(0, -'.md'.length)).toHaveLength(8)
 
     const tailBox = measure(ELLIPSIS + PREFERRED_TAIL)
-    expect(tailBox).toBeCloseTo(78.3, 5)
+    expect(tailBox).toBeCloseTo(93.96, 5)
     expect(measure(MEETING)).toBeGreaterThan(tailBox)
 
     const atTail = middleEllipsis(MEETING, tailBox, measure)
@@ -55,7 +55,7 @@ describe('middleEllipsis', () => {
     expect(grown.slice(0, grown.indexOf(ELLIPSIS)).length).toBeGreaterThan(0)
   })
 
-  it('shrinks the tail but still ends with the extension when the 6-character tail does not fit', () => {
+  it('shrinks the tail but still ends with the extension when the 8-character tail does not fit', () => {
     const tailBox = measure(ELLIPSIS + PREFERRED_TAIL)
     const narrower = tailBox - 0.5
     expect(measure(ELLIPSIS + '.md')).toBeLessThan(narrower)
@@ -65,7 +65,7 @@ describe('middleEllipsis', () => {
     expect(shown.endsWith('.md')).toBe(true)
     const tail = shown.slice(shown.indexOf(ELLIPSIS) + 1)
     expect(tail.length).toBeLessThan(PREFERRED_TAIL.length)
-    expect(tail.slice(0, -'.md'.length).length).toBeLessThan(6)
+    expect(tail.slice(0, -'.md'.length).length).toBeLessThan(8)
     expect(shown.length).toBeLessThan((ELLIPSIS + PREFERRED_TAIL).length)
   })
 
@@ -125,7 +125,7 @@ describe('middleEllipsis', () => {
     const hidden = '.environment_production_credentials_file'
     expect(hidden.indexOf('.')).toBe(0)
     expect(hidden.lastIndexOf('.')).toBe(0)
-    const tail = hidden.slice(-6)
+    const tail = hidden.slice(-8)
     const head = hidden.slice(0, 3)
     const width = measure(head + ELLIPSIS + tail)
     expect(measure(hidden)).toBeGreaterThan(width)
@@ -136,9 +136,9 @@ describe('middleEllipsis', () => {
     const dir = 'notes_from_the_monday_meeting.backup'
     const ext = '.backup'
     const stem = dir.slice(0, dir.lastIndexOf('.'))
-    const fileTail = stem.slice(-6) + ext
+    const fileTail = stem.slice(-8) + ext
     expect(fileTail.endsWith(ext)).toBe(true)
-    const dirTail = dir.slice(-6)
+    const dirTail = dir.slice(-8)
     expect(dirTail).not.toBe(fileTail)
 
     const asFile = middleEllipsis(dir, measure(ELLIPSIS + fileTail), measure)
@@ -150,7 +150,7 @@ describe('middleEllipsis', () => {
     expect(asDir.endsWith(fileTail)).toBe(false)
 
     const makefile = 'Makefile_from_the_vendor_tree'
-    const makeTail = makefile.slice(-6)
+    const makeTail = makefile.slice(-8)
     expect(middleEllipsis(makefile, measure(ELLIPSIS + makeTail), measure).endsWith(makeTail)).toBe(true)
     expect(middleEllipsis(makefile, measure(ELLIPSIS + makeTail), measure).includes('.')).toBe(false)
   })
@@ -159,8 +159,8 @@ describe('middleEllipsis', () => {
     const name = 'abcdefghijklmnopqrstuvwxyz.tar.gz'
     const stem = name.slice(0, name.lastIndexOf('.'))
     expect(stem.endsWith('.tar')).toBe(true)
-    const fileTail = stem.slice(-6) + '.gz'
-    const wrongExt = name.slice(0, name.lastIndexOf('.tar.gz')).slice(-6) + '.tar.gz'
+    const fileTail = stem.slice(-8) + '.gz'
+    const wrongExt = name.slice(0, name.lastIndexOf('.tar.gz')).slice(-8) + '.tar.gz'
     expect(fileTail.endsWith('.gz')).toBe(true)
     expect(fileTail).not.toBe(wrongExt)
 
@@ -176,12 +176,12 @@ describe('middleEllipsis', () => {
     const shrunk = middleEllipsis(name, narrow, measure)
     assertKeepsEnd(name, shrunk)
     expect(shrunk.endsWith('.gz')).toBe(true)
-    expect(shrunk.slice(shrunk.indexOf(ELLIPSIS) + 1, -'.gz'.length).length).toBeLessThan(6)
+    expect(shrunk.slice(shrunk.indexOf(ELLIPSIS) + 1, -'.gz'.length).length).toBeLessThan(8)
 
     expect(middleEllipsis('archive.tar.gz', measure('archive.tar.gz'), measure)).toBe('archive.tar.gz')
   })
 
-  it('keeps the 6-character tail in a normal drawer and shrinks only when that tail does not fit', () => {
+  it('keeps the 8-character tail in a normal drawer and shrinks only when that tail does not fit', () => {
     expect(treeNameSlotWidth(180, 0)).toBe(128)
     expect(treeNameSlotWidth(180, 1)).toBe(112)
     expect(treeNameSlotWidth(240, 4)).toBe(124)
@@ -200,7 +200,7 @@ describe('middleEllipsis', () => {
     expect(shown.endsWith('.md')).toBe(true)
     const tail = shown.slice(shown.indexOf(ELLIPSIS) + 1)
     expect(tail.length).toBeLessThan(PREFERRED_TAIL.length)
-    expect(tail.slice(0, -'.md'.length).length).toBeLessThan(6)
+    expect(tail.slice(0, -'.md'.length).length).toBeLessThan(8)
   })
 
   it('clamps a non-positive slot to empty when the name does not fit', () => {

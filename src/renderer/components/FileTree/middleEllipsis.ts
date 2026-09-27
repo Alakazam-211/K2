@@ -3,9 +3,9 @@ export const ELLIPSIS = '\u2026'
 
 /**
  * Cap on stem characters kept in front of the extension. Not a floor.
- * Six keeps a suffix like `_v2` and leaves the rest of the row for the start.
+ * Eight keeps a suffix like `_v2` plus a little of the word, and leaves the rest of the row for the start.
  */
-const TAIL_CAP = 6
+const TAIL_CAP = 8
 
 /**
  * Tree-row name slot.

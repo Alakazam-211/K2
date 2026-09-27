@@ -18,13 +18,22 @@ import { normalizeUrl } from './normalizeUrl'
 
 export { normalizeUrl }
 
-/** Cmd+L on a visible browser tab. Hidden panes stay mounted, so skip those. */
+/** Cmd+L on a visible browser tab. Hidden panes stay mounted, so skip those.
+ *  The child page holds keyboard focus, so move focus back to this UI
+ *  webview or the address selection never shows. */
 export function focusVisibleBrowserAddress(): boolean {
   const inputs = document.querySelectorAll<HTMLInputElement>('[data-browser-address]')
   for (const input of inputs) {
     if (input.closest('[aria-hidden="true"]')) continue
-    input.focus()
-    input.select()
+    const select = (): void => {
+      input.focus()
+      input.select()
+    }
+    select()
+    void import('@tauri-apps/api/webview')
+      .then(({ getCurrentWebview }) => getCurrentWebview().setFocus())
+      .then(select)
+      .catch(select)
     return true
   }
   return false

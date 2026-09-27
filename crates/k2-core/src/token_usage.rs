@@ -85,6 +85,18 @@ pub struct WorkspaceTotals {
     pub totals: TokenTotals,
 }
 
+/// One UTC calendar day. Not a local-timezone shift of `recorded_at`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DayTotals {
+    /// `YYYY-MM-DD`, UTC.
+    pub day: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub turns: i64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct UsageReport {
     pub scope: String,
@@ -94,6 +106,9 @@ pub struct UsageReport {
     pub models: Vec<ModelTotals>,
     pub workspaces: Vec<WorkspaceTotals>,
     pub outside: TokenTotals,
+    /// Ascending UTC days. Unparseable `recorded_at` values are omitted
+    /// here and still included in `total`.
+    pub days: Vec<DayTotals>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -966,6 +981,110 @@ fn load_groups(conn: &Connection, workspace: Option<&str>) -> Result<Vec<Group>,
     Ok(out)
 }
 
+struct TurnStamp {
+    recorded_at: String,
+    totals: TokenTotals,
+}
+
+fn recorded_text(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
+    Ok(match row.get_ref(idx)? {
+        rusqlite::types::ValueRef::Text(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        rusqlite::types::ValueRef::Integer(n) => n.to_string(),
+        _ => String::new(),
+    })
+}
+
+fn load_turn_stamps(conn: &Connection, workspace: Option<&str>) -> Result<Vec<TurnStamp>, String> {
+    let sql = "SELECT recorded_at,
+            COALESCE(input_tokens, 0),
+            COALESCE(output_tokens, 0),
+            COALESCE(cache_read_tokens, 0),
+            COALESCE(cache_write_tokens, 0)
+         FROM turns
+         WHERE (?1 IS NULL OR workspace_path = ?1)";
+    let mut stmt = conn.prepare(sql).map_err(|e| format!("ledger days: {e}"))?;
+    let rows = stmt
+        .query_map(params![workspace], |r| {
+            Ok(TurnStamp {
+                recorded_at: recorded_text(r, 0)?,
+                totals: TokenTotals {
+                    input_tokens: r.get(1)?,
+                    output_tokens: r.get(2)?,
+                    cache_read_tokens: r.get(3)?,
+                    cache_write_tokens: r.get(4)?,
+                    turns: 1,
+                },
+            })
+        })
+        .map_err(|e| format!("ledger days: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("ledger day row: {e}"))?);
+    }
+    Ok(out)
+}
+
+fn is_ymd_prefix(bytes: &[u8]) -> bool {
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(|b| b.is_ascii_digit())
+        && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+        && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+}
+
+/// UTC `YYYY-MM-DD` for a ledger `recorded_at`, or `None` when the value
+/// is not a day we can place. A date prefix is kept as written (no local
+/// timezone shift). Digits are unix milliseconds at `>= 1_000_000_000_000`
+/// and unix seconds at `>= 1_000_000_000`. Anything else, including the
+/// fixture timestamp `10`, is omitted. Never errors.
+fn utc_day(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let bytes = s.as_bytes();
+    if bytes.len() >= 10 && is_ymd_prefix(&bytes[..10]) {
+        return Some(s[..10].to_string());
+    }
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: i64 = s.parse().ok()?;
+    let secs = if n >= 1_000_000_000_000 {
+        n / 1000
+    } else if n >= 1_000_000_000 {
+        n
+    } else {
+        return None;
+    };
+    let date = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)?.date_naive();
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month(),
+        date.day()
+    ))
+}
+
+fn bucket_days(stamps: &[TurnStamp]) -> Vec<DayTotals> {
+    let mut by_day: BTreeMap<String, TokenTotals> = BTreeMap::new();
+    for stamp in stamps {
+        let Some(day) = utc_day(&stamp.recorded_at) else {
+            continue;
+        };
+        add_totals(by_day.entry(day).or_default(), &stamp.totals);
+    }
+    by_day
+        .into_iter()
+        .map(|(day, totals)| DayTotals {
+            day,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cache_read_tokens: totals.cache_read_tokens,
+            cache_write_tokens: totals.cache_write_tokens,
+            turns: totals.turns,
+        })
+        .collect()
+}
+
 /// `workspace` is an exact path after [`canonical_workspace`]. `None` is
 /// the machine total. Known paths are this daemon's workspaces
 /// (`projects_list` paths and `workspaces.worktree_path`). Sentinels are
@@ -982,7 +1101,12 @@ pub fn query(
         .map(|p| canonical_workspace(p))
         .filter(|p| !p.is_empty())
         .collect();
-    let groups = with_ledger(ledger, |conn| load_groups(conn, filter.as_deref()))?;
+    let (groups, stamps) = with_ledger(ledger, |conn| {
+        let groups = load_groups(conn, filter.as_deref())?;
+        let stamps = load_turn_stamps(conn, filter.as_deref())?;
+        Ok((groups, stamps))
+    })?;
+    let days = bucket_days(&stamps);
     let mut total = TokenTotals::default();
     let mut outside = TokenTotals::default();
     let mut by_ws: BTreeMap<String, TokenTotals> = BTreeMap::new();
@@ -1040,6 +1164,7 @@ pub fn query(
         models,
         workspaces,
         outside,
+        days,
     })
 }
 
@@ -1079,6 +1204,35 @@ mod tests {
             body.push('\n');
         }
         fs::write(path, body).expect("write jsonl");
+    }
+
+    fn insert_turns(ledger: &Path, rows: &[(&str, &str, &str, i64, i64, i64, i64)]) {
+        let conn = open_ledger(ledger).expect("open ledger");
+        for (key, workspace, recorded_at, input, output, cache_read, cache_write) in rows {
+            conn.execute(
+                "INSERT INTO turns (
+                    turn_key, workspace_path, harness, model,
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                    recorded_at
+                 ) VALUES (?1, ?2, 'grok', 'grok-test', ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    key,
+                    workspace,
+                    input,
+                    output,
+                    cache_read,
+                    cache_write,
+                    recorded_at
+                ],
+            )
+            .expect("insert turn");
+        }
+    }
+
+    fn canon_dir(root: &Path, name: &str) -> String {
+        let path = root.join(name);
+        fs::create_dir_all(&path).expect("workspace dir");
+        canonical_workspace(&path.to_string_lossy())
     }
 
     struct Stored {
@@ -1660,5 +1814,115 @@ mod tests {
             .expect("projects probe");
         assert_eq!(projects_table, 0);
         drop(conn);
+    }
+
+    #[test]
+    fn two_turns_on_the_same_utc_day_sum_into_one_days_row() {
+        let dir = tmp();
+        let ws = canon_dir(&dir.0, "ws");
+        let ledger = dir.0.join("tokens.sqlite");
+        insert_turns(
+            &ledger,
+            &[
+                ("a", &ws, "2026-09-18T02:00:00Z", 10, 1, 4, 2),
+                ("b", &ws, "2026-09-18T23:00:00Z", 4, 5, 6, 7),
+            ],
+        );
+        let report = query(&ledger, None, std::slice::from_ref(&ws)).expect("report");
+        assert_eq!(report.days.len(), 1);
+        assert_eq!(report.days[0].day, "2026-09-18");
+        assert_eq!(report.days[0].input_tokens, 14);
+        assert_eq!(report.days[0].output_tokens, 6);
+        assert_eq!(report.days[0].cache_read_tokens, 10);
+        assert_eq!(report.days[0].cache_write_tokens, 9);
+        assert_eq!(report.days[0].turns, 2);
+        assert_eq!(report.total.input_tokens, 14);
+        assert_eq!(report.total.turns, 2);
+    }
+
+    #[test]
+    fn rfc3339_and_unix_seconds_on_the_same_utc_day_sum() {
+        let dir = tmp();
+        let ws = canon_dir(&dir.0, "ws");
+        let ledger = dir.0.join("tokens.sqlite");
+        // 1789735446 is 2026-09-18 12:44:06 UTC, the shape of a real Grok line.
+        // 1789735446000 is that instant in unix milliseconds.
+        // An offset RFC3339 keeps the date written in the string.
+        insert_turns(
+            &ledger,
+            &[
+                ("rfc", &ws, "2026-09-18T00:30:00Z", 3, 1, 0, 0),
+                ("secs", &ws, "1789735446", 7, 2, 1, 0),
+                ("millis", &ws, "1789735446000", 1, 1, 1, 0),
+                ("offset", &ws, "2026-09-17T20:00:00-07:00", 100, 0, 0, 0),
+            ],
+        );
+        let report = query(&ledger, None, std::slice::from_ref(&ws)).expect("report");
+        assert_eq!(report.days.len(), 2);
+        assert_eq!(report.days[0].day, "2026-09-17");
+        assert_eq!(report.days[0].input_tokens, 100);
+        assert_eq!(report.days[1].day, "2026-09-18");
+        assert_eq!(report.days[1].input_tokens, 3 + 7 + 1);
+        assert_eq!(report.days[1].output_tokens, 1 + 2 + 1);
+        assert_eq!(report.days[1].cache_read_tokens, 2);
+        assert_eq!(report.days[1].turns, 3);
+        assert_ne!(report.days[1].day, "2026-09-17");
+        assert_eq!(report.total.input_tokens, 3 + 7 + 1 + 100);
+    }
+
+    #[test]
+    fn workspace_query_omits_another_paths_day() {
+        let dir = tmp();
+        let a = canon_dir(&dir.0, "a");
+        let b = canon_dir(&dir.0, "b");
+        let ledger = dir.0.join("tokens.sqlite");
+        insert_turns(
+            &ledger,
+            &[
+                ("a", &a, "2026-09-01T00:00:00Z", 10, 1, 0, 0),
+                ("b", &b, "2026-09-02T00:00:00Z", 20, 1, 0, 0),
+            ],
+        );
+        let known = [a.clone(), b.clone()];
+        let only_a = query(&ledger, Some(&a), &known).expect("workspace report");
+        assert_eq!(only_a.days.len(), 1);
+        assert_eq!(only_a.days[0].day, "2026-09-01");
+        assert_eq!(only_a.days[0].input_tokens, 10);
+        assert_eq!(only_a.total.input_tokens, 10);
+        assert!(only_a.days.iter().all(|d| d.day != "2026-09-02"));
+        assert_ne!(only_a.total.input_tokens, 30);
+        let machine = query(&ledger, None, &known).expect("machine report");
+        assert_eq!(machine.days.len(), 2);
+        assert_eq!(machine.days[0].day, "2026-09-01");
+        assert_eq!(machine.days[0].input_tokens, 10);
+        assert_eq!(machine.days[1].day, "2026-09-02");
+        assert_eq!(machine.days[1].input_tokens, 20);
+        assert_eq!(machine.total.input_tokens, 30);
+    }
+
+    #[test]
+    fn timestamp_10_does_not_create_a_day_row_and_stays_in_total() {
+        let dir = tmp();
+        let ws = canon_dir(&dir.0, "ws");
+        let ledger = dir.0.join("tokens.sqlite");
+        insert_turns(
+            &ledger,
+            &[
+                ("fixture", &ws, "10", 42, 7, 9, 11),
+                ("real", &ws, "2026-09-18T00:00:00Z", 8, 1, 2, 3),
+            ],
+        );
+        let report = query(&ledger, None, std::slice::from_ref(&ws)).expect("report");
+        assert_eq!(report.days.len(), 1);
+        assert_eq!(report.days[0].day, "2026-09-18");
+        assert_eq!(report.days[0].input_tokens, 8);
+        assert_eq!(report.days[0].turns, 1);
+        assert!(report.days.iter().all(|d| d.day != "10"));
+        assert_eq!(report.total.input_tokens, 42 + 8);
+        assert_eq!(report.total.output_tokens, 7 + 1);
+        assert_eq!(report.total.cache_read_tokens, 9 + 2);
+        assert_eq!(report.total.cache_write_tokens, 11 + 3);
+        assert_eq!(report.total.turns, 2);
+        assert_ne!(report.days[0].input_tokens, report.total.input_tokens);
     }
 }

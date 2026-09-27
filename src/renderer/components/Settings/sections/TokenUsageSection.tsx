@@ -7,6 +7,8 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import type { SettingEntry } from '../searchManifest'
+import { dailyTokenChart, type DailySeries, type UsageDay } from './dailyTokenChart'
+import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -34,6 +36,8 @@ interface UsageReport {
   models: Array<TokenTotals & { harness: string; model: string }>
   workspaces: Array<TokenTotals & { path: string; outside: boolean }>
   outside: TokenTotals
+  /** Absent on an older daemon. Treated as no days, not an error. */
+  days?: UsageDay[] | null
 }
 
 const EMPTY: TokenTotals = {
@@ -66,7 +70,7 @@ function TotalsTable({
 }: {
   rows: Array<{ key: string; label: string; totals: TokenTotals }>
   labelHeader: string
-  label: (row: { key: string; label: string }) => string
+  label: (row: { key: string; label: string }) => React.ReactNode
 }): React.JSX.Element {
   if (rows.length === 0) {
     return <p className="text-xs text-[var(--color-text-muted)]">No counts yet.</p>
@@ -86,7 +90,7 @@ function TotalsTable({
       <tbody>
         {rows.map((row) => (
           <tr key={row.key} className="border-t border-[var(--color-border)]">
-            <td className="py-1.5 pr-3">{label(row)}</td>
+            <td className="py-1.5 pr-3 align-top">{label(row)}</td>
             <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(row.totals.input_tokens)}</td>
             <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(row.totals.output_tokens)}</td>
             <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(row.totals.cache_read_tokens)}</td>
@@ -99,7 +103,100 @@ function TotalsTable({
   )
 }
 
-function ReportBlock({ title, path, report }: { title: string; path?: string; report: UsageReport }): React.JSX.Element {
+const SERIES_FILL: Record<DailySeries, string> = {
+  input: 'var(--color-accent)',
+  output: 'var(--color-status-ok)',
+  cacheRead: 'var(--color-status-working)',
+}
+
+const SERIES_LABEL: Record<DailySeries, string> = {
+  input: 'Input',
+  output: 'Output',
+  cacheRead: 'Cache read',
+}
+
+function localCalendarDay(now: Date): string {
+  const year = String(now.getFullYear()).padStart(4, '0')
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function DailyTokenChart({ days }: { days: UsageDay[] | null | undefined }): React.JSX.Element {
+  const geo = dailyTokenChart(days, localCalendarDay(new Date()))
+  const first = geo.slots[0].day
+  const last = geo.slots[geo.slots.length - 1].day
+  return (
+    <div className="mb-4">
+      <p className="text-xs text-[var(--color-text-muted)] mb-1">Last 30 days</p>
+      <svg
+        viewBox={`0 0 ${geo.width} ${geo.height}`}
+        className="w-full h-24"
+        role="img"
+        aria-label="Last 30 days"
+      >
+        {geo.bars.map((bar) => (
+          <rect
+            key={`${bar.day}:${bar.series}`}
+            x={bar.x}
+            y={bar.y}
+            width={bar.width}
+            height={bar.height}
+            fill={SERIES_FILL[bar.series]}
+          >
+            <title>{`${bar.day} ${SERIES_LABEL[bar.series]} ${fmt(bar.value)}`}</title>
+          </rect>
+        ))}
+      </svg>
+      <div className="mt-1 flex justify-between text-[11px] text-[var(--color-text-muted)]">
+        <span>{first}</span>
+        <span>{last}</span>
+      </div>
+      <div className="mt-1 flex gap-3 text-[11px] text-[var(--color-text-muted)]">
+        {(Object.keys(SERIES_LABEL) as DailySeries[]).map((series) => (
+          <span key={series} className="inline-flex items-center gap-1">
+            <span className="inline-block w-2 h-2" style={{ background: SERIES_FILL[series] }} />
+            {SERIES_LABEL[series]}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceName({
+  path,
+  outside,
+  projects,
+}: {
+  path: string
+  outside: boolean
+  projects: readonly UsageNameProject[]
+}): React.JSX.Element {
+  const label = workspaceUsageLabel({ path, outside }, projects)
+  return (
+    <div title={outside ? undefined : path}>
+      <div>{label.name}</div>
+      {label.subtitle != null ? (
+        <div className="text-[11px] text-[var(--color-text-muted)] break-all">{label.subtitle}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function ReportBlock({
+  title,
+  path,
+  name,
+  report,
+  showChart,
+}: {
+  title: string
+  path?: string
+  name?: string
+  report: UsageReport
+  showChart?: boolean
+}): React.JSX.Element {
   const harnessRows = report.harnesses.map((h) => ({
     key: h.harness,
     label: h.harness,
@@ -113,14 +210,22 @@ function ReportBlock({ title, path, report }: { title: string; path?: string; re
   return (
     <section className="mb-8">
       <h3 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">{title}</h3>
+      {name ? (
+        <p className="text-xs text-[var(--color-text-primary)] mb-0.5" title={path}>
+          {name}
+        </p>
+      ) : null}
       {path ? (
-        <p className="text-[11px] font-mono text-[var(--color-text-muted)] mb-3 break-all">{path}</p>
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-3 break-all" title={path}>
+          {path}
+        </p>
       ) : null}
       <p className="text-xs text-[var(--color-text-muted)] mb-3">
         {fmt(report.total.turns)} turns · input {fmt(report.total.input_tokens)} · output{' '}
         {fmt(report.total.output_tokens)} · cache read {fmt(report.total.cache_read_tokens)} · cache write{' '}
         {fmt(report.total.cache_write_tokens)}
       </p>
+      {showChart ? <DailyTokenChart days={report.days} /> : null}
       <h4 className="text-xs font-medium mb-1">Harness</h4>
       <TotalsTable rows={harnessRows} labelHeader="Harness" label={(row) => harnessLabel(row.label)} />
       <h4 className="text-xs font-medium mt-4 mb-1">Model</h4>
@@ -187,25 +292,41 @@ export function TokenUsageSection(): React.JSX.Element {
         <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
       ) : (
         <>
-          <ReportBlock title="This machine" report={machine} />
+          <ReportBlock title="This machine" report={machine} showChart />
           <h4 className="text-xs font-medium mb-1">Workspace</h4>
           <TotalsTable
             rows={[
               ...machine.workspaces
                 .filter((w) => !w.outside)
-                .map((w) => ({ key: w.path, label: w.path, totals: w })),
+                .map((w) => ({ key: `path:${w.path}`, label: w.path, totals: w })),
               {
                 key: 'outside',
                 label: 'Outside workspaces',
                 totals: machine.outside ?? EMPTY,
               },
             ]}
-            labelHeader="Path"
-            label={(row) => row.label}
+            labelHeader="Workspace"
+            label={(row) => (
+              <WorkspaceName
+                path={row.key === 'outside' ? '' : row.label}
+                outside={row.key === 'outside'}
+                projects={projects}
+              />
+            )}
           />
           <div className="mt-8">
             {openCwd && openReport ? (
-              <ReportBlock title="Open workspace" path={openReport.workspace ?? openCwd} report={openReport} />
+              <ReportBlock
+                title="Open workspace"
+                name={
+                  workspaceUsageLabel(
+                    { path: openReport.workspace ?? openCwd, outside: false },
+                    projects,
+                  ).name
+                }
+                path={openReport.workspace ?? openCwd}
+                report={openReport}
+              />
             ) : (
               <section>
                 <h3 className="text-sm font-medium mb-1">Open workspace</h3>

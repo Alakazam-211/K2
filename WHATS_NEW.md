@@ -5,7 +5,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.41.1 — Server switch no longer quits the app
 
-- **Square close button.** Switching to another server changes the window title. On the Square style that update asked the close button for a flag it did not have, and the app quit. The button answers that call now.
+- **Square close button.** Switching to another server changes the window title. On the Square style that update asked the close button for theme-button calls it did not have (`setEditedFlag:`, `setTemporarilyDisabled:`), and the app quit. Those calls now go to the system button. The square paint stays.
 
 ## 0.41.0 — Usage, chat continuation, and a desktop that stays put
 

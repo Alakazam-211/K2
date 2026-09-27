@@ -60,8 +60,6 @@ mod imp {
     static ORIGINAL_CELL: u8 = 0;
     static ORIGINAL_TARGET: u8 = 0;
     static ORIGINAL_ACTION: u8 = 0;
-    /// `setDocumentEdited:` on the close button calls this on the cell.
-    static EDITED_FLAG: u8 = 0;
 
     #[link(name = "AppKit", kind = "framework")]
     extern "C" {
@@ -402,16 +400,13 @@ mod imp {
                 sel!(accessibilityLabel),
                 ax_label as extern "C" fn(&Object, Sel) -> id,
             );
-            // Title changes (server switch) make AppKit call this on the
-            // close button's cell. The system cell implements it. NSButtonCell
-            // does not, so a missing method aborts the process.
+            // A title change asks the close button's cell for theme-widget
+            // methods (`setEditedFlag:`, `setTemporarilyDisabled:`, …).
+            // NSButtonCell does not have them. Send those to the system cell
+            // we kept on the button. Methods this class implements stay here.
             decl.add_method(
-                sel!(setEditedFlag:),
-                set_edited_flag as extern "C" fn(&Object, Sel, BOOL),
-            );
-            decl.add_method(
-                sel!(editedFlag),
-                edited_flag as extern "C" fn(&Object, Sel) -> BOOL,
+                sel!(forwardingTargetForSelector:),
+                forwarding_target as extern "C" fn(&Object, Sel, Sel) -> id,
             );
             decl.register() as *const Class
         })
@@ -452,30 +447,22 @@ mod imp {
         ptr as id
     }
 
-    extern "C" fn set_edited_flag(this: &Object, _: Sel, flag: BOOL) {
-        let n: i64 = if flag == YES { 1 } else { 0 };
-        unsafe {
-            let num: id = msg_send![class!(NSNumber), numberWithLongLong: n];
-            objc_setAssociatedObject(
-                this as *const Object as id,
-                std::ptr::addr_of!(EDITED_FLAG) as *const c_void,
-                num,
-                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
-            );
+    extern "C" fn forwarding_target(this: &Object, _: Sel, asked: Sel) -> id {
+        if asked.as_ptr().is_null() {
+            return nil;
         }
-    }
-
-    extern "C" fn edited_flag(this: &Object, _: Sel) -> BOOL {
         unsafe {
-            let num: id = objc_getAssociatedObject(
-                this as *const Object as id,
-                std::ptr::addr_of!(EDITED_FLAG) as *const c_void,
-            );
-            if num == nil {
-                return NO;
+            let view: id = msg_send![this, controlView];
+            if view == nil {
+                return nil;
             }
-            let v: i64 = msg_send![num, longLongValue];
-            if v != 0 { YES } else { NO }
+            let orig: id =
+                objc_getAssociatedObject(view, std::ptr::addr_of!(ORIGINAL_CELL) as *const c_void);
+            if orig == nil {
+                return nil;
+            }
+            let answers: BOOL = msg_send![orig, respondsToSelector: asked];
+            if answers == YES { orig } else { nil }
         }
     }
 

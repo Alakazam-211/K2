@@ -476,6 +476,7 @@ export function BrowserPane({
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 flex-shrink-0">
+        <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           type="button"
           className={historyButtonClass(historyReady && canBack)}
@@ -500,6 +501,7 @@ export function BrowserPane({
             <polyline points="4 2 7 5 4 8" />
           </svg>
         </button>
+        </div>
         <input
           ref={addressRef}
           data-browser-address=""
@@ -530,12 +532,13 @@ export function BrowserPane({
           }}
           className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text)] font-mono outline-none focus:border-[var(--color-text-muted)]"
         />
+        <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           type="button"
           onClick={handleReload}
           title="Reload"
           aria-label="Reload"
-          className="inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors flex-shrink-0"
+          className="inline-flex items-center justify-center h-5 w-5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex-shrink-0"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -570,6 +573,7 @@ export function BrowserPane({
             </svg>
           </button>
         )}
+        </div>
       </div>
 
       {/* Mid-session errors (bad scheme, navigate failure): the native

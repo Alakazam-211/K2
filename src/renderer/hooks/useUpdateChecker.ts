@@ -68,7 +68,9 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
       }
       return
     }
-    if (showToastIfNone) {
+    // A failed Arch manifest fetch returns false with status `error`.
+    // Don't toast "up to date" on top of that row.
+    if (showToastIfNone && useUpdateStore.getState().status !== 'error') {
       useToastStore.getState().addToast('K2 is up to date', 'success', 3000)
     }
     return

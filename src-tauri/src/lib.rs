@@ -1886,6 +1886,7 @@ pub fn run() {
             // Updater
             commands::updater::check_for_update,
             commands::updater::get_current_version,
+            commands::updater::probe_install_update,
             commands::updater::broadcast_sync,
             // Plan B cleanup — `workspace_layout_*` command surface
             // deleted. Routed daemon data; the renderer reaches it

@@ -20,15 +20,32 @@ type SplitUpdate = Update & {
   install?: () => Promise<void>
 }
 
+interface InstallUpdateProbe {
+  kind: string
+  version: string | null
+  has_update: boolean
+  download_url: string | null
+}
+
 interface UpdateState {
   status: UpdateStatus
   version: string | null
   notes: string | null
   progress: number
   error: string | null
+  /** Pacman asset for an Arch offer. Set only when plugin-updater is skipped. */
+  archDownloadUrl: string | null
   checkForUpdate: () => Promise<boolean>
+  /** Available-row Download: Arch opens the pkg, anything else runs the installer. */
+  openAvailableDownload: () => Promise<void>
   startDownload: () => Promise<void>
   installAndRelaunch: () => Promise<void>
+}
+
+function updateErrorText(err: unknown): string {
+  if (typeof err === 'string') return err
+  if (err instanceof Error && err.message) return err.message
+  return String(err)
 }
 
 let pendingUpdate: SplitUpdate | null = null
@@ -50,19 +67,54 @@ function applyDownloadProgress(
   }
 }
 
-export const useUpdateStore = create<UpdateState>((set) => ({
+export const useUpdateStore = create<UpdateState>((set, get) => ({
   status: 'idle',
   version: null,
   notes: null,
   progress: 0,
   error: null,
+  archDownloadUrl: null,
 
   checkForUpdate: async () => {
     if (isAirgap()) {
-      set({ status: 'idle', error: null })
+      set({ status: 'idle', error: null, archDownloadUrl: null })
       return false
     }
-    set({ status: 'checking', error: null })
+    set({ status: 'checking', error: null, archDownloadUrl: null })
+    try {
+      const probe = await invoke<InstallUpdateProbe>('probe_install_update')
+      if (probe.kind === 'arch') {
+        pendingUpdate = null
+        if (probe.has_update && probe.version && probe.download_url) {
+          set({
+            status: 'available',
+            version: probe.version,
+            notes: null,
+            error: null,
+            archDownloadUrl: probe.download_url,
+          })
+          return true
+        }
+        set({
+          status: 'idle',
+          version: null,
+          notes: null,
+          error: null,
+          archDownloadUrl: null,
+        })
+        return false
+      }
+    } catch (err) {
+      // Fetch failed. Do not throw: the hook's catch only looks for a .dmg.
+      console.error('[updater] Arch manifest check failed:', err)
+      pendingUpdate = null
+      set({
+        status: 'error',
+        error: updateErrorText(err),
+        archDownloadUrl: null,
+      })
+      return false
+    }
     try {
       const update = await check()
       if (update) {
@@ -71,16 +123,31 @@ export const useUpdateStore = create<UpdateState>((set) => ({
           status: 'available',
           version: update.version,
           notes: update.body ?? null,
+          error: null,
+          archDownloadUrl: null,
         })
         return true
       }
-      set({ status: 'idle' })
+      set({ status: 'idle', archDownloadUrl: null })
       return false
     } catch (err) {
       console.error('[updater] Check failed:', err)
-      set({ status: 'error', error: String(err) })
+      set({ status: 'error', error: String(err), archDownloadUrl: null })
       return false
     }
+  },
+
+  openAvailableDownload: async () => {
+    const url = get().archDownloadUrl
+    if (url) {
+      try {
+        await invoke('plugin:opener|open_url', { url })
+      } catch {
+        window.open(url)
+      }
+      return
+    }
+    await get().startDownload()
   },
 
   startDownload: async () => {
@@ -103,6 +170,9 @@ export const useUpdateStore = create<UpdateState>((set) => ({
   },
 
   installAndRelaunch: async () => {
+    // Arch offers a pkg URL and never sets pendingUpdate. Do not relaunch
+    // or the unknown bundle type falls through to an AppImage install.
+    if (!pendingUpdate) return
     try {
       // Unlock k2-daemon.exe so NSIS can replace it (Windows file lock).
       await invoke('stop_bundled_daemon_for_update').catch((e) => {

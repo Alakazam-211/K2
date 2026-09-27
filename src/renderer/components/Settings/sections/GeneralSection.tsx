@@ -244,7 +244,7 @@ export function GeneralSection(): React.JSX.Element {
             </div>
             <button
               className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
-              onClick={() => useUpdateStore.getState().startDownload()}
+              onClick={() => void useUpdateStore.getState().openAvailableDownload()}
             >
               Download
             </button>

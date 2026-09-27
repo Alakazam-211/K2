@@ -18,6 +18,7 @@ import { Surface } from '@/components/ui'
 import {
   APP_MENU_BUTTON_MIN_WIDTH_PX,
   getDesktopChrome,
+  TRAFFIC_LIGHT_CLUSTER_GAP_PX,
   TRAFFIC_LIGHT_SPACER_BASE_PX,
 } from '@/lib/desktop-chrome'
 
@@ -94,13 +95,13 @@ export default function TopBar({
     >
       {/* Left: chrome spacer/Menu + K2 branding + sidebar toggle. */}
       <div
-        className="flex items-center gap-2"
-        style={{ minWidth: leftMinWidth }}
+        className="flex items-center [&>*]:shrink-0"
+        style={{ minWidth: leftMinWidth, gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
       >
         <DesktopChromeLeft />
         <button
           type="button"
-          className="no-drag flex h-5 w-5 items-center justify-center flex-shrink-0"
+          className="no-drag flex h-4 w-4 items-center justify-center p-0 flex-shrink-0"
           title="K2 dashboard"
           aria-label="Open the K2 dashboard"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}

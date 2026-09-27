@@ -9,6 +9,7 @@ import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSe
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
@@ -251,7 +252,7 @@ export default function Settings(): React.JSX.Element {
         onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
           <DesktopChromeLeft />
           {/* App name (in-app wordmark) */}
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">

@@ -16,6 +16,7 @@ import { useToastStore } from '@/stores/toast'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
@@ -452,7 +453,7 @@ export default function WikiPage(): React.JSX.Element | null {
         onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex items-center flex-1" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
           <DesktopChromeLeft />
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2

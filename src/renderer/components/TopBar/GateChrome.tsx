@@ -9,6 +9,7 @@ import { Surface } from '@/components/ui'
 import ServerSwitcher from './ServerSwitcher'
 import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 
 export default function GateChrome(): React.JSX.Element {
   return (
@@ -20,7 +21,7 @@ export default function GateChrome(): React.JSX.Element {
       onDoubleClick={titleBarOnDoubleClick}
       style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
         <DesktopChromeLeft />
         <ServerSwitcher />
       </div>

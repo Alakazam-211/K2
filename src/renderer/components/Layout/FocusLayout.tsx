@@ -7,6 +7,7 @@ import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
@@ -43,7 +44,7 @@ export default function FocusLayout({
           minHeight: TOPBAR_HEIGHT
         }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
           <DesktopChromeLeft />
           <ServerSwitcher />
         </div>

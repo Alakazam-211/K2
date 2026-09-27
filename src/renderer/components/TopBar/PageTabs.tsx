@@ -99,7 +99,7 @@ export default function PageTabs(): React.JSX.Element {
   }
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex items-center gap-0.5 [&>button:first-child]:pl-0">
       <PageTab
         selected={settingsOpen}
         onSelect={() => {

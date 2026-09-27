@@ -325,7 +325,7 @@ export default function ServerSwitcher(): React.JSX.Element {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
-          className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)]"
+          className="flex items-center gap-1.5 h-6 px-0 text-[11px] text-[var(--color-text-secondary)]"
           title={ind.title}
           aria-label={`Connected host: ${activeLabel}`}
         >
@@ -354,7 +354,7 @@ export default function ServerSwitcher(): React.JSX.Element {
     >
       <button
         onClick={() => toggle()}
-        className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded no-drag"
+        className="flex items-center gap-1.5 h-6 px-0 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded no-drag"
         title={`${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`}
         aria-keyshortcuts="Meta+L"
       >

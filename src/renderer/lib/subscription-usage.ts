@@ -20,20 +20,20 @@ export interface SubscriptionDoc {
   harnesses: HarnessUsage[]
 }
 
-/** v1 probes. Anything else is absent — do not invent a row. */
-export const PROBED_HARNESSES = ['claude', 'codex'] as const
+/** Clock-menu probes. Anything else is absent — do not invent a row. */
+export const PROBED_HARNESSES = ['claude', 'codex', 'grok'] as const
 
 const STALE_MS = 15_000
+const PROBED = new Set<string>(PROBED_HARNESSES)
 
 export function visibleHarnesses(doc: SubscriptionDoc): HarnessUsage[] {
-  return doc.harnesses.filter(
-    (h) => h.harness === 'claude' || h.harness === 'codex',
-  )
+  return doc.harnesses.filter((h) => PROBED.has(h.harness))
 }
 
 export function harnessName(id: string): string {
   if (id === 'claude') return 'Claude'
   if (id === 'codex') return 'Codex'
+  if (id === 'grok') return 'Grok'
   return id
 }
 
@@ -42,7 +42,7 @@ export function isSignedIn(row: HarnessUsage): boolean {
   return row.status !== 'Not signed in' && row.status !== 'Sign-in expired'
 }
 
-/** Claude `utilization` and Codex `usedPercent`, as a whole percent used. */
+/** Claude `utilization`, Codex `usedPercent`, and Grok `creditUsagePercent`, as a whole percent used. */
 export function percentUsed(used: number): number {
   const clamped = Math.min(1, Math.max(0, used))
   return Math.round(clamped * 100)

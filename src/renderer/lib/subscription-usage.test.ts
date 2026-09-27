@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest'
 import {
   buttonLabel,
   formatResetsIn,
+  harnessName,
   isStale,
   percentUsed,
+  PROBED_HARNESSES,
   visibleHarnesses,
   type SubscriptionDoc,
 } from './subscription-usage'
@@ -48,7 +50,9 @@ describe('subscription window math', () => {
     expect(label).toBe('Claude 31%')
   })
 
-  it('picks the highest used signed-in window and ignores an unprobed harness', () => {
+  it('picks the highest used signed-in window and hides an unprobed harness', () => {
+    expect([...PROBED_HARNESSES]).toEqual(['claude', 'codex', 'grok'])
+    expect(harnessName('grok')).toBe('Grok')
     const label = buttonLabel(
       doc({
         harnesses: [
@@ -68,7 +72,14 @@ describe('subscription window math', () => {
           },
           {
             harness: 'grok',
-            plan: 'Super',
+            plan: 'SuperGrok',
+            windows: [{ label: 'Weekly', used: 0.19, resetsAt: '2026-10-03T00:00:00Z' }],
+            checkedAt: '2026-09-26T15:00:00Z',
+            status: '',
+          },
+          {
+            harness: 'gemini',
+            plan: 'Ultra',
             windows: [{ label: 'Weekly', used: 0.99, resetsAt: '2026-10-03T00:00:00Z' }],
             checkedAt: '2026-09-26T15:00:00Z',
             status: '',
@@ -88,6 +99,13 @@ describe('subscription window math', () => {
             status: 'Not signed in',
           },
           {
+            harness: 'gemini',
+            plan: '',
+            windows: [{ label: 'Weekly', used: 0.5, resetsAt: '2026-10-03T00:00:00Z' }],
+            checkedAt: '',
+            status: '',
+          },
+          {
             harness: 'claude',
             plan: '',
             windows: [],
@@ -97,7 +115,7 @@ describe('subscription window math', () => {
         ],
       }),
     )
-    expect(rows.map((row) => row.harness)).toEqual(['claude'])
+    expect(rows.map((row) => row.harness)).toEqual(['grok', 'claude'])
   })
 
   it('reads Usage when nothing is signed in, not 0%', () => {
@@ -135,6 +153,7 @@ describe('subscription window math', () => {
           harnesses: [
             { harness: 'claude', plan: '', windows: [], checkedAt: fresh, status: '' },
             { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
+            { harness: 'grok', plan: '', windows: [], checkedAt: fresh, status: '' },
           ],
         }),
         now,
@@ -145,6 +164,18 @@ describe('subscription window math', () => {
         doc({
           harnesses: [
             { harness: 'claude', plan: '', windows: [], checkedAt: stale, status: '' },
+            { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
+            { harness: 'grok', plan: '', windows: [], checkedAt: fresh, status: '' },
+          ],
+        }),
+        now,
+      ),
+    ).toBe(true)
+    expect(
+      isStale(
+        doc({
+          harnesses: [
+            { harness: 'claude', plan: '', windows: [], checkedAt: fresh, status: '' },
             { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
           ],
         }),

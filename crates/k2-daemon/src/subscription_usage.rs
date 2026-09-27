@@ -1,4 +1,4 @@
-//! Subscription windows for the signed-in Claude and Codex logins.
+//! Subscription windows for the signed-in Claude, Codex, and Grok logins.
 //!
 //! The daemon probes. The cache file is `k2_home()/usage/subscriptions.json`
 //! and stores windows only — never an access token, refresh token, or
@@ -36,6 +36,8 @@ pub const STATUS_NO_WINDOW: &str = "No usage window";
 
 const HARNESS_CLAUDE: &str = "claude";
 const HARNESS_CODEX: &str = "codex";
+const HARNESS_GROK: &str = "grok";
+const PROBED_HARNESSES: [&str; 3] = [HARNESS_CLAUDE, HARNESS_CODEX, HARNESS_GROK];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -93,10 +95,34 @@ struct CodexParsed {
     windows: Vec<UsageWindow>,
 }
 
+#[derive(Debug, Clone)]
+enum GrokOutcome {
+    NotSignedIn,
+    /// Transport or timeout. Keep still-open cached windows.
+    Failed,
+    Ready {
+        plan: String,
+        windows: Vec<UsageWindow>,
+    },
+}
+
+#[derive(Debug)]
+enum GrokFail {
+    NotSignedIn,
+    Transport(String),
+}
+
+#[derive(Debug)]
+struct GrokParsed {
+    plan: String,
+    windows: Vec<UsageWindow>,
+}
+
 trait UsageIo: Send + Sync {
     fn claude_login(&self) -> ClaudeLogin;
     fn claude_get(&self, access_token: &str) -> Result<String, String>;
     fn codex(&self) -> CodexOutcome;
+    fn grok(&self) -> GrokOutcome;
 }
 
 struct LiveIo;
@@ -191,12 +217,16 @@ fn ok_doc(doc: &SubscriptionFile) -> CliResponse {
     }
 }
 
+fn is_known_harness(name: &str) -> bool {
+    PROBED_HARNESSES.contains(&name)
+}
+
 fn filter_known(doc: SubscriptionFile) -> SubscriptionFile {
     SubscriptionFile {
         harnesses: doc
             .harnesses
             .into_iter()
-            .filter(|h| h.harness == HARNESS_CLAUDE || h.harness == HARNESS_CODEX)
+            .filter(|h| is_known_harness(&h.harness))
             .collect(),
     }
 }
@@ -210,7 +240,7 @@ fn fresh_cache(now: DateTime<Utc>) -> Option<SubscriptionFile> {
 }
 
 fn is_fresh(doc: &SubscriptionFile, now: DateTime<Utc>) -> bool {
-    for name in [HARNESS_CLAUDE, HARNESS_CODEX] {
+    for name in PROBED_HARNESSES {
         let Some(h) = doc.harnesses.iter().find(|h| h.harness == name) else {
             return false;
         };
@@ -256,7 +286,7 @@ fn read_cache_file() -> Result<SubscriptionFile, String> {
     }
 }
 
-/// Probe both harnesses, then atomic-replace the cache.
+/// Probe Claude, Codex, and Grok, then atomic-replace the cache.
 /// A failed read of an existing file does not truncate it.
 fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
     probe_hits().fetch_add(1, Ordering::SeqCst);
@@ -287,8 +317,16 @@ fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
             .find(|h| h.harness == HARNESS_CODEX),
         now,
     );
+    let grok = probe_grok(
+        io.grok(),
+        previous
+            .harnesses
+            .iter()
+            .find(|h| h.harness == HARNESS_GROK),
+        now,
+    );
     let doc = SubscriptionFile {
-        harnesses: vec![claude, codex],
+        harnesses: vec![claude, codex, grok],
     };
     write_cache(&doc)?;
     Ok(doc)
@@ -359,6 +397,37 @@ fn probe_codex(
             };
             HarnessUsage {
                 harness: HARNESS_CODEX.into(),
+                plan,
+                windows,
+                checked_at: now.to_rfc3339(),
+                status,
+            }
+        }
+    }
+}
+
+fn probe_grok(
+    outcome: GrokOutcome,
+    prev: Option<&HarnessUsage>,
+    now: DateTime<Utc>,
+) -> HarnessUsage {
+    match outcome {
+        GrokOutcome::NotSignedIn => HarnessUsage {
+            harness: HARNESS_GROK.into(),
+            plan: String::new(),
+            windows: Vec::new(),
+            checked_at: now.to_rfc3339(),
+            status: STATUS_NOT_SIGNED_IN.into(),
+        },
+        GrokOutcome::Failed => preserved(HARNESS_GROK, prev, prev_status(prev), "", now),
+        GrokOutcome::Ready { plan, windows } => {
+            let status = if windows.is_empty() {
+                STATUS_NO_WINDOW.to_string()
+            } else {
+                String::new()
+            };
+            HarnessUsage {
+                harness: HARNESS_GROK.into(),
                 plan,
                 windows,
                 checked_at: now.to_rfc3339(),
@@ -912,6 +981,334 @@ fn run_codex_process(program: &str) -> Result<CodexParsed, CodexFail> {
     parsed
 }
 
+trait GrokTransport {
+    fn write_line(&mut self, line: &str) -> Result<(), String>;
+    fn read_matching(&mut self, id: i64, timeout: Duration) -> Result<Value, String>;
+    fn close_stdin(&mut self) -> Result<(), String>;
+}
+
+fn grok_line(id: i64, method: &str, params: Value) -> Result<String, GrokFail> {
+    serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|e| GrokFail::Transport(e.to_string()))
+}
+
+/// One-shot `grok agent stdio` exchange. Initialize, then `_x.ai/billing`.
+/// Stdin closes after that request. No login refresh and no billing URL.
+fn grok_exchange(io: &mut dyn GrokTransport) -> Result<GrokParsed, GrokFail> {
+    let timeout = Duration::from_secs(8);
+    io.write_line(&grok_line(
+        1,
+        "initialize",
+        json!({
+            "clientInfo": {"name": "k2", "title": "K2", "version": "0"}
+        }),
+    )?)
+    .map_err(GrokFail::Transport)?;
+    let init = io.read_matching(1, timeout).map_err(GrokFail::Transport)?;
+    if is_grok_auth_message(&init) {
+        return Err(GrokFail::NotSignedIn);
+    }
+    if init.get("error").is_some() {
+        return Err(GrokFail::Transport("grok initialize failed".into()));
+    }
+    io.write_line(&grok_line(2, "_x.ai/billing", json!({}))?)
+        .map_err(GrokFail::Transport)?;
+    io.close_stdin().map_err(GrokFail::Transport)?;
+    let billing = io.read_matching(2, timeout).map_err(GrokFail::Transport)?;
+    parse_grok_billing(&billing)
+}
+
+fn parse_grok_billing(msg: &Value) -> Result<GrokParsed, GrokFail> {
+    if is_grok_auth_message(msg) {
+        return Err(GrokFail::NotSignedIn);
+    }
+    if msg.get("error").is_some() {
+        return Err(GrokFail::Transport("grok billing failed".into()));
+    }
+    let Some(result) = msg.get("result").filter(|v| v.is_object()) else {
+        return Err(GrokFail::Transport("grok billing missing result".into()));
+    };
+    Ok(grok_from_result(result))
+}
+
+fn grok_from_result(result: &Value) -> GrokParsed {
+    let plan = grok_plan(result);
+    let config = result
+        .get("config")
+        .filter(|v| v.is_object())
+        .unwrap_or(result);
+    let credit = util_number(config.get("creditUsagePercent"));
+    let build = grok_build_percent(result);
+    let percent_scale = [credit, build].into_iter().flatten().any(|n| n >= 1.0);
+    let resets_at = config
+        .pointer("/currentPeriod/end")
+        .map(reset_to_rfc3339)
+        .unwrap_or_default();
+    let label = grok_period_label(
+        config
+            .pointer("/currentPeriod/type")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
+    let mut windows = Vec::new();
+    // A missing credit percent is "no window", not a made-up 0%.
+    if let Some(used) = normalize_used(credit, percent_scale) {
+        windows.push(UsageWindow {
+            label,
+            used,
+            resets_at: resets_at.clone(),
+        });
+    }
+    if credit.is_some() {
+        if let Some(used) = normalize_used(build, percent_scale) {
+            windows.push(UsageWindow {
+                label: "Grok Build".into(),
+                used,
+                resets_at,
+            });
+        }
+    }
+    GrokParsed { plan, windows }
+}
+
+fn grok_plan(result: &Value) -> String {
+    for key in ["subscription_tier", "subscriptionTier"] {
+        if let Some(text) = json_string(result, key) {
+            return text;
+        }
+    }
+    if let Some(config) = result.get("config") {
+        for key in ["subscription_tier", "subscriptionTier"] {
+            if let Some(text) = json_string(config, key) {
+                return text;
+            }
+        }
+    }
+    String::new()
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn grok_build_percent(result: &Value) -> Option<f64> {
+    let value = result
+        .pointer("/config/productUsage/GrokBuild/usagePercent")
+        .or_else(|| result.pointer("/productUsage/GrokBuild/usagePercent"));
+    util_number(value)
+}
+
+fn grok_period_label(kind: &str) -> String {
+    let text = kind.to_ascii_uppercase();
+    if text.contains("WEEK") || text.is_empty() {
+        "Weekly".into()
+    } else if text.contains("MONTH") {
+        "Monthly".into()
+    } else if text.contains("DAY") {
+        "Daily".into()
+    } else if text.contains("HOUR") {
+        "Hourly".into()
+    } else {
+        "Limit".into()
+    }
+}
+
+fn is_grok_auth_message(msg: &Value) -> bool {
+    let Some(error) = msg.get("error") else {
+        return false;
+    };
+    if error.is_null() {
+        return false;
+    }
+    grok_auth_error(error)
+}
+
+fn grok_auth_error(error: &Value) -> bool {
+    if let Some(text) = error.as_str() {
+        return grok_auth_words(text);
+    }
+    if matches!(error.get("code").and_then(|c| c.as_i64()), Some(401 | 403)) {
+        return true;
+    }
+    if error
+        .get("message")
+        .and_then(|m| m.as_str())
+        .is_some_and(grok_auth_words)
+    {
+        return true;
+    }
+    let Some(data) = error.get("data") else {
+        return false;
+    };
+    if data.as_str().is_some_and(grok_auth_words) {
+        return true;
+    }
+    data.get("message")
+        .and_then(|m| m.as_str())
+        .is_some_and(grok_auth_words)
+}
+
+fn grok_auth_words(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("auth")
+        || lower.contains("forbidden")
+        || lower.contains("sign in")
+        || lower.contains("signed out")
+        || lower.contains("not logged")
+        || lower.contains("login required")
+        || lower.contains("credential")
+}
+
+fn grok_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.args(["agent", "stdio", "--no-leader"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd
+}
+
+struct GrokProcessTransport {
+    stdin: Option<std::process::ChildStdin>,
+    rx: std::sync::mpsc::Receiver<String>,
+}
+
+impl GrokTransport for GrokProcessTransport {
+    fn write_line(&mut self, line: &str) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "grok stdin closed".to_string())?;
+        stdin
+            .write_all(line.as_bytes())
+            .map_err(|e| e.to_string())?;
+        stdin.write_all(b"\n").map_err(|e| e.to_string())?;
+        stdin.flush().map_err(|e| e.to_string())
+    }
+
+    fn close_stdin(&mut self) -> Result<(), String> {
+        self.stdin.take();
+        Ok(())
+    }
+
+    fn read_matching(&mut self, id: i64, timeout: Duration) -> Result<Value, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err("grok billing timed out".into());
+            }
+            match self.rx.recv_timeout(left) {
+                Ok(line) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let msg: Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if msg.get("id").and_then(|v| v.as_i64()) == Some(id) {
+                        return Ok(msg);
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("grok billing timed out".into());
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("grok billing closed".into());
+                }
+            }
+        }
+    }
+}
+
+/// Kills the grok process group on drop, including when a read times out.
+struct GrokGuard {
+    child: Option<std::process::Child>,
+}
+
+impl Drop for GrokGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            kill_grok_group(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn kill_grok_group(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        let pgid = pid as libc::pid_t;
+        if libc::killpg(pgid, libc::SIGKILL) != 0 {
+            libc::kill(pgid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+}
+
+fn map_grok_spawn_err(err: std::io::Error) -> GrokFail {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        GrokFail::NotSignedIn
+    } else {
+        GrokFail::Transport(err.to_string())
+    }
+}
+
+fn run_grok_process(program: &str) -> Result<GrokParsed, GrokFail> {
+    let mut child = grok_command(program).spawn().map_err(map_grok_spawn_err)?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| GrokFail::Transport("grok stdin missing".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| GrokFail::Transport("grok stdout missing".into()))?;
+    let guard = GrokGuard { child: Some(child) };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    let mut transport = GrokProcessTransport {
+        stdin: Some(stdin),
+        rx,
+    };
+    let parsed = grok_exchange(&mut transport);
+    drop(transport);
+    drop(guard);
+    parsed
+}
+
 fn write_cache(doc: &SubscriptionFile) -> Result<(), String> {
     let path = cache_path();
     let bytes = serde_json::to_vec_pretty(doc).map_err(|e| e.to_string())?;
@@ -995,6 +1392,23 @@ impl UsageIo for LiveIo {
             }
         }
     }
+
+    fn grok(&self) -> GrokOutcome {
+        if probe_denied() {
+            return GrokOutcome::Failed;
+        }
+        match run_grok_process("grok") {
+            Ok(parsed) => GrokOutcome::Ready {
+                plan: parsed.plan,
+                windows: parsed.windows,
+            },
+            Err(GrokFail::NotSignedIn) => GrokOutcome::NotSignedIn,
+            Err(GrokFail::Transport(err)) => {
+                k2_core::log_debug!("[usage] grok probe failed: {err}");
+                GrokOutcome::Failed
+            }
+        }
+    }
 }
 
 fn live_claude_login() -> ClaudeLogin {
@@ -1051,6 +1465,7 @@ mod tests {
         body: Mutex<Result<String, String>>,
         gets: AtomicUsize,
         codex: Mutex<CodexOutcome>,
+        grok: Mutex<GrokOutcome>,
     }
 
     impl UsageIo for ScriptIo {
@@ -1063,6 +1478,9 @@ mod tests {
         }
         fn codex(&self) -> CodexOutcome {
             self.codex.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        }
+        fn grok(&self) -> GrokOutcome {
+            self.grok.lock().unwrap_or_else(|p| p.into_inner()).clone()
         }
     }
 
@@ -1077,6 +1495,9 @@ mod tests {
         }
         fn codex(&self) -> CodexOutcome {
             panic!("codex probe ran");
+        }
+        fn grok(&self) -> GrokOutcome {
+            panic!("grok probe ran");
         }
     }
 
@@ -1206,6 +1627,7 @@ mod tests {
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
+                grok: Mutex::new(GrokOutcome::NotSignedIn),
             };
             let doc = probe_and_write(&io).expect("write");
             assert_eq!(io.gets.load(Ordering::SeqCst), 1);
@@ -1550,7 +1972,7 @@ mod tests {
             let now = Utc::now().to_rfc3339();
             let doc = SubscriptionFile {
                 harnesses: vec![harness(
-                    "grok",
+                    "gemini",
                     vec![UsageWindow {
                         label: "Weekly".into(),
                         used: 0.99,
@@ -1563,24 +1985,25 @@ mod tests {
             write_cache(&doc).expect("seed");
             let response = handle_get();
             assert_eq!(response.status, "200 OK");
-            assert!(!response.body.contains("grok"), "{}", response.body);
+            assert!(!response.body.contains("gemini"), "{}", response.body);
             let on_disk = fs::read_to_string(cache_path()).expect("disk");
-            assert!(on_disk.contains("grok"), "GET must not rewrite the file");
+            assert!(on_disk.contains("gemini"), "GET must not rewrite the file");
             let io = ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
+                grok: Mutex::new(GrokOutcome::NotSignedIn),
             };
             let written = probe_and_write(&io).expect("probe");
-            assert_eq!(written.harnesses.len(), 2);
-            assert!(written.harnesses.iter().all(|h| h.harness != "grok"));
+            assert_eq!(written.harnesses.len(), 3);
+            assert!(written.harnesses.iter().all(|h| h.harness != "gemini"));
             let names: Vec<&str> = written
                 .harnesses
                 .iter()
                 .map(|h| h.harness.as_str())
                 .collect();
-            assert_eq!(names, vec![HARNESS_CLAUDE, HARNESS_CODEX]);
+            assert_eq!(names, vec![HARNESS_CLAUDE, HARNESS_CODEX, HARNESS_GROK]);
         });
     }
 
@@ -1640,6 +2063,7 @@ mod tests {
                 harnesses: vec![
                     harness(HARNESS_CLAUDE, Vec::new(), STATUS_NOT_SIGNED_IN, &now),
                     harness(HARNESS_CODEX, Vec::new(), STATUS_NOT_SIGNED_IN, &now),
+                    harness(HARNESS_GROK, Vec::new(), STATUS_NOT_SIGNED_IN, &now),
                 ],
             };
             write_cache(&doc).expect("seed");
@@ -1659,6 +2083,7 @@ mod tests {
                 harnesses: vec![
                     harness(HARNESS_CLAUDE, Vec::new(), STATUS_NOT_SIGNED_IN, &stale),
                     harness(HARNESS_CODEX, Vec::new(), STATUS_NOT_SIGNED_IN, &stale),
+                    harness(HARNESS_GROK, Vec::new(), STATUS_NOT_SIGNED_IN, &stale),
                 ],
             };
             write_cache(&doc).expect("seed");
@@ -1671,6 +2096,7 @@ mod tests {
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
+                grok: Mutex::new(GrokOutcome::NotSignedIn),
             }));
             probe_hits().store(0, Ordering::SeqCst);
             let response = handle_refresh();
@@ -1706,6 +2132,7 @@ mod tests {
                 body: Mutex::new(Err("usage endpoint down".into())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::Failed),
+                grok: Mutex::new(GrokOutcome::Failed),
             };
             let written = probe_and_write(&io).expect("preserved write");
             assert_eq!(io.gets.load(Ordering::SeqCst), 1);
@@ -1796,5 +2223,215 @@ mod tests {
             .expect("session");
         assert!((session.used - 0.31).abs() < 1e-9);
         assert_eq!(percent_left(session.used), 69);
+    }
+
+    const GROK_FIXTURE: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":22.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-19T00:00:00Z","end":"2026-09-26T00:00:00Z"}},"subscription_tier":"SuperGrok"}}"#;
+
+    fn grok_value(raw: &str) -> Value {
+        serde_json::from_str(raw).expect("grok json")
+    }
+
+    struct MemGrok {
+        lines: Vec<String>,
+        closed_after: Option<usize>,
+        billing: Value,
+    }
+
+    impl GrokTransport for MemGrok {
+        fn write_line(&mut self, line: &str) -> Result<(), String> {
+            self.lines.push(line.to_string());
+            Ok(())
+        }
+        fn close_stdin(&mut self) -> Result<(), String> {
+            self.closed_after = Some(self.lines.len());
+            Ok(())
+        }
+        fn read_matching(&mut self, id: i64, _timeout: Duration) -> Result<Value, String> {
+            let last = self.lines.last().map(|s| s.as_str()).unwrap_or("");
+            let sent: Value = serde_json::from_str(last).map_err(|e| e.to_string())?;
+            let method = sent.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let result = match method {
+                "initialize" => json!({}),
+                "_x.ai/billing" => self.billing.clone(),
+                other => return Err(format!("unexpected method {other}")),
+            };
+            Ok(json!({"id": id, "result": result}))
+        }
+    }
+
+    #[test]
+    fn grok_fixture_stores_used_0_22_supergrok_and_period_end() {
+        let parsed = parse_grok_billing(&grok_value(GROK_FIXTURE)).expect("fixture");
+        assert_eq!(parsed.plan, "SuperGrok");
+        assert_eq!(parsed.windows.len(), 1);
+        assert_eq!(parsed.windows[0].label, "Weekly");
+        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+        assert_eq!(parsed.windows[0].resets_at, "2026-09-26T00:00:00Z");
+        assert!(parsed.windows.iter().all(|w| w.label != "Grok Build"));
+    }
+
+    #[test]
+    fn grok_subscription_tier_camel_case_is_plan() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":22.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-26T00:00:00Z"}},"subscriptionTier":"SuperGrok"}}"#;
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("camel tier");
+        assert_eq!(parsed.plan, "SuperGrok");
+        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+    }
+
+    #[test]
+    fn grok_fraction_credit_stays_a_fraction() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":0.22,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-26T00:00:00Z"}},"subscription_tier":"SuperGrok"}}"#;
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("fraction");
+        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+    }
+
+    #[test]
+    fn grok_build_window_when_product_usage_present() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":22.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-26T00:00:00Z"},"productUsage":{"GrokBuild":{"usagePercent":4.0}}},"subscription_tier":"SuperGrok"}}"#;
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("build");
+        assert_eq!(parsed.windows.len(), 2);
+        assert_eq!(parsed.windows[0].label, "Weekly");
+        let build = parsed
+            .windows
+            .iter()
+            .find(|w| w.label == "Grok Build")
+            .expect("grok build");
+        assert!((build.used - 0.04).abs() < 1e-9);
+        assert_eq!(build.resets_at, "2026-09-26T00:00:00Z");
+    }
+
+    #[test]
+    fn grok_missing_percent_is_no_usage_window() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-19T00:00:00Z","end":"2026-09-26T00:00:00Z"},"productUsage":{"GrokBuild":{"usagePercent":4.0}}},"subscription_tier":"SuperGrok"}}"#;
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("no percent");
+        assert!(parsed.windows.is_empty());
+        assert_eq!(parsed.plan, "SuperGrok");
+        let got = probe_grok(
+            GrokOutcome::Ready {
+                plan: parsed.plan,
+                windows: parsed.windows,
+            },
+            None,
+            Utc::now(),
+        );
+        assert_eq!(got.status, STATUS_NO_WINDOW);
+        assert!(got.windows.is_empty());
+    }
+
+    #[test]
+    fn grok_auth_error_is_not_signed_in() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"error":{"code":401,"message":"unauthorized"}}"#;
+        let err = parse_grok_billing(&grok_value(raw)).expect_err("auth");
+        assert!(matches!(err, GrokFail::NotSignedIn));
+        let missing = map_grok_spawn_err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file",
+        ));
+        assert!(matches!(missing, GrokFail::NotSignedIn));
+        let now = Utc::now();
+        let got = probe_grok(GrokOutcome::NotSignedIn, None, now);
+        assert_eq!(got.status, STATUS_NOT_SIGNED_IN);
+        assert!(got.windows.is_empty());
+        assert_eq!(got.harness, HARNESS_GROK);
+    }
+
+    #[test]
+    fn grok_not_signed_in_leaves_claude_and_codex_rows() {
+        with_isolated(|| {
+            let io = ScriptIo {
+                login: token_login(Some(future_expiry_secs())),
+                body: Mutex::new(Ok(usage_body())),
+                gets: AtomicUsize::new(0),
+                codex: Mutex::new(CodexOutcome::Ready {
+                    plan: "plus".into(),
+                    windows: vec![UsageWindow {
+                        label: "Weekly".into(),
+                        used: 0.18,
+                        resets_at: "2026-10-03T00:00:00Z".into(),
+                    }],
+                }),
+                grok: Mutex::new(GrokOutcome::NotSignedIn),
+            };
+            let doc = probe_and_write(&io).expect("probe");
+            let claude = doc
+                .harnesses
+                .iter()
+                .find(|h| h.harness == HARNESS_CLAUDE)
+                .expect("claude");
+            assert_eq!(claude.status, "");
+            assert!(claude.windows.iter().any(|w| w.label == "Weekly"));
+            let codex = doc
+                .harnesses
+                .iter()
+                .find(|h| h.harness == HARNESS_CODEX)
+                .expect("codex");
+            assert_eq!(codex.plan, "plus");
+            assert_eq!(codex.status, "");
+            assert!((codex.windows[0].used - 0.18).abs() < 1e-9);
+            let grok = doc
+                .harnesses
+                .iter()
+                .find(|h| h.harness == HARNESS_GROK)
+                .expect("grok");
+            assert_eq!(grok.status, STATUS_NOT_SIGNED_IN);
+            assert!(grok.windows.is_empty());
+        });
+    }
+
+    #[test]
+    fn grok_argv_is_agent_stdio_without_reauth() {
+        let cmd = grok_command("grok");
+        assert_eq!(cmd.get_program().to_string_lossy(), "grok");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "agent".to_string(),
+                "stdio".to_string(),
+                "--no-leader".to_string()
+            ]
+        );
+        assert!(!args
+            .iter()
+            .any(|a| { a == "--reauth" || a.contains("auth.json") || a == "usage" }));
+        let head = include_str!("subscription_usage.rs")
+            .split("mod tests")
+            .next()
+            .expect("module head");
+        assert!(head.contains("process_group(0)"));
+        assert!(head.contains("killpg"));
+        assert!(!head.contains("cli-chat-proxy.grok.com"));
+    }
+
+    #[test]
+    fn grok_exchange_initializes_then_billing_and_closes_stdin() {
+        let fixture = grok_value(GROK_FIXTURE);
+        let billing = fixture.get("result").cloned().expect("result");
+        let mut io = MemGrok {
+            lines: Vec::new(),
+            closed_after: None,
+            billing,
+        };
+        let parsed = grok_exchange(&mut io).expect("exchange");
+        assert_eq!(parsed.plan, "SuperGrok");
+        assert_eq!(parsed.windows.len(), 1);
+        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+        assert_eq!(parsed.windows[0].resets_at, "2026-09-26T00:00:00Z");
+        let joined = io.lines.join("\n");
+        assert!(joined.contains("\"method\":\"initialize\""));
+        assert!(joined.contains("\"method\":\"_x.ai/billing\""));
+        let init_at = joined.find("\"method\":\"initialize\"").expect("init");
+        let bill_at = joined
+            .find("\"method\":\"_x.ai/billing\"")
+            .expect("billing");
+        assert!(init_at < bill_at);
+        assert_eq!(io.closed_after, Some(2));
+        assert!(!joined.contains("\"method\":\"initialized\""));
+        assert!(!joined.contains("--reauth"));
+        assert!(!joined.contains("auth.json"));
+        assert!(!joined.contains("cli-chat-proxy"));
     }
 }

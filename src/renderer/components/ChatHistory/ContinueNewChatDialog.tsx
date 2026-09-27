@@ -172,8 +172,13 @@ export function ContinueNewChatDialog({
         <div style={{ fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
           {source.displayName}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 14 }}>
-          From {sourceLabel}
+        <div
+          data-continue-source=""
+          className="flex items-center gap-1.5"
+          style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 14 }}
+        >
+          <AgentIcon agent={PROVIDER_CONFIG[source.provider] ? source.provider : sourceLabel} size={14} />
+          <span>{sourceLabel}</span>
         </div>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>Harness</div>

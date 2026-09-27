@@ -433,4 +433,6 @@ check-cfg = [
     "cfg(linux)",
     "cfg(gtk)",
     "cfg(macos_12_unavailable)",
+    # webkit2gtk 2.0.2 stops at v2_40, so this stays off and the <2.42 fallback compiles.
+    "cfg(feature, values(\"v2_42\"))",
 ]

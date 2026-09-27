@@ -1240,10 +1240,11 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                           if (!items || items.length === 0) return null
                           return (
                             <div key={group} className="mb-0.5">
-                              <div className="px-3 py-1 border-b border-white/[0.04]">
+                              <div className="px-3 pt-1">
                                 <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">
                                   {group}
                                 </span>
+                                <div className="mt-1 h-px bg-white/[0.04]" />
                               </div>
                               {items.map(renderSessionRow)}
                             </div>

@@ -1153,11 +1153,10 @@ interface TabsState {
   moveTabToGroup: (fromGroup: number, toGroup: number, tabId: string) => void
   getGroupTabs: (groupIndex: number) => { tabs: Tab[], activeTabId: string | null }
 
-  // Navigation history (back/forward)
+  // Navigation history (back/forward) — tab strip, not the browser page.
+  // ⌘[ / ⌘] in App.tsx call goBack / goForward. Page history is browser_*.
   navHistory: string[]     // stack of tabIds
   navIndex: number         // current position (-1 = no history)
-  canGoBack: () => boolean
-  canGoForward: () => boolean
   goBack: () => void
   goForward: () => void
 
@@ -1933,11 +1932,6 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   navHistory: [],
   navIndex: -1,
 
-  canGoBack: () => get().navIndex > 0,
-  canGoForward: () => {
-    const s = get()
-    return s.navIndex < s.navHistory.length - 1
-  },
   goBack: () => {
     const s = get()
     if (s.navIndex <= 0) return

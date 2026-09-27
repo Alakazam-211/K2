@@ -3,7 +3,6 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
-import { useTabsStore } from '@/stores/tabs'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import TimerButton from '@/components/Timer/TimerButton'
@@ -144,8 +143,6 @@ export default function TopBar({
         </button>
         {/* Running Agents */}
         <RunningAgentsTopBarButton />
-        {/* Back / Forward navigation */}
-        <NavButtons />
       </div>
 
       {/* Center: workspace + worktree name */}
@@ -312,43 +309,3 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
 // FeedbackTopBarButton (v0.40.26) was absorbed into the §6.0 page
 // switcher — see PageTabs.tsx (the Feedback tab keeps its waiting-count
 // badge and the event-wiring effect verbatim).
-
-function NavButtons(): React.JSX.Element {
-  const canBack = useTabsStore((s) => s.canGoBack())
-  const canForward = useTabsStore((s) => s.canGoForward())
-
-  return (
-    <div className="flex items-center gap-0.5">
-      <button
-        onClick={() => useTabsStore.getState().goBack()}
-        disabled={!canBack}
-        className={`flex h-5 w-5 items-center justify-center transition-colors no-drag ${
-          canBack
-            ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
-            : 'text-[var(--color-text-muted)] opacity-30'
-        }`}
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        title="Go Back (⌘[)"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="6 2 3 5 6 8" />
-        </svg>
-      </button>
-      <button
-        onClick={() => useTabsStore.getState().goForward()}
-        disabled={!canForward}
-        className={`flex h-5 w-5 items-center justify-center transition-colors no-drag ${
-          canForward
-            ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
-            : 'text-[var(--color-text-muted)] opacity-30'
-        }`}
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        title="Go Forward (⌘])"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="4 2 7 5 4 8" />
-        </svg>
-      </button>
-    </div>
-  )
-}

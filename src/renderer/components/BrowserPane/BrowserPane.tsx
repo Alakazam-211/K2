@@ -40,9 +40,10 @@ export { normalizeUrl }
  *    restored background layout doesn't load pages invisibly) and
  *    `browser_close`d on unmount (item/tab close).
  *
- * Chrome is deliberately minimal: address field (Enter → navigate),
- * reload, devtools (dev builds). No back/forward — the Rust command
- * surface has no history API.
+ * Chrome: back and forward for this webview's page history (left of the
+ * address field), the address field (Enter → navigate), reload, and
+ * devtools (dev builds). Arrows call `browser_back` / `browser_forward`.
+ * They do not walk the tab strip. ⌘[ / ⌘] stay on the window.
  */
 
 interface BrowserPaneProps {
@@ -127,6 +128,10 @@ export function BrowserPane({
   /** Feature-off stub build / hosted web → render the graceful-degradation message. */
   const [unavailable, setUnavailable] = useState(!webFeatures.browserPane)
   const [error, setError] = useState<string | null>(null)
+  // Page history. A new tab, a missing view, the stub, and hosted web
+  // start disabled. Failures here must not use the red error strip.
+  const [canBack, setCanBack] = useState(false)
+  const [canForward, setCanForward] = useState(false)
 
   // Address bar. Mirrors the polled current URL unless focused (don't
   // clobber the user's in-progress edit).
@@ -247,6 +252,40 @@ export function BrowserPane({
     }
   }, [scheduleBoundsPush])
 
+  const refreshHistory = useCallback(async (): Promise<void> => {
+    if (!webFeatures.browserPane || unavailable || !createdRef.current) {
+      setCanBack(false)
+      setCanForward(false)
+      return
+    }
+    try {
+      const state = await invoke<{ canBack: boolean; canForward: boolean }>(
+        'browser_history_state',
+        { itemId, parentWindow },
+      )
+      setCanBack(Boolean(state?.canBack))
+      setCanForward(Boolean(state?.canForward))
+    } catch {
+      // Stub ("not enabled") and a dead child. Not the red strip.
+      setCanBack(false)
+      setCanForward(false)
+    }
+  }, [itemId, parentWindow, unavailable])
+
+  const readCurrentUrl = useCallback(async (): Promise<void> => {
+    try {
+      const current = await invoke<string>('browser_current_url', { itemId, parentWindow })
+      if (!current) return
+      lastKnownUrlRef.current = current
+      if (!addressFocusedRef.current) setAddress(current)
+      if (!standalone) {
+        setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+      }
+    } catch {
+      // View gone (close race). The address poll owns recovery.
+    }
+  }, [itemId, parentWindow, standalone, setBrowserItemState, tabId, paneGroupId])
+
   const navigateView = useCallback(async (targetUrl: string): Promise<void> => {
     const remoteErr = refuseLoopbackOnRemote(targetUrl)
     if (remoteErr) {
@@ -257,10 +296,11 @@ export function BrowserPane({
     try {
       await invoke('browser_navigate', { itemId, url: targetUrl, parentWindow })
       lastKnownUrlRef.current = targetUrl
+      await refreshHistory()
     } catch (e) {
       setError(String(e))
     }
-  }, [itemId, parentWindow])
+  }, [itemId, parentWindow, refreshHistory])
 
   // ── Visibility bridge + lazy creation ───────────────────────────────
   useEffect(() => {
@@ -307,27 +347,31 @@ export function BrowserPane({
   }, [itemId, parentWindow])
 
   // ── Address-bar sync: poll current URL only while visible ──────────
+  // Same 1500ms tick re-reads page history. In-page link clicks never
+  // touch the address store until this poll.
   useEffect(() => {
     if (!visible || !created) return
     const timer = setInterval(() => {
       void (async () => {
         try {
           const current = await invoke<string>('browser_current_url', { itemId, parentWindow })
-          if (!current || current === lastKnownUrlRef.current) return
-          lastKnownUrlRef.current = current
-          if (!addressFocusedRef.current) setAddress(current)
-          // Stamp the store so serialize captures in-page navigation.
-          // Standalone embeds (Settings OAuth) are not tab items.
-          if (!standalone) {
-            setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+          if (current && current !== lastKnownUrlRef.current) {
+            lastKnownUrlRef.current = current
+            if (!addressFocusedRef.current) setAddress(current)
+            // Stamp the store so serialize captures in-page navigation.
+            // Standalone embeds (Settings OAuth) are not tab items.
+            if (!standalone) {
+              setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+            }
           }
         } catch {
           // View gone (close race) — the interval is cleared by unmount.
         }
+        await refreshHistory()
       })()
     }, 1500)
     return () => clearInterval(timer)
-  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState, standalone, parentWindow])
+  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState, standalone, parentWindow, refreshHistory])
 
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = useCallback(() => {
@@ -365,9 +409,32 @@ export function BrowserPane({
     }
   }, [address, navigateView, createView])
 
+  const stepHistory = useCallback((command: 'browser_back' | 'browser_forward') => {
+    if (!webFeatures.browserPane || unavailable || !createdRef.current) return
+    void (async () => {
+      try {
+        await invoke(command, { itemId, parentWindow })
+      } catch {
+        // No view / stub. Do not setError — that strip is for navigate.
+        setCanBack(false)
+        setCanForward(false)
+        return
+      }
+      await readCurrentUrl()
+      await refreshHistory()
+    })()
+  }, [itemId, parentWindow, unavailable, readCurrentUrl, refreshHistory])
+
   // ── Render ──────────────────────────────────────────────────────────
   const chromeButtonClass =
     'px-1.5 py-0.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex-shrink-0'
+  const historyReady = webFeatures.browserPane && !unavailable && created
+  const historyButtonClass = (enabled: boolean): string =>
+    `flex h-5 w-5 items-center justify-center flex-shrink-0 ${
+      enabled
+        ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+        : 'text-[var(--color-text-muted)] opacity-30'
+    }`
 
   // Placeholder only renders when no native view covers the dock area;
   // once created, the child webview floats over the DOM, so errors that
@@ -385,6 +452,32 @@ export function BrowserPane({
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          <button
+            type="button"
+            className={historyButtonClass(historyReady && canBack)}
+            disabled={!historyReady || !canBack}
+            onClick={() => stepHistory('browser_back')}
+            title="Back"
+            aria-label="Back"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 2 3 5 6 8" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={historyButtonClass(historyReady && canForward)}
+            disabled={!historyReady || !canForward}
+            onClick={() => stepHistory('browser_forward')}
+            title="Forward"
+            aria-label="Forward"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 2 7 5 4 8" />
+            </svg>
+          </button>
+        </div>
         <input
           type="text"
           value={address}

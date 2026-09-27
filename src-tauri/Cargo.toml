@@ -139,6 +139,24 @@ signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 cocoa = "0.26"
+# WKWebView history via tauri::Webview::with_webview. Same crate wry already
+# pins; WKNavigation is what exposes goBack / goForward on WKWebView.
+objc2-web-kit = { version = "0.3.0", default-features = false, features = [
+    "std",
+    "objc2-app-kit",
+    "WKWebView",
+    "WKNavigation",
+] }
+
+# Linux page history is webkit2gtk::WebView on the child tauri already
+# stores. Same pin as vendored wry so this is not a second webkit.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+# Windows page history is the controller's ICoreWebView2, not a new webview.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
 
 [features]
 default = ["browser-pane"]

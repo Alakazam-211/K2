@@ -20,6 +20,15 @@
 
 #![allow(clippy::module_inception)]
 
+/// Page history for one browser child. Wire shape is `{ canBack, canForward }`.
+/// No map entry is both flags false — not an error, and not the red strip.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserHistoryState {
+    pub can_back: bool,
+    pub can_forward: bool,
+}
+
 #[cfg(feature = "browser-pane")]
 mod real {
     use std::collections::HashMap;
@@ -406,6 +415,211 @@ mod real {
         let _ = view;
         Ok(())
     }
+
+    #[derive(Clone, Copy)]
+    enum HistoryStep {
+        Back,
+        Forward,
+    }
+
+    fn browser_view(app: &AppHandle, item_id: &str, parent_window: Option<&str>) -> Option<Webview> {
+        let parent = resolve_parent(parent_window);
+        let key = registry_key(parent, item_id);
+        views(app).0.lock().unwrap().get(&key).cloned()
+    }
+
+    /// `with_webview` posts to the main thread and returns before the
+    /// closure runs. Bound the wait so a dead child cannot hang the command.
+    async fn with_platform_webview<T: Send + 'static>(
+        view: &Webview,
+        f: impl FnOnce(tauri::webview::PlatformWebview) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        view.with_webview(move |webview| {
+            let _ = tx.send(f(webview));
+        })
+        .map_err(|e| e.to_string())?;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("browser view closed before history".into()),
+            Err(_) => Err("browser history timed out".into()),
+        }
+    }
+
+    fn history_on_platform(
+        webview: tauri::webview::PlatformWebview,
+        step: Option<HistoryStep>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        #[cfg(target_os = "macos")]
+        let result = macos_history(webview, step);
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ))]
+        let result = gtk_history(webview, step);
+        #[cfg(windows)]
+        let result = windows_history(webview, step);
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )))]
+        let result = {
+            let _ = (webview, step);
+            Ok(super::BrowserHistoryState {
+                can_back: false,
+                can_forward: false,
+            })
+        };
+        result
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_history(
+        webview: tauri::webview::PlatformWebview,
+        step: Option<HistoryStep>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        // PlatformWebview::inner() is the WKWebView tauri already owns.
+        // Do not add wry::WebView::go_back — that method is not on the child.
+        unsafe {
+            let view: &objc2_web_kit::WKWebView = &*webview.inner().cast();
+            match step {
+                Some(HistoryStep::Back) => {
+                    let _ = view.goBack();
+                }
+                Some(HistoryStep::Forward) => {
+                    let _ = view.goForward();
+                }
+                None => {}
+            }
+            Ok(super::BrowserHistoryState {
+                can_back: view.canGoBack(),
+                can_forward: view.canGoForward(),
+            })
+        }
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    fn gtk_history(
+        webview: tauri::webview::PlatformWebview,
+        step: Option<HistoryStep>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        use webkit2gtk::WebViewExt;
+        let view = webview.inner();
+        match step {
+            Some(HistoryStep::Back) => view.go_back(),
+            Some(HistoryStep::Forward) => view.go_forward(),
+            None => {}
+        }
+        Ok(super::BrowserHistoryState {
+            can_back: view.can_go_back(),
+            can_forward: view.can_go_forward(),
+        })
+    }
+
+    #[cfg(windows)]
+    fn windows_history(
+        webview: tauri::webview::PlatformWebview,
+        step: Option<HistoryStep>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        // History lives on the controller's ICoreWebView2, not a second webview.
+        unsafe {
+            let core = webview
+                .controller()
+                .CoreWebView2()
+                .map_err(|e| e.to_string())?;
+            match step {
+                Some(HistoryStep::Back) => {
+                    core.GoBack().map_err(|e| e.to_string())?;
+                }
+                Some(HistoryStep::Forward) => {
+                    core.GoForward().map_err(|e| e.to_string())?;
+                }
+                None => {}
+            }
+            let mut can_back = windows_core::BOOL::default();
+            let mut can_forward = windows_core::BOOL::default();
+            core.CanGoBack(&mut can_back).map_err(|e| e.to_string())?;
+            core.CanGoForward(&mut can_forward)
+                .map_err(|e| e.to_string())?;
+            Ok(super::BrowserHistoryState {
+                can_back: can_back.as_bool(),
+                can_forward: can_forward.as_bool(),
+            })
+        }
+    }
+
+    fn disabled_history() -> super::BrowserHistoryState {
+        super::BrowserHistoryState {
+            can_back: false,
+            can_forward: false,
+        }
+    }
+
+    /// Walk this child's back-forward list. No view is `Ok(())` — the
+    /// renderer must not paint that as the red strip.
+    #[tauri::command]
+    pub async fn browser_back(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<(), String> {
+        let Some(view) = browser_view(&app, &item_id, parent_window.as_deref()) else {
+            return Ok(());
+        };
+        with_platform_webview(&view, |webview| {
+            history_on_platform(webview, Some(HistoryStep::Back))
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Walk this child's back-forward list forward. No view is `Ok(())`.
+    #[tauri::command]
+    pub async fn browser_forward(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<(), String> {
+        let Some(view) = browser_view(&app, &item_id, parent_window.as_deref()) else {
+            return Ok(());
+        };
+        with_platform_webview(&view, |webview| {
+            history_on_platform(webview, Some(HistoryStep::Forward))
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// `{ canBack, canForward }` for this child. No map entry is both false,
+    /// not `Err`, so the address chrome does not use the red strip.
+    #[tauri::command]
+    pub async fn browser_history_state(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        let Some(view) = browser_view(&app, &item_id, parent_window.as_deref()) else {
+            return Ok(disabled_history());
+        };
+        match with_platform_webview(&view, |webview| history_on_platform(webview, None)).await {
+            Ok(state) => Ok(state),
+            Err(_) => Ok(disabled_history()),
+        }
+    }
 }
 
 #[cfg(feature = "browser-pane")]
@@ -496,7 +710,49 @@ mod stub {
     ) -> Result<(), String> {
         Err(OFF.into())
     }
+    #[tauri::command]
+    pub async fn browser_back(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<(), String> {
+        Err(OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_forward(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<(), String> {
+        Err(OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_history_state(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<super::BrowserHistoryState, String> {
+        Err(OFF.into())
+    }
 }
 
 #[cfg(not(feature = "browser-pane"))]
 pub use stub::*;
+
+#[cfg(test)]
+mod history_wire {
+    use super::BrowserHistoryState;
+
+    #[test]
+    fn history_state_serializes_camel_case_disabled() {
+        let v = serde_json::to_value(BrowserHistoryState {
+            can_back: false,
+            can_forward: false,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "canBack": false, "canForward": false })
+        );
+    }
+}

@@ -3433,6 +3433,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "objc",
+ "objc2-web-kit",
  "parking_lot",
  "polling",
  "portable-pty",
@@ -3466,6 +3467,9 @@ dependencies = [
  "url",
  "uuid",
  "vte",
+ "webkit2gtk",
+ "webview2-com",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

@@ -16,12 +16,13 @@ export type DesktopChrome = {
 
 /**
  * macOS 27 system lights at inset 0, measured in-process: each button is
- * 14×14, origins at 9 / 32 / 55, so the zoom frame ends at 69 and the gap
- * between lights is 9. The top bar's px-3 (12) sits outside this spacer, so
- * the spacer is 69 − 12. The flex gap after it is the same 9.
+ * 14×14, origins at 9 / 32 / 55, so the zoom frame ends at 69. The top bar's
+ * px-3 (12) sits outside this spacer, so the spacer is 69 − 12. The flex gap
+ * after the zoom light, and between the logo, server switcher, and page tabs,
+ * is 14 (the 9px light gap plus the 5px Rosson asked to add).
  */
 export const TRAFFIC_LIGHT_CLUSTER_RIGHT_PX = 69
-export const TRAFFIC_LIGHT_CLUSTER_GAP_PX = 9
+export const TRAFFIC_LIGHT_CLUSTER_GAP_PX = 14
 const TOP_BAR_PAD_X_PX = 12
 
 /** Reserved width for macOS traffic lights when the spacer is active. */

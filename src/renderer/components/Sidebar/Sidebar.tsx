@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
-import { useAssistantStore } from '@/stores/assistant'
+import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { useToastStore } from '@/stores/toast'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -1058,7 +1058,7 @@ export default function Sidebar(): React.JSX.Element {
         </div>
       )}
 
-      {/* Add Workspace + Assistant buttons */}
+      {/* Add Workspace + collapse the nav */}
       <div className="p-3 border-t border-[var(--color-border)] flex gap-2">
         <button
           className={`no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors ${
@@ -1080,16 +1080,7 @@ export default function Sidebar(): React.JSX.Element {
           </svg>
           Add Workspace
         </button>
-        <button
-          className="no-drag flex items-center gap-1.5 px-2.5 py-2 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors"
-          onClick={() => useAssistantStore.getState().toggle()}
-          title="Toggle Assistant (⇧⌘L)"
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="4 17 10 11 4 5" />
-            <line x1="12" y1="19" x2="20" y2="19" />
-          </svg>
-        </button>
+        <SidebarCollapseButton />
       </div>
 
       {/* Worktree creation dialog */}

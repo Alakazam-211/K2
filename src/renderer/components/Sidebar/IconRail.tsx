@@ -20,6 +20,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { EMPTY_NAV_TAGS, navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import ProjectAvatar from './ProjectAvatar'
+import { SidebarCollapseButton } from './SidebarCollapseButton'
 
 const RAIL_WIDTH = 48
 
@@ -350,16 +351,19 @@ export default function IconRail(): React.JSX.Element {
         </div>
       )}
 
-      {/* Add workspace button */}
-      <button
-        className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mt-1"
-        onClick={handleAddProject}
-        title="Add Workspace"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-        </svg>
-      </button>
+      {/* Add workspace, then open the full nav. The rail is one icon wide. */}
+      <div className="flex flex-col items-center mt-1 flex-shrink-0">
+        <button
+          className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
+          onClick={handleAddProject}
+          title="Add Workspace"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+        <SidebarCollapseButton />
+      </div>
     </div>
   )
 }

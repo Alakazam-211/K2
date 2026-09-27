@@ -27,10 +27,8 @@ interface TopBarProps {
   projectName?: string
   projectPath?: string
   workspaceName?: string
-  primarySidebarVisible?: boolean
   leftPanelVisible?: boolean
   rightPanelVisible?: boolean
-  onTogglePrimarySidebar?: () => void
   onToggleLeftPanel?: () => void
   onToggleRightPanel?: () => void
   onRunCommand?: (command: string) => void
@@ -40,10 +38,8 @@ export default function TopBar({
   projectName,
   projectPath,
   workspaceName,
-  primarySidebarVisible = true,
   leftPanelVisible = false,
   rightPanelVisible = false,
-  onTogglePrimarySidebar,
   onToggleLeftPanel,
   onToggleRightPanel,
   onRunCommand
@@ -120,39 +116,6 @@ export default function TopBar({
         <ServerSwitcher />
         {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
         <PageTabs />
-        {/* Primary sidebar toggle */}
-        <button
-          onClick={onTogglePrimarySidebar}
-          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-          style={{
-            // @ts-expect-error -- Electron-specific CSS property
-            WebkitAppRegion: 'no-drag'
-          }}
-          title="Toggle workspaces sidebar"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            {primarySidebarVisible ? (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="5" y1="2" x2="5" y2="12" />
-              </>
-            ) : (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="5" y1="2" x2="5" y2="12" strokeDasharray="1.5 1.5" />
-              </>
-            )}
-          </svg>
-        </button>
         {/* Running Agents */}
         <RunningAgentsTopBarButton />
       </div>
@@ -212,6 +175,7 @@ export default function TopBar({
           <TimerButton />
 
           <K2NounsCheatSheet />
+          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
 
           {/* Per-window viewer/claimer mode toggle */}
           <ModeToggle />

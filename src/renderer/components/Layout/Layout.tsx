@@ -30,7 +30,6 @@ export default function Layout({
 }: LayoutProps): React.JSX.Element {
   const sidebarWidth = useSidebarStore((s) => s.width)
   const isCollapsed = useSidebarStore((s) => s.isCollapsed)
-  const toggleSidebar = useSidebarStore((s) => s.toggle)
 
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)
   const rightPanelOpen = usePanelsStore((s) => s.rightPanelOpen)
@@ -44,10 +43,8 @@ export default function Layout({
       <TopBar
         projectName={projectName}
         workspaceName={workspaceName}
-        primarySidebarVisible={!isCollapsed}
         leftPanelVisible={leftPanelOpen}
         rightPanelVisible={rightPanelOpen}
-        onTogglePrimarySidebar={toggleSidebar}
         onToggleLeftPanel={toggleLeftPanel}
         onToggleRightPanel={toggleRightPanel}
       />

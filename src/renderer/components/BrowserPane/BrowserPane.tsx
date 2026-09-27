@@ -475,7 +475,7 @@ export function BrowserPane({
   return (
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 flex-shrink-0">
+      <div className={`flex h-9 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] pl-3 flex-shrink-0 ${import.meta.env.DEV ? '' : 'pr-3'}`}>
         <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           type="button"
@@ -532,7 +532,6 @@ export function BrowserPane({
           }}
           className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text)] font-mono outline-none focus:border-[var(--color-text-muted)]"
         />
-        <div className="flex items-center gap-1 flex-shrink-0">
         <button
           type="button"
           onClick={handleReload}
@@ -560,7 +559,7 @@ export function BrowserPane({
         </button>
         {import.meta.env.DEV && (
           <button
-            className="inline-flex items-center justify-center h-6 w-6 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text)] flex-shrink-0"
+            className="flex h-full w-9 flex-shrink-0 items-center justify-center self-stretch text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text)]"
             onClick={() =>
               void invoke('browser_devtools', { itemId, parentWindow }).catch(() => {})
             }
@@ -573,7 +572,6 @@ export function BrowserPane({
             </svg>
           </button>
         )}
-        </div>
       </div>
 
       {/* Mid-session errors (bad scheme, navigate failure): the native

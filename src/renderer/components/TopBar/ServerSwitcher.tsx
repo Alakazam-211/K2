@@ -137,6 +137,39 @@ function StatusDot({ status }: { status: ConnectionStatus }): React.JSX.Element 
   )
 }
 
+// One document mousedown for every mounted switcher. A display:none copy
+// (Settings shell, Wiki, Feedback, Projects after everOpened) stays in the
+// tree; any [data-server-switcher] root counts as inside so that copy cannot
+// close the menu before the visible row's click. A target outside all of
+// them still closes.
+const SERVER_SWITCHER_ROOT = '[data-server-switcher]'
+let outsideClickUsers = 0
+
+function targetInsideServerSwitcher(target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false
+  const el = target instanceof Element ? target : target.parentElement
+  return el?.closest(SERVER_SWITCHER_ROOT) != null
+}
+
+function onServerSwitcherOutsideMouseDown(e: MouseEvent): void {
+  if (document.querySelector(SERVER_SWITCHER_ROOT) == null) return
+  if (targetInsideServerSwitcher(e.target)) return
+  useServerSwitcherStore.getState().setOpen(false)
+}
+
+function retainServerSwitcherOutsideClick(): () => void {
+  if (outsideClickUsers === 0) {
+    document.addEventListener('mousedown', onServerSwitcherOutsideMouseDown)
+  }
+  outsideClickUsers += 1
+  return () => {
+    outsideClickUsers -= 1
+    if (outsideClickUsers === 0) {
+      document.removeEventListener('mousedown', onServerSwitcherOutsideMouseDown)
+    }
+  }
+}
+
 export default function ServerSwitcher(): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
@@ -151,27 +184,22 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   const [query, setQuery] = useState('')
   const [highlighted, setHighlighted] = useState(0)
-  const rootRef = useRef<HTMLDivElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  // Close the dropdown on outside click / Escape.
+  // Close on Escape per copy (idempotent). Outside click is one shared
+  // listener — see retainServerSwitcherOutsideClick.
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
+    const releaseOutsideClick = retainServerSwitcherOutsideClick()
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onDown)
+      releaseOutsideClick()
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
@@ -348,7 +376,7 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   return (
     <div
-      ref={rootRef}
+      data-server-switcher=""
       className="relative no-drag"
       style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >

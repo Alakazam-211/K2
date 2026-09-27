@@ -19,6 +19,7 @@ import { showContextMenu } from '@/lib/context-menu'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Surface } from '@/components/ui'
+import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
 import { useToastStore } from '@/stores/toast'
 
@@ -845,9 +846,33 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     </svg>
                   )
                 } else if (cliAgent) {
+                  // Any shell command, including one AgentIcon does not
+                  // know, owns this slot and blocks the file and browser glyphs.
                   icon = <AgentIcon agent={cliAgent} size={12} />
+                } else {
+                  // First file-viewer path in pane-group order. Basename
+                  // only — open and copy keep filePath. Not the tab title.
+                  const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
+                  let fileName: string | null = null
+                  for (const item of items) {
+                    if (item.type !== 'file-viewer') continue
+                    const filePath = (item.data as { filePath?: string }).filePath
+                    if (!filePath) continue
+                    fileName = filePath.split(/[/\\]/).pop() || filePath
+                    break
+                  }
+                  if (fileName) {
+                    icon = <SetiFileIcon name={fileName} size={12} />
+                  } else if (items.some((item) => item.type === 'browser')) {
+                    // Same mute as the worktree glyph. Not a Seti name, not the URL.
+                    icon = (
+                      <svg className="w-3 h-3 text-[var(--color-text-muted)] opacity-70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="8" cy="8" r="6.5" />
+                        <path d="M1.5 8h13M8 1.5c1.8 1.7 2.8 4 2.8 6.5S9.8 13.3 8 14.5C6.2 12.8 5.2 10.5 5.2 8S6.2 3.2 8 1.5z" />
+                      </svg>
+                    )
+                  }
                 }
-
 
                 if (icon) {
                   return (

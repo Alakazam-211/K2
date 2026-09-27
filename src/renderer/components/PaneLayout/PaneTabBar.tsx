@@ -7,6 +7,7 @@ import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
 import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
 import PinDimensionsModal from './PinDimensionsModal'
 import { Surface } from '@/components/ui'
+import { SetiFileIcon } from '@/lib/seti-file-icons'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -70,6 +71,26 @@ function getTabLabel(item: Item): string {
     }
   }
   return 'Unknown'
+}
+
+/** Leading glyph for a split pane row. Terminal and agent stay text —
+ *  the top strip already has the model or robot mark. */
+function paneItemIcon(item: Item): React.JSX.Element | null {
+  if (item.type === 'file-viewer') {
+    const filePath = (item.data as FileViewerItemData).filePath
+    if (!filePath) return null
+    const name = filePath.split(/[/\\]/).pop() || filePath
+    return <SetiFileIcon name={name} size={12} />
+  }
+  if (item.type === 'browser') {
+    return (
+      <svg className="w-3 h-3 text-[var(--color-text-muted)] opacity-70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="8" cy="8" r="6.5" />
+        <path d="M1.5 8h13M8 1.5c1.8 1.7 2.8 4 2.8 6.5S9.8 13.3 8 14.5C6.2 12.8 5.2 10.5 5.2 8S6.2 3.2 8 1.5z" />
+      </svg>
+    )
+  }
+  return null
 }
 
 // ── Props ────────────────────────────────────────────────────────────────
@@ -259,6 +280,7 @@ export function PaneTabBar({
           // Pin-to-size context menu, only on items with a LIVE
           // Kessel session (the store mapping doubles as the gate).
           const pinSessionId = resolvePinSessionId(item, pinSessions, projects)
+          const glyph = paneItemIcon(item)
           return (
             <div
               key={item.id}
@@ -279,6 +301,7 @@ export function PaneTabBar({
               onMouseDown={(e) => handleItemMouseDown(e, item.id)}
               onContextMenu={(e) => void handleItemContextMenu(e, item, pinSessionId)}
             >
+              {glyph && <span className="flex-shrink-0 mr-1.5">{glyph}</span>}
               <span className="truncate" style={{ lineHeight: '24px' }}>
                 {getTabLabel(item)}
               </span>

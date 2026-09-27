@@ -44,10 +44,12 @@ export interface SetiFileIconProps {
   title?: string
   /** Override scheme (tests). Default: live style store resolved scheme. */
   scheme?: SetiScheme
+  /** Box in pixels. Default 16 (Files drawer). Tabs pass 12. */
+  size?: number
 }
 
 /**
- * Colored Seti file-type icon (16px). Folders use a separate folder mark in
+ * Colored Seti file-type icon. Folders use a separate folder mark in
  * FileTree — Seti theme is file-oriented.
  */
 export function SetiFileIcon({
@@ -55,21 +57,23 @@ export function SetiFileIcon({
   className = 'w-4 h-4',
   title,
   scheme: schemeProp,
+  size = 16,
 }: SetiFileIconProps): JSX.Element {
   ensureSetiFont()
   const storeScheme = useStyleStore((s) => s.resolvedScheme)
   const scheme: SetiScheme = schemeProp ?? (storeScheme === 'light' ? 'light' : 'dark')
   const def = resolveSetiIcon(name, scheme)
   const glyph = String.fromCodePoint(def.code)
+  const px = `${size}px`
   return (
     <span
       className={`inline-flex items-center justify-center flex-shrink-0 leading-none select-none ${className}`}
       style={{
         fontFamily: 'k2-seti, sans-serif',
-        fontSize: '16px',
+        fontSize: px,
         color: def.color,
-        width: '1rem',
-        height: '1rem',
+        width: px,
+        height: px,
       }}
       title={title}
       aria-hidden

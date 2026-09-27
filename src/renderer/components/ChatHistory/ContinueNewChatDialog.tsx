@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { Button, DialogFrame, DialogScrim } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { type ComposeStatus } from '@/components/Terminal/terminalCompose'
 
 // Per-provider resume contract. Shared by Chat history and the pinned
@@ -184,7 +185,11 @@ export function ContinueNewChatDialog({
             disabled={inFlight}
             value={target}
             onChange={setTarget}
-            options={Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => ({ value: key, label: cfg.label }))}
+            options={Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => ({
+              value: key,
+              label: cfg.label,
+              leading: <AgentIcon agent={key} size={14} />,
+            }))}
           />
         </div>
         <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 4 }}>Context</div>

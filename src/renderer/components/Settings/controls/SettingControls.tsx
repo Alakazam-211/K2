@@ -89,7 +89,7 @@ export function SettingDropdown({
   ariaLabel,
 }: {
   value: string
-  options: { value: string; label: string; disabled?: boolean }[]
+  options: { value: string; label: string; disabled?: boolean; leading?: React.ReactNode }[]
   onChange: (value: string) => void | Promise<void>
   className?: string
   /**
@@ -174,8 +174,9 @@ export function SettingDropdown({
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'
         } ${fullWidth ? 'w-full justify-between' : ''}`}
       >
-        <span className={`truncate ${selected ? '' : 'text-[var(--color-text-muted)]'}`}>
-          {selected?.label ?? placeholder ?? ''}
+        <span className={`flex min-w-0 items-center gap-2 truncate ${selected ? '' : 'text-[var(--color-text-muted)]'}`}>
+          {selected?.leading}
+          <span className="truncate">{selected?.label ?? placeholder ?? ''}</span>
         </span>
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
@@ -208,6 +209,7 @@ export function SettingDropdown({
                       : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] cursor-pointer'
                 }`}
               >
+                {option.leading}
                 <span className="whitespace-nowrap flex-1">{option.label}</span>
                 {isActive && (
                   <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

@@ -976,7 +976,9 @@ describe('Continue in a new chat — pinned session switcher', () => {
     fireEvent.click(continueRow())
     await screen.findByTestId('continue-new-chat')
     fireEvent.click(screen.getByLabelText('Harness'))
-    const codex = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent === 'Codex')
+    const codex = Array.from(document.querySelectorAll('button')).find((btn) =>
+      btn.closest('[data-testid="continue-new-chat"]') && btn.textContent?.includes('Codex'),
+    )
     expect(codex).toBeTruthy()
     fireEvent.click(codex!)
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))

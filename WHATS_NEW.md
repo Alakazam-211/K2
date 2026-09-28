@@ -8,6 +8,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Top bar.** The K2 icon is the menu on Linux and Windows. Projects, Tickets, Settings, and Wiki use the same logo and the same right-hand cluster as Agents. New Window is Ctrl+Shift+N on Linux and Windows, and still Command+Shift+N on Mac.
 - **Linux window buttons.** GNOME shows close, minimize, and maximize. Other Linux desktops, including Hyprland on Arch, show close only. The squares sit 1px lower in the bar. A divider next to the drawer buttons hides when those buttons are not on the page.
 - **Long run.** After the app had been open for many hours, a missing method name inside a window event quit the process. That event is skipped. The app stays up.
+- **Email Link.** The Primary workspace menu on Connect an inbox stays readable and can be clicked. It no longer opens as a see-through list inside the page.
 - **Mac and Windows.** Mac keeps the system stoplights. Windows keeps minimize, maximize, and close on the right.
 
 ## 0.41.2 — Arch download, and quieter stoplights

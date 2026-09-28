@@ -230,6 +230,7 @@ export function SettingDropdown({
             left: menuBox.left,
             right: menuBox.right,
           }}
+          data-testid="setting-dropdown-menu"
           className="w-max bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto"
         >
           {options.map((option) => {

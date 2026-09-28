@@ -451,11 +451,10 @@ describe('Continue in a new chat', () => {
     expect(trigger.textContent).toContain('Claude')
     fireEvent.click(trigger)
 
-    const menu = trigger.parentElement?.querySelector(':scope > div') ?? null
-    expect(menu).toBeTruthy()
-    expect(menu!.tagName).toBe('DIV')
-    expect(menu!.className).toContain('bg-[var(--color-bg-surface)]')
-    expect(menu!.className).toContain('border-[var(--color-border)]')
+    const menu = await screen.findByTestId('setting-dropdown-menu')
+    expect(menu.tagName).toBe('DIV')
+    expect(menu.className).toContain('bg-[var(--color-bg)]')
+    expect(menu.className).toContain('border-[var(--color-border)]')
     expect(menu!.querySelector('select')).toBeNull()
     expect(menu!.querySelector('option')).toBeNull()
     const choices = Array.from(menu!.querySelectorAll('button'))

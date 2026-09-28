@@ -216,20 +216,20 @@ describe('subscription window math', () => {
 
 describe('UsageButton mounts', () => {
   it('sits left of TimerButton on each of the six bars', () => {
+    const utils = readFileSync(
+      resolve(root, 'src/renderer/components/TopBar/TopBarUtilities.tsx'),
+      'utf8',
+    )
+    const usage = utils.indexOf('<UsageButton />')
+    const timer = utils.indexOf('<TimerButton />')
+    expect(usage).toBeGreaterThanOrEqual(0)
+    expect(timer).toBeGreaterThan(usage)
+    expect(utils.slice(usage, timer).replace(/\s+/g, '')).toBe('<UsageButton/><Pipe/>')
     for (const rel of MOUNTS) {
       const text = readFileSync(resolve(root, rel), 'utf8')
-      const usageCount = text.split('<UsageButton />').length - 1
-      const timerCount = text.split('<TimerButton />').length - 1
-      expect(usageCount, rel).toBe(1)
-      expect(timerCount, rel).toBe(1)
-      const usage = text.indexOf('<UsageButton />')
-      const timer = text.indexOf('<TimerButton />')
-      expect(usage, rel).toBeGreaterThanOrEqual(0)
-      expect(timer, rel).toBeGreaterThan(usage)
-      const between = text.slice(usage, timer).replace(/\s+/g, '')
-      expect(between, rel).toMatch(
-        /^<UsageButton\/>(<divclassName="w-pxh-4bg-\[var\(--color-border\)\]mx-1"\/>)?$/,
-      )
+      expect(text.includes('<TopBarUtilities'), rel).toBe(true)
+      expect(text.includes('<UsageButton />'), rel).toBe(false)
+      expect(text.includes('<TimerButton />'), rel).toBe(false)
     }
   })
 

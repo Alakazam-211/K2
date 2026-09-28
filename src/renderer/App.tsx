@@ -67,6 +67,7 @@ import { useGitInfo } from './hooks/useGit'
 import { useUpdateChecker } from './hooks/useUpdateChecker'
 import { useAppUpdateTrigger } from './hooks/useAppUpdateTrigger'
 import { useWindowSync } from './hooks/useWindowSync'
+import { useNewWindowShortcut } from './hooks/useNewWindowShortcut'
 import { useTimerStore } from './stores/timer'
 import MemoDialog from './components/Timer/MemoDialog'
 import { useCursorMigrationCheck } from './hooks/useCursorMigrationCheck'
@@ -460,6 +461,10 @@ function AppRoot(): React.JSX.Element {
   // register their own listeners (leaked async listen() + unstable effect
   // deps produced N copies of one drop). See external-drop-router.ts.
   useEffect(() => mountExternalDropRouter(), [])
+
+  // New Window. Not inside useTerminalShortcuts — that hook exists
+  // only while TerminalArea is mounted.
+  useNewWindowShortcut()
 
   // Cmd+, settings, Cmd+K command palette, Cmd+L server switcher,
   // Cmd+Shift+L assistant, Cmd+J running agents

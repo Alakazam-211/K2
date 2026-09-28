@@ -9,7 +9,8 @@ import { Surface } from '@/components/ui'
 import ServerSwitcher from './ServerSwitcher'
 import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
-import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
+import K2MarkButton from './K2MarkButton'
+import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 
 export default function GateChrome(): React.JSX.Element {
   return (
@@ -21,8 +22,12 @@ export default function GateChrome(): React.JSX.Element {
       onDoubleClick={titleBarOnDoubleClick}
       style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
     >
-      <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
+      <div
+        className="flex items-center [&>*]:shrink-0"
+        style={{ minWidth: topBarLeftClusterMinWidth(), gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
+      >
         <DesktopChromeLeft />
+        <K2MarkButton />
         <ServerSwitcher />
       </div>
       <DesktopChromeRight />

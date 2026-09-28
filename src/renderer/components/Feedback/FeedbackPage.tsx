@@ -24,12 +24,10 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
-import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
+import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
-import TimerButton from '@/components/Timer/TimerButton'
-import UsageButton from '@/components/Timer/UsageButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
-import ModeToggle from '@/components/Presence/ModeToggle'
+import K2MarkButton from '@/components/TopBar/K2MarkButton'
+import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import { Surface } from '@/components/ui'
 import {
   collectAssignees,
@@ -657,31 +655,25 @@ export default function FeedbackPage(): React.JSX.Element | null {
         onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
-        <div className="flex items-center flex-1" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
+        <div
+          className="flex items-center flex-1 [&>*]:shrink-0"
+          style={{ minWidth: topBarLeftClusterMinWidth(), gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
+        >
           <DesktopChromeLeft />
-          <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
-            K2
-          </span>
+          <K2MarkButton />
           {/* §6.0 — the server dropdown + page switcher stay visible on
               every page; the Feedback tab reads selected here. (Replaces
               the old Back button — Esc still returns to Agents.) */}
           <ServerSwitcher />
-          <div className="no-drag">
-            <PageTabs />
-          </div>
+          <PageTabs />
         </div>
 
         <DesktopChromeRight>
-          <div className="flex items-center gap-2 no-drag">
-            <UsageButton />
-            <TimerButton />
-            <K2NounsCheatSheet />
-            <ModeToggle />
-            <div className="w-px h-4 bg-[var(--color-border)]" />
+          <TopBarUtilities>
             <button
               type="button"
               onClick={close}
-              className="flex items-center justify-center w-7 h-7 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
+              className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
               title="Close (Esc)"
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -689,7 +681,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
                 <line x1="10" y1="2" x2="2" y2="10" />
               </svg>
             </button>
-          </div>
+          </TopBarUtilities>
         </DesktopChromeRight>
       </Surface>
 

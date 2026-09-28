@@ -1,15 +1,13 @@
 import { type ReactNode } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { usePanelsStore } from '../../stores/panels'
-import TimerButton from '@/components/Timer/TimerButton'
-import UsageButton from '@/components/Timer/UsageButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
-import PresenceRoster from '@/components/Presence/PresenceRoster'
-import ModeToggle from '@/components/Presence/ModeToggle'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import K2MarkButton from '@/components/TopBar/K2MarkButton'
+import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
+import { Surface } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 
 interface FocusLayoutProps {
@@ -35,8 +33,10 @@ export default function FocusLayout({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
       {/* Top bar — no primary sidebar toggle, but has left/right panel toggles */}
-      <div
-        className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none"
+      <Surface
+        role2="surface"
+        bordered={false}
+        className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
         style={{
@@ -46,6 +46,7 @@ export default function FocusLayout({
       >
         <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
           <DesktopChromeLeft />
+          <K2MarkButton />
           <ServerSwitcher />
         </div>
 
@@ -74,18 +75,7 @@ export default function FocusLayout({
 
         {/* Right: presence roster + timer + left/right panel toggles + window controls */}
         <DesktopChromeRight>
-          <div className="flex items-center gap-1">
-            <PresenceRoster />
-            <UsageButton />
-            <TimerButton />
-            <K2NounsCheatSheet />
-
-            {/* Per-window viewer/claimer mode toggle */}
-            <ModeToggle />
-
-            {/* Separator between timer and panel toggles */}
-            <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
-
+          <TopBarUtilities>
             <button
               onClick={toggleLeftPanel}
               className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
@@ -135,9 +125,9 @@ export default function FocusLayout({
                 )}
               </svg>
             </button>
-          </div>
+          </TopBarUtilities>
         </DesktopChromeRight>
-      </div>
+      </Surface>
 
       {/* Content area with optional left/right panels */}
       <div className="flex flex-1 overflow-hidden">

@@ -1,5 +1,5 @@
-// Native app menu bar is macOS-only. Win/Linux use the in-app Menu button
-// (see renderer desktop-chrome) + `window_new` / `open_new_window` below.
+// Native app menu bar is macOS-only. Win/Linux open the same actions from
+// the K2 logo. `window_new` / `open_new_window` below.
 // Without these cfg gates, Linux CI (`-D warnings`) fails on dead_code.
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -124,7 +124,10 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
         "Window",
         true,
         &[
-            &MenuItem::with_id(handle, "new-window", "New Window", true, Some("CmdOrCtrl+Shift+N"))?,
+            // No accelerator. useNewWindowShortcut is the only keyboard
+            // owner (Ctrl+Shift+N, and Cmd+Shift+N on macOS). Binding it
+            // here too opened a second window. The item stays clickable.
+            &MenuItem::with_id(handle, "new-window", "New Window", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::minimize(handle, None)?,
             &PredefinedMenuItem::maximize(handle, None)?,

@@ -32,12 +32,10 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
-import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
+import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
-import TimerButton from '@/components/Timer/TimerButton'
-import UsageButton from '@/components/Timer/UsageButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
-import ModeToggle from '@/components/Presence/ModeToggle'
+import K2MarkButton from '@/components/TopBar/K2MarkButton'
+import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
@@ -319,58 +317,51 @@ export default function ProjectsPage(): React.JSX.Element | null {
         onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
-        <div className="flex items-center flex-1" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
+        <div
+          className="flex items-center flex-1 [&>*]:shrink-0"
+          style={{ minWidth: topBarLeftClusterMinWidth(), gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
+        >
           <DesktopChromeLeft />
-          <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
-            K2
-          </span>
+          <K2MarkButton />
           <ServerSwitcher />
-          <div className="no-drag">
-            <PageTabs />
-          </div>
-          {/* §6.7.1 — nav-collapse toggle, the TopBar primary-sidebar
-              idiom (same icon/placement order: … | ⚙ | collapse). */}
-          <button
-            type="button"
-            onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!navCollapsed)}
-            className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Toggle projects nav"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {!navCollapsed ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5" y1="2" x2="5" y2="12" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5" y1="2" x2="5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
-              )}
-            </svg>
-          </button>
+          <PageTabs />
         </div>
 
         {/* Right: the chat-panel toggle (§6.7.3 — the TopBar right-panel
             idiom at the bar's right end); the unread dot rides it while
             the panel is closed. Window controls sit after page affordances. */}
         <DesktopChromeRight>
-          <div className="flex items-center gap-1">
-            <UsageButton />
-            <TimerButton />
-            <K2NounsCheatSheet />
-            <ModeToggle />
-            <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
+          <TopBarUtilities>
+            {/* §6.7.1 — nav-collapse toggle, after the last pipe. */}
+            <button
+              type="button"
+              onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!navCollapsed)}
+              className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+              title="Toggle projects nav"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {!navCollapsed ? (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="5" y1="2" x2="5" y2="12" />
+                  </>
+                ) : (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="5" y1="2" x2="5" y2="12" strokeDasharray="1.5 1.5" />
+                  </>
+                )}
+              </svg>
+            </button>
             <button
               type="button"
               onClick={() => useProjectGroupsStore.getState().setChatCollapsed(!chatCollapsed)}
@@ -407,7 +398,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
                 />
               )}
             </button>
-          </div>
+          </TopBarUtilities>
         </DesktopChromeRight>
       </Surface>
 

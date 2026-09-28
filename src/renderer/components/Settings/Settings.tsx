@@ -9,8 +9,11 @@ import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSe
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
-import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
+import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import K2MarkButton from '@/components/TopBar/K2MarkButton'
+import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
+import { Surface } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
@@ -45,10 +48,6 @@ import { PermissionsSection, PERMISSIONS_MANIFEST } from './sections/Permissions
 import { DictationLabSection, DICTATION_LAB_MANIFEST } from './sections/DictationLabSection'
 import ServerSwitcher from '../TopBar/ServerSwitcher'
 import PageTabs from '../TopBar/PageTabs'
-import TimerButton from '@/components/Timer/TimerButton'
-import UsageButton from '@/components/Timer/UsageButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
-import ModeToggle from '@/components/Presence/ModeToggle'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
@@ -246,31 +245,28 @@ export default function Settings(): React.JSX.Element {
       {/* Top-bar — same left cluster as the other pages so Agents /
           Projects / Tickets stay reachable (settings cog is the
           selected tab). */}
-      <div
-        className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
+      <Surface
+        role2="surface"
+        bordered={false}
+        className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
-        <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>
+        <div
+          className="flex items-center [&>*]:shrink-0"
+          style={{ minWidth: topBarLeftClusterMinWidth(), gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
+        >
           <DesktopChromeLeft />
-          {/* App name (in-app wordmark) */}
-          <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
-            K2
-          </span>
+          <K2MarkButton />
           {/* K2 server switcher (Local / saved servers / add) */}
           <ServerSwitcher />
           <PageTabs />
         </div>
         <DesktopChromeRight>
-          <div className="flex items-center gap-1 no-drag">
-            <UsageButton />
-            <TimerButton />
-            <K2NounsCheatSheet />
-            <ModeToggle />
-          </div>
+          <TopBarUtilities />
         </DesktopChromeRight>
-      </div>
+      </Surface>
 
       <div className="flex flex-1 w-full min-h-0">
       {/* Left nav */}

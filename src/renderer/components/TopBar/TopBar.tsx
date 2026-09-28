@@ -3,23 +3,16 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
-import TimerButton from '@/components/Timer/TimerButton'
-import UsageButton from '@/components/Timer/UsageButton'
-import { openUrl } from '@tauri-apps/plugin-opener'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
-import k2Logo from '../../assets/k2-logo.png'
-import PresenceRoster from '@/components/Presence/PresenceRoster'
-import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
+import K2MarkButton from './K2MarkButton'
+import TopBarUtilities from './TopBarUtilities'
 import { Surface } from '@/components/ui'
 import {
-  APP_MENU_BUTTON_MIN_WIDTH_PX,
-  getDesktopChrome,
+  topBarLeftClusterMinWidth,
   TRAFFIC_LIGHT_CLUSTER_GAP_PX,
-  TRAFFIC_LIGHT_SPACER_BASE_PX,
 } from '@/lib/desktop-chrome'
 
 interface TopBarProps {
@@ -74,12 +67,7 @@ export default function TopBar({
       // No run command configured
     }
   }
-  const chrome = getDesktopChrome()
-  const leftMinWidth = chrome.trafficLightSpacer
-    ? TRAFFIC_LIGHT_SPACER_BASE_PX + 60
-    : chrome.appMenuButton
-      ? APP_MENU_BUTTON_MIN_WIDTH_PX + 60
-      : undefined
+  const leftMinWidth = topBarLeftClusterMinWidth()
 
   return (
     <Surface
@@ -93,24 +81,13 @@ export default function TopBar({
         minHeight: TOPBAR_HEIGHT
       }}
     >
-      {/* Left: chrome spacer/Menu + K2 branding + sidebar toggle. */}
+      {/* Left: spacer or Linux squares, logo, server, page tabs. */}
       <div
         className="flex items-center [&>*]:shrink-0"
         style={{ minWidth: leftMinWidth, gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
       >
         <DesktopChromeLeft />
-        <button
-          type="button"
-          className="no-drag flex h-4 w-4 items-center justify-center p-0 flex-shrink-0"
-          title="K2 dashboard"
-          aria-label="Open the K2 dashboard"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          onClick={() => {
-            void openUrl('https://k2.dev/dashboard')
-          }}
-        >
-          <img src={k2Logo} alt="" className="h-4 w-4" />
-        </button>
+        <K2MarkButton />
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher />
         {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
@@ -138,48 +115,31 @@ export default function TopBar({
 
       {/* Right: run button + panel toggles + window controls */}
       <DesktopChromeRight>
-        <div className="flex items-center gap-1">
-          {/* Run command button — only visible when project has a run command */}
-          {hasRun && (
-            <button
-              onClick={handleRun}
-              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors no-drag"
-              style={{
-                // @ts-expect-error -- Electron-specific CSS property
-                WebkitAppRegion: 'no-drag'
-              }}
-              title="Run workspace command"
-            >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 12 12"
-                fill="currentColor"
-                stroke="none"
+        <TopBarUtilities
+          leading={
+            hasRun ? (
+              <button
+                onClick={handleRun}
+                className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors no-drag"
+                style={{
+                  // @ts-expect-error -- Electron-specific CSS property
+                  WebkitAppRegion: 'no-drag'
+                }}
+                title="Run workspace command"
               >
-                <polygon points="2,0 2,12 11,6" />
-              </svg>
-            </button>
-          )}
-
-          {/* Presence roster — who's connected to this daemon (hidden when
-              alone or when the host predates the presence routes) */}
-          <PresenceRoster />
-
-          {/* Subscription allowance, a pipe, then the stopwatch. */}
-          <UsageButton />
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
-          <TimerButton />
-
-          <K2NounsCheatSheet />
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
-
-          {/* Per-window viewer/claimer mode toggle */}
-          <ModeToggle />
-
-          {/* Separator between timer and panel toggles */}
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
-
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 12 12"
+                  fill="currentColor"
+                  stroke="none"
+                >
+                  <polygon points="2,0 2,12 11,6" />
+                </svg>
+              </button>
+            ) : null
+          }
+        >
           {/* Left panel toggle (opens panel to the left of terminal) */}
           <button
             onClick={onToggleLeftPanel}
@@ -249,7 +209,7 @@ export default function TopBar({
               )}
             </svg>
           </button>
-        </div>
+        </TopBarUtilities>
       </DesktopChromeRight>
     </Surface>
   )

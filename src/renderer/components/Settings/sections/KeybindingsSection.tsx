@@ -11,6 +11,7 @@ import {
 } from '@shared/hotkeys'
 import type { HotkeyDefinition } from '@shared/hotkeys'
 import { KeyCombo } from '@/components/KeySymbol'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 import type { SettingEntry } from '../searchManifest'
 
 /**
@@ -250,7 +251,7 @@ function KeybindingRow({
                 : 'bg-[var(--color-bg-surface)] border-[var(--color-border)] text-[var(--color-text-primary)]'
             } hover:border-[var(--color-text-muted)]`}
           >
-            <KeyCombo combo={formatKeyCombo(combo)} />
+            <KeyCombo combo={formatKeyCombo(combo, isMacPlatform())} />
           </button>
         )}
 

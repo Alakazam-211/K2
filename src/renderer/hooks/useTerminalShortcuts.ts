@@ -152,6 +152,10 @@ export function useTerminalShortcuts(cwd: string): void {
         }
 
         case 'n': {
+          // Shift stays. Cmd+Shift+N is New Window (useNewWindowShortcut),
+          // not a document. Deleting this return makes Cmd+Shift+N call
+          // openUntitledDocument. Ctrl+Shift+N never reaches this switch
+          // (`if (!e.metaKey) return` above).
           if (e.shiftKey || e.altKey) return
           e.preventDefault()
           state.openUntitledDocument(cwd)

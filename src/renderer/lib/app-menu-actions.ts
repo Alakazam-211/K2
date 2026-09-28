@@ -1,5 +1,5 @@
 /**
- * App menu action IDs and handlers for the Win/Linux "Menu" button.
+ * App menu action IDs and handlers for the Win/Linux logo menu.
  * Emits the same events App.tsx listens for (see menu.rs handle_menu_event).
  * No CmdOrCtrl accelerators — webview owns those keybindings.
  */

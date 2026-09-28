@@ -25,5 +25,9 @@ codegen-units = 1
 
 # wry 0.57 still unwraps a nil NSURL (URLWithString / IPC / nav). The
 # path patch skips those instead of aborting the macOS main thread.
+# objc2 0.6.4 expects a null selector (aborts sendEvent). tao 0.37.1 then
+# dereferences the null superclass pointer. Path-patched the same way.
 [patch.crates-io]
 wry = { path = "third_party/wry" }
+objc2 = { path = "third_party/objc2" }
+tao = { path = "third_party/tao" }

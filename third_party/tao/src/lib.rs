@@ -146,6 +146,11 @@
   clippy::non_send_fields_in_send_ty
 )]
 #![deny(rustdoc::broken_intra_doc_links)]
+// Upstream tao 0.37.1 still warns on macOS under `-D warnings`
+// (unused imports, deprecated AppKit symbols, dead fields). The
+// release gate denies warnings for this path patch. Allow those
+// upstream lints. The null-superclass change does not add them.
+#![allow(dead_code, unused_imports, unused_unsafe, deprecated)]
 
 use dpi::PixelUnit;
 #[cfg(feature = "rwh_04")]

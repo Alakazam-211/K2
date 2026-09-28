@@ -35,6 +35,7 @@ pub mod format;
 // `/cli/project-config/*`, and `/cli/whats_new` on k2so-daemon
 // directly.
 pub mod daemon;
+pub mod linux_desktop;
 pub mod permissions;
 pub mod memory_watcher;
 // Phase 2.1c Item 2 — workspace inbox primitive Tauri shims. Thin

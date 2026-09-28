@@ -17,11 +17,13 @@ import {
   LINUX_STOPLIGHT_GAP_PX,
   LINUX_STOPLIGHT_HIT_PX,
   LINUX_STOPLIGHT_INACTIVE_ALPHA,
+  LINUX_STOPLIGHT_NUDGE_Y_PX,
   LINUX_STOPLIGHT_INACTIVE_RGB,
   LINUX_STOPLIGHT_RADIUS_PX,
   LINUX_STOPLIGHT_ROLES,
   LINUX_STOPLIGHT_SQUARE_PX,
   linuxStoplightFill,
+  linuxStoplightRolesForDesktop,
 } from './linux-stoplights'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -142,6 +144,22 @@ describe('left cluster min width', () => {
 })
 
 describe('linux stoplight paint', () => {
+  it('shows close only outside GNOME, and all three on GNOME', () => {
+    expect(linuxStoplightRolesForDesktop('Hyprland')).toEqual(['close'])
+    expect(linuxStoplightRolesForDesktop('')).toEqual(['close'])
+    expect(linuxStoplightRolesForDesktop('KDE')).toEqual(['close'])
+    expect(linuxStoplightRolesForDesktop('GNOME')).toEqual([
+      'close',
+      'minimize',
+      'maximize',
+    ])
+    expect(linuxStoplightRolesForDesktop('ubuntu:GNOME')).toEqual([
+      'close',
+      'minimize',
+      'maximize',
+    ])
+  })
+
   it('orders close, minimize, maximize as small squares', () => {
     expect([...LINUX_STOPLIGHT_ROLES]).toEqual(['close', 'minimize', 'maximize'])
     expect(LINUX_STOPLIGHT_RADIUS_PX).toBe(0)
@@ -185,7 +203,10 @@ describe('linux stoplight paint', () => {
     expect(src).not.toContain('set_traffic_light_inset')
     expect(src).not.toContain('rounded-full')
     expect(src).not.toContain('border-radius: 50%')
-    expect(src).toContain('LINUX_STOPLIGHT_ROLES.map')
+    expect(src).toContain('roles.map')
+    expect(src).toContain('LINUX_STOPLIGHT_NUDGE_Y_PX')
+    expect(LINUX_STOPLIGHT_NUDGE_Y_PX).toBe(1)
+    expect(src).toContain('linux_desktop_session')
     expect(src).toContain('borderRadius: LINUX_STOPLIGHT_RADIUS_PX')
     expect(src).toContain('.minimize()')
     expect(src).toContain('.unmaximize()')

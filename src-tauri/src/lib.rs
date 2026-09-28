@@ -1774,6 +1774,7 @@ pub fn run() {
             commands::traffic_lights::set_traffic_light_inset,
             // Square style — private NSWindow corner radius. Non-mac no-op.
             commands::window_corners::set_window_corner_radius,
+            commands::linux_desktop::linux_desktop_session,
             // Cmd+L — `makeFirstResponder:` BOOL. `set_focus` drops it.
             commands::ui_webview_focus::ui_webview_make_first_responder,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.

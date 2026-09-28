@@ -509,7 +509,7 @@ function OauthConnect({
       </p>
 
       <div className="grid grid-cols-2 gap-3">
-        <label className="flex flex-col gap-0.5 min-w-0">
+        <div className="flex flex-col gap-0.5 min-w-0">
           <span className="text-[10px] text-[var(--color-text-secondary)]">Primary workspace</span>
           <SettingDropdown
             value={project}
@@ -519,7 +519,7 @@ function OauthConnect({
             menuAlign="left"
             className={disabledField || !canMutate ? 'opacity-50 pointer-events-none' : undefined}
           />
-        </label>
+        </div>
         <label className="flex flex-col gap-0.5 min-w-0">
           <span className="text-[10px] text-[var(--color-text-secondary)]">Email address</span>
           <input
@@ -994,11 +994,11 @@ function AddInboxForm({
     node: React.JSX.Element,
     hint?: string,
   ): React.JSX.Element => (
-    <label className="flex flex-col gap-0.5 min-w-0">
+    <div className="flex flex-col gap-0.5 min-w-0">
       <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
       {node}
       {hint && <span className="text-[9px] text-[var(--color-text-muted)]">{hint}</span>}
-    </label>
+    </div>
   )
 
   const inputCls =
@@ -1048,7 +1048,7 @@ function AddInboxForm({
                 options={projects.map((p) => ({ value: p.id, label: p.name }))}
                 onChange={(v) => setProject(v)}
                 menuAlign="left"
-                className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
+                disabled={!canMutate || busy}
               />,
               'The workspace that manages the account and who else can use it.',
             )}

@@ -1,5 +1,6 @@
 import React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export function SettingRow({
   label,
@@ -123,8 +124,15 @@ export function SettingDropdown({
   ariaLabel?: string
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
-  const [openUp, setOpenUp] = useState(false)
+  const [menuBox, setMenuBox] = useState<{
+    top?: number
+    bottom?: number
+    left?: number
+    right?: number
+    minWidth: number
+  } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const match = options.find((o) => o.value === value)
   const selected = match ?? (placeholder !== undefined ? undefined : options[0])
@@ -134,12 +142,47 @@ export function SettingDropdown({
     setIsOpen(false)
   }, [disabled])
 
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuBox(null)
+      return
+    }
+    const place = (): void => {
+      const trigger = containerRef.current
+      if (!trigger) return
+      const rect = trigger.getBoundingClientRect()
+      const up =
+        menuPlacement === 'up'
+          ? true
+          : menuPlacement === 'down'
+            ? false
+            : shouldOpenMenuUp(trigger, options.length)
+      setMenuBox({
+        minWidth: rect.width,
+        ...(up
+          ? { bottom: window.innerHeight - rect.top + 2 }
+          : { top: rect.bottom + 2 }),
+        ...(menuAlign === 'left'
+          ? { left: rect.left }
+          : { right: window.innerWidth - rect.right }),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [isOpen, menuAlign, menuPlacement, options.length])
+
   useEffect(() => {
     if (!isOpen) return
     const handler = (e: MouseEvent): void => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
+      const node = e.target as Node
+      if (containerRef.current?.contains(node)) return
+      if (menuRef.current?.contains(node)) return
+      setIsOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -147,17 +190,6 @@ export function SettingDropdown({
 
   const toggleOpen = (): void => {
     if (disabled) return
-    if (!isOpen) {
-      const up =
-        menuPlacement === 'up'
-          ? true
-          : menuPlacement === 'down'
-            ? false
-            : containerRef.current
-              ? shouldOpenMenuUp(containerRef.current, options.length)
-              : false
-      setOpenUp(up)
-    }
     setIsOpen(!isOpen)
   }
 
@@ -186,8 +218,20 @@ export function SettingDropdown({
         </svg>
       </button>
 
-      {isOpen && (
-        <div className={`absolute ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'} ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 w-max min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
+      {isOpen && menuBox && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: 'fixed',
+            zIndex: 400,
+            minWidth: menuBox.minWidth,
+            top: menuBox.top,
+            bottom: menuBox.bottom,
+            left: menuBox.left,
+            right: menuBox.right,
+          }}
+          className="w-max bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto"
+        >
           {options.map((option) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true
@@ -219,7 +263,8 @@ export function SettingDropdown({
               </button>
             )
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

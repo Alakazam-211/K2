@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useTabsStore } from '@/stores/tabs'
@@ -75,6 +77,9 @@ export function HeartbeatSessionPicker({
     return sessions.find((s) => pinnedIds.includes(s.sessionId))?.sessionId ?? null
   }, [pinnedIds, sessions])
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const [menuBox, setMenuBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
 
   // The closed trigger shows the explicit session's TITLE, which only
   // chat/list knows — so that one case also warrants a mount fetch.
@@ -151,12 +156,37 @@ export function HeartbeatSessionPicker({
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const node = e.target as Node
+      if (rootRef.current?.contains(node)) return
+      if (menuRef.current?.contains(node)) return
+      setOpen(false)
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuBox(null)
+      return
+    }
+    const place = (): void => {
+      const trigger = buttonRef.current
+      if (!trigger) return
+      const rect = trigger.getBoundingClientRect()
+      setMenuBox({
+        top: rect.bottom + 4,
+        left: rect.left,
+        zIndex: menuLayerForTrigger(trigger),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
   }, [open])
 
   const candidates = useMemo(
@@ -183,6 +213,7 @@ export function HeartbeatSessionPicker({
   return (
     <div ref={rootRef} className="relative inline-flex min-w-0">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         title="Where this heartbeat's wakeup is delivered — the workspace's pinned chat, its own session, or a saved session"
@@ -196,10 +227,18 @@ export function HeartbeatSessionPicker({
           <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
         </svg>
       </button>
-      {open && (
+      {open && menuBox && createPortal(
         <div
+          ref={menuRef}
           role="listbox"
-          className="absolute left-0 top-full mt-1 z-20 w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl py-1"
+          data-testid="heartbeat-wakeup-menu"
+          style={{
+            position: 'fixed',
+            top: menuBox.top,
+            left: menuBox.left,
+            zIndex: menuBox.zIndex,
+          }}
+          className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
               entry (accent + pin mark, separated from the rest). */}
@@ -288,7 +327,8 @@ export function HeartbeatSessionPicker({
               )
             })
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

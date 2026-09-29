@@ -1,4 +1,6 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { usePresetsStore } from '@/stores/presets'
 import { showContextMenu } from '@/lib/context-menu'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
@@ -42,6 +44,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
   const reorderFromRef = useRef<number | null>(null)
   const reorderDropRef = useRef<number | null>(null)
   const presetsBarRef = useRef<HTMLDivElement>(null)
+  const addButtonRef = useRef<HTMLButtonElement>(null)
+  const [formBox, setFormBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
 
   const handleReorderMouseDown = useCallback((e: React.MouseEvent, idx: number) => {
     if (e.button !== 0) return
@@ -109,6 +113,30 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
   useEffect(() => {
     if (form.visible) {
       requestAnimationFrame(() => formLabelRef.current?.focus())
+    }
+  }, [form.visible])
+
+  useLayoutEffect(() => {
+    if (!form.visible) {
+      setFormBox(null)
+      return
+    }
+    const place = (): void => {
+      const trigger = addButtonRef.current
+      if (!trigger) return
+      const rect = trigger.getBoundingClientRect()
+      setFormBox({
+        top: rect.bottom,
+        left: rect.left,
+        zIndex: menuLayerForTrigger(trigger),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
     }
   }, [form.visible])
 
@@ -291,6 +319,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
 
       {/* Add button */}
       <button
+        ref={addButtonRef}
         onClick={openNewForm}
         onMouseEnter={(e) => {
           ;(e.currentTarget as HTMLButtonElement).style.color = '#e0e0e0'
@@ -321,20 +350,22 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
         +
       </button>
 
-      {/* Inline form */}
-      {form.visible && (
+      {/* Inline form — portaled so the bar's overflow-y clip cannot hide it. */}
+      {form.visible && formBox && createPortal(
         <div
+          data-testid="presets-bar-form"
           onKeyDown={handleFormKeyDown}
+          className="bg-[var(--color-bg)]"
           style={{
-            position: 'absolute',
-            left: 0,
-            top: '100%',
-            zIndex: 50,
+            position: 'fixed',
+            top: formBox.top,
+            left: formBox.left,
+            zIndex: formBox.zIndex,
             display: 'flex',
             alignItems: 'center',
             gap: '4px',
             borderBottom: '1px solid var(--color-border, #1e1e1e)',
-            backgroundColor: 'var(--color-bg-stripe)',
+            backgroundColor: 'var(--color-bg)',
             padding: '6px 8px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
             fontFamily: 'inherit',
@@ -423,7 +454,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
           >
             Cancel
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

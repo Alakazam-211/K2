@@ -14,7 +14,9 @@
 // the right panel in place — no navigation. Zero selection shows a
 // dashed empty state; the selection survives filters hiding its card.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { useProjectsStore } from '@/stores/projects'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useFeedbackStore } from '@/stores/feedback'
@@ -90,11 +92,41 @@ function CardStatusDropdown({
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [menuBox, setMenuBox] = useState<{ top: number; right: number; zIndex: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuBox(null)
+      return
+    }
+    const place = (): void => {
+      const trigger = buttonRef.current
+      if (!trigger) return
+      const rect = trigger.getBoundingClientRect()
+      setMenuBox({
+        top: rect.bottom + 2,
+        right: window.innerWidth - rect.right,
+        zIndex: menuLayerForTrigger(trigger),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      const node = e.target as Node
+      if (rootRef.current?.contains(node)) return
+      if (menuRef.current?.contains(node)) return
+      setOpen(false)
     }
     // Capture-phase so the first Esc closes THIS popover instead of
     // reaching the page-level handler (clear selection / close page).
@@ -136,6 +168,7 @@ function CardStatusDropdown({
     // must not select/deselect the card underneath.
     <div ref={rootRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
       <button
+        ref={buttonRef}
         type="button"
         disabled={busy}
         onClick={() => setOpen((o) => !o)}
@@ -154,8 +187,18 @@ function CardStatusDropdown({
         </svg>
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[140px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
+      {open && menuBox && createPortal(
+        <div
+          ref={menuRef}
+          data-testid="ticket-status-menu"
+          style={{
+            position: 'fixed',
+            top: menuBox.top,
+            right: menuBox.right,
+            zIndex: menuBox.zIndex,
+          }}
+          className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+        >
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (
             <div
@@ -186,7 +229,8 @@ function CardStatusDropdown({
               </button>
             )
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

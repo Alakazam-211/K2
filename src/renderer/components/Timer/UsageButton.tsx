@@ -86,7 +86,7 @@ export default function UsageButton(): React.JSX.Element {
         <div
           role="menu"
           data-testid="subscription-usage-menu"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 shadow-lg"
+          className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
         >
           {remote && (

@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports } from '@/lib/server-capabilities'
 import type { SettingEntry } from '../searchManifest'
+import { SettingDropdown } from '../controls/SettingControls'
 import {
   AUDIT_TAIL_CHOICES,
   AUDIT_TAIL_DEFAULT,
@@ -205,18 +206,15 @@ export function AccessAuditSection(): React.JSX.Element {
             <div className="flex items-center gap-2">
               <label className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
                 tail
-                <select
-                  aria-label="Audit tail"
-                  value={tail}
-                  onChange={(e) => setTail(Number(e.target.value))}
-                  className="text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-1.5 py-0.5 outline-none cursor-pointer no-drag"
-                >
-                  {AUDIT_TAIL_CHOICES.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
+                <SettingDropdown
+                  ariaLabel="Audit tail"
+                  value={String(tail)}
+                  onChange={(value) => setTail(Number(value))}
+                  options={AUDIT_TAIL_CHOICES.map((n) => ({
+                    value: String(n),
+                    label: String(n),
+                  }))}
+                />
               </label>
               <button
                 type="button"

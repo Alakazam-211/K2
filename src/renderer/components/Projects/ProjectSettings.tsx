@@ -84,6 +84,7 @@ import {
   removeMemberBlockedReason,
 } from './project-settings'
 import { moveDashboardId, orderedDashboards } from './project-tabs'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 
 /** Uniform section header (the ProjectsSection h3 idiom). */
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
@@ -1111,21 +1112,23 @@ function ProjectSettingsDetail({
       {/* ── Point of Contact ── */}
       <div className="space-y-2">
         <SectionTitle>Point of Contact</SectionTitle>
-        <select
+        <SettingDropdown
+          fullWidth
+          ariaLabel="Point of Contact"
           value={detail.pocWorkspaceId ?? ''}
           disabled={readOnly || detail.members.length === 0}
-          onChange={(e) => {
-            if (e.target.value) void setPoc(e.target.value)
+          onChange={(value) => {
+            if (value) void setPoc(value)
           }}
-          className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {detail.members.length === 0 && <option value="">No members yet</option>}
-          {detail.members.map((m) => (
-            <option key={m.workspaceId} value={m.workspaceId}>
-              {m.agentName ?? m.name ?? m.workspaceId.slice(0, 8)}
-            </option>
-          ))}
-        </select>
+          options={
+            detail.members.length === 0
+              ? [{ value: '', label: 'No members yet' }]
+              : detail.members.map((m) => ({
+                  value: m.workspaceId,
+                  label: m.agentName ?? m.name ?? m.workspaceId.slice(0, 8),
+                }))
+          }
+        />
         <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">
           Every project chat message (except the PoC&rsquo;s own) is injected into the
           PoC&rsquo;s session.

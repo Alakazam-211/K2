@@ -412,7 +412,7 @@ export default function ServerSwitcher(): React.JSX.Element {
 
       {open && (
         <div
-          className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-lg py-1 text-[12px] flex flex-col"
+          className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
         >
           <div className="px-2 pb-1">
             <input

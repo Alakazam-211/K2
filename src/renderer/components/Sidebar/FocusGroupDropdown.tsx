@@ -104,7 +104,7 @@ export default function FocusGroupDropdown({
 
       {/* Dropdown panel */}
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 z-50 mt-0.5 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl">
+        <div className="absolute top-full left-0 right-0 z-50 mt-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl">
           {/* Search input */}
           <div className="p-1.5 border-b border-[var(--color-border)]">
             <input

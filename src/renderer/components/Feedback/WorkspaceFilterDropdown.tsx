@@ -305,7 +305,7 @@ export function WorkspaceFilterDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg flex flex-col">
+        <div className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
           {/* Search — same feel as the settings page's workspace search. */}
           <div className="p-1.5 border-b border-[var(--color-border)]">
             <input

@@ -822,7 +822,7 @@ export function TerminalComposeBar({
             ref={slashMenuRef}
             role="menu"
             data-testid="compose-slash-menu"
-            className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-0.5 shadow-lg"
+            className="border border-[var(--color-border)] bg-[var(--color-bg)] py-0.5 shadow-lg"
             style={{
               position: 'fixed',
               left: slashMenuPos.left,

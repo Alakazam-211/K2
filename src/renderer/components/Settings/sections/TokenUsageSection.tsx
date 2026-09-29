@@ -11,6 +11,7 @@ import { useProjectsStore } from '@/stores/projects'
 import type { SettingEntry } from '../searchManifest'
 import { dailyTokenChart, type DailySeries, type UsageDay } from './dailyTokenChart'
 import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
+import { SettingDropdown } from '../controls/SettingControls'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -554,34 +555,35 @@ export function TokenUsageSection(): React.JSX.Element {
           <div className="flex flex-wrap gap-3 mb-3">
             <label className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1.5">
               Workspace
-              <select
+              <SettingDropdown
+                ariaLabel="Workspace"
                 value={chartWs}
-                onChange={(e) => setChartWs(e.target.value)}
-                className="bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs px-1.5 py-1"
-              >
-                <option value="all">All workspaces</option>
-                {machine.workspaces
-                  .filter((w) => !w.outside)
-                  .map((w) => (
-                    <option key={w.path} value={w.path}>
-                      {workspaceUsageLabel({ path: w.path, outside: false }, projects).name}
-                    </option>
-                  ))}
-                <option value="outside">Outside workspaces</option>
-              </select>
+                onChange={setChartWs}
+                options={[
+                  { value: 'all', label: 'All workspaces' },
+                  ...machine.workspaces
+                    .filter((w) => !w.outside)
+                    .map((w) => ({
+                      value: w.path,
+                      label: workspaceUsageLabel({ path: w.path, outside: false }, projects).name,
+                    })),
+                  { value: 'outside', label: 'Outside workspaces' },
+                ]}
+              />
             </label>
             <label className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1.5">
               LLM
-              <select
+              <SettingDropdown
+                ariaLabel="LLM"
                 value={chartHarness}
-                onChange={(e) => setChartHarness(e.target.value)}
-                className="bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs px-1.5 py-1"
-              >
-                <option value="all">All</option>
-                <option value="claude">Claude</option>
-                <option value="codex">Codex</option>
-                <option value="grok">Grok</option>
-              </select>
+                onChange={setChartHarness}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'claude', label: 'Claude' },
+                  { value: 'codex', label: 'Codex' },
+                  { value: 'grok', label: 'Grok' },
+                ]}
+              />
             </label>
           </div>
           <ReportBlock

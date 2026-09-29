@@ -301,7 +301,7 @@ function AssigneeFilterDropdown({
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[160px] max-h-56 overflow-y-auto bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
+        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[160px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5">
           {(
             [
               { v: 'all' as const, text: 'All people' },

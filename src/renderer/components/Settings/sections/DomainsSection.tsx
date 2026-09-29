@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import type { SettingEntry } from '../searchManifest'
+import { SettingDropdown } from '../controls/SettingControls'
 
 type CertState = { state: string; issuer?: string; expiresAt?: string | null }
 
@@ -347,16 +348,17 @@ export function DomainsSection(): React.JSX.Element {
               if (e.key === 'Enter') void addName()
             }}
           />
-          <select
+          <SettingDropdown
             value={role}
-            onChange={(e) => setRole(e.target.value)}
-            className="px-1 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-          >
-            <option value="other">other</option>
-            <option value="mail">mail</option>
-            <option value="publish">publish</option>
-            <option value="direct">direct</option>
-          </select>
+            onChange={setRole}
+            ariaLabel="Hostname role"
+            options={[
+              { value: 'other', label: 'other' },
+              { value: 'mail', label: 'mail' },
+              { value: 'publish', label: 'publish' },
+              { value: 'direct', label: 'direct' },
+            ]}
+          />
           <button
             type="button"
             onClick={() => void addName()}

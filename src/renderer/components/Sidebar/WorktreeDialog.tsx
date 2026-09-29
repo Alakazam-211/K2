@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 // is the contract).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { DialogScrim } from '@/components/ui'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 
@@ -228,16 +229,16 @@ export default function WorktreeDialog({
               <label className="text-xs text-[var(--color-text-muted)] block mb-1.5">
                 Select branch
               </label>
-              <select
+              <SettingDropdown
+                fullWidth
+                ariaLabel="Select branch"
                 value={selectedBranch}
-                onChange={(e) => setSelectedBranch(e.target.value)}
-                className="w-full px-3 py-2 text-xs font-mono bg-white/[0.04] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/25"
-              >
-                <option value="" disabled>Choose a branch...</option>
-                {branches.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
+                onChange={setSelectedBranch}
+                options={[
+                  { value: '', label: 'Choose a branch...', disabled: true },
+                  ...branches.map((b) => ({ value: b, label: b })),
+                ]}
+              />
               <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
                 Opens an existing branch in its own workspace.
               </p>

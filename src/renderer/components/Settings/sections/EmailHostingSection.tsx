@@ -80,6 +80,7 @@ import {
   type PreflightReport,
   type RotatedMailboxPassword,
 } from './email-api'
+import { SettingDropdown } from '../controls/SettingControls'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
@@ -944,16 +945,17 @@ function DomainPanel({
             <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
               Send mode
             </span>
-            <select
+            <SettingDropdown
+              ariaLabel="Send mode"
               value={effectiveMode}
               disabled={!canMutate || configBusy}
-              onChange={(e) => setModeDraft(e.target.value)}
-              className="px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <option value="receive-only">Receive only</option>
-              <option value="direct">Direct (from this box)</option>
-              <option value="relay">Relay (smart host)</option>
-            </select>
+              onChange={setModeDraft}
+              options={[
+                { value: 'receive-only', label: 'Receive only' },
+                { value: 'direct', label: 'Direct (from this box)' },
+                { value: 'relay', label: 'Relay (smart host)' },
+              ]}
+            />
             {effectiveMode === 'direct' && (
               <span className="text-[10px] text-[var(--color-text-muted)]">
                 Requires a passing deliverability-doctor grade.
@@ -1648,18 +1650,15 @@ function ApprovalsPanel({
           <SectionTitle>History</SectionTitle>
           <span className="flex-1" />
           {!sample && (
-            <select
+            <SettingDropdown
+              ariaLabel="History workspace"
               value={historyWs}
-              onChange={(e) => setHistoryWs(e.target.value)}
-              className="px-2 py-1 text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag cursor-pointer"
-            >
-              <option value="">Pick a workspace…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              onChange={setHistoryWs}
+              options={[
+                { value: '', label: 'Pick a workspace…' },
+                ...projects.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
           )}
         </div>
         {historyError ? (

@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react'
 import { useSettingsStore, normalizeConnectLoginIngress } from '@/stores/settings'
 import type { ConnectLoginIngress } from '@shared/types'
+import { SettingDropdown } from '../controls/SettingControls'
 
 // ── S1 (PRD connect-login-edge-only) — "Password sign-in over the tunnel" ──
 // Where the daemon answers `POST /cli/auth/login` on TUNNEL ingress:
@@ -47,8 +48,8 @@ export function ConnectLoginIngressRow(): React.JSX.Element {
   const setMode = useSettingsStore((s) => s.setConnectLoginIngress)
 
   const onChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      void setMode(normalizeConnectLoginIngress(e.target.value))
+    (value: string) => {
+      void setMode(normalizeConnectLoginIngress(value))
     },
     [setMode],
   )
@@ -66,18 +67,16 @@ export function ConnectLoginIngressRow(): React.JSX.Element {
         </span>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{current.detail}</p>
       </div>
-      <select
+      <SettingDropdown
         value={mode}
         onChange={onChange}
-        aria-label="Password sign-in over the tunnel"
-        className="flex-shrink-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag cursor-pointer"
-      >
-        {CONNECT_LOGIN_INGRESS_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+        ariaLabel="Password sign-in over the tunnel"
+        className="flex-shrink-0"
+        options={CONNECT_LOGIN_INGRESS_OPTIONS.map((o) => ({
+          value: o.value,
+          label: o.label,
+        }))}
+      />
     </div>
   )
 }

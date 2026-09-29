@@ -124,7 +124,7 @@ export default function DashboardPresetsMenu(): React.JSX.Element | null {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-40 w-44 border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl py-1">
+        <div className="absolute right-0 top-full mt-1 z-40 w-44 border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl py-1">
           {PRESETS.map((p) => (
             <button
               key={p.shape}

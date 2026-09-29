@@ -564,7 +564,7 @@ function AssigneePicker({
         </button>
       </div>
       {open && (
-        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-48 overflow-y-auto bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-1">
+        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-48 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1">
           {candidates.map((name) => {
             const on = local.includes(name)
             return (

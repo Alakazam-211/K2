@@ -160,7 +160,7 @@ export default function ContextMenu(): React.JSX.Element | null {
         zIndex: 99999,
         minWidth: 180,
         maxWidth: 320,
-        background: 'var(--color-bg-surface)',
+        background: 'var(--color-bg)',
         border: '1px solid var(--color-border)',
         boxShadow: '0 4px 24px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3)',
         padding: '4px 0',

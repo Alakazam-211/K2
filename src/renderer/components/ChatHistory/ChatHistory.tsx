@@ -724,7 +724,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     // Position after mount so menus near the bottom/right of the drawer flip
     // into the viewport instead of opening off-page.
     const menuDiv = document.createElement('div')
-    menuDiv.style.cssText = `position:fixed;left:0;top:0;z-index:9999;visibility:hidden;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);box-shadow:0 4px 12px rgba(0,0,0,0.35);`
+    menuDiv.style.cssText = `position:fixed;left:0;top:0;z-index:9999;visibility:hidden;background:var(--color-bg);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);box-shadow:0 4px 12px rgba(0,0,0,0.35);`
     const config = PROVIDER_CONFIG[session.provider]
     const resumeCmd = config
       ? (config.resumeSubcommand

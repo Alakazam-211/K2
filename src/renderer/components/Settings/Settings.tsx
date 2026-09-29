@@ -88,8 +88,8 @@ function settingsNav(): NavBlock[] {
       items: [
         { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
         { id: 'domains', label: 'Domains' },
-        { id: 'k2-access', label: 'Server Access' },
-        { id: 'people', label: 'People' },
+        { id: 'k2-access', label: 'Admin Access' },
+        { id: 'people', label: 'User Access' },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'api-tokens', label: 'API Keys' },
         { id: 'companion', label: 'K2 Companion' },
@@ -362,7 +362,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'email-hosting' ||
           activeSection === 'email-link' ||
           activeSection === 'data' ||
-          activeSection === 'skin-access'
+          activeSection === 'skin-access' ||
+          activeSection === 'people'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'

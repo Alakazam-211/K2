@@ -4,9 +4,10 @@
 //! (`owner_role_identity`) **or** a workspace-agent scoped hook. Manage
 //! mutations admit owner-tier **or** a scoped hook when that workspace's
 //! Agent-tab `agents_can_manage_skin` column is ON. Leftover front-door /
-//! Hydra stay owner-only. Grants (`/cli/skin/grants`) are owner-only and
-//! are not agent verbs. Mutations are POST-only (GET twins 405). Raw
-//! `k2skn_…` secret is returned once on create.
+//! Hydra stay owner-only. Grants (`/cli/skin/grants`), grant enabled /
+//! host login, and access templates are owner-only and are not agent
+//! verbs. Mutations are POST-only (GET twins 405). Raw `k2skn_…` secret
+//! is returned once on create.
 
 use std::collections::HashSet;
 
@@ -548,6 +549,262 @@ pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+fn require_bool(v: &serde_json::Value, keys: &[&str]) -> Result<bool, CliResponse> {
+    for k in keys {
+        if let Some(raw) = v.get(*k) {
+            return raw
+                .as_bool()
+                .ok_or_else(|| CliResponse::bad_request(format!("{k} must be a boolean")));
+        }
+    }
+    Err(CliResponse::bad_request(format!("missing {}", keys[0])))
+}
+
+pub fn handle_grants_enabled(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing grant id");
+    };
+    let enabled = match require_bool(&v, &["enabled"]) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    match skin::set_grant_enabled(id, enabled) {
+        Ok(grant) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} grant {} enabled={}",
+                grant.id,
+                grant.enabled
+            );
+            CliResponse::ok_json(serde_json::to_string(&grant).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_grants_host(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let present = match require_bool(&v, &["present"]) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    match skin::set_host_login(username, present) {
+        Ok(changed) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} host login {username} present={present} changed={changed}"
+            );
+            CliResponse::ok_json(
+                serde_json::json!({ "success": true, "present": present }).to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_templates_get() -> CliResponse {
+    match skin::list_access_templates() {
+        Ok(templates) => {
+            CliResponse::ok_json(serde_json::json!({ "templates": templates }).to_string())
+        }
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+pub fn handle_templates_post(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(name) = str_field(&v, &["name"]) else {
+        return CliResponse::bad_request("missing template name");
+    };
+    match skin::create_access_template(name) {
+        Ok(template) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} template {} name={}",
+                template.id,
+                template.name
+            );
+            CliResponse::ok_json(serde_json::to_string(&template).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_templates_update(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing template id");
+    };
+    let Some(name) = str_field(&v, &["name"]) else {
+        return CliResponse::bad_request("missing template name");
+    };
+    match skin::update_access_template(id, name) {
+        Ok(template) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} template {} name={}",
+                template.id,
+                template.name
+            );
+            CliResponse::ok_json(serde_json::to_string(&template).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_templates_delete(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing template id");
+    };
+    match skin::delete_access_template(id) {
+        Ok(true) => {
+            k2_core::log_debug!("[skin] actor={actor} deleted template {id}");
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Ok(false) => CliResponse::bad_request("unknown template"),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_template_lines_post(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(template_id) = str_field(&v, &["templateId", "template_id"]) else {
+        return CliResponse::bad_request("missing template id");
+    };
+    let Some(kind) = str_field(&v, &["kind"]) else {
+        return CliResponse::bad_request("missing kind");
+    };
+    let role = opt_text_field(&v, &["roleId", "role_id", "role"]);
+    match skin::create_template_line(template_id, kind, role) {
+        Ok(line) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} template line {} kind={}",
+                line.id,
+                line.kind
+            );
+            CliResponse::ok_json(serde_json::to_string(&line).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_template_lines_update(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing template line id");
+    };
+    let Some(kind) = str_field(&v, &["kind"]) else {
+        return CliResponse::bad_request("missing kind");
+    };
+    let role = opt_text_field(&v, &["roleId", "role_id", "role"]);
+    match skin::update_template_line(id, kind, role) {
+        Ok(line) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} template line {} kind={}",
+                line.id,
+                line.kind
+            );
+            CliResponse::ok_json(serde_json::to_string(&line).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_template_lines_delete(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing template line id");
+    };
+    match skin::delete_template_line(id) {
+        Ok(true) => {
+            k2_core::log_debug!("[skin] actor={actor} deleted template line {id}");
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Ok(false) => CliResponse::bad_request("unknown template line"),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_templates_apply(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(principal_id) = str_field(&v, &["principalId", "principal_id"]) else {
+        return CliResponse::bad_request("missing subject id");
+    };
+    let Some(template_id) = str_field(&v, &["templateId", "template_id"]) else {
+        return CliResponse::bad_request("missing template id");
+    };
+    let Some(arr) = v.get("lines").and_then(|x| x.as_array()) else {
+        return CliResponse::bad_request("missing lines");
+    };
+    let mut lines = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(line_id) = str_field(item, &["lineId", "line_id", "id"]) else {
+            return CliResponse::bad_request("missing line id");
+        };
+        let Some(target_id) = str_field(item, &["targetId", "target_id", "target"]) else {
+            return CliResponse::bad_request("missing target id");
+        };
+        lines.push(skin::TemplateApplyLine {
+            line_id: line_id.to_string(),
+            target_id: target_id.to_string(),
+            scope: opt_text_field(item, &["scope"]).map(str::to_string),
+            role: opt_text_field(item, &["roleId", "role_id", "role"]).map(str::to_string),
+        });
+    }
+    match skin::apply_access_template(principal_id, template_id, &lines) {
+        Ok(grants) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} applied template {template_id} grants={}",
+                grants.len()
+            );
+            CliResponse::ok_json(serde_json::json!({ "grants": grants }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_access_post(path: &str, body: &[u8], actor: &str) -> CliResponse {
+    match path {
+        "/cli/skin/grants/enabled" => handle_grants_enabled(body, actor),
+        "/cli/skin/grants/host" => handle_grants_host(body, actor),
+        "/cli/skin/templates/update" => handle_templates_update(body, actor),
+        "/cli/skin/templates/delete" => handle_templates_delete(body, actor),
+        "/cli/skin/templates/lines" => handle_template_lines_post(body, actor),
+        "/cli/skin/templates/lines/update" => handle_template_lines_update(body, actor),
+        "/cli/skin/templates/lines/delete" => handle_template_lines_delete(body, actor),
+        "/cli/skin/templates/apply" => handle_templates_apply(body, actor),
+        _ => CliResponse::not_found(),
+    }
+}
+
 pub fn handle_roles_get() -> CliResponse {
     match skin::list_roles() {
         Ok(roles) => CliResponse::ok_json(serde_json::json!({ "roles": roles }).to_string()),
@@ -571,12 +828,14 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(None) => RoomPolicy::new(),
         Err(e) => return e,
     };
-    match skin::create_role(name, &policy) {
+    let app_id = opt_text_field(&v, &["appId", "app_id", "app"]);
+    match skin::create_role_for_app(name, &policy, app_id) {
         Ok(role) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} created role {} name={} caps={:?} rooms={:?}",
+                "[skin] actor={actor} created role {} name={} app={:?} caps={:?} rooms={:?}",
                 role.id,
                 role.name,
+                role.app_id,
                 role.caps,
                 role.rooms
             );

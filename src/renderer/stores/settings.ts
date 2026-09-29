@@ -65,7 +65,7 @@ export type SettingsSection =
   | 'k2-connect'
   /** Settings → K2 Server → Domains (custom-domain inventory + certs). */
   | 'domains'
-  /** Settings → K2 Server → Server Access (K2 Connect people/roles). */
+  /** Settings → K2 Server → Admin Access (K2 Connect people/roles). */
   | 'k2-access'
   /** Settings → K2 Server → People (skin principals: username + full name). Not Connect users. */
   | 'people'

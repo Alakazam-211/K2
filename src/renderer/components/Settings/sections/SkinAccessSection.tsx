@@ -140,6 +140,7 @@ export type SkinFrontDoor = {
 }
 
 export type SkinUser = {
+  id: string | null
   username: string
   createdAt?: string | null
   defaultRooms: string[]
@@ -162,7 +163,31 @@ export type SkinRole = {
   rooms: string[]
   roomHandles: string[]
   roomAccess: SkinRoomAccess[]
+  appId: string | null
 }
+
+export type PublishedApp = {
+  id: string
+  projectId: string
+  name: string
+  status: string
+  expose: string | null
+  url: string | null
+  kind: string
+}
+
+export type SkinGrantRow = {
+  id: string
+  subjectKind: string
+  subjectId: string
+  kind: string
+  targetId: string
+  roleId: string | null
+  scope: string | null
+  enabled: boolean
+}
+
+const PUBLISH_STATUS = new Set(['running', 'starting', 'exited', 'stopped', 'unhealthy'])
 
 export type SkinTokenRow = {
   id: string
@@ -340,9 +365,11 @@ function parseStringList(raw: unknown): string[] {
 export function parseSkinUsers(raw: unknown): SkinUser[] {
   return asList(raw, ['users', 'roster']).flatMap((row) => {
     const rec = asRecord(row)
-    const username = asString(rec.username) ?? asString(rec.id) ?? asString(rec.principal)
+    const usernameField = asString(rec.username)
+    const username = usernameField ?? asString(rec.id) ?? asString(rec.principal)
     if (!username) return []
     return [{
+      id: usernameField ? asString(rec.id) : null,
       username,
       createdAt: asString(rec.createdAt) ?? asString(rec.created_at),
       defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
@@ -370,8 +397,65 @@ export function parseSkinRoles(raw: unknown): SkinRole[] {
       rooms: parseStringList(rec.rooms),
       roomHandles: roomHandles.length ? roomHandles : roomAccess.map((r) => r.handle),
       roomAccess,
+      appId: asString(rec.appId) ?? asString(rec.app_id),
     }]
   })
+}
+
+/** Both `cmd` and `skin` publishes are apps. Key is `published_services.id`, not the name. */
+export function parsePublishedApps(raw: unknown): PublishedApp[] {
+  return asList(raw, ['services']).flatMap((row) => {
+    const rec = asRecord(row)
+    const id = asString(rec.id)
+    const name = asString(rec.name)
+    const projectId = asString(rec.projectId) ?? asString(rec.project_id)
+    const kind = asString(rec.kind)
+    if (!id || !name || !projectId || (kind !== 'cmd' && kind !== 'skin')) return []
+    return [{
+      id,
+      projectId,
+      name,
+      status: asString(rec.status) ?? '',
+      expose: asString(rec.expose),
+      url: asString(rec.url),
+      kind,
+    }]
+  })
+}
+
+export function parseSkinGrants(raw: unknown): SkinGrantRow[] {
+  return asList(raw, ['grants']).flatMap((row) => {
+    const rec = asRecord(row)
+    const id = asString(rec.id)
+    const subjectKind = asString(rec.subjectKind) ?? asString(rec.subject_kind)
+    const subjectId = asString(rec.subjectId) ?? asString(rec.subject_id)
+    const kind = asString(rec.kind)
+    const targetId = asString(rec.targetId) ?? asString(rec.target_id)
+    if (!id || !subjectKind || !subjectId || !kind || !targetId) return []
+    const enabled = rec.enabled
+    return [{
+      id,
+      subjectKind,
+      subjectId,
+      kind,
+      targetId,
+      roleId: asString(rec.roleId) ?? asString(rec.role_id),
+      scope: asString(rec.scope),
+      enabled: typeof enabled === 'boolean' ? enabled : enabled !== 0,
+    }]
+  })
+}
+
+function grantSubjectLabel(grant: SkinGrantRow, users: SkinUser[], workspaces: SkinWorkspace[]): string {
+  if (grant.subjectKind === 'workspace') {
+    const ws = workspaces.find((w) => w.id === grant.subjectId)
+    return ws ? ws.name : grant.subjectId
+  }
+  if (grant.subjectKind === 'principal') {
+    const user = users.find((u) => u.id != null && u.id === grant.subjectId)
+    return user ? user.username : grant.subjectId
+  }
+  return grant.subjectId
 }
 
 export function parseWorkspaces(raw: unknown): SkinWorkspace[] {
@@ -546,6 +630,10 @@ export function SkinAccessSection(): React.JSX.Element {
   const [editRoleRooms, setEditRoleRooms] = useState<Set<string>>(() => new Set())
   const [editRoleCapsByRoom, setEditRoleCapsByRoom] = useState<Record<string, Set<string>>>({})
   const [removeRoleConfirm, setRemoveRoleConfirm] = useState<string | null>(null)
+  const [publishedApps, setPublishedApps] = useState<PublishedApp[]>([])
+  const [grants, setGrants] = useState<SkinGrantRow[]>([])
+  const [selectedApp, setSelectedApp] = useState<string | null>(null)
+  const [publishBusy, setPublishBusy] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -579,12 +667,31 @@ export function SkinAccessSection(): React.JSX.Element {
       failures.push(`keys: ${errText(e)}`)
       setTokens([])
     }
+    let workspaceRows: SkinWorkspace[] = []
     try {
       const projects = await daemonCliGet<unknown>('projects/list')
-      setWorkspaces(parseWorkspaces(projects))
+      workspaceRows = parseWorkspaces(projects)
+      setWorkspaces(workspaceRows)
     } catch (e) {
       failures.push(`workspaces: ${errText(e)}`)
       setWorkspaces([])
+    }
+    const apps: PublishedApp[] = []
+    for (const workspace of workspaceRows) {
+      try {
+        const listed = await daemonCliGet<unknown>('publish/list', { project: workspace.id })
+        apps.push(...parsePublishedApps(listed))
+      } catch (e) {
+        failures.push(`publish ${workspace.handle}: ${errText(e)}`)
+      }
+    }
+    setPublishedApps(apps)
+    try {
+      const listed = await daemonCliGet<unknown>('skin/grants')
+      setGrants(parseSkinGrants(listed))
+    } catch (e) {
+      failures.push(`grants: ${errText(e)}`)
+      setGrants([])
     }
     try {
       const h = await daemonCliGet<unknown>('skin/hydra')
@@ -782,7 +889,12 @@ export function SkinAccessSection(): React.JSX.Element {
         handle,
         caps: [...(newRoleCapsByRoom[handle] ?? new Set(DEFAULT_SKIN_CAPS))],
       }))
-      await daemonCliPost('skin/roles', { name, roomAccess })
+      const body: { name: string; roomAccess: { handle: string; caps: string[] }[]; appId?: string } = {
+        name,
+        roomAccess,
+      }
+      if (selectedApp && selectedApp !== 'host') body.appId = selectedApp
+      await daemonCliPost('skin/roles', body)
       setNewRoleName('')
       setNewRoleRooms(new Set())
       setNewRoleCapsByRoom({})
@@ -792,7 +904,7 @@ export function SkinAccessSection(): React.JSX.Element {
     } finally {
       setRoleBusy(false)
     }
-  }, [newRoleName, newRoleRooms, newRoleCapsByRoom, refresh])
+  }, [newRoleName, newRoleRooms, newRoleCapsByRoom, refresh, selectedApp])
 
   const saveRole = useCallback(
     async (id: string, handles: string[], capsByRoom: Record<string, Set<string>>) => {
@@ -885,6 +997,68 @@ export function SkinAccessSection(): React.JSX.Element {
     [tokens],
   )
 
+  const visibleRoles = useMemo(() => {
+    if (selectedApp == null) return []
+    if (selectedApp === 'host') return roles.filter((r) => !r.appId)
+    return roles.filter((r) => r.appId === selectedApp)
+  }, [roles, selectedApp])
+
+  const selectedPublished = publishedApps.find((app) => app.id === selectedApp) ?? null
+
+  const appGrants = useMemo(() => {
+    if (!selectedApp) return []
+    const target = selectedApp === 'host' ? 'host' : selectedApp
+    return grants.filter((g) => g.kind === 'app' && g.targetId === target)
+  }, [grants, selectedApp])
+
+  const publishAction = useCallback(
+    async (action: 'start' | 'stop', app: PublishedApp) => {
+      setPublishBusy(app.id)
+      setError(null)
+      try {
+        await daemonCliPost(`publish/${action}`, { name: app.name, project: app.projectId })
+        await refresh()
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setPublishBusy(null)
+      }
+    },
+    [refresh],
+  )
+
+  const setGrantEnabled = useCallback(
+    async (grant: SkinGrantRow, enabled: boolean) => {
+      setBusyId(grant.id)
+      setError(null)
+      try {
+        await daemonCliPost('skin/grants/enabled', { id: grant.id, enabled })
+        await refresh()
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [refresh],
+  )
+
+  const revokeGrant = useCallback(
+    async (id: string) => {
+      setBusyId(id)
+      setError(null)
+      try {
+        await daemonCliPost('skin/grants/delete', { id })
+        await refresh()
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [refresh],
+  )
+
   const persistHydra = useCallback(
     async (enabled: boolean) => {
       if (!hydra.supported) {
@@ -934,7 +1108,7 @@ export function SkinAccessSection(): React.JSX.Element {
         <div>
           <h2 className="text-base font-medium text-[var(--color-text-primary)]">Apps</h2>
           <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-            Guests of apps on this box (login sessions) and platform tokens (caps + rooms) — not Server Access.
+            Guests of apps on this box (login sessions) and platform tokens (caps + rooms) — not Admin Access.
             Do not mint a key for a user. Host the UI with k2 publish, not this page.
             Overlay Thread rooms only; never grid / PTY.
           </p>
@@ -1038,7 +1212,7 @@ export function SkinAccessSection(): React.JSX.Element {
         <SettingsGroup title="Guests">
           <div data-settings-id="skin-access.users" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Guest list for apps. Not the Server Access / Connect operator roster. Set a
+              Guest list for apps. Not the Admin Access / Connect operator roster. Set a
               password so the app can POST /cli/skin/login (the app owns the login UI).
               Email is optional — needed to mint a password-reset token. K2 never emails
               guests. Guests never see a secret. No public register. Do not mint a key for
@@ -1350,6 +1524,126 @@ export function SkinAccessSection(): React.JSX.Element {
           </div>
         </SettingsGroup>
 
+        <SettingsGroup title="Apps on this box">
+          <div className="flex min-h-[18rem] border border-[var(--color-border)]">
+            <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] overflow-y-auto">
+              {/* cmd and skin publishes both own roles and grants.
+                  Host is the literal `host`, not a published_services row.
+                  Roles with app_id NULL sit under Host. */}
+              <button
+                type="button"
+                className={`w-full text-left px-3 py-2 text-xs no-drag cursor-pointer ${
+                  selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+                }`}
+                onClick={() => setSelectedApp('host')}
+              >
+                Host
+              </button>
+              {publishedApps.map((app) => (
+                <button
+                  key={app.id}
+                  type="button"
+                  aria-label={`Open ${app.name}`}
+                  className={`w-full text-left px-3 py-2 no-drag cursor-pointer ${
+                    selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+                  }`}
+                  onClick={() => setSelectedApp(app.id)}
+                >
+                  <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
+                    {app.name}
+                  </span>
+                  <span className="block text-[10px] text-[var(--color-text-muted)]">
+                    {app.kind}
+                    {PUBLISH_STATUS.has(app.status) ? ` · ${app.status}` : ''}
+                    {app.expose === 'local' ? ' · local-only' : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 min-w-0 overflow-y-auto p-3 space-y-4">
+              {selectedApp == null ? (
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  Select Host or an app. Roles stay on that detail.
+                </p>
+              ) : (
+                <>
+                  {selectedPublished ? (
+                    <div className="space-y-2">
+                      <div className="text-xs font-mono text-[var(--color-text-primary)]">
+                        {selectedPublished.name}
+                      </div>
+                      <p className="text-[10px] text-[var(--color-text-muted)]">
+                        {selectedPublished.kind}
+                        {PUBLISH_STATUS.has(selectedPublished.status)
+                          ? ` · ${selectedPublished.status}`
+                          : ''}
+                        {selectedPublished.expose === 'local' ? ' · local-only' : ''}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                          disabled={publishBusy === selectedPublished.id}
+                          onClick={() => void publishAction('start', selectedPublished)}
+                        >
+                          Start {selectedPublished.name}
+                        </button>
+                        <button
+                          type="button"
+                          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
+                          disabled={publishBusy === selectedPublished.id}
+                          onClick={() => void publishAction('stop', selectedPublished)}
+                        >
+                          Stop {selectedPublished.name}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                      Host-wide roles stay app_id empty. The login role is still the guest&apos;s principals.role_id.
+                    </p>
+                  )}
+                  <div className="divide-y divide-[var(--color-border)]">
+                    {appGrants.length === 0 ? (
+                      <p className="text-[10px] text-[var(--color-text-muted)]">No grants on this app.</p>
+                    ) : (
+                      appGrants.map((grant) => (
+                        <div key={grant.id} className="py-2 flex items-center justify-between gap-2">
+                          <span className="text-xs text-[var(--color-text-primary)]">
+                            {grantSubjectLabel(grant, users, workspaces)}
+                            {grant.subjectKind === 'workspace' ? ' · workspace' : ''}
+                          </span>
+                          <span className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={grant.enabled}
+                              aria-label={`Enable grant ${grant.id}`}
+                              disabled={busyId === grant.id}
+                              onClick={() => void setGrantEnabled(grant, !grant.enabled)}
+                              className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
+                                grant.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+                              }`}
+                            >
+                              <span
+                                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+                                  grant.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                                }`}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Revoke grant ${grant.id}`}
+                              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                              onClick={() => void revokeGrant(grant.id)}
+                            >
+                              Revoke
+                            </button>
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
         <SettingsGroup title="Roles">
           <div data-settings-id="skin-access.roles" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
@@ -1463,13 +1757,13 @@ export function SkinAccessSection(): React.JSX.Element {
             )}
             {loading ? (
               <p className="text-[10px] text-[var(--color-text-muted)]">Loading roles…</p>
-            ) : roles.length === 0 ? (
+            ) : visibleRoles.length === 0 ? (
               <p className="text-[10px] text-[var(--color-text-muted)]">
                 No skin roles yet. Create one above — not owner/admin/member/viewer.
               </p>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
-                {roles.map((r) => {
+                {visibleRoles.map((r) => {
                   const editing = editRoleId === r.id
                   return (
                     <div key={r.id} className="py-2 space-y-2">
@@ -1643,6 +1937,11 @@ export function SkinAccessSection(): React.JSX.Element {
                 })}
               </div>
             )}
+          </div>
+        </SettingsGroup>
+                </>
+              )}
+            </div>
           </div>
         </SettingsGroup>
 

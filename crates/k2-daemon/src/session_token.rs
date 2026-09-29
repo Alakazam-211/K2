@@ -548,7 +548,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/roles/assign",
         "/cli/skin/roles/unassign",
         "/cli/skin/roles/room",
-        // `/cli/skin/grants` and `/cli/skin/grants/delete` stay off this list
+        // `/cli/skin/grants`, `/cli/skin/grants/delete`, `/cli/skin/grants/enabled`,
+        // `/cli/skin/grants/host`, and `/cli/skin/templates*` stay off this list
         // (owner-only). Do not add `/cli/people`.
         "/cli/skin-tokens",
         "/cli/skin-tokens/revoke",
@@ -1335,6 +1336,27 @@ mod tests {
         assert!(
             !is_agent_verb("/cli/skin/grants/delete"),
             "grant revoke is owner-only, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/grants/enabled"),
+            "grant enabled is owner-only, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/grants/host"),
+            "host login grant is owner-only, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/templates"),
+            "access templates are owner-only, not an agent verb"
+        );
+        assert!(!is_agent_verb("/cli/skin/templates/update"));
+        assert!(!is_agent_verb("/cli/skin/templates/delete"));
+        assert!(!is_agent_verb("/cli/skin/templates/lines"));
+        assert!(!is_agent_verb("/cli/skin/templates/lines/update"));
+        assert!(!is_agent_verb("/cli/skin/templates/lines/delete"));
+        assert!(
+            !is_agent_verb("/cli/skin/templates/apply"),
+            "template apply is owner-only, not an agent verb"
         );
         assert!(
             !is_agent_verb("/cli/people"),

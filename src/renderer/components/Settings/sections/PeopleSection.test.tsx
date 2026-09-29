@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// Settings → K2 Server → People. Principals (username + full name).
-// Not Server Access's ConnectTab 'people', not skin-access.
+// Settings → K2 Server → User Access. Principals (username + full name).
+// Not Admin Access's ConnectTab 'people', not skin-access.
 
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -24,6 +24,16 @@ import { SECTION_LABELS } from '../searchManifest'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
+function allowRoster(users: unknown): void {
+  h.daemonCliGet.mockImplementation(async (route: string) => {
+    if (route === 'skin/users') return { users }
+    if (route === 'skin/grants') return { grants: [] }
+    if (route === 'skin/roles') return { roles: [] }
+    if (route === 'skin/templates') return { templates: [] }
+    throw new Error(`unexpected GET ${route}`)
+  })
+}
+
 beforeEach(() => {
   cleanup()
   h.daemonCliGet.mockReset()
@@ -31,48 +41,49 @@ beforeEach(() => {
 })
 
 describe('PEOPLE_MANIFEST', () => {
-  it('is K2 Server People, not skin-access and not Server Access', () => {
+  it('is K2 Server User Access, not skin-access and not Admin Access', () => {
     expect(PEOPLE_MANIFEST.every((e) => e.section === 'people')).toBe(true)
     expect(PEOPLE_MANIFEST.some((e) => e.section === 'skin-access')).toBe(false)
-    expect(SECTION_LABELS.people).toBe('People')
-    expect(SECTION_LABELS['k2-access']).toBe('Server Access')
+    expect(SECTION_LABELS.people).toBe('User Access')
+    expect(SECTION_LABELS['k2-access']).toBe('Admin Access')
     expect(SECTION_LABELS['skin-access']).toBe('Apps')
   })
 })
 
 describe('PeopleSection', () => {
   it('lists username and full name from principals and does not fetch projects', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route !== 'skin/users') throw new Error(`unexpected GET ${route}`)
-      return {
-        users: [
-          { username: 'ada', fullName: 'Ada Lovelace' },
-          { username: 'bob', fullName: null },
-        ],
-      }
-    })
+    allowRoster([
+      { username: 'ada', fullName: 'Ada Lovelace', defaultRoomHandles: ['secret-room'] },
+      { username: 'bob', fullName: null },
+    ])
     render(<PeopleSection />)
     await waitFor(() => {
       expect(screen.getByText('ada')).toBeTruthy()
     })
-    expect(screen.getByRole('heading', { level: 2, name: 'People' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: 'Server Access' })).toBeNull()
+    expect(screen.getByRole('heading', { level: 2, name: 'User Access' })).toBeTruthy()
+    expect(screen.getByText('Access templates')).toBeTruthy()
+    expect(screen.getByText('Ada Lovelace')).toBeTruthy()
+    expect(screen.queryByText('secret-room')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Admin Access' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Apps' })).toBeNull()
+    expect(screen.queryByLabelText('ada full name')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open ada' }))
     const ada = screen.getByLabelText('ada full name') as HTMLInputElement
-    const bob = screen.getByLabelText('bob full name') as HTMLInputElement
     expect(ada.value).toBe('Ada Lovelace')
+    fireEvent.click(screen.getByRole('button', { name: 'Open bob' }))
+    const bob = screen.getByLabelText('bob full name') as HTMLInputElement
     expect(bob.value).toBe('')
     expect(h.daemonCliGet).toHaveBeenCalledWith('skin/users')
     expect(h.daemonCliGet.mock.calls.every((c) => c[0] !== 'projects/list')).toBe(true)
+    expect(h.daemonCliGet.mock.calls.every((c) => c[0] !== 'publish/list')).toBe(true)
   })
 
   it('owner save and clear post skin/users/full-name', async () => {
-    h.daemonCliGet.mockResolvedValue({
-      users: [{ username: 'ada', fullName: 'Ada Lovelace' }],
-    })
+    allowRoster([{ username: 'ada', fullName: 'Ada Lovelace' }])
     h.daemonCliPost.mockResolvedValue({ username: 'ada', fullName: 'Ada/Lovelace: MD' })
     render(<PeopleSection />)
-    const input = await screen.findByLabelText('ada full name')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open ada' }))
+    const input = screen.getByLabelText('ada full name')
     fireEvent.change(input, { target: { value: 'Ada/Lovelace: MD' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save ada full name' }))
     await waitFor(() => {
@@ -82,7 +93,7 @@ describe('PeopleSection', () => {
       })
     })
 
-    h.daemonCliGet.mockResolvedValue({ users: [{ username: 'ada', fullName: 'Ada Lovelace' }] })
+    allowRoster([{ username: 'ada', fullName: 'Ada Lovelace' }])
     fireEvent.click(screen.getByRole('button', { name: 'Clear ada full name' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/full-name', {
@@ -92,18 +103,83 @@ describe('PeopleSection', () => {
     })
   })
 
+  it('grant row uses a switch and kind is a SettingDropdown', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/users') {
+        return {
+          users: [{
+            id: 'p-ada',
+            username: 'ada',
+            fullName: 'Ada Lovelace',
+            roleId: 'role-1',
+            roleName: 'reader',
+            defaultRoomHandles: ['secret-room'],
+          }],
+        }
+      }
+      if (route === 'skin/grants') {
+        return {
+          grants: [{
+            id: 'g1',
+            subjectKind: 'principal',
+            subjectId: 'p-ada',
+            kind: 'app',
+            targetId: 'svc-1',
+            roleId: 'role-2',
+            enabled: true,
+          }],
+        }
+      }
+      if (route === 'skin/roles') {
+        return {
+          roles: [
+            { id: 'role-1', name: 'reader', roomAccess: [{ handle: 'secret-room', caps: ['thread:read'] }] },
+            { id: 'role-2', name: 'editor', roomAccess: [{ handle: 'sales', caps: ['files:read'] }] },
+          ],
+        }
+      }
+      if (route === 'skin/templates') {
+        return { templates: [{ id: 't1', name: 'Clinic', lines: [] }] }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<PeopleSection />)
+    await screen.findByRole('button', { name: 'Open ada' })
+    expect(screen.getByText('Access templates')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open template Clinic' })).toBeTruthy()
+    expect(screen.queryByText('secret-room')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open ada' }))
+    const sw = screen.getByRole('switch', { name: 'Enable app svc-1' })
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Show app svc-1' }))
+    expect(screen.getByText('editor')).toBeTruthy()
+    expect(screen.getByText('sales')).toBeTruthy()
+    expect(screen.queryByText('secret-room')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Grant kind' }))
+    expect(screen.getByTestId('setting-dropdown-menu')).toBeTruthy()
+    expect(h.daemonCliGet.mock.calls.every((c) => c[0] !== 'projects/list')).toBe(true)
+  })
+
   it('does not call fetchProjects and is not the Connect people tab', () => {
     const src = readFileSync(resolve(dir, 'PeopleSection.tsx'), 'utf8')
     expect(src).not.toContain('fetchProjects')
     expect(src).not.toContain('skin-access')
     expect(src).not.toContain("section: 'k2-access'")
     const shell = readFileSync(resolve(dir, 'K2ConnectSettingsShell.tsx'), 'utf8')
-    expect(shell).toContain("title: 'Server Access'")
+    expect(shell).toContain("title: 'Admin Access'")
     expect(shell).toContain("if (section === 'k2-access') return 'people'")
     expect(shell).not.toContain('PeopleSection')
     const parsed = parsePeople({
       users: [{ username: 'ada', full_name: 'Ada Lovelace' }, { username: '' }],
     })
-    expect(parsed).toEqual([{ username: 'ada', fullName: 'Ada Lovelace' }])
+    expect(parsed).toEqual([{
+      id: null,
+      username: 'ada',
+      fullName: 'Ada Lovelace',
+      roleId: null,
+      roleName: null,
+      defaultRooms: [],
+      defaultRoomHandles: [],
+    }])
   })
 })

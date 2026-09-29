@@ -1074,8 +1074,18 @@ async fn handle_one_request(
             // Full name is owner-only (not an agent verb, stricter than role edits).
             | "/cli/skin/users/full-name"
             // Grants are owner-only POSTs (list is GET). Not an agent verb.
+            // enabled / host / templates stay owner-only too.
             | "/cli/skin/grants"
             | "/cli/skin/grants/delete"
+            | "/cli/skin/grants/enabled"
+            | "/cli/skin/grants/host"
+            | "/cli/skin/templates"
+            | "/cli/skin/templates/update"
+            | "/cli/skin/templates/delete"
+            | "/cli/skin/templates/lines"
+            | "/cli/skin/templates/lines/update"
+            | "/cli/skin/templates/lines/delete"
+            | "/cli/skin/templates/apply"
             | "/cli/skin/roles"
             | "/cli/skin/roles/update"
             | "/cli/skin/roles/remove"
@@ -7022,6 +7032,82 @@ async fn handle_one_request(
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/grants/enabled"
+                | "/cli/skin/grants/host"
+                | "/cli/skin/templates/update"
+                | "/cli/skin/templates/delete"
+                | "/cli/skin/templates/lines"
+                | "/cli/skin/templates/lines/update"
+                | "/cli/skin/templates/lines/delete"
+                | "/cli/skin/templates/apply" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let path = p.to_string();
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_access_post(&path, &body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/templates" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_templates_post(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/templates" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_templates_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
                 }
                 "/cli/skin-tokens" if is_post => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {

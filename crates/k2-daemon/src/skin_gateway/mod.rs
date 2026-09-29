@@ -1282,6 +1282,12 @@ mod tests {
         );
         assert!(!allowlisted_http("POST", "/cli/skin/grants"));
         assert!(!allowlisted_http("POST", "/cli/skin/grants/delete"));
+        assert!(!allowlisted_http("POST", "/cli/skin/grants/enabled"));
+        assert!(!allowlisted_http("POST", "/cli/skin/grants/host"));
+        assert!(!allowlisted_http("GET", "/cli/skin/templates"));
+        assert!(!allowlisted_http("POST", "/cli/skin/templates"));
+        assert!(!allowlisted_http("POST", "/cli/skin/templates/apply"));
+        assert!(!allowlisted_http("POST", "/cli/skin/templates/lines"));
     }
 
     #[test]

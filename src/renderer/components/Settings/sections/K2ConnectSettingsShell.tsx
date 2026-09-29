@@ -1,6 +1,6 @@
 // Settings → K2 Server nested pages (sidebar). Tunnel is a middle split
 // (expose left, policies right). Deep-link: `connections` → Connected
-// Servers; `k2-connect` → Tunnel; `k2-access` → Server Access.
+// Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
 
 import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
@@ -18,7 +18,7 @@ const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
       'Expose this device’s daemon (left) and set host policies for the active daemon (right).',
   },
   people: {
-    title: 'Server Access',
+    title: 'Admin Access',
     blurb: 'Who can connect in to this daemon — users, roles, and password policy.',
   },
   servers: {

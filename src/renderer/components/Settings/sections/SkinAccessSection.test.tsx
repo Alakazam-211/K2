@@ -73,6 +73,8 @@ function mockOk(): void {
     if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
     if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
     if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+    if (route === 'skin/grants') return { grants: [] }
+    if (route === 'publish/list') return { services: [] }
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockResolvedValue({ ok: true })
@@ -182,6 +184,7 @@ describe('parsers', () => {
   it('parseSkinUsers reads roster, never invents connect-users fields', () => {
     expect(parseSkinUsers({ users: [USER_ALICE] })).toEqual([
       {
+        id: null,
         username: 'alice',
         createdAt: '2026-08-01T00:00:00Z',
         defaultRooms: [],
@@ -194,6 +197,7 @@ describe('parsers', () => {
     ])
     expect(parseSkinUsers([USER_BOB])).toEqual([
       {
+        id: null,
         username: 'bob',
         createdAt: null,
         defaultRooms: [],
@@ -204,6 +208,7 @@ describe('parsers', () => {
         email: null,
       },
     ])
+    expect(parseSkinUsers({ users: [{ id: 'p-ada', username: 'ada' }] })[0].id).toBe('p-ada')
     expect(
       parseSkinUsers({ users: [{ username: 'cara', email: 'cara@clinic.com' }] })[0].email,
     ).toBe('cara@clinic.com')
@@ -262,12 +267,14 @@ describe('SkinAccessSection', () => {
   it('nav/h2 is Apps, not Skin Access or Server Access', async () => {
     expect(SECTION_LABELS['skin-access']).toBe('Apps')
     expect(SECTION_LABELS['skin-access']).not.toBe('Skin Access')
-    expect(SECTION_LABELS['k2-access']).toBe('Server Access')
+    expect(SECTION_LABELS['k2-access']).toBe('Admin Access')
     render(<SkinAccessSection />)
     await loaded()
     expect(screen.getByRole('heading', { level: 2, name: 'Apps' })).not.toBeNull()
     expect(screen.queryByRole('heading', { name: 'Skin Access' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Server Access' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Admin Access' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Roles' })).toBeNull()
   })
 
   it('search skin and app both hit the Apps page', () => {
@@ -694,6 +701,7 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await loaded()
     expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/roles')
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
     expect(
       screen.getByText(/Skin roles are not Connect owner\/admin\/member\/viewer/),
     ).not.toBeNull()
@@ -725,6 +733,7 @@ describe('SkinAccessSection', () => {
   it('creates a role with per-room roomAccess, not caps+rooms', async () => {
     render(<SkinAccessSection />)
     await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
     fireEvent.change(screen.getByLabelText('New skin role name'), { target: { value: 'dentist' } })
     fireEvent.click(screen.getByLabelText('Role agent sales'))
     fireEvent.click(screen.getByLabelText('Role sales files:read'))
@@ -738,8 +747,120 @@ describe('SkinAccessSection', () => {
       })
     })
     const posts = h.daemonCliPost.mock.calls.filter((c) => c[0] === 'skin/roles')
-    const body = posts[0][1] as { caps?: unknown; rooms?: unknown }
+    const body = posts[0][1] as { caps?: unknown; rooms?: unknown; appId?: unknown }
     expect(body.caps).toBeUndefined()
     expect(body.rooms).toBeUndefined()
+    expect(body.appId).toBeUndefined()
+  })
+
+  it('keeps Guests, tokens, Caddy, and Hydra, and shows Roles only after an app is selected', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByRole('heading', { name: 'Guests' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Platform tokens' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Roles' })).toBeNull()
+    expect(screen.queryByLabelText('New skin role name')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+    expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
+    expect(screen.getByLabelText('New skin role name')).toBeTruthy()
+  })
+
+  it('lists cmd and skin from each workspace and resolves workspace grants by project id', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: { project?: string }) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') {
+        return {
+          grants: [
+            {
+              id: 'gw',
+              subjectKind: 'workspace',
+              subjectId: 'proj-sales',
+              kind: 'app',
+              targetId: 'svc-wiki',
+              roleId: null,
+              enabled: true,
+            },
+            {
+              id: 'gx',
+              subjectKind: 'workspace',
+              subjectId: 'not-a-project',
+              kind: 'app',
+              targetId: 'svc-wiki',
+              roleId: null,
+              enabled: false,
+            },
+          ],
+        }
+      }
+      if (route === 'publish/list') {
+        if (!params?.project) throw new Error('publish/list without project')
+        if (params.project === 'proj-sales') {
+          return {
+            services: [
+              { id: 'svc-wiki', projectId: 'proj-sales', name: 'wiki', kind: 'skin', status: 'running', expose: 'local', url: null },
+              { id: 'svc-sh', projectId: 'proj-sales', name: 'shell', kind: 'cmd', status: 'stopped', expose: 'public', url: 'https://sh.example' },
+              { id: 'svc-boot', projectId: 'proj-sales', name: 'boot', kind: 'skin', status: 'starting', expose: 'public', url: 'https://boot.example' },
+              { id: 'svc-old', projectId: 'proj-sales', name: 'old', kind: 'cmd', status: 'exited', expose: 'public', url: 'https://old.example' },
+            ],
+          }
+        }
+        if (params.project === 'proj-support') {
+          return {
+            services: [
+              { id: 'svc-mail', projectId: 'proj-support', name: 'mailer', kind: 'skin', status: 'unhealthy', expose: 'public', url: 'https://m.example' },
+            ],
+          }
+        }
+        throw new Error(`unexpected project ${params.project}`)
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    h.daemonCliPost.mockRejectedValueOnce(new Error("role 'wiki-editor' already exists"))
+    render(<SkinAccessSection />)
+    await loaded()
+    const publishCalls = h.daemonCliGet.mock.calls.filter((c) => c[0] === 'publish/list')
+    expect(publishCalls.map((c) => c[1])).toEqual([
+      { project: 'proj-sales' },
+      { project: 'proj-support' },
+    ])
+    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/skin/)
+    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/running/)
+    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/local-only/)
+    expect(screen.getByRole('button', { name: 'Open shell' }).textContent).toMatch(/cmd/)
+    expect(screen.getByRole('button', { name: 'Open shell' }).textContent).toMatch(/stopped/)
+    expect(screen.getByRole('button', { name: 'Open boot' }).textContent).toMatch(/starting/)
+    expect(screen.getByRole('button', { name: 'Open old' }).textContent).toMatch(/exited/)
+    expect(screen.getByRole('button', { name: 'Open mailer' }).textContent).toMatch(/unhealthy/)
+    fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
+    expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
+    expect(screen.getByText('Sales · workspace')).toBeTruthy()
+    expect(screen.getByText('not-a-project · workspace')).toBeTruthy()
+    expect(screen.getByRole('switch', { name: 'Enable grant gw' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.change(screen.getByLabelText('New skin role name'), { target: { value: 'wiki-editor' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toMatch(/already exists/)
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles', {
+      name: 'wiki-editor',
+      roomAccess: [],
+      appId: 'svc-wiki',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start wiki' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('publish/start', {
+        name: 'wiki',
+        project: 'proj-sales',
+      })
+    })
   })
 })

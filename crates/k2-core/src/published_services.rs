@@ -92,6 +92,11 @@ pub struct PublishedService {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceJson {
+    /// `published_services.id`. The app id stored on grants and roles.
+    /// Always present. Not the publish name.
+    pub id: String,
+    /// Workspace id (`published_services.project_id`). Always present.
+    pub project_id: String,
     pub name: String,
     pub cmd: String,
     pub cwd: String,
@@ -125,6 +130,8 @@ impl ServiceJson {
             0
         };
         Self {
+            id: row.id.clone(),
+            project_id: row.project_id.clone(),
             name: row.name.clone(),
             cmd: row.cmd.clone(),
             cwd: row.cwd.clone(),
@@ -486,6 +493,8 @@ mod tests {
         let json = ServiceJson::from_row(&row, STATUS_RUNNING, None, Some(4242));
         let v = serde_json::to_value(&json).unwrap();
         for key in [
+            "id",
+            "projectId",
             "name",
             "cmd",
             "cwd",
@@ -503,6 +512,9 @@ mod tests {
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }
+        assert_eq!(v["id"], row.id, "id is published_services.id");
+        assert_eq!(v["projectId"], pid);
+        assert!(v.get("project_id").is_none(), "wire key is projectId");
         assert_eq!(v["kind"], KIND_CMD);
         assert_eq!(v["skinRoot"], "", "empty skinRoot is present, never omitted");
         assert!(v["url"].is_null(), "local-only url is explicit null");

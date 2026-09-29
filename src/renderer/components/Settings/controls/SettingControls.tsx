@@ -77,6 +77,25 @@ function shouldOpenMenuUp(trigger: HTMLElement, optionCount: number): boolean {
   return spaceBelow < estimated && spaceAbove > spaceBelow
 }
 
+const MENU_LAYER_FLOOR = 400
+
+/** Layer for the portaled menu. Floor 400 stays under the assistant bar.
+ *  One above the highest ancestor integer z-index. `auto` and any
+ *  non-integer are skipped. Position is not a filter: a static flex or
+ *  grid item with a numeric z-index is a layer, and jsdom reports the
+ *  dialog frame as static while keeping its inline z-index. */
+export function menuLayerForTrigger(trigger: HTMLElement): number {
+  let highest: number | null = null
+  for (let el: Element | null = trigger.parentElement; el; el = el.parentElement) {
+    const raw = getComputedStyle(el).zIndex.trim()
+    if (!/^-?\d+$/.test(raw)) continue
+    const value = Number(raw)
+    if (highest === null || value > highest) highest = value
+  }
+  if (highest === null) return MENU_LAYER_FLOOR
+  return Math.max(MENU_LAYER_FLOOR, highest + 1)
+}
+
 export function SettingDropdown({
   value,
   options,
@@ -130,6 +149,7 @@ export function SettingDropdown({
     left?: number
     right?: number
     minWidth: number
+    zIndex: number
   } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -159,6 +179,7 @@ export function SettingDropdown({
             : shouldOpenMenuUp(trigger, options.length)
       setMenuBox({
         minWidth: rect.width,
+        zIndex: menuLayerForTrigger(trigger),
         ...(up
           ? { bottom: window.innerHeight - rect.top + 2 }
           : { top: rect.bottom + 2 }),
@@ -223,7 +244,7 @@ export function SettingDropdown({
           ref={menuRef}
           style={{
             position: 'fixed',
-            zIndex: 400,
+            zIndex: menuBox.zIndex,
             minWidth: menuBox.minWidth,
             top: menuBox.top,
             bottom: menuBox.bottom,

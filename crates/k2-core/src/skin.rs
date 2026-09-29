@@ -19,10 +19,11 @@
 //! tokens — high-entropy CSPRNG, not argon2).
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
-//! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`, `store:write`.
-//! Empty/missing caps stay Thread-only — never silent-add files, tickets,
-//! wiki, or store. Never `pty:*`. `store:write` is dump insert/update/delete
-//! only — it does not grant `_k2_store` PUT.
+//! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`, `store:write`,
+//! `activity:read`. Empty/missing caps stay Thread-only — never silent-add
+//! files, tickets, wiki, store, or activity. Never `pty:*`. `store:write`
+//! is dump insert/update/delete only — it does not grant `_k2_store` PUT.
+//! `files:read` and `files:write` do not imply `activity:read`.
 //! Assigned guests snapshot the role onto `session=1`; platform tokens
 //! keep their own caps+rooms (not a role). Session policy is **per-room**
 //! (`room_policy` map). Platform `--name` tokens stay flat.
@@ -71,11 +72,13 @@ pub const CAP_STORE_READ: &str = "store:read";
 /// Dump-table insert/update/delete (`POST /cli/db/rows|rows/update|rows/delete`).
 /// Does not imply `_k2_store` PUT/create/rm/drop.
 pub const CAP_STORE_WRITE: &str = "store:write";
+/// Agent working mark (`WS /cli/activity/events`). Not implied by files.
+pub const CAP_ACTIVITY_READ: &str = "activity:read";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// Empty/missing `--caps` stay Thread-only. Never silent-add files, tickets, wiki, or store.
+/// Empty/missing `--caps` stay Thread-only. Never silent-add files, tickets, wiki, store, or activity.
 const DEFAULT_CAPS: &[&str] = &[CAP_THREAD_READ, CAP_THREAD_POST];
 const ACCEPTED_CAPS: &[&str] = &[
     CAP_THREAD_READ,
@@ -87,6 +90,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_WIKI_READ,
     CAP_STORE_READ,
     CAP_STORE_WRITE,
+    CAP_ACTIVITY_READ,
 ];
 
 /// Connect / Server Access names — never a skin role.
@@ -265,9 +269,11 @@ fn presented_looks_like_email(raw: &str) -> bool {
 
 /// Parse + validate cap names. Empty/missing → default Thread read+post
 /// (never silent-add `files:*`, `tickets:*`, `wiki:read`, `store:read`,
-/// or `store:write`). Unknown names fail loud. Write-only is accepted at
-/// mint; list/read still require `files:read` / `tickets:read` /
-/// `wiki:read` / `store:read` listed. `store:write` is dump DML only.
+/// `store:write`, or `activity:read`). Unknown names fail loud. Write-only
+/// is accepted at mint; list/read still require `files:read` /
+/// `tickets:read` / `wiki:read` / `store:read` listed. `store:write` is
+/// dump DML only. `files:read` and `files:write` do not imply
+/// `activity:read`.
 pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     match raw {
@@ -4058,6 +4064,10 @@ mod tests {
                 .any(|c| c == CAP_FILES_READ || c == CAP_FILES_WRITE),
             "empty caps must stay Thread-only, never silent-add files: {empty:?}"
         );
+        assert!(
+            !empty.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty:?}"
+        );
         let missing = parse_caps(Some(&[])).expect("missing default");
         assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
         assert!(
@@ -4096,6 +4106,10 @@ mod tests {
                 .any(|c| c == CAP_TICKETS_READ || c == CAP_TICKETS_POST),
             "empty caps must stay Thread-only, never silent-add tickets: {empty:?}"
         );
+        assert!(
+            !empty.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty:?}"
+        );
         let missing = parse_caps(Some(&[])).expect("missing default");
         assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
         assert!(
@@ -4129,6 +4143,10 @@ mod tests {
             !empty.iter().any(|c| c == CAP_WIKI_READ),
             "empty caps must stay Thread-only, never silent-add wiki: {empty:?}"
         );
+        assert!(
+            !empty.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty:?}"
+        );
         let missing = parse_caps(Some(&[])).expect("missing default");
         assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
         assert!(
@@ -4155,6 +4173,10 @@ mod tests {
                 .iter()
                 .any(|c| c == CAP_STORE_READ || c == CAP_STORE_WRITE),
             "empty caps must stay Thread-only, never silent-add store: {empty:?}"
+        );
+        assert!(
+            !empty.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty:?}"
         );
         let missing = parse_caps(Some(&[])).expect("missing default");
         assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
@@ -4186,6 +4208,48 @@ mod tests {
         assert!(err.contains("wiki:write"), "{err}");
         let err = parse_caps(Some(&["grid".into()])).unwrap_err();
         assert!(err.contains("grid"), "{err}");
+    }
+
+    #[test]
+    fn parse_caps_accepts_activity_read_never_silent_add() {
+        let empty = parse_caps(None).expect("empty default");
+        assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !empty.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty:?}"
+        );
+        let missing = parse_caps(Some(&[])).expect("missing default");
+        assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !missing.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "missing caps must stay Thread-only: {missing:?}"
+        );
+
+        let files_read = parse_caps(Some(&["files:read".into()])).expect("files:read");
+        assert_eq!(files_read, vec![CAP_FILES_READ]);
+        assert!(
+            !files_read.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "files:read must not imply activity:read: {files_read:?}"
+        );
+        let files_write = parse_caps(Some(&["files:write".into()])).expect("files:write");
+        assert_eq!(files_write, vec![CAP_FILES_WRITE]);
+        assert!(
+            !files_write.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "files:write must not imply activity:read: {files_write:?}"
+        );
+
+        let activity = parse_caps(Some(&["activity:read".into()])).expect("activity:read");
+        assert_eq!(activity, vec![CAP_ACTIVITY_READ]);
+        assert!(
+            !activity
+                .iter()
+                .any(|c| c == CAP_FILES_READ || c == CAP_FILES_WRITE),
+            "activity:read must not imply files: {activity:?}"
+        );
+
+        let err = parse_caps(Some(&["activity:write".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
+        assert!(err.contains("activity:write"), "{err}");
     }
 
     #[test]
@@ -4312,6 +4376,10 @@ mod tests {
         assert!(
             !empty_caps.iter().any(|c| c.starts_with("files:")),
             "empty caps must not grant files: {empty_caps:?}"
+        );
+        assert!(
+            !empty_caps.iter().any(|c| c == CAP_ACTIVITY_READ),
+            "empty caps must stay Thread-only, never silent-add activity:read: {empty_caps:?}"
         );
         assert!(
             parse_rooms_json(None).is_empty(),

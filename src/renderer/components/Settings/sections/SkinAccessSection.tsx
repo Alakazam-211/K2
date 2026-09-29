@@ -64,7 +64,9 @@ export const SKIN_FILE_CAPS = ['files:read', 'files:write'] as const
 export const SKIN_TICKET_CAPS = ['tickets:read', 'tickets:post'] as const
 export const SKIN_WIKI_CAPS = ['wiki:read'] as const
 export const SKIN_STORE_CAPS = ['store:read', 'store:write'] as const
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS] as const
+// Own group. Not a files cap — files:read / files:write do not imply it.
+export const SKIN_ACTIVITY_CAPS = ['activity:read'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 

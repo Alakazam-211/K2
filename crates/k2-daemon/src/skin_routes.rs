@@ -13,8 +13,9 @@ use std::collections::HashSet;
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{
-    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ, CAP_STORE_WRITE,
-    CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ,
+    self, RoomPolicy, CAP_ACTIVITY_READ, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ,
+    CAP_STORE_WRITE, CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ,
+    CAP_WIKI_READ,
 };
 use k2_core::skin_door;
 
@@ -1186,6 +1187,7 @@ pub const THREAD_READ: &str = CAP_THREAD_READ;
 pub const THREAD_POST: &str = CAP_THREAD_POST;
 pub const FILES_READ: &str = CAP_FILES_READ;
 pub const FILES_WRITE: &str = CAP_FILES_WRITE;
+pub const ACTIVITY_READ: &str = CAP_ACTIVITY_READ;
 pub const TICKETS_READ: &str = CAP_TICKETS_READ;
 pub const TICKETS_POST: &str = CAP_TICKETS_POST;
 pub const WIKI_READ: &str = CAP_WIKI_READ;

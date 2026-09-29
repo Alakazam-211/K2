@@ -248,6 +248,10 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/fs/create")
             | ("POST", "/cli/fs/copy")
             | ("POST", "/cli/fs/move")
+            | ("POST", "/cli/fs/rename")
+            | ("GET", "/cli/workspace/resources")
+            | ("POST", "/cli/workspace/resources/add")
+            | ("POST", "/cli/workspace/resources/remove")
             | ("POST", "/cli/workspace/ensure-pinned-chat")
             | ("GET", "/cli/feedback/list")
             | ("HEAD", "/cli/feedback/list")
@@ -282,7 +286,7 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
 pub fn allowlisted_ws(path: &str) -> bool {
     matches!(
         path_only(path),
-        "/cli/overlay/events" | "/cli/fs/events"
+        "/cli/overlay/events" | "/cli/fs/events" | "/cli/activity/events"
     )
 }
 
@@ -1294,6 +1298,44 @@ mod tests {
         assert!(!allowlisted_http("POST", "/cli/skin/templates"));
         assert!(!allowlisted_http("POST", "/cli/skin/templates/apply"));
         assert!(!allowlisted_http("POST", "/cli/skin/templates/lines"));
+    }
+
+    #[test]
+    fn app_resource_activity_rename_allowlist_is_exact() {
+        assert!(allowlisted_http("GET", "/cli/workspace/resources"));
+        assert!(allowlisted_http(
+            "GET",
+            "/cli/workspace/resources?workspace=sales"
+        ));
+        assert!(allowlisted_http("POST", "/cli/workspace/resources/add"));
+        assert!(allowlisted_http("POST", "/cli/workspace/resources/remove"));
+        assert!(!allowlisted_http("POST", "/cli/workspace/resources"));
+        assert!(!allowlisted_http("GET", "/cli/workspace/resources/add"));
+        assert!(!allowlisted_http("GET", "/cli/workspace/resources/remove"));
+        assert!(!allowlisted_http(
+            "POST",
+            "/cli/workspace/resources/add/foo"
+        ));
+        assert!(!allowlisted_http("GET", "/cli/workspace/resources/foo"));
+
+        assert!(allowlisted_http("POST", "/cli/fs/rename"));
+        assert!(!allowlisted_http("GET", "/cli/fs/rename"));
+        assert!(!allowlisted_http("POST", "/cli/fs/rename/foo"));
+
+        assert!(allowlisted_ws("/cli/activity/events"));
+        assert!(allowlisted_ws("/cli/activity/events?workspace=sales"));
+        assert!(!allowlisted_ws("/cli/activity/events/foo"));
+        assert!(!allowlisted_ws("/cli/activity/events/foo?workspace=sales"));
+        assert!(!never_proxy("/cli/activity/events"));
+
+        assert!(!allowlisted_ws("/cli/sessions/events"));
+        assert!(!allowlisted_ws("/cli/sessions/events?path=/tmp/sales"));
+        assert!(never_proxy("/cli/sessions/events"));
+        assert!(!allowlisted_ws("/cli/awareness/subscribe"));
+        assert!(!allowlisted_ws("/cli/ops/stream"));
+        assert!(!allowlisted_http("GET", "/cli/sessions/events"));
+        assert!(!allowlisted_http("GET", "/cli/awareness/subscribe"));
+        assert!(!allowlisted_http("GET", "/cli/ops/stream"));
     }
 
     #[test]

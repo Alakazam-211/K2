@@ -182,6 +182,7 @@ pub mod workspace_routes;
 pub mod overlay_routes;
 pub mod overlay_ws;
 pub mod fs_events_ws;
+pub mod activity_events_ws;
 pub mod chat_overlay_ws;
 pub mod skin_hydra;
 pub mod skin_routes;

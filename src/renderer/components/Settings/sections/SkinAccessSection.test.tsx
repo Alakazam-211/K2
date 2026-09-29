@@ -21,7 +21,9 @@ import {
   SKIN_ACCESS_MANIFEST,
   DEFAULT_FRONT_DOOR,
   DEFAULT_SKIN_CAPS,
+  SKIN_ACTIVITY_CAPS,
   SKIN_CAP_CHOICES,
+  SKIN_FILE_CAPS,
   SKIN_STORE_CAPS,
   parseFrontDoor,
   parseSkinUsers,
@@ -336,6 +338,10 @@ describe('SkinAccessSection', () => {
       rooms: ['sales'],
     })
     expect(DEFAULT_SKIN_CAPS).toEqual(['thread:read', 'thread:post'])
+    expect(DEFAULT_SKIN_CAPS).not.toContain('activity:read')
+    expect(SKIN_FILE_CAPS).toEqual(['files:read', 'files:write'])
+    expect(SKIN_FILE_CAPS).not.toContain('activity:read')
+    expect(SKIN_ACTIVITY_CAPS).toEqual(['activity:read'])
     expect(SKIN_STORE_CAPS).toEqual(['store:read', 'store:write'])
     expect(SKIN_CAP_CHOICES).toEqual([
       'thread:read',
@@ -347,6 +353,7 @@ describe('SkinAccessSection', () => {
       'wiki:read',
       'store:read',
       'store:write',
+      'activity:read',
     ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()

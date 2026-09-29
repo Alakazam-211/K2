@@ -426,6 +426,13 @@ pub fn handle_move_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
     }
 }
 
+pub fn handle_rename_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_rename(body, &pass),
+        None => handle_rename(body),
+    }
+}
+
 fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let ws = match need_workspace(params) {
         Ok(w) => w,
@@ -820,6 +827,87 @@ fn handle_skin_copy(body: &[u8], pass: &SkinPass) -> CliResponse {
 
 fn handle_skin_move(body: &[u8], pass: &SkinPass) -> CliResponse {
     handle_skin_copy_or_move(body, pass, true)
+}
+
+/// Skin `new_name` is one [`Component::Normal`]. `.` and `..` are not.
+/// Owner [`fsc::rename`] still allows those two.
+fn skin_new_name_is_normal_segment(name: &str) -> bool {
+    let mut comps = Path::new(name).components();
+    match comps.next() {
+        Some(Component::Normal(_)) => comps.next().is_none(),
+        _ => false,
+    }
+}
+
+fn relative_inside(root: &str, abs: &str) -> Result<String, String> {
+    let root = Path::new(root)
+        .canonicalize()
+        .map_err(|e| format!("workspace root unavailable: {e}"))?;
+    let abs_path = Path::new(abs);
+    let canon = std::fs::canonicalize(abs_path).unwrap_or_else(|_| abs_path.to_path_buf());
+    let rel = canon
+        .strip_prefix(&root)
+        .or_else(|_| abs_path.strip_prefix(&root))
+        .map_err(|_| "renamed path left the workspace".to_string())?;
+    let s = rel.to_string_lossy().replace('\\', "/");
+    if s.is_empty() || s.split('/').any(|p| p == "..") {
+        return Err("renamed path left the workspace".to_string());
+    }
+    Ok(s)
+}
+
+fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let rel = v
+        .get("path")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if rel.is_empty() {
+        return CliResponse::bad_request("Missing 'path' parameter");
+    }
+    let new_name = v
+        .get("new_name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if new_name.is_empty() {
+        return CliResponse::bad_request("Missing 'new_name' parameter");
+    }
+    let resolved = match skin_resolve_write(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    // Reject before rename. Owner `fs_commands::rename` allows `.` and `..`.
+    if !skin_new_name_is_normal_segment(&new_name) {
+        return CliResponse::bad_request("new_name must be a single path segment");
+    }
+    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::rename(&abs, &new_name) {
+        Ok(new_abs) => {
+            crate::session_events::emit_fs_changed_for_paths([abs, new_abs.clone()]);
+            match relative_inside(&resolved.path, &new_abs) {
+                Ok(rel_out) => {
+                    CliResponse::ok_json(serde_json::json!({ "path": rel_out }).to_string())
+                }
+                Err(e) => CliResponse::internal_error(e),
+            }
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1867,5 +1955,180 @@ mod tests {
         );
         let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(keep);
+    }
+    fn insert_handled_project(path: &str, handle: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, handle, path, handle],
+        )
+        .expect("insert project");
+        id
+    }
+
+    fn session_pass(project_id: &str, caps: &[&str]) -> SkinPass {
+        let mut room_policy = k2_core::skin::RoomPolicy::new();
+        room_policy.insert(
+            project_id.to_string(),
+            caps.iter().map(|c| (*c).to_string()).collect(),
+        );
+        SkinPass {
+            id: uuid::Uuid::new_v4().to_string(),
+            principal_id: Some(uuid::Uuid::new_v4().to_string()),
+            username: "guest".to_string(),
+            caps: caps.iter().map(|c| (*c).to_string()).collect(),
+            rooms: vec![project_id.to_string()],
+            session: true,
+            room_policy,
+        }
+    }
+
+    #[test]
+    fn skin_rename_rejects_non_segment_names_and_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skin-rename-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let notes = dir.join("notes");
+        std::fs::create_dir_all(&notes).expect("mkdir");
+        let file = notes.join("draft.md");
+        std::fs::write(&file, b"keep-me").expect("write");
+        let canon = dir.canonicalize().expect("canon");
+        let handle = format!("rn{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = insert_handled_project(&canon.to_string_lossy(), &handle);
+        let pass = session_pass(
+            &id,
+            &[
+                k2_core::skin::CAP_FILES_WRITE,
+                k2_core::skin::CAP_THREAD_READ,
+                k2_core::skin::CAP_THREAD_POST,
+            ],
+        );
+        for name in ["../x", "a/b", ".", ".."] {
+            let body = serde_json::json!({
+                "workspace": handle,
+                "path": "notes/draft.md",
+                "new_name": name,
+            })
+            .to_string();
+            let resp = handle_rename_gated(body.as_bytes(), Some(pass.clone()));
+            assert_eq!(resp.status, "400 Bad Request", "name {name}: {}", resp.body);
+            assert!(
+                resp.body.contains("new_name must be a single path segment"),
+                "name {name}: {}",
+                resp.body
+            );
+            assert_eq!(
+                std::fs::read(&file).expect("rejected rename must leave the file"),
+                b"keep-me"
+            );
+            assert!(
+                !dir.join("x").exists(),
+                "rejected ../x must not create a sibling"
+            );
+        }
+        let body = serde_json::json!({
+            "workspace": handle,
+            "path": "notes/draft.md",
+            "new_name": "brief.md",
+        })
+        .to_string();
+        let resp = handle_rename_gated(body.as_bytes(), Some(pass));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["path"], "notes/brief.md");
+        let rel = v["path"].as_str().expect("path string");
+        assert!(
+            !rel.starts_with('/'),
+            "guest path must stay relative: {rel}"
+        );
+        assert!(
+            !resp.body.contains(&canon.to_string_lossy().to_string()),
+            "response leaked the room root: {}",
+            resp.body
+        );
+        assert_eq!(
+            std::fs::read(notes.join("brief.md")).expect("renamed file"),
+            b"keep-me"
+        );
+        assert!(!file.exists(), "old name must be gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skin_rename_thread_only_missing_write_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skin-rename-cap-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("draft.md");
+        std::fs::write(&file, b"keep-me").expect("write");
+        let canon = dir.canonicalize().expect("canon");
+        let handle = format!("rc{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = insert_handled_project(&canon.to_string_lossy(), &handle);
+        let pass = session_pass(
+            &id,
+            &[
+                k2_core::skin::CAP_THREAD_READ,
+                k2_core::skin::CAP_THREAD_POST,
+            ],
+        );
+        let body = serde_json::json!({
+            "workspace": handle,
+            "path": "draft.md",
+            "new_name": "..",
+        })
+        .to_string();
+        let resp = handle_rename_gated(body.as_bytes(), Some(pass));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(
+            resp.body.contains("missing capability files:write"),
+            "{}",
+            resp.body
+        );
+        assert!(!resp.body.contains("skin_room"), "{}", resp.body);
+        assert!(
+            !resp.body.contains("single path segment"),
+            "cap miss is checked before the segment rule: {}",
+            resp.body
+        );
+        assert_eq!(std::fs::read(&file).expect("file stayed"), b"keep-me");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owner_rename_dot_and_dotdot_are_not_the_skin_segment_rule() {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-owner-rename-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let notes = dir.join("notes");
+        std::fs::create_dir_all(&notes).expect("mkdir");
+        let file = notes.join("draft.md");
+        std::fs::write(&file, b"keep-me").expect("write");
+        for name in [".", ".."] {
+            let body = serde_json::json!({
+                "old_path": file.to_string_lossy(),
+                "new_name": name,
+            })
+            .to_string();
+            let resp = handle_rename(body.as_bytes());
+            assert!(
+                !resp.body.contains("single path segment"),
+                "owner rename must keep accepting {name}: {}",
+                resp.body
+            );
+            assert_eq!(
+                std::fs::read(&file).expect("owner rename must leave the file in place"),
+                b"keep-me"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

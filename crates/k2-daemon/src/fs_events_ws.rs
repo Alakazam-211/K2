@@ -2,7 +2,9 @@
 //!
 //! Distinct from `/cli/sessions/events` (host-wide APP-LEVEL, including
 //! `fs_changed` plus presence/mail) and from overlay/grid. Frames:
-//! `{kind:"fs_changed", workspace, paths:[relative]}`.
+//! `{kind:"fs_changed", workspace, paths:[relative]}` and, for this
+//! room's project id only,
+//! `{kind:"workspace_resources_changed", workspace, workspaceId}`.
 //!
 //! Skin: pass `Some(SkinPass)` so rooms are checked **before**
 //! `accept_async`. Owner/Connect: `None` (still requires `workspace=`).
@@ -30,6 +32,47 @@ fn wire_json(workspace: &str, paths: &[String]) -> String {
         "paths": paths,
     })
     .to_string()
+}
+
+fn resources_changed_json(workspace: &str, workspace_id: &str) -> String {
+    serde_json::json!({
+        "kind": "workspace_resources_changed",
+        "workspace": workspace,
+        "workspaceId": workspace_id,
+    })
+    .to_string()
+}
+
+/// One guest frame, or nothing. Resources filter by project id. `fs_changed`
+/// stays on the single room root (`same_root`).
+pub fn subscriber_frame(
+    project_id: &str,
+    root: &str,
+    wire_workspace: &str,
+    event: &SessionEvent,
+) -> Option<String> {
+    match event {
+        SessionEvent::FsChanged {
+            workspace_path,
+            paths,
+        } => {
+            if !same_root(workspace_path, root) {
+                return None;
+            }
+            let rel = map_changed_paths(root, paths);
+            if rel.is_empty() {
+                return None;
+            }
+            Some(wire_json(wire_workspace, &rel))
+        }
+        SessionEvent::WorkspaceResourcesChanged { workspace_id } => {
+            if workspace_id != project_id {
+                return None;
+            }
+            Some(resources_changed_json(wire_workspace, workspace_id))
+        }
+        _ => None,
+    }
 }
 
 fn same_root(a: &str, b: &str) -> bool {
@@ -155,6 +198,7 @@ pub async fn serve_fs_events_connection(
         resolved.handle.clone()
     };
     let root = resolved.path.clone();
+    let project_id = resolved.project_id.clone();
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
         Ok(ws) => ws,
@@ -182,23 +226,14 @@ pub async fn serve_fs_events_connection(
             }
             event = rx.recv() => {
                 match event {
-                    Ok(SessionEvent::FsChanged { workspace_path, paths }) => {
-                        if !same_root(&workspace_path, &root) {
+                    Ok(event) => {
+                        let Some(frame) = subscriber_frame(&project_id, &root, &wire_workspace, &event) else {
                             continue;
-                        }
-                        let rel = map_changed_paths(&root, &paths);
-                        if rel.is_empty() {
-                            continue;
-                        }
-                        if write
-                            .send(Message::Text(wire_json(&wire_workspace, &rel)))
-                            .await
-                            .is_err()
-                        {
+                        };
+                        if write.send(Message::Text(frame)).await.is_err() {
                             break;
                         }
                     }
-                    Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -210,6 +245,9 @@ pub async fn serve_fs_events_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
+    use std::collections::HashMap;
+    use tokio_tungstenite::tungstenite::Message;
 
     #[test]
     fn fs_events_ws_path_is_not_host_wide_or_pty() {
@@ -251,5 +289,202 @@ mod tests {
             ],
         );
         assert_eq!(mapped, vec!["a.md".to_string(), "src/x.ts".to_string()]);
+    }
+    #[test]
+    fn resources_frame_is_project_id_and_has_no_file_list() {
+        let ev = crate::session_events::SessionEvent::WorkspaceResourcesChanged {
+            workspace_id: "proj-a".into(),
+        };
+        let frame = subscriber_frame("proj-a", "/tmp/sales", "sales", &ev).expect("room frame");
+        let v: serde_json::Value = serde_json::from_str(&frame).expect("json");
+        let mut keys: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "kind".to_string(),
+                "workspace".to_string(),
+                "workspaceId".to_string(),
+            ]
+        );
+        assert_eq!(v["kind"], "workspace_resources_changed");
+        assert_eq!(v["workspace"], "sales");
+        assert_eq!(v["workspaceId"], "proj-a");
+        assert!(v.get("paths").is_none(), "{v}");
+        assert!(v.get("filePath").is_none(), "{v}");
+        assert!(v.get("docs").is_none(), "{v}");
+        assert!(subscriber_frame("proj-b", "/tmp/other", "other", &ev).is_none());
+        let active = crate::session_events::SessionEvent::ActiveChanged {
+            active_project_ids: vec!["proj-a".into()],
+            active_window_hours: 1,
+        };
+        assert!(subscriber_frame("proj-a", "/tmp/sales", "sales", &active).is_none());
+    }
+
+    fn session_pass(project_id: &str, caps: &[&str]) -> k2_core::skin::SkinPass {
+        let mut room_policy = k2_core::skin::RoomPolicy::new();
+        room_policy.insert(
+            project_id.to_string(),
+            caps.iter().map(|c| (*c).to_string()).collect(),
+        );
+        k2_core::skin::SkinPass {
+            id: uuid::Uuid::new_v4().to_string(),
+            principal_id: Some(uuid::Uuid::new_v4().to_string()),
+            username: "guest".to_string(),
+            caps: caps.iter().map(|c| (*c).to_string()).collect(),
+            rooms: vec![project_id.to_string()],
+            session: true,
+            room_policy,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resources_changed_reaches_only_the_room_that_added() {
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+
+        let dir_a = std::env::temp_dir().join(format!(
+            "k2-fs-ev-a-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let dir_b = std::env::temp_dir().join(format!(
+            "k2-fs-ev-b-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir_a).expect("mkdir a");
+        std::fs::create_dir_all(&dir_b).expect("mkdir b");
+        std::fs::write(dir_a.join("a.csv"), b"a").expect("file a");
+        std::fs::write(dir_b.join("b.csv"), b"b").expect("file b");
+        let root_a = dir_a.canonicalize().expect("canon a");
+        let root_b = dir_b.canonicalize().expect("canon b");
+        let handle_a = format!("fa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let handle_b = format!("fb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id_a = {
+            let id = uuid::Uuid::new_v4().to_string();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, handle_a, root_a.to_string_lossy().to_string(), handle_a],
+            )
+            .expect("insert a");
+            id
+        };
+        let id_b = {
+            let id = uuid::Uuid::new_v4().to_string();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, handle_b, root_b.to_string_lossy().to_string(), handle_b],
+            )
+            .expect("insert b");
+            id
+        };
+        let caps = [
+            k2_core::skin::CAP_FILES_READ,
+            k2_core::skin::CAP_FILES_WRITE,
+        ];
+        let pass_a = session_pass(&id_a, &caps);
+        let pass_b = session_pass(&id_b, &caps);
+
+        async fn open(
+            pass: k2_core::skin::SkinPass,
+            workspace: String,
+        ) -> tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        > {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let mut params = HashMap::new();
+                params.insert("workspace".to_string(), workspace);
+                serve_fs_events_connection(&mut stream, params, Some(pass)).await;
+            });
+            let (ws, resp) =
+                tokio_tungstenite::connect_async(format!("ws://{addr}{FS_EVENTS_WS_PATH}"))
+                    .await
+                    .expect("fs events handshake");
+            assert_eq!(resp.status(), 101, "upgrade");
+            ws
+        }
+
+        let mut sock_a = open(pass_a.clone(), handle_a.clone()).await;
+        let mut sock_b = open(pass_b.clone(), handle_b.clone()).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let added = crate::workspace_resources_routes::handle_add_gated(
+            &HashMap::from([
+                ("workspace".to_string(), handle_a.clone()),
+                ("path".to_string(), "a.csv".to_string()),
+            ]),
+            Some(pass_a),
+        );
+        assert_eq!(added.status, "200 OK", "{}", added.body);
+
+        let text = tokio::time::timeout(Duration::from_secs(2), sock_a.next())
+            .await
+            .expect("room A timed out")
+            .expect("room A open")
+            .expect("room A message");
+        let text = match text {
+            Message::Text(t) => t.to_string(),
+            other => panic!("expected text, got {other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(v["kind"], "workspace_resources_changed", "{v}");
+        assert_eq!(v["workspace"], handle_a, "{v}");
+        assert_eq!(v["workspaceId"], id_a, "{v}");
+        assert!(v.get("paths").is_none(), "{v}");
+        assert!(v.get("filePath").is_none(), "{v}");
+        assert!(v.get("docs").is_none(), "{v}");
+        let mut keys: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "kind".to_string(),
+                "workspace".to_string(),
+                "workspaceId".to_string(),
+            ]
+        );
+
+        match tokio::time::timeout(Duration::from_millis(300), sock_b.next()).await {
+            Err(_) => {}
+            Ok(other) => panic!("room B must not see room A's resources frame: {other:?}"),
+        }
+
+        let added_b = crate::workspace_resources_routes::handle_add_gated(
+            &HashMap::from([
+                ("workspace".to_string(), handle_b.clone()),
+                ("path".to_string(), "b.csv".to_string()),
+            ]),
+            Some(pass_b),
+        );
+        assert_eq!(added_b.status, "200 OK", "{}", added_b.body);
+        let text_b = tokio::time::timeout(Duration::from_secs(2), sock_b.next())
+            .await
+            .expect("room B timed out")
+            .expect("room B open")
+            .expect("room B message");
+        let text_b = match text_b {
+            Message::Text(t) => t.to_string(),
+            other => panic!("expected text, got {other:?}"),
+        };
+        let vb: serde_json::Value = serde_json::from_str(&text_b).expect("json");
+        assert_eq!(vb["workspaceId"], id_b, "{vb}");
+        assert_eq!(vb["workspace"], handle_b, "{vb}");
+        assert_eq!(vb["kind"], "workspace_resources_changed");
+
+        match tokio::time::timeout(Duration::from_millis(300), sock_a.next()).await {
+            Err(_) => {}
+            Ok(other) => panic!("room A must not see room B's resources frame: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
     }
 }

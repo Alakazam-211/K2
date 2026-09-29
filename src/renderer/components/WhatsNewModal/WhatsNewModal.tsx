@@ -59,6 +59,8 @@ export default function WhatsNewModal({
   const [visible, setVisible] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [pageIdx, setPageIdx] = useState(0)
+  // Settings → Read what's new shows the newest page only.
+  const [latestOnly, setLatestOnly] = useState(false)
 
   // Shared check function — used by initial mount AND by the
   // `k2so:show-whats-new` event from Settings → Release notes button.
@@ -113,10 +115,11 @@ export default function WhatsNewModal({
     return () => clearTimeout(id)
   }, [mode, runCheck])
 
-  // Listen for the "Read what's new" button in Settings. Resets daemon
-  // state then dispatches this event; we re-check and force-open.
+  // Settings → Read what's new. The button does not clear the seen
+  // marker. This open shows the newest page only.
   useEffect(() => {
     const handler = (): void => {
+      setLatestOnly(true)
       void runCheck(true)
     }
     window.addEventListener('k2so:show-whats-new', handler)
@@ -145,8 +148,12 @@ export default function WhatsNewModal({
     if (current) out.push({ ...current, body: current.body.join('\n') })
     // Reverse: oldest first → newest last. Forward arrow = newer.
     out.reverse()
+    if (latestOnly) {
+      const newest = out[out.length - 1]
+      return newest ? [newest] : []
+    }
     return out
-  }, [payload?.content])
+  }, [payload?.content, latestOnly])
 
   // Default landing page is the NEWEST version (the one the user just
   // updated to). They can navigate back (←) to read older releases
@@ -172,6 +179,7 @@ export default function WhatsNewModal({
       console.debug('[whats-new] mark_seen failed:', err)
     }
     setVisible(false)
+    setLatestOnly(false)
     setDismissing(false)
   }, [dismissing])
 

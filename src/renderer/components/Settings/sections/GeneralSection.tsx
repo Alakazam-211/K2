@@ -819,39 +819,23 @@ function DevToolsRow(): React.JSX.Element {
   )
 }
 
-// ── What's New — re-open the popup ──────────────────────────────────────
-// 0.38.8: small Settings row that lets the user re-read the most recent
-// version's changelog without waiting for the next update. Clicking the
-// button resets the last-seen marker daemon-side, then dispatches a
-// `k2so:show-whats-new` window event the WhatsNewModal listens for to
-// force-open. After the user dismisses, the marker gets re-stamped to
-// the current version so the popup doesn't auto-show on next launch
-// (idempotent with the normal dismiss flow).
+// ── What's New — open the latest notes ──────────────────────────────────
+// The button does not clear the seen marker. It asks the popup to show
+// the newest page only. Dismiss still stamps the current version.
 function WhatsNewRow(): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-
-  const handleClick = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await daemonCliGet('whats_new/reset')
-      window.dispatchEvent(new CustomEvent('k2so:show-whats-new'))
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.debug('[whats-new] reset failed:', e)
-    }
-    setBusy(false)
-  }, [busy])
+  const handleClick = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('k2so:show-whats-new'))
+  }, [])
 
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <span className="text-xs text-[var(--color-text-secondary)]">Release notes</span>
       <button
+        type="button"
         onClick={handleClick}
-        disabled={busy}
-        className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+        className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
       >
-        {busy ? 'Opening…' : "Read what's new"}
+        Read what's new
       </button>
     </div>
   )

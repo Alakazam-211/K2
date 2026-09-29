@@ -7,6 +7,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 - **Nested workspace.** A workspace that lives inside another workspace keeps its own terminal. The outer workspace's session list no longer shows the inner one. Opening a saved pane leaves the other workspace's live terminal alone.
 - **Menus.** A dropdown opened from Settings, or from a dialog, paints solid and sits above the layer that opened it. A list that used to clip inside the page now opens on the page.
+- **Read what's new.** Settings → General opens the latest notes. It does not replay the older pages in this version series.
 
 ## 0.41.4 — User access, apps, and shortcuts in the front window
 

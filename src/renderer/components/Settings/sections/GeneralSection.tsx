@@ -622,6 +622,7 @@ function CLIVersionRow(): React.JSX.Element {
     installedVersion: string | null
     bundledVersion: string | null
     updateAvailable: boolean
+    packageManaged?: boolean
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [checking, setChecking] = useState(false)
@@ -633,6 +634,7 @@ function CLIVersionRow(): React.JSX.Element {
         installedVersion: string | null
         bundledVersion: string | null
         updateAvailable: boolean
+        packageManaged?: boolean
       }>('cli_install_status')
       setStatus(result)
     } catch {
@@ -675,7 +677,7 @@ function CLIVersionRow(): React.JSX.Element {
     }
     return 0
   }
-  const updateAvailable = status?.installed && status.bundledVersion && status.installedVersion
+  const updateAvailable = !status?.packageManaged && status?.installed && status.bundledVersion && status.installedVersion
     && compareVersions(status.bundledVersion, status.installedVersion) > 0
 
   return (

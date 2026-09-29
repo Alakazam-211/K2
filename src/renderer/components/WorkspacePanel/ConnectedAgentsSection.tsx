@@ -194,7 +194,7 @@ function ConnRow({
   const inner = (
     <>
       <span
-        className="w-2 h-2 flex-shrink-0 rounded-full"
+        className="w-2 h-2 flex-shrink-0"
         style={{
           backgroundColor: federated
             ? 'var(--color-accent)'

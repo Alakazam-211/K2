@@ -12,8 +12,8 @@ export const PEOPLE_MANIFEST: SettingEntry[] = [
     id: 'people.roster',
     section: 'people',
     label: 'User Access',
-    description: 'Skin principals on this box — username and full name. Not Admin Access.',
-    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password'],
+    description: 'App users on this box — username and full name. Not Admin Access.',
+    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password', 'app'],
     group: 'People',
   },
 ]
@@ -427,7 +427,10 @@ export function PeopleSection(): React.JSX.Element {
       )
     : []
   const hostGrant = personGrants.find((g) => g.kind === 'app' && g.targetId === 'host')
-  const appChoices = apps.map((app) => ({ value: app.id, label: `${app.name} (${app.kind})` }))
+  const appChoices = apps.map((app) => ({
+    value: app.id,
+    label: `${app.name} (${app.kind === 'skin' ? 'app' : app.kind})`,
+  }))
   const roleChoices = roles.map((role) => ({ value: role.id, label: role.name }))
 
   return (
@@ -449,7 +452,7 @@ export function PeopleSection(): React.JSX.Element {
           {loading ? (
             <p className="px-3 text-[10px] text-[var(--color-text-muted)]">Loading…</p>
           ) : people.length === 0 ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No skin users yet.</p>
+            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No app users yet.</p>
           ) : (
             people.map((row) => (
               <button
@@ -480,7 +483,7 @@ export function PeopleSection(): React.JSX.Element {
         >
           <input
             className={`${INPUT_CLS} w-full`}
-            aria-label="New skin username"
+            aria-label="New app username"
             placeholder="username"
             autoCapitalize="none"
             autoCorrect="off"
@@ -490,7 +493,7 @@ export function PeopleSection(): React.JSX.Element {
           />
           <input
             className={`${INPUT_CLS} w-full`}
-            aria-label="New skin full name"
+            aria-label="New app full name"
             placeholder="full name"
             value={newFullName}
             onChange={(e) => setNewFullName(e.target.value)}
@@ -498,7 +501,7 @@ export function PeopleSection(): React.JSX.Element {
           <input
             type="password"
             className={`${INPUT_CLS} w-full`}
-            aria-label="New skin password"
+            aria-label="New app password"
             placeholder="password"
             autoComplete="new-password"
             value={newPassword}
@@ -507,7 +510,7 @@ export function PeopleSection(): React.JSX.Element {
           <input
             type="email"
             className={`${INPUT_CLS} w-full`}
-            aria-label="New skin email"
+            aria-label="New app email"
             placeholder="email (optional)"
             autoCapitalize="none"
             autoCorrect="off"

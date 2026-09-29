@@ -3,6 +3,15 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.4 — User access, apps, and shortcuts in the front window
+
+- **User Access.** K2 Server lists Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, and K2 Companion. User Access, User Templates, and Apps are marked Beta. You add a person on User Access. Each app lists its users, and adding one gives that person a role on the app.
+- **Apps.** Pick an app on the left and its users and roles are on the right. Platform tokens and the sign-in issuer stay on Host. The old Caddy group is no longer on this page.
+- **Connected agents.** The mark next to a connected agent is a square.
+- **CLI on Linux.** Settings → General shows the `k2` command that is already on the machine, including an Arch install. It no longer offers a Mac-only install button when that command is missing from the Mac path.
+- **Front window.** Command-K, Command-J, and Command-Shift-L open in the window you are using. Other K2 windows stay put.
+- **Wording.** User Access says app users.
+
 ## 0.41.3 — Window chrome, and a crash after a long run
 
 - **Top bar.** The K2 icon is the menu on Linux and Windows. Projects, Tickets, Settings, and Wiki use the same logo and the same right-hand cluster as Agents. New Window is Ctrl+Shift+N on Linux and Windows, and still Command+Shift+N on Mac.

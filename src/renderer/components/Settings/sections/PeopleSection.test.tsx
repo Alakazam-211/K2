@@ -66,7 +66,7 @@ describe('PeopleSection', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'User Access' })).toBeTruthy()
     expect(screen.queryByText('Access templates')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Open template Clinic' })).toBeNull()
-    expect(screen.getByLabelText('New skin username')).toBeTruthy()
+    expect(screen.getByLabelText('New app username')).toBeTruthy()
     expect(screen.getByText('Ada Lovelace')).toBeTruthy()
     expect(screen.queryByText('secret-room')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Admin Access' })).toBeNull()
@@ -201,10 +201,10 @@ describe('PeopleSection', () => {
     allowRoster([])
     h.daemonCliPost.mockResolvedValue({ username: 'carol' })
     render(<PeopleSection />)
-    fireEvent.change(screen.getByLabelText('New skin username'), { target: { value: 'Carol' } })
-    fireEvent.change(screen.getByLabelText('New skin full name'), { target: { value: 'Carol Danvers' } })
-    fireEvent.change(screen.getByLabelText('New skin password'), { target: { value: 's3cret-horse' } })
-    fireEvent.change(screen.getByLabelText('New skin email'), { target: { value: 'carol@clinic.com' } })
+    fireEvent.change(screen.getByLabelText('New app username'), { target: { value: 'Carol' } })
+    fireEvent.change(screen.getByLabelText('New app full name'), { target: { value: 'Carol Danvers' } })
+    fireEvent.change(screen.getByLabelText('New app password'), { target: { value: 's3cret-horse' } })
+    fireEvent.change(screen.getByLabelText('New app email'), { target: { value: 'carol@clinic.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users', {

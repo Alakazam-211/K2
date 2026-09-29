@@ -95,11 +95,99 @@ fn find_cli_script() -> Option<PathBuf> {
 }
 
 /// macOS install path for the `k2` symlink.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "linux")))]
 const CLI_SYMLINK_PATH: &str = "/usr/local/bin/k2";
 /// Legacy alias — points at the cli/k2so deprecation shim.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "linux")))]
 const CLI_LEGACY_SYMLINK_PATH: &str = "/usr/local/bin/k2so";
+
+/// Distro packages (Arch pacman) install the CLI here. Settings must not
+/// write a second copy over it.
+#[cfg(any(target_os = "linux", test))]
+const DISTRO_CLI_PATH: &str = "/usr/bin/k2";
+
+/// Login PATH order on Linux. `/usr/local/bin` is ahead of `/usr/bin`,
+/// which is ahead of `~/.local/bin`. The first file that exists is the
+/// one `k2` runs.
+#[cfg(any(target_os = "linux", test))]
+fn linux_cli_search_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = vec![
+        PathBuf::from("/usr/local/bin/k2"),
+        PathBuf::from(DISTRO_CLI_PATH),
+    ];
+    if let Some(home) = home {
+        if !home.as_os_str().is_empty() {
+            paths.push(home.join(".local/bin/k2"));
+        }
+    }
+    paths
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn first_existing_cli(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .find(|p| {
+            p.exists()
+                || fs::symlink_metadata(p)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+        })
+        .cloned()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cli_is_distro_package(path: &Path) -> bool {
+    path == Path::new(DISTRO_CLI_PATH)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn copy_cli_script(src: &Path, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    fs::copy(src, dest).map_err(|e| format!("copy CLI to {}: {e}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dest, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod {}: {e}", dest.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_installed_cli() -> Option<PathBuf> {
+    let home = linux_home();
+    first_existing_cli(&linux_cli_search_paths(home.as_deref()))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_user_cli_dest() -> Result<PathBuf, String> {
+    let home = linux_home().ok_or_else(|| "HOME is not set".to_string())?;
+    Ok(home.join(".local/bin/k2"))
+}
+
+/// Copy the bundled CLI (and the k2so shim, when present) onto `dest`.
+#[cfg(target_os = "linux")]
+fn linux_write_cli(
+    dest: &Path,
+    cli_script: &Path,
+    legacy_shim: &Option<PathBuf>,
+) -> Result<(), String> {
+    copy_cli_script(cli_script, dest)?;
+    if let (Some(shim), Some(parent)) = (legacy_shim.as_ref(), dest.parent()) {
+        let _ = copy_cli_script(shim, &parent.join("k2so"));
+    }
+    Ok(())
+}
 
 /// Windows: user-scoped install root (`%LOCALAPPDATA%\K2`).
 #[cfg(windows)]
@@ -245,7 +333,13 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
             .unwrap_or_default();
         return !script.exists();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // A distro package or an earlier daemon stage already put `k2` on
+        // PATH. Do not add `/usr/local/bin/k2` in front of `/usr/bin/k2`.
+        return linux_installed_cli().is_none();
+    }
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         let new_cli = Path::new(CLI_SYMLINK_PATH);
         match fs::read_link(new_cli) {
@@ -271,6 +365,7 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
 /// `/System/Volumes/Data/Applications`) don't compare unequal and loop a false
 /// heal every launch (#56). A target that fails to canonicalize is broken
 /// (its file is gone) → heal.
+#[cfg(any(not(target_os = "linux"), test))]
 fn symlink_target_needs_heal(target: &Path, bundled: &Path) -> bool {
     match (fs::canonicalize(target), fs::canonicalize(bundled)) {
         (Ok(t), Ok(b)) => t != b,
@@ -293,6 +388,17 @@ fn read_cli_version(script_path: &Path) -> Option<String> {
     None
 }
 
+fn version_is_newer(bundled: Option<&str>, installed: Option<&str>) -> bool {
+    match (bundled, installed) {
+        (Some(bundled_v), Some(installed_v)) => {
+            let bv: Vec<u32> = bundled_v.split('.').filter_map(|s| s.parse().ok()).collect();
+            let iv: Vec<u32> = installed_v.split('.').filter_map(|s| s.parse().ok()).collect();
+            bv > iv
+        }
+        _ => false,
+    }
+}
+
 #[tauri::command]
 pub fn cli_install_status() -> Result<serde_json::Value, String> {
     #[cfg(windows)]
@@ -308,14 +414,8 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
         } else {
             None
         };
-        let update_available = match (&bundled_version, &installed_version) {
-            (Some(bundled_v), Some(installed_v)) => {
-                let bv: Vec<u32> = bundled_v.split('.').filter_map(|s| s.parse().ok()).collect();
-                let iv: Vec<u32> = installed_v.split('.').filter_map(|s| s.parse().ok()).collect();
-                bv > iv
-            }
-            _ => false,
-        };
+        let update_available =
+            version_is_newer(bundled_version.as_deref(), installed_version.as_deref());
         return Ok(serde_json::json!({
             "installed": installed,
             "symlinkPath": cmd.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
@@ -326,7 +426,34 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
             "updateAvailable": update_available,
         }));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let bundled = find_cli_script();
+        let bundled_path = bundled.as_ref().map(|p| p.to_string_lossy().to_string());
+        let bundled_version = bundled.as_ref().and_then(|p| read_cli_version(p));
+        let found = linux_installed_cli();
+        let package_managed = found.as_ref().is_some_and(|p| cli_is_distro_package(p));
+        let installed_version = found.as_ref().and_then(|p| {
+            let actual = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            read_cli_version(&actual)
+        });
+        let update_available = if package_managed {
+            false
+        } else {
+            version_is_newer(bundled_version.as_deref(), installed_version.as_deref())
+        };
+        return Ok(serde_json::json!({
+            "installed": found.is_some(),
+            "packageManaged": package_managed,
+            "symlinkPath": found.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+            "target": found.as_ref().map(|p| p.display().to_string()),
+            "bundledPath": bundled_path,
+            "bundledVersion": bundled_version,
+            "installedVersion": installed_version,
+            "updateAvailable": update_available,
+        }));
+    }
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         let symlink_path = Path::new(CLI_SYMLINK_PATH);
         let installed = symlink_path.exists() || symlink_path.is_symlink();
@@ -353,15 +480,8 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
             None
         };
 
-        // Determine if an update is available (bundled must be strictly newer)
-        let update_available = match (&bundled_version, &installed_version) {
-            (Some(bundled_v), Some(installed_v)) => {
-                let bv: Vec<u32> = bundled_v.split('.').filter_map(|s| s.parse().ok()).collect();
-                let iv: Vec<u32> = installed_v.split('.').filter_map(|s| s.parse().ok()).collect();
-                bv > iv
-            }
-            _ => false,
-        };
+        let update_available =
+            version_is_newer(bundled_version.as_deref(), installed_version.as_deref());
 
         Ok(serde_json::json!({
             "installed": installed,
@@ -394,6 +514,7 @@ fn ensure_cli_executable(cli_script: &Path, legacy_shim: &Option<PathBuf>) {
 /// (the auto-heal) must not throw a password dialog.
 ///
 /// On Windows, performs the user-local `%LOCALAPPDATA%\K2` install (no admin).
+#[cfg(not(target_os = "linux"))]
 fn try_direct_cli_symlink(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> bool {
     #[cfg(windows)]
     {
@@ -435,7 +556,18 @@ pub(crate) fn cli_heal_silent() -> Result<bool, String> {
         find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
     let legacy_shim = find_cli_script_named("k2so");
     ensure_cli_executable(&cli_script, &legacy_shim);
-    Ok(try_direct_cli_symlink(&cli_script, &legacy_shim))
+    #[cfg(target_os = "linux")]
+    {
+        if linux_installed_cli().is_some() {
+            return Ok(false);
+        }
+        linux_write_cli(&linux_user_cli_dest()?, &cli_script, &legacy_shim)?;
+        return Ok(true);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(try_direct_cli_symlink(&cli_script, &legacy_shim))
+    }
 }
 
 #[tauri::command]
@@ -452,7 +584,26 @@ pub fn cli_install() -> Result<String, String> {
         return windows_cli_install(&cli_script, &legacy_shim);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(found) = linux_installed_cli() {
+            if cli_is_distro_package(&found) {
+                return Ok(found.display().to_string());
+            }
+            let is_link = fs::symlink_metadata(&found)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if !is_link {
+                linux_write_cli(&found, &cli_script, &legacy_shim)?;
+            }
+            return Ok(found.display().to_string());
+        }
+        let dest = linux_user_cli_dest()?;
+        linux_write_cli(&dest, &cli_script, &legacy_shim)?;
+        return Ok(dest.display().to_string());
+    }
+
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         let symlink_path = Path::new(CLI_SYMLINK_PATH);
 
@@ -520,7 +671,25 @@ pub fn cli_uninstall() -> Result<(), String> {
     {
         return windows_cli_uninstall();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // Never remove the distro package. Drop only the user-local copy
+        // Settings wrote when nothing else was on PATH.
+        let Ok(dest) = linux_user_cli_dest() else {
+            return Ok(());
+        };
+        if dest.exists() || dest.is_symlink() {
+            fs::remove_file(&dest).map_err(|e| format!("remove {}: {e}", dest.display()))?;
+        }
+        if let Some(parent) = dest.parent() {
+            let shim = parent.join("k2so");
+            if shim.exists() || shim.is_symlink() {
+                let _ = fs::remove_file(shim);
+            }
+        }
+        return Ok(());
+    }
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         let symlink_path = Path::new(CLI_SYMLINK_PATH);
         if !symlink_path.exists() && !symlink_path.is_symlink() {
@@ -687,7 +856,10 @@ pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod cli_heal_tests {
-    use super::symlink_target_needs_heal;
+    use super::{
+        cli_is_distro_package, copy_cli_script, first_existing_cli, linux_cli_search_paths,
+        read_cli_version, symlink_target_needs_heal, version_is_newer,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -749,6 +921,59 @@ mod cli_heal_tests {
         let other = d.join("old-k2");
         fs::write(&other, "old\n").unwrap();
         assert!(symlink_target_needs_heal(&other, &bundled));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn linux_search_order_matches_login_path() {
+        let home = PathBuf::from("/home/z");
+        let paths = linux_cli_search_paths(Some(&home));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/usr/local/bin/k2"),
+                PathBuf::from("/usr/bin/k2"),
+                home.join(".local/bin/k2"),
+            ]
+        );
+        assert!(linux_cli_search_paths(None).len() == 2);
+    }
+
+    #[test]
+    fn first_existing_cli_skips_absent_and_distro_is_usr_bin_only() {
+        let d = scratch();
+        let absent = d.join("missing");
+        let present = d.join("k2");
+        fs::write(&present, "K2_CLI_VERSION=\"0.41.2\"\n").unwrap();
+        let found = first_existing_cli(&[absent, present.clone()]).unwrap();
+        assert_eq!(found, present);
+        assert_eq!(read_cli_version(&found).as_deref(), Some("0.41.2"));
+        assert!(!cli_is_distro_package(&found));
+        assert!(cli_is_distro_package(std::path::Path::new("/usr/bin/k2")));
+        assert!(!cli_is_distro_package(std::path::Path::new("/usr/local/bin/k2")));
+        assert!(!cli_is_distro_package(std::path::Path::new(
+            "/home/z/.local/bin/k2"
+        )));
+        assert!(version_is_newer(Some("0.41.3"), Some("0.41.2")));
+        assert!(!version_is_newer(Some("0.41.2"), Some("0.41.2")));
+        assert!(!version_is_newer(Some("0.41.3"), None));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn copy_cli_script_writes_an_executable_user_copy() {
+        let d = scratch();
+        let src = d.join("bundled");
+        fs::write(&src, "#!/bin/bash\nK2_CLI_VERSION=\"9.9.9\"\n").unwrap();
+        let dest = d.join("bin").join("k2");
+        copy_cli_script(&src, &dest).unwrap();
+        assert_eq!(read_cli_version(&dest).as_deref(), Some("9.9.9"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&dest).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111);
+        }
         let _ = fs::remove_dir_all(&d);
     }
 }

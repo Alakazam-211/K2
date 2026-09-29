@@ -476,10 +476,12 @@ function AppRoot(): React.JSX.Element {
       }
       if (e.metaKey && e.key === 'k') {
         e.preventDefault()
+        if (!useWindowFocusStore.getState().isFocused) return
         toggleCommandPalette()
       }
       if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
+        if (e.shiftKey && !useWindowFocusStore.getState().isFocused) return
         applyCmdL({
           shift: e.shiftKey,
           focusAddress: focusVisibleBrowserAddress,
@@ -488,6 +490,7 @@ function AppRoot(): React.JSX.Element {
       }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
+        if (!useWindowFocusStore.getState().isFocused) return
         toggleRunningAgents()
       }
       if (e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
@@ -766,12 +769,14 @@ function AppRoot(): React.JSX.Element {
         if (activeTabId) removeTab(activeTabId)
       }).then(track)
       listen('menu:command-palette', () => {
+        if (!useWindowFocusStore.getState().isFocused) return
         toggleCommandPalette()
       }).then(track)
       // 0.40.31 — the View-menu "Review Queue" item became "Running
       // Agents" (⌘J): the native accelerator consumes the keystroke on
       // macOS, so the menu event is how ⌘J reaches us from the menu path.
       listen('menu:running-agents', () => {
+        if (!useWindowFocusStore.getState().isFocused) return
         useRunningAgentsStore.getState().toggle()
       }).then(track)
       listen('menu:projects', () => {
@@ -782,6 +787,7 @@ function AppRoot(): React.JSX.Element {
         useSidebarStore.getState().toggle()
       }).then(track)
       listen('menu:toggle-assistant', () => {
+        if (!useWindowFocusStore.getState().isFocused) return
         toggleAssistant()
       }).then(track)
       listen('menu:server-switcher', () => {

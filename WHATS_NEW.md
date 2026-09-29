@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.5 — Nested workspaces, and menus that stay put
+
+- **Nested workspace.** A workspace that lives inside another workspace keeps its own terminal. The outer workspace's session list no longer shows the inner one. Opening a saved pane leaves the other workspace's live terminal alone.
+- **Menus.** A dropdown opened from Settings, or from a dialog, paints solid and sits above the layer that opened it. A list that used to clip inside the page now opens on the page.
+
 ## 0.41.4 — User access, apps, and shortcuts in the front window
 
 - **User Access.** K2 Server lists Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, and K2 Companion. User Access, User Templates, and Apps are marked Beta. You add a person on User Access. Each app lists its users, and adding one gives that person a role on the app.

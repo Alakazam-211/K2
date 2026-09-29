@@ -998,6 +998,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0121_mail_bans_migrate",
             include_str!("../../drizzle_sql/0121_mail_bans_migrate.sql"),
         ),
+        // 0122 — sql_grant_relations, child of sql_grants. Empty list is
+        // the broad grant; rows fence k2 db grant --relation.
+        (
+            "0122_sql_grant_relations",
+            include_str!("../../drizzle_sql/0122_sql_grant_relations.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1601,7 +1607,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0121_mail_bans_migrate",
+            last_name, "0122_sql_grant_relations",
             "unexpected last migration name: {last_name}"
         );
     }

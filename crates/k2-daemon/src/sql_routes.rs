@@ -32,6 +32,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/db/bind"
         | "/cli/db/rows/update"
         | "/cli/db/rows/delete"
+        | "/cli/db/query"
         | "/cli/store/create"
         | "/cli/store/put"
         | "/cli/store/rm"
@@ -168,5 +169,8 @@ mod tests {
         assert_eq!(r.status, "405 Method Not Allowed");
         let r = dispatch("/cli/db/rows/delete", &HashMap::new()).unwrap();
         assert_eq!(r.status, "405 Method Not Allowed");
+        let r = dispatch("/cli/db/query", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+        assert!(r.body.contains("POST required"), "{}", r.body);
     }
 }

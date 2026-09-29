@@ -225,6 +225,8 @@ lettre = { version = "0.11", default-features = false, features = [
 # acme.rs is not test-only). aws-lc-rs matches the rustls provider at boot.
 instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "aws-lc-rs"] }
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+# Postgres 16 grammar for POST /cli/db/query. pg_query 6.x is PostgreSQL 17.
+pg_query = "=5.1.1"
 
 # Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
 # pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or

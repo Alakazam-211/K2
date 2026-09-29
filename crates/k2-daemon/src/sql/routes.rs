@@ -1202,6 +1202,9 @@ struct GrantBody {
     level: String,
     manage: Option<bool>,
     can_manage: Option<bool>,
+    /// Replaces the stored relation fence. Empty or absent clears it.
+    #[serde(default)]
+    relations: Vec<String>,
 }
 
 pub fn handle_grant(body: &[u8]) -> CliResponse {
@@ -1246,6 +1249,7 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
         &grantee,
         &b.level,
         can_manage,
+        &b.relations,
     ) {
         Ok(v) => {
             let s = v.to_string().to_ascii_lowercase();
@@ -1347,6 +1351,96 @@ pub fn handle_bind(body: &[u8]) -> CliResponse {
                     "500 Internal Server Error",
                     "engine",
                     "refusing to return secrets from bind",
+                );
+            }
+            ok_json(v)
+        }
+        Err(e) => ops_err(e),
+    }
+}
+
+fn session_token_required() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: r#"{"error":"session token required"}"#.to_string(),
+    }
+}
+
+/// `POST /cli/db/query`. Session token only. One parsed statement, run as
+/// the migrator with a lock row then SET ROLE. GET must not reach this.
+pub fn handle_db_query(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    let Some(pass) = skin else {
+        return session_token_required();
+    };
+    if !pass.session {
+        return crate::skin_routes::platform_store_forbidden();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = v
+        .get("workspace")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if workspace.is_empty() {
+        return CliResponse::bad_request("missing workspace");
+    }
+    let sql = v.get("sql").and_then(|x| x.as_str()).unwrap_or("");
+    if sql.trim().is_empty() {
+        return CliResponse::bad_request("missing sql");
+    }
+    let params = match v.get("params") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(items)) => items.clone(),
+        Some(_) => {
+            return ops_err(OpsError::Usage("params must be an array".into()));
+        }
+    };
+    let stmt = match super::query::classify_guest_sql(sql) {
+        Ok(s) => s,
+        Err(e) => return ops_err(e),
+    };
+    let principal = match pass
+        .principal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => id.to_string(),
+        None => {
+            return ops_err(OpsError::Usage("session has no principal id".into()));
+        }
+    };
+    if uuid::Uuid::parse_str(&principal).is_err() {
+        return ops_err(OpsError::Usage(
+            "session principal id is not a uuid".into(),
+        ));
+    }
+    let cap = if stmt.read {
+        crate::skin_routes::STORE_READ
+    } else {
+        crate::skin_routes::STORE_WRITE
+    };
+    let project_id = match skin_dump_workspace_body(&workspace, &pass, cap) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    let secrets = FileSecretStore::default();
+    match ops::exec_guest_query(ops(), &secrets, &project_id, &principal, &stmt, &params) {
+        Ok(v) => {
+            let rendered = v.to_string();
+            if rendered.contains("postgres://") || rendered.contains("\"dsn\"") {
+                return err_json(
+                    "500 Internal Server Error",
+                    "engine",
+                    "refusing to return a database URL",
                 );
             }
             ok_json(v)

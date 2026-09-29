@@ -20,6 +20,10 @@ pub enum OpsError {
     #[allow(dead_code)]
     Forbidden(String),
     Engine(String),
+    /// Guest query returned a 5001st row. The HTTP body is this error, not a page.
+    RowCap(String),
+    /// Guest statement hit `statement_timeout` (10s).
+    StatementTimeout(String),
 }
 
 impl OpsError {
@@ -28,6 +32,7 @@ impl OpsError {
             Self::Usage(_) => "400 Bad Request",
             Self::NotFound(_) => "404 Not Found",
             Self::CapReached(_) | Self::NotReady(_) | Self::ChecksumMismatch(_) => "409 Conflict",
+            Self::RowCap(_) | Self::StatementTimeout(_) => "409 Conflict",
             Self::Forbidden(_) => "403 Forbidden",
             Self::Engine(_) => "502 Bad Gateway",
         }
@@ -41,6 +46,8 @@ impl OpsError {
             Self::ChecksumMismatch(_) => "checksum_mismatch",
             Self::Forbidden(_) => "forbidden",
             Self::Engine(_) => "engine",
+            Self::RowCap(_) => "row_cap",
+            Self::StatementTimeout(_) => "statement_timeout",
         }
     }
     pub fn hint(&self) -> &str {
@@ -51,7 +58,9 @@ impl OpsError {
             | Self::NotReady(h)
             | Self::ChecksumMismatch(h)
             | Self::Forbidden(h)
-            | Self::Engine(h) => h,
+            | Self::Engine(h)
+            | Self::RowCap(h)
+            | Self::StatementTimeout(h) => h,
         }
     }
 }
@@ -238,10 +247,25 @@ pub(crate) fn ensure_k2_helpers_sql() -> &'static str {
     r#"CREATE SCHEMA IF NOT EXISTS k2;
 GRANT USAGE ON SCHEMA k2 TO PUBLIC;
 CREATE OR REPLACE FUNCTION k2.skin_uid() RETURNS uuid
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
+SECURITY DEFINER
+SET search_path = pg_temp, pg_catalog
 AS $k2fn$
-  SELECT nullif(current_setting('k2.skin_principal', true), '')::uuid
+DECLARE
+  locked uuid;
+BEGIN
+  BEGIN
+    SELECT id INTO locked FROM pg_temp.k2_principal_lock LIMIT 1;
+    IF FOUND THEN
+      RETURN locked;
+    END IF;
+  EXCEPTION
+    WHEN undefined_table THEN
+      NULL;
+  END;
+  RETURN nullif(current_setting('k2.skin_principal', true), '')::uuid;
+END;
 $k2fn$;
 GRANT EXECUTE ON FUNCTION k2.skin_uid() TO PUBLIC;
 CREATE OR REPLACE FUNCTION k2.set_principal(p uuid) RETURNS void
@@ -268,21 +292,41 @@ GRANT EXECUTE ON FUNCTION k2.principal_hygiene() TO PUBLIC;
 "#
 }
 
+/// One sql_grants LOGIN in a privilege sync. Empty `relations` is the
+/// broad grant (ALL TABLES + default privileges). A non-empty list is
+/// the relation fence.
+#[derive(Clone, Debug)]
+pub(crate) struct SyncGrant {
+    pub role: String,
+    pub level: String,
+    pub relations: Vec<(String, String)>,
+}
+
 /// P7: after each applied file, GRANT USAGE + DML + sequences on every
-/// migrator-owned non-system schema to `{db}_agent` and sql_grants roles.
-pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[(String, String)]) -> String {
+/// migrator-owned non-system schema to `{db}_agent` and to sql_grants
+/// roles that have no relation rows. A listed grantee is revoked down
+/// to those relations (no ALL TABLES, no default privileges).
+pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> String {
     let agent = format!("{db_name}_agent");
     let migrator = format!("{db_name}_migrator");
-    let mut targets: Vec<(String, bool)> = vec![(agent, true)];
-    for (role, level) in extra_grants {
-        if targets.iter().any(|(r, _)| r == role) {
+    let mut broad: Vec<(String, bool)> = vec![(agent, true)];
+    let mut listed: Vec<(SyncGrant, bool)> = Vec::new();
+    for grant in extra_grants {
+        if broad.iter().any(|(role, _)| role == &grant.role)
+            || listed.iter().any(|(g, _)| g.role == grant.role)
+        {
             continue;
         }
-        targets.push((role.clone(), level == "write"));
+        let write = grant.level == "write";
+        if grant.relations.is_empty() {
+            broad.push((grant.role.clone(), write));
+        } else {
+            listed.push((grant.clone(), write));
+        }
     }
     let mig_lit = pg_quote_literal(&migrator);
     let mut body = String::new();
-    for (role, write) in &targets {
+    for (role, write) in &broad {
         let role_lit = pg_quote_literal(role);
         if *write {
             body.push_str(&format!(
@@ -302,10 +346,54 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[(String, String)
             ));
         }
     }
+    for (grant, _) in &listed {
+        let role_lit = pg_quote_literal(&grant.role);
+        body.push_str(&format!(
+            "    EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM %I', sch, {role_lit});\n\
+             EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM %I', sch, {role_lit});\n\
+             EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON TABLES FROM %I', {mig_lit}, sch, {role_lit});\n\
+             EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM %I', {mig_lit}, sch, {role_lit});\n"
+        ));
+    }
+    let mut after = String::new();
+    for (grant, write) in &listed {
+        let role_lit = pg_quote_literal(&grant.role);
+        let mut schemas: Vec<&str> = Vec::new();
+        for (schema, _) in &grant.relations {
+            if !schemas.iter().any(|s| *s == schema.as_str()) {
+                schemas.push(schema.as_str());
+            }
+        }
+        for schema in schemas {
+            let sch_lit = pg_quote_literal(schema);
+            after.push_str(&format!(
+                "  EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', {sch_lit}, {role_lit});\n"
+            ));
+        }
+        for (schema, name) in &grant.relations {
+            let sch_lit = pg_quote_literal(schema);
+            let rel_lit = pg_quote_literal(name);
+            if *write {
+                after.push_str(&format!(
+                    "  EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I.%I TO %I', {sch_lit}, {rel_lit}, {role_lit});\n"
+                ));
+                after.push_str(&owned_sequence_grant_sql(&sch_lit, &rel_lit, &role_lit));
+            } else {
+                after.push_str(&format!(
+                    "  EXECUTE format('GRANT SELECT ON TABLE %I.%I TO %I', {sch_lit}, {rel_lit}, {role_lit});\n"
+                ));
+            }
+        }
+    }
+    let declare = if listed.iter().any(|(_, write)| *write) {
+        "  sch text;\n  seq_schema text;\n  seq_name text;\n"
+    } else {
+        "  sch text;\n"
+    };
     format!(
         "DO $k2priv$\n\
          DECLARE\n\
-           sch text;\n\
+         {declare}\
          BEGIN\n\
            FOR sch IN\n\
              SELECT n.nspname\n\
@@ -319,9 +407,46 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[(String, String)
            LOOP\n\
          {body}\
            END LOOP;\n\
+         {after}\
          END\n\
          $k2priv$;"
     )
+}
+
+/// Sequences owned by one table (serial `deptype = a`, identity `i`).
+/// Not every sequence in the schema.
+fn owned_sequence_grant_sql(schema_lit: &str, table_lit: &str, role_lit: &str) -> String {
+    format!(
+        "  FOR seq_schema, seq_name IN\n\
+            SELECT sn.nspname, s.relname\n\
+            FROM pg_class s\n\
+            JOIN pg_namespace sn ON sn.oid = s.relnamespace\n\
+            JOIN pg_depend d ON d.classid = 'pg_class'::regclass\n\
+              AND d.objid = s.oid\n\
+              AND d.refclassid = 'pg_class'::regclass\n\
+              AND d.deptype IN ('a', 'i')\n\
+            JOIN pg_class t ON t.oid = d.refobjid\n\
+            JOIN pg_namespace tn ON tn.oid = t.relnamespace\n\
+            WHERE s.relkind = 'S'\n\
+              AND tn.nspname = {schema_lit}\n\
+              AND t.relname = {table_lit}\n\
+         LOOP\n\
+           EXECUTE format('GRANT USAGE, SELECT, UPDATE ON SEQUENCE %I.%I TO %I', seq_schema, seq_name, {role_lit});\n\
+         END LOOP;\n"
+    )
+}
+
+/// Shared by migrate (`privilege_sync_for_row`) and `grant_access`.
+fn apply_privilege_sync(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+    grants: &[SyncGrant],
+) -> Result<(), OpsError> {
+    let sql = privilege_sync_sql(&row.name, grants);
+    let (user, pw) = migrator_creds(secrets, row)?;
+    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    Ok(())
 }
 
 fn privilege_sync_for_row(
@@ -329,18 +454,12 @@ fn privilege_sync_for_row(
     secrets: &dyn SecretStore,
     row: &DbRow,
 ) -> Result<(), OpsError> {
-    let extra: Vec<(String, String)> = {
+    let grants = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        grants_for(&conn, &row.id)
-            .into_iter()
-            .map(|g| (default_agent_role(&g.project_id), g.level))
-            .collect()
+        sync_grants_for(&conn, &row.id)?
     };
-    let sql = privilege_sync_sql(&row.name, &extra);
-    let (user, pw) = migrator_creds(secrets, row)?;
-    exec_as(ops, &row.name, &user, &pw, &sql)?;
-    Ok(())
+    apply_privilege_sync(ops, secrets, row, &grants)
 }
 
 fn ensure_k2_helpers(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
@@ -365,6 +484,17 @@ fn ensure_k2_helpers(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
         &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
         Some(owner.as_bytes()),
     );
+    // ALTER SCHEMA does not change function owners. SECURITY DEFINER must
+    // be the migrator, not postgres. CREATE OR REPLACE keeps the old owner.
+    let fn_owner = format!(
+        "ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};",
+        migrator = pg_quote_ident(&format!("{}_migrator", row.name)),
+    );
+    ops.run_helper(
+        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        Some(fn_owner.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
     Ok(())
 }
 
@@ -805,6 +935,9 @@ fn create_database_inner(
         Some(role_sql.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
+    // Migrator is NOINHERIT and is not a member of the agent until this
+    // GRANT. SET ROLE on the guest query session needs it. Never the reverse.
+    grant_grantee_membership(ops, &name, &agent)?;
 
     let create_db = format!(
         "CREATE DATABASE {db} OWNER {owner};",
@@ -842,7 +975,8 @@ fn create_database_inner(
          ALTER TABLE _k2_store OWNER TO {migrator};\n\
          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
          {helpers}\n\
-         ALTER SCHEMA k2 OWNER TO {migrator};",
+         ALTER SCHEMA k2 OWNER TO {migrator};\n\
+         ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
@@ -1519,7 +1653,23 @@ fn replay_one_grant(
         .map(|s| s.to_string())
         .unwrap_or_else(|| default_agent_role(&grant.project_id));
     refuse_sidecar_role(&role)?;
-    let sref = apply_pg_grant(ops, secrets, &row.name, &role, level)?;
+    let sref = mint_grantee_login(ops, secrets, &row.name, &role)?;
+    let grants = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut grants = sync_grants_for(&conn, &row.id)?;
+        if let Some(g) = grants.iter_mut().find(|g| g.role == role) {
+            g.level = level.to_string();
+        } else {
+            grants.push(SyncGrant {
+                role: role.clone(),
+                level: level.to_string(),
+                relations: Vec::new(),
+            });
+        }
+        grants
+    };
+    apply_privilege_sync(ops, secrets, row, &grants)?;
     let hired = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2039,12 +2189,13 @@ fn validate_level(level: &str) -> Result<&str, OpsError> {
     }
 }
 
-fn apply_pg_grant(
+/// Mint the grantee LOGIN and GRANT CONNECT. Table privileges go through
+/// [`apply_privilege_sync`], not a second public-only script.
+fn mint_grantee_login(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     db_name: &str,
     role: &str,
-    level: &str,
 ) -> Result<String, OpsError> {
     let (sref, _pw) = mint_workspace_agent_secret(ops, secrets, role, true)?;
     let connect = format!(
@@ -2058,35 +2209,80 @@ fn apply_pg_grant(
         Some(connect.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
-    let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
-    let role_q = pg_quote_ident(role);
-    let dml = if level == "write" {
-        format!(
-            "GRANT USAGE ON SCHEMA public TO {role_q};\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role_q};\n\
-             GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {role_q};\n\
-             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
-               GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role_q};\n\
-             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
-               GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {role_q};"
-        )
-    } else {
-        format!(
-            "GRANT USAGE ON SCHEMA public TO {role_q};\n\
-             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role_q};\n\
-             GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_q};\n\
-             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
-               GRANT SELECT ON TABLES TO {role_q};\n\
-             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
-               GRANT SELECT ON SEQUENCES TO {role_q};"
-        )
-    };
+    Ok(sref)
+}
+
+/// `GRANT <grantee> TO {db}_migrator` so the NOINHERIT migrator can
+/// SET ROLE. Never `GRANT {db}_migrator TO` the agent or the grantee.
+fn grant_grantee_membership(
+    ops: &dyn SystemOps,
+    db_name: &str,
+    role: &str,
+) -> Result<(), OpsError> {
+    let migrator = format!("{db_name}_migrator");
+    let sql = format!(
+        "GRANT {role} TO {migrator};",
+        role = pg_quote_ident(role),
+        migrator = pg_quote_ident(&migrator),
+    );
     ops.run_helper(
-        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
-        Some(dml.as_bytes()),
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
-    Ok(sref)
+    Ok(())
+}
+
+fn revoke_grantee_membership(
+    ops: &dyn SystemOps,
+    db_name: &str,
+    role: &str,
+) -> Result<(), OpsError> {
+    let migrator = format!("{db_name}_migrator");
+    let sql = format!(
+        "REVOKE {role} FROM {migrator};",
+        role = pg_quote_ident(role),
+        migrator = pg_quote_ident(&migrator),
+    );
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    Ok(())
+}
+
+/// Revoke tables, sequences, and default privileges on every
+/// migrator-owned schema. Runs as superuser so FOR ROLE names the
+/// migrator (not current_user).
+fn revoke_grantee_privileges_sql(db_name: &str, role: &str) -> String {
+    let migrator = format!("{db_name}_migrator");
+    let mig_lit = pg_quote_literal(&migrator);
+    let role_lit = pg_quote_literal(role);
+    format!(
+        "DO $k2revoke$\n\
+         DECLARE\n\
+           sch text;\n\
+         BEGIN\n\
+           FOR sch IN\n\
+             SELECT n.nspname\n\
+             FROM pg_namespace n\n\
+             JOIN pg_roles r ON r.oid = n.nspowner\n\
+             WHERE r.rolname = {mig_lit}\n\
+               AND n.nspname <> 'pg_catalog'\n\
+               AND n.nspname <> 'information_schema'\n\
+               AND n.nspname NOT LIKE 'pg_toast%'\n\
+               AND n.nspname NOT LIKE 'pg_temp%'\n\
+           LOOP\n\
+             EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I', sch, {role_lit});\n\
+             EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM %I', sch, {role_lit});\n\
+             EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM %I', sch, {role_lit});\n\
+             EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON TABLES FROM %I', {mig_lit}, sch, {role_lit});\n\
+             EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM %I', {mig_lit}, sch, {role_lit});\n\
+           END LOOP;\n\
+         END\n\
+         $k2revoke$;"
+    )
 }
 
 fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(), OpsError> {
@@ -2099,22 +2295,158 @@ fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(),
         &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
         Some(connect.as_bytes()),
     );
-    let dml = format!(
-        "REVOKE ALL ON SCHEMA public FROM {role};\n\
-         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role};\n\
-         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role};",
-        role = pg_quote_ident(role),
-    );
+    let dml = revoke_grantee_privileges_sql(db_name, role);
     let _ = ops.run_helper(
         &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
         Some(dml.as_bytes()),
     );
+    let _ = revoke_grantee_membership(ops, db_name, role);
     Ok(())
+}
+
+fn relation_ident_ok(ident: &str) -> bool {
+    let bytes = ident.as_bytes();
+    if bytes.is_empty() || bytes.len() > 63 {
+        return false;
+    }
+    let first = bytes[0] as char;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    bytes.iter().skip(1).all(|b| {
+        let c = *b as char;
+        c.is_ascii_alphanumeric() || c == '_'
+    })
+}
+
+fn relation_ident_reserved(ident: &str) -> bool {
+    ident == "information_schema" || ident.starts_with("pg_") || ident.starts_with("_k2_")
+}
+
+/// Fold to lowercase. A bare name is `public.<name>`. Bad names are
+/// Usage — caller must run this before any Postgres or catalog write.
+fn normalize_relations(raw: &[String]) -> Result<Vec<(String, String)>, OpsError> {
+    let mut out = Vec::new();
+    for item in raw {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            return Err(OpsError::Usage(
+                "relation name is empty — use schema.name or a bare name (public)".into(),
+            ));
+        }
+        let (schema, name) = match trimmed.split_once('.') {
+            Some((schema, name)) => {
+                if schema.is_empty() || name.is_empty() || name.contains('.') {
+                    return Err(OpsError::Usage(format!(
+                        "relation {trimmed:?} must be schema.name or a bare name"
+                    )));
+                }
+                (schema, name)
+            }
+            None => ("public", trimmed),
+        };
+        let schema = schema.to_ascii_lowercase();
+        let name = name.to_ascii_lowercase();
+        if !relation_ident_ok(&schema) || !relation_ident_ok(&name) {
+            return Err(OpsError::Usage(format!(
+                "relation {trimmed:?} must match [A-Za-z_][A-Za-z0-9_]* and be at most 63 characters"
+            )));
+        }
+        if relation_ident_reserved(&schema) || relation_ident_reserved(&name) {
+            return Err(OpsError::Usage(format!(
+                "relation {trimmed:?} is reserved (pg_, _k2_, information_schema)"
+            )));
+        }
+        if out.iter().any(|(s, n)| s == &schema && n == &name) {
+            continue;
+        }
+        out.push((schema, name));
+    }
+    Ok(out)
+}
+
+fn catalog_replace_grant(
+    database_id: &str,
+    project_id: &str,
+    level: &str,
+    can_manage: bool,
+    sref: &str,
+    relations: &[(String, String)],
+) -> Result<(), OpsError> {
+    let now = now_secs();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute_batch("SAVEPOINT k2_sql_grant")
+        .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
+    let write = (|| -> Result<(), rusqlite::Error> {
+        conn.execute(
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at, agent_secret_ref) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+             ON CONFLICT (database_id, project_id) DO UPDATE SET \
+               level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at, \
+               agent_secret_ref = COALESCE(sql_grants.agent_secret_ref, excluded.agent_secret_ref)",
+            rusqlite::params![
+                database_id,
+                project_id,
+                level,
+                if can_manage { 1 } else { 0 },
+                now,
+                sref
+            ],
+        )?;
+        conn.execute(
+            "DELETE FROM sql_grant_relations WHERE database_id = ?1 AND project_id = ?2",
+            rusqlite::params![database_id, project_id],
+        )?;
+        for (i, (schema, name)) in relations.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO sql_grant_relations \
+                 (database_id, project_id, schema_name, relation_name, position) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![database_id, project_id, schema, name, i as i64],
+            )?;
+        }
+        Ok(())
+    })();
+    match write {
+        Ok(()) => {
+            conn.execute_batch("RELEASE SAVEPOINT k2_sql_grant")
+                .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO SAVEPOINT k2_sql_grant");
+            let _ = conn.execute_batch("RELEASE SAVEPOINT k2_sql_grant");
+            Err(OpsError::Engine(format!("catalog grant: {e}")))
+        }
+    }
+}
+
+fn restore_previous_privileges(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+    role: &str,
+    previous_existed: bool,
+) {
+    if previous_existed {
+        let grants = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            sync_grants_for(&conn, &row.id).unwrap_or_default()
+        };
+        let _ = apply_privilege_sync(ops, secrets, row, &grants);
+    } else {
+        let _ = apply_pg_revoke(ops, &row.name, role);
+    }
 }
 
 /// Grant another workspace read|write on this database via **their** PG
 /// role. Never shares superuser. Same-workspace (the owner) is rejected
 /// with teaching — they already have manage/write.
+///
+/// `relations` replaces the stored fence. Empty restores the broad grant.
+/// Names are checked before Postgres or the catalog change.
 pub fn grant_access(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -2123,9 +2455,11 @@ pub fn grant_access(
     grantee_project_id: &str,
     level: &str,
     can_manage: bool,
+    relations: &[String],
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     let level = validate_level(level)?;
+    let relations = normalize_relations(relations)?;
     let row = find_database(db_spec, caller_project)?;
     if !caller_can_manage(caller_project, &row) {
         return Err(OpsError::Forbidden(
@@ -2148,8 +2482,50 @@ pub fn grant_access(
         }
     }
     let role = default_agent_role(grantee_project_id);
-    let sref = apply_pg_grant(ops, secrets, &row.name, &role, level)?;
-    catalog_upsert_grant(&row.id, grantee_project_id, level, can_manage, &sref)?;
+    let previous_existed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grant_level_on(&conn, &row.id, grantee_project_id).is_some()
+    };
+    let sref = mint_grantee_login(ops, secrets, &row.name, &role)?;
+    let intended = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut grants = sync_grants_for(&conn, &row.id)?;
+        if let Some(g) = grants.iter_mut().find(|g| g.role == role) {
+            g.level = level.to_string();
+            g.relations = relations.clone();
+        } else {
+            grants.push(SyncGrant {
+                role: role.clone(),
+                level: level.to_string(),
+                relations: relations.clone(),
+            });
+        }
+        grants
+    };
+    if let Err(e) = apply_privilege_sync(ops, secrets, &row, &intended) {
+        return Err(e);
+    }
+    if let Err(e) = grant_grantee_membership(ops, &row.name, &role) {
+        restore_previous_privileges(ops, secrets, &row, &role, previous_existed);
+        return Err(e);
+    }
+    if let Err(e) = catalog_replace_grant(
+        &row.id,
+        grantee_project_id,
+        level,
+        can_manage,
+        &sref,
+        &relations,
+    ) {
+        restore_previous_privileges(ops, secrets, &row, &role, previous_existed);
+        return Err(e);
+    }
+    let shown: Vec<String> = relations
+        .iter()
+        .map(|(schema, name)| format!("{schema}.{name}"))
+        .collect();
     let v = serde_json::json!({
         "ok": true,
         "databaseId": row.id,
@@ -2158,6 +2534,7 @@ pub fn grant_access(
         "level": level,
         "canManage": can_manage,
         "role": role,
+        "relations": shown,
     });
     assert_no_superuser_json(&v);
     Ok(v)
@@ -2314,6 +2691,58 @@ fn grants_for(conn: &rusqlite::Connection, database_id: &str) -> Vec<GrantRow> {
     .unwrap_or_default()
 }
 
+fn relations_for(
+    conn: &rusqlite::Connection,
+    database_id: &str,
+    project_id: &str,
+) -> Result<Vec<(String, String)>, OpsError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT schema_name, relation_name FROM sql_grant_relations \
+             WHERE database_id = ?1 AND project_id = ?2 \
+             ORDER BY position, schema_name, relation_name",
+        )
+        .map_err(|e| OpsError::Engine(format!("grant relations: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params![database_id, project_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| OpsError::Engine(format!("grant relations: {e}")))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| OpsError::Engine(format!("grant relations: {e}")))?);
+    }
+    Ok(out)
+}
+
+fn sync_grants_for(
+    conn: &rusqlite::Connection,
+    database_id: &str,
+) -> Result<Vec<SyncGrant>, OpsError> {
+    let mut out = Vec::new();
+    for grant in grants_for(conn, database_id) {
+        let relations = relations_for(conn, database_id, &grant.project_id)?;
+        out.push(SyncGrant {
+            role: default_agent_role(&grant.project_id),
+            level: grant.level,
+            relations,
+        });
+    }
+    Ok(out)
+}
+
+fn relation_labels(
+    conn: &rusqlite::Connection,
+    database_id: &str,
+    project_id: &str,
+) -> Vec<String> {
+    relations_for(conn, database_id, project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(schema, name)| format!("{schema}.{name}"))
+        .collect()
+}
+
 fn participant_json(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -2378,7 +2807,11 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             .unwrap_or_else(|| default_agent_role(&row.project_id));
         let grant_json: Vec<serde_json::Value> = grants
             .iter()
-            .map(|g| participant_json(&conn, &g.project_id, &g.level, g.can_manage))
+            .map(|g| {
+                let mut item = participant_json(&conn, &g.project_id, &g.level, g.can_manage);
+                item["relations"] = serde_json::json!(relation_labels(&conn, &row.id, &g.project_id));
+                item
+            })
             .collect();
         let mut item = serde_json::json!({
             "id": row.id,
@@ -3069,6 +3502,85 @@ fn validate_collection(name: &str) -> Result<String, OpsError> {
     Ok(n.to_string())
 }
 
+fn guest_lock_sql(principal: &str, login: &str) -> String {
+    let id = format!("'{}'", principal.replace('\'', "''"));
+    format!(
+        "CREATE TEMP TABLE pg_temp.k2_principal_lock (id uuid) ON COMMIT PRESERVE ROWS;\n\
+         INSERT INTO pg_temp.k2_principal_lock (id) VALUES ({id}::uuid);\n\
+         GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO {login};",
+        login = pg_quote_ident(login),
+    )
+}
+
+/// One psql process as `{db}_migrator`. Lock row, SET ROLE, statement_timeout,
+/// then the user statement. `-c` only: real psql ignores stdin when any `-c`
+/// is set. No `set_config('k2.skin_principal')`.
+pub(crate) fn exec_guest_query(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    principal_id: &str,
+    stmt: &super::query::GuestStmt,
+    params: &[serde_json::Value],
+) -> Result<serde_json::Value, OpsError> {
+    let quoted = if params.is_empty() {
+        None
+    } else {
+        Some(super::query::quote_guest_params(params)?)
+    };
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    let login = dml.bind.clone().unwrap_or_else(|| dml.user.clone());
+    let (mig_user, mig_pw) = migrator_creds(secrets, &dml.row)?;
+    let exec_sql = if stmt.returns_rows {
+        super::query::rows_wrapper(&stmt.sql)
+    } else {
+        stmt.sql.clone()
+    };
+    // `-A` without `-t`: INSERT/UPDATE/DELETE command tags stay on stdout.
+    // Row JSON lines still start with `{`.
+    let mut args: Vec<String> = vec![
+        "-h".into(),
+        "127.0.0.1".into(),
+        "-U".into(),
+        mig_user,
+        "-d".into(),
+        dml.row.name.clone(),
+        "-v".into(),
+        "ON_ERROR_STOP=1".into(),
+        "-A".into(),
+        "-c".into(),
+        guest_lock_sql(principal_id, &login),
+        "-c".into(),
+        format!("SET ROLE {}", pg_quote_ident(&login)),
+        "-c".into(),
+        "SET statement_timeout = '10s'".into(),
+    ];
+    if let Some(list) = quoted {
+        args.push("-c".into());
+        args.push(format!("PREPARE k2_guest_query AS {exec_sql}"));
+        args.push("-c".into());
+        args.push(format!("EXECUTE k2_guest_query({list})"));
+    } else {
+        args.push("-c".into());
+        args.push(exec_sql);
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = ops
+        .run_cmd(
+            PSQL_PATH,
+            &arg_refs,
+            &[("PGPASSWORD", mig_pw.as_str())],
+            None,
+        )
+        .map_err(super::query::map_guest_engine)?;
+    let text = String::from_utf8_lossy(&out);
+    if stmt.returns_rows {
+        super::query::guest_rows_json(&text)
+    } else {
+        super::query::guest_command_json(&text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3235,6 +3747,18 @@ mod tests {
             sql.contains("GRANT EXECUTE ON FUNCTION k2.set_principal(uuid) TO PUBLIC"),
             "{sql}"
         );
+        assert!(sql.contains("SECURITY DEFINER"), "{sql}");
+        assert!(sql.contains("pg_temp.k2_principal_lock"), "{sql}");
+        assert!(sql.contains("undefined_table"), "{sql}");
+        assert!(
+            sql.contains("SET search_path = pg_temp, pg_catalog"),
+            "{sql}"
+        );
+        assert!(!sql.contains("k2.lock_principal"), "{sql}");
+        assert!(
+            sql.contains("nullif(current_setting('k2.skin_principal', true), '')::uuid"),
+            "{sql}"
+        );
     }
 
     #[test]
@@ -3242,8 +3766,16 @@ mod tests {
         let sql = privilege_sync_sql(
             "ws_docs",
             &[
-                ("ws_sales_agent".into(), "write".into()),
-                ("ws_read_agent".into(), "read".into()),
+                SyncGrant {
+                    role: "ws_sales_agent".into(),
+                    level: "write".into(),
+                    relations: vec![],
+                },
+                SyncGrant {
+                    role: "ws_read_agent".into(),
+                    level: "read".into(),
+                    relations: vec![],
+                },
             ],
         );
         let up = sql.to_ascii_uppercase();
@@ -3276,6 +3808,96 @@ mod tests {
         assert!(sql.contains("ws_docs_agent"), "{sql}");
         assert!(sql.contains("ws_sales_agent"), "{sql}");
         assert!(sql.contains("ws_read_agent"), "{sql}");
+    }
+
+    #[test]
+    fn relation_names_fold_public_and_reject_reserved() {
+        let ok = normalize_relations(&[
+            "Notes".into(),
+            "public.Notes".into(),
+            "App.Tasks".into(),
+        ])
+        .expect("fold");
+        assert_eq!(
+            ok,
+            vec![
+                ("public".into(), "notes".into()),
+                ("app".into(), "tasks".into()),
+            ]
+        );
+        for bad in [
+            "pg_stat",
+            "information_schema.t",
+            "_k2_migrations",
+            "9no",
+            "a.b.c",
+            "",
+            "public.",
+        ] {
+            assert!(
+                normalize_relations(&[bad.into()]).is_err(),
+                "{bad} must be rejected before SQL"
+            );
+        }
+    }
+
+    #[test]
+    fn privilege_sync_sql_listed_is_select_not_all_tables() {
+        let sql = privilege_sync_sql(
+            "ws_docs",
+            &[SyncGrant {
+                role: "ws_patty_agent".into(),
+                level: "read".into(),
+                relations: vec![
+                    ("public".into(), "notes".into()),
+                    ("app".into(), "tasks".into()),
+                ],
+            }],
+        );
+        assert!(sql.contains("GRANT SELECT ON TABLE"), "{sql}");
+        assert!(sql.contains("'notes'"), "{sql}");
+        assert!(sql.contains("'tasks'"), "{sql}");
+        assert!(sql.contains("REVOKE ALL ON ALL TABLES"), "{sql}");
+        assert!(sql.contains("REVOKE ALL ON SEQUENCES"), "{sql}");
+        for stmt in sql.split(';') {
+            if stmt.contains("'ws_patty_agent'") && stmt.to_ascii_uppercase().contains("GRANT") {
+                assert!(
+                    !stmt.to_ascii_uppercase().contains("ON ALL TABLES"),
+                    "listed grantee must not receive ALL TABLES: {stmt}"
+                );
+            }
+        }
+        assert!(
+            sql.contains("ws_docs_agent")
+                && sql.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES"),
+            "owner agent stays broad: {sql}"
+        );
+        let write = privilege_sync_sql(
+            "ws_docs",
+            &[SyncGrant {
+                role: "ws_patty_agent".into(),
+                level: "write".into(),
+                relations: vec![("public".into(), "invoices".into())],
+            }],
+        );
+        assert!(
+            write.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE"),
+            "{write}"
+        );
+        assert!(write.contains("deptype IN ('a', 'i')"), "{write}");
+        assert!(
+            write.contains("GRANT USAGE, SELECT, UPDATE ON SEQUENCE"),
+            "{write}"
+        );
+        for stmt in write.split(';') {
+            let up = stmt.to_ascii_uppercase();
+            if stmt.contains("'ws_patty_agent'")
+                && up.contains("GRANT")
+                && up.contains("ON ALL SEQUENCES")
+            {
+                panic!("write list must not grant every sequence: {stmt}");
+            }
+        }
     }
 
     #[test]

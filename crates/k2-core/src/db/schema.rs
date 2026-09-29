@@ -3450,6 +3450,18 @@ pub struct SqlGrant {
     pub updated_at: i64,
 }
 
+/// One fenced relation on a `sql_grants` row (0122). No rows for that
+/// grant means the broad ALL TABLES grant. `position` is replace order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlGrantRelation {
+    pub database_id: String,
+    pub project_id: String,
+    pub schema_name: String,
+    pub relation_name: String,
+    pub position: i64,
+}
+
 // ── K2 Mail (0075, prd-email-server-v1 §12) ────────────────────────────
 //
 // Row structs for the mail tables. Serialize camelCase — the wire
@@ -3982,6 +3994,51 @@ mod unit_tests {
             )
             .expect("secret_ref reread");
         assert_eq!(sref2.as_deref(), Some("dbsec_agent_test"));
+    }
+
+    /// 0122: relation rows are a child of sql_grants and cascade on delete.
+    #[test]
+    fn sql_grant_relations_0122_roundtrip_and_cascade() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, created_at) \
+             VALUES ('d1', 'p1', 'ws_p1', 100)",
+            [],
+        )
+        .expect("sql_databases insert");
+        conn.execute(
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
+             VALUES ('d1', 'p2', 'read', 0, 100, 100)",
+            [],
+        )
+        .expect("sql_grants insert");
+        conn.execute(
+            "INSERT INTO sql_grant_relations (database_id, project_id, schema_name, relation_name, position) \
+             VALUES ('d1', 'p2', 'public', 'notes', 0), ('d1', 'p2', 'app', 'tasks', 1)",
+            [],
+        )
+        .expect("two relation rows");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sql_grant_relations WHERE database_id = 'd1' AND project_id = 'p2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count relations");
+        assert_eq!(n, 2);
+        conn.execute(
+            "DELETE FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'",
+            [],
+        )
+        .expect("delete parent");
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sql_grant_relations WHERE database_id = 'd1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count after cascade");
+        assert_eq!(left, 0, "child rows must cascade with the grant");
     }
 
     /// 0072 (K2 Mail): the CHECK-constrained enums reject invalid

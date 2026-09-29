@@ -891,6 +891,7 @@ async fn handle_one_request(
             | "/cli/db/rows"
             | "/cli/db/rows/update"
             | "/cli/db/rows/delete"
+            | "/cli/db/query"
             // DNS K1 — principal-bound control-plane proxy. JSON-bodied
             // POSTs; token_ok OR scoped require_hook in the dedicated arm
             // below (mirrors mail). Zone create/delete are owner-only
@@ -5492,6 +5493,85 @@ async fn handle_one_request(
                 body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // Guest stamped SQL. Exact path, before the `/cli/db/` skin 404
+        // glob. GET is 405 here; the top guard already 405s HEAD/PUT.
+        p if p == "/cli/db/query" => {
+            if !is_post {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if pass.session => Some(pass),
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::platform_store_forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let (auth_ok, _) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                if !auth_ok {
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let r = sql_dual_auth_failure(p, &query, bearer_token.as_deref());
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                let r = crate::cli_response::CliResponse {
+                    status: "403 Forbidden",
+                    content_type: "application/json",
+                    body: r#"{"error":"session token required"}"#.to_string(),
+                };
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            };
+            let Some(pass) = skin_pass else {
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::sql::routes::handle_db_query(&body_bytes, Some(pass))
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
         // Dump-table writes — exact paths before the skin 404 glob so

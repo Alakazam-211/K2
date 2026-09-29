@@ -13336,12 +13336,13 @@ cmd_schema() {
     },
     {
       "name": "db grant",
-      "usage": "k2 db grant <workspace> --db <id|name> --level read|write [--manage] [--json]",
-      "description": "Grant another workspace read or write on a database via THEIR Postgres role (never superuser). Owner or can_manage. Cross-workspace only — the owning workspace already has manage/write. --manage lets the grantee grant/revoke others.",
+      "usage": "k2 db grant <workspace> --db <id|name> --level read|write [--relation schema.name …] [--manage] [--json]",
+      "description": "Grant another workspace read or write on a database via THEIR Postgres role (never superuser). Owner or can_manage. Cross-workspace only — the owning workspace already has manage/write. --manage lets the grantee grant/revoke others. Repeating --relation replaces the stored fence (it does not append). Omit it to restore the broad grant.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [
         {"name": "--db", "arg": "id|name", "description": "Database id or name from k2 db list."},
         {"name": "--level", "arg": "read|write", "description": "read = SELECT; write = DML."},
+        {"name": "--relation", "arg": "schema.name", "description": "One relation on the fence. Repeat to name more. A bare name is public.<name>. Replaces the stored list."},
         {"name": "--manage", "arg": null, "description": "Allow the grantee to grant/revoke others."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -31894,6 +31895,7 @@ _db_py() {
     D_DOC_JSON="${D_DOC_JSON:-}" D_WHERE="${D_WHERE:-}" D_LIMIT="${D_LIMIT:-}" \
     D_GRANTEE="${D_GRANTEE:-}" D_DB="${D_DB:-}" D_LEVEL="${D_LEVEL:-}" \
     D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" D_ACCESS="${D_ACCESS:-}" \
+    D_RELATIONS="${D_RELATIONS:-[]}" \
     python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 
@@ -32008,11 +32010,18 @@ elif verb == "drop":
     status, raw = request("POST", "/cli/db/drop", body=body)
     d = load(raw)
 elif verb == "grant":
+    try:
+        relations = json.loads(os.environ.get("D_RELATIONS") or "[]")
+    except Exception:
+        die({"code": "usage", "hint": "relations must be a JSON array"})
+    if not isinstance(relations, list) or not all(isinstance(x, str) for x in relations):
+        die({"code": "usage", "hint": "relations must be a JSON array of strings"})
     body = {
         "project": os.environ.get("D_GRANTEE", ""),
         "db": os.environ.get("D_DB", ""),
         "level": os.environ.get("D_LEVEL", ""),
         "manage": os.environ.get("D_MANAGE") == "true",
+        "relations": relations,
     }
     status, raw = request("POST", "/cli/db/grant", body=body)
     d = load(raw)
@@ -32185,7 +32194,7 @@ AGENT (workspace — identity from token, never body project=)
   restore <file>                 workspace-relative (no .. / abs)
   drop --yes                     live Skin only
   drop --test --yes              test DB only (404 if missing; never the live Skin)
-  grant <workspace> --db … --level read|write [--manage]
+  grant <workspace> --db … --level read|write [--relation schema.name …] [--manage]
   revoke <workspace> --db …
 
 TWO ACTORS
@@ -32378,23 +32387,41 @@ cmd_db() {
             D_VERB="drop" D_JSON="$as_json" D_YES="$yes" D_TEST="$test" _db_py ;;
         grant)
             local grantee="" db_spec="" level="" manage=false
+            local relations=()
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --db) db_spec="${2:-}"; shift 2 ;;
                     --level) level="${2:-}"; shift 2 ;;
                     --manage) manage=true; shift ;;
+                    --relation)
+                        if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
+                            _db_err "usage" "--relation requires schema.name or a bare name"
+                            exit 2
+                        fi
+                        relations+=("$2")
+                        shift 2 ;;
+                    --relation=*)
+                        local rel="${1#*=}"
+                        if [ -z "$rel" ]; then
+                            _db_err "usage" "--relation requires schema.name or a bare name"
+                            exit 2
+                        fi
+                        relations+=("$rel")
+                        shift ;;
                     -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                     *)
                         if [ -z "$grantee" ]; then grantee="$1"; shift
                         else _db_err "usage" "unexpected extra argument '$1'"; exit 2; fi ;;
                 esac
             done
-            [ -n "$grantee" ] || { _db_err "usage" "k2 db grant <workspace> --db … --level read|write [--manage]"; exit 2; }
+            [ -n "$grantee" ] || { _db_err "usage" "k2 db grant <workspace> --db … --level read|write [--relation schema.name …] [--manage]"; exit 2; }
             [ -n "$db_spec" ] || { _db_err "usage" "grant requires --db <id|name>"; exit 2; }
             [ -n "$level" ] || { _db_err "usage" "grant requires --level read|write"; exit 2; }
             case "$level" in read|write) ;; *) _db_err "usage" "--level must be read or write"; exit 2 ;; esac
-            D_VERB="grant" D_JSON="$as_json" D_GRANTEE="$grantee" D_DB="$db_spec" D_LEVEL="$level" D_MANAGE="$manage" _db_py ;;
+            local relations_json
+            relations_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' ${relations[@]+"${relations[@]}"})
+            D_VERB="grant" D_JSON="$as_json" D_GRANTEE="$grantee" D_DB="$db_spec" D_LEVEL="$level" D_MANAGE="$manage" D_RELATIONS="$relations_json" _db_py ;;
         revoke)
             local grantee="" db_spec=""
             while [ $# -gt 0 ]; do

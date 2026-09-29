@@ -274,6 +274,7 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/db/rows")
             | ("POST", "/cli/db/rows/update")
             | ("POST", "/cli/db/rows/delete")
+            | ("POST", "/cli/db/query")
             | ("POST", "/cli/skin/password/change")
     )
 }
@@ -1245,6 +1246,11 @@ mod tests {
         assert!(allowlisted_http("POST", "/cli/db/rows"));
         assert!(allowlisted_http("POST", "/cli/db/rows/update"));
         assert!(allowlisted_http("POST", "/cli/db/rows/delete"));
+        assert!(allowlisted_http("POST", "/cli/db/query"));
+        assert!(!allowlisted_http("GET", "/cli/db/query"));
+        assert!(!allowlisted_http("HEAD", "/cli/db/query"));
+        assert!(!allowlisted_http("POST", "/cli/db/query/foo"));
+        assert!(!allowlisted_ws("/cli/db/query"));
         assert!(!allowlisted_http("POST", "/cli/db/rows/foo"));
         assert!(!allowlisted_http("GET", "/cli/db/foo"));
         assert!(!allowlisted_http("GET", "/cli/db/dump"));

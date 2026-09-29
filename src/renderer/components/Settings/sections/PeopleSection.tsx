@@ -1,6 +1,6 @@
 // Settings → K2 Server → User Access. Principals (username + full name)
-// plus that person's grants and access templates. Not Admin Access
-// (Connect users) and not Sidecars → Apps.
+// plus that person's grants. Access templates live under User Templates.
+// Not Admin Access (Connect users) and not Sidecars → Apps.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -13,16 +13,8 @@ export const PEOPLE_MANIFEST: SettingEntry[] = [
     section: 'people',
     label: 'User Access',
     description: 'Skin principals on this box — username and full name. Not Admin Access.',
-    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant'],
+    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password'],
     group: 'People',
-  },
-  {
-    id: 'people.templates',
-    section: 'people',
-    label: 'Access templates',
-    description: 'Kind and role lines applied onto a person as grants. Editing a template does not rewrite grants.',
-    keywords: ['template', 'access', 'grant', 'mailbox', 'role'],
-    group: 'Access templates',
   },
 ]
 
@@ -56,29 +48,10 @@ type GrantRow = {
   enabled: boolean
 }
 
-type TemplateLine = {
-  id: string
-  templateId: string
-  kind: string
-  roleId: string | null
-  position: number
-}
-
-type TemplateRow = {
-  id: string
-  name: string
-  lines: TemplateLine[]
-}
-
 type AppOption = { id: string; name: string; kind: string }
-
-type Selection =
-  | { kind: 'person'; username: string }
-  | { kind: 'template'; id: string }
 
 const KIND_OPTIONS = [
   { value: 'app', label: 'app' },
-  { value: 'mailbox', label: 'mailbox' },
   { value: 'database', label: 'database' },
   { value: 'cli', label: 'cli' },
 ]
@@ -181,30 +154,6 @@ function parseGrants(raw: unknown): GrantRow[] {
   })
 }
 
-function parseTemplates(raw: unknown): TemplateRow[] {
-  return asList(raw, ['templates']).flatMap((row) => {
-    const rec = asRecord(row)
-    const id = asString(rec.id)
-    const name = asString(rec.name)
-    if (!id || !name) return []
-    const lines = asList(rec.lines, ['lines']).flatMap((line) => {
-      const item = asRecord(line)
-      const lineId = asString(item.id)
-      const kind = asString(item.kind)
-      if (!lineId || !kind) return []
-      const position = item.position
-      return [{
-        id: lineId,
-        templateId: asString(item.templateId) ?? asString(item.template_id) ?? id,
-        kind,
-        roleId: asString(item.roleId) ?? asString(item.role_id),
-        position: typeof position === 'number' ? position : 0,
-      }]
-    })
-    return [{ id, name, lines }]
-  })
-}
-
 function parseApps(raw: unknown): AppOption[] {
   return asList(raw, ['services']).flatMap((row) => {
     const rec = asRecord(row)
@@ -258,10 +207,9 @@ export function PeopleSection(): React.JSX.Element {
   const [people, setPeople] = useState<PersonRow[]>([])
   const [roles, setRoles] = useState<RoleRow[]>([])
   const [grants, setGrants] = useState<GrantRow[]>([])
-  const [templates, setTemplates] = useState<TemplateRow[]>([])
   const [apps, setApps] = useState<AppOption[]>([])
   const [appsLoaded, setAppsLoaded] = useState(false)
-  const [selection, setSelection] = useState<Selection | null>(null)
+  const [selection, setSelection] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -273,12 +221,10 @@ export function PeopleSection(): React.JSX.Element {
   const [grantApp, setGrantApp] = useState('')
   const [grantTarget, setGrantTarget] = useState('')
   const [grantScope, setGrantScope] = useState('')
-  const [templateName, setTemplateName] = useState('')
-  const [lineKind, setLineKind] = useState('')
-  const [lineRole, setLineRole] = useState('')
-  const [applyPerson, setApplyPerson] = useState('')
-  const [applyTargets, setApplyTargets] = useState<Record<string, string>>({})
-  const [applyScopes, setApplyScopes] = useState<Record<string, string>>({})
+  const [newUsername, setNewUsername] = useState('')
+  const [newFullName, setNewFullName] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newEmail, setNewEmail] = useState('')
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -300,12 +246,6 @@ export function PeopleSection(): React.JSX.Element {
     } catch (e) {
       failures.push(errText(e))
       setRoles([])
-    }
-    try {
-      setTemplates(parseTemplates(await daemonCliGet<unknown>('skin/templates')))
-    } catch (e) {
-      failures.push(errText(e))
-      setTemplates([])
     }
     if (failures.length) setError(failures.join(' · '))
     setLoading(false)
@@ -335,23 +275,11 @@ export function PeopleSection(): React.JSX.Element {
   }, [appsLoaded])
 
   useEffect(() => {
-    const template = selection?.kind === 'template'
-      ? templates.find((t) => t.id === selection.id)
-      : undefined
-    const needsApps =
-      grantKind === 'app' ||
-      lineKind === 'app' ||
-      Boolean(template?.lines.some((line) => line.kind === 'app'))
-    if (!needsApps) return
+    if (grantKind !== 'app') return
     void loadApps().catch((e) => setError(errText(e)))
-  }, [grantKind, lineKind, selection, templates, loadApps])
+  }, [grantKind, loadApps])
 
-  const person = selection?.kind === 'person'
-    ? people.find((p) => p.username === selection.username) ?? null
-    : null
-  const template = selection?.kind === 'template'
-    ? templates.find((t) => t.id === selection.id) ?? null
-    : null
+  const person = selection ? people.find((p) => p.username === selection) ?? null : null
 
   const saveName = useCallback(
     async (username: string, fullName: string) => {
@@ -466,118 +394,37 @@ export function PeopleSection(): React.JSX.Element {
     }
   }, [person, grantKind, grantApp, grantTarget, grantRole, grantScope, refresh])
 
-  const addTemplate = useCallback(async () => {
-    const name = templateName.trim()
-    if (!name) return
-    setBusy('add-template')
+  const addPerson = useCallback(async () => {
+    const username = newUsername.trim().toLowerCase()
+    const password = newPassword.trim()
+    if (!username || !password) return
+    const email = newEmail.trim()
+    const fullName = newFullName.trim()
+    setBusy('add-person')
     setError(null)
     try {
-      await daemonCliPost('skin/templates', { name })
-      setTemplateName('')
+      const body: { username: string; password: string; email?: string } = { username, password }
+      if (email) body.email = email
+      await daemonCliPost('skin/users', body)
+      if (fullName) {
+        await daemonCliPost('skin/users/full-name', { username, fullName })
+      }
+      setNewUsername('')
+      setNewFullName('')
+      setNewPassword('')
+      setNewEmail('')
       await refresh()
     } catch (e) {
       setError(errText(e))
     } finally {
       setBusy(null)
     }
-  }, [templateName, refresh])
-
-  const renameTemplate = useCallback(
-    async (id: string, name: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost('skin/templates/update', { id, name })
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const removeTemplate = useCallback(
-    async (id: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost('skin/templates/delete', { id })
-        setSelection(null)
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const addLine = useCallback(async () => {
-    if (!template) return
-    setBusy('add-line')
-    setError(null)
-    try {
-      await daemonCliPost('skin/templates/lines', {
-        templateId: template.id,
-        kind: lineKind,
-        ...(lineKind === 'app' ? { roleId: lineRole } : {}),
-      })
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [template, lineKind, lineRole, refresh])
-
-  const removeLine = useCallback(
-    async (id: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost('skin/templates/lines/delete', { id })
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const applyTemplate = useCallback(async () => {
-    if (!template) return
-    const who = people.find((p) => p.id === applyPerson)
-    if (!who?.id) {
-      setError('missing subject id')
-      return
-    }
-    setBusy('apply')
-    setError(null)
-    try {
-      await daemonCliPost('skin/templates/apply', {
-        principalId: who.id,
-        templateId: template.id,
-        lines: template.lines.map((line) => ({
-          lineId: line.id,
-          targetId: applyTargets[line.id] ?? '',
-          ...(line.kind === 'app' ? {} : { scope: (applyScopes[line.id] ?? '').trim() }),
-        })),
-      })
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [template, people, applyPerson, applyTargets, applyScopes, refresh])
+  }, [newUsername, newFullName, newPassword, newEmail, refresh])
 
   const personGrants = person?.id
-    ? grants.filter((g) => g.subjectKind === 'principal' && g.subjectId === person.id)
+    ? grants.filter(
+        (g) => g.subjectKind === 'principal' && g.subjectId === person.id && g.kind !== 'mailbox',
+      )
     : []
   const hostGrant = personGrants.find((g) => g.kind === 'app' && g.targetId === 'host')
   const appChoices = apps.map((app) => ({ value: app.id, label: `${app.name} (${app.kind})` }))
@@ -602,17 +449,15 @@ export function PeopleSection(): React.JSX.Element {
           {loading ? (
             <p className="px-3 text-[10px] text-[var(--color-text-muted)]">Loading…</p>
           ) : people.length === 0 ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">
-              No skin users yet. Add them under Sidecars → Apps.
-            </p>
+            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No skin users yet.</p>
           ) : (
             people.map((row) => (
               <button
                 key={row.username}
                 type="button"
                 aria-label={`Open ${row.username}`}
-                className={listButtonClass(selection?.kind === 'person' && selection.username === row.username)}
-                onClick={() => setSelection({ kind: 'person', username: row.username })}
+                className={listButtonClass(selection === row.username)}
+                onClick={() => setSelection(row.username)}
               >
                 <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
                   {row.username}
@@ -625,47 +470,59 @@ export function PeopleSection(): React.JSX.Element {
               </button>
             ))
           )}
-          <div data-settings-id="people.templates" className="border-t border-[var(--color-border)] mt-2">
-            <div className="px-3 pt-2 pb-1">
-              <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-                Access templates
-              </span>
-            </div>
-            {templates.length === 0 ? (
-              <p className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]">No access templates yet.</p>
-            ) : (
-              templates.map((row) => (
-                <button
-                  key={row.id}
-                  type="button"
-                  aria-label={`Open template ${row.name}`}
-                  className={listButtonClass(selection?.kind === 'template' && selection.id === row.id)}
-                  onClick={() => setSelection({ kind: 'template', id: row.id })}
-                >
-                  <span className="block text-xs text-[var(--color-text-primary)] truncate">{row.name}</span>
-                </button>
-              ))
-            )}
-            <form
-              className="px-3 py-2 space-y-1.5"
-              onSubmit={(e) => {
-                e.preventDefault()
-                void addTemplate()
-              }}
-            >
-              <input
-                className={`${INPUT_CLS} w-full`}
-                aria-label="New access template name"
-                placeholder="template name"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-              />
-              <button type="submit" className={BTN_ACCENT} disabled={busy === 'add-template' || !templateName.trim()}>
-                Add template
-              </button>
-            </form>
-          </div>
         </div>
+        <form
+          className="border-t border-[var(--color-border)] px-3 py-2 space-y-1.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void addPerson()
+          }}
+        >
+          <input
+            className={`${INPUT_CLS} w-full`}
+            aria-label="New skin username"
+            placeholder="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            value={newUsername}
+            onChange={(e) => setNewUsername(e.target.value)}
+          />
+          <input
+            className={`${INPUT_CLS} w-full`}
+            aria-label="New skin full name"
+            placeholder="full name"
+            value={newFullName}
+            onChange={(e) => setNewFullName(e.target.value)}
+          />
+          <input
+            type="password"
+            className={`${INPUT_CLS} w-full`}
+            aria-label="New skin password"
+            placeholder="password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+          />
+          <input
+            type="email"
+            className={`${INPUT_CLS} w-full`}
+            aria-label="New skin email"
+            placeholder="email (optional)"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+          />
+          <button
+            type="submit"
+            className={BTN_ACCENT}
+            disabled={busy === 'add-person' || !newUsername.trim() || !newPassword.trim()}
+          >
+            Add user
+          </button>
+        </form>
       </div>
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {error && (
@@ -705,33 +562,8 @@ export function PeopleSection(): React.JSX.Element {
             onGrantScope={setGrantScope}
             onAddGrant={() => void addGrant()}
           />
-        ) : template ? (
-          <TemplateDetail
-            template={template}
-            people={people}
-            roles={roles}
-            apps={apps}
-            busy={busy}
-            lineKind={lineKind}
-            lineRole={lineRole}
-            applyPerson={applyPerson}
-            applyTargets={applyTargets}
-            applyScopes={applyScopes}
-            onRename={(name) => void renameTemplate(template.id, name)}
-            onDelete={() => void removeTemplate(template.id)}
-            onLineKind={setLineKind}
-            onLineRole={setLineRole}
-            onAddLine={() => void addLine()}
-            onRemoveLine={(id) => void removeLine(id)}
-            onApplyPerson={setApplyPerson}
-            onApplyTarget={(id, value) => setApplyTargets((prev) => ({ ...prev, [id]: value }))}
-            onApplyScope={(id, value) => setApplyScopes((prev) => ({ ...prev, [id]: value }))}
-            onApply={() => void applyTemplate()}
-          />
         ) : (
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            Select a person or an access template.
-          </p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">Select a person.</p>
         )}
       </div>
     </div>
@@ -1024,183 +856,6 @@ function PersonDetail({
           Delete account
         </button>
       )}
-    </div>
-  )
-}
-
-function TemplateDetail({
-  template,
-  people,
-  roles,
-  apps,
-  busy,
-  lineKind,
-  lineRole,
-  applyPerson,
-  applyTargets,
-  applyScopes,
-  onRename,
-  onDelete,
-  onLineKind,
-  onLineRole,
-  onAddLine,
-  onRemoveLine,
-  onApplyPerson,
-  onApplyTarget,
-  onApplyScope,
-  onApply,
-}: {
-  template: TemplateRow
-  people: PersonRow[]
-  roles: RoleRow[]
-  apps: AppOption[]
-  busy: string | null
-  lineKind: string
-  lineRole: string
-  applyPerson: string
-  applyTargets: Record<string, string>
-  applyScopes: Record<string, string>
-  onRename: (name: string) => void
-  onDelete: () => void
-  onLineKind: (value: string) => void
-  onLineRole: (value: string) => void
-  onAddLine: () => void
-  onRemoveLine: (id: string) => void
-  onApplyPerson: (id: string) => void
-  onApplyTarget: (lineId: string, value: string) => void
-  onApplyScope: (lineId: string, value: string) => void
-  onApply: () => void
-}): React.JSX.Element {
-  const [name, setName] = useState(template.name)
-  useEffect(() => {
-    setName(template.name)
-  }, [template.name])
-  const roleChoices = roles.map((role) => ({ value: role.id, label: role.name }))
-  return (
-    <div className="max-w-2xl space-y-4">
-      <SettingsGroup title="Access template">
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onRename(name.trim())
-          }}
-        >
-          <input
-            className={INPUT_CLS}
-            aria-label={`Template ${template.name} name`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <button type="submit" className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer">
-            Save template
-          </button>
-          <button
-            type="button"
-            className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-            onClick={onDelete}
-          >
-            Delete template
-          </button>
-        </form>
-        {template.lines.length === 0 ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">No lines yet. A line stores kind and, for app, a role. Not a target.</p>
-        ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {template.lines.map((line) => {
-              const role = line.roleId ? roles.find((r) => r.id === line.roleId) : null
-              const targets = apps
-                .filter((app) => !role?.appId || app.id === role.appId)
-                .map((app) => ({ value: app.id, label: `${app.name} (${app.kind})` }))
-              return (
-                <div key={line.id} className="py-2 space-y-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono text-[var(--color-text-primary)]">
-                      {line.kind}{role ? ` · ${role.name}` : ''}
-                    </span>
-                    <button
-                      type="button"
-                      className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                      onClick={() => onRemoveLine(line.id)}
-                    >
-                      Remove line
-                    </button>
-                  </div>
-                  {line.kind === 'app' ? (
-                    <SettingRow label="App">
-                      <SettingDropdown
-                        ariaLabel={`Apply target ${line.id}`}
-                        value={applyTargets[line.id] ?? ''}
-                        placeholder="app"
-                        options={targets}
-                        onChange={(value) => onApplyTarget(line.id, value)}
-                        menuAlign="right"
-                      />
-                    </SettingRow>
-                  ) : (
-                    <>
-                      <SettingRow label="Target">
-                        <input
-                          className={INPUT_CLS}
-                          aria-label={`Apply target ${line.id}`}
-                          value={applyTargets[line.id] ?? ''}
-                          onChange={(e) => onApplyTarget(line.id, e.target.value)}
-                        />
-                      </SettingRow>
-                      <SettingRow label="Scope">
-                        <input
-                          className={INPUT_CLS}
-                          aria-label={`Apply scope ${line.id}`}
-                          value={applyScopes[line.id] ?? ''}
-                          onChange={(e) => onApplyScope(line.id, e.target.value)}
-                        />
-                      </SettingRow>
-                    </>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-        <SettingRow label="Kind">
-          <SettingDropdown
-            ariaLabel="Template line kind"
-            value={lineKind}
-            placeholder="kind"
-            options={KIND_OPTIONS}
-            onChange={onLineKind}
-            menuAlign="right"
-          />
-        </SettingRow>
-        {lineKind === 'app' ? (
-          <SettingRow label="Role">
-            <SettingDropdown
-              ariaLabel="Template line role"
-              value={lineRole}
-              placeholder="role"
-              options={roleChoices}
-              onChange={onLineRole}
-              menuAlign="right"
-            />
-          </SettingRow>
-        ) : null}
-        <button type="button" className={BTN_ACCENT} disabled={busy === 'add-line' || !lineKind} onClick={onAddLine}>
-          Add line
-        </button>
-        <SettingRow label="Person">
-          <SettingDropdown
-            ariaLabel="Apply template to"
-            value={applyPerson}
-            placeholder="person"
-            options={people.flatMap((p) => (p.id ? [{ value: p.id, label: p.username }] : []))}
-            onChange={onApplyPerson}
-            menuAlign="right"
-          />
-        </SettingRow>
-        <button type="button" className={BTN_ACCENT} disabled={busy === 'apply' || template.lines.length === 0} onClick={onApply}>
-          Apply template
-        </button>
-      </SettingsGroup>
     </div>
   )
 }

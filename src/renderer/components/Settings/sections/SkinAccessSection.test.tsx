@@ -82,7 +82,15 @@ function mockOk(): void {
 
 async function loaded(): Promise<void> {
   await waitFor(() => {
-    expect(screen.getByText('bob')).not.toBeNull()
+    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(screen.getByRole('heading', { level: 2, name: 'Apps' })).not.toBeNull()
+  })
+}
+
+async function openHost(): Promise<void> {
+  await loaded()
+  fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+  await waitFor(() => {
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
   })
 }
@@ -93,30 +101,6 @@ beforeEach(() => {
   h.daemonCliPost.mockReset()
   mockOk()
 })
-
-function lastFrontDoorPost(): Record<string, unknown> {
-  const call = [...h.daemonCliPost.mock.calls].reverse().find((c) => c[0] === 'skin/front-door')
-  expect(call).toBeTruthy()
-  return (call?.[1] ?? {}) as Record<string, unknown>
-}
-
-const CADDY_MISSING_FIXTURE = {
-  mode: 'direct' as const,
-  listen: 'Caddy :443 → 127.0.0.1:18789',
-  connectUrl: 'https://skin.acme.k2.dev',
-  caddy: { missing: true, running: false, pid: null, binary: null },
-}
-
-const NESTED_REGISTERED_FIXTURE = {
-  mode: 'connect' as const,
-  connectUrl: 'https://skin.acme.k2.dev',
-  nested: {
-    label: 'skin',
-    host: 'skin.acme.k2.dev',
-    target: '127.0.0.1:18789',
-    registered: true,
-  },
-}
 
 describe('parsers', () => {
   it('parseFrontDoor defaults to connect stub URLs', () => {
@@ -248,12 +232,11 @@ describe('SKIN_ACCESS_MANIFEST', () => {
   it('is the Apps section (route id skin-access), not Server Access', () => {
     expect(SKIN_ACCESS_MANIFEST.every((e) => e.section === 'skin-access')).toBe(true)
     expect(SKIN_ACCESS_MANIFEST.map((e) => e.id)).toEqual([
-      'skin-access.front-door',
-      'skin-access.users',
       'skin-access.roles',
       'skin-access.keys',
       'skin-access.hydra',
     ])
+    expect(SKIN_ACCESS_MANIFEST.some((e) => /caddy/i.test(e.label + (e.group ?? '')))).toBe(false)
     expect(SKIN_ACCESS_MANIFEST.map((e) => e.id).join(' ')).not.toContain(
       'agents-can-manage-skin',
     )
@@ -286,144 +269,50 @@ describe('SkinAccessSection', () => {
     expect(appHits.every((e) => e.section === 'skin-access')).toBe(true)
   })
 
-  it('loads front-door, skin users, and tokens — never /cli/users', async () => {
+  it('loads users, roles, and tokens — never front-door or /cli/users', async () => {
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     const gets = h.daemonCliGet.mock.calls.map((c) => c[0])
-    expect(gets).toContain('skin/front-door')
+    expect(gets).not.toContain('skin/front-door')
     expect(gets).toContain('skin/users')
     expect(gets).toContain('skin/roles')
     expect(gets).toContain('skin-tokens')
     expect(gets.some((r: string) => r === 'users' || r.startsWith('users/'))).toBe(false)
-    expect(screen.getByText('https://skin.acme.k2.dev')).not.toBeNull()
-    expect(screen.getAllByText('alice').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Leftover Caddy (optional)')).toBeNull()
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
     expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
     expect(screen.queryByText(/Stub URLs only/i)).toBeNull()
   })
 
-  it("Connect radio POSTs {mode:'connect'} (apply may be true)", async () => {
+  it('does not render Leftover Caddy or the guest create form', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
+    expect(screen.queryByLabelText('New skin username')).toBeNull()
+    expect(screen.queryByRole('radio', { name: /Use K2 Connect/i })).toBeNull()
+    expect(screen.queryByRole('radio', { name: /Direct \/ this box/i })).toBeNull()
+    expect(screen.queryByText(/brew install caddy/)).toBeNull()
+  })
+
+  it('surfaces a users GET error without a front-door failure', async () => {
     h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') return { mode: 'direct', listen: ':443' }
-      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/users') throw new Error('users roster down')
       if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') return { grants: [] }
+      if (route === 'publish/list') return { services: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
-    await loaded()
-    const doorGets = () => h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/front-door').length
-    const getsBefore = doorGets()
-    fireEvent.click(screen.getByRole('radio', { name: /Use K2 Connect/i }))
     await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalled()
+      expect(screen.getByRole('alert').textContent).toMatch(/users roster down/)
     })
-    const body = lastFrontDoorPost()
-    expect(body.mode).toBe('connect')
-    if (body.apply !== undefined) expect(body.apply).toBe(true)
-    await waitFor(() => {
-      expect(doorGets()).toBeGreaterThan(getsBefore)
-    })
-  })
-
-  it("Direct radio POSTs {mode:'direct'}", async () => {
-    render(<SkinAccessSection />)
-    await loaded()
-    const doorGets = () => h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/front-door').length
-    const getsBefore = doorGets()
-    fireEvent.click(screen.getByRole('radio', { name: /Direct \/ this box/i }))
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalled()
-    })
-    const body = lastFrontDoorPost()
-    expect(body.mode).toBe('direct')
-    if (body.apply !== undefined) expect(body.apply).toBe(true)
-    await waitFor(() => {
-      expect(doorGets()).toBeGreaterThan(getsBefore)
-    })
-    const posts = h.daemonCliPost.mock.calls.map((c) => String(c[0]))
-    expect(posts.some((r) => /caddy/i.test(r))).toBe(false)
-  })
-
-  it('renders listen + caddy missing hint from fixture', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') return CADDY_MISSING_FIXTURE
-      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
-      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
-      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<SkinAccessSection />)
-    await loaded()
-    expect(screen.getByText('Caddy :443 → 127.0.0.1:18789')).not.toBeNull()
-    expect(screen.getByText(/brew install caddy/)).not.toBeNull()
-    expect(screen.getByText(/distro package/)).not.toBeNull()
-    expect(screen.queryByRole('switch', { name: /caddy/i })).toBeNull()
-  })
-
-  it('renders nested host when registered', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') return NESTED_REGISTERED_FIXTURE
-      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
-      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
-      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<SkinAccessSection />)
-    await loaded()
-    expect(screen.getByText('skin.acme.k2.dev')).not.toBeNull()
-    expect(screen.getByText(/registered/i)).not.toBeNull()
-  })
-
-  it('surfaces GET error on the existing alert', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') {
-        return { mode: 'connect', error: 'caddy: binary missing' }
-      }
-      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
-      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
-      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<SkinAccessSection />)
-    await loaded()
-    expect(screen.getByRole('alert').textContent).toMatch(/caddy: binary missing/)
-  })
-
-  it('search filters the skin roster', async () => {
-    render(<SkinAccessSection />)
-    await loaded()
-    const roster = () => document.querySelector('[data-settings-id="skin-access.users"]')
-    fireEvent.change(screen.getByLabelText('Search skin users'), { target: { value: 'ali' } })
-    expect(roster()?.textContent).toMatch(/alice/)
-    expect(roster()?.textContent).not.toMatch(/bob/)
-    fireEvent.change(screen.getByLabelText('Search skin users'), { target: { value: 'zzz' } })
-    expect(screen.getByText('No users match.')).not.toBeNull()
-  })
-
-  it('adds and removes skin users via skin/users — not users/add', async () => {
-    render(<SkinAccessSection />)
-    await loaded()
-    fireEvent.change(screen.getByLabelText('New skin username'), { target: { value: 'carol' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users', { username: 'carol' })
-    })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0])
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm remove' }))
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/remove', { username: 'alice' })
-    })
-    const posts = h.daemonCliPost.mock.calls.map((c) => String(c[0]))
-    expect(posts).not.toContain('users/add')
-    expect(posts).not.toContain('users/remove')
+    expect(screen.getByRole('alert').textContent).not.toMatch(/front-door/)
+    expect(screen.queryByText('Leftover Caddy (optional)')).toBeNull()
   })
 
   it('mints a secret once and lists prefix + caps without the secret', async () => {
@@ -434,7 +323,7 @@ describe('SkinAccessSection', () => {
       return { ok: true }
     })
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
@@ -471,7 +360,7 @@ describe('SkinAccessSection', () => {
       return { ok: true }
     })
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     expect(screen.getByLabelText('Mint cap files:read')).not.toBeNull()
     expect(screen.getByLabelText('Mint cap files:write')).not.toBeNull()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
@@ -494,7 +383,7 @@ describe('SkinAccessSection', () => {
   it('fails loud when mint returns no secret', async () => {
     h.daemonCliPost.mockResolvedValue({ id: 'tok-new', prefix: 'k2skn_ffff' })
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
@@ -510,7 +399,7 @@ describe('SkinAccessSection', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toMatch(/skin routes missing/)
     })
-    expect(screen.getByRole('alert').textContent).toMatch(/front-door/)
+    expect(screen.getByRole('alert').textContent).not.toMatch(/front-door/)
     expect(screen.getByRole('alert').textContent).toMatch(/users/)
     expect(screen.getByRole('alert').textContent).toMatch(/keys/)
   })
@@ -518,7 +407,7 @@ describe('SkinAccessSection', () => {
   it('revokes via skin-tokens/revoke', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<SkinAccessSection />)
-    await waitFor(() => expect(screen.getByText('k2skn_…ab12')).not.toBeNull())
+    await openHost()
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens/revoke', { id: 'tok-1' })
@@ -528,7 +417,7 @@ describe('SkinAccessSection', () => {
 
   it('unsupported Hydra toggle is disabled and does not POST', async () => {
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/hydra')
     expect(screen.getByText(/THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS/i)).not.toBeNull()
     const sw = screen.getByRole('switch', { name: 'Turn on Hydra OIDC issuer' })
@@ -548,6 +437,8 @@ describe('SkinAccessSection', () => {
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_SUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') return { grants: [] }
+      if (route === 'publish/list') return { services: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
@@ -558,7 +449,7 @@ describe('SkinAccessSection', () => {
       return { ok: true }
     })
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     const sw = screen.getByRole('switch', { name: 'Turn on Hydra OIDC issuer' })
     expect((sw as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(sw)
@@ -579,93 +470,21 @@ describe('SkinAccessSection', () => {
       }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') return { grants: [] }
+      if (route === 'publish/list') return { services: [] }
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     expect(screen.getByText(/Assign agents or these platform tokens go dark/i)).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText(/Assign agents or these platform tokens go dark/i)).toBeNull()
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/rooms/)
   })
 
-  it('sets a skin password via skin/users/password, not Connect users', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') {
-        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
-      }
-      if (route === 'skin/users') {
-        return { users: [{ ...USER_ALICE, hasPassword: false }, USER_BOB] }
-      }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
-      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
-      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<SkinAccessSection />)
-    await loaded()
-    fireEvent.change(screen.getByLabelText('alice password'), { target: { value: 's3cret-horse' } })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Set password' })[0])
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/password', {
-        username: 'alice',
-        password: 's3cret-horse',
-      })
-    })
-    expect(h.daemonCliPost.mock.calls.map((c) => String(c[0]))).not.toContain('users/set-password')
-  })
-
-  it('adds a guest with optional email and sets per-row email via skin/users/email', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') {
-        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
-      }
-      if (route === 'skin/users') {
-        return { users: [{ ...USER_ALICE, email: 'alice@clinic.com' }, USER_BOB] }
-      }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
-      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
-      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<SkinAccessSection />)
-    await loaded()
-    fireEvent.change(screen.getByLabelText('New skin username'), { target: { value: 'carol' } })
-    fireEvent.change(screen.getByLabelText('New skin email'), {
-      target: { value: 'carol@clinic.com' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users', {
-        username: 'carol',
-        email: 'carol@clinic.com',
-      })
-    })
-    fireEvent.change(screen.getByLabelText('alice email'), {
-      target: { value: 'alice@docs.com' },
-    })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Set email' })[0])
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/email', {
-        username: 'alice',
-        email: 'alice@docs.com',
-      })
-    })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Clear email' })[0])
-    await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/email', {
-        username: 'alice',
-        email: '',
-      })
-    })
-    expect(h.daemonCliPost.mock.calls.map((c) => String(c[0]))).not.toContain('users/email')
-  })
-
   it('mints disabled until an agent is checked', async () => {
     render(<SkinAccessSection />)
-    await loaded()
+    await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -687,36 +506,61 @@ describe('SkinAccessSection', () => {
         { handle: 'sales', caps: ['thread:read', 'thread:post', 'files:read'] },
       ],
     }
+    const wikiReader = {
+      id: 'role-wiki',
+      name: 'wiki-reader',
+      appId: 'svc-wiki',
+      roomAccess: [],
+    }
+    const bob = {
+      id: 'p-bob',
+      username: 'bob',
+      defaultRoomHandles: ['secret-room'],
+    }
     h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/front-door') {
-        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
-      }
-      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
-      if (route === 'skin/roles') return { roles: [dentist] }
+      if (route === 'skin/users') return { users: [USER_ALICE, bob] }
+      if (route === 'skin/roles') return { roles: [dentist, wikiReader] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') {
+        return {
+          grants: [{
+            id: 'gh-bob',
+            subjectKind: 'principal',
+            subjectId: 'p-bob',
+            kind: 'app',
+            targetId: 'host',
+            roleId: 'role-other',
+            enabled: true,
+          }],
+        }
+      }
+      if (route === 'publish/list') return { services: [] }
       throw new Error(`unexpected GET ${route}`)
     })
-    render(<SkinAccessSection />)
+    const view = render(<SkinAccessSection />)
     await loaded()
     expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/roles')
     fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+    expect(view.container.querySelector('select')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(screen.queryByText('role-other')).toBeNull()
+    expect(screen.getByText('default rooms: secret-room')).toBeTruthy()
     expect(
       screen.getByText(/Skin roles are not Connect owner\/admin\/member\/viewer/),
     ).not.toBeNull()
-    expect(screen.getByText(/They never include the terminal/)).not.toBeNull()
-    expect(
-      screen.getByText(/Files on Documents does not grant files on Anna/),
-    ).not.toBeNull()
-    const bobRole = screen.getByLabelText('bob role') as HTMLSelectElement
-    const optionNames = [...bobRole.options].map((o) => o.value)
-    expect(optionNames).toEqual(['', 'dentist'])
+    fireEvent.click(screen.getByLabelText('bob login role'))
+    const menu = screen.getByTestId('setting-dropdown-menu')
+    const optionNames = [...menu.querySelectorAll('button')].map((b) => b.textContent)
+    expect(optionNames).toContain('None')
+    expect(optionNames).toContain('dentist')
+    expect(optionNames).not.toContain('wiki-reader')
     expect(optionNames).not.toContain('owner')
     expect(optionNames).not.toContain('admin')
     expect(optionNames).not.toContain('member')
     expect(optionNames).not.toContain('viewer')
-    fireEvent.change(bobRole, { target: { value: 'dentist' } })
+    fireEvent.click(screen.getByRole('button', { name: 'dentist' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles/assign', {
         username: 'bob',
@@ -753,18 +597,23 @@ describe('SkinAccessSection', () => {
     expect(body.appId).toBeUndefined()
   })
 
-  it('keeps Guests, tokens, Caddy, and Hydra, and shows Roles only after an app is selected', async () => {
+  it('shows tokens and Hydra only after Host, and never Guests or Leftover Caddy', async () => {
     render(<SkinAccessSection />)
     await loaded()
-    expect(screen.getByRole('heading', { name: 'Guests' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Platform tokens' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Roles' })).toBeNull()
-    expect(screen.queryByLabelText('New skin role name')).toBeNull()
+    expect(screen.queryByLabelText('New skin username')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Host' }))
     expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Platform tokens' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeTruthy()
     expect(screen.getByLabelText('New skin role name')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
+    expect(screen.queryByLabelText('New skin username')).toBeNull()
   })
 
   it('lists cmd and skin from each workspace and resolves workspace grants by project id', async () => {
@@ -862,5 +711,58 @@ describe('SkinAccessSection', () => {
         project: 'proj-sales',
       })
     })
+  })
+
+  it('adds an existing person to the selected app as a grants row', async () => {
+    const ada = { id: 'p-ada', username: 'ada' }
+    const wikiReader = {
+      id: 'role-wiki',
+      name: 'wiki-reader',
+      appId: 'svc-wiki',
+      roomAccess: [],
+    }
+    const dentist = { id: 'role-1', name: 'dentist', roomAccess: [] }
+    h.daemonCliGet.mockImplementation(async (route: string, params?: { project?: string }) => {
+      if (route === 'skin/users') return { users: [ada] }
+      if (route === 'skin/roles') return { roles: [wikiReader, dentist] }
+      if (route === 'skin-tokens') return { tokens: [] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES]
+      if (route === 'skin/grants') return { grants: [] }
+      if (route === 'publish/list') {
+        if (params?.project !== 'proj-sales') throw new Error(`unexpected project ${params?.project}`)
+        return {
+          services: [
+            { id: 'svc-wiki', projectId: 'proj-sales', name: 'wiki', kind: 'skin', status: 'running', expose: 'local', url: null },
+          ],
+        }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
+    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeNull()
+    fireEvent.click(screen.getByLabelText('App user'))
+    fireEvent.click(screen.getByRole('button', { name: 'ada' }))
+    fireEvent.click(screen.getByLabelText('App user role'))
+    const roleMenu = screen.getByTestId('setting-dropdown-menu')
+    const roleNames = [...roleMenu.querySelectorAll('button')].map((b) => b.textContent)
+    expect(roleNames).toContain('wiki-reader')
+    expect(roleNames).not.toContain('dentist')
+    fireEvent.click(screen.getByRole('button', { name: 'wiki-reader' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants', {
+        subjectKind: 'principal',
+        subjectId: 'p-ada',
+        kind: 'app',
+        targetId: 'svc-wiki',
+        roleId: 'role-wiki',
+      })
+    })
+    expect(h.daemonCliPost.mock.calls.map((c) => c[0])).not.toContain('skin/users')
   })
 })

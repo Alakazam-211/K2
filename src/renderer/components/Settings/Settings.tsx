@@ -34,6 +34,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { PeopleSection, PEOPLE_MANIFEST } from './sections/PeopleSection'
+import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTemplatesSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
@@ -59,6 +60,7 @@ type NavLeaf = {
   label: string
   soon?: boolean
   hide?: boolean
+  beta?: boolean
 }
 type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string }
@@ -86,10 +88,11 @@ function settingsNav(): NavBlock[] {
       kind: 'group',
       title: 'K2 Server',
       items: [
-        { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
-        { id: 'domains', label: 'Domains' },
         { id: 'k2-access', label: 'Admin Access' },
-        { id: 'people', label: 'User Access' },
+        { id: 'people', label: 'User Access', beta: true },
+        { id: 'user-templates', label: 'User Templates', beta: true },
+        { id: 'domains', label: 'Custom Domains' },
+        { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'api-tokens', label: 'API Keys' },
         { id: 'companion', label: 'K2 Companion' },
@@ -119,7 +122,7 @@ function settingsNav(): NavBlock[] {
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
         { id: 'data', label: 'Database' },
-        { id: 'skin-access', label: 'Apps' },
+        { id: 'skin-access', label: 'Apps', beta: true },
       ],
     },
   ]
@@ -169,6 +172,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
       ...PEOPLE_MANIFEST,
+      ...USER_TEMPLATES_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
       ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
       ...(import.meta.env.DEV ? DICTATION_LAB_MANIFEST : []),
@@ -327,6 +331,7 @@ export default function Settings(): React.JSX.Element {
                       id={id}
                       label={it.label}
                       nested
+                      beta={it.beta}
                       active={activeSection === id}
                       onClick={() => setSection(id)}
                     />
@@ -363,7 +368,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'email-link' ||
           activeSection === 'data' ||
           activeSection === 'skin-access' ||
-          activeSection === 'people'
+          activeSection === 'people' ||
+          activeSection === 'user-templates'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'
@@ -443,6 +449,11 @@ export default function Settings(): React.JSX.Element {
             <PeopleSection />
           </SectionErrorBoundary>
         )}
+        {activeSection === 'user-templates' && (
+          <SectionErrorBoundary>
+            <UserTemplatesSection />
+          </SectionErrorBoundary>
+        )}
         {activeSection === 'api-tokens' && (
           <SectionErrorBoundary>
             <ApiTokensSection />
@@ -520,12 +531,14 @@ function SettingsNavButton({
   label,
   active,
   nested,
+  beta,
   onClick,
 }: {
   id: SettingsSection
   label: string
   active: boolean
   nested?: boolean
+  beta?: boolean
   onClick: () => void
 }): React.JSX.Element {
   return (
@@ -533,13 +546,16 @@ function SettingsNavButton({
       type="button"
       data-settings-nav={id}
       onClick={onClick}
-      className={`w-full text-left ${nested ? 'pl-7 pr-4' : 'px-4'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
+      className={`w-full text-left flex items-center justify-between ${nested ? 'pl-7 pr-4' : 'px-4'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
         active
           ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
           : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
       }`}
     >
-      {label}
+      <span>{label}</span>
+      {beta ? (
+        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">BETA</span>
+      ) : null}
     </button>
   )
 }

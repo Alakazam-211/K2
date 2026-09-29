@@ -20,6 +20,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { PeopleSection, PEOPLE_MANIFEST, parsePeople } from './PeopleSection'
+import { UserTemplatesSection } from './UserTemplatesSection'
 import { SECTION_LABELS } from '../searchManifest'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -45,6 +46,8 @@ describe('PEOPLE_MANIFEST', () => {
     expect(PEOPLE_MANIFEST.every((e) => e.section === 'people')).toBe(true)
     expect(PEOPLE_MANIFEST.some((e) => e.section === 'skin-access')).toBe(false)
     expect(SECTION_LABELS.people).toBe('User Access')
+    expect(SECTION_LABELS['user-templates']).toBe('User Templates')
+    expect(SECTION_LABELS.domains).toBe('Custom Domains')
     expect(SECTION_LABELS['k2-access']).toBe('Admin Access')
     expect(SECTION_LABELS['skin-access']).toBe('Apps')
   })
@@ -61,7 +64,9 @@ describe('PeopleSection', () => {
       expect(screen.getByText('ada')).toBeTruthy()
     })
     expect(screen.getByRole('heading', { level: 2, name: 'User Access' })).toBeTruthy()
-    expect(screen.getByText('Access templates')).toBeTruthy()
+    expect(screen.queryByText('Access templates')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open template Clinic' })).toBeNull()
+    expect(screen.getByLabelText('New skin username')).toBeTruthy()
     expect(screen.getByText('Ada Lovelace')).toBeTruthy()
     expect(screen.queryByText('secret-room')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Admin Access' })).toBeNull()
@@ -127,6 +132,14 @@ describe('PeopleSection', () => {
             targetId: 'svc-1',
             roleId: 'role-2',
             enabled: true,
+          }, {
+            id: 'gm',
+            subjectKind: 'principal',
+            subjectId: 'p-ada',
+            kind: 'mailbox',
+            targetId: 'box',
+            scope: 'inbox',
+            enabled: true,
           }],
         }
       }
@@ -145,10 +158,11 @@ describe('PeopleSection', () => {
     })
     render(<PeopleSection />)
     await screen.findByRole('button', { name: 'Open ada' })
-    expect(screen.getByText('Access templates')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Open template Clinic' })).toBeTruthy()
+    expect(screen.queryByText('Access templates')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open template Clinic' })).toBeNull()
     expect(screen.queryByText('secret-room')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open ada' }))
+    expect(screen.queryByText(/mailbox/)).toBeNull()
     const sw = screen.getByRole('switch', { name: 'Enable app svc-1' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Show app svc-1' }))
@@ -181,5 +195,42 @@ describe('PeopleSection', () => {
       defaultRooms: [],
       defaultRoomHandles: [],
     }])
+  })
+
+  it('adds a person with password, full name, and optional email', async () => {
+    allowRoster([])
+    h.daemonCliPost.mockResolvedValue({ username: 'carol' })
+    render(<PeopleSection />)
+    fireEvent.change(screen.getByLabelText('New skin username'), { target: { value: 'Carol' } })
+    fireEvent.change(screen.getByLabelText('New skin full name'), { target: { value: 'Carol Danvers' } })
+    fireEvent.change(screen.getByLabelText('New skin password'), { target: { value: 's3cret-horse' } })
+    fireEvent.change(screen.getByLabelText('New skin email'), { target: { value: 'carol@clinic.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users', {
+        username: 'carol',
+        password: 's3cret-horse',
+        email: 'carol@clinic.com',
+      })
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/full-name', {
+      username: 'carol',
+      fullName: 'Carol Danvers',
+    })
+    expect(h.daemonCliGet.mock.calls.every((c) => c[0] !== 'skin/templates')).toBe(true)
+  })
+
+  it('User Templates renders the access template list', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/templates') return { templates: [{ id: 't1', name: 'Clinic', lines: [] }] }
+      if (route === 'skin/roles') return { roles: [] }
+      if (route === 'skin/users') return { users: [] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<UserTemplatesSection />)
+    expect(await screen.findByRole('heading', { level: 2, name: 'User Templates' })).toBeTruthy()
+    expect(screen.getByText('Access templates')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open template Clinic' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'User Access' })).toBeNull()
   })
 })

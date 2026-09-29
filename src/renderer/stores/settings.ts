@@ -67,13 +67,15 @@ export type SettingsSection =
   | 'domains'
   /** Settings → K2 Server → Admin Access (K2 Connect people/roles). */
   | 'k2-access'
-  /** Settings → K2 Server → People (skin principals: username + full name). Not Connect users. */
+  /** Settings → K2 Server → User Access (skin principals). Not Connect users. */
   | 'people'
+  /** Settings → K2 Server → User Templates (access_templates recipes). */
+  | 'user-templates'
   | 'api-tokens'
   | 'email-hosting'
   | 'email-link'
   | 'data'
-  /** Settings → Sidecars → Apps (route id skin-access; guests / keys / front door). */
+  /** Settings → Sidecars → Apps (route id skin-access; per-app roles and users). */
   | 'skin-access'
 
 export interface TerminalSettings {

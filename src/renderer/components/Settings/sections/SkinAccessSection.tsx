@@ -1,56 +1,14 @@
-// Settings → Sidecars → Skin Access (prd-skin-identity-reshape-v1).
-// Owner surface: front door (POST apply + live Caddy/nested status), guests
-// (NOT Server Access), platform k2skn_ tokens (secret once at mint). Hydra is
-// opt-in (Linux sidecar; Mac supported=false). Enable skins ≠ start Hydra.
+// Settings → Sidecars → Apps. Master-detail: Host plus each published
+// service. Roles and app grants live on the selected detail. Platform
+// tokens and Hydra are box-level and render on Host only.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { SquareRadio, Toggle } from '@/components/ui'
-import { SettingsGroup } from '../controls/SettingControls'
+import { Toggle } from '@/components/ui'
+import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
-  {
-    id: 'skin-access.front-door',
-    section: 'skin-access',
-    label: 'Leftover Caddy (optional)',
-    description: 'Leftover optional Caddy. Host apps with k2 publish — not required.',
-    keywords: [
-      'front door',
-      'connect',
-      'caddy',
-      'direct',
-      'localhost',
-      'skin subdomain',
-      'tunnel',
-      'ui port',
-      'listen',
-      'skin',
-      'app',
-    ],
-    group: 'Leftover Caddy (optional)',
-  },
-  {
-    id: 'skin-access.users',
-    section: 'skin-access',
-    label: 'Guests',
-    description: 'Guest list for apps — passwords, email, and default rooms; not platform tokens',
-    keywords: [
-      'skin users',
-      'roster',
-      'guest',
-      'principal',
-      'add',
-      'remove',
-      'search',
-      'password',
-      'email',
-      'login',
-      'skin',
-      'app',
-    ],
-    group: 'Guests',
-  },
   {
     id: 'skin-access.roles',
     section: 'skin-access',
@@ -227,7 +185,6 @@ export const DEFAULT_HYDRA: SkinHydra = {
 
 const CONNECT_URL_STUB = 'https://skin.<sub>.k2.dev'
 const DIRECT_LISTEN_STUB = 'Caddy :443 (or LAN port) → 127.0.0.1:daemon'
-const CADDY_INSTALL_HINT = 'brew install caddy / distro package'
 
 const INPUT_CLS =
   'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
@@ -541,72 +498,13 @@ export function prefixLabel(prefix: string): string {
   return prefix
 }
 
-function FrontDoorStatus({ door }: { door: SkinFrontDoor }): React.JSX.Element {
-  const caddy = door.caddy
-  const nested = door.mode === 'connect' ? door.nested : undefined
-  return (
-    <div className="space-y-1.5">
-      <div>
-        <div className="text-[10px] text-[var(--color-text-muted)]">Connect URL</div>
-        <code className="block text-[10px] font-mono text-[var(--color-text-secondary)] mt-0.5">
-          {door.connectUrl}
-        </code>
-      </div>
-      <div>
-        <div className="text-[10px] text-[var(--color-text-muted)]">Listen</div>
-        <span className="block text-[10px] font-mono text-[var(--color-text-secondary)] mt-0.5">
-          {door.listen}
-        </span>
-      </div>
-      {caddy?.missing ? (
-        <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-          Caddy is not installed — {CADDY_INSTALL_HINT}.
-        </p>
-      ) : caddy ? (
-        <div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Caddy</div>
-          <span className="block text-[10px] text-[var(--color-text-secondary)] mt-0.5">
-            {caddy.running
-              ? `running${caddy.pid != null ? ` (pid ${caddy.pid})` : ''}`
-              : 'not running'}
-          </span>
-        </div>
-      ) : null}
-      {nested ? (
-        <div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Nested</div>
-          <span className="block text-[10px] text-[var(--color-text-secondary)] mt-0.5">
-            {nested.registered ? 'registered' : 'not registered'}
-            {nested.host ? (
-              <>
-                {' · '}
-                <code className="font-mono">{nested.host}</code>
-              </>
-            ) : null}
-          </span>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 export function SkinAccessSection(): React.JSX.Element {
-  const [frontDoor, setFrontDoor] = useState<SkinFrontDoor>(DEFAULT_FRONT_DOOR)
-  const [uiPortText, setUiPortText] = useState('')
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
   const [workspaces, setWorkspaces] = useState<SkinWorkspace[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [userQuery, setUserQuery] = useState('')
-  const [newUsername, setNewUsername] = useState('')
-  const [newEmail, setNewEmail] = useState('')
-  const [addBusy, setAddBusy] = useState(false)
-  const [addError, setAddError] = useState<string | null>(null)
-  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
-  const [passwordDraft, setPasswordDraft] = useState<Record<string, string>>({})
-  const [emailDraft, setEmailDraft] = useState<Record<string, string>>({})
   const [mintName, setMintName] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
@@ -614,10 +512,8 @@ export function SkinAccessSection(): React.JSX.Element {
   const [mintError, setMintError] = useState<string | null>(null)
   const [mintedSecret, setMintedSecret] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [doorBusy, setDoorBusy] = useState(false)
   const [hydra, setHydra] = useState<SkinHydra>(DEFAULT_HYDRA)
   const [hydraBusy, setHydraBusy] = useState(false)
-  const [applyToAll, setApplyToAll] = useState<Record<string, boolean>>({})
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editKeyRooms, setEditKeyRooms] = useState<Set<string>>(() => new Set())
@@ -633,19 +529,13 @@ export function SkinAccessSection(): React.JSX.Element {
   const [publishedApps, setPublishedApps] = useState<PublishedApp[]>([])
   const [grants, setGrants] = useState<SkinGrantRow[]>([])
   const [selectedApp, setSelectedApp] = useState<string | null>(null)
+  const [addPersonId, setAddPersonId] = useState('')
+  const [addRoleId, setAddRoleId] = useState('')
   const [publishBusy, setPublishBusy] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setError(null)
     const failures: string[] = []
-    try {
-      const door = await daemonCliGet<unknown>('skin/front-door')
-      const parsed = parseFrontDoor(door)
-      setFrontDoor(parsed)
-      if (parsed.error) failures.push(parsed.error)
-    } catch (e) {
-      failures.push(`front-door: ${errText(e)}`)
-    }
     try {
       const roster = await daemonCliGet<unknown>('skin/users')
       setUsers(parseSkinUsers(roster))
@@ -708,111 +598,6 @@ export function SkinAccessSection(): React.JSX.Element {
     void refresh()
   }, [refresh])
 
-  useEffect(() => {
-    setUiPortText(frontDoor.uiPort == null ? '' : String(frontDoor.uiPort))
-  }, [frontDoor.uiPort])
-
-  const visibleUsers = useMemo(() => {
-    const q = userQuery.trim().toLowerCase()
-    if (!q) return users
-    return users.filter(
-      (u) =>
-        u.username.toLowerCase().includes(q) || (u.email ?? '').toLowerCase().includes(q),
-    )
-  }, [users, userQuery])
-
-  const persistDoor = useCallback(
-    async (body: { mode: FrontDoorMode; uiPort?: number | null; apply: true }) => {
-      setDoorBusy(true)
-      setError(null)
-      try {
-        const posted = await daemonCliPost<unknown>('skin/front-door', body)
-        const postErr = parseFrontDoor(posted).error
-        try {
-          const door = await daemonCliGet<unknown>('skin/front-door')
-          const parsed = parseFrontDoor(door)
-          setFrontDoor(parsed)
-          setError(parsed.error ?? postErr)
-        } catch {
-          if (postErr) setError(postErr)
-        }
-      } catch (e) {
-        setError(`front-door: ${errText(e)}`)
-        throw e
-      } finally {
-        setDoorBusy(false)
-      }
-    },
-    [],
-  )
-
-  const setMode = useCallback(
-    async (mode: FrontDoorMode) => {
-      if (mode === frontDoor.mode) return
-      const prev = frontDoor.mode
-      setFrontDoor((d) => ({ ...d, mode }))
-      try {
-        await persistDoor({ mode, apply: true })
-      } catch {
-        setFrontDoor((d) => ({ ...d, mode: prev }))
-      }
-    },
-    [frontDoor.mode, persistDoor],
-  )
-
-  const commitUiPort = useCallback(async () => {
-    const trimmed = uiPortText.trim()
-    let next: number | null = null
-    if (trimmed) {
-      const n = Number(trimmed)
-      if (!Number.isInteger(n) || n < 1 || n > 65535) {
-        setError('front-door: UI port must be 1–65535')
-        return
-      }
-      next = n
-    }
-    if (next === (frontDoor.uiPort ?? null)) return
-    try {
-      await persistDoor({ mode: frontDoor.mode, uiPort: next, apply: true })
-    } catch {
-      /* persistDoor already set the alert */
-    }
-  }, [uiPortText, frontDoor.mode, frontDoor.uiPort, persistDoor])
-
-  const addUser = useCallback(async () => {
-    const username = newUsername.trim().toLowerCase()
-    if (!username) return
-    const email = newEmail.trim()
-    setAddBusy(true)
-    setAddError(null)
-    try {
-      const body: { username: string; email?: string } = { username }
-      if (email) body.email = email
-      await daemonCliPost('skin/users', body)
-      setNewUsername('')
-      setNewEmail('')
-      await refresh()
-    } catch (e) {
-      setAddError(errText(e))
-    } finally {
-      setAddBusy(false)
-    }
-  }, [newUsername, newEmail, refresh])
-
-  const removeUser = useCallback(
-    async (username: string) => {
-      setAddError(null)
-      try {
-        await daemonCliPost('skin/users/remove', { username })
-        setRemoveConfirm(null)
-        await refresh()
-      } catch (e) {
-        setAddError(errText(e))
-      }
-    },
-    [refresh],
-  )
-
   const mintKey = useCallback(async () => {
     const name = mintName.trim().toLowerCase()
     if (!name) {
@@ -843,38 +628,6 @@ export function SkinAccessSection(): React.JSX.Element {
       setMintBusy(false)
     }
   }, [mintName, mintCaps, mintRooms, refresh])
-
-  const setUserPassword = useCallback(
-    async (username: string, password: string | null) => {
-      setAddError(null)
-      try {
-        await daemonCliPost('skin/users/password', { username, password: password ?? '' })
-        setPasswordDraft((prev) => ({ ...prev, [username]: '' }))
-        await refresh()
-      } catch (e) {
-        setAddError(errText(e))
-      }
-    },
-    [refresh],
-  )
-
-  const setUserEmail = useCallback(
-    async (username: string, email: string | null) => {
-      setAddError(null)
-      try {
-        await daemonCliPost('skin/users/email', { username, email: email ?? '' })
-        setEmailDraft((prev) => {
-          const next = { ...prev }
-          delete next[username]
-          return next
-        })
-        await refresh()
-      } catch (e) {
-        setAddError(errText(e))
-      }
-    },
-    [refresh],
-  )
 
   const createRole = useCallback(async () => {
     const name = newRoleName.trim().toLowerCase()
@@ -943,7 +696,7 @@ export function SkinAccessSection(): React.JSX.Element {
 
   const setUserRole = useCallback(
     async (username: string, role: string | null) => {
-      setAddError(null)
+      setError(null)
       try {
         if (role) {
           await daemonCliPost('skin/roles/assign', { username, role })
@@ -952,24 +705,7 @@ export function SkinAccessSection(): React.JSX.Element {
         }
         await refresh()
       } catch (e) {
-        setAddError(errText(e))
-      }
-    },
-    [refresh],
-  )
-
-  const saveUserRooms = useCallback(
-    async (username: string, handles: string[], applyTokens: boolean) => {
-      setAddError(null)
-      try {
-        await daemonCliPost('skin/users/rooms', {
-          username,
-          rooms: handles,
-          applyTokens,
-        })
-        await refresh()
-      } catch (e) {
-        setAddError(errText(e))
+        setError(errText(e))
       }
     },
     [refresh],
@@ -1102,549 +838,135 @@ export function SkinAccessSection(): React.JSX.Element {
     [refresh],
   )
 
+  const addAppUser = useCallback(async () => {
+    if (!selectedApp || !addPersonId || !addRoleId) {
+      setError('Pick a person and a role')
+      return
+    }
+    setBusyId('add-user')
+    setError(null)
+    try {
+      await daemonCliPost('skin/grants', {
+        subjectKind: 'principal',
+        subjectId: addPersonId,
+        kind: 'app',
+        targetId: selectedApp === 'host' ? 'host' : selectedApp,
+        roleId: addRoleId,
+      })
+      setAddPersonId('')
+      setAddRoleId('')
+      await refresh()
+    } catch (e) {
+      setError(errText(e))
+    } finally {
+      setBusyId(null)
+    }
+  }, [selectedApp, addPersonId, addRoleId, refresh])
+
+  const peopleChoices = users.flatMap((u) => (u.id ? [{ value: u.id, label: u.username }] : []))
+  const appRoleChoices = visibleRoles.map((r) => ({ value: r.id, label: r.name }))
+  const loginRoleChoices = [
+    { value: '', label: 'None' },
+    ...visibleRoles.map((r) => ({ value: r.name, label: r.name })),
+  ]
+  const workspaceLabel = selectedPublished
+    ? (workspaces.find((w) => w.id === selectedPublished.projectId)?.name ?? selectedPublished.projectId)
+    : ''
+
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6">
-      <div className="max-w-2xl space-y-8">
-        <div>
-          <h2 className="text-base font-medium text-[var(--color-text-primary)]">Apps</h2>
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-            Guests of apps on this box (login sessions) and platform tokens (caps + rooms) — not Admin Access.
-            Do not mint a key for a user. Host the UI with k2 publish, not this page.
-            Overlay Thread rooms only; never grid / PTY.
+    <div className="flex h-full min-h-0">
+      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
+        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
+          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Apps</h2>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Host plus each published service. Not Admin Access.
           </p>
         </div>
-
-        {error && (
-          <p
-            role="alert"
-            className="text-[11px] text-[var(--color-status-error-soft)] max-w-2xl"
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {loading ? <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading…</p> : null}
+          <button
+            type="button"
+            aria-label="Host"
+            className={`w-full text-left px-3 py-2 text-xs no-drag cursor-pointer ${
+              selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+            }`}
+            onClick={() => setSelectedApp('host')}
           >
+            Host
+          </button>
+          {publishedApps.map((app) => (
+            <button
+              key={app.id}
+              type="button"
+              aria-label={`Open ${app.name}`}
+              className={`w-full text-left px-3 py-2 no-drag cursor-pointer ${
+                selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
+              }`}
+              onClick={() => setSelectedApp(app.id)}
+            >
+              <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
+                {app.name}
+              </span>
+              <span className="block text-[10px] text-[var(--color-text-muted)]">
+                {app.kind}
+                {PUBLISH_STATUS.has(app.status) ? ` · ${app.status}` : ''}
+                {app.expose === 'local' ? ' · local-only' : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-6 min-h-0">
+        {error && (
+          <p role="alert" className="text-[11px] text-[var(--color-status-error-soft)] max-w-2xl mb-3">
             {error}
           </p>
         )}
-
-        {!bannerDismissed && darkKeys.length > 0 ? (
-          <div
-            role="status"
-            className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2"
-          >
-            <p className="text-[11px] text-[var(--color-text-primary)]">
-              Assign agents or these platform tokens go dark. Tokens with no rooms cannot Thread.
-            </p>
-            <button
-              type="button"
-              className="text-[10px] text-[var(--color-accent)] cursor-pointer"
-              onClick={() => setBannerDismissed(true)}
-            >
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        <SettingsGroup title="Leftover Caddy (optional)">
-          <div data-settings-id="skin-access.front-door" className="space-y-3">
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Not how you host a skin. Hosting is k2 publish → the UI port that is
-              already listening. This leftover path-filter is optional. Do not apt
-              install caddy for a new skin; if a distro unit is already on, stop and
-              disable it (it binds *:80).
-            </p>
-            <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-              <SquareRadio
-                name="skin-front-door"
-                value="connect"
-                checked={frontDoor.mode === 'connect'}
-                disabled={doorBusy}
-                onChange={() => void setMode('connect')}
-                className="mt-0.5"
-              />
-              <span className="text-[11px] text-[var(--color-text-secondary)]">Use K2 Connect</span>
-            </label>
-            <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-              <SquareRadio
-                name="skin-front-door"
-                value="direct"
-                checked={frontDoor.mode === 'direct'}
-                disabled={doorBusy}
-                onChange={() => void setMode('direct')}
-                className="mt-0.5"
-              />
-              <span>
-                <span className="text-[11px] text-[var(--color-text-secondary)]">
-                  Direct / this box
-                </span>
-                <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                  Caddy on this box → daemon loopback. DNS A/AAAA has no port (use :443 in
-                  production). Do not bind k2-daemon to the LAN. Nested public names are
-                  k2 publish labels, not a CNAME onto a customer domain.
-                </span>
-              </span>
-            </label>
-            <FrontDoorStatus door={frontDoor} />
-            <label className="flex items-center gap-2">
-              <span className="text-[10px] text-[var(--color-text-muted)]">
-                UI port (optional, same-origin /)
-              </span>
-              <input
-                type="number"
-                min={1}
-                max={65535}
-                step={1}
-                inputMode="numeric"
-                placeholder=""
-                aria-label="UI port (optional, same-origin /)"
-                disabled={doorBusy}
-                value={uiPortText}
-                onChange={(e) => setUiPortText(e.target.value)}
-                onBlur={() => void commitUiPort()}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    ;(e.target as HTMLInputElement).blur()
-                  }
-                }}
-                className="w-20 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
-              />
-            </label>
-          </div>
-        </SettingsGroup>
-
-        <SettingsGroup title="Guests">
-          <div data-settings-id="skin-access.users" className="space-y-3">
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Guest list for apps. Not the Admin Access / Connect operator roster. Set a
-              password so the app can POST /cli/skin/login (the app owns the login UI).
-              Email is optional — needed to mint a password-reset token. K2 never emails
-              guests. Guests never see a secret. No public register. Do not mint a key for
-              this user.
-            </p>
-            <form
-              className="flex flex-wrap gap-1.5 items-center"
-              onSubmit={(e) => {
-                e.preventDefault()
-                void addUser()
-              }}
-            >
-              <input
-                className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
-                placeholder="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                aria-label="New skin username"
-              />
-              <input
-                className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
-                placeholder="email (optional)"
-                type="email"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                aria-label="New skin email"
-              />
-              <button
-                type="submit"
-                disabled={addBusy || !newUsername.trim()}
-                className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-              >
-                {addBusy ? 'Adding…' : 'Add user'}
-              </button>
-            </form>
-            {addError && (
-              <div
-                role="alert"
-                className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]"
-              >
-                {addError}
-              </div>
-            )}
-            <input
-              type="search"
-              value={userQuery}
-              onChange={(e) => setUserQuery(e.target.value)}
-              placeholder="Search users"
-              aria-label="Search skin users"
-              className={INPUT_CLS}
-            />
-            {loading ? (
-              <p className="text-[10px] text-[var(--color-text-muted)] py-1">Loading…</p>
-            ) : users.length === 0 ? (
-              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
-                No skin users yet — add one above.
-              </div>
-            ) : visibleUsers.length === 0 ? (
-              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
-                No users match.
+        {selectedApp == null ? (
+          <p className="text-[10px] text-[var(--color-text-muted)]">Select Host or an app.</p>
+        ) : (
+          <div className="max-w-2xl space-y-6">
+            {selectedPublished ? (
+              <div className="space-y-2">
+                <div className="text-xs font-mono text-[var(--color-text-primary)]">
+                  {selectedPublished.name}
+                </div>
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  {workspaceLabel}
+                  {` · ${selectedPublished.kind}`}
+                  {PUBLISH_STATUS.has(selectedPublished.status) ? ` · ${selectedPublished.status}` : ''}
+                  {selectedPublished.expose === 'local'
+                    ? ' · local-only'
+                    : selectedPublished.url
+                      ? ` · ${selectedPublished.url}`
+                      : ''}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                    disabled={publishBusy === selectedPublished.id}
+                    onClick={() => void publishAction('start', selectedPublished)}
+                  >
+                    Start {selectedPublished.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
+                    disabled={publishBusy === selectedPublished.id}
+                    onClick={() => void publishAction('stop', selectedPublished)}
+                  >
+                    Stop {selectedPublished.name}
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="divide-y divide-[var(--color-border)]">
-                {visibleUsers.map((u) => {
-                  const assigned = Boolean(u.roleName || u.roleId)
-                  const assignedRole = roles.find(
-                    (r) => r.name === u.roleName || r.id === u.roleId,
-                  )
-                  const selected = new Set(
-                    assigned
-                      ? (assignedRole?.roomHandles.length
-                          ? assignedRole.roomHandles
-                          : assignedRole?.rooms ?? [])
-                      : u.defaultRoomHandles.length
-                        ? u.defaultRoomHandles
-                        : u.defaultRooms,
-                  )
-                  return (
-                  <div key={u.username} className="py-2 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-[var(--color-text-primary)] font-mono truncate">
-                      {u.username}
-                    </span>
-                    {removeConfirm === u.username ? (
-                      <span className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => void removeUser(u.username)}
-                          className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                        >
-                          Confirm remove
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setRemoveConfirm(null)}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setRemoveConfirm(u.username)}
-                        className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                      >
-                        Remove
-                      </button>
-                    )}
-                    </div>
-                    <label className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-[var(--color-text-muted)]">Role</span>
-                      <select
-                        aria-label={`${u.username} role`}
-                        className={INPUT_CLS}
-                        value={u.roleName ?? ''}
-                        onChange={(e) => {
-                          const next = e.target.value.trim()
-                          void setUserRole(u.username, next || null)
-                        }}
-                      >
-                        <option value="">None</option>
-                        {roles.map((r) => (
-                          <option key={r.id} value={r.name}>
-                            {r.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {assigned && assignedRole ? (
-                      <div className="space-y-1.5">
-                        {(assignedRole.roomAccess.length
-                          ? assignedRole.roomAccess
-                          : assignedRole.roomHandles.map((handle) => ({
-                              handle,
-                              caps: [...DEFAULT_SKIN_CAPS],
-                            }))
-                        ).map((row) => (
-                          <div key={`${u.username}-${row.handle}`} className="space-y-1">
-                            <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                              {row.handle}
-                            </span>
-                            <div className="flex flex-wrap gap-x-3 gap-y-1">
-                              {SKIN_CAP_CHOICES.map((cap) => (
-                                <label
-                                  key={`${u.username}-${row.handle}-${cap}`}
-                                  className="flex items-center gap-1.5 select-none no-drag"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    aria-label={`${u.username} ${row.handle} ${cap}`}
-                                    checked={row.caps.includes(cap)}
-                                    disabled
-                                  />
-                                  <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
-                                    {cap}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : workspaces.length > 0 ? (
-                      <div className="flex flex-wrap gap-x-3 gap-y-1">
-                        {workspaces.map((ws) => (
-                          <label
-                            key={`${u.username}-${ws.id}`}
-                            className="flex items-center gap-1.5 select-none no-drag cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              aria-label={`${u.username} agent ${ws.handle}`}
-                              checked={selected.has(ws.handle) || selected.has(ws.id)}
-                              onChange={(e) => {
-                                const next = new Set(selected)
-                                if (e.target.checked) next.add(ws.handle)
-                                else {
-                                  next.delete(ws.handle)
-                                  next.delete(ws.id)
-                                }
-                                void saveUserRooms(
-                                  u.username,
-                                  [...next].filter((h) => workspaces.some((w) => w.handle === h || w.id === h)),
-                                  applyToAll[u.username] === true,
-                                )
-                              }}
-                            />
-                            <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                              {ws.handle}
-                            </span>
-                            {ws.name && ws.name !== ws.handle ? (
-                              <span className="text-[10px] text-[var(--color-text-muted)]">
-                                {ws.name}
-                              </span>
-                            ) : null}
-                          </label>
-                        ))}
-                      </div>
-                    ) : null}
-                    <form
-                      className="flex flex-wrap gap-1.5 items-center"
-                      onSubmit={(e) => {
-                        e.preventDefault()
-                        const pw = (passwordDraft[u.username] ?? '').trim()
-                        if (!pw) return
-                        void setUserPassword(u.username, pw)
-                      }}
-                    >
-                      <input
-                        type="password"
-                        className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
-                        placeholder={u.hasPassword ? 'new password' : 'set password'}
-                        autoComplete="new-password"
-                        aria-label={`${u.username} password`}
-                        value={passwordDraft[u.username] ?? ''}
-                        onChange={(e) =>
-                          setPasswordDraft((prev) => ({ ...prev, [u.username]: e.target.value }))
-                        }
-                      />
-                      <button
-                        type="submit"
-                        disabled={!(passwordDraft[u.username] ?? '').trim()}
-                        className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40"
-                      >
-                        Set password
-                      </button>
-                      {u.hasPassword ? (
-                        <button
-                          type="button"
-                          onClick={() => void setUserPassword(u.username, null)}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                        >
-                          Clear password
-                        </button>
-                      ) : (
-                        <span className="text-[10px] text-[var(--color-text-muted)]">
-                          no K2 login
-                        </span>
-                      )}
-                    </form>
-                    <form
-                      className="flex flex-wrap gap-1.5 items-center"
-                      onSubmit={(e) => {
-                        e.preventDefault()
-                        const em = (emailDraft[u.username] ?? u.email ?? '').trim()
-                        void setUserEmail(u.username, em)
-                      }}
-                    >
-                      <input
-                        type="email"
-                        className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
-                        placeholder={u.email ? 'email' : 'set email'}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        autoComplete="off"
-                        aria-label={`${u.username} email`}
-                        value={emailDraft[u.username] ?? u.email ?? ''}
-                        onChange={(e) =>
-                          setEmailDraft((prev) => ({ ...prev, [u.username]: e.target.value }))
-                        }
-                      />
-                      <button
-                        type="submit"
-                        className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
-                      >
-                        Set email
-                      </button>
-                      {u.email ? (
-                        <button
-                          type="button"
-                          onClick={() => void setUserEmail(u.username, null)}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                        >
-                          Clear email
-                        </button>
-                      ) : (
-                        <span className="text-[10px] text-[var(--color-text-muted)]">
-                          no email
-                        </span>
-                      )}
-                    </form>
-                    {assigned ? null : (
-                    <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                      <input
-                        type="checkbox"
-                        checked={applyToAll[u.username] === true}
-                        onChange={(e) =>
-                          setApplyToAll((prev) => ({ ...prev, [u.username]: e.target.checked }))
-                        }
-                      />
-                      <span className="text-[10px] text-[var(--color-text-muted)]">
-                        Apply to live sessions
-                      </span>
-                    </label>
-                    )}
-                  </div>
-                  )
-                })}
-              </div>
+              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                Host has no publish row. Login role is principals.role_id. Host roles keep app_id empty.
+              </p>
             )}
-          </div>
-        </SettingsGroup>
 
-        <SettingsGroup title="Apps on this box">
-          <div className="flex min-h-[18rem] border border-[var(--color-border)]">
-            <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] overflow-y-auto">
-              {/* cmd and skin publishes both own roles and grants.
-                  Host is the literal `host`, not a published_services row.
-                  Roles with app_id NULL sit under Host. */}
-              <button
-                type="button"
-                className={`w-full text-left px-3 py-2 text-xs no-drag cursor-pointer ${
-                  selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-                }`}
-                onClick={() => setSelectedApp('host')}
-              >
-                Host
-              </button>
-              {publishedApps.map((app) => (
-                <button
-                  key={app.id}
-                  type="button"
-                  aria-label={`Open ${app.name}`}
-                  className={`w-full text-left px-3 py-2 no-drag cursor-pointer ${
-                    selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-                  }`}
-                  onClick={() => setSelectedApp(app.id)}
-                >
-                  <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
-                    {app.name}
-                  </span>
-                  <span className="block text-[10px] text-[var(--color-text-muted)]">
-                    {app.kind}
-                    {PUBLISH_STATUS.has(app.status) ? ` · ${app.status}` : ''}
-                    {app.expose === 'local' ? ' · local-only' : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 min-w-0 overflow-y-auto p-3 space-y-4">
-              {selectedApp == null ? (
-                <p className="text-[10px] text-[var(--color-text-muted)]">
-                  Select Host or an app. Roles stay on that detail.
-                </p>
-              ) : (
-                <>
-                  {selectedPublished ? (
-                    <div className="space-y-2">
-                      <div className="text-xs font-mono text-[var(--color-text-primary)]">
-                        {selectedPublished.name}
-                      </div>
-                      <p className="text-[10px] text-[var(--color-text-muted)]">
-                        {selectedPublished.kind}
-                        {PUBLISH_STATUS.has(selectedPublished.status)
-                          ? ` · ${selectedPublished.status}`
-                          : ''}
-                        {selectedPublished.expose === 'local' ? ' · local-only' : ''}
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-                          disabled={publishBusy === selectedPublished.id}
-                          onClick={() => void publishAction('start', selectedPublished)}
-                        >
-                          Start {selectedPublished.name}
-                        </button>
-                        <button
-                          type="button"
-                          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
-                          disabled={publishBusy === selectedPublished.id}
-                          onClick={() => void publishAction('stop', selectedPublished)}
-                        >
-                          Stop {selectedPublished.name}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                      Host-wide roles stay app_id empty. The login role is still the guest&apos;s principals.role_id.
-                    </p>
-                  )}
-                  <div className="divide-y divide-[var(--color-border)]">
-                    {appGrants.length === 0 ? (
-                      <p className="text-[10px] text-[var(--color-text-muted)]">No grants on this app.</p>
-                    ) : (
-                      appGrants.map((grant) => (
-                        <div key={grant.id} className="py-2 flex items-center justify-between gap-2">
-                          <span className="text-xs text-[var(--color-text-primary)]">
-                            {grantSubjectLabel(grant, users, workspaces)}
-                            {grant.subjectKind === 'workspace' ? ' · workspace' : ''}
-                          </span>
-                          <span className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={grant.enabled}
-                              aria-label={`Enable grant ${grant.id}`}
-                              disabled={busyId === grant.id}
-                              onClick={() => void setGrantEnabled(grant, !grant.enabled)}
-                              className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                                grant.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                              }`}
-                            >
-                              <span
-                                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                                  grant.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                                }`}
-                              />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={`Revoke grant ${grant.id}`}
-                              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                              onClick={() => void revokeGrant(grant.id)}
-                            >
-                              Revoke
-                            </button>
-                          </span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-        <SettingsGroup title="Roles">
+            <SettingsGroup title="Roles">
           <div data-settings-id="skin-access.roles" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Skin roles are not Connect owner/admin/member/viewer. They never include the
@@ -1939,13 +1261,124 @@ export function SkinAccessSection(): React.JSX.Element {
             )}
           </div>
         </SettingsGroup>
-                </>
-              )}
-            </div>
-          </div>
-        </SettingsGroup>
 
-        <SettingsGroup title="Platform tokens">
+            <SettingsGroup title="Users">
+              {appGrants.length === 0 ? (
+                <p className="text-[10px] text-[var(--color-text-muted)]">No grants on this app.</p>
+              ) : (
+                <div className="divide-y divide-[var(--color-border)]">
+                  {appGrants.map((grant) => {
+                    const person = users.find((u) => u.id != null && u.id === grant.subjectId)
+                    const rooms = person
+                      ? (person.defaultRoomHandles.length ? person.defaultRoomHandles : person.defaultRooms)
+                      : []
+                    const grantRole = grant.roleId
+                      ? roles.find((r) => r.id === grant.roleId)
+                      : null
+                    return (
+                      <div key={grant.id} className="py-2 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-[var(--color-text-primary)]">
+                            {grantSubjectLabel(grant, users, workspaces)}
+                            {grant.subjectKind === 'workspace' ? ' · workspace' : ''}
+                          </span>
+                          <span className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={grant.enabled}
+                              aria-label={`Enable grant ${grant.id}`}
+                              disabled={busyId === grant.id}
+                              onClick={() => void setGrantEnabled(grant, !grant.enabled)}
+                              className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
+                                grant.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+                              }`}
+                            >
+                              <span
+                                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+                                  grant.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                                }`}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Revoke grant ${grant.id}`}
+                              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                              onClick={() => void revokeGrant(grant.id)}
+                            >
+                              Revoke
+                            </button>
+                          </span>
+                        </div>
+                        {selectedApp === 'host' && grant.subjectKind === 'principal' && person ? (
+                          <div className="space-y-1">
+                            {person.roleId || person.roleName ? null : (
+                              <p className="text-[10px] text-[var(--color-text-muted)]">
+                                default rooms: {rooms.length ? rooms.join(', ') : 'none'}
+                              </p>
+                            )}
+                            <SettingRow label="Login role">
+                              <SettingDropdown
+                                ariaLabel={`${person.username} login role`}
+                                value={person.roleName ?? ''}
+                                placeholder="None"
+                                options={loginRoleChoices}
+                                onChange={(next) => void setUserRole(person.username, next.trim() ? next : null)}
+                                menuAlign="right"
+                              />
+                            </SettingRow>
+                          </div>
+                        ) : selectedApp !== 'host' && grantRole ? (
+                          <p className="text-[10px] text-[var(--color-text-muted)]">{grantRole.name}</p>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <SettingRow label="Person">
+                <SettingDropdown
+                  ariaLabel="App user"
+                  value={addPersonId}
+                  placeholder="person"
+                  options={peopleChoices}
+                  onChange={setAddPersonId}
+                  menuAlign="right"
+                />
+              </SettingRow>
+              <SettingRow label="Role">
+                <SettingDropdown
+                  ariaLabel="App user role"
+                  value={addRoleId}
+                  placeholder="role"
+                  options={appRoleChoices}
+                  onChange={setAddRoleId}
+                  menuAlign="right"
+                />
+              </SettingRow>
+              <button
+                type="button"
+                className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                disabled={busyId === 'add-user' || !addPersonId || !addRoleId}
+                onClick={() => void addAppUser()}
+              >
+                Add user
+              </button>
+            </SettingsGroup>
+
+            {selectedApp === 'host' ? (
+              <>
+            {selectedApp === 'host' && !bannerDismissed && darkKeys.length > 0 ? (
+              <div role="status" className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2">
+                <p className="text-[11px] text-[var(--color-text-primary)]">
+                  Assign agents or these platform tokens go dark. Tokens with no rooms cannot Thread.
+                </p>
+                <button type="button" className="text-[10px] text-[var(--color-accent)] cursor-pointer" onClick={() => setBannerDismissed(true)}>
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+<SettingsGroup title="Platform tokens">
           <div data-settings-id="skin-access.keys" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Platform tokens are labels (vercel), not guests. The raw secret is shown only
@@ -2195,8 +1628,7 @@ export function SkinAccessSection(): React.JSX.Element {
             )}
           </div>
         </SettingsGroup>
-
-        <SettingsGroup title="OIDC issuer (Hydra)">
+<SettingsGroup title="OIDC issuer (Hydra)">
           <div data-settings-id="skin-access.hydra" className="space-y-2">
             {!hydra.supported ? (
               <p className="text-[10px] text-[var(--color-status-warn)] leading-relaxed">
@@ -2234,6 +1666,11 @@ export function SkinAccessSection(): React.JSX.Element {
             </div>
           </div>
         </SettingsGroup>
+              </>
+            ) : null}
+
+          </div>
+        )}
       </div>
     </div>
   )

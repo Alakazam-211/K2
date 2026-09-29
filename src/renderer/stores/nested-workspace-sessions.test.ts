@@ -16,8 +16,9 @@ vi.mock('@/lib/server-capabilities', () => ({
   serverSupports: vi.fn(() => true),
 }))
 
+type Fn = (...a: unknown[]) => void
+
 const ev = vi.hoisted(() => {
-  type Fn = (...a: unknown[]) => void
   return {
     sessionSubs: [] as Array<{ path: string; handlers: Record<string, Fn> }>,
   }

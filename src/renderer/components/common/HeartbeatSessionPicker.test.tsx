@@ -5,7 +5,7 @@ import { HeartbeatSessionPicker } from './HeartbeatSessionPicker'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 
 const cli = vi.hoisted(() => ({
-  get: vi.fn(async (route: string) => {
+  get: vi.fn(async (route: string, _params?: unknown) => {
     if (route === 'chat/list') {
       return [{
         sessionId: 's1',
@@ -31,7 +31,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => cli.get(...args),
+  daemonCliGet: (route: string, params?: unknown) =>
+    params === undefined ? cli.get(route) : cli.get(route, params),
   daemonCliGetText: vi.fn(async () => ''),
   daemonCliPost: vi.fn(async () => ({})),
   RecoveringError: class RecoveringError extends Error {},

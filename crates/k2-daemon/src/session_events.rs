@@ -5,8 +5,8 @@
 //! `SessionEvent` onto a process-wide `tokio::sync::broadcast` channel.
 //! `session_events_ws::serve_session_events_connection` fans those
 //! events out to each `/cli/sessions/events?path=<workspace>` WS
-//! subscriber, filtering by `cwd starts_with workspace_path` (same
-//! rule the existing list-for-workspace endpoint uses in `cli.rs`).
+//! subscriber. Session cwd events use [`cwd_matches_workspace`], the
+//! same rule as `GET /cli/sessions/list-for-workspace`.
 //!
 //! Why a broadcast bus instead of per-subscriber polling: the
 //! renderer used to discover new daemon-owned PTYs only on workspace
@@ -751,12 +751,80 @@ pub fn emit_fs_changed(workspace_path: &str, paths: impl IntoIterator<Item = Str
     });
 }
 
+/// Path-boundary match shared by list-for-workspace and the workspace
+/// socket. Trailing slashes are ignored. A query that trims to empty
+/// (`/` or `""`) matches an empty cwd or any cwd that starts with `/`.
+/// `/x/foo` does not match `/x/foobar`.
+pub fn cwd_path_boundary_matches(cwd: &str, query: &str) -> bool {
+    let trimmed = query.trim_end_matches('/');
+    let prefix_with_slash = if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        format!("{trimmed}/")
+    };
+    let cwd_trim = cwd.trim_end_matches('/');
+    cwd_trim == trimmed || cwd.starts_with(&prefix_with_slash)
+}
+
+/// Index of the longest registered project path that is a path-boundary
+/// prefix of `path`. Empty project paths (including `/`, which trims to
+/// empty) are skipped. No parent-directory fallback. `None` when nothing
+/// matches. Equal lengths keep the earlier row.
+pub fn longest_registered_project_index(path: &str, project_paths: &[String]) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    for (i, raw) in project_paths.iter().enumerate() {
+        let root = raw.trim_end_matches('/');
+        if root.is_empty() {
+            continue;
+        }
+        if !cwd_path_boundary_matches(path, root) {
+            continue;
+        }
+        let len = root.len();
+        let take = match best {
+            None => true,
+            Some((_, best_len)) => len > best_len,
+        };
+        if take {
+            best = Some((i, len));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// Whether `cwd` belongs on a workspace whose query path is `query`.
+///
+/// Does not open the database. `project_paths` is the registered project
+/// paths (`projects_list()`, which already drops `_orphan` and
+/// `_broadcast`). A query that trims to empty keeps the path-boundary
+/// rule and does not compare projects. Every other query matches only
+/// when the cwd is the query or a child of it, AND the longest registered
+/// project path that is a path-boundary prefix of the cwd is the same
+/// path as the longest such prefix of the query. Both missing counts as
+/// equal, so an empty registry still includes a subdirectory of the query.
+pub fn cwd_matches_workspace(cwd: &str, query: &str, project_paths: &[String]) -> bool {
+    if query.trim_end_matches('/').is_empty() {
+        return cwd_path_boundary_matches(cwd, query);
+    }
+    if !cwd_path_boundary_matches(cwd, query) {
+        return false;
+    }
+    let owner = |path: &str| {
+        longest_registered_project_index(path, project_paths)
+            .map(|i| project_paths[i].trim_end_matches('/'))
+    };
+    owner(cwd) == owner(query)
+}
+
 /// Resolve the workspace root for a mutated absolute path: the longest
 /// registered project path that is a prefix of `path` (exact match or
 /// `root/` prefix — never `/x/foo` for `/x/foobar`). When no project
 /// matches, fall back to the path's parent directory (still useful for
 /// prefix-style filtering if a client subscribed with that workspace
 /// root). Empty input yields empty string.
+///
+/// Files-drawer only. Session list and the workspace socket use
+/// [`cwd_matches_workspace`], which has no parent-directory fallback.
 pub fn resolve_workspace_for_path(path: &str) -> String {
     // Bare "/" is a valid absolute path (root). Don't collapse it to empty.
     if path == "/" {
@@ -1336,19 +1404,11 @@ mod tests {
 
     #[test]
     fn workspace_path_filter_rules_match_cli_endpoint() {
-        // Document the filter rule in a test. The actual filter is
-        // applied in session_events_ws.rs's per-subscriber loop;
-        // this test just pins the rule.
-        fn matches(cwd: &str, workspace_path: &str) -> bool {
-            let trimmed = workspace_path.trim_end_matches('/');
-            let prefix_with_slash = if trimmed.is_empty() {
-                "/".to_string()
-            } else {
-                format!("{}/", trimmed)
-            };
-            let cwd_trim = cwd.trim_end_matches('/');
-            cwd_trim == trimmed || cwd.starts_with(&prefix_with_slash)
-        }
+        // Same predicate list-for-workspace and the workspace socket use.
+        let none: Vec<String> = Vec::new();
+        let matches = |cwd: &str, workspace_path: &str| {
+            cwd_matches_workspace(cwd, workspace_path, &none)
+        };
         assert!(matches("/x/K2SO", "/x/K2SO"));
         assert!(matches("/x/K2SO/sub", "/x/K2SO"));
         assert!(matches("/x/K2SO/sub/deeper", "/x/K2SO"));
@@ -1359,6 +1419,66 @@ mod tests {
         // Trailing-slash tolerance.
         assert!(matches("/x/K2SO/", "/x/K2SO"));
         assert!(matches("/x/K2SO", "/x/K2SO/"));
+
+        // A nested registered project is not the parent's session.
+        let parent = "/x/K2SO".to_string();
+        let nested = "/x/K2SO/ProposalWriter".to_string();
+        let projects = vec![parent.clone(), nested.clone()];
+        let nested_matches = |cwd: &str, workspace_path: &str| {
+            cwd_matches_workspace(cwd, workspace_path, &projects)
+        };
+        assert!(
+            !nested_matches(&nested, &parent),
+            "nested project cwd must leave the parent workspace"
+        );
+        assert!(
+            !nested_matches(&format!("{nested}/src"), &parent),
+            "a child of the nested project must leave the parent workspace"
+        );
+        assert!(nested_matches(&format!("{parent}/src"), &parent));
+        assert!(nested_matches(&nested, &nested));
+        assert!(!nested_matches(&parent, &nested));
+    }
+
+    #[test]
+    fn nested_workspace_predicate_keeps_registered_projects_apart() {
+        let parent = "/proj/Parent".to_string();
+        let nested = "/proj/Parent/Nested".to_string();
+        let projects = vec![parent.clone(), nested.clone()];
+        let matches = |cwd: &str, query: &str| cwd_matches_workspace(cwd, query, &projects);
+        let worktree = format!("{parent}/.worktrees/branch");
+
+        assert!(!matches(&nested, &parent));
+        assert!(!matches(&format!("{nested}/src"), &parent));
+        assert!(matches(&parent, &parent));
+        assert!(matches(&format!("{parent}/src"), &parent));
+        assert!(matches(&format!("{parent}/src/"), &format!("{parent}/")));
+        assert!(matches(&worktree, &parent));
+        assert!(matches(&format!("{worktree}/file"), &parent));
+
+        assert!(matches(&worktree, &worktree));
+        assert!(matches(&format!("{worktree}/src"), &worktree));
+        assert!(!matches(&nested, &worktree));
+        assert!(!matches(&parent, &worktree));
+
+        assert!(matches(&nested, &nested));
+        assert!(matches(&format!("{nested}/src"), &nested));
+        assert!(!matches(&parent, &nested));
+        assert!(!matches(&format!("{parent}/src"), &nested));
+        assert!(!matches(&worktree, &nested));
+
+        let foo: Vec<String> = vec!["/x/foo".to_string(), "/x/foobar".to_string()];
+        assert!(!cwd_matches_workspace("/x/foobar", "/x/foo", &foo));
+        assert!(!cwd_matches_workspace("/x/foo", "/x/foobar", &foo));
+        assert!(!cwd_matches_workspace("/x/foobar", "/x/foo", &[]));
+        assert!(cwd_matches_workspace("/x/foo/sub", "/x/foo", &[]));
+
+        let sandbox = "/home/u/.k2/sandbox-sessions/abc";
+        assert!(cwd_matches_workspace("/any/absolute", "/", &projects));
+        assert!(cwd_matches_workspace(sandbox, "/", &projects));
+        assert!(cwd_matches_workspace("/any/absolute", "", &projects));
+        assert!(!cwd_matches_workspace("relative/cwd", "/", &projects));
+        assert!(cwd_matches_workspace(&nested, "/", &projects));
     }
 
     /// S1 presence FROZEN WIRE CONTRACT: `{ "kind": "presence_changed",

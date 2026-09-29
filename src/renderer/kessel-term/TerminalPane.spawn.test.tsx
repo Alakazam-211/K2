@@ -52,6 +52,8 @@ vi.mock('../kessel/daemon-ws', () => ({
 }))
 vi.mock('@/lib/remote-session', () => ({
   isPossibleAuthFailure: () => false,
+  isPasswordChangeRequired: () => false,
+  requirePasswordRotation: vi.fn(),
   reviveRemoteSession: vi.fn(async () => 'still-valid'),
 }))
 vi.mock('@/lib/file-drag', () => ({
@@ -82,6 +84,9 @@ vi.mock('@/stores/terminal-settings', () => {
     ),
   }
 })
+const tabsApi = vi.hoisted(() => ({
+  releasePaneOwnedElsewhere: vi.fn(),
+}))
 vi.mock('@/stores/tabs', () => ({
   useTabsStore: {
     getState: () => ({
@@ -90,6 +95,7 @@ vi.mock('@/stores/tabs', () => ({
       setTabTitle: vi.fn(),
       tabs: [],
       extraGroups: [],
+      releasePaneOwnedElsewhere: tabsApi.releasePaneOwnedElsewhere,
     }),
   },
 }))
@@ -348,6 +354,43 @@ function pane(visible: boolean, props: Partial<React.ComponentProps<typeof Termi
     </TabVisibilityContext.Provider>
   )
 }
+
+describe('session_owned_elsewhere', () => {
+  function installStatus(status: number, body: string): { urls: () => string[] } {
+    const urls: string[] = []
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input))
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => ({}),
+        text: async () => body,
+      } as unknown as Response
+    }) as unknown as typeof fetch
+    return { urls: () => urls }
+  }
+
+  it('drops the pane and does not retry, error, or POST v2/close', async () => {
+    const { urls } = installStatus(409, '{"error":"session_owned_elsewhere"}')
+    render(pane(true))
+    await waitFor(() => expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledWith('pg-test'))
+    expect(document.body.textContent ?? '').not.toContain('Kessel:')
+    expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
+    expect(urls().some((url) => url.includes('/cli/sessions/v2/close'))).toBe(false)
+    expect(urls().some((url) => url.includes('clear_index'))).toBe(false)
+    await settle()
+    expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
+    expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledTimes(1)
+  })
+
+  it('other 4xx still surfaces the spawn error and does not drop the pane', async () => {
+    installStatus(400, '{"error":"bad request"}')
+    render(pane(true))
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('spawn 400'))
+    expect(tabsApi.releasePaneOwnedElsewhere).not.toHaveBeenCalled()
+    expect(document.body.textContent ?? '').toContain('bad request')
+  })
+})
 
 describe('lazy spawn — restored never-attached bare tabs', () => {
   it('a hidden bare tab (no command, no session) does NOT spawn on mount', async () => {

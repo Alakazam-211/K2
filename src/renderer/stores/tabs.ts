@@ -1039,6 +1039,9 @@ interface TabsState {
   reorderTabs: (fromIndex: number, toIndex: number, groupIndex?: number) => void
   addPaneToTab: (tabId: string, paneId: string, pane: PaneData) => void
   removePaneFromTab: (tabId: string, paneGroupId: string) => void
+  /** Spawn 409 `session_owned_elsewhere`: drop this pane from the open
+   *  workspace and save. Does not POST v2/close. */
+  releasePaneOwnedElsewhere: (paneId: string) => void
   moveItemBetweenPanes: (fromTabId: string, fromPaneGroupId: string, itemId: string, toTabId: string, toPaneGroupId: string) => void
   getActiveTab: () => Tab | undefined
   openFileInPane: (tabId: string, filePath: string) => void
@@ -2224,6 +2227,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         return { ...tab, paneGroups: newPaneGroups }
       })
     }))
+  },
+
+  releasePaneOwnedElsewhere: (paneId) => {
+    dropPaneOwnedElsewhere(paneId)
   },
 
   removePaneFromTab: (tabId, paneGroupId) => {
@@ -5367,6 +5374,55 @@ function dropSurfacedTabsForSessionRemoval(
     useTabsStore.getState().saveLayoutForWorkspace(save.projectId, save.workspaceId)
   }
   return true
+}
+
+/** Strip one pane id out of a mosaic split. One-terminal tabs are not
+ *  touched here — `dropSurfacedTabsForSessionRemoval` owns those. */
+function stripSplitPane(tabs: Tab[], paneId: string): { tabs: Tab[]; changed: boolean } {
+  let changed = false
+  const next = tabs.map((tab) => {
+    if (tab.paneGroups.size <= 1 || !tab.paneGroups.has(paneId)) return tab
+    changed = true
+    const paneGroups = new Map(tab.paneGroups)
+    paneGroups.delete(paneId)
+    return {
+      ...tab,
+      paneGroups,
+      mosaicTree: removePaneFromTree(tab.mosaicTree, paneId),
+    }
+  })
+  return { tabs: next, changed }
+}
+
+/** A v2 spawn 409 `session_owned_elsewhere`. The live PTY belongs to
+ *  another registered project. Remove this pane from the workspace that
+ *  was opening and save that layout. Does not POST `/cli/sessions/v2/close`
+ *  and does not send `clear_index`. A one-terminal tab is dropped whole.
+ *  A split loses only this pane id. */
+export function releasePaneOwnedElsewhere(paneId: string): void {
+  dropPaneOwnedElsewhere(paneId)
+}
+
+function dropPaneOwnedElsewhere(paneId: string): void {
+  const state = useTabsStore.getState()
+  const save =
+    state.activeProjectId && state.activeWorkspaceId
+      ? { projectId: state.activeProjectId, workspaceId: state.activeWorkspaceId }
+      : null
+  if (dropSurfacedTabsForSessionRemoval(paneId, save)) return
+
+  const main = stripSplitPane(state.tabs, paneId)
+  let extraChanged = false
+  const extraGroups = state.extraGroups.map((g) => {
+    const stripped = stripSplitPane(g.tabs, paneId)
+    if (stripped.changed) extraChanged = true
+    return { ...g, tabs: stripped.tabs }
+  })
+  if (!main.changed && !extraChanged) return
+  useTabsStore.setState({ tabs: main.tabs, extraGroups })
+  if (save) {
+    useTabsStore.getState().saveLayoutForWorkspace(save.projectId, save.workspaceId)
+  }
 }
 
 /** Local strip drop after a sidecar refresh spawn failed and this window

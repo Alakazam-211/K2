@@ -1547,6 +1547,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
           if (!spawnRes.ok) {
             const body = await spawnRes.text()
+            // The live PTY is owned by a nested workspace. Drop this pane
+            // from the layout that was opening. Do not retry, do not
+            // surface an error, and do not close the other session.
+            if (spawnRes.status === 409 && body.includes('session_owned_elsewhere')) {
+              if (!cancelled) {
+                useTabsStore.getState().releasePaneOwnedElsewhere(terminalId)
+              }
+              return
+            }
             // Stale remote session: a remote daemon restart wiped its
             // in-memory connect-sessions, so this spawn was rejected with the
             // token-gate 401/403 — not a bad request. Revive (single-flight

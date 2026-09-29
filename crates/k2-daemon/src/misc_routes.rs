@@ -1028,33 +1028,35 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Returns JSON array; one object per live session:
         //   { sessionId, agentName, command, args, cwd, isV2 }
         //
-        // Filter rule: longest cwd-prefix match against `path`, mirroring
-        // the companion routes' grouping. Workspaces with `path` that
-        // doesn't match any session return an empty array.
+        // Filter: `session_events::cwd_matches_workspace` (path boundary
+        // plus the same longest registered project). A nested registered
+        // project does not belong to its parent. Workspaces with `path`
+        // that doesn't match any session return an empty array.
         "/cli/sessions/list-for-workspace" => {
             let path = str_param(params, "path");
             if path.is_empty() {
                 CliResponse::bad_request("Missing path parameter")
             } else {
-                // Match rule: session.cwd is either EXACTLY `path` or a
-                // subdirectory of `path`. The previous loose `starts_with`
-                // matched siblings — e.g. `/x/K2SO` would match
-                // `/x/K2SO-website`. Require the next character to be
-                // either end-of-string or `/` so siblings can't sneak in.
-                let trimmed = path.trim_end_matches('/').to_string();
-                let prefix_with_slash = if trimmed.is_empty() {
-                    "/".to_string()
-                } else {
-                    format!("{}/", trimmed)
+                // A failed load is not an empty registry. Empty paths would
+                // make every longest-prefix match and return the nested
+                // project's sessions. 500 instead of `[]`.
+                let project_paths = match k2_core::projects_ops::projects_list() {
+                    Ok(rows) => rows.into_iter().map(|p| p.path).collect::<Vec<_>>(),
+                    Err(e) => {
+                        return Some(CliResponse::internal_error(format!(
+                            "projects_list: {e}"
+                        )));
+                    }
                 };
                 let live = crate::session_lookup::snapshot_all();
                 let mut out: Vec<serde_json::Value> = Vec::new();
                 for (agent_name, session) in live {
                     let cwd = session.cwd();
-                    let cwd_trim = cwd.trim_end_matches('/');
-                    let matches = cwd_trim == trimmed.as_str()
-                        || cwd.starts_with(&prefix_with_slash);
-                    if !matches {
+                    if !crate::session_events::cwd_matches_workspace(
+                        &cwd,
+                        &path,
+                        &project_paths,
+                    ) {
                         continue;
                     }
                     let conversation_id = crate::v2_spawn::conversation_id_for_agent(

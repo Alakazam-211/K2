@@ -1,10 +1,9 @@
 //! `/cli/sessions/events?path=<workspace>` WebSocket endpoint.
 //!
 //! Push-driven session lifecycle stream. Wire format defined in
-//! `session_events.rs::SessionEvent`. Each subscriber filters events
-//! by `cwd starts_with path`, mirroring the existing
-//! `/cli/sessions/list-for-workspace` HTTP endpoint's filter rule
-//! (see `cli.rs`).
+//! `session_events.rs::SessionEvent`. Session cwd events use
+//! `session_events::cwd_matches_workspace`, the same rule as
+//! `GET /cli/sessions/list-for-workspace`.
 //!
 //! Lifecycle:
 //!   1. `main.rs::handle_connection` token-auths the request and
@@ -293,8 +292,8 @@ pub async fn serve_session_events_connection(
     );
 }
 
-/// Apply the same prefix filter the `list-for-workspace` HTTP endpoint
-/// uses (`cli.rs`). Documented and unit-tested in
+/// Apply the same workspace filter as `list-for-workspace`. Documented
+/// and unit-tested in
 /// `session_events::tests::workspace_path_filter_rules_match_cli_endpoint`.
 fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
     let cwd = match event {
@@ -392,14 +391,24 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         SessionEvent::HeartbeatStateChanged { workspace_path: cwd, .. } => cwd,
         SessionEvent::HeartbeatRosterChanged { workspace_path: cwd, .. } => cwd,
     };
-    let trimmed = workspace_path.trim_end_matches('/');
-    let prefix_with_slash = if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        format!("{}/", trimmed)
-    };
-    let cwd_trim = cwd.trim_end_matches('/');
-    cwd_trim == trimmed || cwd.starts_with(&prefix_with_slash)
+    // A failed load is not an empty registry. An empty list makes every
+    // longest-prefix match, so a nested project would show up here again.
+    // On that error only, keep the path-boundary rule so this workspace's
+    // own session_added / session_removed still arrive. A successful empty
+    // registry still goes through the predicate.
+    match k2_core::projects_ops::projects_list() {
+        Ok(rows) => {
+            let paths: Vec<String> = rows.into_iter().map(|p| p.path).collect();
+            session_events::cwd_matches_workspace(cwd, workspace_path, &paths)
+        }
+        Err(e) => {
+            log_debug!(
+                "[daemon/session_events_ws] projects_list failed ({e}); \
+                 path-boundary match only"
+            );
+            session_events::cwd_path_boundary_matches(cwd, workspace_path)
+        }
+    }
 }
 
 async fn send_json<W, T>(write: &mut W, msg: &T) -> Result<(), ()>

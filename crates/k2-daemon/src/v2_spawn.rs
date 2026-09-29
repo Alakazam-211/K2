@@ -578,6 +578,28 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     spawn_session_locked(req)
 }
 
+/// Live child is owned by a different registered project than the request.
+/// Either id missing (or a failed project load) is not a conflict — today's
+/// reuse, including program-mismatch eviction, still applies. Ids come from
+/// the same `projects_list()` rows and path-boundary longest prefix as
+/// [`crate::session_events::cwd_matches_workspace`].
+fn session_owned_elsewhere(live_cwd: &str, requested_cwd: &str) -> bool {
+    let projects = match k2_core::projects_ops::projects_list() {
+        Ok(rows) => rows,
+        Err(e) => {
+            log_debug!("[v2-spawn] projects_list failed ({e}); not refusing reuse");
+            return false;
+        }
+    };
+    let paths: Vec<String> = projects.iter().map(|p| p.path.clone()).collect();
+    let live = crate::session_events::longest_registered_project_index(live_cwd, &paths);
+    let requested = crate::session_events::longest_registered_project_index(requested_cwd, &paths);
+    match (live, requested) {
+        (Some(a), Some(b)) => projects[a].id != projects[b].id,
+        _ => false,
+    }
+}
+
 /// Body of [`spawn_session`]. Caller MUST already hold
 /// [`canonical_spawn_lock`] for `req.agent_name`.
 fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
@@ -663,7 +685,31 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // program does not match the resolved resume/fresh command (login
     // shell / $SHELL / wrong binary) is the post-update pinned-chat
     // trap: unregister + kill, then fall through to resume-spawn.
+    //
+    // A live child owned by a different registered project must not
+    // reach that unregister. `clear_index` on v2/close deletes every
+    // workspace_tab_sessions row for this agent_name.
     if let Some(existing) = existing.as_ref() {
+        if existing.is_child_alive() {
+            let live_cwd = existing
+                .cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if session_owned_elsewhere(&live_cwd, &req.cwd) {
+                log_debug!(
+                    "[v2-spawn] refusing reuse agent={} live_cwd={} requested_cwd={} \
+                     — session_owned_elsewhere",
+                    req.agent_name,
+                    live_cwd,
+                    req.cwd,
+                );
+                return HandlerResult {
+                    status: "409 Conflict",
+                    body: r#"{"error":"session_owned_elsewhere"}"#.to_string(),
+                };
+            }
+        }
         let alive = existing.is_child_alive();
         let matches =
             alive && live_program_matches(existing.program.as_deref(), command.as_deref());
@@ -2320,6 +2366,184 @@ mod tests {
         assert!(
             crate::v2_session_map::lookup_by_agent_name(agent).is_none(),
             "must not register a bare api-* shell"
+        );
+    }
+
+    fn seed_project_row(id: &str, path: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, path, id],
+        )
+        .expect("seed project");
+    }
+
+    fn spawn_sleep(agent: &str, cwd: &str) -> HandlerResult {
+        let body = serde_json::json!({
+            "agent_name": agent,
+            "cwd": cwd,
+            "command": "sleep",
+            "args": ["30"],
+        })
+        .to_string()
+        .into_bytes();
+        handle_v2_spawn(&body)
+    }
+
+    struct SpawnCleanup {
+        agent: String,
+        root: std::path::PathBuf,
+        ids: Vec<String>,
+    }
+
+    impl Drop for SpawnCleanup {
+        fn drop(&mut self) {
+            if let Some(session) = crate::v2_session_map::unregister(&self.agent) {
+                session.kill();
+            }
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                for id in &self.ids {
+                    let _ =
+                        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn session_id_of(body: &str) -> String {
+        let json: serde_json::Value = serde_json::from_str(body).expect("spawn json");
+        json["sessionId"]
+            .as_str()
+            .expect("sessionId string")
+            .to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nested_workspace_spawn_refuses_other_project() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let agent = format!("tab-nested-own-{n}");
+        let root = std::env::temp_dir().join(format!("k2-nested-own-{n}"));
+        let parent = root.join("parent");
+        let nested = parent.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+        let parent_s = parent.to_string_lossy().into_owned();
+        let nested_s = nested.to_string_lossy().into_owned();
+        let parent_id = format!("proj-parent-{n}");
+        let nested_id = format!("proj-nested-{n}");
+        seed_project_row(&parent_id, &parent_s);
+        seed_project_row(&nested_id, &nested_s);
+        let _cleanup = SpawnCleanup {
+            agent: agent.clone(),
+            root,
+            ids: vec![parent_id, nested_id],
+        };
+
+        let first = spawn_sleep(&agent, &nested_s);
+        assert_eq!(first.status, "200 OK", "body={}", first.body);
+        let first_id = session_id_of(&first.body);
+
+        let second = spawn_sleep(&agent, &parent_s);
+        assert_eq!(second.status, "409 Conflict", "body={}", second.body);
+        assert_eq!(second.body, r#"{"error":"session_owned_elsewhere"}"#);
+
+        let live =
+            crate::v2_session_map::lookup_by_agent_name(&agent).expect("session stays registered");
+        assert!(live.is_child_alive(), "child must stay alive");
+        assert_eq!(live.session_id.to_string(), first_id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nested_workspace_spawn_reuses_worktree_on_parent_project() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let agent = format!("tab-nested-wt-{n}");
+        let root = std::env::temp_dir().join(format!("k2-nested-wt-{n}"));
+        let parent = root.join("parent");
+        let worktree = parent.join(".worktrees").join("branch");
+        std::fs::create_dir_all(&worktree).expect("create worktree cwd");
+        let parent_s = parent.to_string_lossy().into_owned();
+        let worktree_s = worktree.to_string_lossy().into_owned();
+        let parent_id = format!("proj-wt-parent-{n}");
+        seed_project_row(&parent_id, &parent_s);
+        let _cleanup = SpawnCleanup {
+            agent: agent.clone(),
+            root,
+            ids: vec![parent_id],
+        };
+
+        let first = spawn_sleep(&agent, &worktree_s);
+        assert_eq!(first.status, "200 OK", "body={}", first.body);
+        let first_id = session_id_of(&first.body);
+
+        let second = spawn_sleep(&agent, &parent_s);
+        assert_eq!(second.status, "200 OK", "body={}", second.body);
+        let second_json: serde_json::Value =
+            serde_json::from_str(&second.body).expect("reuse json");
+        assert_eq!(second_json["reused"], true);
+        assert_eq!(
+            second_json["sessionId"].as_str().expect("sessionId"),
+            first_id
+        );
+
+        // Empty command matches any live program when the owner is the same.
+        let empty = handle_v2_spawn(
+            &serde_json::json!({
+                "agent_name": agent,
+                "cwd": parent_s,
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        assert_eq!(empty.status, "200 OK", "body={}", empty.body);
+        let empty_json: serde_json::Value =
+            serde_json::from_str(&empty.body).expect("empty-command json");
+        assert_eq!(empty_json["reused"], true);
+        assert_eq!(
+            empty_json["sessionId"].as_str().expect("sessionId"),
+            first_id
+        );
+        assert!(crate::v2_session_map::lookup_by_agent_name(&agent)
+            .expect("session stays registered")
+            .is_child_alive());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nested_workspace_spawn_reuses_when_one_side_unregistered() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let agent = format!("tab-nested-orphan-{n}");
+        let root = std::env::temp_dir().join(format!("k2-nested-orphan-{n}"));
+        let parent = root.join("parent");
+        let orphan = root.join("orphan");
+        std::fs::create_dir_all(&parent).expect("create parent cwd");
+        std::fs::create_dir_all(&orphan).expect("create unregistered cwd");
+        let parent_s = parent.to_string_lossy().into_owned();
+        let orphan_s = orphan.to_string_lossy().into_owned();
+        let parent_id = format!("proj-orphan-parent-{n}");
+        seed_project_row(&parent_id, &parent_s);
+        let _cleanup = SpawnCleanup {
+            agent: agent.clone(),
+            root,
+            ids: vec![parent_id],
+        };
+
+        let first = spawn_sleep(&agent, &orphan_s);
+        assert_eq!(first.status, "200 OK", "body={}", first.body);
+        let first_id = session_id_of(&first.body);
+
+        let second = spawn_sleep(&agent, &parent_s);
+        assert_eq!(second.status, "200 OK", "body={}", second.body);
+        let second_json: serde_json::Value =
+            serde_json::from_str(&second.body).expect("reuse json");
+        assert_eq!(second_json["reused"], true);
+        assert_eq!(
+            second_json["sessionId"].as_str().expect("sessionId"),
+            first_id
         );
     }
 

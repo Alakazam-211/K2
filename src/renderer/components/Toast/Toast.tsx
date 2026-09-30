@@ -97,6 +97,7 @@ function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
 type ToastAnchor = HTMLElement | 'settings'
 
 const PAGE_HOST: Partial<Record<AppPage, string>> = {
+  home: 'home',
   projects: 'projects',
   feedback: 'feedback',
   wiki: 'wiki',

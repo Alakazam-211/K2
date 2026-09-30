@@ -48,6 +48,7 @@ import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import FeedbackPage from './components/Feedback/FeedbackPage'
+import HomePage from './components/Home/HomePage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore } from './stores/page-view'
@@ -1081,6 +1082,7 @@ function AppRoot(): React.JSX.Element {
       <CloneToDialog />
       <CommandPalette />
       {!settingsOpen && <RunningAgentsPanel />}
+      {!settingsOpen && <HomePage />}
       {!settingsOpen && <FeedbackPage />}
       {!settingsOpen && <ProjectsPage />}
       {!settingsOpen && <WikiPage />}

@@ -59,8 +59,9 @@ export default function WhatsNewModal({
   const [visible, setVisible] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [pageIdx, setPageIdx] = useState(0)
-  // Settings → Read what's new shows the newest page only.
-  const [latestOnly, setLatestOnly] = useState(false)
+  // Settings → Read what's new opens on the newest page. The arrows
+  // walk the rest of the series the daemon sent (0.41.0 through the
+  // running version).
 
   // Shared check function — used by initial mount AND by the
   // `k2so:show-whats-new` event from Settings → Release notes button.
@@ -116,10 +117,10 @@ export default function WhatsNewModal({
   }, [mode, runCheck])
 
   // Settings → Read what's new. The button does not clear the seen
-  // marker. This open shows the newest page only.
+  // marker. The daemon still sends the series, so the arrows work
+  // after the current version was already dismissed.
   useEffect(() => {
     const handler = (): void => {
-      setLatestOnly(true)
       void runCheck(true)
     }
     window.addEventListener('k2so:show-whats-new', handler)
@@ -148,12 +149,8 @@ export default function WhatsNewModal({
     if (current) out.push({ ...current, body: current.body.join('\n') })
     // Reverse: oldest first → newest last. Forward arrow = newer.
     out.reverse()
-    if (latestOnly) {
-      const newest = out[out.length - 1]
-      return newest ? [newest] : []
-    }
     return out
-  }, [payload?.content, latestOnly])
+  }, [payload?.content])
 
   // Default landing page is the NEWEST version (the one the user just
   // updated to). They can navigate back (←) to read older releases

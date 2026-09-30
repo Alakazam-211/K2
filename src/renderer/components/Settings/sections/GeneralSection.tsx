@@ -820,8 +820,9 @@ function DevToolsRow(): React.JSX.Element {
 }
 
 // ── What's New — open the latest notes ──────────────────────────────────
-// The button does not clear the seen marker. It asks the popup to show
-// the newest page only. Dismiss still stamps the current version.
+// The button does not clear the seen marker. The popup opens on the
+// newest note. Arrows walk back through 0.41.0 and later. Dismiss
+// still stamps the current version.
 function WhatsNewRow(): React.JSX.Element {
   const handleClick = useCallback(() => {
     window.dispatchEvent(new CustomEvent('k2so:show-whats-new'))

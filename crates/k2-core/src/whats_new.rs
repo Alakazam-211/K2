@@ -35,6 +35,12 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+/// First version the Settings → Read what's new button walks.
+/// The popup opens on the newest note at or below the running
+/// version. The arrows walk back through this floor. Older series
+/// stay out.
+pub const READ_WHATS_NEW_FLOOR: &str = "0.41.0";
+
 /// The user-facing changelog, embedded at build time.
 ///
 /// **Release script contract:** every released version MUST have a
@@ -63,12 +69,12 @@ pub struct WhatsNewCheck {
     pub last_seen_version: Option<String>,
     /// True iff there's at least one unseen section worth showing.
     pub has_new: bool,
-    /// The markdown payload to show in the modal. When `has_new` is
-    /// true, this is the full current MAJOR.MINOR track up through
-    /// `current_version` (e.g. all 0.39.x entries `<= 0.39.3`), so the
-    /// modal can paginate back through every entry on the user's
-    /// current minor track — not just the entries newer than
-    /// `last_seen_version`. Empty string when `has_new` is false.
+    /// The markdown payload for Read what's new. Every section from
+    /// [`READ_WHATS_NEW_FLOOR`] through `current_version`, inclusive,
+    /// newest-first as in the file. Filled even when `has_new` is
+    /// false, so the Settings button can open the series after the
+    /// user has already dismissed the current version. `has_new` still
+    /// decides whether the popup opens by itself.
     pub content: String,
 }
 
@@ -186,6 +192,20 @@ pub fn slice_unseen(
         .join("\n\n")
 }
 
+/// Every section from `floor` through `current`, both inclusive.
+/// File order is preserved (newest first in `WHATS_NEW.md`).
+pub fn slice_from_version(sections: &[VersionSection], floor: &str, current: &str) -> String {
+    sections
+        .iter()
+        .filter(|s| {
+            compare_semver(&s.version, floor) != Ordering::Less
+                && compare_semver(&s.version, current) != Ordering::Greater
+        })
+        .map(|s| s.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// Extract the MAJOR.MINOR prefix from a `X.Y.Z` version string.
 /// Returns `"0.39"` for `"0.39.3"`, `"1.0"` for `"1.0.0"`, etc. If the
 /// input has fewer than two dot-separated components, returns the
@@ -285,15 +305,10 @@ pub fn check_for_user(current_version: &str) -> WhatsNewCheck {
     // section newer than what the user last dismissed.
     let unseen = slice_unseen(&sections, last_seen.as_deref(), current_version);
     let has_new = !unseen.trim().is_empty();
-    // What to ship to the modal: the full current minor-track up
-    // through `current_version`. Lets the modal paginate back to the
-    // start of the current minor (e.g. 0.39.0 from 0.39.3) even if
-    // `last_seen` was already in the track — see module doc.
-    let content = if has_new {
-        slice_minor_track(&sections, current_version)
-    } else {
-        String::new()
-    };
+    // The button always receives the 0.41.0+ series through the
+    // running version, including after the user has dismissed it.
+    // `has_new` stays the auto-open gate.
+    let content = slice_from_version(&sections, READ_WHATS_NEW_FLOOR, current_version);
     WhatsNewCheck {
         current_version: current_version.to_string(),
         last_seen_version: last_seen,
@@ -632,6 +647,56 @@ older minor body
     }
 
     // ── End-to-end orchestrator ──────────────────────────────────────
+
+    #[test]
+    fn read_whats_new_keeps_041_series_after_dismiss() {
+        let _g = crate::themes::HOME_LOCK.lock();
+        let tmp = std::env::temp_dir().join(format!(
+            "k2-whats-new-floor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", &tmp); }
+
+        write_last_seen("0.41.5").unwrap();
+        let seen = check_for_user("0.41.5");
+        assert!(!seen.has_new, "dismissed 0.41.5 must not auto-open");
+        assert_eq!(seen.last_seen_version.as_deref(), Some("0.41.5"));
+        assert!(
+            seen.content.contains("## 0.41.0 —"),
+            "missing 0.41.0 in {:?}",
+            &seen.content[..seen.content.len().min(200)]
+        );
+        assert!(seen.content.contains("## 0.41.5 —"));
+        assert!(
+            !seen.content.contains("## 0.40.150 —"),
+            "0.40 leaked into the 0.41 series"
+        );
+
+        let mid = check_for_user("0.41.2");
+        assert!(mid.content.contains("## 0.41.0 —"));
+        assert!(mid.content.contains("## 0.41.2 —"));
+        assert!(!mid.content.contains("## 0.41.5 —"));
+
+        let before = check_for_user("0.40.150");
+        assert!(
+            before.content.trim().is_empty(),
+            "a 0.40 daemon must not show the 0.41 series"
+        );
+
+        unsafe {
+            match prev_home {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn embedded_changelog_parses_cleanly() {

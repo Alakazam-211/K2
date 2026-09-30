@@ -87,6 +87,67 @@ KEYCHAIN_PROFILE="K2SO-notarize"   # machine-local notarytool profile name — N
 RELEASE_REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Optional Intel updater artifact, built and signed out of band. Supplying
+# neither preserves the existing arm64-only Mac release. Supplying only one,
+# or a malformed/version-mismatched pair, stops before build/sign/publish.
+INTEL_SOURCE_ARCHIVE="${K2_INTEL_UPDATER_ARCHIVE:-}"
+INTEL_SOURCE_SIGNATURE="${K2_INTEL_UPDATER_SIGNATURE:-}"
+if { [ -n "$INTEL_SOURCE_ARCHIVE" ] && [ -z "$INTEL_SOURCE_SIGNATURE" ]; } \
+    || { [ -z "$INTEL_SOURCE_ARCHIVE" ] && [ -n "$INTEL_SOURCE_SIGNATURE" ]; }; then
+    echo "ERROR: K2_INTEL_UPDATER_ARCHIVE and K2_INTEL_UPDATER_SIGNATURE must be supplied together" >&2
+    exit 1
+fi
+INTEL_ARCHIVE=""
+INTEL_SIGNATURE=""
+INTEL_URL=""
+INTEL_STAGE_DIR=""
+INTEL_STAGE_TOKEN=""
+cleanup_intel_stage() {
+    local release_rc="$?" cleanup_rc
+    trap - EXIT HUP INT TERM
+    set +e
+    python3 "$PROJECT_DIR/scripts/intel-updater-manifest.py" cleanup \
+        "$VERSION" "$INTEL_STAGE_DIR" "$INTEL_STAGE_TOKEN"
+    cleanup_rc="$?"
+    set -e
+    if [ "$release_rc" -ne 0 ]; then
+        if [ "$cleanup_rc" -ne 0 ]; then
+            echo "ERROR: secondary Intel staging cleanup failed" >&2
+        fi
+        exit "$release_rc"
+    fi
+    exit "$cleanup_rc"
+}
+if [ -n "$INTEL_SOURCE_ARCHIVE" ]; then
+    INTEL_NAME="$(basename "$INTEL_SOURCE_ARCHIVE")"
+    INTEL_URL="https://github.com/${RELEASE_REPO}/releases/download/${TAG}/${INTEL_NAME}"
+    INTEL_STAGE_RECORD="$(python3 "$PROJECT_DIR/scripts/intel-updater-manifest.py" stage \
+        "$VERSION" "$INTEL_SOURCE_ARCHIVE" "$INTEL_SOURCE_SIGNATURE" "$INTEL_URL" \
+        "$PROJECT_DIR/src-tauri/tauri.conf.json")"
+    case "$INTEL_STAGE_RECORD" in
+        *$'\n'*|*$'\t'*$'\t'*|*$'\t'|$'\t'*)
+            echo "ERROR: malformed Intel staging record" >&2
+            exit 1
+            ;;
+    esac
+    if [[ "$INTEL_STAGE_RECORD" != *$'\t'* ]]; then
+        echo "ERROR: malformed Intel staging record" >&2
+        exit 1
+    fi
+    IFS=$'\t' read -r INTEL_STAGE_DIR INTEL_STAGE_TOKEN <<<"$INTEL_STAGE_RECORD"
+    if [[ "$INTEL_STAGE_DIR" != /* || ! "$INTEL_STAGE_TOKEN" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "ERROR: malformed Intel staging record" >&2
+        exit 1
+    fi
+    trap cleanup_intel_stage EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    INTEL_ARCHIVE="$INTEL_STAGE_DIR/$INTEL_NAME"
+    INTEL_SIGNATURE="$INTEL_ARCHIVE.sig"
+    echo "  Intel updater inputs verified + snapshotted: $INTEL_STAGE_DIR"
+fi
+
 # Notarization auth (0.39.45): prefer DIRECT App Store Connect API-key
 # auth when the env provides it — the keychain profile lives in the
 # data-protection keychain, which headless/agent sessions can't read
@@ -506,7 +567,14 @@ cat > "/tmp/latest.json" <<MANIFEST
   }
 }
 MANIFEST
-echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS if present)."
+if [ -n "$INTEL_ARCHIVE" ]; then
+    python3 "$PROJECT_DIR/scripts/intel-updater-manifest.py" merge \
+        /tmp/latest.json "$VERSION" "$INTEL_ARCHIVE" "$INTEL_SIGNATURE" "$INTEL_URL" \
+        "$PROJECT_DIR/src-tauri/tauri.conf.json"
+    echo "  latest.json generated (darwin-aarch64 + darwin-x86_64; windows-x86_64 added after NSIS if present)."
+else
+    echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS if present)."
+fi
 
 # ── Step 8.5: Standalone per-OS daemon binary + signature + manifest ──
 #
@@ -650,6 +718,7 @@ ASSETS=(
     "target/release/bundle/macos/K2.app.tar.gz"
 )
 [ -f "$SIG_FILE" ] && ASSETS+=("$SIG_FILE")
+[ -n "$INTEL_ARCHIVE" ] && ASSETS+=("$INTEL_ARCHIVE" "$INTEL_SIGNATURE")
 ASSETS+=("/tmp/latest.json")
 
 # Standalone daemon assets (remote-update P1): the native macos-aarch64
@@ -794,8 +863,9 @@ fi
 # `/releases/latest/download/<name>` alias — which can lag for a few seconds
 # after publish, and the asset CDN occasionally 504s. So retry, then FAIL
 # LOUDLY (the release is already live) rather than let a broken updater pass
-# silently. Validates HTTP body actually contains `"version": "<VERSION>"`
-# (a 504 HTML page or a stale manifest both fail this).
+# silently. Validates HTTP body contains `"version": "<VERSION>"`; when the
+# Intel seam is used, also requires its exact key, URL, and nonempty signature.
+# A 504 HTML page or stale/incomplete manifest fails this check.
 echo ""
 echo "Step 10: Verifying updater endpoints serve valid v${VERSION} JSON..."
 VERIFY_BASE="https://github.com/${RELEASE_REPO}/releases/latest/download"
@@ -804,9 +874,14 @@ verify_manifest() {
     local label="$1" url="$2" ok="" body=""
     for attempt in $(seq 1 8); do
         body="$(curl -sL --max-time 20 "$url" 2>/dev/null)"
-        if printf '%s' "$body" | grep -q "\"version\"[[:space:]]*:[[:space:]]*\"${VERSION}\""; then
+        if [ "$label" = "app latest.json" ] && [ -n "$INTEL_ARCHIVE" ]; then
+            printf '%s' "$body" | python3 "$PROJECT_DIR/scripts/intel-updater-manifest.py" \
+                verify - "$VERSION" "$INTEL_URL" "$INTEL_ARCHIVE" "$INTEL_SIGNATURE" \
+                "$PROJECT_DIR/src-tauri/tauri.conf.json" >/dev/null 2>&1 && ok=1
+        elif printf '%s' "$body" | grep -q "\"version\"[[:space:]]*:[[:space:]]*\"${VERSION}\""; then
             ok=1; break
         fi
+        [ -n "$ok" ] && break
         echo "    ${label}: not ready (attempt ${attempt}/8), retrying in 15s..."
         sleep 15
     done

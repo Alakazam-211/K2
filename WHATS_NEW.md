@@ -3,6 +3,15 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.41.6 — Notes you can page, and a lock you can clear
+
+- **Read what's new.** Settings → General opens on the newest note. The arrows walk back through 0.41.0 and every later note in this series, and they stop before 0.40. Closing the popup still marks this version seen. The button still opens after this version was already dismissed.
+- **Login lock.** `k2 app user unlock` clears an app guest's lock and leaves the password alone. `k2 users unlock` does the same for a box login. A name with no lock still succeeds. Changing an app user's password leaves the lock in place. Changing a box user's password still clears that lock.
+- **Thread.** A message sent as the room shows the room's name. You is a message typed in the compose bar.
+- **Apps.** An app with a room can add a file to that room's resource list, rename one file in the room, and hear when an agent there is working. Settings → Apps lists `activity:read` on its own. `files:read` and `files:write` do not include it. A new file name is one name, not a path.
+- **Database grant.** `k2 db grant` can name the tables or views another workspace may use. Repeating `--relation` replaces that list. Leaving `--relation` off restores the whole public schema. A later migrate keeps the same list.
+- **Guest query.** On the Linux database, an app session can send one SQL statement. K2 fills in the signed-in person, and the statement cannot choose someone else. A read uses store read. A change uses store write.
+
 ## 0.41.5 — Nested workspaces, and menus that stay put
 
 - **Nested workspace.** A workspace that lives inside another workspace keeps its own terminal. The outer workspace's session list no longer shows the inner one. Opening a saved pane leaves the other workspace's live terminal alone.

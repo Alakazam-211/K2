@@ -792,6 +792,56 @@ describe('browser pane items', () => {
     expect(tab.mosaicTree).toBe(pgs[0].id)
   })
 
+  // V8/V19 — a same-value stamp (a remounted webview reporting the URL the
+  // layout already has) must not make new tab objects: that fired the
+  // autosave, which rebuilt the other window, whose new webview stamped…
+  it('setBrowserItemState with the same url and title changes nothing', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const tab = useTabsStore.getState().tabs[0]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    const itemId = pg.items[0].id
+    useTabsStore.getState().setBrowserItemState(tab.id, pg.id, itemId, { url: 'https://example.com/x', title: 'X' })
+    const before = useTabsStore.getState().tabs
+
+    useTabsStore.getState().setBrowserItemState(tab.id, pg.id, itemId, { url: 'https://example.com/x', title: 'X' })
+    useTabsStore.getState().setBrowserItemState(tab.id, pg.id, itemId, { url: 'https://example.com/x' })
+
+    expect(useTabsStore.getState().tabs).toBe(before)
+    useTabsStore.getState().setBrowserItemState(tab.id, pg.id, itemId, { url: 'https://example.com/y' })
+    expect(useTabsStore.getState().tabs).not.toBe(before)
+    expect(browserItems(0)[0].data.url).toBe('https://example.com/y')
+  })
+
+  it('setTabDirty with the flag it already has changes nothing', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const tabId = useTabsStore.getState().tabs[0].id
+    const before = useTabsStore.getState().tabs
+    useTabsStore.getState().setTabDirty(tabId, false)
+    expect(useTabsStore.getState().tabs).toBe(before)
+    useTabsStore.getState().setTabDirty(tabId, true)
+    expect(useTabsStore.getState().tabs).not.toBe(before)
+    expect(useTabsStore.getState().tabs[0].isDirty).toBe(true)
+  })
+
+  // V21 — only this window's own navigate request bumps navSeq (what the
+  // pane navigates on); it is never written into the shared layout.
+  it('openUrlInPane bumps navSeq on the reused item, and navSeq is not serialized', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+    const tab = useTabsStore.getState().tabs[0]
+    expect(browserItems(0)[0].data.navSeq).toBeUndefined()
+
+    useTabsStore.getState().openUrlInPane(tab.id, 'https://example.com/next')
+    expect(browserItems(0)[0].data.navSeq).toBe(1)
+    useTabsStore.getState().openUrlInPane(tab.id, 'https://example.com/again')
+    expect(browserItems(0)[0].data.navSeq).toBe(2)
+    expect(browserItems(0)[0].data.url).toBe('https://example.com/again')
+
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    const item = Object.values(layout.tabs[0].paneGroups)[0].items[0] as unknown as Record<string, unknown>
+    expect(item.url).toBe('https://example.com/again')
+    expect('navSeq' in item).toBe(false)
+  })
+
   it('browser item survives a serialize → restore round-trip (url + title)', () => {
     useTabsStore.getState().openUrlInNewTab('https://example.com/start')
     const tab = useTabsStore.getState().tabs[0]
@@ -820,8 +870,9 @@ describe('browser pane items', () => {
     expect(restored).toHaveLength(1)
     expect(restored[0].data.url).toBe('https://example.com/after-nav')
     expect(restored[0].data.title).toBe('After Nav')
-    // Restore re-mints item ids (native views are re-created lazily).
-    expect(restored[0].id).not.toBe(itemId)
+    // V3/V20 — restore keeps the saved item id, so a remote save never
+    // remounts (and re-creates the native view of) a surviving pane.
+    expect(restored[0].id).toBe(itemId)
   })
 
   it('old layouts without browser items still restore unchanged', () => {
@@ -1045,7 +1096,8 @@ describe('browser page title and favicon', () => {
       expect(body).not.toContain('setTitle')
       expect(body).not.toContain('locked:')
     }
-    expect(tabsSrc.match(/icon: si\.icon/g)?.length).toBe(2)
+    // One shared item restore for column 0 and the split columns (V20).
+    expect(tabsSrc.match(/icon: si\.icon/g)?.length).toBe(1)
     expect(tabsSrc).toContain('icon: d.icon')
 
     const pane = readFileSync(join(root, 'src/renderer/components/BrowserPane/BrowserPane.tsx'), 'utf8')

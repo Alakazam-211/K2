@@ -55,6 +55,12 @@ import {
 import { serverSupports } from '@/lib/server-capabilities'
 import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
+import {
+  EMPTY_SERIALIZED_LAYOUT,
+  canonicalLayoutJson,
+  collapseEmptyLeadingColumns,
+  mergeSerializedLayouts,
+} from '@/lib/layout-merge'
 
 /** Phase 2.5 fix (finding #547) — gate for `loadWorkspaceSessionsFromDb`.
  *  Flips to true on the first successful load (regardless of whether the
@@ -280,68 +286,353 @@ export function __isLayoutSaveSuppressedForTests(): boolean {
   return isLayoutSaveSuppressed()
 }
 
+/** Test-only: forget every piece of layout-sync bookkeeping (revisions,
+ *  acked layouts, lanes, the autosave debounce). Suites that share one
+ *  module instance across tests call this in `beforeEach` — `vi.clearAllTimers`
+ *  alone leaves `persistDebounceTimer` pointing at a dead timer. */
+export function __resetLayoutSyncForTests(): void {
+  layoutRevisions.clear()
+  ackedLayouts.clear()
+  cacheRevisions.clear()
+  layoutCwds.clear()
+  layoutLanes.clear()
+  refetchInFlight.clear()
+  deferredAdoptions.clear()
+  if (persistDebounceTimer) clearTimeout(persistDebounceTimer)
+  persistDebounceTimer = null
+}
+
+/** Test-only read of the acked (daemon-confirmed) layout for a key. */
+export function __getAckedLayoutForTests(key: string): SerializedLayout | undefined {
+  return ackedLayouts.get(key)?.layout
+}
+
+/** Test-only: seed the acked layout for a key (as a load would). */
+export function __setAckedLayoutForTests(key: string, layout: SerializedLayout): void {
+  setAckedLayout(key, layout)
+}
+
 /** Test-only override of the last-known layout revision (#677.3 LWW). */
 export function __setLayoutRevisionForTests(key: string, revision: number): void {
   layoutRevisions.set(key, revision)
 }
 
-/** Record a layout `revision` returned by `workspace-layouts/save` as our
- *  new base for the workspace key. Monotonic — never moves backwards (a
- *  late-arriving response from an earlier write can't clobber a newer base).
- *  Tolerates the old daemon's `{success}`-only response (no revision). */
+/** Record a layout `revision` seen on a `TabOrderChanged` at or below our
+ *  base. Monotonic — never moves backwards. Tolerates the old daemon's
+ *  `{success}`-only response (no revision). */
 function recordLayoutRevision(key: string, revision: unknown): void {
   if (typeof revision !== 'number') return
   const prev = layoutRevisions.get(key) ?? 0
   if (revision > prev) layoutRevisions.set(key, revision)
 }
 
-// In-flight `workspace-layouts/save` requests per workspace key. The daemon
-// emits `TabOrderChanged` BEFORE it writes the save's HTTP response, so our
-// OWN save's broadcast can reach `onTabOrderChanged` while `layoutRevisions`
-// still holds the pre-save base — which made the handler misread the echo as
-// a REMOTE write and refetch+apply the canonical layout. That layout is
-// stale relative to any structural change made since the save was
-// serialized: clicking "Split into columns" while a save was in flight had
-// the split column wiped by the rebuild (and the split terminal's
-// `session_added` then adopted it into the MAIN group — the reported
-// "column disappears and merges back"). The handler now settles these
-// in-flight saves before deciding, so a self-echo dissolves against the
-// recorded base and only a genuinely-newer remote revision refetches.
-const pendingLayoutSaves = new Map<string, Set<Promise<void>>>()
+/** Set the base revision to exactly what the daemon just told us for the
+ *  layout this window now holds (a load, an adopted refetch, or our own save
+ *  landing). `undefined` (an older daemon) forgets the base, so the next save
+ *  goes without `baseRevision` and stays last-write-wins (D4). */
+function setLayoutRevisionExact(key: string, revision: unknown): void {
+  if (typeof revision === 'number') layoutRevisions.set(key, revision)
+  else layoutRevisions.delete(key)
+}
 
-/** Register an in-flight `workspace-layouts/save` POST for `key`. The stored
- *  promise is a settle-only view (never rejects); callers keep owning error
- *  handling on the original promise. */
-function trackPendingLayoutSave(key: string, save: Promise<unknown>): void {
-  let set = pendingLayoutSaves.get(key)
-  if (!set) {
-    set = new Set()
-    pendingLayoutSaves.set(key, set)
+// ── Layout save pipeline (split view with two windows, V14–V19, V22) ─────
+//
+// Every writer of the shared layout goes through `submitLayoutSave`:
+//   - saves for one workspace key run ONE AT A TIME. A save asked for while
+//     another is in flight waits and then serializes the state it has then
+//     (latest wins), so a window never races its own `baseRevision` (V17);
+//   - a save whose JSON matches the layout the daemon last confirmed is
+//     skipped (V19). That covers a remount's `setTabDirty` / file-viewer
+//     scroll writes, a same-value browser stamp, and reconcile refreshes;
+//   - a 409 `layout_revision_conflict` fetches the newer layout and merges
+//     this window's change onto it (V18), or drops a background write whose
+//     workspace is open somewhere newer. A conflict never goes to the blind
+//     retry.
+// A remote refetch runs in the same lane, so no save can go out with a base
+// that a half-applied refetch is about to replace.
+
+interface AckedLayout {
+  /** Canonical JSON (layout-merge `canonicalLayoutJson`) for the V19 check. */
+  canonical: string
+  /** The layout itself, the base of a three-way merge. */
+  layout: SerializedLayout
+}
+
+/** Last layout this window knows the daemon holds, per workspace key. */
+const ackedLayouts = new Map<string, AckedLayout>()
+
+function setAckedLayout(key: string, layout: SerializedLayout): void {
+  ackedLayouts.set(key, { canonical: canonicalLayoutJson(layout), layout })
+}
+
+/** Revision of the cached `workspaceLayouts[key]` entry, when known. The
+ *  cached restore path takes its base from here, never from a newer save. */
+const cacheRevisions = new Map<string, number>()
+
+/** Workspace cwd per key, so a conflict merge can restore the merged layout. */
+const layoutCwds = new Map<string, string>()
+
+/** Keys with a remote refetch waiting or running. `session_added` adoption
+ *  waits for it (V22) so a peer's new split terminal is not pulled into
+ *  this window's column 0. */
+const refetchInFlight = new Set<string>()
+const deferredAdoptions = new Map<string, Array<() => void>>()
+
+function deferAdoption(key: string, fn: () => void): void {
+  let list = deferredAdoptions.get(key)
+  if (!list) {
+    list = []
+    deferredAdoptions.set(key, list)
   }
-  const inFlight = set
-  const settled: Promise<void> = save.then(
-    () => undefined,
-    () => undefined,
-  )
-  inFlight.add(settled)
-  void settled.then(() => {
-    inFlight.delete(settled)
-    if (inFlight.size === 0 && pendingLayoutSaves.get(key) === inFlight) {
-      pendingLayoutSaves.delete(key)
+  list.push(fn)
+}
+
+function drainDeferredAdoptions(key: string): void {
+  const list = deferredAdoptions.get(key)
+  if (!list) return
+  deferredAdoptions.delete(key)
+  for (const fn of list) fn()
+}
+
+type LayoutConflictMode = 'merge' | 'drop'
+
+interface LayoutSaveJob {
+  projectId: string
+  workspaceId: string
+  /** Build the layout at send time. `null` = nothing to save now. */
+  produce: () => SerializedLayout | null
+  /** `merge` for the open workspace, `drop` for background / park writes. */
+  conflict: LayoutConflictMode
+  /** Send even when it matches the acked layout (v1→v2 migration). */
+  force?: boolean
+  /** Failures (not conflicts) re-arm the durable retry. */
+  retry?: boolean
+  label: string
+}
+
+interface LayoutLane {
+  busy: boolean
+  ops: Array<() => Promise<void>>
+  queuedSave: LayoutSaveJob | null
+  idle: Array<() => void>
+}
+
+const layoutLanes = new Map<string, LayoutLane>()
+
+function laneFor(key: string): LayoutLane {
+  let lane = layoutLanes.get(key)
+  if (!lane) {
+    lane = { busy: false, ops: [], queuedSave: null, idle: [] }
+    layoutLanes.set(key, lane)
+  }
+  return lane
+}
+
+function logLaneError(err: unknown): void {
+  console.error('[tabs] layout lane op failed:', err)
+}
+
+/** Run `op` exclusively for `key`. Starts synchronously when the lane is
+ *  idle (so a save's POST goes out in the same tick, as before). */
+function runInLayoutLane(key: string, op: () => Promise<void>): Promise<void> {
+  const lane = laneFor(key)
+  if (lane.busy) {
+    return new Promise<void>((resolve) => {
+      lane.ops.push(() => op().finally(resolve))
+    })
+  }
+  lane.busy = true
+  return op()
+    .catch(logLaneError)
+    .finally(() => releaseLayoutLane(key))
+}
+
+function releaseLayoutLane(key: string): void {
+  const lane = laneFor(key)
+  const next = lane.ops.shift()
+  if (next) {
+    void next()
+      .catch(logLaneError)
+      .finally(() => releaseLayoutLane(key))
+    return
+  }
+  const job = lane.queuedSave
+  if (job) {
+    lane.queuedSave = null
+    void runLayoutSaveJob(key, job)
+      .catch(logLaneError)
+      .finally(() => releaseLayoutLane(key))
+    return
+  }
+  lane.busy = false
+  const waiters = lane.idle.splice(0)
+  for (const w of waiters) w()
+}
+
+/** Resolve once nothing is running or queued for `key` — including saves
+ *  queued while waiting (each carries a base-advancing revision the caller
+ *  must see before judging a broadcast). Resolves at once when idle. */
+function waitLayoutIdle(key: string): Promise<void> {
+  const lane = laneFor(key)
+  if (!lane.busy) return Promise.resolve()
+  return new Promise<void>((resolve) => lane.idle.push(resolve))
+}
+
+/** Queue or send a layout save for `key`. Latest wins while a save or
+ *  refetch is in flight. Resolves when this save (or the one that replaced
+ *  it) has settled. */
+function submitLayoutSave(key: string, job: LayoutSaveJob): Promise<void> {
+  const lane = laneFor(key)
+  if (lane.busy) {
+    lane.queuedSave = job
+    return waitLayoutIdle(key)
+  }
+  lane.busy = true
+  return runLayoutSaveJob(key, job)
+    .catch(logLaneError)
+    .finally(() => releaseLayoutLane(key))
+}
+
+function isLayoutRevisionConflict(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('layout_revision_conflict')
+}
+
+const LAYOUT_CONFLICT_MAX_ATTEMPTS = 3
+
+/** The body of one save. Runs inside the lane. */
+async function runLayoutSaveJob(key: string, job: LayoutSaveJob, attempt = 0): Promise<void> {
+  const layout = job.produce()
+  if (!layout) return
+  const canonical = canonicalLayoutJson(layout)
+  if (!job.force && ackedLayouts.get(key)?.canonical === canonical) return
+  const base = layoutRevisions.get(key)
+  let res: { success?: boolean; revision?: number } | undefined
+  try {
+    res = await daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+      projectId: job.projectId,
+      workspaceId: job.workspaceId,
+      layoutJson: JSON.stringify(layout),
+      ...(base !== undefined ? { baseRevision: base } : {}),
+    })
+  } catch (err) {
+    if (isLayoutRevisionConflict(err)) {
+      if (job.conflict === 'merge' && attempt < LAYOUT_CONFLICT_MAX_ATTEMPTS) {
+        await mergeAfterLayoutConflict(key, job, attempt + 1)
+        return
+      }
+      console.warn(`[tabs] ${job.label}: layout changed elsewhere; dropped this write for ${key}`)
+      // The cached copy is behind the daemon — let the next open re-read it.
+      if (job.conflict === 'drop') forgetCachedLayout(key)
+      return
     }
+    console.error(`[tabs] ${job.label} failed:`, err)
+    if (job.retry) rearmLayoutSave(err)
+    return
+  }
+  layoutSaveSucceeded()
+  if (typeof res?.revision === 'number') {
+    layoutRevisions.set(key, res.revision)
+    cacheRevisions.set(key, res.revision)
+  }
+  setAckedLayout(key, layout)
+}
+
+function forgetCachedLayout(key: string): void {
+  cacheRevisions.delete(key)
+  const cur = useTabsStore.getState().workspaceLayouts
+  if (!(key in cur)) return
+  const { [key]: _drop, ...rest } = cur
+  useTabsStore.setState({ workspaceLayouts: rest })
+}
+
+interface FetchedLayout {
+  layout: SerializedLayout | null
+  /** `undefined` against an older daemon (no `with_revision`). */
+  revision: number | undefined
+}
+
+/** GET the stored layout with its revision (V14). An older daemon ignores
+ *  `with_revision` and answers with the bare JSON string. */
+async function fetchLayoutWithRevision(projectId: string, workspaceId: string): Promise<FetchedLayout> {
+  const res = await daemonCliGet<unknown>('workspace-layouts/load', {
+    project_id: projectId,
+    workspace_id: workspaceId,
+    with_revision: '1',
+  })
+  let json: string | null = null
+  let revision: number | undefined
+  if (typeof res === 'string') {
+    json = res
+  } else if (res && typeof res === 'object' && 'layoutJson' in (res as Record<string, unknown>)) {
+    const obj = res as { layoutJson?: unknown; revision?: unknown }
+    json = typeof obj.layoutJson === 'string' ? obj.layoutJson : null
+    revision = typeof obj.revision === 'number' ? obj.revision : undefined
+  }
+  if (!json) return { layout: null, revision }
+  return { layout: JSON.parse(json) as SerializedLayout, revision }
+}
+
+/** True when this window holds a layout change the daemon has not confirmed:
+ *  the autosave debounce is armed, or the current layout differs from acked. */
+function hasUnackedLocalLayout(key: string): boolean {
+  // No acked layout (an older daemon, or nothing loaded yet): there is no
+  // base to merge against, so the remote layout wins as before.
+  const acked = ackedLayouts.get(key)
+  if (!acked) return false
+  if (persistDebounceTimer !== null) return true
+  const st = useTabsStore.getState()
+  if (st.activeWorkspaceKey !== key) return false
+  return canonicalLayoutJson(st.serializeCurrentLayout()) !== acked.canonical
+}
+
+/** Apply a layout from the daemon to this window without echoing a save.
+ *  A pure reorder permutes the live tabs; anything else restores with the
+ *  saved item ids, so a surviving pane never remounts (V3). */
+function applyLayoutSilently(key: string, layout: SerializedLayout, cwd: string): void {
+  withLayoutSaveSuppressed(() => {
+    if (tryReorderTabsInPlace(key, layout)) return
+    useTabsStore.setState((s) => ({ workspaceLayouts: { ...s.workspaceLayouts, [key]: layout } }))
+    useTabsStore.getState().restoreLayout(layout, cwd)
   })
 }
 
-/** Resolve once every save currently in flight for `key` has settled —
- *  including saves issued while waiting (each carries a base-advancing
- *  revision the caller must see before judging a broadcast). Resolves
- *  immediately when nothing is in flight. */
-async function settlePendingLayoutSaves(key: string): Promise<void> {
-  for (;;) {
-    const set = pendingLayoutSaves.get(key)
-    if (!set || set.size === 0) return
-    await Promise.all([...set])
+function cwdForLayoutKey(key: string): string {
+  const known = layoutCwds.get(key)
+  if (known) return known
+  const st = useTabsStore.getState()
+  for (const t of [...st.tabs, ...st.extraGroups.flatMap((g) => g.tabs)]) {
+    for (const pg of t.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type === 'terminal') return (item.data as TerminalItemData).cwd
+      }
+    }
   }
+  return ''
+}
+
+/** 409 on an open-workspace save (V18): fetch the newer layout, merge this
+ *  window's change onto it by tab id, adopt the result, and save it with the
+ *  fresh base. Runs inside the lane. */
+async function mergeAfterLayoutConflict(key: string, job: LayoutSaveJob, attempt: number): Promise<void> {
+  const fetched = await fetchLayoutWithRevision(job.projectId, job.workspaceId)
+  if (useTabsStore.getState().activeWorkspaceKey !== key) return
+  const local = job.produce()
+  if (!local) return
+  const remote = fetched.layout ?? EMPTY_SERIALIZED_LAYOUT
+  const base = ackedLayouts.get(key)?.layout ?? null
+  const merged = mergeSerializedLayouts(base, local, remote)
+  setLayoutRevisionExact(key, fetched.revision)
+  if (fetched.revision !== undefined) cacheRevisions.set(key, fetched.revision)
+  setAckedLayout(key, remote)
+  if (persistDebounceTimer) {
+    clearTimeout(persistDebounceTimer)
+    persistDebounceTimer = null
+  }
+  console.warn(
+    `[tabs] layout conflict for ${key}: merged this window's change onto revision ${fetched.revision ?? '?'}`,
+  )
+  applyLayoutSilently(key, merged, cwdForLayoutKey(key))
+  await runLayoutSaveJob(key, job, attempt)
 }
 
 // Best-effort cleanup on window unload — the WS would close on its own
@@ -398,8 +689,13 @@ if (typeof window !== 'undefined') {
  */
 function closeTerminalForRenderer(
   data: TerminalItemData,
-  opts?: { forceReap?: boolean },
+  opts?: { forceReap?: boolean; wholeTab?: boolean },
 ): void {
+  // V23 — a whole-tab close (removeTab / removeTabFromGroup / force reap)
+  // tells the daemon, so it can refuse an empty-command respawn of this
+  // `tab-<pg>` from a window that has not dropped the tab yet. A pane or
+  // item close inside a tab does not (the pane-group id can be reused).
+  const closeReason = opts?.wholeTab ? ({ reason: 'tab_close' } as const) : {}
   // Heartbeat tabs are "minimize, don't kill" — the daemon-owned PTY
   // keeps running in the background after the tab closes so the
   // heartbeat continues to fire on schedule. We still flip the
@@ -425,7 +721,7 @@ function closeTerminalForRenderer(
     if (opts?.forceReap) {
       const name = data.attachAgentName
       if (name) {
-        closeV2Session(name, { clearIndex: true })
+        closeV2Session(name, { clearIndex: true, ...closeReason })
       }
       return
     }
@@ -491,7 +787,7 @@ function closeTerminalForRenderer(
       // Daemon-owned PTY; unregister from v2_session_map so the
       // last Arc drops and DaemonPtySession tears down the child
       // + PTY master. See .k2so/prds/alacritty-v2.md phase A6.
-      closeV2Session(`tab-${data.terminalId}`)
+      closeV2Session(`tab-${data.terminalId}`, closeReason)
       break
     default:
       // Drift guard (2026-07-02 PTY-leak incident). This switch used
@@ -505,7 +801,7 @@ function closeTerminalForRenderer(
       console.error(
         `[tabs] closeTerminalForRenderer: unknown renderer '${String(renderer)}' — issuing v2 close anyway (add the case!)`,
       )
-      closeV2Session(`tab-${data.terminalId}`)
+      closeV2Session(`tab-${data.terminalId}`, closeReason)
       break
   }
 }
@@ -546,7 +842,7 @@ async function liveSubscriberCountForProject(projectId: string): Promise<number>
 
 async function closeV2Session(
   agentName: string,
-  opts?: { clearIndex?: boolean },
+  opts?: { clearIndex?: boolean; reason?: 'tab_close' },
 ): Promise<void> {
   try {
     const creds = await getDaemonWs()
@@ -567,6 +863,7 @@ async function closeV2Session(
           agent_name: agentName,
           force: true,
           ...(opts?.clearIndex ? { clear_index: true } : {}),
+          ...(opts?.reason ? { reason: opts.reason } : {}),
         }),
       }),
     )
@@ -772,6 +1069,12 @@ export interface BrowserItemData {
   title?: string
   /** Paintable favicon (`data:image/…` or `blob:`). Never an https URL. */
   icon?: string
+  /** V21 / D3 — bumped only when THIS window asks the pane to navigate
+   *  (`openUrlInPane`). BrowserPane navigates its live page on a change of
+   *  this, never on a `url` change alone, so another window's navigation
+   *  (arriving through the shared layout) does not move this window's page.
+   *  Never serialized. */
+  navSeq?: number
 }
 
 export interface Item {
@@ -1198,7 +1501,7 @@ interface TabsState {
   workspaceLayouts: Record<string, SerializedLayout>
   serializeCurrentLayout: () => SerializedLayout
   restoreLayout: (layout: SerializedLayout, cwd: string) => void
-  saveLayoutForWorkspace: (projectId: string, workspaceId: string) => void
+  saveLayoutForWorkspace: (projectId: string, workspaceId: string, opts?: { force?: boolean }) => void
   /** Restore the saved tab layout for a workspace into the active view.
    *  Returns a promise that resolves once the *initial* restore has run
    *  (`restoreLayout` synchronously sets tabs + activeTabId + sessionId,
@@ -1229,11 +1532,7 @@ interface TabsState {
   /** 0.40.48: cancel the autosave debounce and save the active workspace
    *  layout NOW. For structural mutations that must hold across a remote
    *  round-trip (column split/unsplit). */
-  flushLayoutPersist: () => void
-  /** Add a tab to a workspace without switching to it. If the workspace is active,
-   *  adds directly. If background/stashed, saves to DB session so it's there when restored.
-   *  Returns the terminal ID (paneGroupId) so the caller can spawn a background PTY. */
-  addTabToWorkspace: (workspaceKey: string, cwd: string, options: { title: string; command: string; args: string[] }) => string | null
+  flushLayoutPersist: (opts?: { allowEmpty?: boolean }) => void
 
   // Pinned system agent tab
   /** Ensure a pinned agent tab exists for this workspace. Creates one if missing.
@@ -1562,15 +1861,28 @@ function restampBuiltTabs(tabs: Tab[], liveById: Map<string, Tab>): Tab[] {
  *  intentionally omitted so a background-workspace save can't leak this
  *  client's selection to peers. */
 function serializeSnapshot(snapshot: WorkspaceTabSnapshot): SerializedLayout {
-  const serializedExtraGroups = snapshot.extraGroups.map((group) => ({
-    tabs: group.tabs.map(serializeTab),
-  }))
+  return serializeColumnsLayout(snapshot.tabs, snapshot.extraGroups, snapshot.splitCount)
+}
+
+/** The shared layout for a set of columns (D1: columns and their tabs are
+ *  shared). Per-window view state is never written (D2): not the focused
+ *  column (`activeGroupIndex`), not any column's selected tab. When column 0
+ *  is empty but a later column is not, the columns move left — every reader
+ *  treats an empty `tabs` as "no layout". */
+function serializeColumnsLayout(
+  tabs: Tab[],
+  extraGroups: Array<{ tabs: Tab[] }>,
+  splitCount: number,
+): SerializedLayout {
+  const raw: Tab[][] = [tabs, ...extraGroups.map((g) => g.tabs)]
+  while (raw.length < splitCount) raw.push([])
+  const cols = collapseEmptyLeadingColumns(raw)
+  const [first, ...rest] = cols
   return {
     version: LAYOUT_SCHEMA_VERSION,
-    tabs: snapshot.tabs.map(serializeTab),
-    extraGroups: serializedExtraGroups.length > 0 ? serializedExtraGroups : undefined,
-    splitCount: snapshot.splitCount > 1 ? snapshot.splitCount : undefined,
-    activeGroupIndex: snapshot.activeGroupIndex > 0 ? snapshot.activeGroupIndex : undefined,
+    tabs: (first ?? []).map(serializeTab),
+    extraGroups: rest.length > 0 ? rest.map((c) => ({ tabs: c.map(serializeTab) })) : undefined,
+    splitCount: cols.length > 1 ? cols.length : undefined,
   }
 }
 
@@ -1641,38 +1953,59 @@ function layoutSaveSucceeded(): void {
  *  `flushLayoutPersist` can run it immediately for mutations that must
  *  hold (0.40.48 — column split/unsplit). Serializes CURRENT state at
  *  call time; failures re-arm via `rearmLayoutSave`. */
-function saveActiveWorkspaceLayoutNow(): void {
-  if (isLayoutSaveSuppressed()) return
+function saveActiveWorkspaceLayoutNow(opts?: { allowEmpty?: boolean }): Promise<void> {
+  if (isLayoutSaveSuppressed()) return Promise.resolve()
   const state = useTabsStore.getState()
-  if (!state.activeWorkspaceKey) return
-  if (state.tabs.length === 0 && state.extraGroups.length === 0) return
-
-  const layout = state.serializeCurrentLayout()
   const key = state.activeWorkspaceKey
+  if (!key) return Promise.resolve()
+  // An empty strip is saved only by an explicit close (V16/V22). A general
+  // autosave with no tabs is a mid-switch view-clear, not the user's layout.
+  if (!opts?.allowEmpty && state.tabs.length === 0 && state.extraGroups.length === 0) {
+    return Promise.resolve()
+  }
   const [projectId, workspaceId] = key.split(':')
-  if (projectId && workspaceId) {
-    const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
-      projectId,
-      workspaceId,
-      layoutJson: JSON.stringify(layout),
-    }).then((res) => {
-      layoutSaveSucceeded()
-      recordLayoutRevision(key, res?.revision)
-    })
-    // Same self-echo guard as saveLayoutForWorkspace: the broadcast
-    // handler settles this before treating a revision as remote.
-    trackPendingLayoutSave(key, save)
-    save.catch((err) => {
-      console.error('[tabs] Auto-save failed:', err)
-      rearmLayoutSave(err)
-    })
+  if (!projectId || !workspaceId) return Promise.resolve()
+  return submitLayoutSave(key, activeLayoutSaveJob(key, projectId, workspaceId, {
+    allowEmpty: opts?.allowEmpty,
+    label: 'Auto-save',
+  }))
+}
+
+/** A save job for the open workspace: serializes this window's state at send
+ *  time, merges on a 409, and keeps the cached copy in step. */
+function activeLayoutSaveJob(
+  key: string,
+  projectId: string,
+  workspaceId: string,
+  opts: { allowEmpty?: boolean; force?: boolean; label: string },
+): LayoutSaveJob {
+  return {
+    projectId,
+    workspaceId,
+    conflict: 'merge',
+    retry: true,
+    force: opts.force,
+    label: opts.label,
+    produce: () => {
+      if (isLayoutSaveSuppressed()) return null
+      const st = useTabsStore.getState()
+      if (st.activeWorkspaceKey !== key) return null
+      const empty = st.tabs.length === 0 && st.extraGroups.length === 0
+      if (empty && !opts.allowEmpty) return null
+      const layout = empty ? EMPTY_SERIALIZED_LAYOUT : st.serializeCurrentLayout()
+      if (empty) {
+        const { [key]: _gone, ...remaining } = st.workspaceLayouts
+        useTabsStore.setState({ workspaceLayouts: remaining })
+        cacheRevisions.delete(key)
+      } else {
+        useTabsStore.setState({ workspaceLayouts: { ...st.workspaceLayouts, [key]: layout } })
+      }
+      return layout
+    },
   }
 }
 
-/** Cancel a pending debounced autosave (see `persistActiveWorkspace`). Used by
- *  the silent remote-reorder adoption path (#676/#677) so a pre-adoption save
- *  scheduled before suppression can't fire ~1s later and serialize the
- *  just-adopted layout, re-emitting the echo we suppressed. */
+/** Cancel a pending debounced autosave (see `persistActiveWorkspace`). */
 function cancelPendingLayoutSave(): void {
   if (persistDebounceTimer) {
     clearTimeout(persistDebounceTimer)
@@ -1726,6 +2059,194 @@ function countLeaves(tree: MosaicNode<string> | null): number {
 }
 
 /** Find a tab across all groups (group 0 = main tabs, groups 1+ = extraGroups) */
+/** When column 0 empties while a later column still has tabs (a close or a
+ *  move of its last tab), move the columns left. An empty column 0 reads as
+ *  "no layout" to every reader of the shared layout. */
+function collapseEmptyLeadingColumnsInStore(): void {
+  const st = useTabsStore.getState()
+  if (st.tabs.length > 0) return
+  if (!st.extraGroups.some((g) => g.tabs.length > 0)) return
+  let tabs = st.tabs
+  let activeTabId = st.activeTabId
+  let groups = st.extraGroups.slice()
+  let splitCount = st.splitCount
+  let activeGroupIndex = st.activeGroupIndex
+  while (tabs.length === 0 && groups.some((g) => g.tabs.length > 0)) {
+    const [next, ...rest] = groups
+    tabs = next.tabs
+    activeTabId = next.activeTabId ?? next.tabs[0]?.id ?? null
+    groups = rest
+    splitCount = Math.max(1, splitCount - 1)
+    activeGroupIndex = Math.max(0, activeGroupIndex - 1)
+  }
+  useTabsStore.setState({ tabs, activeTabId, extraGroups: groups, splitCount, activeGroupIndex })
+}
+
+/** Fields of a terminal item that the shared layout carries. Everything else
+ *  on a live item (daemon command/args/sessionId, resolved sandbox, spawn
+ *  time) is runtime and survives a remote restore of the same item. */
+function carryLiveTerminalData(restored: TerminalItemData, live: TerminalItemData): TerminalItemData {
+  return {
+    ...live,
+    heartbeatName: restored.heartbeatName,
+    projectPath: restored.projectPath,
+    surfacedAgentName: restored.surfacedAgentName,
+    attachAgentName: restored.attachAgentName,
+    fromApi: restored.fromApi,
+    sandbox: restored.sandbox,
+    commandHint: restored.commandHint ?? live.commandHint,
+    conversationId: restored.conversationId ?? live.conversationId,
+  }
+}
+
+/** Restore one serialized item. Reuses the saved id (V20) when it is a string
+ *  not already used in this restore; mints one otherwise (old layouts,
+ *  duplicates). */
+function restoreSerializedItem(
+  si: SerializedItem,
+  paneGroupId: string,
+  cwd: string,
+  liveItemsById: Map<string, Item>,
+  usedItemIds: Set<string>,
+): Item {
+  const savedId =
+    typeof si.id === 'string' && si.id.length > 0 && !usedItemIds.has(si.id) ? si.id : null
+  const id = savedId ?? crypto.randomUUID()
+  usedItemIds.add(id)
+  const live = savedId ? liveItemsById.get(savedId) : undefined
+  if (si.type === 'terminal') {
+    // After migrateLayoutToV2, terminal items are v2 shape: only
+    // paneGroupId + heartbeat metadata. cwd/command/args/sessionId/renderer
+    // come from the daemon at reconcile time — or, for a pane this window
+    // already shows, from the live item.
+    const restored = restoredV2TerminalData(si as SerializedTerminalItemV2, paneGroupId, cwd)
+    const liveData =
+      live?.type === 'terminal' && (live.data as TerminalItemData).terminalId === paneGroupId
+        ? (live.data as TerminalItemData)
+        : undefined
+    return {
+      id,
+      type: 'terminal' as const,
+      data: liveData ? carryLiveTerminalData(restored, liveData) : restored,
+    }
+  }
+  if (si.type === 'agent') {
+    const restoredSection = si.section ?? 'inbox'
+    return {
+      id,
+      type: 'agent' as const,
+      data: {
+        agentName: si.agentName ?? '',
+        projectPath: si.projectPath ?? cwd,
+        section: restoredSection,
+        // 0.37.12 — restore the pinned chat tab's Claude session id (when
+        // present). AgentChatPane reads this as a hint and resumes the same
+        // session without a daemon round-trip. 0.37.12 P1C scrub: only the
+        // chat tab carries it; a leaked value on inbox tabs is dropped. Split
+        // columns restore it the same way as column 0.
+        sessionId: restoredSection === 'chat' ? si.sessionId : undefined,
+      },
+    }
+  }
+  if (si.type === 'browser') {
+    // URL, title, and favicon persist; the native child webview is created
+    // at that URL by BrowserPane on first visibility. A missing icon (older
+    // layouts) is the globe. An empty url = address bar only. `navSeq` (this
+    // window's own navigate requests, V21) is never saved and survives.
+    const liveNav =
+      live?.type === 'browser' ? (live.data as BrowserItemData).navSeq : undefined
+    return {
+      id,
+      type: 'browser' as const,
+      data: {
+        url: si.url ?? '',
+        title: si.title,
+        icon: si.icon,
+        ...(liveNav !== undefined ? { navSeq: liveNav } : {}),
+      },
+    }
+  }
+  const liveMode =
+    live?.type === 'file-viewer' ? (live.data as FileViewerItemData).mode : undefined
+  return {
+    id,
+    type: 'file-viewer' as const,
+    data: {
+      filePath: si.filePath ?? '',
+      scrollTop: si.scrollTop,
+      cursorPos: si.cursorPos,
+      ...(liveMode !== undefined ? { mode: liveMode } : {}),
+    },
+    pinned: si.pinned ?? false,
+  }
+}
+
+/** Restore one serialized tab — the same rules for column 0 and the split
+ *  columns. Tab and pane-group ids are the saved ones: the daemon's
+ *  `tab-<paneGroupId>` session is keyed by the pane-group id, so reusing it
+ *  re-attaches the restored pane to the live PTY. */
+function restoreSerializedTab(
+  serializedTab: SerializedTab,
+  cwd: string,
+  liveTabsById: Map<string, Tab>,
+  liveItemsById: Map<string, Item>,
+  usedItemIds: Set<string>,
+): Tab {
+  const paneGroups = new Map<string, PaneGroup>()
+  const idMap = new Map<string, string>()
+  // Handle both new format (paneGroups) and legacy format (panes)
+  const serializedPaneGroups = serializedTab.paneGroups
+    ?? convertLegacyPanes((serializedTab as unknown as { panes?: Record<string, LegacySerializedPaneData> }).panes)
+  if (!serializedPaneGroups || typeof serializedPaneGroups !== 'object') {
+    console.warn('[tabs] Corrupted layout: missing paneGroups, creating fresh tab')
+    const pgId = crypto.randomUUID()
+    paneGroups.set(pgId, makeTerminalPaneGroup(pgId, cwd))
+    idMap.set('default', pgId)
+  } else {
+    for (const [oldPgId, serializedPg] of Object.entries(serializedPaneGroups)) {
+      const newPgId = oldPgId
+      idMap.set(oldPgId, newPgId)
+      const rawItems = Array.isArray(serializedPg?.items) ? serializedPg.items : []
+      const items: Item[] = rawItems.map((si) =>
+        restoreSerializedItem(si, newPgId, cwd, liveItemsById, usedItemIds),
+      )
+      // Ensure at least one item per pane group. A stable id, so every
+      // window (and every restore) makes the same one.
+      if (items.length === 0) {
+        const fallbackId = usedItemIds.has(`item-${newPgId}`) ? crypto.randomUUID() : `item-${newPgId}`
+        usedItemIds.add(fallbackId)
+        items.push({
+          id: fallbackId,
+          type: 'terminal',
+          data: { terminalId: newPgId, cwd, renderer: currentRenderer() },
+        })
+      }
+      const clampedIndex = Math.max(0, Math.min(serializedPg?.activeItemIndex ?? 0, items.length - 1))
+      paneGroups.set(newPgId, { id: newPgId, items, activeItemIndex: clampedIndex })
+    }
+  }
+  tabCounter++
+  // Reuse the daemon-canonical serialized id (fall back for legacy layouts
+  // saved before ids were serialized). Re-minting here broke cross-client
+  // tab identity: TabTitleChanged events + tab_titles snapshots key on the
+  // RENAMER's id (the remote-rename-invisible bug, 2026-07-08).
+  const id = serializedTab.id ?? crypto.randomUUID()
+  const live = liveTabsById.get(id)
+  return {
+    id,
+    title: serializedTab.title,
+    mosaicTree: remapMosaicIds(serializedTab.mosaicTree, idMap),
+    paneGroups,
+    ...(serializedTab.isSystemAgent ? { isSystemAgent: true } : {}),
+    ...(serializedTab.isPinnedFile ? { isPinnedFile: true } : {}),
+    // Tab-rename stickiness — restore the locked flag so a user-renamed tab
+    // stays sticky after relaunch.
+    ...(serializedTab.locked ? { locked: true } : {}),
+    // Unsaved edits are this window's; a remote restore must not clear them.
+    ...(live?.isDirty ? { isDirty: true } : {}),
+  }
+}
+
 function findTabAcrossGroups(state: { tabs: Tab[], extraGroups: Array<{ tabs: Tab[], activeTabId: string | null }> }, tabId: string): Tab | undefined {
   const found = state.tabs.find((t) => t.id === tabId)
   if (found) return found
@@ -2099,7 +2620,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         for (const item of pg.items) {
           if (item.type === 'terminal') {
             const data = item.data as TerminalItemData
-            closeTerminalForRenderer(data, opts)
+            closeTerminalForRenderer(data, { ...opts, wholeTab: true })
           }
         }
       }
@@ -2120,10 +2641,15 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
       return { tabs: newTabs, activeTabId: newActiveId }
     })
+    collapseEmptyLeadingColumnsInStore()
 
     // 0.38.0 Commit 4 — no cross-window broadcast here. The daemon's
     // `/cli/sessions/events` push delivers `session_removed` to other
     // windows after `closeTerminalForRenderer` unregisters the v2 PTY.
+    //
+    // V22 — a close is saved at once, not on the 1s debounce, so another
+    // window's save in that second can't carry the closed tab back.
+    get().flushLayoutPersist({ allowEmpty: true })
   },
 
   setActiveTab: (tabId: string) => {
@@ -3233,7 +3759,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         if (browserIdx !== -1) {
           const newItems = [...pg.items]
           const prev = newItems[browserIdx]
-          newItems[browserIdx] = { ...prev, data: { ...(prev.data as BrowserItemData), url } }
+          const prevData = prev.data as BrowserItemData
+          // V21 — this window asked for the navigation; bump navSeq so the
+          // pane moves its live page (a url change alone never does).
+          newItems[browserIdx] = {
+            ...prev,
+            data: { ...prevData, url, navSeq: (prevData.navSeq ?? 0) + 1 },
+          }
           newPaneGroups.set(activePgId, { ...pg, items: newItems, activeItemIndex: browserIdx })
         } else {
           const newItem: Item = {
@@ -3253,18 +3785,30 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   setBrowserItemState: (tabId: string, paneGroupId: string, itemId: string, browserState: { url?: string; title?: string }) => {
     set((state) => {
+      // V8/V19 — a same-value stamp (a remounted webview reporting the URL
+      // the layout already has) changes nothing and must not save.
+      let changed = false
       const result = mapTabAcrossGroups(state, tabId, (tab) => {
         const pg = tab.paneGroups.get(paneGroupId)
         if (!pg) return tab
+        let pgChanged = false
         const newItems = pg.items.map((item) => {
           if (item.id !== itemId || item.type !== 'browser') return item
           const prevData = item.data as BrowserItemData
+          const same =
+            (browserState.url === undefined || browserState.url === prevData.url) &&
+            (browserState.title === undefined || browserState.title === prevData.title)
+          if (same) return item
+          pgChanged = true
           return { ...item, data: { ...prevData, ...browserState } }
         })
+        if (!pgChanged) return tab
+        changed = true
         const newPaneGroups = new Map(tab.paneGroups)
         newPaneGroups.set(paneGroupId, { ...pg, items: newItems })
         return { ...tab, paneGroups: newPaneGroups }
       })
+      if (!changed) return {}
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
   },
@@ -3526,6 +4070,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   setTabDirty: (tabId: string, dirty: boolean) => {
     set((state) => {
+      // V19 — FileViewerPane calls this on every mount; an unchanged flag
+      // must not make a new tabs array (that fired the autosave).
+      const current = findTabAcrossGroups(state, tabId)
+      if (!current || Boolean(current.isDirty) === dirty) return {}
       const result = mapTabAcrossGroups(state, tabId, (tab) => ({ ...tab, isDirty: dirty }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
@@ -3556,18 +4104,30 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   setFileViewerState: (tabId: string, paneId: string, itemId: string, viewerState: { scrollTop?: number; cursorPos?: number }) => {
     set((state) => {
+      // V19 — FileViewerPane writes this on every unmount; the same scroll /
+      // cursor it already has is not a change.
+      let changed = false
       const result = mapTabAcrossGroups(state, tabId, (tab) => {
         const pg = tab.paneGroups.get(paneId)
         if (!pg) return tab
+        let pgChanged = false
         const newItems = pg.items.map((item) => {
           if (item.id !== itemId || item.type !== 'file-viewer') return item
           const prevData = item.data as FileViewerItemData
+          const same =
+            (viewerState.scrollTop === undefined || viewerState.scrollTop === prevData.scrollTop) &&
+            (viewerState.cursorPos === undefined || viewerState.cursorPos === prevData.cursorPos)
+          if (same) return item
+          pgChanged = true
           return { ...item, data: { ...prevData, ...viewerState } }
         })
+        if (!pgChanged) return tab
+        changed = true
         const newPaneGroups = new Map(tab.paneGroups)
         newPaneGroups.set(paneId, { ...pg, items: newItems })
         return { ...tab, paneGroups: newPaneGroups }
       })
+      if (!changed) return {}
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
   },
@@ -3804,7 +4364,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       for (const [, pg] of tab.paneGroups) {
         for (const item of pg.items) {
           if (item.type === 'terminal') {
-            closeTerminalForRenderer(item.data as TerminalItemData, opts)
+            closeTerminalForRenderer(item.data as TerminalItemData, { ...opts, wholeTab: true })
           }
         }
       }
@@ -3820,6 +4380,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     const newGroups = [...state.extraGroups]
     newGroups[gi] = { tabs: newTabs, activeTabId: newActiveId }
     set({ extraGroups: newGroups })
+    // V22 — same immediate save as removeTab.
+    get().flushLayoutPersist({ allowEmpty: true })
   },
 
   forceReapAllTabsInGroup: (groupIndex: number) => {
@@ -3916,6 +4478,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         set({ extraGroups: newGroups })
       }
     }
+    collapseEmptyLeadingColumnsInStore()
   },
 
   getGroupTabs: (groupIndex: number): { tabs: Tab[], activeTabId: string | null } => {
@@ -3936,21 +4499,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   serializeCurrentLayout: (): SerializedLayout => {
     const state = get()
-    const serializedTabs = state.tabs.map(serializeTab)
     // per-client-view-state.md (Phase 1) — the canonical layout carries only
     // STRUCTURE. `activeTabId` (top-level AND per-split-group) is per-client
     // VIEW state and is intentionally OMITTED so a save can't drag this
-    // client's selection onto peers that adopt the layout.
-    const serializedExtraGroups = state.extraGroups.map((group) => ({
-      tabs: group.tabs.map(serializeTab),
-    }))
-    return {
-      version: LAYOUT_SCHEMA_VERSION,
-      tabs: serializedTabs,
-      extraGroups: serializedExtraGroups.length > 0 ? serializedExtraGroups : undefined,
-      splitCount: state.splitCount > 1 ? state.splitCount : undefined,
-      activeGroupIndex: state.activeGroupIndex > 0 ? state.activeGroupIndex : undefined,
-    }
+    // client's selection onto peers that adopt the layout. D2 — the focused
+    // column (`activeGroupIndex`) is per-window too. D1 — the columns and
+    // which tab sits in which column ARE shared.
+    return serializeColumnsLayout(state.tabs, state.extraGroups, state.splitCount)
   },
 
   restoreLayout: (layout: SerializedLayout, cwd: string) => {
@@ -3968,240 +4523,55 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // which `loadLayoutForWorkspace` triggers when migration happens.
     migrateLayoutToV2(layout)
 
-    const restoredTabs: Tab[] = layout.tabs.map((serializedTab) => {
-      const paneGroups = new Map<string, PaneGroup>()
-
-      // We need to remap paneGroup IDs: old serialized IDs -> new UUIDs
-      // because terminal items need fresh terminalIds (old PTYs are dead).
-      const idMap = new Map<string, string>()
-
-      // Handle both new format (paneGroups) and legacy format (panes)
-      const serializedPaneGroups = serializedTab.paneGroups
-        ?? convertLegacyPanes((serializedTab as any).panes)
-
-      if (!serializedPaneGroups || typeof serializedPaneGroups !== 'object') {
-        console.warn('[tabs] Corrupted layout: missing paneGroups, creating fresh tab')
-        const pgId = crypto.randomUUID()
-        const pg = makeTerminalPaneGroup(pgId, cwd)
-        paneGroups.set(pgId, pg)
-        idMap.set('default', pgId)
-      } else {
-      for (const [oldPgId, serializedPg] of Object.entries(serializedPaneGroups)) {
-        // Reuse the saved ID — if a background PTY was already spawned with it
-        // (e.g. delegate), the backend skips re-creation and connects to the
-        // existing process. If no PTY exists, a new one is created with this ID.
-        const newPgId = oldPgId
-        idMap.set(oldPgId, newPgId)
-
-        const rawItems = Array.isArray(serializedPg?.items) ? serializedPg.items : []
-        const items: Item[] = rawItems.map((si) => {
-          if (si.type === 'terminal') {
-            // After migrateLayoutToV2, terminal items are v2 shape:
-            // only paneGroupId + heartbeat metadata. cwd/command/args/
-            // sessionId/renderer come from the daemon at reconcile
-            // time. Default to undefined so TerminalPane attaches to
-            // the existing daemon PTY by paneGroupId; if no PTY
-            // exists, it spawns a fresh shell at the workspace cwd.
-            const t = si as SerializedTerminalItemV2
-            return {
-              id: crypto.randomUUID(),
-              type: 'terminal' as const,
-              data: restoredV2TerminalData(t, newPgId, cwd),
-            }
-          } else if (si.type === 'agent') {
-            const restoredSection = si.section ?? 'inbox'
-            return {
-              id: crypto.randomUUID(),
-              type: 'agent' as const,
-              data: {
-                agentName: si.agentName ?? '',
-                projectPath: si.projectPath ?? cwd,
-                section: restoredSection,
-                // 0.37.12 — restore the pinned chat tab's Claude
-                // session id (when present). AgentChatPane reads
-                // this as a hint and resumes the same session
-                // immediately without round-tripping
-                // k2so_agents_resume_chat_args. Absent on rows
-                // serialized before 0.37.12 — AgentChatPane falls
-                // back to the daemon lookup in that case.
-                //
-                // 0.37.12 P1C scrub: only restore sessionId for
-                // the chat tab. Inbox tabs (and any other
-                // non-chat agent surface) don't render Claude, so
-                // a stamped sessionId there is unused garbage.
-                // Pre-fix layouts may carry a leaked value from
-                // the broader stampAgentSessionId match. Drop it
-                // on restore so the next serialize doesn't
-                // round-trip the stale data.
-                sessionId: restoredSection === 'chat' ? si.sessionId : undefined,
-              },
-            }
-          } else if (si.type === 'browser') {
-            // Browser pane — URL, title, and favicon persist; the native
-            // child webview is re-created at that URL by BrowserPane on
-            // first visibility. A missing icon (older layouts) is the globe.
-            return {
-              id: crypto.randomUUID(),
-              type: 'browser' as const,
-              // Empty url = BrowserPane renders its address bar only and
-              // defers browser_create until the user enters one (the Rust
-              // side rejects non-http(s) URLs, so no placeholder scheme).
-              data: {
-                url: si.url ?? '',
-                title: si.title,
-                icon: si.icon,
-              },
-            }
-          } else {
-            return {
-              id: crypto.randomUUID(),
-              type: 'file-viewer' as const,
-              data: {
-                filePath: si.filePath ?? '',
-                scrollTop: si.scrollTop,
-                cursorPos: si.cursorPos,
-              },
-              pinned: si.pinned ?? false,
-            }
-          }
-        })
-
-        // Ensure at least one item per pane group
-        if (items.length === 0) {
-          items.push({
-            id: crypto.randomUUID(),
-            type: 'terminal',
-            data: { terminalId: newPgId, cwd, renderer: currentRenderer() },
-          })
-        }
-
-        const clampedIndex = Math.max(0, Math.min(serializedPg?.activeItemIndex ?? 0, items.length - 1))
-        paneGroups.set(newPgId, {
-          id: newPgId,
-          items,
-          activeItemIndex: clampedIndex,
-        })
+    // V3/V20 — restore keeps the saved item ids, so a remote save never
+    // remounts a pane whose tab is still there (panes key on `item.id`). A
+    // live item with the same id keeps its runtime-only data.
+    const liveItemsById = new Map<string, Item>()
+    for (const t of liveById.values()) {
+      for (const pg of t.paneGroups.values()) {
+        for (const it of pg.items) liveItemsById.set(it.id, it)
       }
-      }
+    }
+    const usedItemIds = new Set<string>()
+    const restoreTab = (serializedTab: SerializedTab): Tab =>
+      restoreSerializedTab(serializedTab, cwd, liveById, liveItemsById, usedItemIds)
 
-      // Remap the mosaic tree IDs
-      const remappedTree = remapMosaicIds(serializedTab.mosaicTree, idMap)
-
-      tabCounter++
-      return {
-        // Reuse the daemon-canonical serialized id (fall back for legacy
-        // layouts saved before ids were serialized). Re-minting here broke
-        // cross-client tab identity: TabTitleChanged events + tab_titles
-        // snapshots key on the RENAMER's id, so every other client
-        // silently no-op'd (the remote-rename-invisible bug, 2026-07-08).
-        id: serializedTab.id ?? crypto.randomUUID(),
-        title: serializedTab.title,
-        mosaicTree: remappedTree,
-        paneGroups,
-        ...(serializedTab.isSystemAgent ? { isSystemAgent: true } : {}),
-        ...(serializedTab.isPinnedFile ? { isPinnedFile: true } : {}),
-        // Tab-rename stickiness — restore the locked flag so a user-renamed
-        // tab stays sticky after relaunch.
-        ...(serializedTab.locked ? { locked: true } : {}),
-      }
-    })
+    const restoredTabs: Tab[] = (Array.isArray(layout.tabs) ? layout.tabs : []).map(restoreTab)
 
     // per-client-view-state.md (Phase 1+2) — selection is NO LONGER read from
-    // the shared layout's leaked `activeTabId` (that hijacked peers). It comes
+    // the shared layout's leaked `activeTabId` (that hijacked peers). A tab
+    // this window already has selected stays selected; otherwise it comes
     // from this client's per-client selected-tabs store, matched by paneGroup
-    // SIGNATURE (the stable identity that survives restore's tab-id re-mint).
-    // Fallbacks: the saved selection's tab no longer exists → first tab; a
-    // brand-new client with no saved selection → first tab (preserves #658
-    // cold-boot pinned-chat, which is the first/system tab).
-    const restoredActiveTabId = resolveRestoredSelection(get(), restoredTabs)
+    // SIGNATURE. Fallbacks: the saved selection's tab no longer exists → first
+    // tab; a brand-new client with no saved selection → first tab (preserves
+    // #658 cold-boot pinned-chat, which is the first/system tab).
+    const liveSelected = get().activeTabId
+    const restoredActiveTabId =
+      liveSelected && restoredTabs.some((t) => t.id === liveSelected)
+        ? liveSelected
+        : resolveRestoredSelection(get(), restoredTabs)
 
-    // Restore extra groups (split columns)
+    // Restore extra groups (split columns). D1 — columns and their tabs are
+    // shared. D2 — each column's selected tab is this window's: keep the tab
+    // this window had selected in whichever column now holds it, else the
+    // column's first tab.
+    const liveColumnSelections = new Set<string>()
+    for (const g of get().extraGroups) if (g.activeTabId) liveColumnSelections.add(g.activeTabId)
     const restoredExtraGroups: Array<{ tabs: Tab[], activeTabId: string | null }> = []
-    if (layout.extraGroups) {
-      for (const group of layout.extraGroups) {
-        const groupTabs = group.tabs.map((serializedTab) => {
-          // Use the same restore logic as group 0
-          const paneGroups = new Map<string, PaneGroup>()
-          const idMap = new Map<string, string>()
-          const serializedPaneGroups = serializedTab.paneGroups
-            ?? convertLegacyPanes((serializedTab as any).panes)
-          if (serializedPaneGroups && typeof serializedPaneGroups === 'object') {
-            for (const [oldPgId, serializedPg] of Object.entries(serializedPaneGroups)) {
-              // Reuse the saved ID (same rule as the group-0 restore above):
-              // the daemon's `tab-<paneGroupId>` session for a split-column
-              // terminal is keyed by this ID, so reusing it makes the
-              // restored pane RE-ATTACH to the live PTY. Re-minting here
-              // orphaned every split terminal on restore — the fresh ID
-              // spawned a duplicate PTY and the orphaned session was then
-              // adopted into the MAIN group by reconcile/hello.
-              const newPgId = oldPgId
-              idMap.set(oldPgId, newPgId)
-              const rawItems = Array.isArray(serializedPg?.items) ? serializedPg.items : []
-              const items: Item[] = rawItems.map((si) => {
-                if (si.type === 'terminal') {
-                  // v2: daemon owns command/args/cwd/sessionId/renderer.
-                  // Reconcile fills them in after restore.
-                  const t = si as SerializedTerminalItemV2
-                  return {
-                    id: crypto.randomUUID(),
-                    type: 'terminal' as const,
-                    data: restoredV2TerminalData(t, newPgId, cwd),
-                  }
-                } else if (si.type === 'agent') {
-                  return {
-                    id: crypto.randomUUID(),
-                    type: 'agent' as const,
-                    data: { agentName: si.agentName ?? '', projectPath: si.projectPath ?? cwd },
-                  }
-                } else if (si.type === 'browser') {
-                  // Same restore rule as group 0: URL, title, icon. Webview
-                  // re-created lazily by BrowserPane. Missing icon is the globe.
-                  return {
-                    id: crypto.randomUUID(),
-                    type: 'browser' as const,
-                    data: { url: si.url ?? '', title: si.title, icon: si.icon },
-                  }
-                } else {
-                  return {
-                    id: crypto.randomUUID(),
-                    type: 'file-viewer' as const,
-                    data: {
-                      filePath: si.filePath ?? '',
-                      scrollTop: si.scrollTop,
-                      cursorPos: si.cursorPos,
-                    },
-                    pinned: si.pinned ?? false,
-                  }
-                }
-              })
-              if (items.length === 0) {
-                items.push({ id: crypto.randomUUID(), type: 'terminal', data: { terminalId: newPgId, cwd, renderer: currentRenderer() } })
-              }
-              const clampedIndex = Math.max(0, Math.min(serializedPg?.activeItemIndex ?? 0, items.length - 1))
-              paneGroups.set(newPgId, { id: newPgId, items, activeItemIndex: clampedIndex })
-            }
-          }
-          tabCounter++
-          return {
-            // Same id-reuse rule as the group-0 restore above — re-minting
-            // broke cross-client tab identity for renames.
-            id: serializedTab.id ?? crypto.randomUUID(),
-            title: serializedTab.title,
-            mosaicTree: remapMosaicIds(serializedTab.mosaicTree, idMap),
-            paneGroups,
-            ...(serializedTab.locked ? { locked: true } : {}),
-          }
-        })
-        // per-client-view-state.md (Phase 1) — split-group selection is also
-        // per-client VIEW state and is no longer read from the (now omitted)
-        // serialized `group.activeTabId`. Default to the group's first tab;
-        // the user's split focus re-establishes locally as they interact. (The
-        // per-client store tracks only the primary group-0 selection.)
-        restoredExtraGroups.push({
-          tabs: groupTabs,
-          activeTabId: groupTabs.length > 0 ? groupTabs[0].id : null,
-        })
-      }
+    for (const group of layout.extraGroups ?? []) {
+      const groupTabs = (Array.isArray(group?.tabs) ? group.tabs : []).map(restoreTab)
+      const kept = groupTabs.find((t) => liveColumnSelections.has(t.id))
+      restoredExtraGroups.push({
+        tabs: groupTabs,
+        activeTabId: kept ? kept.id : (groupTabs[0]?.id ?? null),
+      })
+    }
+    const restoredSplitCount = Math.min(
+      3,
+      Math.max(1, layout.splitCount ?? 1, 1 + restoredExtraGroups.length),
+    )
+    while (restoredExtraGroups.length < restoredSplitCount - 1) {
+      restoredExtraGroups.push({ tabs: [], activeTabId: null })
     }
 
     // T11 — restamp the built array BEFORE set(). Never await chat/list here.
@@ -4218,8 +4588,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       tabs: restampedTabs,
       activeTabId: restampedActiveTabId,
       extraGroups: restampedExtraGroups,
-      splitCount: layout.splitCount ?? 1,
-      activeGroupIndex: layout.activeGroupIndex ?? 0,
+      splitCount: restoredSplitCount,
+      // D2 — the focused column is this window's, never the saved layout's.
+      // A remote adoption keeps it (clamped); a fresh load starts at 0
+      // because `clearAllTabs` reset it.
+      activeGroupIndex: Math.min(get().activeGroupIndex, restoredSplitCount - 1),
     })
     } catch (err) {
       console.error('[tabs] Failed to restore layout, falling back to fresh tab:', err)
@@ -4237,46 +4610,26 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }
   },
 
-  saveLayoutForWorkspace: (projectId: string, workspaceId: string) => {
+  saveLayoutForWorkspace: (projectId: string, workspaceId: string, opts?: { force?: boolean }) => {
     // 0.39.39 (#676/#677) — silent remote-reorder adoption: never echo a save
     // back while applying a peer's layout (would re-broadcast and ping-pong).
     if (isLayoutSaveSuppressed()) return
-    const state = get()
     const key = `${projectId}:${workspaceId}`
-
-    if (state.tabs.length === 0) {
-      // Save empty state so next open shows the empty workspace hints
-      // instead of restoring a stale session
-      const { [key]: _, ...remaining } = state.workspaceLayouts
-      set({ workspaceLayouts: remaining })
-      // POST body is camelCase (LayoutDeleteBody `#[serde(rename_all =
-      // "camelCase")]`); no cross-window sync — layouts aren't a synced
-      // surface (the old Tauri layout commands emitted nothing).
-      daemonCliPost('workspace-layouts/delete', { projectId, workspaceId }).catch(() => {})
-      return
-    }
-
-    const layout = state.serializeCurrentLayout()
-    set({ workspaceLayouts: { ...state.workspaceLayouts, [key]: layout } })
-
-    // Persist to SQLite via the host-aware daemon route. Capture the
-    // monotonic `revision` (#677.3) so a later remote reorder's broadcast
-    // can be compared against our base and a stale local write skipped.
-    const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
-      projectId,
-      workspaceId,
-      layoutJson: JSON.stringify(layout),
-    }).then((res) => recordLayoutRevision(key, res?.revision))
-    // Registered BEFORE the daemon can broadcast the save's
-    // `TabOrderChanged`, so the handler's settle step always sees it.
-    trackPendingLayoutSave(key, save)
-    save.then(layoutSaveSucceeded).catch((err) => {
-      console.error('[tabs] Failed to persist workspace layout:', err)
-      // 0.40.48 durability: a dropped save (recovery gate / tunnel blip)
-      // otherwise leaves the server on a stale layout that the next read
-      // clobbers the live state with. Re-arm like the autosave path.
-      rearmLayoutSave(err)
-    })
+    // The layout serialized is this window's CURRENT state; it only belongs
+    // to `key` while `key` is the open workspace.
+    if (get().activeWorkspaceKey !== key) return
+    // V16 — an empty strip saves `{"version":2,"tabs":[]}` instead of
+    // deleting the row, so the revision keeps climbing and other windows
+    // hear about it. Every reader treats empty `tabs` as "no layout" (next
+    // open shows the empty-workspace hints / default agent).
+    //
+    // V17 — goes through the based save (`baseRevision`, merge on 409). The
+    // monotonic `revision` (#677.3) rides back and becomes our base.
+    void submitLayoutSave(key, activeLayoutSaveJob(key, projectId, workspaceId, {
+      allowEmpty: true,
+      force: opts?.force,
+      label: 'Failed to persist workspace layout',
+    }))
   },
 
   loadLayoutForWorkspace: async (projectId: string, workspaceId: string, cwd: string): Promise<void> => {
@@ -4291,6 +4644,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       void restampSessionTabsFromChatList(cwd, collectStoreTabs(st), st.setTabTitle)
     }
     const savedLayout = get().workspaceLayouts[key]
+    layoutCwds.set(key, cwd)
     // Kill any existing PTYs in the active view before restoring
     get().clearAllTabs()
 
@@ -4481,6 +4835,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
     if (savedLayout && savedLayout.tabs && savedLayout.tabs.length > 0) {
       const wasPreV2 = (savedLayout.version ?? 1) < LAYOUT_SCHEMA_VERSION
+      // V14/V17 — the cached copy's own revision is the base, never a newer
+      // save's: a stale cache then gets a 409 and merges instead of
+      // overwriting. Unknown (older daemon) → no base (last-write-wins).
+      setLayoutRevisionExact(key, cacheRevisions.get(key))
+      setAckedLayout(key, savedLayout)
       get().restoreLayout(savedLayout, cwd)
       set({ activeWorkspaceKey: key })
       healAndSave()
@@ -4489,7 +4848,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         // migrated shape so the disk copy converges and the next open
         // is a pure-v2 path.
         console.warn(`[tabs] migrated workspace_layouts to v2 for ${key}`)
-        get().saveLayoutForWorkspace(projectId, workspaceId)
+        get().saveLayoutForWorkspace(projectId, workspaceId, { force: true })
       }
       restampNamedChats()
       void reconcileWithDaemon()
@@ -4507,15 +4866,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // not part of the initial restore the caller waits on.
       try {
         // Try loading from DB. GET query params are snake_case (the daemon
-        // reads `project_id`/`workspace_id`); the route returns the layout
-        // JSON string or null (`Option<String>` serialized).
-        const json = await daemonCliGet<string | null>('workspace-layouts/load', { project_id: projectId, workspace_id: workspaceId })
+        // reads `project_id`/`workspace_id`). V14 — `with_revision=1` returns
+        // `{layoutJson, revision}` so this window has a base for its first
+        // save; an older daemon answers with the bare JSON string.
+        const fetched = await fetchLayoutWithRevision(projectId, workspaceId)
         // Guard: bail if user already switched to a different workspace
         if (get().activeWorkspaceKey !== key) return
+        setLayoutRevisionExact(key, fetched.revision)
+        if (fetched.revision !== undefined) cacheRevisions.set(key, fetched.revision)
+        else cacheRevisions.delete(key)
+        if (fetched.layout) setAckedLayout(key, fetched.layout)
+        else ackedLayouts.delete(key)
 
-        if (json) {
+        if (fetched.layout) {
           try {
-            const layout = JSON.parse(json) as SerializedLayout
+            const layout = fetched.layout
             if (layout.tabs && layout.tabs.length > 0) {
               const wasPreV2 = (layout.version ?? 1) < LAYOUT_SCHEMA_VERSION
               set({ workspaceLayouts: { ...get().workspaceLayouts, [key]: layout } })
@@ -4523,7 +4888,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
               healAndSave()
               if (wasPreV2) {
                 console.warn(`[tabs] migrated workspace_layouts to v2 for ${key}`)
-                get().saveLayoutForWorkspace(projectId, workspaceId)
+                get().saveLayoutForWorkspace(projectId, workspaceId, { force: true })
               }
               restampNamedChats()
               void reconcileWithDaemon()
@@ -4565,12 +4930,16 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // field-identical wrapper struct (also camelCase) — a pure rename
       // with no shape change — so the raw daemon response already matches
       // this type and needs NO post-fetch transform.
-      const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string }>>('workspace-layouts/load-all')
+      const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string, revision?: number }>>('workspace-layouts/load-all')
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== loadHostKey) return
       const layouts: Record<string, SerializedLayout> = {}
       for (const session of sessions) {
+        const rowKey = `${session.projectId}:${session.workspaceId}`
         try {
-          layouts[`${session.projectId}:${session.workspaceId}`] = JSON.parse(session.layoutJson)
+          layouts[rowKey] = JSON.parse(session.layoutJson)
+          // V14 — each row's revision is the base for the cached restore.
+          if (typeof session.revision === 'number') cacheRevisions.set(rowKey, session.revision)
+          else cacheRevisions.delete(rowKey)
         } catch { /* skip corrupt entries */ }
       }
       set({ workspaceLayouts: layouts })
@@ -4833,10 +5202,20 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         workspaceLayouts: remainingLayouts,
         activeWorkspaceKey: null,
       })
-      // Delete saved session from DB so loadLayoutForWorkspace falls through to launchDefaultAgent
+      // V16 — save the empty layout (not a delete) so loadLayoutForWorkspace
+      // falls through to launchDefaultAgent AND the revision keeps climbing.
+      // The workspace is leaving this window, so a 409 (it changed elsewhere)
+      // drops this write — the other window's layout is newer.
       const [projectId, workspaceId] = key.split(':')
+      cacheRevisions.delete(key)
       if (projectId && workspaceId) {
-        daemonCliPost('workspace-layouts/delete', { projectId, workspaceId }).catch(() => {})
+        void submitLayoutSave(key, {
+          projectId,
+          workspaceId,
+          conflict: 'drop',
+          label: 'empty-workspace save',
+          produce: () => EMPTY_SERIALIZED_LAYOUT,
+        })
       }
       return
     }
@@ -4875,6 +5254,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // key the per-client store.
       const { [key]: _, ...remaining } = state.backgroundWorkspaces
       const [liveProjectId, liveWorkspaceId] = key.split(':')
+      layoutCwds.set(key, cwd)
       set({
         tabs: live.tabs,
         activeTabId: live.activeTabId,
@@ -4940,29 +5320,28 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   serializeAllWorkspaces: async (activeKey: string) => {
     const state = get()
 
-    // Serialize + save current active workspace
+    // Serialize + save current active workspace (based save, merge on 409).
     if (state.tabs.length > 0 || state.extraGroups.length > 0) {
-      const layout = state.serializeCurrentLayout()
       const [projectId, workspaceId] = activeKey.split(':')
-      if (projectId && workspaceId) {
-        await daemonCliPost('workspace-layouts/save', {
-          projectId,
-          workspaceId,
-          layoutJson: JSON.stringify(layout),
-        }).catch((err) => console.error('[tabs] Failed to save active workspace:', err))
+      if (projectId && workspaceId && state.activeWorkspaceKey === activeKey) {
+        await submitLayoutSave(activeKey, activeLayoutSaveJob(activeKey, projectId, workspaceId, {
+          label: 'Failed to save active workspace',
+        }))
       }
     }
 
-    // Serialize + save each background workspace
+    // Serialize + save each background workspace. V17 — a 409 drops the
+    // write: the window that has that workspace open is newer.
     for (const [key, snapshot] of Object.entries(state.backgroundWorkspaces)) {
-      const layout = serializeSnapshot(snapshot)
       const [projectId, workspaceId] = key.split(':')
       if (projectId && workspaceId) {
-        await daemonCliPost('workspace-layouts/save', {
+        await submitLayoutSave(key, {
           projectId,
           workspaceId,
-          layoutJson: JSON.stringify(layout),
-        }).catch((err) => console.error('[tabs] Failed to save background workspace:', key, err))
+          conflict: 'drop',
+          label: `Failed to save background workspace ${key}`,
+          produce: () => serializeSnapshot(snapshot),
+        })
       }
     }
   },
@@ -5015,71 +5394,18 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }, 1000)
   },
 
-  flushLayoutPersist: () => {
-    // 0.40.48: structural mutations that MUST hold (column split/unsplit)
-    // save immediately instead of riding the 1s debounce — closes the
-    // window where a competing remote `TabOrderChanged` finds no pending
-    // save to settle against and rebuilds from the pre-mutation layout.
+  flushLayoutPersist: (opts?: { allowEmpty?: boolean }) => {
+    // 0.40.48: structural mutations that MUST hold (column split/unsplit,
+    // and since V22 a tab close) save immediately instead of riding the 1s
+    // debounce — closes the window where a competing remote
+    // `TabOrderChanged` rebuilds from the pre-mutation layout.
     if (persistDebounceTimer) {
       clearTimeout(persistDebounceTimer)
       persistDebounceTimer = null
     }
-    saveActiveWorkspaceLayoutNow()
+    void saveActiveWorkspaceLayoutNow(opts)
   },
 
-  addTabToWorkspace: (workspaceKey: string, cwd: string, options: { title: string; command: string; args: string[] }): string | null => {
-    const state = get()
-
-    // If this IS the active workspace, just add the tab directly
-    if (state.activeWorkspaceKey === workspaceKey) {
-      state.addTabToGroup(0, cwd, options)
-      return null // terminal created by the live tab
-    }
-
-    // Otherwise, save a session to the DB for this workspace so the tab
-    // is waiting when the user navigates there. Build a minimal v2
-    // serialized layout — daemon owns the PTY's cwd/command/args so we
-    // emit only metadata. `reconcileWithDaemon` fills them in when the
-    // user lands on the workspace and the daemon's `tab-<pgId>` session
-    // is discovered.
-    const tabId = crypto.randomUUID()
-    const pgId = crypto.randomUUID()
-    const terminalId = pgId
-
-    const layout: SerializedLayout = {
-      version: LAYOUT_SCHEMA_VERSION,
-      tabs: [{
-        id: tabId,
-        title: options.title,
-        mosaicTree: pgId,
-        paneGroups: {
-          [pgId]: {
-            id: pgId,
-            items: [{
-              id: crypto.randomUUID(),
-              type: 'terminal' as const,
-              paneGroupId: pgId,
-            } as SerializedTerminalItemV2],
-            activeItemIndex: 0,
-          }
-        }
-      }],
-      activeTabId: tabId,
-      splitCount: 1,
-      activeGroupIndex: 0,
-    }
-
-    const [projectId, workspaceId] = workspaceKey.split(':')
-    if (projectId && workspaceId) {
-      daemonCliPost('workspace-layouts/save', {
-        projectId,
-        workspaceId,
-        layoutJson: JSON.stringify(layout),
-      }).catch((err) => console.error('[tabs] Failed to save agent tab to workspace:', err))
-    }
-
-    return pgId // terminal ID for background PTY spawning
-  },
 }))
 
 // ── Tree utilities ───────────────────────────────────────────────────────
@@ -5299,7 +5625,9 @@ function buildAdoptedTerminalTab(args: {
   }
   tabCounter++
   return {
-    id: crypto.randomUUID(),
+    // V22 — a stable id, so two windows adopting the same daemon session
+    // make the same tab and the layout merge collapses them.
+    id: `adopted-${args.paneGroupId}`,
     title: args.command ?? `Terminal ${tabCounter}`,
     mosaicTree: args.paneGroupId,
     paneGroups: new Map([[args.paneGroupId, pg]]),
@@ -5511,23 +5839,34 @@ function subscribeForActiveWorkspace(
           recordLayoutRevision(key, event.revision)
           return
         }
+        // V22 — a refetch is coming: hold `session_added` adoption until it
+        // lands, so a peer's new split terminal is placed by the layout (in
+        // the peer's column), not adopted into this window's column 0.
+        refetchInFlight.add(key)
         void (async () => {
-          // The daemon emits this broadcast BEFORE writing the save
-          // response, so OUR OWN in-flight save's echo can outrun the
-          // response that advances `layoutRevisions`. Settle in-flight
-          // saves first, then re-judge: a self-echo dissolves against
-          // the recorded base (refetching here applied a layout that
-          // was STALE relative to post-save local changes — it wiped a
-          // just-created split column). Only a revision still ahead of
-          // the settled base is a genuine remote write.
-          await settlePendingLayoutSaves(key)
-          if (useTabsStore.getState().activeWorkspaceKey !== key) return
-          const settledBase = layoutRevisions.get(key) ?? 0
-          if (event.revision <= settledBase) return
-          // A remote client reordered ahead of our base — re-fetch the
-          // canonical layout and adopt it (no silent last-write-wins clobber).
-          recordLayoutRevision(key, event.revision)
-          void refetchLayoutForRemoteReorder(key, projectId, workspaceId, cwd)
+          try {
+            // The daemon emits this broadcast BEFORE writing the save
+            // response, so OUR OWN in-flight save's echo can outrun the
+            // response that advances `layoutRevisions`. Settle in-flight
+            // saves first, then re-judge: a self-echo dissolves against
+            // the recorded base (refetching here applied a layout that
+            // was STALE relative to post-save local changes — it wiped a
+            // just-created split column). Only a revision still ahead of
+            // the settled base is a genuine remote write.
+            await waitLayoutIdle(key)
+            if (useTabsStore.getState().activeWorkspaceKey !== key) return
+            const settledBase = layoutRevisions.get(key) ?? 0
+            if (event.revision <= settledBase) return
+            // A remote client changed the layout ahead of our base — re-fetch
+            // the canonical layout and adopt it, merging any change of ours
+            // the daemon has not confirmed. The base advances only once the
+            // fetched layout is applied (never before: a save sent in between
+            // would carry a base whose content this window never saw).
+            await refetchLayoutForRemoteReorder(key, projectId, workspaceId, cwd, event.revision)
+          } finally {
+            refetchInFlight.delete(key)
+            drainDeferredAdoptions(key)
+          }
         })()
       },
       onHello: () => {
@@ -5547,18 +5886,29 @@ function subscribeForActiveWorkspace(
       if (!pgId || !event.agent_name.startsWith('tab-')) return
       // Workspace switched while the event was in flight — bail.
       if (useTabsStore.getState().activeWorkspaceKey !== key) return
-      const state = useTabsStore.getState()
-      if (isPaneGroupSurfaced(state, pgId)) return
-      const tab = buildAdoptedTerminalTab({
-        paneGroupId: pgId,
-        cwd: event.workspace_path || cwd,
-        command: event.command ?? undefined,
-        args: event.args.length > 0 ? event.args : undefined,
-        sessionId: event.session_id,
-      })
-      console.warn(`[tabs] session_added push — adopting paneGroup=${pgId} for ${key}`)
-      useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
-      useTabsStore.getState().saveLayoutForWorkspace(projectId, workspaceId)
+      const adopt = (): void => {
+        if (useTabsStore.getState().activeWorkspaceKey !== key) return
+        const state = useTabsStore.getState()
+        if (isPaneGroupSurfaced(state, pgId)) return
+        const tab = buildAdoptedTerminalTab({
+          paneGroupId: pgId,
+          cwd: event.workspace_path || cwd,
+          command: event.command ?? undefined,
+          args: event.args.length > 0 ? event.args : undefined,
+          sessionId: event.session_id,
+        })
+        console.warn(`[tabs] session_added push — adopting paneGroup=${pgId} for ${key}`)
+        useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
+        // V22 — through the based save (merge on 409), not a blind write.
+        useTabsStore.getState().saveLayoutForWorkspace(projectId, workspaceId)
+      }
+      // V22 — while a remote layout refetch is pending, adopt only after it
+      // lands (the refetched layout may already place this pane).
+      if (refetchInFlight.has(key)) {
+        deferAdoption(key, adopt)
+        return
+      }
+      adopt()
     },
     onRemoved: (event: SessionRemovedEvent) => {
       const pgId = event.pane_group_id
@@ -5579,6 +5929,10 @@ function subscribeForActiveWorkspace(
       void (async () => {
         const sessions = await fetchDaemonSessions(cwd)
         if (sessions === null) return
+        if (useTabsStore.getState().activeWorkspaceKey !== key) return
+        // V22 — same rule as `onAdded`: a pending layout refetch may place
+        // these sessions in a peer's column; adopt only after it lands.
+        if (refetchInFlight.has(key)) await new Promise<void>((resolve) => deferAdoption(key, resolve))
         if (useTabsStore.getState().activeWorkspaceKey !== key) return
         const state = useTabsStore.getState()
         const adopted: Tab[] = []
@@ -5768,13 +6122,15 @@ function placeApiAdoptedTab(tab: Tab, eventPath: string): void {
     })
     const layout = useTabsStore.getState().workspaceLayouts[layoutKey]
     if (layout) {
-      daemonCliPost('workspace-layouts/save', {
+      // V17 — based save; a 409 drops it (the workspace is open, and newer,
+      // somewhere else; that window adopts the session itself).
+      void submitLayoutSave(layoutKey, {
         projectId: project.id,
         workspaceId: project.primaryWorkspaceId,
-        layoutJson: JSON.stringify(layout),
-      }).catch((err) =>
-        console.warn('[tabs] api-session park save (background) failed:', err),
-      )
+        conflict: 'drop',
+        label: 'api-session park save (background)',
+        produce: () => layout,
+      })
     }
     return
   }
@@ -5803,13 +6159,14 @@ function placeApiAdoptedTab(tab: Tab, eventPath: string): void {
       [layoutKey]: nextLayout,
     },
   }))
-  daemonCliPost('workspace-layouts/save', {
+  // V17 — based save; a 409 drops it and forgets the stale cached copy.
+  void submitLayoutSave(layoutKey, {
     projectId: project.id,
     workspaceId: project.primaryWorkspaceId,
-    layoutJson: JSON.stringify(nextLayout),
-  }).catch((err) =>
-    console.warn('[tabs] api-session park save (layout) failed:', err),
-  )
+    conflict: 'drop',
+    label: 'api-session park save (layout)',
+    produce: () => nextLayout,
+  })
 }
 
 /** True when removing the tab is safe under the API-session reaper path.
@@ -6475,54 +6832,73 @@ async function refetchLayoutForRemoteReorder(
   projectId: string,
   workspaceId: string,
   cwd: string,
+  eventRevision?: number,
 ): Promise<void> {
-  try {
-    const json = await daemonCliGet<string | null>('workspace-layouts/load', {
-      project_id: projectId,
-      workspace_id: workspaceId,
-    })
+  // Runs in the layout lane: no save of ours goes out while the refetch is
+  // being applied (it would carry a base about to be replaced).
+  await runInLayoutLane(key, async () => {
+    let fetched: FetchedLayout
+    try {
+      fetched = await fetchLayoutWithRevision(projectId, workspaceId)
+    } catch (err) {
+      console.warn('[tabs] remote-reorder re-fetch failed:', err)
+      return
+    }
     if (useTabsStore.getState().activeWorkspaceKey !== key) return
-    if (!json) return
-    const layout = JSON.parse(json) as SerializedLayout
-    if (!layout.tabs || layout.tabs.length === 0) return
+    // An older daemon has no revision on read; the broadcast's is the best
+    // we know for the layout we just read.
+    const revision = fetched.revision ?? eventRevision
+    if (typeof revision === 'number' && revision <= (layoutRevisions.get(key) ?? -1)) return
+    const layout = fetched.layout
+    if (!layout || !layout.tabs || layout.tabs.length === 0) {
+      // Empty remote layout: keep this window's tabs (unchanged from before —
+      // a view-clear elsewhere must not wipe this window), but take the base
+      // so our next save is not refused forever.
+      setLayoutRevisionExact(key, revision)
+      if (layout) setAckedLayout(key, layout)
+      return
+    }
+    if (hasUnackedLocalLayout(key)) {
+      // V18 — this window has a change the daemon has not confirmed (the
+      // debounce is armed, or local differs from acked). Merge it onto the
+      // newer layout and save the result — the old `cancelPendingLayoutSave()`
+      // here threw that change away (a closed tab came back).
+      const local = useTabsStore.getState().serializeCurrentLayout()
+      const base = ackedLayouts.get(key)?.layout ?? null
+      const merged = mergeSerializedLayouts(base, local, layout)
+      setLayoutRevisionExact(key, revision)
+      if (typeof revision === 'number') cacheRevisions.set(key, revision)
+      setAckedLayout(key, layout)
+      cancelPendingLayoutSave()
+      applyLayoutSilently(key, merged, cwd)
+      console.warn(`[tabs] merged remote layout (revision ${revision ?? '?'}) with this window's change for ${key}`)
+      await runLayoutSaveJob(key, activeLayoutSaveJob(key, projectId, workspaceId, {
+        label: 'merged layout save',
+      }))
+      return
+    }
     // Adopt the peer's layout SILENTLY. Whether we reorder in place or fall
     // back to `restoreLayout`, the mutation runs under suppression so the
     // autosave subscription (which fires synchronously inside the store's
     // `set(...)`) does NOT echo a `workspace-layouts/save` back to the daemon
     // — the echo that would re-broadcast `TabOrderChanged` and make two clients
-    // ping-pong forever (#676/#677 0.39.39 regression). The base revision was
-    // already advanced via `recordLayoutRevision` at the call site, so a
-    // duplicate broadcast at this revision stays a no-op.
+    // ping-pong forever (#676/#677 0.39.39 regression).
     //
-    // Also cancel any pending pre-adoption autosave: its debounced timer fires
-    // ~1s later (after suppression has lowered) and would serialize CURRENT
-    // (= the just-adopted) state, re-emitting the echo we just suppressed. The
-    // peer's canonical layout supersedes that stale local write (LWW — it has a
-    // higher revision), so dropping the pending save is correct, not lossy.
+    // A pure reorder permutes the EXISTING `Tab` objects in place. Any other
+    // change restores with the saved tab / pane-group / item ids (V3), so a
+    // pane whose tab survived is not remounted. Selection and the focused
+    // column stay this window's (per-client-view-state.md Phase 3, D2).
+    //
+    // Nothing of ours is unconfirmed here, except with no acked layout to
+    // merge against (an older daemon): then the remote wins as before, and a
+    // pending pre-adoption autosave must not fire ~1s later and echo it.
     cancelPendingLayoutSave()
-    withLayoutSaveSuppressed(() => {
-      // #2 (companion to #1): if the change is a PURE REORDER of the current
-      // live tabs (same set, different order), permute the EXISTING `Tab`
-      // objects in place — reusing each tab's `id` (the React key) and live
-      // `paneGroups`/terminals. React moves the terminal components without
-      // unmounting, so a cross-client reorder is visual-only (no terminal
-      // reload, no pinned-chat re-ensure). Only when the tab SET actually
-      // differs (add/remove on the peer) do we fall back to the full
-      // `restoreLayout` rebuild (which re-mints tab/pane ids → remount).
-      if (tryReorderTabsInPlace(key, layout)) return
-      // per-client-view-state.md (Phase 3) — the rebuild fallback re-anchors
-      // selection via `restoreLayout` → `resolveRestoredSelection`, which
-      // sources THIS client's selection from the per-client store (matched by
-      // paneGroup signature) and falls back to the first tab. It does NOT read
-      // the peer's serialized `activeTabId` (now omitted), so a peer's tab-set
-      // change can never hijack this client's selected tab.
-      useTabsStore.setState((s) => ({ workspaceLayouts: { ...s.workspaceLayouts, [key]: layout } }))
-      useTabsStore.getState().restoreLayout(layout, cwd)
-      console.warn(`[tabs] adopted remote tab-order reorder (rebuild) for ${key}`)
-    })
-  } catch (err) {
-    console.warn('[tabs] remote-reorder re-fetch failed:', err)
-  }
+    setLayoutRevisionExact(key, revision)
+    if (typeof revision === 'number') cacheRevisions.set(key, revision)
+    setAckedLayout(key, layout)
+    applyLayoutSilently(key, layout, cwd)
+    console.warn(`[tabs] adopted remote layout (revision ${revision ?? '?'}) for ${key}`)
+  })
 }
 
 // Export for tests / external introspection. Internal callers should
@@ -6895,6 +7271,12 @@ export function __resetWorkspaceSessionsForHostSwitch(): void {
   // Never stashWorkspace: an empty stash POSTs workspace-layouts/delete
   // on whatever daemon is now active.
   cancelLayoutPersistForHostSwitch()
+  // Revisions, acked layouts, and cached revisions belong to the OLD host.
+  layoutRevisions.clear()
+  ackedLayouts.clear()
+  cacheRevisions.clear()
+  refetchInFlight.clear()
+  deferredAdoptions.clear()
   // Tear down the active workspace's session-events WS to the OLD host so
   // we don't keep a live subscription open against a daemon we've left.
   // The new host's subscription is established when the next workspace is
@@ -6946,11 +7328,13 @@ useTabsStore.subscribe(
   (state, prevState) => {
     // Only trigger on meaningful tab structure changes (not backgroundWorkspaces
     // swaps, and not pure selection changes — see note above).
+    //
+    // D2 — the focused column (`activeGroupIndex`) is per-window view state
+    // too: focusing a column is not a save.
     if (
       state.tabs !== prevState.tabs ||
       state.extraGroups !== prevState.extraGroups ||
-      state.splitCount !== prevState.splitCount ||
-      state.activeGroupIndex !== prevState.activeGroupIndex
+      state.splitCount !== prevState.splitCount
     ) {
       if (state.activeWorkspaceKey && state.tabs.length > 0) {
         state.persistActiveWorkspace()

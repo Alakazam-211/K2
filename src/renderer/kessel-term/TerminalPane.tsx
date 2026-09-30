@@ -1550,7 +1550,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // The live PTY is owned by a nested workspace. Drop this pane
             // from the layout that was opening. Do not retry, do not
             // surface an error, and do not close the other session.
-            if (spawnRes.status === 409 && body.includes('session_owned_elsewhere')) {
+            //
+            // V23 — `tab_closed`: this tab was closed as a whole (here or in
+            // another window) in the last few minutes, and the daemon will
+            // not respawn it with no command. Drop the pane the same way.
+            if (
+              spawnRes.status === 409 &&
+              (body.includes('session_owned_elsewhere') || body.includes('"tab_closed"'))
+            ) {
               if (!cancelled) {
                 useTabsStore.getState().releasePaneOwnedElsewhere(terminalId)
               }

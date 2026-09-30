@@ -362,6 +362,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                   tabId={tabId}
                   paneGroupId={paneGroupId}
                   url={bd.url}
+                  navSeq={bd.navSeq}
                 />
               )
             }

@@ -316,16 +316,24 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
         }
 
         case 'split_window': {
+          // Same path as the tab bar's split button: `splitTerminalArea`
+          // saves the shared layout at once (D1 — columns are shared). Read
+          // the live count each time; `tabsStore` is a snapshot taken before
+          // the first split, so looping on it never ended.
           const targetCount = call.args.count as number | undefined
+          const liveSplitCount = (): number => useTabsStore.getState().splitCount
           if (targetCount) {
             // Split to a specific column count (2 or 3)
-            while (tabsStore.splitCount < Math.min(targetCount, 3)) {
-              tabsStore.splitTerminalArea(cwd)
+            const target = Math.min(targetCount, 3)
+            while (liveSplitCount() < target) {
+              const before = liveSplitCount()
+              useTabsStore.getState().splitTerminalArea(cwd)
+              if (liveSplitCount() === before) break
             }
-            results.push(`${tabsStore.splitCount} columns`)
-          } else if (tabsStore.splitCount < 3) {
-            tabsStore.splitTerminalArea(cwd)
-            results.push(`${tabsStore.splitCount} columns`)
+            results.push(`${liveSplitCount()} columns`)
+          } else if (liveSplitCount() < 3) {
+            useTabsStore.getState().splitTerminalArea(cwd)
+            results.push(`${liveSplitCount()} columns`)
           } else {
             results.push('Already at max columns (3)')
           }
@@ -333,9 +341,10 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
         }
 
         case 'unsplit_window': {
-          if (tabsStore.splitCount > 1) {
-            tabsStore.unsplitTerminalArea()
-            results.push(tabsStore.splitCount === 1 ? 'Single column' : `${tabsStore.splitCount} columns`)
+          if (useTabsStore.getState().splitCount > 1) {
+            useTabsStore.getState().unsplitTerminalArea()
+            const after = useTabsStore.getState().splitCount
+            results.push(after === 1 ? 'Single column' : `${after} columns`)
           } else {
             results.push('Already single column')
           }

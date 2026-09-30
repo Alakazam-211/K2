@@ -481,7 +481,13 @@ describe('sidecar refresh strip', () => {
     expect(useTabsStore.getState().tabs).toEqual([])
     expect(useTabsStore.getState().activeTabId).toBeNull()
     const routes = strip.daemonCliPost.mock.calls.map((call) => call[0])
-    expect(routes).toContain('workspace-layouts/delete')
+    // V16 — the now-empty strip is saved as an empty layout (the revision
+    // keeps climbing and other windows hear it), never deleted.
+    expect(routes).toContain('workspace-layouts/save')
+    expect(routes).not.toContain('workspace-layouts/delete')
+    const save = strip.daemonCliPost.mock.calls.find((call) => call[0] === 'workspace-layouts/save')
+    if (!save) throw new Error('expected a workspace-layouts/save')
+    expect(JSON.parse((save[1] as { layoutJson: string }).layoutJson)).toEqual({ version: 2, tabs: [] })
     expect(routes).not.toContain('sessions/v2/close')
     expect(takeSessionRemoved(PG)).toBe('passthrough')
   })

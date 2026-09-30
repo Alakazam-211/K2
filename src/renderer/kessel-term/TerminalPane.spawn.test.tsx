@@ -383,6 +383,22 @@ describe('session_owned_elsewhere', () => {
     expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledTimes(1)
   })
 
+  // V23 — the daemon refuses an empty-command respawn of a `tab-<pg>` that
+  // was closed as a whole tab minutes ago (here or in another window). The
+  // pane is dropped the same way: no retry, no close, no error strip.
+  it('409 tab_closed drops the pane and does not retry, error, or POST v2/close', async () => {
+    const { urls } = installStatus(409, '{"error":"tab_closed","agent_name":"tab-pg-test"}')
+    render(pane(true))
+    await waitFor(() => expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledWith('pg-test'))
+    expect(document.body.textContent ?? '').not.toContain('Kessel:')
+    expect(document.body.textContent ?? '').not.toContain('spawn 409')
+    expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
+    expect(urls().some((url) => url.includes('/cli/sessions/v2/close'))).toBe(false)
+    await settle()
+    expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
+    expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledTimes(1)
+  })
+
   it('other 4xx still surfaces the spawn error and does not drop the pane', async () => {
     installStatus(400, '{"error":"bad request"}')
     render(pane(true))

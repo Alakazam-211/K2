@@ -171,6 +171,13 @@ beforeEach(() => {
   vi.clearAllTimers()
 })
 
+// The tabs module is shared across tests here; reset its layout-sync
+// bookkeeping (acked layouts, revisions, save lanes, debounce) per test.
+beforeEach(async () => {
+  const { __resetLayoutSyncForTests } = await import('./tabs')
+  __resetLayoutSyncForTests()
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
@@ -800,6 +807,81 @@ describe('tabs — in-place reorder on remote adoption (no remount) (#676/#677)'
     // Still silent — adoption never echoes a save (the #1 invariant holds on
     // the fallback path too).
     expect(cli.posts.find((p) => p.route === 'workspace-layouts/save')).toBeUndefined()
+  })
+})
+
+// ── tabs: 409 layout_revision_conflict merges, never drops (V15/V18) ────
+//
+// Split view with two windows: the daemon refuses a save whose
+// `baseRevision` is behind. The window merges its change onto the newer
+// layout by tab id and saves again with the fresh base — the conflict never
+// goes to the blind retry, and a close is never lost.
+describe('tabs — layout revision conflict merge (V18)', () => {
+  function sTab(id: string, pg: string) {
+    return {
+      id,
+      title: id,
+      mosaicTree: pg,
+      paneGroups: { [pg]: { id: pg, items: [{ id: `item-${pg}`, type: 'terminal', paneGroupId: pg }], activeItemIndex: 0 } },
+    }
+  }
+
+  it('a close that hits 409 is merged onto the newer layout and saved with the fresh base', async () => {
+    vi.useFakeTimers()
+    const tabsMod = await import('./tabs')
+    const { useTabsStore, __setLayoutRevisionForTests, __setAckedLayoutForTests, __getLayoutRevisionForTests } = tabsMod
+    const key = 'projM:wsM'
+    useTabsStore.setState({
+      tabs: [],
+      extraGroups: [],
+      activeTabId: null,
+      activeWorkspaceKey: null,
+      backgroundWorkspaces: {
+        [key]: {
+          tabs: [
+            { id: 'tab-a', title: 'tab-a', mosaicTree: 'pg-a', paneGroups: new Map([['pg-a', { id: 'pg-a', items: [{ id: 'item-pg-a', type: 'terminal', data: { terminalId: 'pg-a', cwd: '/ws/m', renderer: 'kessel' } }], activeItemIndex: 0 }]]) },
+            { id: 'tab-x', title: 'tab-x', mosaicTree: 'pg-x', paneGroups: new Map([['pg-x', { id: 'pg-x', items: [{ id: 'item-pg-x', type: 'terminal', data: { terminalId: 'pg-x', cwd: '/ws/m', renderer: 'kessel' } }], activeItemIndex: 0 }]]) },
+          ],
+          activeTabId: 'tab-a',
+          extraGroups: [],
+          splitCount: 1,
+          activeGroupIndex: 0,
+        },
+      } as never,
+    })
+    await useTabsStore.getState().restoreWorkspace(key, '/ws/m')
+    await vi.runAllTimersAsync()
+    // What this window last knew the daemon had: revision 3 with A and X.
+    __setAckedLayoutForTests(key, { version: 2, tabs: [sTab('tab-a', 'pg-a'), sTab('tab-x', 'pg-x')] } as never)
+    __setLayoutRevisionForTests(key, 3)
+
+    // Meanwhile the other window saved revision 4: A, X, and its new B.
+    const remote = { version: 2, tabs: [sTab('tab-a', 'pg-a'), sTab('tab-x', 'pg-x'), sTab('tab-b', 'pg-b')] }
+    cli.getImpl = async (route: string) =>
+      route === 'workspace-layouts/load' ? { layoutJson: JSON.stringify(remote), revision: 4 } : []
+    let saves = 0
+    cli.postImpl = async (route: string, body?: unknown) => {
+      if (route !== 'workspace-layouts/save') return {}
+      saves += 1
+      const base = (body as { baseRevision?: number }).baseRevision
+      if (base !== 4) throw new Error('layout_revision_conflict')
+      return { success: true, revision: 5 }
+    }
+    cli.posts = []
+
+    useTabsStore.getState().removeTab('tab-x')
+    await vi.runAllTimersAsync()
+
+    const layoutSaves = cli.posts.filter((p) => p.route === 'workspace-layouts/save')
+    expect(layoutSaves).toHaveLength(2)
+    expect((layoutSaves[0].body as { baseRevision: number }).baseRevision).toBe(3)
+    const merged = layoutSaves[1].body as { baseRevision: number; layoutJson: string }
+    expect(merged.baseRevision).toBe(4)
+    expect((JSON.parse(merged.layoutJson) as { tabs: Array<{ id: string }> }).tabs.map((t) => t.id)).toEqual(['tab-a', 'tab-b'])
+    expect(useTabsStore.getState().tabs.map((t) => t.id)).toEqual(['tab-a', 'tab-b'])
+    expect(__getLayoutRevisionForTests(key)).toBe(5)
+    // No blind retry of the refused save afterwards.
+    expect(saves).toBe(2)
   })
 })
 

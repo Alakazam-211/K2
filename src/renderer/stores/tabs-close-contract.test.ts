@@ -82,10 +82,10 @@ vi.stubGlobal(
 import { useTabsStore, type Tab, type TerminalItemData } from './tabs'
 
 /** Every recorded /cli/sessions/v2/close call, parsed. */
-function v2Closes(): Array<{ agent_name: string; force: boolean; clear_index?: boolean }> {
+function v2Closes(): Array<{ agent_name: string; force: boolean; clear_index?: boolean; reason?: string }> {
   return fetches.calls
     .filter((c) => c.url.includes('/cli/sessions/v2/close'))
-    .map((c) => JSON.parse(c.body) as { agent_name: string; force: boolean; clear_index?: boolean })
+    .map((c) => JSON.parse(c.body) as { agent_name: string; force: boolean; clear_index?: boolean; reason?: string })
 }
 
 /** Let the fire-and-forget closeV2Session promise chain settle. */
@@ -146,7 +146,7 @@ describe('A6 close contract — deliberate closes issue the daemon v2 close', ()
     await flushAsync()
 
     expect(useTabsStore.getState().tabs).toHaveLength(0)
-    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-A', force: true }])
+    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-A', force: true, reason: 'tab_close' }])
     // The legacy Tauri kill must NOT fire for a daemon-hosted tab.
     expect(killed.ids).toEqual([])
   })
@@ -161,7 +161,31 @@ describe('A6 close contract — deliberate closes issue the daemon v2 close', ()
     await flushAsync()
 
     expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(0)
-    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-B', force: true }])
+    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-B', force: true, reason: 'tab_close' }])
+  })
+
+  // V22 — a close saves the shared layout at once (no 1s debounce), so a
+  // second window's save inside that second can't carry the tab back.
+  it('a whole-tab close saves the layout at once, without the tab', async () => {
+    useTabsStore.setState({
+      tabs: [terminalTab('tab-K', 'pg-K'), terminalTab('tab-G', 'pg-G')],
+      activeTabId: 'tab-G',
+      activeWorkspaceKey: 'projClose:wsClose',
+    })
+
+    useTabsStore.getState().removeTab('tab-G')
+
+    // Synchronous: the POST went out in the same tick as the close.
+    const saves = cliPosts.calls.filter((c) => c.route === 'workspace-layouts/save')
+    expect(saves).toHaveLength(1)
+    const body = saves[0].body as { projectId: string; workspaceId: string; layoutJson: string }
+    expect(body.projectId).toBe('projClose')
+    expect(body.workspaceId).toBe('wsClose')
+    const saved = JSON.parse(body.layoutJson) as { tabs: Array<{ id: string }> }
+    expect(saved.tabs.map((t) => t.id)).toEqual(['tab-K'])
+    await flushAsync()
+    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-G', force: true, reason: 'tab_close' }])
+    useTabsStore.setState({ activeWorkspaceKey: null })
   })
 
   it('closeItemInPaneGroup closes the removed terminal item\'s daemon session', async () => {
@@ -184,7 +208,7 @@ describe('A6 close contract — deliberate closes issue the daemon v2 close', ()
     useTabsStore.getState().removeTab('tab-D')
     await flushAsync()
 
-    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-D', force: true }])
+    expect(v2Closes()).toEqual([{ agent_name: 'tab-pg-D', force: true, reason: 'tab_close' }])
     expect(killed.ids).toEqual([])
   })
 
@@ -309,7 +333,7 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
     expect(left).toHaveLength(1)
     expect(left[0].isSystemAgent).toBe(true)
     expect(v2Closes()).toEqual([
-      { agent_name: 'api-scout-bbbb', force: true, clear_index: true },
+      { agent_name: 'api-scout-bbbb', force: true, clear_index: true, reason: 'tab_close' },
     ])
   })
 })

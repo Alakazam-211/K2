@@ -265,3 +265,81 @@ describe('browser show and hide commands', () => {
     },
   )
 })
+
+// V21 / D3 — with the same Browser tab open in two windows, one window's
+// navigation reaches the other through the shared layout (`url` prop). The
+// other window's live page must stay where it is; only this window's own
+// request (a `navSeq` bump from openUrlInPane) moves it.
+describe("another window's navigation does not move this page", () => {
+  beforeEach(() => {
+    resetChrome()
+    vi.mocked(invoke).mockReset()
+    vi.mocked(invoke).mockImplementation(async () => null)
+    globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 32,
+      width: 640,
+      height: 480,
+      top: 32,
+      left: 0,
+      right: 640,
+      bottom: 512,
+      toJSON() {
+        return {}
+      },
+    } as DOMRect)
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    resetChrome()
+  })
+
+  it('a remote url change does not call browser_navigate; a navSeq bump does', async () => {
+    const view = render(
+      <BrowserPane itemId="b2" tabId="tab-2" paneGroupId="pg-2" url="https://example.com/a" />,
+    )
+    await flush()
+    expect(commandNames()).toContain('browser_create')
+
+    // The other window navigated; its save changed the stored url only.
+    const beforeRemote = vi.mocked(invoke).mock.calls.length
+    view.rerender(
+      <BrowserPane itemId="b2" tabId="tab-2" paneGroupId="pg-2" url="https://example.com/b" />,
+    )
+    await flush()
+    const remote = namesSince(beforeRemote)
+    expect(remote).not.toContain('browser_navigate')
+    expect(remote).not.toContain('browser_close')
+    expect(remote).not.toContain('browser_create')
+
+    // This window asked (openUrlInPane bumps navSeq): navigate.
+    const beforeLocal = vi.mocked(invoke).mock.calls.length
+    view.rerender(
+      <BrowserPane itemId="b2" tabId="tab-2" paneGroupId="pg-2" url="https://example.com/c" navSeq={1} />,
+    )
+    await flush()
+    expect(namesSince(beforeLocal)).toContain('browser_navigate')
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('browser_navigate', {
+      itemId: 'b2',
+      url: 'https://example.com/c',
+      parentWindow: 'main',
+    })
+  })
+
+  it('a standalone embed (Settings OAuth) still follows its url prop', async () => {
+    const view = render(
+      <BrowserPane itemId="oauth" tabId="settings-oauth" paneGroupId="settings-oauth" url="https://example.com/start" standalone />,
+    )
+    await flush()
+    expect(commandNames()).toContain('browser_create')
+    const before = vi.mocked(invoke).mock.calls.length
+    view.rerender(
+      <BrowserPane itemId="oauth" tabId="settings-oauth" paneGroupId="settings-oauth" url="https://example.com/next" standalone />,
+    )
+    await flush()
+    expect(namesSince(before)).toContain('browser_navigate')
+  })
+})

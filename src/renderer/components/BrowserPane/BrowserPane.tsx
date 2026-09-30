@@ -57,6 +57,13 @@ interface BrowserPaneProps {
   /** Canonical URL from the tabs store (BrowserItemData.url). */
   url: string
   /**
+   * V21 / D3 — this window's navigate-request counter
+   * (BrowserItemData.navSeq). A tab pane moves its live page only when
+   * this changes. A `url` change alone (another window navigated and the
+   * shared layout carried it here) updates the saved value only.
+   */
+  navSeq?: number
+  /**
    * Settings / modal embed: always treat as visible (ignore tab
    * visibility), and do not stamp the tabs store. Still uses the same
    * native child-webview docking as tab panes.
@@ -117,6 +124,7 @@ export function BrowserPane({
   tabId,
   paneGroupId,
   url,
+  navSeq,
   standalone = false,
 }: BrowserPaneProps): React.JSX.Element {
   const tabVisible = useIsTabVisible()
@@ -347,8 +355,18 @@ export function BrowserPane({
     }
   }, [visible, url, itemId, createView, scheduleBoundsPush, parentWindow])
 
-  // ── Store url changes (openUrlInPane navigate-in-place reuse) ───────
+  // ── Navigate requests (openUrlInPane navigate-in-place reuse) ───────
+  // Tab panes: only a request from THIS window (navSeq bump) moves the
+  // live page (V21 / D3). The stored url also changes when another window
+  // navigates its copy of this tab and saves the shared layout; following
+  // that reloaded this page and, with a redirect, bounced both windows.
+  // Standalone embeds (Settings OAuth) are not tab items and still follow
+  // their url prop.
+  const navKey = standalone ? url : navSeq
+  const lastNavKeyRef = useRef(navKey)
   useEffect(() => {
+    if (lastNavKeyRef.current === navKey) return
+    lastNavKeyRef.current = navKey
     if (!url) return
     if (!addressFocusedRef.current) setAddress(url)
     if (url === lastKnownUrlRef.current) return
@@ -358,7 +376,7 @@ export function BrowserPane({
       void createView(normalizeUrl(url))
     }
     // Hidden + not created: the visibility effect creates on first show.
-  }, [url, navigateView, createView])
+  }, [navKey, url, navigateView, createView])
 
   // Page title and favicon from the child webview. Standalone OAuth
   // embeds are not tab items. Hide/show does not clear either field.

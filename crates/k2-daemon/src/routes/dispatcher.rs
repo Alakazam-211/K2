@@ -3547,6 +3547,46 @@ async fn handle_one_request(
             let r = crate::presence::handle_roster();
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /cli/presence/summary — Home P1. Per workspace: how many
+        // people are present and who (owner display name / usernames),
+        // folded from the SAME live registry as the roster. A client's
+        // Home status poll calls it with its saved login for a server it
+        // has no socket on. `/boot-status` stays public and never carries
+        // this. Same gate as the roster: owner token OR a live
+        // connect-user session — app/skin passes (`k2skn_`) and agent
+        // passports are neither, so they 403. GET-only (405 on POST).
+        "/cli/presence/summary" => {
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "405 Method Not Allowed",
+                    "application/json",
+                    r#"{"error":"GET required"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let _ = stream.read(&mut buf).await;
+            let tok = super::http::extract_token(&query).unwrap_or("");
+            let authorized = (!tok.is_empty()
+                && super::http::ct_eq_token(tok, state.token.as_str()))
+                || k2_core::connect_users::validate_session(tok).is_some();
+            if !authorized {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let r = tokio::task::spawn_blocking(crate::presence::handle_summary)
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // POST /cli/presence/kick — S3 (presence/multiplayer arc). Kick a
         // connected user: revoke their persisted sessions (durable) + fire
         // their live WS close handles (immediate). Gated like

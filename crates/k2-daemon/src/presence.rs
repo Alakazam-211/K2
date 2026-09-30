@@ -370,6 +370,141 @@ pub fn handle_roster() -> crate::cli_response::CliResponse {
     }
 }
 
+// ── Presence summary (Home P1) ───────────────────────────────────────────
+//
+// `GET /cli/presence/summary` — "who is on which agent", for a client's
+// Home rows that point at this daemon but have no socket open here. It is
+// a projection of the SAME registry `roster()` reads (no new state): each
+// roster user's workspace subscriptions are folded onto the registered
+// project that owns the path (longest registered prefix, the rule the
+// workspace socket and v2 spawn use), so a user subscribed to a nested
+// worktree counts on its project. `/boot-status` stays public and never
+// carries this — the route is authorized exactly like the roster.
+
+/// One registered workspace the summary can attribute a path to.
+#[derive(Debug, Clone)]
+pub struct SummaryWorkspaceRef {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub handle: String,
+}
+
+/// One person present on a workspace. `user` is the roster key
+/// (`"owner"` or the connect username); `name` is what to paint
+/// (the owner's display name when set, else the username).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SummaryPerson {
+    pub user: String,
+    pub name: String,
+    pub role: String,
+}
+
+/// One workspace with at least one person on it. `workspaceId` /
+/// `handle` / `name` are null when the subscribed path is not under any
+/// registered workspace (then `path` is the raw subscription path).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SummaryWorkspace {
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: Option<String>,
+    pub handle: Option<String>,
+    pub name: Option<String>,
+    pub path: String,
+    pub count: usize,
+    pub people: Vec<SummaryPerson>,
+}
+
+/// Pure fold of a roster onto registered workspaces. Deterministic:
+/// workspaces sorted by path, people in roster order (owner first, then
+/// usernames). A user with several sockets on one workspace counts once.
+pub fn summarize(
+    roster: &[RosterUser],
+    workspaces: &[SummaryWorkspaceRef],
+    owner_name: &str,
+) -> Vec<SummaryWorkspace> {
+    let paths: Vec<String> = workspaces.iter().map(|w| w.path.clone()).collect();
+    // key → (index into workspaces, or the raw path) + people.
+    let mut groups: Vec<(Option<usize>, String, Vec<SummaryPerson>)> = Vec::new();
+    for user in roster {
+        let person = SummaryPerson {
+            user: user.user.clone(),
+            name: if user.user == "owner" {
+                owner_name.to_string()
+            } else {
+                user.user.clone()
+            },
+            role: user.role.clone(),
+        };
+        for sub in &user.workspaces {
+            let owner_idx = crate::session_events::longest_registered_project_index(sub, &paths);
+            let key_path = match owner_idx {
+                Some(i) => workspaces[i].path.clone(),
+                None => sub.clone(),
+            };
+            let slot = match groups
+                .iter_mut()
+                .position(|(idx, p, _)| *idx == owner_idx && *p == key_path)
+            {
+                Some(pos) => &mut groups[pos],
+                None => {
+                    groups.push((owner_idx, key_path, Vec::new()));
+                    groups.last_mut().expect("just pushed")
+                }
+            };
+            if !slot.2.iter().any(|p| p.user == person.user) {
+                slot.2.push(person.clone());
+            }
+        }
+    }
+    let mut out: Vec<SummaryWorkspace> = groups
+        .into_iter()
+        .map(|(idx, path, people)| {
+            let ws = idx.map(|i| &workspaces[i]);
+            SummaryWorkspace {
+                workspace_id: ws.map(|w| w.id.clone()),
+                handle: ws.map(|w| w.handle.clone()).filter(|h| !h.is_empty()),
+                name: ws.map(|w| w.name.clone()),
+                path,
+                count: people.len(),
+                people,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// `GET /cli/presence/summary` →
+/// `{ "online": <distinct people connected>, "workspaces": [SummaryWorkspace] }`.
+/// Auth (owner token OR live connect session; app/skin passes and agent
+/// passports refused) is gated in the dispatcher, same gate as the roster.
+pub fn handle_summary() -> crate::cli_response::CliResponse {
+    use crate::cli_response::CliResponse;
+    let projects = match k2_core::projects_ops::projects_list() {
+        Ok(rows) => rows,
+        Err(e) => return CliResponse::internal_error(format!("projects_list: {e}")),
+    };
+    let refs: Vec<SummaryWorkspaceRef> = projects
+        .into_iter()
+        .map(|p| SummaryWorkspaceRef {
+            id: p.id,
+            name: p.name,
+            path: p.path,
+            handle: p.handle,
+        })
+        .collect();
+    let owner_name = crate::workspace_msg::resolve_owner_from();
+    let live = roster();
+    let body = serde_json::json!({
+        "online": live.len(),
+        "workspaces": summarize(&live, &refs, &owner_name),
+    });
+    match serde_json::to_string(&body) {
+        Ok(s) => CliResponse::ok_json(s),
+        Err(e) => CliResponse::internal_error(format!("serialize summary: {e}")),
+    }
+}
+
 /// Body of `POST /cli/presence/kick`.
 #[derive(Deserialize)]
 struct KickReq {
@@ -744,5 +879,81 @@ mod tests {
         let users: Vec<String> = roster().into_iter().map(|r| r.user).collect();
         assert_eq!(users, vec!["owner", "alpha", "zeta"]);
         drop((g1, g2, g3));
+    }
+
+    fn ru(user: &str, role: &str, workspaces: &[&str]) -> RosterUser {
+        RosterUser {
+            user: user.into(),
+            role: role.into(),
+            window_count: 1,
+            workspaces: workspaces.iter().map(|s| s.to_string()).collect(),
+            granted_edit: false,
+            connected_at: 1,
+        }
+    }
+
+    fn wref(id: &str, name: &str, path: &str, handle: &str) -> SummaryWorkspaceRef {
+        SummaryWorkspaceRef {
+            id: id.into(),
+            name: name.into(),
+            path: path.into(),
+            handle: handle.into(),
+        }
+    }
+
+    /// Home P1 — the summary folds nested subscriptions onto the owning
+    /// (longest-prefix) workspace, counts a person once per workspace,
+    /// paints the owner's display name, and keeps unregistered paths raw.
+    #[test]
+    fn summarize_folds_paths_onto_owning_workspace() {
+        let roster = vec![
+            ru("owner", "owner", &["/w/cortana", "/w/cortana/.worktrees/a"]),
+            ru("anna", "member", &["/w/cortana/sub", "/w/nested/inner"]),
+            ru("idle", "viewer", &[]),
+            ru("stray", "member", &["/elsewhere"]),
+        ];
+        let refs = vec![
+            wref("id-c", "Cortana", "/w/cortana", "cortana"),
+            wref("id-n", "Nested", "/w/nested", ""),
+            wref("id-i", "Inner", "/w/nested/inner", "inner"),
+        ];
+        let out = summarize(&roster, &refs, "Rosson");
+        let paths: Vec<&str> = out.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, vec!["/elsewhere", "/w/cortana", "/w/nested/inner"]);
+
+        let c = &out[1];
+        assert_eq!(c.workspace_id.as_deref(), Some("id-c"));
+        assert_eq!(c.handle.as_deref(), Some("cortana"));
+        assert_eq!(c.count, 2, "owner counted once despite two sockets: {c:?}");
+        assert_eq!(
+            c.people,
+            vec![
+                SummaryPerson { user: "owner".into(), name: "Rosson".into(), role: "owner".into() },
+                SummaryPerson { user: "anna".into(), name: "anna".into(), role: "member".into() },
+            ]
+        );
+
+        // Longest prefix wins: /w/nested/inner is its own workspace.
+        let inner = &out[2];
+        assert_eq!(inner.workspace_id.as_deref(), Some("id-i"));
+        assert_eq!(inner.count, 1);
+
+        let stray = &out[0];
+        assert_eq!(stray.workspace_id, None);
+        assert_eq!(stray.handle, None);
+        assert_eq!(stray.count, 1);
+
+        // Wire shape is camelCase `workspaceId`.
+        let v = serde_json::to_value(c).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["count", "handle", "name", "path", "people", "workspaceId"]);
+    }
+
+    #[test]
+    fn summarize_empty_roster_is_empty() {
+        let refs = vec![wref("id-c", "Cortana", "/w/cortana", "cortana")];
+        assert!(summarize(&[], &refs, "owner").is_empty());
     }
 }

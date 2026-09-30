@@ -309,6 +309,19 @@ pub struct WorkspaceLayout {
     pub project_id: String,
     pub workspace_id: String,
     pub layout_json: String,
+    /// Split-view V14: the row's stored revision, so a window that reads
+    /// via `load-all` knows its compare-and-set base. Old clients ignore it.
+    pub revision: i64,
+}
+
+/// Split-view V15: result of a compare-and-set layout save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutSaveOutcome {
+    /// Written. Carries the NEW stored revision.
+    Saved(i64),
+    /// Refused: the caller's base did not match. Carries the STORED
+    /// revision. Nothing was written.
+    Conflict(i64),
 }
 
 pub fn workspace_layout_save(
@@ -347,6 +360,35 @@ pub fn workspace_layout_save_with_revision(
     workspace_id: &str,
     layout_json: &str,
 ) -> Result<i64, String> {
+    match workspace_layout_save_cas(project_id, workspace_id, layout_json, None)? {
+        LayoutSaveOutcome::Saved(revision) => Ok(revision),
+        // Unreachable with `base: None`; surface it loudly if it ever is.
+        LayoutSaveOutcome::Conflict(stored) => Err(format!(
+            "layout save without a base reported a conflict (stored revision {stored})"
+        )),
+    }
+}
+
+/// Split-view V15 — compare-and-set layout save.
+///
+/// Same heal + prune as [`workspace_layout_save_with_revision`] (run BEFORE
+/// the DB lock — the resolvers take their own scoped locks). Then, inside
+/// one locked connection:
+///
+/// - `base: None` → today's last-write-wins upsert (old clients, D4).
+/// - `base: Some(b)`, row present, `b == stored` → write, revision + 1.
+/// - `base: Some(b)`, row present, `b != stored` → [`LayoutSaveOutcome::Conflict`]
+///   with the stored revision. No write.
+/// - `base: Some(b)`, no row → insert at `max(1, b + 1)`, so a window that
+///   held base N never sees the revision go backwards (V16: layouts are
+///   saved empty, not deleted, but a project delete or an old client's
+///   delete can still remove the row).
+pub fn workspace_layout_save_cas(
+    project_id: &str,
+    workspace_id: &str,
+    layout_json: &str,
+    base: Option<i64>,
+) -> Result<LayoutSaveOutcome, String> {
     // 0.39.45 (#27): heal pinned-tab identity BEFORE persisting. The
     // renderer's workspace-switch race can stamp a SIBLING workspace's
     // agentName/projectPath into the system-agent tab; pre-0.39.45 the
@@ -362,44 +404,104 @@ pub fn workspace_layout_save_with_revision(
     // tabs over the healed row. Same scoped-lock rule as above.
     let pruned = prune_leaked_bare_tabs(project_id, layout_json);
     let layout_json = pruned.as_deref().unwrap_or(layout_json);
+    workspace_layout_save_healed(project_id, workspace_id, layout_json, base)
+}
 
+/// Locked write shared by the LWW and CAS saves. `layout_json` is already
+/// healed + pruned.
+fn workspace_layout_save_healed(
+    project_id: &str,
+    workspace_id: &str,
+    layout_json: &str,
+    base: Option<i64>,
+) -> Result<LayoutSaveOutcome, String> {
     let db = db::shared();
     let conn = db.lock();
     let id = format!("{}:{}", project_id, workspace_id);
 
-    conn.execute(
-        "INSERT INTO workspace_layouts (id, project_id, workspace_id, layout_json, updated_at, revision)
-         VALUES (?1, ?2, ?3, ?4, unixepoch(), 1)
-         ON CONFLICT(project_id, workspace_id)
-         DO UPDATE SET layout_json = excluded.layout_json,
-                       updated_at = unixepoch(),
-                       revision = workspace_layouts.revision + 1",
-        rusqlite::params![id, project_id, workspace_id, layout_json],
-    )
-    .map_err(|e| e.to_string())?;
-
-    let revision: i64 = conn
-        .query_row(
+    let read_revision = |conn: &rusqlite::Connection| -> Result<Option<i64>, String> {
+        match conn.query_row(
             "SELECT revision FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
             rusqlite::params![project_id, workspace_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    };
 
-    Ok(revision)
+    match base {
+        None => {
+            conn.execute(
+                "INSERT INTO workspace_layouts (id, project_id, workspace_id, layout_json, updated_at, revision)
+                 VALUES (?1, ?2, ?3, ?4, unixepoch(), 1)
+                 ON CONFLICT(project_id, workspace_id)
+                 DO UPDATE SET layout_json = excluded.layout_json,
+                               updated_at = unixepoch(),
+                               revision = workspace_layouts.revision + 1",
+                rusqlite::params![id, project_id, workspace_id, layout_json],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Some(base) => match read_revision(&conn)? {
+            None => {
+                let start = std::cmp::max(1, base.saturating_add(1));
+                conn.execute(
+                    "INSERT INTO workspace_layouts (id, project_id, workspace_id, layout_json, updated_at, revision)
+                     VALUES (?1, ?2, ?3, ?4, unixepoch(), ?5)",
+                    rusqlite::params![id, project_id, workspace_id, layout_json, start],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            Some(stored) if stored != base => {
+                return Ok(LayoutSaveOutcome::Conflict(stored));
+            }
+            Some(_) => {
+                let n = conn
+                    .execute(
+                        "UPDATE workspace_layouts
+                         SET layout_json = ?3, updated_at = unixepoch(), revision = revision + 1
+                         WHERE project_id = ?1 AND workspace_id = ?2 AND revision = ?4",
+                        rusqlite::params![project_id, workspace_id, layout_json, base],
+                    )
+                    .map_err(|e| e.to_string())?;
+                if n != 1 {
+                    // Same locked connection, so this should not happen.
+                    // Report a conflict rather than claim a write.
+                    let stored = read_revision(&conn)?
+                        .ok_or_else(|| "layout row vanished during save".to_string())?;
+                    return Ok(LayoutSaveOutcome::Conflict(stored));
+                }
+            }
+        },
+    }
+
+    let revision = read_revision(&conn)?
+        .ok_or_else(|| "layout row missing after save".to_string())?;
+    Ok(LayoutSaveOutcome::Saved(revision))
 }
 
 pub fn workspace_layout_load(
     project_id: &str,
     workspace_id: &str,
 ) -> Result<Option<String>, String> {
+    workspace_layout_load_with_revision(project_id, workspace_id).map(|(json, _)| json)
+}
+
+/// Split-view V14 — the layout JSON plus its stored revision. `(None, 0)`
+/// when no row exists. Same read-repair as [`workspace_layout_load`].
+pub fn workspace_layout_load_with_revision(
+    project_id: &str,
+    workspace_id: &str,
+) -> Result<(Option<String>, i64), String> {
     let result = {
         let db = db::shared();
         let conn = db.lock();
         conn.query_row(
-            "SELECT layout_json FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
+            "SELECT layout_json, revision FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
             rusqlite::params![project_id, workspace_id],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
     };
     match result {
@@ -411,12 +513,12 @@ pub fn workspace_layout_load(
         // leaked-bare-tab prune the same way — rows poisoned by the
         // pre-b339c70 tab re-mint loop otherwise make every workspace
         // restore O(hundreds of dead panes).
-        Ok(json) => {
+        Ok((json, revision)) => {
             let json = heal_system_agent_tab_identity(project_id, &json).unwrap_or(json);
             let json = prune_leaked_bare_tabs(project_id, &json).unwrap_or(json);
-            Ok(Some(json))
+            Ok((Some(json), revision))
         }
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok((None, 0)),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -694,7 +796,7 @@ pub fn workspace_layout_load_all() -> Result<Vec<WorkspaceLayout>, String> {
     let db = db::shared();
     let conn = db.lock();
     let mut stmt = conn
-        .prepare("SELECT project_id, workspace_id, layout_json FROM workspace_layouts")
+        .prepare("SELECT project_id, workspace_id, layout_json, revision FROM workspace_layouts")
         .map_err(|e| e.to_string())?;
     let layouts = stmt
         .query_map([], |row| {
@@ -702,6 +804,7 @@ pub fn workspace_layout_load_all() -> Result<Vec<WorkspaceLayout>, String> {
                 project_id: row.get(0)?,
                 workspace_id: row.get(1)?,
                 layout_json: row.get(2)?,
+                revision: row.get(3)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1459,6 +1562,133 @@ mod tab_title_and_revision_tests {
             .expect("load")
             .expect("present");
         assert_eq!(loaded, r#"{"a":3}"#);
+    }
+
+    // ── Split-view V15 compare-and-set ─────────────────────────────────
+
+    fn seeded_layout_key() -> (String, String) {
+        let project_id = unique("p");
+        let workspace_id = unique("w");
+        seed_project(&project_id);
+        seed_workspace(&workspace_id, &project_id);
+        (project_id, workspace_id)
+    }
+
+    fn stored(project_id: &str, workspace_id: &str) -> (String, i64) {
+        let (json, rev) = workspace_layout_load_with_revision(project_id, workspace_id)
+            .expect("load_with_revision");
+        (json.expect("row present"), rev)
+    }
+
+    #[test]
+    fn layout_cas_accepts_matching_base_and_bumps_revision() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        let r1 = workspace_layout_save_with_revision(&p, &w, r#"{"a":1}"#).expect("seed save");
+        assert_eq!(r1, 1);
+
+        let out = workspace_layout_save_cas(&p, &w, r#"{"a":2}"#, Some(1)).expect("cas");
+        assert_eq!(out, LayoutSaveOutcome::Saved(2));
+        assert_eq!(stored(&p, &w), (r#"{"a":2}"#.to_string(), 2));
+    }
+
+    #[test]
+    fn layout_cas_rejects_stale_base_and_leaves_row_unchanged() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        workspace_layout_save_with_revision(&p, &w, r#"{"a":1}"#).expect("save1");
+        workspace_layout_save_with_revision(&p, &w, r#"{"a":2}"#).expect("save2");
+        assert_eq!(stored(&p, &w).1, 2);
+
+        let stale = workspace_layout_save_cas(&p, &w, r#"{"stale":true}"#, Some(1)).expect("cas");
+        assert_eq!(stale, LayoutSaveOutcome::Conflict(2));
+        assert_eq!(
+            stored(&p, &w),
+            (r#"{"a":2}"#.to_string(), 2),
+            "a refused save must not write or bump"
+        );
+
+        // A base AHEAD of the stored revision is also a conflict.
+        let ahead = workspace_layout_save_cas(&p, &w, r#"{"ahead":true}"#, Some(9)).expect("cas");
+        assert_eq!(ahead, LayoutSaveOutcome::Conflict(2));
+        assert_eq!(stored(&p, &w), (r#"{"a":2}"#.to_string(), 2));
+    }
+
+    #[test]
+    fn layout_cas_without_base_is_last_write_wins() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, r#"{"a":1}"#, None).expect("cas1"),
+            LayoutSaveOutcome::Saved(1)
+        );
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, r#"{"a":2}"#, None).expect("cas2"),
+            LayoutSaveOutcome::Saved(2)
+        );
+        assert_eq!(stored(&p, &w), (r#"{"a":2}"#.to_string(), 2));
+    }
+
+    #[test]
+    fn layout_cas_empty_tabs_save_keeps_revision_rising() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        let one_tab = r#"{"version":2,"tabs":[{"id":"t1","title":"x","paneGroups":{}}]}"#;
+        let empty = r#"{"version":2,"tabs":[]}"#;
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, one_tab, Some(0)).expect("first"),
+            LayoutSaveOutcome::Saved(1)
+        );
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, empty, Some(1)).expect("empty"),
+            LayoutSaveOutcome::Saved(2)
+        );
+        let (json, rev) = stored(&p, &w);
+        assert_eq!(rev, 2);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("stored json");
+        assert_eq!(v["tabs"], serde_json::json!([]), "empty layout stored as-is: {json}");
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, one_tab, Some(2)).expect("after empty"),
+            LayoutSaveOutcome::Saved(3)
+        );
+    }
+
+    #[test]
+    fn layout_cas_missing_row_inserts_past_base() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        let (json, rev) = workspace_layout_load_with_revision(&p, &w).expect("load");
+        assert_eq!((json, rev), (None, 0), "missing row reads as (None, 0)");
+
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, r#"{"a":1}"#, Some(7)).expect("insert"),
+            LayoutSaveOutcome::Saved(8),
+            "a window holding base 7 must not see the revision go backwards"
+        );
+        assert_eq!(stored(&p, &w), (r#"{"a":1}"#.to_string(), 8));
+
+        // Delete then based save with base 0 → revision 1.
+        workspace_layout_delete(&p, Some(&w)).expect("delete");
+        assert_eq!(
+            workspace_layout_save_cas(&p, &w, r#"{"a":2}"#, Some(0)).expect("insert0"),
+            LayoutSaveOutcome::Saved(1)
+        );
+    }
+
+    #[test]
+    fn layout_load_all_rows_carry_revision() {
+        let _g = TEST_LOCK.lock();
+        let (p, w) = seeded_layout_key();
+        workspace_layout_save_with_revision(&p, &w, r#"{"a":1}"#).expect("save1");
+        workspace_layout_save_with_revision(&p, &w, r#"{"a":2}"#).expect("save2");
+        let rows = workspace_layout_load_all().expect("load_all");
+        let row = rows
+            .iter()
+            .find(|r| r.project_id == p && r.workspace_id == w)
+            .expect("row in load_all");
+        assert_eq!(row.revision, 2);
+        let v = serde_json::to_value(row).expect("serialize");
+        assert_eq!(v["revision"], serde_json::json!(2), "camelCase field: {v}");
     }
 }
 

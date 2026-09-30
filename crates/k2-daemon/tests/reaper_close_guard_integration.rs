@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
 use k2_daemon::v2_session_map;
-use k2_daemon::v2_spawn::handle_v2_close;
+use k2_daemon::v2_spawn::{handle_v2_close, handle_v2_spawn};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -260,4 +260,99 @@ fn v2_close_force_bypasses_attached_guard() {
     );
 
     session.kill();
+}
+
+// ── Split-view V23: a user tab-close refuses the empty-command respawn ──
+
+fn uniq_tab_name() -> String {
+    format!(
+        "tab-close-guard-{}-{}",
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
+fn temp_cwd(tag: &str) -> String {
+    let dir = std::env::temp_dir().join(format!(
+        "k2-tab-close-guard-{tag}-{}-{}",
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).expect("temp cwd");
+    dir.to_string_lossy().into_owned()
+}
+
+fn empty_spawn(agent: &str, cwd: &str) -> (String, serde_json::Value) {
+    let body = serde_json::json!({ "agent_name": agent, "cwd": cwd, "cols": 40, "rows": 12 });
+    let res = handle_v2_spawn(body.to_string().as_bytes());
+    let parsed: serde_json::Value = serde_json::from_str(&res.body)
+        .unwrap_or_else(|e| panic!("spawn body must be JSON ({e}): {}", res.body));
+    (res.status.to_string(), parsed)
+}
+
+struct Reap(String);
+impl Drop for Reap {
+    fn drop(&mut self) {
+        if let Some(s) = v2_session_map::unregister(&self.0) {
+            s.kill();
+        }
+    }
+}
+
+/// (3a) Close a live `tab-*` session with `reason: "tab_close"` → the next
+/// empty-command spawn of that name is 409 `tab_closed` and registers
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_close_with_tab_close_reason_refuses_empty_respawn() {
+    k2_core::db::init_for_tests();
+    let agent = uniq_tab_name();
+    let _reap = Reap(agent.clone());
+    let session = spawn_live_session();
+    v2_session_map::register(agent.clone(), session.clone());
+
+    let body = serde_json::json!({ "agent_name": agent, "force": true, "reason": "tab_close" });
+    let result = handle_v2_close(body.to_string().as_bytes());
+    assert_eq!(result.status, "200 OK");
+    assert!(
+        result.body.contains(r#""closed":true"#),
+        "tab close must tear down the session; got: {}",
+        result.body
+    );
+    session.kill();
+
+    let (status, parsed) = empty_spawn(&agent, &temp_cwd("refuse"));
+    assert_eq!(status, "409 Conflict", "body={parsed}");
+    assert_eq!(
+        parsed,
+        serde_json::json!({ "error": "tab_closed", "agent_name": agent }),
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name(&agent).is_none(),
+        "a refused spawn must not register a session"
+    );
+}
+
+/// (3b) The same close WITHOUT a reason (reaper / old client) leaves the
+/// empty-command respawn alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_close_without_reason_does_not_refuse_empty_respawn() {
+    k2_core::db::init_for_tests();
+    let agent = uniq_tab_name();
+    let _reap = Reap(agent.clone());
+    let session = spawn_live_session();
+    v2_session_map::register(agent.clone(), session.clone());
+
+    let body = serde_json::json!({ "agent_name": agent, "force": true });
+    let result = handle_v2_close(body.to_string().as_bytes());
+    assert_eq!(result.status, "200 OK");
+    assert!(result.body.contains(r#""closed":true"#), "{}", result.body);
+    session.kill();
+
+    let (status, parsed) = empty_spawn(&agent, &temp_cwd("no-reason"));
+    assert_eq!(status, "200 OK", "body={parsed}");
+    assert_eq!(parsed["reused"], serde_json::json!(false), "{parsed}");
+    assert!(
+        v2_session_map::lookup_by_agent_name(&agent).is_some(),
+        "the respawn must register a session"
+    );
 }

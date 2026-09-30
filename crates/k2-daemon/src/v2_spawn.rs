@@ -600,6 +600,115 @@ fn session_owned_elsewhere(live_cwd: &str, requested_cwd: &str) -> bool {
     }
 }
 
+// ── Split-view V23: recently closed `tab-*` names ──────────────────────
+//
+// In memory only (never persisted). A user tab-close POSTs v2/close with
+// `reason: "tab_close"`; a second window still holding that tab would
+// otherwise re-mount it and an empty-command spawn would mint a fresh
+// shell under the closed name. While the name is on this list (10 min),
+// such a spawn gets 409 `tab_closed` and the renderer drops the pane.
+
+/// How long a user-closed `tab-*` name refuses an empty-command spawn.
+pub const CLOSED_TAB_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// Most closed names kept; the oldest is evicted past this.
+pub const CLOSED_TAB_CAP: usize = 1024;
+
+/// `agent_name` → when the user closed it. Clock is passed in so tests
+/// can drive expiry without sleeping.
+#[derive(Default)]
+pub struct ClosedTabs {
+    entries: HashMap<String, std::time::Instant>,
+}
+
+impl ClosedTabs {
+    pub fn record(&mut self, agent_name: &str, now: std::time::Instant) {
+        self.entries
+            .retain(|_, at| now.saturating_duration_since(*at) < CLOSED_TAB_TTL);
+        self.entries.insert(agent_name.to_string(), now);
+        while self.entries.len() > CLOSED_TAB_CAP {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, at)| **at)
+                .map(|(name, _)| name.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    pub fn is_closed(&self, agent_name: &str, now: std::time::Instant) -> bool {
+        self.entries
+            .get(agent_name)
+            .is_some_and(|at| now.saturating_duration_since(*at) < CLOSED_TAB_TTL)
+    }
+
+    pub fn clear(&mut self, agent_name: &str) {
+        self.entries.remove(agent_name);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+static CLOSED_TABS: std::sync::LazyLock<parking_lot::Mutex<ClosedTabs>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(ClosedTabs::default()));
+
+/// The V23 refusal rule, pure: a `tab-*` name, an empty requested command,
+/// no live child, and a live entry on the closed list.
+pub fn closed_tab_refuses(
+    closed: &ClosedTabs,
+    agent_name: &str,
+    requested_command: Option<&str>,
+    live_child: bool,
+    now: std::time::Instant,
+) -> bool {
+    agent_name.starts_with("tab-")
+        && requested_command.is_none_or(|c| c.trim().is_empty())
+        && !live_child
+        && closed.is_closed(agent_name, now)
+}
+
+/// Spawn-side V23 gate. Returns the 409 to send, or `None` to proceed. A
+/// spawn that carries a command clears the name's entry.
+fn closed_tab_gate(req: &SpawnRequest) -> Option<HandlerResult> {
+    if !req.agent_name.starts_with("tab-") {
+        return None;
+    }
+    let requested = req.command.as_deref();
+    if requested.is_some_and(|c| !c.trim().is_empty()) {
+        CLOSED_TABS.lock().clear(&req.agent_name);
+        return None;
+    }
+    let live_child = v2_session_map::lookup_by_agent_name(&req.agent_name)
+        .is_some_and(|s| s.is_child_alive());
+    let refused = closed_tab_refuses(
+        &CLOSED_TABS.lock(),
+        &req.agent_name,
+        requested,
+        live_child,
+        std::time::Instant::now(),
+    );
+    if !refused {
+        return None;
+    }
+    log_debug!(
+        "[v2-spawn] refusing empty-command spawn agent={} — tab_closed",
+        req.agent_name
+    );
+    Some(HandlerResult {
+        status: "409 Conflict",
+        body: serde_json::json!({
+            "error": "tab_closed",
+            "agent_name": req.agent_name,
+        })
+        .to_string(),
+    })
+}
+
 /// Body of [`spawn_session`]. Caller MUST already hold
 /// [`canonical_spawn_lock`] for `req.agent_name`.
 fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
@@ -610,6 +719,12 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // recover via `recovered_launch` only when the tab-session row is a
     // harness + provider session id; api-* and `{pid}:hb:{name}` stay
     // on their own lanes (R22).
+    // Split-view V23: a user-closed `tab-*` does not come back through an
+    // empty-command spawn (checked before `recovered_launch`).
+    if let Some(refused) = closed_tab_gate(&req) {
+        return refused;
+    }
+
     let project_id = project_id_for_cwd(&req.cwd);
     let is_canonical = project_id.as_deref() == Some(req.agent_name.as_str());
 
@@ -1507,8 +1622,10 @@ fn close_allowed(subscriber_count: usize, force: bool) -> bool {
 
 /// Handler for `POST /cli/sessions/v2/close`.
 ///
-/// Request body: `{"agent_name": "tab-<terminalId>", "force": false}`.
-/// (`force` is optional, defaults to `false`.)
+/// Request body: `{"agent_name": "tab-<terminalId>", "force": false,
+/// "reason": "tab_close"}`. (`force` is optional, defaults to `false`;
+/// `reason` is optional — `"tab_close"` puts a `tab-*` name on the V23
+/// closed list.)
 /// Response: `{"closed": true|false[, "reason": "..."]}`.
 ///
 /// Unregisters the session from `v2_session_map`. The last `Arc`
@@ -1542,6 +1659,11 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
         /// restart-recovery cannot revive this cell.
         #[serde(default)]
         clear_index: bool,
+        /// Split-view V23: `"tab_close"` marks a deliberate user tab
+        /// close. Only then (and only for `tab-*`) is the name put on the
+        /// closed list that refuses an empty-command respawn.
+        #[serde(default)]
+        reason: Option<String>,
     }
 
     let req: CloseRequest = match serde_json::from_slice(body) {
@@ -1581,6 +1703,11 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
     }
 
     let removed = v2_session_map::unregister(&req.agent_name).is_some();
+    if req.reason.as_deref() == Some("tab_close") && req.agent_name.starts_with("tab-") {
+        CLOSED_TABS
+            .lock()
+            .record(&req.agent_name, std::time::Instant::now());
+    }
     if req.clear_index {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -3036,5 +3163,213 @@ mod tests {
         assert!(still.is_child_alive());
         assert!(unregister_if_same_session(&agent, current_id));
         assert!(crate::v2_session_map::lookup_by_agent_name(&agent).is_none());
+    }
+
+    // ── Split-view V23: closed-tab guard ─────────────────────────────────
+
+    fn closed_tab_name() -> String {
+        format!(
+            "tab-closed-guard-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::SeqCst)
+        )
+    }
+
+    fn unique_cwd(tag: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-closed-tab-{tag}-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).expect("cwd");
+        dir.to_string_lossy().into_owned()
+    }
+
+    fn on_closed_list(agent: &str) -> bool {
+        CLOSED_TABS.lock().is_closed(agent, std::time::Instant::now())
+    }
+
+    #[test]
+    fn closed_tab_rule_matrix() {
+        let t0 = std::time::Instant::now();
+        let mut closed = ClosedTabs::default();
+        closed.record("tab-a", t0);
+        closed.record("0192aaaa-bbbb-7000-8000-000000000000", t0);
+
+        // Refused: tab-*, empty command (absent or blank), no live child, listed.
+        assert!(closed_tab_refuses(&closed, "tab-a", None, false, t0));
+        assert!(closed_tab_refuses(&closed, "tab-a", Some(""), false, t0));
+        assert!(closed_tab_refuses(&closed, "tab-a", Some("  "), false, t0));
+        // A command, a live child, or an unlisted name → proceed.
+        assert!(!closed_tab_refuses(&closed, "tab-a", Some("claude"), false, t0));
+        assert!(!closed_tab_refuses(&closed, "tab-a", None, true, t0));
+        assert!(!closed_tab_refuses(&closed, "tab-b", None, false, t0));
+        // Non-`tab-*` names (canonical key) are never refused.
+        assert!(!closed_tab_refuses(
+            &closed,
+            "0192aaaa-bbbb-7000-8000-000000000000",
+            None,
+            false,
+            t0
+        ));
+        // Expiry: still refused just inside the TTL, not at it.
+        let almost = t0 + CLOSED_TAB_TTL - std::time::Duration::from_secs(1);
+        assert!(closed_tab_refuses(&closed, "tab-a", None, false, almost));
+        assert!(!closed_tab_refuses(&closed, "tab-a", None, false, t0 + CLOSED_TAB_TTL));
+        // Clear drops the entry.
+        closed.clear("tab-a");
+        assert!(!closed_tab_refuses(&closed, "tab-a", None, false, t0));
+    }
+
+    #[test]
+    fn closed_tab_list_caps_and_evicts_oldest() {
+        let t0 = std::time::Instant::now();
+        let mut closed = ClosedTabs::default();
+        for i in 0..(CLOSED_TAB_CAP + 5) {
+            closed.record(
+                &format!("tab-cap-{i}"),
+                t0 + std::time::Duration::from_millis(i as u64),
+            );
+        }
+        assert_eq!(closed.len(), CLOSED_TAB_CAP);
+        let now = t0 + std::time::Duration::from_millis((CLOSED_TAB_CAP + 5) as u64);
+        for i in 0..5 {
+            assert!(
+                !closed.is_closed(&format!("tab-cap-{i}"), now),
+                "oldest entry tab-cap-{i} must be evicted"
+            );
+        }
+        assert!(closed.is_closed("tab-cap-5", now));
+        assert!(closed.is_closed(&format!("tab-cap-{}", CLOSED_TAB_CAP + 4), now));
+    }
+
+    #[test]
+    fn closed_tab_record_prunes_expired_entries() {
+        let t0 = std::time::Instant::now();
+        let mut closed = ClosedTabs::default();
+        closed.record("tab-old", t0);
+        closed.record("tab-new", t0 + CLOSED_TAB_TTL);
+        assert_eq!(closed.len(), 1, "expired entry must be pruned on record");
+        assert!(closed.is_closed("tab-new", t0 + CLOSED_TAB_TTL));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_with_tab_close_reason_refuses_empty_spawn_until_command_spawn() {
+        k2_core::db::init_for_tests();
+        let agent = closed_tab_name();
+        let _reap = ReapAgent(agent.clone());
+        let cwd = unique_cwd("refuse");
+
+        let closed = handle_v2_close(
+            serde_json::json!({ "agent_name": agent, "force": true, "reason": "tab_close" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(closed.status, "200 OK", "{}", closed.body);
+        assert!(on_closed_list(&agent), "tab_close must record the name");
+
+        let refused = handle_v2_spawn(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(refused.status, "409 Conflict", "{}", refused.body);
+        let body = json_body(&refused.body);
+        assert_eq!(body["error"].as_str(), Some("tab_closed"), "{body}");
+        assert_eq!(body["agent_name"].as_str(), Some(agent.as_str()), "{body}");
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(&agent).is_none(),
+            "a refused spawn must not register a session"
+        );
+
+        // A blank command string is still an empty spawn.
+        let blank = handle_v2_spawn(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": "" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(blank.status, "409 Conflict", "{}", blank.body);
+
+        // A spawn that carries a command proceeds and clears the entry.
+        let with_cmd = handle_v2_spawn(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": "sleep", "args": ["30"] })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(with_cmd.status, "200 OK", "{}", with_cmd.body);
+        assert!(!on_closed_list(&agent), "command spawn must clear the entry");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_without_reason_does_not_refuse_empty_spawn() {
+        k2_core::db::init_for_tests();
+        let agent = closed_tab_name();
+        let _reap = ReapAgent(agent.clone());
+        let cwd = unique_cwd("no-reason");
+
+        let closed = handle_v2_close(
+            serde_json::json!({ "agent_name": agent, "force": true })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(closed.status, "200 OK", "{}", closed.body);
+        assert!(!on_closed_list(&agent), "a close without reason must not record");
+
+        // Another reason string is not tab_close either.
+        let other = handle_v2_close(
+            serde_json::json!({ "agent_name": agent, "force": true, "reason": "reap" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(other.status, "200 OK", "{}", other.body);
+        assert!(!on_closed_list(&agent), "reason other than tab_close must not record");
+
+        let spawned = handle_v2_spawn(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(spawned.status, "200 OK", "{}", spawned.body);
+    }
+
+    #[test]
+    fn close_with_tab_close_reason_ignores_non_tab_names() {
+        let agent = uniq_agent_name();
+        assert!(!agent.starts_with("tab-"));
+        let closed = handle_v2_close(
+            serde_json::json!({ "agent_name": agent, "reason": "tab_close" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(closed.status, "200 OK", "{}", closed.body);
+        assert!(!on_closed_list(&agent), "non-tab names are never recorded");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_is_not_refused_by_a_closed_entry() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("closed-refresh-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let agent = format!("tab-{pid}");
+        let _reap = ReapAgent(agent.clone());
+        let stub = write_agent_stub("claude");
+        let stub_s = stub.to_string_lossy().into_owned();
+        let sid = "01920000-cccc-7000-8000-0000000000cc";
+        seed_project_and_tab_row(&pid, &cwd, &agent, Some(stub_s.as_str()), Some(sid), &[]);
+
+        CLOSED_TABS.lock().record(&agent, std::time::Instant::now());
+        let refreshed = handle_v2_refresh(
+            serde_json::json!({ "agent_name": agent, "cwd": cwd })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(refreshed.status, "200 OK", "{}", refreshed.body);
+        assert_eq!(json_body(&refreshed.body)["conversationId"].as_str(), Some(sid));
+        assert!(
+            !on_closed_list(&agent),
+            "refresh spawns with a command, which clears the entry"
+        );
+        let _ = std::fs::remove_dir_all(stub.parent().unwrap());
     }
 }

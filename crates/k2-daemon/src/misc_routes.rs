@@ -1269,6 +1269,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/sections/list" => crate::db_routes::handle_sections_list(params),
         "/cli/workspace-layouts/load" => crate::db_routes::handle_layout_load(params),
         "/cli/workspace-layouts/load-all" => crate::db_routes::handle_layout_load_all(),
+        // Layout writes are POST-only (`dispatch_unit4_post`). A GET twin
+        // must 405, never write (split-view V15).
+        "/cli/workspace-layouts/save" | "/cli/workspace-layouts/delete" => {
+            CliResponse::method_not_allowed()
+        }
         // 0.39.39 #676 — daemon-canonical tab titles read (GET).
         "/cli/workspace/tab-titles" => crate::db_routes::handle_tab_titles_list(params),
         "/cli/timer/entries-list" => crate::db_routes::handle_timer_entries_list(params),

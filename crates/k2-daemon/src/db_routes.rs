@@ -102,6 +102,18 @@ pub fn handle_layout_load(params: &HashMap<String, String>) -> CliResponse {
     if project_id.is_empty() || workspace_id.is_empty() {
         return CliResponse::bad_request("Missing 'project_id'/'workspace_id' parameter");
     }
+    // Split-view V14: opt-in `with_revision=1` returns the compare-and-set
+    // base alongside the JSON. The default stays the bare serialized
+    // `Option<String>` old clients parse.
+    let with_revision = matches!(str_param(params, "with_revision").as_str(), "1" | "true");
+    if with_revision {
+        return match dops::workspace_layout_load_with_revision(&project_id, &workspace_id) {
+            Ok((layout_json, revision)) => CliResponse::ok_json(
+                serde_json::json!({ "layoutJson": layout_json, "revision": revision }).to_string(),
+            ),
+            Err(e) => CliResponse::bad_request(e),
+        };
+    }
     serialized(dops::workspace_layout_load(&project_id, &workspace_id))
 }
 
@@ -512,6 +524,11 @@ struct LayoutSaveBody {
     project_id: String,
     workspace_id: String,
     layout_json: String,
+    /// Split-view V15: the revision this layout was built on. Present →
+    /// compare-and-set (409 on mismatch). Absent → last-write-wins (old
+    /// clients, D4).
+    #[serde(default)]
+    base_revision: Option<i64>,
 }
 
 pub fn handle_layout_save(body: &[u8]) -> CliResponse {
@@ -525,12 +542,23 @@ pub fn handle_layout_save(body: &[u8]) -> CliResponse {
     // revision rides back in the response (additive — old clients
     // ignore it) and out on the `TabOrderChanged` broadcast so every
     // OTHER client can drop a stale local write whose base is behind.
-    match dops::workspace_layout_save_with_revision(
+    match dops::workspace_layout_save_cas(
         &b.project_id,
         &b.workspace_id,
         &b.layout_json,
+        b.base_revision,
     ) {
-        Ok(revision) => {
+        // Split-view V15: stale base → no write, no broadcast.
+        Ok(dops::LayoutSaveOutcome::Conflict(stored)) => CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "layout_revision_conflict",
+                "revision": stored,
+            })
+            .to_string(),
+        },
+        Ok(dops::LayoutSaveOutcome::Saved(revision)) => {
             // Resolve the project PATH for the workspace-scoped event
             // filter. Best-effort: if the project row is gone the event
             // still carries project_id/workspace_id (which the renderer

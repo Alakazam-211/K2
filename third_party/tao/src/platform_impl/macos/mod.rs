@@ -8,6 +8,8 @@ mod app_state;
 mod badge;
 mod dock;
 mod event;
+// K2 patch: catch exceptions and panics in `sendEvent:` (see the file).
+mod event_fault;
 mod event_loop;
 mod ffi;
 mod icon;
@@ -26,6 +28,7 @@ pub(crate) use self::event_loop::PlatformSpecificEventLoopAttributes;
 pub use self::{
   app_delegate::get_aux_state_mut,
   event::KeyEventExtra,
+  event_fault::{set_event_fault_hook, EventFault, EventFaultHook, EventFaultKind},
   event_loop::{EventLoop, EventLoopWindowTarget, Proxy as EventLoopProxy},
   keycode::{keycode_from_scancode, keycode_to_scancode},
   monitor::{MonitorHandle, VideoMode},

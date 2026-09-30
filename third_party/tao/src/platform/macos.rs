@@ -16,6 +16,13 @@ use crate::{
   window::{Window, WindowBuilder},
 };
 
+// K2 patch: `sendEvent:` catches ObjC exceptions and Rust panics, drops the
+// event, and reports it here instead of aborting. See
+// `platform_impl/macos/event_fault.rs`.
+pub use crate::platform_impl::{
+  set_event_fault_hook, EventFault, EventFaultHook, EventFaultKind,
+};
+
 /// Additional methods on `Window` that are specific to MacOS.
 pub trait WindowExtMacOS {
   /// Returns a pointer to the cocoa `NSWindow` that is used by this window.

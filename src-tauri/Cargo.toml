@@ -147,6 +147,10 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
     "WKWebView",
     "WKNavigation",
 ] }
+# Same tao tauri-runtime-wry uses (path-patched to third_party/tao). Only for
+# `tao::platform::macos::set_event_fault_hook` (src/event_faults.rs).
+tao = "0.37"
+log = "0.4"
 
 # Linux page history is webkit2gtk::WebView on the child tauri already
 # stores. Same pin as wry 0.57 (=2.0.2) so this is not a second webkit.

@@ -83,6 +83,10 @@ pub use k2_core::terminal;
 mod k2_app_window;
 mod watcher;
 mod window;
+// macOS: field log for events vendored tao drops instead of aborting in
+// `sendEvent:` (`~/.k2/client-event-faults.log`).
+#[cfg(target_os = "macos")]
+mod event_faults;
 
 use tauri::{Emitter, Manager};
 
@@ -979,6 +983,11 @@ pub(crate) fn install_menu_bar_helper() {
 }
 
 pub fn run() {
+    // Before any window exists: a caught ObjC exception or panic in tao's
+    // `sendEvent:` writes one line to ~/.k2/client-event-faults.log.
+    #[cfg(target_os = "macos")]
+    event_faults::install();
+
     // Ignore SIGPIPE so writing to a dead PTY returns EPIPE instead of
     // killing the entire process.
     #[cfg(unix)]

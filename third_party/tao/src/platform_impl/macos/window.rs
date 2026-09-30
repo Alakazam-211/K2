@@ -431,8 +431,12 @@ extern "C" fn is_focusable(this: &Object, _: Sel) -> Bool {
   }
 }
 
-extern "C" fn send_event(this: &Object, _sel: Sel, event: &NSEvent) {
-  unsafe {
+// K2 patch: the body runs inside `guard_send_event`. This IMP is `extern "C"`,
+// so an ObjC exception or a Rust panic from `super sendEvent:` used to abort
+// the process with no reason (0.41.0). Now that one event is dropped and a
+// fault record is written. See `event_fault.rs` for the nesting order.
+pub(super) extern "C" fn send_event(this: &Object, _sel: Sel, event: &NSEvent) {
+  super::event_fault::guard_send_event("TaoWindow", event, || unsafe {
     let event_type = event.r#type();
     if event_type == NSEventType::LeftMouseDown {
       // When wkwebview is set on NSWindow, `WindowBuilder::with_movable_by_window_background` is not working.
@@ -445,7 +449,7 @@ extern "C" fn send_event(this: &Object, _sel: Sel, event: &NSEvent) {
     if let Some(superclass) = util::superclass(this) {
       let _: () = msg_send![super(this, superclass), sendEvent: event];
     }
-  }
+  });
 }
 
 #[derive(Default)]

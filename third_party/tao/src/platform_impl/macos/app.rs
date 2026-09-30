@@ -8,7 +8,7 @@ use objc2::runtime::{AnyClass as Class, ClassBuilder as ClassDecl, Sel};
 use objc2_app_kit::{self as appkit, NSApplication, NSEvent, NSEventType};
 use std::sync::LazyLock;
 
-use super::{app_state::AppState, event::EventWrapper, util, DEVICE_ID};
+use super::{app_state::AppState, event::EventWrapper, event_fault, util, DEVICE_ID};
 use crate::event::{DeviceEvent, ElementState, Event};
 
 pub struct AppClass(pub *const Class);
@@ -28,8 +28,14 @@ pub static APP_CLASS: LazyLock<AppClass> = LazyLock::new(|| unsafe {
 // Normally, holding Cmd + any key never sends us a `keyUp` event for that key.
 // Overriding `sendEvent:` like this fixes that. (https://stackoverflow.com/a/15294196)
 // Fun fact: Firefox still has this bug! (https://bugzilla.mozilla.org/show_bug.cgi?id=1299553)
-extern "C" fn send_event(this: &NSApplication, _sel: Sel, event: &NSEvent) {
-  unsafe {
+//
+// K2 patch: the body runs inside `guard_send_event`. This IMP is `extern "C"`,
+// so an ObjC exception or a Rust panic from `key_window.sendEvent` or
+// `super sendEvent:` used to abort the process with no reason (0.41.4). Now
+// that one event is dropped and a fault record is written. See
+// `event_fault.rs` for the nesting order.
+pub(super) extern "C" fn send_event(this: &NSApplication, _sel: Sel, event: &NSEvent) {
+  event_fault::guard_send_event("TaoApp", event, || unsafe {
     // For posterity, there are some undocumented event types
     // (https://github.com/servo/cocoa-rs/issues/155)
     // but that doesn't really matter here.
@@ -49,7 +55,7 @@ extern "C" fn send_event(this: &NSApplication, _sel: Sel, event: &NSEvent) {
         let _: () = msg_send![super(this, superclass), sendEvent: event];
       }
     }
-  }
+  });
 }
 
 unsafe fn maybe_dispatch_device_event(event: &NSEvent) {

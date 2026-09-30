@@ -255,6 +255,12 @@ version = "0.6"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies.objc2]
 version = "0.6"
 
+# K2 patch: `objc2::exception::catch` for the macOS `sendEvent:` guard
+# (src/platform_impl/macos/event_fault.rs). wry already enables it.
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
+features = ["exception"]
+
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies.dbus]
 version = "0.9"
 optional = true

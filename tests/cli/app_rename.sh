@@ -102,6 +102,7 @@ assert_contains "app help desktop updates" "$app_help" "k2 update --app"
 assert_not_contains "app help not updater" "$app_help" "Checking for app updates"
 assert_contains "app help full-name" "$app_help" "k2 app user full-name"
 assert_contains "app help list full name column" "$app_help" "full name"
+assert_contains "app help unlock" "$app_help" "k2 app user unlock"
 
 echo "== leftover k2 skin teach line is stderr-only =="
 set +e
@@ -149,6 +150,8 @@ assert_contains "schema leftover skin-token" "$schema" '"name": "skin-token"'
 assert_not_contains "schema has no app-token family" "$schema" '"name": "app-token"'
 assert_contains "schema --skin flag stays" "$schema" '"name": "--skin"'
 assert_contains "schema --skin sentence" "$schema" "Static HTML host (an app)"
+assert_contains "schema app user unlock" "$schema" '"name": "app user unlock"'
+assert_contains "schema skin user unlock" "$schema" '"name": "skin user unlock"'
 
 echo "== k2 publish run --help still documents --skin =="
 set +e
@@ -317,6 +320,96 @@ assert_eq "full-name omit clears exit 0" "$clear_rc" "0"
 assert_contains "full-name omit clears" "$clear_out" "cleared"
 assert_eq "full-name empty --name clears exit 0" "$empty_name_rc" "0"
 assert_contains "full-name empty --name clears" "$empty_name_out" "cleared"
+
+echo "== k2 app user unlock and k2 skin user unlock (stub daemon) =="
+set +e
+unlock_help="$(run_k2 app user unlock --help 2>&1)"
+unlock_help_rc=$?
+unlock_missing="$(run_k2 app user unlock 2>&1)"
+unlock_missing_rc=$?
+unlock_unknown="$(run_k2 app user nosuch 2>&1)"
+unlock_unknown_rc=$?
+set -e
+assert_eq "k2 app user unlock --help exit 0" "$unlock_help_rc" "0"
+assert_contains "unlock --help is group usage" "$unlock_help" "k2 app user unlock"
+assert_eq "unlock missing username exit 1" "$unlock_missing_rc" "1"
+assert_contains "unlock missing username usage" "$unlock_missing" "k2 app user unlock <username>"
+assert_eq "unknown app user action exit 1" "$unlock_unknown_rc" "1"
+assert_contains "unknown app user action lists unlock" "$unlock_unknown" "unlock"
+
+kill "$STUB_PID" 2>/dev/null || true
+wait "$STUB_PID" 2>/dev/null || true
+STUB_PID=""
+STUB_PY3="$SANDBOX/stub-unlock.py"
+cat >"$STUB_PY3" <<'PY'
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, body):
+        raw = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        n = int(self.headers.get("Content-Length") or "0")
+        raw = self.rfile.read(n)
+        if path != "/cli/skin/users/unlock":
+            self._send(404, json.dumps({"error": "not found"}))
+            return
+        body = json.loads(raw.decode() or "{}")
+        name = body.get("username") or ""
+        if name == "nope":
+            self._send(403, json.dumps({"error": "Invalid or missing auth token"}))
+            return
+        cleared = name == "baden"
+        self._send(200, json.dumps({"ok": True, "username": name, "cleared": cleared}))
+
+    def log_message(self, *_args):
+        pass
+
+HTTPServer(("127.0.0.1", int(__import__("os").environ["PORT"])), H).serve_forever()
+PY
+STUB_PORT3="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+export K2_PORT="$STUB_PORT3"
+echo "$STUB_PORT3" >"$HOME/.k2/heartbeat.port"
+PORT="$STUB_PORT3" python3 "$STUB_PY3" &
+STUB_PID=$!
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if curl -sf -o /dev/null --connect-timeout 1 -X POST "http://127.0.0.1:${STUB_PORT3}/cli/skin/users/unlock" -d '{}'; then
+        break
+    fi
+    sleep 0.05
+done
+
+set +e
+app_cleared="$(run_k2 app user unlock baden 2>"$SANDBOX/unlock-err")"
+app_cleared_rc=$?
+app_none="$(run_k2 app user unlock other 2>>"$SANDBOX/unlock-err")"
+app_none_rc=$?
+skin_none="$(run_k2 skin user unlock other 2>>"$SANDBOX/unlock-err")"
+skin_none_rc=$?
+app_json="$(run_k2 app user unlock other --json 2>>"$SANDBOX/unlock-err")"
+app_json_rc=$?
+app_bad="$(run_k2 app user unlock nope --json 2>"$SANDBOX/unlock-err")"
+app_bad_rc=$?
+set -e
+assert_eq "app unlock cleared exit 0" "$app_cleared_rc" "0"
+assert_eq "app unlock cleared line" "$app_cleared" "Lock cleared for baden"
+assert_eq "app unlock missing lock exit 0" "$app_none_rc" "0"
+assert_eq "app unlock missing lock line" "$app_none" "No lock for other"
+assert_eq "skin unlock shares app path exit 0" "$skin_none_rc" "0"
+assert_eq "skin unlock missing lock line" "$skin_none" "No lock for other"
+assert_eq "app unlock json cleared false exit 0" "$app_json_rc" "0"
+assert_contains "app unlock json body" "$app_json" '"cleared": false'
+assert_contains "app unlock json ok" "$app_json" '"ok": true'
+assert_eq "app unlock refused token exit 3" "$app_bad_rc" "3"
+assert_contains "app unlock refused token error" "$(cat "$SANDBOX/unlock-err")" "Invalid or missing auth token"
+assert_not_contains "app unlock --json does not print body on error" "$app_bad" '"ok": true'
 
 echo ""
 echo "Results: $pass passed, $fail failed"

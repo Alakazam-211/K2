@@ -198,6 +198,37 @@ pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliRespo
     )
 }
 
+/// `POST /cli/users/unlock` `{username}` →
+/// `{"ok":true,"username":"<key>","cleared":<bool>}`.
+/// Removes the lock-map entry only. A missing entry is 200 `cleared: false`.
+/// Does not create a user or write `password_hash` / `token_epoch`. A session
+/// store failure is 500 (the entry is still there).
+pub fn handle_unlock(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(username) = v
+        .get("username")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return CliResponse::bad_request("missing username");
+    };
+    match connect_users::clear_lockout(username) {
+        Ok((key, cleared)) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "username": key,
+                "cleared": cleared,
+            })
+            .to_string(),
+        ),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
 /// `GET /cli/users/audit?tail=N` — the last N auth-audit records (L3).
 /// `tail` is clamped to `1..=MAX_TAIL` (default 50); a non-numeric value
 /// is a 400. Gate (owner token OR Owner-role session) lives in the

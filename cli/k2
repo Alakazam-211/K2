@@ -5421,6 +5421,8 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
                                         Set/clear full name (omit/empty clears)
   k2 app user password <username> --password-stdin
                                         Set/reset K2-login password (empty stdin clears)
+  k2 app user unlock <username> [--json]
+                                        Clear an app guest login lock (does not change the password)
   k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—; no secrets)
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--apply-tokens]
@@ -5560,6 +5562,34 @@ print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ
 import json,sys
 d=json.load(sys.stdin)
 print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared", d.get("username","")))'
+                    ;;
+                unlock)
+                    local username="" json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user unlock <username> [--json]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user unlock <username> [--json]" >&2; exit 1; }
+                    local body raw
+                    body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
+                    raw=$(cli_post_json "/cli/skin/users/unlock" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [ "$json_out" = 1 ]; then
+                        printf '%s\n' "$raw"
+                        return 0
+                    fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+key=d.get("username","")
+if d.get("cleared") is True:
+    print("Lock cleared for %s" % key)
+else:
+    print("No lock for %s" % key)'
                     ;;
                 email)
                     local username="" email=""
@@ -5705,7 +5735,7 @@ d=json.load(sys.stdin)
 print("Skin user %s unassigned." % d.get("username",""))'
                     ;;
                 *)
-                    echo "Usage: k2 app user <add|list|remove|rooms|password|email|full-name|role|unassign>" >&2
+                    echo "Usage: k2 app user <add|list|remove|rooms|password|email|full-name|role|unassign|unlock>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -10122,12 +10152,15 @@ USAGE
                                 change-password / logout / set-password:
                                 outcome, ingress, ip, client). Owner only.
                                 Default 50, max 1000. ~/.k2/auth-audit.jsonl
+  k2 users unlock <username> [--json]
+                                Clear a box login lock without changing
+                                the password. Exit 0 when no lock is there.
 
 FLAGS
   --role <r>                    owner | admin | member | viewer
   --password-stdin              Read password from stdin (automation; no echo)
   --tail <N>                    audit: how many records (1..1000, default 50)
-  --json                        audit: raw JSON from the daemon
+  --json                        unlock: daemon body; audit: raw JSON
   --help, -h                    This help
 
 SECURITY
@@ -10417,6 +10450,76 @@ def line(r):
 print(line(hdr))
 for r in rows:
     print(line(r))
+'
+            ;;
+        unlock)
+            shift || true
+            local username="" as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=1; shift ;;
+                    --help|-h) _users_usage; return 0 ;;
+                    -*)
+                        echo "Error: unknown flag '$1'" >&2
+                        _users_usage
+                        return 2
+                        ;;
+                    *)
+                        if [ -z "$username" ]; then
+                            username="$1"; shift
+                        else
+                            echo "Error: unexpected argument '$1'" >&2
+                            return 2
+                        fi
+                        ;;
+                esac
+            done
+            if [ -z "$username" ]; then
+                echo "Usage: k2 users unlock <username> [--json]" >&2
+                return 2
+            fi
+            local body resp
+            body=$(USERNAME="$username" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["USERNAME"]}))
+')
+            resp=$(cli_send cli_post_json "/cli/users/unlock" "$body") || resp=""
+            printf '%s' "$resp" | AS_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+as_json = os.environ.get("AS_JSON") == "1"
+if not raw.strip():
+    sys.stderr.write("Error: empty response from daemon (is it running?)\n")
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: unexpected response from /cli/users/unlock\n")
+    sys.exit(1)
+err = d.get("error")
+if err is None and d.get("ok") is False:
+    err = d
+if err is not None:
+    if isinstance(err, dict):
+        hint = err.get("hint") or err.get("message") or err.get("code") or "error"
+    else:
+        hint = err
+    sys.stderr.write("Error: %s\n" % hint)
+    sys.exit(1)
+if d.get("ok") is not True:
+    sys.stderr.write("Error: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+if as_json:
+    sys.stdout.write(raw if raw.endswith("\n") else raw + "\n")
+    sys.exit(0)
+key = d.get("username") or ""
+if d.get("cleared") is True:
+    print("Lock cleared for %s" % key)
+else:
+    print("No lock for %s" % key)
 '
             ;;
         *)
@@ -14282,12 +14385,21 @@ cmd_schema() {
     },
     {
       "name": "users",
-      "usage": "k2 users [list|add|audit] ...",
-      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role; audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only).",
+      "usage": "k2 users [list|add|audit|unlock] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role; audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
       "args": [],
       "flags": [
         {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
-        {"name": "--json", "arg": null, "description": "audit: raw JSON {events,tail,path}."}
+        {"name": "--json", "arg": null, "description": "unlock: daemon body; audit: raw JSON {events,tail,path}."}
+      ]
+    },
+    {
+      "name": "users unlock",
+      "usage": "k2 users unlock <username> [--json]",
+      "description": "Clear a box login lock without changing the password. Exit 0 when no lock is present. Does not create a user.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,username,cleared}."}
       ]
     },
     {
@@ -14342,6 +14454,15 @@ cmd_schema() {
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin."}
+      ]
+    },
+    {
+      "name": "app user unlock",
+      "usage": "k2 app user unlock <username> [--json]",
+      "description": "Clear an app guest login lock without changing the password. Exit 0 when no lock is present. Does not create a principal.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,username,cleared}."}
       ]
     },
     {
@@ -14575,6 +14696,15 @@ cmd_schema() {
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin."}
+      ]
+    },
+    {
+      "name": "skin user unlock",
+      "usage": "k2 skin user unlock <username> [--json]",
+      "description": "Leftover of k2 app user unlock. Clear an app guest login lock without changing the password. Exit 0 when no lock is present.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,username,cleared}."}
       ]
     },
     {

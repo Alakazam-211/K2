@@ -540,6 +540,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/users",
         "/cli/skin/users/remove",
         "/cli/skin/users/password",
+        "/cli/skin/users/unlock",
         "/cli/skin/users/email",
         "/cli/skin/users/rooms",
         "/cli/skin/roles",
@@ -1317,6 +1318,11 @@ mod tests {
         assert!(is_agent_verb("/cli/skin/users"));
         assert!(is_agent_verb("/cli/skin/users/remove"));
         assert!(is_agent_verb("/cli/skin/users/password"));
+        assert!(is_agent_verb("/cli/skin/users/unlock"));
+        assert!(
+            !is_agent_verb("/cli/users/unlock"),
+            "box login unlock is owner-tier, not an agent verb"
+        );
         assert!(is_agent_verb("/cli/skin/users/email"));
         assert!(
             !is_agent_verb("/cli/skin/users/full-name"),

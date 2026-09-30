@@ -2171,15 +2171,40 @@ pub enum SkinLoginOutcome {
     LockedOut,
 }
 
+/// Same row key as [`check_and_record_login`]: trim + ASCII lowercase; an
+/// `@` keeps that string; otherwise [`normalize_username`], and on failure
+/// the trim+lowercase string (how a non-principal row was stored).
+fn login_lockout_key(username: &str) -> String {
+    let presented = username.trim().to_ascii_lowercase();
+    if presented_looks_like_email(&presented) {
+        presented
+    } else {
+        normalize_username(username).unwrap_or(presented)
+    }
+}
+
+/// Delete the `login_lockouts` row for the login key. Does not create a
+/// principal, touch `password_hash`, or revoke sessions. `Ok((key, false))`
+/// when no row was stored.
+pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
+    let key = login_lockout_key(username);
+    let deleted = with_conn(|conn| {
+        let n = conn
+            .execute(
+                "DELETE FROM login_lockouts WHERE username = ?1",
+                params![key],
+            )
+            .map_err(|e| format!("skin lockout clear: {e}"))?;
+        Ok(n)
+    })?;
+    Ok((key, deleted > 0))
+}
+
 pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
     // Lockout 3/15 stays on the presented string (trim+lowercase). `@` →
     // email lookup; else username. Invalid email is a miss, not 400.
     let presented = username.trim().to_ascii_lowercase();
-    let key = if presented_looks_like_email(&presented) {
-        presented.clone()
-    } else {
-        normalize_username(username).unwrap_or_else(|_| presented.clone())
-    };
+    let key = login_lockout_key(username);
 
     let locked = with_conn(|conn| {
         let row: Option<(i64, Option<i64>)> = conn
@@ -6217,6 +6242,123 @@ mod tests {
                 SkinLoginOutcome::BadCreds => {}
                 other => panic!("empty still clears, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn clear_login_lockout_deletes_only_the_presented_key() {
+        with_temp_home(|| {
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES ('jane@clinic.com', 0, ?1), ('jane', 1, NULL), ('bad name', 2, NULL)",
+                    params![now_secs().saturating_add(900)],
+                )
+                .map_err(|e| e.to_string())?;
+                conn.execute(
+                    "INSERT INTO password_reset_throttle (username, last_attempt) VALUES ('jane', 1)",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .expect("seed lock rows");
+            let before = list_principals().expect("list before");
+            let (key, cleared) = clear_login_lockout("  Jane@Clinic.COM ").expect("email clear");
+            assert_eq!(key, "jane@clinic.com");
+            assert!(cleared, "email row existed");
+            let jane_left: i64 = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM login_lockouts WHERE username = 'jane'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("jane row");
+            assert_eq!(jane_left, 1, "username row must stay");
+            let email_left: i64 = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM login_lockouts WHERE username = 'jane@clinic.com'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("email row");
+            assert_eq!(email_left, 0, "email row must be gone");
+            let (key, cleared) = clear_login_lockout("Jane").expect("username clear");
+            assert_eq!(key, "jane");
+            assert!(cleared, "failed_count 1 with locked_until NULL is a row");
+            let (key, cleared) = clear_login_lockout("jane").expect("second clear");
+            assert_eq!(key, "jane");
+            assert!(!cleared, "missing row is cleared false");
+            let (key, cleared) = clear_login_lockout("  Bad Name ").expect("junk key");
+            assert_eq!(key, "bad name");
+            assert!(cleared, "non-principal trim+lowercase row");
+            assert_eq!(
+                list_principals().expect("list after"),
+                before,
+                "unlock must not create a principal"
+            );
+            let throttle: i64 = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM password_reset_throttle WHERE username = 'jane'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("throttle");
+            assert_eq!(throttle, 1, "password_reset_throttle must stay");
+        });
+    }
+
+    #[test]
+    fn set_principal_password_does_not_delete_login_lockout() {
+        with_temp_home(|| {
+            add_principal("cara").expect("add");
+            set_principal_password("cara", Some("s3cret-horse")).expect("set");
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES ('cara', 1, NULL)",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .expect("seed lock");
+            let hash_before: String = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT password_hash FROM principals WHERE username = 'cara'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("hash before");
+            set_principal_password("cara", Some("other-password-1")).expect("reset");
+            let still: i64 = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM login_lockouts WHERE username = 'cara'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("lock after password set");
+            assert_eq!(still, 1, "password set must leave the lock row");
+            let hash_after: String = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT password_hash FROM principals WHERE username = 'cara'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("hash after");
+            assert_ne!(hash_before, hash_after, "password set still writes the hash");
         });
     }
 

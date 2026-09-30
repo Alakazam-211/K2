@@ -547,7 +547,8 @@ pub fn set_password(username: &str, password: &str) -> Result<(), String> {
     // clear any lockout (failed_count/locked_until) so a correct login
     // succeeds right away. (change_password already clears on success via
     // check_and_record; this is specifically the owner-reset path.)
-    clear_lockout(&username);
+    // The bool and a store error are ignored here; the unlock route reports them.
+    let _ = clear_lockout(&username);
     Ok(())
 }
 
@@ -929,6 +930,13 @@ pub enum LoginOutcome {
     BadCreds,
 }
 
+/// Normalized username, or trim+lowercase when [`normalize_username`] rejects
+/// the string. Same key for [`check_and_record`], [`clear_lockout`], and
+/// [`is_locked`].
+fn lockout_key(username: &str) -> String {
+    normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase())
+}
+
 /// Verify `password` for `username` THROUGH the brute-force lockout gate.
 /// This is the single entry point the login + change-password paths use
 /// so the policy can never be bypassed.
@@ -948,7 +956,7 @@ pub enum LoginOutcome {
 /// stored account; it's keyed under its lossy lowercase form so repeated
 /// junk still gets rate-limited rather than silently uncounted.
 pub fn check_and_record(username: &str, password: &str) -> LoginOutcome {
-    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    let key = lockout_key(username);
 
     // First: are we currently locked? Read the persisted lockout state and
     // clear an expired lock, but do it as a quick load-modify-save before
@@ -1047,21 +1055,22 @@ pub fn change_password(username: &str, current: &str, new: &str) -> ChangePasswo
 
 /// Clear any lockout state (failed_count + locked_until) for `username`.
 /// Keyed by the normalized username — same key `check_and_record`/`is_locked`
-/// use. Idempotent; a no-op when there's no entry. Used by the owner-reset
-/// path so a password reset immediately unlocks a stuck user.
-pub fn clear_lockout(username: &str) {
-    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
-    let _ = update_sessions(|store| {
-        store.locks.remove(&key);
-        Ok(())
-    });
+/// use. Does not create a connect-user. `Ok((key, true))` when `locks.remove`
+/// hit an entry, including a partial `failed_count` with `locked_until: None`.
+/// `Err` when the session store cannot be read or written — the entry is
+/// left in place. Callers that only need the side effect (`set_password`)
+/// ignore the result.
+pub fn clear_lockout(username: &str) -> Result<(String, bool), String> {
+    let key = lockout_key(username);
+    let cleared = update_sessions(|store| Ok(store.locks.remove(&key).is_some()))?;
+    Ok((key, cleared))
 }
 
 /// The current consecutive-failure count for `username` (0 when there is
 /// no lockout entry). Read-only. Lets the login gate tests prove that a
 /// blocked tunnel attempt never touched the counter.
 pub fn lockout_failed_count(username: &str) -> u32 {
-    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    let key = lockout_key(username);
     match load_sessions() {
         Ok(store) => store.locks.get(&key).map(|e| e.failed_count).unwrap_or(0),
         Err(_) => 0,
@@ -1071,7 +1080,7 @@ pub fn lockout_failed_count(username: &str) -> u32 {
 /// Whether `username` is currently locked out. Read-only; used by callers
 /// that want to surface a hint without attempting a verify.
 pub fn is_locked(username: &str) -> bool {
-    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    let key = lockout_key(username);
     let store = match load_sessions() {
         Ok(s) => s,
         Err(_) => return false,
@@ -2025,6 +2034,96 @@ mod tests {
                 check_and_record("locked", "brandnewpw"),
                 LoginOutcome::Ok,
                 "unlocked user logs in immediately after owner reset"
+            );
+        });
+    }
+
+    #[test]
+    fn clear_lockout_reports_entry_and_does_not_create_a_user() {
+        with_temp_home(|| {
+            let (key, cleared) = clear_lockout("Ghost").expect("missing entry");
+            assert_eq!(key, "ghost");
+            assert!(!cleared);
+            assert_eq!(check_and_record("Ghost", "x"), LoginOutcome::BadCreds);
+            assert!(!is_locked("ghost"), "one failure is not a live lock");
+            assert_eq!(lockout_failed_count("ghost"), 1);
+            let (key, cleared) = clear_lockout("ghost").expect("entry existed");
+            assert_eq!(key, "ghost");
+            assert!(cleared);
+            assert_eq!(lockout_failed_count("ghost"), 0);
+            let (key, cleared) = clear_lockout("ghost").expect("second clear");
+            assert_eq!(key, "ghost");
+            assert!(!cleared);
+            assert!(
+                list_users()
+                    .expect("list")
+                    .iter()
+                    .all(|u| u.username != "ghost"),
+                "clear must not create a connect-user"
+            );
+        });
+    }
+
+    #[test]
+    fn set_password_still_clears_a_partial_lock_entry() {
+        with_temp_home(|| {
+            add_user("baden", "oldpassword1").expect("add");
+            let tok = create_session("baden");
+            assert_eq!(check_and_record("baden", "nope"), LoginOutcome::BadCreds);
+            assert_eq!(lockout_failed_count("baden"), 1);
+            assert!(!is_locked("baden"));
+            let before = fs::read_to_string(store_path()).expect("users file");
+            set_password("baden", "newpassword1").expect("set");
+            assert_eq!(lockout_failed_count("baden"), 0, "set_password still clears");
+            let (_key, cleared) = clear_lockout("baden").expect("after set_password");
+            assert!(!cleared, "entry already removed");
+            assert_eq!(validate_session(&tok), None, "set_password still revokes");
+            let after = fs::read_to_string(store_path()).expect("users file after");
+            assert_ne!(before, after, "set_password still writes the credential");
+            assert!(verify("baden", "newpassword1"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_lockout_write_failure_keeps_the_entry() {
+        use std::os::unix::fs::PermissionsExt;
+        with_temp_home(|| {
+            assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
+            assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
+            assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
+            assert!(is_locked("stuck"));
+            let dir = config_dir();
+            let mode = fs::metadata(&dir)
+                .expect("stat .k2")
+                .permissions()
+                .mode();
+            struct Restore {
+                dir: std::path::PathBuf,
+                mode: u32,
+            }
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&self.dir, fs::Permissions::from_mode(self.mode));
+                }
+            }
+            let _restore = Restore {
+                dir: dir.clone(),
+                mode,
+            };
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).expect("chmod 0555");
+            let err = clear_lockout("stuck").expect_err("unwritable session store");
+            assert!(!err.is_empty(), "store error must be non-empty");
+            drop(_restore);
+            assert!(is_locked("stuck"), "failed write must leave the lock");
+            assert_eq!(lockout_failed_count("stuck"), 0, "live lock stores failed_count 0");
+            assert!(
+                list_users()
+                    .expect("list")
+                    .iter()
+                    .all(|u| u.username != "stuck"),
+                "failed clear must not create a user"
             );
         });
     }

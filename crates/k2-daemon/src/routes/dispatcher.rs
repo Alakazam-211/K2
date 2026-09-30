@@ -548,6 +548,7 @@ async fn handle_one_request(
             | "/cli/users/add"
             | "/cli/users/remove"
             | "/cli/users/set-password"
+            | "/cli/users/unlock"
             | "/cli/users/set-disabled"
             // K2SO #629 — change a connect-user's role. Owner-only (gated
             // per-handler below); method-gated POST.
@@ -1071,6 +1072,7 @@ async fn handle_one_request(
             | "/cli/skin/users/remove"
             | "/cli/skin/users/rooms"
             | "/cli/skin/users/password"
+            | "/cli/skin/users/unlock"
             | "/cli/skin/users/email"
             // Full name is owner-only (not an agent verb, stricter than role edits).
             | "/cli/skin/users/full-name"
@@ -3111,6 +3113,27 @@ async fn handle_one_request(
                 "-",
                 if web_client_header { "web" } else { "api" },
             ));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        "/cli/users/unlock" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            // Same gate as set-password. Do not call handle_set_password_as.
+            let actor = super::http::set_password_actor(&query, state.token.as_str());
+            if actor.is_none() {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = crate::connect_users_routes::handle_unlock(&body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/cli/users/set-disabled" => {
@@ -6843,6 +6866,36 @@ async fn handle_one_request(
                             crate::skin_routes::handle_users_password(&body, &actor),
                             &actor,
                         )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/users/unlock" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let actor = match owner_or_skin_manage_hook(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    ) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(
+                                &mut *stream,
+                                f.status,
+                                f.content_type,
+                                &f.body,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_users_unlock(&body, &actor)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

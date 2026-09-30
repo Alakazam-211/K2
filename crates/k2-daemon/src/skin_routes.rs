@@ -359,6 +359,31 @@ pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// Delete one `login_lockouts` row. Body is only `ok`, `username`, `cleared`.
+pub fn handle_users_unlock(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username", "name"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    match skin::clear_login_lockout(username) {
+        Ok((key, cleared)) => {
+            k2_core::log_debug!("[skin] actor={actor} unlock {key} cleared={cleared}");
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "username": key,
+                    "cleared": cleared,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
 pub fn handle_users_remove(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,

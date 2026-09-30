@@ -127,6 +127,9 @@ export interface HostBootStatus {
   /** `'starting' | 'migrating' | 'ready' | 'error' | …` — readiness is
    *  ONLY ever `phase === 'ready'`; the poller never assumes a delay. */
   phase?: string
+  /** The dark-tunnel draft body (`{version, ready, connectLogin}`) says
+   *  ready this way instead of `phase`. Home's status probe accepts both. */
+  ready?: boolean
   /** The daemon's running version once it's back (used to refresh the tile). */
   version?: string
 }

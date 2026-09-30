@@ -30,6 +30,7 @@ import { useSettingsStore } from './settings'
 // show→painted metric (read by TerminalPane's [v2-perf] line).
 import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
+import { takeHostSelect } from '@/lib/home-pending-select'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -385,6 +386,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         let restoredProject = null
         let restoredWorkspaceId: string | null = null
 
+        // Home P1 (H15) — a Home row opened on this host wins over the
+        // per-host last-session restore.
+        const homePick = takeHostSelect(useConnectHostStore.getState().activeHost, projectsWithWorkspaces)
+        if (homePick) {
+          restoredProject = homePick.workspace
+          restoredWorkspaceId = homePick.workspace.workspaces[0]?.id ?? null
+        }
+
         // 0.39.0: read from the already-loaded settings store instead of
         // re-invoking `settings_get`. Saves ~20-50ms on boot. The store
         // initializes via `useSettingsStore.getState().fetchSettings()`
@@ -393,7 +402,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         // hasn't finished its initial fetch yet (rare boot-race), fall
         // back to the direct invoke so we don't lose the last-session
         // restore — but in the common case we skip the second roundtrip.
-        try {
+        if (!restoredProject) try {
           const settingsState = useSettingsStore.getState()
           let lastActiveProjectId = settingsState.lastActiveProjectId
           let lastActiveWorkspaceId = settingsState.lastActiveWorkspaceId
@@ -432,6 +441,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           activeProjectId: restoredProject.id,
           activeWorkspaceId: restoredWorkspaceId
         })
+        homePick?.onSelected?.()
 
         // Load saved layout for the restored workspace.
         //

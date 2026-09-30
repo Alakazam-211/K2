@@ -47,6 +47,16 @@ describe('page-view switcher + feedback delegation', () => {
     expect(usePageViewStore.getState().page).toBe('agents')
   })
 
+  it('Home is a page: selecting it closes Feedback and clears a bound wiki path', () => {
+    usePageViewStore.getState().openWiki('/w/cortana')
+    usePageViewStore.getState().setPage('home')
+    expect(usePageViewStore.getState().page).toBe('home')
+    expect(usePageViewStore.getState().wikiProjectPath).toBeNull()
+    useFeedbackStore.getState().open()
+    usePageViewStore.getState().setPage('home')
+    expect(useFeedbackStore.getState().isOpen).toBe(false)
+  })
+
   it('selecting the Projects tab closes an open Feedback page', () => {
     useFeedbackStore.getState().open()
     usePageViewStore.getState().setPage('projects')

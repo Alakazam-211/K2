@@ -176,7 +176,6 @@ export default function WhatsNewModal({
       console.debug('[whats-new] mark_seen failed:', err)
     }
     setVisible(false)
-    setLatestOnly(false)
     setDismissing(false)
   }, [dismissing])
 

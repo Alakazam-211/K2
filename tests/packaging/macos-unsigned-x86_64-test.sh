@@ -3,6 +3,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 SCRIPT="$ROOT/scripts/build-unsigned-x86_64-test.sh"
+
+# This uses the real repository before fake tools take over. Every commit the
+# build script relies on must exist locally and be reachable from this branch.
+commit_count=0
+while IFS= read -r commit; do
+    commit_count=$((commit_count + 1))
+    git -C "$ROOT" cat-file -e "$commit^{commit}" || {
+        echo "FAIL: build script requires missing commit $commit" >&2
+        exit 1
+    }
+    git -C "$ROOT" merge-base --is-ancestor "$commit" HEAD || {
+        echo "FAIL: build script commit is not branch-reachable: $commit" >&2
+        exit 1
+    }
+done < <(sed -En 's/^[A-Z_]*COMMIT="([0-9a-f]{40})"$/\1/p' "$SCRIPT")
+[ "$commit_count" -eq 2 ] || { echo "FAIL: expected two pinned commits" >&2; exit 1; }
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/k2-unsigned-x86-test.XXXXXX")"
 if [ "${K2_KEEP_TEST_TMP:-0}" != 1 ]; then
     trap 'rm -rf "$TMP"' EXIT
@@ -18,6 +35,9 @@ mkdir -p "$FAKE_BIN" "$SOURCE/src-tauri" "$SOURCE/crates/k2-daemon" \
 
 git -C "$ROOT" show 655fe8bbbc5bbd259cabb77ea714f3bf092db2c3:crates/k2-menubar/src/main.rs \
     > "$SOURCE/crates/k2-menubar/src/main.rs"
+OVERLAY_MAIN="$TMP/menubar-main-overlay.rs"
+git -C "$ROOT" show 1485549c1c04b1fa8886caa949cc4735143ac7ba:crates/k2-menubar/src/main.rs \
+    > "$OVERLAY_MAIN"
 
 cat > "$SOURCE/package.json" <<'EOF'
 {"version": "0.41.3"}
@@ -53,14 +73,18 @@ case "$1:$2" in
         echo "${FAKE_COMMIT:-655fe8bbbc5bbd259cabb77ea714f3bf092db2c3}" ;;
     rev-parse:655fe8bbbc5bbd259cabb77ea714f3bf092db2c3^\{tree\})
         echo "${FAKE_TREE:-ff9cf6a5ef9eaffd739e43dd207ea4e9db575f32}" ;;
-    rev-parse:617655ee0b015bd9419b35c7d9779cdc24069781^\{tree\})
-        echo "${FAKE_OVERLAY_TREE:-243aabb4402e2edeb6b2254cdc8dc8fe340e97cb}" ;;
+    merge-base:--is-ancestor)
+        [ "$3" = 1485549c1c04b1fa8886caa949cc4735143ac7ba ] && [ "$4" = HEAD ] ;;
+    rev-parse:1485549c1c04b1fa8886caa949cc4735143ac7ba^\{tree\})
+        echo "${FAKE_COMPOSED_TREE:-ec0db74023ab708c95114cd85e828ac3ca93d0fb}" ;;
     show:655fe8bbbc5bbd259cabb77ea714f3bf092db2c3:crates/k2-menubar/src/main.rs)
         if [ "${FAKE_BAD_MENUBAR_PREIMAGE:-0}" = 1 ]; then
             echo wrong
         else
             cat "$FAKE_SOURCE/crates/k2-menubar/src/main.rs"
         fi ;;
+    show:1485549c1c04b1fa8886caa949cc4735143ac7ba:crates/k2-menubar/src/main.rs)
+        cat "$FAKE_OVERLAY_MAIN" ;;
     archive:655fe8bbbc5bbd259cabb77ea714f3bf092db2c3)
         /usr/bin/tar -cf - -C "$FAKE_SOURCE" . ;;
     *) echo "unexpected fake git call: $*" >&2; exit 90 ;;
@@ -142,7 +166,7 @@ chmod 755 "$NODE_MODULES/.bin/tauri"
 printf '{"version": "2.12.0"}\n' > "$NODE_MODULES/@tauri-apps/cli/package.json"
 
 export PATH="$FAKE_BIN:/usr/bin:/bin"
-export FAKE_SOURCE="$SOURCE" FAKE_LOG="$LOG"
+export FAKE_SOURCE="$SOURCE" FAKE_OVERLAY_MAIN="$OVERLAY_MAIN" FAKE_LOG="$LOG"
 
 expect_fail() {
     local label="$1"; shift
@@ -157,8 +181,8 @@ OUT_OK="$TMP/out-ok"
 grep -Fq 'VERIFIED TEST BUILD ONLY:' "$TMP/happy.out"
 grep -Fq 'source_commit 655fe8bbbc5bbd259cabb77ea714f3bf092db2c3' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
 grep -Fq 'source_tree ff9cf6a5ef9eaffd739e43dd207ea4e9db575f32' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
-grep -Fq 'menubar_overlay_commit 617655ee0b015bd9419b35c7d9779cdc24069781' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
-grep -Fq 'menubar_overlay_tree 243aabb4402e2edeb6b2254cdc8dc8fe340e97cb' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
+grep -Fq 'composed_evidence_commit 1485549c1c04b1fa8886caa949cc4735143ac7ba' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
+grep -Fq 'composed_evidence_tree ec0db74023ab708c95114cd85e828ac3ca93d0fb' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
 grep -Fq 'menubar_main_base_sha256 b6a2473f2e3966450228b9c2e28371749a799efedebb2752ced33c8eb717d61d' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
 grep -Fq 'menubar_main_overlay_sha256 187079fb19f35c3648e176dd7c219f8f61d9796edff06aad4c3d0b6e7adad631' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
 grep -Fq 'target x86_64-apple-darwin' "$OUT_OK/UNSIGNED_TEST_MANIFEST.txt"
@@ -169,7 +193,7 @@ mkdir "$TMP/existing"
 expect_fail no-clobber "$SCRIPT" --output "$TMP/existing" --frpc "$FRPC" --node-modules "$NODE_MODULES"
 
 FAKE_TREE=wrong expect_fail wrong-tree "$SCRIPT" --output "$TMP/out-wrong-tree" --frpc "$FRPC" --node-modules "$NODE_MODULES"
-FAKE_OVERLAY_TREE=wrong expect_fail wrong-overlay-tree "$SCRIPT" --output "$TMP/out-wrong-overlay-tree" --frpc "$FRPC" --node-modules "$NODE_MODULES"
+FAKE_COMPOSED_TREE=wrong expect_fail wrong-composed-tree "$SCRIPT" --output "$TMP/out-wrong-composed-tree" --frpc "$FRPC" --node-modules "$NODE_MODULES"
 FAKE_BAD_MENUBAR_PREIMAGE=1 expect_fail wrong-menubar-preimage "$SCRIPT" --output "$TMP/out-wrong-menubar-preimage" --frpc "$FRPC" --node-modules "$NODE_MODULES"
 FAKE_RUST_TARGET=aarch64-apple-darwin expect_fail missing-target "$SCRIPT" --output "$TMP/out-missing-target" --frpc "$FRPC" --node-modules "$NODE_MODULES"
 FAKE_MUTATE_LOCK=1 expect_fail changed-lock "$SCRIPT" --output "$TMP/out-changed-lock" --frpc "$FRPC" --node-modules "$NODE_MODULES"

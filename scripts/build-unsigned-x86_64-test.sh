@@ -7,8 +7,8 @@ set -euo pipefail
 TAG_OBJECT="5a9ad6880d6c09e95eb452c5c218451a724c24cf"
 SOURCE_COMMIT="655fe8bbbc5bbd259cabb77ea714f3bf092db2c3"
 SOURCE_TREE="ff9cf6a5ef9eaffd739e43dd207ea4e9db575f32"
-MENUBAR_OVERLAY_COMMIT="617655ee0b015bd9419b35c7d9779cdc24069781"
-MENUBAR_OVERLAY_TREE="243aabb4402e2edeb6b2254cdc8dc8fe340e97cb"
+COMPOSED_COMMIT="1485549c1c04b1fa8886caa949cc4735143ac7ba"
+COMPOSED_TREE="ec0db74023ab708c95114cd85e828ac3ca93d0fb"
 MENUBAR_MAIN_BASE_SHA256="b6a2473f2e3966450228b9c2e28371749a799efedebb2752ced33c8eb717d61d"
 MENUBAR_MAIN_OVERLAY_SHA256="187079fb19f35c3648e176dd7c219f8f61d9796edff06aad4c3d0b6e7adad631"
 VERSION="0.41.3"
@@ -54,7 +54,8 @@ cd "$PROJECT_DIR"
 [ "$(git cat-file -t "$TAG_OBJECT")" = tag ] || { echo "FATAL: expected annotated tag object is absent" >&2; exit 1; }
 [ "$(git rev-parse "$TAG_OBJECT^{}")" = "$SOURCE_COMMIT" ] || { echo "FATAL: tag does not peel to the pinned source commit" >&2; exit 1; }
 [ "$(git rev-parse "$SOURCE_COMMIT^{tree}")" = "$SOURCE_TREE" ] || { echo "FATAL: pinned commit tree does not match" >&2; exit 1; }
-[ "$(git rev-parse "$MENUBAR_OVERLAY_COMMIT^{tree}")" = "$MENUBAR_OVERLAY_TREE" ] || { echo "FATAL: menubar overlay commit tree does not match" >&2; exit 1; }
+git merge-base --is-ancestor "$COMPOSED_COMMIT" HEAD || { echo "FATAL: composed evidence commit is not reachable from HEAD" >&2; exit 1; }
+[ "$(git rev-parse "$COMPOSED_COMMIT^{tree}")" = "$COMPOSED_TREE" ] || { echo "FATAL: composed evidence commit tree does not match" >&2; exit 1; }
 
 for tool in bun cargo rustup lipo plutil codesign shasum tar cp; do
     command -v "$tool" >/dev/null 2>&1 || { echo "FATAL: required local tool missing: $tool" >&2; exit 1; }
@@ -69,7 +70,7 @@ MENUBAR_MAIN="crates/k2-menubar/src/main.rs"
 [ "$(git show "$SOURCE_COMMIT:$MENUBAR_MAIN" | shasum -a 256 | awk '{print $1}')" = "$MENUBAR_MAIN_BASE_SHA256" ] || {
     echo "FATAL: tagged menubar preimage does not match" >&2; exit 1;
 }
-[ "$(shasum -a 256 "$MENUBAR_MAIN" | awk '{print $1}')" = "$MENUBAR_MAIN_OVERLAY_SHA256" ] || {
+[ "$(git show "$COMPOSED_COMMIT:$MENUBAR_MAIN" | shasum -a 256 | awk '{print $1}')" = "$MENUBAR_MAIN_OVERLAY_SHA256" ] || {
     echo "FATAL: reviewed menubar overlay does not match" >&2; exit 1;
 }
 
@@ -81,7 +82,7 @@ git archive "$SOURCE_COMMIT" | tar -x -C "$SOURCE"
 [ "$(shasum -a 256 "$SOURCE/$MENUBAR_MAIN" | awk '{print $1}')" = "$MENUBAR_MAIN_BASE_SHA256" ] || {
     echo "FATAL: archived menubar preimage does not match" >&2; exit 1;
 }
-cp "$PROJECT_DIR/$MENUBAR_MAIN" "$SOURCE/$MENUBAR_MAIN"
+git show "$COMPOSED_COMMIT:$MENUBAR_MAIN" > "$SOURCE/$MENUBAR_MAIN"
 [ "$(shasum -a 256 "$SOURCE/$MENUBAR_MAIN" | awk '{print $1}')" = "$MENUBAR_MAIN_OVERLAY_SHA256" ] || {
     echo "FATAL: archived menubar overlay does not match" >&2; exit 1;
 }
@@ -153,8 +154,8 @@ MANIFEST="$OUTPUT/UNSIGNED_TEST_MANIFEST.txt"
     echo "tag_object $TAG_OBJECT"
     echo "source_commit $SOURCE_COMMIT"
     echo "source_tree $SOURCE_TREE"
-    echo "menubar_overlay_commit $MENUBAR_OVERLAY_COMMIT"
-    echo "menubar_overlay_tree $MENUBAR_OVERLAY_TREE"
+    echo "composed_evidence_commit $COMPOSED_COMMIT"
+    echo "composed_evidence_tree $COMPOSED_TREE"
     echo "menubar_main_base_sha256 $MENUBAR_MAIN_BASE_SHA256"
     echo "menubar_main_overlay_sha256 $MENUBAR_MAIN_OVERLAY_SHA256"
     echo "version $VERSION"

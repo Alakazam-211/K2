@@ -117,6 +117,10 @@ build() {
     export CARGO_HOME="${srcdir}/cargo-home"
     export CARGO_TARGET_DIR="${srcdir}/cargo-target"
     export CARGO_INCREMENTAL=0
+    # pg_query -> prost-build 0.10 builds a bundled protobuf whose
+    # cmake_minimum_required predates 3.5. Arch ships CMake 4, which
+    # refuses that without this policy floor.
+    export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
     bun install --frozen-lockfile
 

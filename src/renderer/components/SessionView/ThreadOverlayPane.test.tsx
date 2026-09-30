@@ -112,6 +112,26 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.getByText('code').tagName).toBe('CODE')
   })
 
+  it('does not paint via=thread from=owner as You', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 2,
+      id: 't-owner-thread',
+      doc: {
+        id: 't-owner-thread',
+        kind: 'text',
+        from: 'owner',
+        via: 'thread',
+        created_at: Math.floor(Date.now() / 1000),
+        body: 'agent said hello',
+      },
+    }
+    render(<ThreadItemRow item={item} />)
+    expect(screen.queryByText('You')).toBeNull()
+    expect(screen.getByText('owner')).not.toBeNull()
+    expect(screen.getByText('agent said hello')).not.toBeNull()
+  })
+
   it('renders a vertical lettered choice card; first option is primary; tap calls onAnswer', () => {
     const picks: string[] = []
     const item: OverlayThreadItem = {

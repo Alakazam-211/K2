@@ -204,7 +204,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
 })
 
 function isHumanPost(doc: OverlayDoc): boolean {
-  return doc.via === 'compose' || doc.from === 'owner'
+  return doc.via === 'compose'
 }
 
 export function ThreadItemRow({

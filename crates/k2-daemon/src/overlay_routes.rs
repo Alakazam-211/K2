@@ -424,6 +424,42 @@ fn compose_from_for_session(session_author: &str) -> String {
     }
 }
 
+/// `principal_bound` is exactly `"1"`. Boolean `true` stringifies to `"true"`
+/// and must not count. A body flag with no prior stamp must not count either.
+fn principal_is_bound(params: &HashMap<String, String>) -> bool {
+    params
+        .get(crate::caller_workspace::PRINCIPAL_BOUND_KEY)
+        .map(String::as_str)
+        == Some("1")
+}
+
+/// No principal: trim `from` first. Empty, `k2`, `owner`, or
+/// `resolve_owner_from()` (ASCII case-insensitive) become the room handle.
+/// Any other explicit `from` is that trimmed string.
+fn unbound_overlay_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay) -> String {
+    let trimmed = params.get("from").map(|s| s.trim()).unwrap_or("");
+    let owner = workspace_msg::resolve_owner_from();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("k2")
+        || trimmed.eq_ignore_ascii_case("owner")
+        || trimmed.eq_ignore_ascii_case(&owner)
+    {
+        thread_from_room_handle(resolved)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Bound principal: the restored stamp, even when that handle is `owner`.
+/// Otherwise [`unbound_overlay_from`].
+fn overlay_sender_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay) -> String {
+    if principal_is_bound(params) {
+        params.get("from").cloned().unwrap_or_default()
+    } else {
+        unbound_overlay_from(params, resolved)
+    }
+}
+
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     let addr = str_param(params, "addr");
     let text = str_param(params, "text");
@@ -433,8 +469,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if text.is_empty() {
         return usage("missing text");
     }
-    let via = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
-    if request_skin().is_some() && via == "compose" {
+    let via_in = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
+    // Skin 403 stays first. A skin token on this arm has no principal.
+    if request_skin().is_some() && via_in == "compose" {
         return error_json(
             "403 Forbidden",
             "forbidden",
@@ -449,20 +486,23 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         return e;
     }
     let principal = crate::caller_workspace::principal_from_params(params);
-    // Skin: authenticated pass username only (never body `from`). Overlay
-    // store and PTY stamp must match. via=compose: session actor. Else
-    // empty/`k2` stamps the room handle (CLI still defaults from=k2).
+    let bound = principal_is_bound(params);
+    // A bound caller is not the human compose bar. Do not store via=compose
+    // and do not run the human side effects below.
+    let via = if bound && via_in == "compose" {
+        "thread".to_string()
+    } else {
+        via_in
+    };
+    // Skin: pass username only (never body `from`). No principal +
+    // via=compose: session actor, still ignoring body `from`. Bound:
+    // restored stamp. Else owner-shaped `from` becomes the room handle.
     let from = if let Some(pass) = request_skin() {
         skin_from_stamp(&pass)
-    } else if via == "compose" {
+    } else if !bound && via == "compose" {
         compose_from_for_session(session_author)
     } else {
-        let explicit = opt_param(params, "from").unwrap_or_default();
-        if explicit.is_empty() || explicit.eq_ignore_ascii_case("k2") {
-            thread_from_room_handle(&resolved)
-        } else {
-            explicit
-        }
+        overlay_sender_from(params, &resolved)
     };
     let command = if via == "compose" {
         match workspace_msg::normalize_composer_slash_command(
@@ -492,7 +532,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
-            if via == "compose" {
+            if !bound && via == "compose" {
                 apply_human_prose(
                     &resolved.conversation_id,
                     &resolved.project_id,
@@ -547,14 +587,7 @@ fn collect_ask_options(params: &HashMap<String, String>) -> Result<Vec<String>, 
     }
 }
 
-fn stamped_from(params: &HashMap<String, String>) -> String {
-    let explicit = opt_param(params, "from").unwrap_or_default();
-    if !explicit.is_empty() {
-        explicit
-    } else {
-        "k2".to_string()
-    }
-}
+
 
 fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = reject_wait(params) {
@@ -585,7 +618,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return e,
     };
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = stamped_from(params);
+    let from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
@@ -611,6 +644,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
                 serde_json::json!({
                     "ok": true,
                     "id": item.id,
+                    "from": item.doc.from,
                     "prompt": choice.map(|c| c.prompt.clone()).unwrap_or_else(|| prompt.trim().to_string()),
                     "options": labels,
                     "allow_custom": choice.map(|c| c.allow_custom).unwrap_or(allow_custom),
@@ -649,7 +683,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return e,
     };
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = stamped_from(params);
+    let from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
@@ -671,6 +705,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                 serde_json::json!({
                     "ok": true,
                     "id": item.id,
+                    "from": item.doc.from,
                     "name": secret.map(|s| s.name.clone()).unwrap_or_else(|| name.trim().to_string()),
                     "status": secret.map(|s| s.status.clone()).unwrap_or_else(|| "pending".to_string()),
                     "kind": item.doc.kind,
@@ -973,7 +1008,32 @@ pub fn dispatch_post_as(
     session_author: &str,
 ) -> CliResponse {
     let mut params = params.clone();
+    // Stamp is already on this map (cell and HTTP stamp, then enter here).
+    // Capture before merge_body. Do not capture the cell's pre-stamp form.
+    let captured_from = params.get("from").cloned();
+    let captured_bound = params
+        .get(crate::caller_workspace::PRINCIPAL_BOUND_KEY)
+        .cloned();
+    let captured_project_id = params.get("project_id").cloned();
+    let stamped = captured_bound.as_deref() == Some("1");
     merge_body(&mut params, body);
+    if stamped {
+        restore_param(&mut params, "from", captured_from);
+        restore_param(
+            &mut params,
+            crate::caller_workspace::PRINCIPAL_BOUND_KEY,
+            captured_bound,
+        );
+        restore_param(&mut params, "project_id", captured_project_id);
+    } else {
+        // A body principal_bound must not survive. Leave body `from` and
+        // project_id for the no-principal path.
+        restore_param(
+            &mut params,
+            crate::caller_workspace::PRINCIPAL_BOUND_KEY,
+            captured_bound,
+        );
+    }
     match path {
         "/cli/thread/post" => handle_post(&params, session_author),
         "/cli/thread/ask" => handle_ask(&params),
@@ -981,6 +1041,17 @@ pub fn dispatch_post_as(
         "/cli/thread/answer" => handle_answer(&params),
         "/cli/thread/void" => handle_void(&params),
         _ => CliResponse::not_found(),
+    }
+}
+
+fn restore_param(params: &mut HashMap<String, String>, key: &str, captured: Option<String>) {
+    match captured {
+        Some(value) => {
+            params.insert(key.to_string(), value);
+        }
+        None => {
+            params.remove(key);
+        }
     }
 }
 
@@ -2285,6 +2356,589 @@ mod tests {
         assert!(
             set_body.get("value").is_none(),
             "must not echo value: {set_body}"
+        );
+    }
+
+    fn stamp_canonical(project_id: &str) -> HashMap<String, String> {
+        let principal = HookPrincipal {
+            workspace_uuid: project_id.to_string(),
+            agent_address: project_id.to_string(),
+        };
+        let mut params = HashMap::new();
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        params
+    }
+
+    /// `cell_session_id` is set before the stamp, matching the cell and HTTP arms.
+    fn stamp_sidecar(project_id: &str, cell_session_id: &str) -> HashMap<String, String> {
+        let principal = HookPrincipal {
+            workspace_uuid: project_id.to_string(),
+            agent_address: project_id.to_string(),
+        };
+        let mut params = HashMap::new();
+        params.insert("cell_session_id".to_string(), cell_session_id.to_string());
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        params
+    }
+
+    fn post_as_owner(params: &HashMap<String, String>, body: serde_json::Value) -> CliResponse {
+        dispatch_post_as(
+            "/cli/thread/post",
+            params,
+            body.to_string().as_bytes(),
+            "owner",
+        )
+    }
+
+    fn stored_text(addr: &str, body: &str) -> (String, String) {
+        let get = dispatch("/cli/thread", &params_of(&[("addr", addr)])).expect("GET thread");
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+        let snap = json_body(&get);
+        let items = snap["items"].as_array().expect("items");
+        let item = items
+            .iter()
+            .find(|i| i["doc"]["body"] == body)
+            .unwrap_or_else(|| panic!("missing stored body {body}: {snap}"));
+        (
+            item["doc"]["from"]
+                .as_str()
+                .expect("stored from")
+                .to_string(),
+            item["doc"]["via"].as_str().expect("stored via").to_string(),
+        )
+    }
+
+    #[test]
+    fn stamped_post_keeps_handle_when_body_says_owner() {
+        let handle = format!("ovlstamp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("ovlother{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let (other_id, _) = seed(&other);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        pin(&other_id, &uuid::Uuid::new_v4().to_string());
+        let params = stamp_canonical(&project_id);
+        let stamped = params.get("from").expect("stamp from").clone();
+        assert_eq!(stamped, handle, "canonical stamp is the workspace handle");
+        assert!(
+            !stamped.contains('/'),
+            "canonical stamp must not be a sidecar: {stamped}"
+        );
+        assert_eq!(
+            params.get("project_id").expect("stamp project_id").as_str(),
+            project_id,
+        );
+
+        let text = format!("stamp-owner-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "from": "owner",
+                "principal_bound": 0,
+                "project_id": other_id,
+            }),
+        );
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["from"].as_str().expect("json from"), handle, "{posted}");
+        assert_eq!(posted["via"].as_str().expect("json via"), "thread", "{posted}");
+        assert_ne!(posted["from"], "owner");
+        let (stored_from, stored_via) = stored_text(&handle, &text);
+        assert_eq!(stored_from, handle);
+        assert_eq!(stored_via, "thread");
+
+        let explicit = format!("explicit-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let kept = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": explicit,
+                "from": "billing-bot",
+            }),
+        );
+        assert_eq!(kept.status, "200 OK", "{}", kept.body);
+        let kept_body = json_body(&kept);
+        assert_eq!(
+            kept_body["from"].as_str().expect("json from"),
+            handle,
+            "body from must not replace the stamp: {kept_body}"
+        );
+        assert_ne!(kept_body["from"], "billing-bot");
+
+        let slashed = format!("slash-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let allowed = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": slashed,
+                "from": format!("{handle}/spoof"),
+            }),
+        );
+        assert_eq!(
+            allowed.status, "200 OK",
+            "canonical stamp with no slash must not be treated as a sidecar: {}",
+            allowed.body
+        );
+        let allowed_body = json_body(&allowed);
+        assert_eq!(
+            allowed_body["from"].as_str().expect("json from"),
+            handle,
+            "{allowed_body}"
+        );
+        assert!(
+            !allowed_body["from"].as_str().expect("from").contains('/'),
+            "{allowed_body}"
+        );
+
+        let denied = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": other,
+                "text": "cross",
+                "from": "owner",
+                "project_id": other_id,
+            }),
+        );
+        assert_eq!(
+            denied.status, "403 Forbidden",
+            "body project_id must not replace the stamp: {}",
+            denied.body
+        );
+        assert!(
+            denied.body.contains("another workspace"),
+            "cross-workspace write must stay refused: {}",
+            denied.body
+        );
+    }
+
+    #[test]
+    fn sidecar_stamp_forbids_canonical_when_body_from_is_bare_handle() {
+        let handle = format!("ovlside{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let pinned = uuid::Uuid::new_v4().to_string();
+        let reviewer = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &pinned);
+        sidecar(&project_id, &reviewer, "reviewer");
+        let params = stamp_sidecar(&project_id, &reviewer);
+        let stamped = params.get("from").expect("sidecar stamp from").clone();
+        assert_eq!(
+            stamped,
+            format!("{handle}/reviewer"),
+            "stamp_principal must write workspace/handle, not a hand-built slash: {stamped}"
+        );
+        assert!(stamped.contains('/'), "{stamped}");
+        assert!(!handle.contains('/'));
+        assert_ne!(handle, stamped);
+
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": "bare-sidecar",
+                "from": handle,
+            }),
+        );
+        assert_eq!(
+            post.status, "403 Forbidden",
+            "sidecar stamp must forbid the canonical room when body from drops the slash: {}",
+            post.body
+        );
+        assert!(
+            post.body.contains("canonical-only"),
+            "must be the sidecar write gate: {}",
+            post.body
+        );
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET");
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+        let snap = json_body(&get);
+        let items = snap["items"].as_array().expect("items");
+        assert!(
+            items.iter().all(|i| i["doc"]["body"] != "bare-sidecar"),
+            "forbidden write must not store: {snap}"
+        );
+    }
+
+    #[test]
+    fn owner_token_owner_shaped_from_stores_room_handle() {
+        let handle = format!("ovlown{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("ovlpeer{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let (_, _) = seed(&other);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let owner_name = workspace_msg::resolve_owner_from();
+        assert!(!handle.eq_ignore_ascii_case("owner"));
+        assert!(!handle.eq_ignore_ascii_case("k2"));
+        assert!(!handle.eq_ignore_ascii_case(&owner_name));
+        assert!(!other.eq_ignore_ascii_case("owner"));
+        assert!(!other.eq_ignore_ascii_case("k2"));
+        assert!(!other.eq_ignore_ascii_case(&owner_name));
+        assert_ne!(other, handle);
+
+        let shaped = [
+            "owner".to_string(),
+            " owner".to_string(),
+            "owner\n".to_string(),
+            format!(" {}\n", owner_name.to_ascii_uppercase()),
+        ];
+        for from in shaped {
+            let text = format!("shaped-{}-{}", from.len(), uuid::Uuid::new_v4());
+            let post = dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": text,
+                    "from": from,
+                })
+                .to_string()
+                .as_bytes(),
+            );
+            assert_eq!(post.status, "200 OK", "from {from:?}: {}", post.body);
+            let posted = json_body(&post);
+            assert_eq!(
+                posted["from"].as_str().expect("json from"),
+                handle,
+                "owner-shaped from {from:?} must store the room handle: {posted}"
+            );
+            assert_ne!(posted["from"], "owner");
+            assert_eq!(posted["via"].as_str().expect("via"), "thread");
+            let (stored_from, stored_via) = stored_text(&handle, &text);
+            assert_eq!(stored_from, handle, "stored from for {from:?}");
+            assert_eq!(stored_via, "thread");
+        }
+
+        let text = format!("peer-{}", uuid::Uuid::new_v4());
+        let post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "from": format!(" {other} "),
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(
+            posted["from"].as_str().expect("json from"),
+            other,
+            "explicit non-owner handle is stored trimmed, not rewritten: {posted}"
+        );
+        let (stored_from, _) = stored_text(&handle, &text);
+        assert_eq!(stored_from, other);
+    }
+
+    #[test]
+    fn compose_without_principal_ignores_body_from() {
+        let handle = format!("ovlcmp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let author = workspace_msg::resolve_owner_from();
+        let text = format!("compose-ignore-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "via": "compose",
+                "from": " owner",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(
+            posted["from"].as_str().expect("json from"),
+            author.as_str(),
+            "via=compose must use compose_from_for_session, not body from: {posted}"
+        );
+        assert_eq!(posted["via"].as_str().expect("via"), "compose");
+        assert_ne!(posted["from"], " owner");
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id)
+            .expect("compose history");
+        assert!(
+            hist.iter().any(|e| e.body == text),
+            "no-principal compose must still record history: {hist:?}"
+        );
+        let want = format_thread_compose_pty_line(&author, &handle, &text);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "no-principal compose must still inject; want {want:?} got {injects:?}"
+        );
+    }
+
+    #[test]
+    fn bound_principal_via_compose_stores_thread_not_human() {
+        let handle = format!("ovlbnd{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let params = stamp_canonical(&project_id);
+        let stamped = params.get("from").expect("stamp from").clone();
+        assert_eq!(stamped, handle);
+        let text = format!("bound-compose-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "from": "owner",
+                "via": "compose",
+            }),
+        );
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["from"].as_str().expect("json from"), stamped, "{posted}");
+        assert_eq!(posted["via"].as_str().expect("json via"), "thread", "{posted}");
+        assert_ne!(posted["via"], "compose");
+        let (stored_from, stored_via) = stored_text(&handle, &text);
+        assert_eq!(stored_from, stamped);
+        assert_eq!(stored_via, "thread");
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id)
+            .expect("compose history");
+        assert!(
+            hist.iter().all(|e| e.body != text),
+            "bound principal must not record compose history: {hist:?}"
+        );
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().all(|l| !l.contains(&text)),
+            "bound principal must not inject a human compose line: {injects:?}"
+        );
+    }
+
+    #[test]
+    fn bound_stamp_owner_is_not_rewritten_to_room_handle() {
+        let handle = format!("ovlraw{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        assert_ne!(handle, "owner");
+        let mut params = HashMap::new();
+        params.insert(
+            crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(),
+            "1".to_string(),
+        );
+        params.insert("project_id".to_string(), project_id.clone());
+        params.insert("from".to_string(), "owner".to_string());
+        let text = format!("raw-owner-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "from": "billing-bot",
+                "via": "compose",
+            }),
+        );
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(
+            posted["from"].as_str().expect("json from"),
+            "owner",
+            "stamp string owner must win over the room handle and body from: {posted}"
+        );
+        assert_ne!(posted["from"], handle);
+        assert_eq!(posted["via"].as_str().expect("via"), "thread");
+        let (stored_from, stored_via) = stored_text(&handle, &text);
+        assert_eq!(stored_from, "owner");
+        assert_eq!(stored_via, "thread");
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id)
+            .expect("compose history");
+        assert!(
+            hist.iter().all(|e| e.body != text),
+            "owner-string stamp must not take the human path: {hist:?}"
+        );
+    }
+
+    #[test]
+    fn forged_principal_bound_does_not_keep_from_owner() {
+        let handle = format!("ovlforge{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        for (label, flag) in [
+            ("number", serde_json::json!(1)),
+            ("bool", serde_json::json!(true)),
+            ("string", serde_json::json!("1")),
+        ] {
+            let text = format!("forged-{label}-{}", uuid::Uuid::new_v4());
+            let post = dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": text,
+                    "from": "owner",
+                    "principal_bound": flag,
+                })
+                .to_string()
+                .as_bytes(),
+            );
+            assert_eq!(post.status, "200 OK", "{label}: {}", post.body);
+            let posted = json_body(&post);
+            assert_eq!(
+                posted["from"].as_str().expect("json from"),
+                handle,
+                "forged principal_bound ({label}) must not keep from=owner: {posted}"
+            );
+            assert_ne!(posted["from"], "owner");
+            let (stored_from, _) = stored_text(&handle, &text);
+            assert_eq!(stored_from, handle, "{label}");
+        }
+    }
+
+    #[test]
+    fn ask_and_secret_follow_from_rules_and_echo_from() {
+        let handle = format!("ovlcard{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("ovlcardp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let (_, _) = seed(&other);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let params = stamp_canonical(&project_id);
+        let stamped = params.get("from").expect("stamp from").clone();
+        assert_eq!(stamped, handle);
+        assert!(!other.eq_ignore_ascii_case("owner"));
+        assert!(!other.eq_ignore_ascii_case("k2"));
+        assert!(!other.eq_ignore_ascii_case(&workspace_msg::resolve_owner_from()));
+
+        let ask_stamp = dispatch_post_as(
+            "/cli/thread/ask",
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Stamp ask?",
+                "options": "Go,Stop",
+                "from": "owner",
+            })
+            .to_string()
+            .as_bytes(),
+            "owner",
+        );
+        assert_eq!(ask_stamp.status, "200 OK", "{}", ask_stamp.body);
+        let ask_stamp_body = json_body(&ask_stamp);
+        assert_eq!(
+            ask_stamp_body["from"].as_str().expect("ask json from"),
+            stamped,
+            "{ask_stamp_body}"
+        );
+        let ask_id = ask_stamp_body["id"].as_str().expect("ask id");
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET");
+        let snap = json_body(&get);
+        let ask_item = snap["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["id"] == ask_id)
+            .expect("ask item");
+        assert_eq!(ask_item["doc"]["from"], stamped);
+
+        let secret_name = format!("TOK_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let secret_stamp = dispatch_post_as(
+            "/cli/thread/secret",
+            &params,
+            serde_json::json!({
+                "addr": handle,
+                "name": secret_name,
+                "prompt": "Stamp secret",
+                "from": " owner",
+            })
+            .to_string()
+            .as_bytes(),
+            "owner",
+        );
+        assert_eq!(secret_stamp.status, "200 OK", "{}", secret_stamp.body);
+        let secret_stamp_body = json_body(&secret_stamp);
+        assert_eq!(
+            secret_stamp_body["from"].as_str().expect("secret json from"),
+            stamped,
+            "{secret_stamp_body}"
+        );
+
+        let ask_owner = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Owner ask?",
+                "options": "Go,Stop",
+                "from": "owner\n",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask_owner.status, "200 OK", "{}", ask_owner.body);
+        let ask_owner_body = json_body(&ask_owner);
+        assert_eq!(
+            ask_owner_body["from"].as_str().expect("ask json from"),
+            handle,
+            "unbound ask owner-shaped from must be the room handle: {ask_owner_body}"
+        );
+        assert_ne!(ask_owner_body["from"], "owner");
+
+        let ask_peer = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Peer ask?",
+                "options": "Go,Stop",
+                "from": other,
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask_peer.status, "200 OK", "{}", ask_peer.body);
+        let ask_peer_body = json_body(&ask_peer);
+        assert_eq!(
+            ask_peer_body["from"].as_str().expect("ask json from"),
+            other,
+            "{ask_peer_body}"
+        );
+
+        let secret_owner_name = format!("OWN_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let secret_owner = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "name": secret_owner_name,
+                "prompt": "Owner secret",
+                "from": " owner",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(secret_owner.status, "200 OK", "{}", secret_owner.body);
+        let secret_owner_body = json_body(&secret_owner);
+        assert_eq!(
+            secret_owner_body["from"].as_str().expect("secret json from"),
+            handle,
+            "{secret_owner_body}"
+        );
+
+        let secret_peer_name = format!("PEER_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let secret_peer = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "name": secret_peer_name,
+                "prompt": "Peer secret",
+                "from": format!(" {other} "),
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(secret_peer.status, "200 OK", "{}", secret_peer.body);
+        let secret_peer_body = json_body(&secret_peer);
+        assert_eq!(
+            secret_peer_body["from"].as_str().expect("secret json from"),
+            other,
+            "explicit secret from is the trimmed handle: {secret_peer_body}"
         );
     }
 }

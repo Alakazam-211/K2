@@ -8,12 +8,12 @@ import { showContextMenu } from '@/lib/context-menu'
 import { useFileTreeStore } from '@/stores/filetree'
 import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
+import { isRemoteScope, mayRunLocalActions } from '@/lib/local-only-actions'
 import { useToastStore } from '@/stores/toast'
 import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { useConnectHostStore } from '@/stores/connect-host'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { isWebClient } from '@/lib/is-web'
@@ -1061,9 +1061,10 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     //
     // On a remote K2 Connect host the local Mac watcher is wrong
     // (client FS ≠ daemon FS) — skip it; the daemon `fs_changed`
-    // session event below is the source of truth.
-    const isRemote = useConnectHostStore.getState().activeHost !== 'local'
-    if (!rootPath || rootPath === '~' || !rootPath.startsWith('/') || isRemote) {
+    // session event below is the source of truth. Home M4 (MS57): the
+    // ROOM's server decides, not the window's — a room on another server
+    // skips it, a room on this computer keeps it.
+    if (!rootPath || rootPath === '~' || !rootPath.startsWith('/') || !mayRunLocalActions(room)) {
       return
     }
     // Start watching the root path
@@ -1091,7 +1092,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       unlisten?.()
       invoke('fs_unwatch_dir', { path: rootPath }).catch((e) => console.warn('[file-tree]', e))
     }
-  }, [rootPath, applyFsPathBatch])
+  }, [rootPath, applyFsPathBatch, room])
 
   // ── Daemon multi-writer FS live refresh (APP-LEVEL fs_changed) ─────
   // Covers agent shell writes, other thin clients, and remote hosts —
@@ -1211,6 +1212,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const [internalDropTarget, setInternalDropTarget] = useState<string | null>(null)
 
   // ── Drag-out: in-window (terminal drop) + folder drop + Finder (OS handoff)
+  // TODO(M4-integrate): 'drag-out' is local-only (lib/local-only-actions.ts).
+  // In a room on another server, `beginFileDrag` must not hand the OS
+  // (Finder) that server's paths, and a drop into a room on a DIFFERENT
+  // server is refused (MS4/MS19): pass `room.scope.hostKey` into
+  // `beginFileDrag` and compare it with the drop target's room
+  // (`roomForElement`, stores/window-room.ts).
   const handleDragOutStart = useCallback((entry: FileEntry, e: React.MouseEvent) => {
     const startX = e.clientX
     const startY = e.clientY
@@ -1614,8 +1621,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // lands in ~/Downloads; hosted web triggers a browser download.
     // Skip only when desktop is on Local (file already on this Mac).
     // Hosted web is always same-origin remote — always offer Download.
-    const isRemote =
-      isWebClient() || useConnectHostStore.getState().activeHost !== 'local'
+    // Home M4: the ROOM's server decides (same as the window's for the
+    // primary room).
+    // TODO(M4-integrate): `lib/fs-transfer` (download, compress, extract)
+    // still runs on `primaryScope()`; it must take `room.scope` before a
+    // room on another server offers Download / Compress / Extract.
+    const isRemote = isWebClient() || isRemoteScope(room.scope)
 
     const items = [
       ...(!isDir && isSingle
@@ -1655,7 +1666,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         : []),
       { id: 'delete', label: `Move to Trash${!isSingle ? ` (${paths.length})` : ''}` },
       { id: 'separator-util', label: '', type: 'separator' },
-      { id: 'open-finder', label: revealInFileManagerLabel() },
+      // MS57: `fs/open-finder` opens Finder on the daemon's machine — off
+      // in a room on another server.
+      ...(room.localCommands ? [{ id: 'open-finder', label: revealInFileManagerLabel() }] : []),
       { id: 'copy-path', label: 'Copy Path' }
     ]
 
@@ -1777,9 +1790,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const timeoutId = window.setTimeout(async () => {
       let matches: Array<{ path: string; name: string; isDirectory: boolean }>
       try {
-        matches = await invoke<Array<{ path: string; name: string; isDirectory: boolean }>>(
-          'fs_search_tree',
-          { root: rootPath, query: trimmed, showHidden: showHiddenFiles, maxResults: 500 }
+        // Home M4 (MS57): `fs_search_tree` was never a registered Tauri
+        // command, so this search always failed. The daemon route searches
+        // the ROOM's server — this computer for a local room, that server
+        // for a remote one.
+        matches = await daemonCliPost<Array<{ path: string; name: string; isDirectory: boolean }>>(
+          room.scope,
+          'fs/search-tree',
+          { root: rootPath, query: trimmed, show_hidden: showHiddenFiles, max_results: 500 },
         )
       } catch (err) {
         console.warn('[file-tree] search failed:', err)
@@ -1933,7 +1951,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     e.stopPropagation()
                     const items = [
                       { id: 'open', label: 'Open' },
-                      { id: 'open-finder', label: revealInFileManagerLabel() },
+                      ...(room.localCommands ? [{ id: 'open-finder', label: revealInFileManagerLabel() }] : []),
                       { id: 'copy-path', label: 'Copy Path' },
                     ]
                     const id = await showContextMenu(items)

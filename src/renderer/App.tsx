@@ -765,7 +765,12 @@ function AppRoot(): React.JSX.Element {
         })
       }).then(track)
       listen('menu:focus-window', () => {
-        const projectId = useProjectsStore.getState().activeProjectId
+        // Home M4 (MS57/MS67): the Focus window looks the project up on
+        // THIS computer's daemon. It acts on the focused room, and only
+        // when that room may run this computer's commands.
+        const room = focusedRoom()
+        if (!room || !room.localCommands) return
+        const projectId = room.activeProjectId()
         if (projectId) {
           import('@tauri-apps/api/core').then(({ invoke }) => {
             invoke('projects_open_focus_window', { projectId }).catch((e) => console.warn('[app]', e))

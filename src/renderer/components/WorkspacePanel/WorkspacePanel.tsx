@@ -78,6 +78,13 @@ export default function WorkspacePanel(): React.JSX.Element {
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint
       // (replaces the legacy `k2so_agents_workspace_inbox_list` whose
       // full-payload fetch was wasted bandwidth for a sidebar badge).
+      // MS67: `k2so_inbox_count` counts THIS computer's inbox.
+      // TODO(M4-integrate): in a room on another server, count with
+      // `daemonCliGet(room.scope, 'inbox/list', …)` instead of no badge.
+      if (!room.localCommands) {
+        if (!cancelled) setWsInboxCount(0)
+        return
+      }
       try {
         const count = await invoke<number>('k2so_inbox_count', { projectPath: activeProjectPath })
         if (!cancelled) setWsInboxCount(count)
@@ -86,7 +93,7 @@ export default function WorkspacePanel(): React.JSX.Element {
     load()
     const interval = setInterval(load, 30000) // 30s, not 15s — reduce IPC chatter
     return () => { cancelled = true; clearInterval(interval) }
-  }, [activeProjectId, activeProjectPath])
+  }, [activeProjectId, activeProjectPath, room])
 
   useEffect(() => {
     if (!activeProjectPath) {
@@ -105,15 +112,19 @@ export default function WorkspacePanel(): React.JSX.Element {
     }
     loadName()
     let unlisten: (() => void) | undefined
-    void listen('sync:projects', () => { loadName() }).then((fn) => {
-      if (cancelled) fn()
-      else unlisten = fn
-    })
+    // MS14/MS67: `sync:projects` is THIS computer's daemon; a room on
+    // another server never hears it.
+    if (room.localCommands) {
+      void listen('sync:projects', () => { loadName() }).then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+    }
     return () => {
       cancelled = true
       unlisten?.()
     }
-  }, [activeProjectPath])
+  }, [activeProjectPath, room])
 
   const agentMode = activeProject?.agentMode || 'off'
   const workspaces = activeProject?.workspaces ?? []
@@ -350,7 +361,7 @@ function WorktreeRow({
 
     const menuItems = [
       { id: 'open', label: 'Open' },
-      { id: 'open-finder', label: 'Show in Finder' },
+      ...(room.localCommands ? [{ id: 'open-finder', label: 'Show in Finder' }] : []),
       { id: 'separator-1', label: '', type: 'separator' },
       { id: 'close', label: 'Close Worktree' },
       { id: 'recycle', label: 'Recycle Worktree' },

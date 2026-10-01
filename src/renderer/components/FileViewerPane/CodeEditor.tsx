@@ -752,6 +752,10 @@ interface CodeEditorProps {
   initialCursorPos?: number
   /** Called when the editor is about to unmount, with current scroll/cursor state. */
   onPersistState?: (state: { scrollTop: number; cursorPos: number }) => void
+  /** Home M4 (MS57/MS67): may format-on-save run this computer's formatter
+   *  (`format_file`)? A room on another server passes false: its path is
+   *  that server's, not this computer's. Omitted = true (window surfaces). */
+  localFormat?: boolean
 }
 
 // ── Compartments for live-reconfigurable settings ───────────────────
@@ -1172,7 +1176,9 @@ const stickyScrollPlugin = ViewPlugin.fromClass(
   }
 )
 
-export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState }: CodeEditorProps): React.JSX.Element {
+export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState, localFormat = true }: CodeEditorProps): React.JSX.Element {
+  const localFormatRef = useRef(localFormat)
+  localFormatRef.current = localFormat
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onSaveRef = useRef(onSave)
@@ -1211,7 +1217,7 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
         const content = view.state.doc.toString()
         onSaveRef.current(content)
         // Format on save: run formatter then reload file content
-        if (useSettingsStore.getState().editor.formatOnSave) {
+        if (useSettingsStore.getState().editor.formatOnSave && localFormatRef.current) {
           invoke('format_file', { filePath }).then(() => {
             // Re-read the formatted file — the parent will poll and update
             // but we can also trigger an immediate onChange to refresh

@@ -7,6 +7,7 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { commandBaseName } from '@/lib/editor-agent-args'
 import { primaryScope } from '@/kessel/server-scope'
+import { isRemoteScope } from '@/lib/local-only-actions'
 
 // ── Session file helpers ────────────────────────────────────────────
 
@@ -305,18 +306,24 @@ export function AIFileEditor({
       await Promise.all(watchedPaths.map(readOne))
     }
 
-    invoke('fs_watch_dir', { path: watchDir }).catch((err) => {
-      console.warn('[ai-editor] Failed to start watcher:', err)
-    })
+    // Home M4 (MS57): this computer's watcher only helps when the file is
+    // on this computer. On a remote window the path is that server's, so
+    // skip it; the 2 s daemon poll below reads the right file.
+    const localWatch = !isRemoteScope(primaryScope())
+    if (localWatch) {
+      invoke('fs_watch_dir', { path: watchDir }).catch((err) => {
+        console.warn('[ai-editor] Failed to start watcher:', err)
+      })
 
-    // Accept either single-event (pre-0.32.13) or batched-array payloads.
-    // This editor just debounces a reload on any change, so we don't need
-    // to inspect the batch contents — just knowing "something changed"
-    // is enough.
-    listen<Array<{ path: string; kind: string }> | { path: string; kind: string }>('fs://change', () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(findAndRead, 300)
-    }).then((fn) => { unlisten = fn })
+      // Accept either single-event (pre-0.32.13) or batched-array payloads.
+      // This editor just debounces a reload on any change, so we don't need
+      // to inspect the batch contents — just knowing "something changed"
+      // is enough.
+      listen<Array<{ path: string; kind: string }> | { path: string; kind: string }>('fs://change', () => {
+        if (debounceRef.current) clearTimeout(debounceRef.current)
+        debounceRef.current = setTimeout(findAndRead, 300)
+      }).then((fn) => { unlisten = fn })
+    }
 
     const pollInterval = setInterval(findAndRead, 2000)
 
@@ -324,7 +331,7 @@ export function AIFileEditor({
       unlisten?.()
       clearInterval(pollInterval)
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      invoke('fs_unwatch_dir', { path: watchDir }).catch((e) => console.warn('[ai-editor]', e))
+      if (localWatch) invoke('fs_unwatch_dir', { path: watchDir }).catch((e) => console.warn('[ai-editor]', e))
     }
   }, [watchDir, watchedKey, fileExtension, trackFileRename, onFileChange, filePath, watchedPaths])
 

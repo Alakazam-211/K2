@@ -143,6 +143,14 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
       setTaskLoaded(true)
       return () => { cancelled = true }
     }
+    // Home M4 (MS57/MS67): `read_worktree_file` reads THIS computer's disk.
+    // TODO(M4-integrate): in a room on another server, read it with
+    // `daemonCliGet(room.scope, 'fs/read-file', { path })` instead of
+    // leaving the tab empty.
+    if (!room.localCommands) {
+      setTaskLoaded(true)
+      return () => { cancelled = true }
+    }
     invoke<string>('read_worktree_file', {
       worktreePath,
       relativePath: 'CLAUDE.md',
@@ -176,6 +184,11 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
     setReviewLoaded(false)
     setReviewItem(null)
     if (!projectPath || !branch) {
+      setReviewLoaded(true)
+      return () => { cancelled = true }
+    }
+    // MS67: this computer's review queue — off in a room on another server.
+    if (!room.localCommands) {
       setReviewLoaded(true)
       return () => { cancelled = true }
     }
@@ -438,7 +451,10 @@ function WorktreeChatTerminal({
           return
         }
       } catch { /* fall through */ }
-      try {
+      // MS67: `k2so_agents_build_launch` builds on THIS computer; a room on
+      // another server falls through to the plain launch below.
+      // TODO(M4-integrate): build it on that server once a `/cli` route exists.
+      if (room.localCommands) try {
         const result = await invoke<{
           command: string
           args: string[]

@@ -2763,3 +2763,140 @@ async fn publish_run_skin_gateway_password_reset_and_change() {
         let _ = std::fs::remove_dir_all(&path);
     });
 }
+
+/// Gateway login through the helper; returns the `Cookie:` header line.
+fn gateway_login_cookie(gport: u16, username: &str, password: &str) -> String {
+    let login = http(
+        gport,
+        "POST",
+        "/login",
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    );
+    assert_eq!(login.status, 200, "gateway login; {}", login.body);
+    let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+    let sid = cookie_k2_skin_ui(&set_cookie).expect("opaque id");
+    format!("Cookie: k2_skin_ui={sid}")
+}
+
+/// GA3/GA4 (prd-gateway-activity-socket-workspace-v1): the helper forwards
+/// `/cli/activity/events?workspace=` to the daemon. Before the fix it wrote
+/// `400 missing conversation query parameter` itself and never dialled up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_activity_ws_per_room() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_anna_id, _anna_conv, anna_path) = seed_files_workspace(&anna);
+        let (_docs_id, _docs_conv, docs_path) = seed_files_workspace(&docs);
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+        let created = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"watcher"}"#),
+        );
+        assert_eq!(created.status, 200, "role create; {}", created.body);
+        for (handle, caps) in [
+            (&anna, r#"["thread:read","thread:post"]"#),
+            (&docs, r#"["thread:read","thread:post","activity:read"]"#),
+        ] {
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+                Some(&format!(
+                    r#"{{"name":"watcher","handle":"{handle}","caps":{caps}}}"#
+                )),
+            );
+            assert_eq!(r.status, 200, "room {handle}; {}", r.body);
+        }
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"watcher"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+        let cookie = gateway_login_cookie(gport, "bob", "s3cret-horse");
+
+        // GA3: the regression. Exactly 101.
+        let docs_ws = ws_upgrade(
+            gport,
+            &format!("/cli/activity/events?workspace={docs}"),
+            &cookie,
+        );
+        assert_eq!(docs_ws.status, 101, "activity WS docs; {}", docs_ws.body);
+
+        // GA4: the refusals stay.
+        let anna_ws = ws_upgrade(
+            gport,
+            &format!("/cli/activity/events?workspace={anna}"),
+            &cookie,
+        );
+        assert_eq!(anna_ws.status, 403, "activity WS anna; {}", anna_ws.body);
+        assert!(
+            anna_ws.body.contains("activity:read"),
+            "anna must name activity:read: {}",
+            anna_ws.body
+        );
+
+        let wrong = ws_upgrade(
+            gport,
+            "/cli/activity/events?workspace=not-a-handle",
+            &cookie,
+        );
+        assert_eq!(wrong.status, 403, "wrong room; {}", wrong.body);
+        assert!(wrong.body.contains("skin_room"), "{}", wrong.body);
+
+        let missing = ws_upgrade(gport, "/cli/activity/events", &cookie);
+        assert_eq!(missing.status, 400, "no workspace; {}", missing.body);
+        assert!(
+            missing.body.contains("missing workspace query parameter"),
+            "{}",
+            missing.body
+        );
+        assert!(
+            !missing.body.contains("conversation"),
+            "must not ask for conversation: {}",
+            missing.body
+        );
+
+        let empty = ws_upgrade(gport, "/cli/activity/events?workspace=", &cookie);
+        assert_eq!(empty.status, 400, "empty workspace; {}", empty.body);
+        let prefixed = ws_upgrade(
+            gport,
+            &format!("/cli/activity/events?xworkspace={docs}"),
+            &cookie,
+        );
+        assert_eq!(prefixed.status, 400, "xworkspace; {}", prefixed.body);
+
+        let sub = ws_upgrade(
+            gport,
+            &format!("/cli/activity/events/foo?workspace={docs}"),
+            &cookie,
+        );
+        assert_eq!(sub.status, 403, "sub path; {}", sub.body);
+        assert!(sub.body.contains("not allowed"), "{}", sub.body);
+
+        let sessions_ev = ws_upgrade(gport, "/cli/sessions/events", &cookie);
+        assert_eq!(sessions_ev.status, 403, "sessions; {}", sessions_ev.body);
+        assert!(
+            sessions_ev.body.contains("not allowed"),
+            "{}",
+            sessions_ev.body
+        );
+
+        stop_skin(dport, &anna_path);
+        let _ = std::fs::remove_dir_all(&anna_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
+    });
+}

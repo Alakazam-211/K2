@@ -283,11 +283,30 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
     )
 }
 
+/// The one table of sockets the helper forwards, and the query parameter
+/// each one must carry. A socket cannot be allowlisted without naming its
+/// parameter (GA1). `/cli/activity/events` was once allowlisted without it,
+/// so the helper asked it for `conversation=` and refused every app.
+pub fn ws_required_param(path: &str) -> Option<&'static str> {
+    match path_only(path) {
+        "/cli/overlay/events" => Some("conversation"),
+        "/cli/fs/events" | "/cli/activity/events" => Some("workspace"),
+        _ => None,
+    }
+}
+
 pub fn allowlisted_ws(path: &str) -> bool {
-    matches!(
-        path_only(path),
-        "/cli/overlay/events" | "/cli/fs/events" | "/cli/activity/events"
-    )
+    ws_required_param(path).is_some()
+}
+
+/// GA2: true when some `&`-separated pair has exactly `key` and a non-empty
+/// value. `xworkspace=a` and `workspace=` do not count. The daemon still
+/// validates the value.
+fn query_has_param(query: &str, key: &str) -> bool {
+    query.split('&').any(|pair| match pair.split_once('=') {
+        Some((k, v)) => k == key && !v.is_empty(),
+        None => false,
+    })
 }
 
 pub fn is_static_path(path: &str) -> bool {
@@ -1024,23 +1043,13 @@ async fn proxy_upgrade(
         None => (target, ""),
     };
     let query = strip_token_query(query);
-    if path == "/cli/fs/events" {
-        if !query.contains("workspace=") {
-            write_json(
-                client,
-                "400 Bad Request",
-                r#"{"error":"missing workspace query parameter"}"#,
-            )
-            .await;
-            return;
-        }
-    } else if !query.contains("conversation=") {
-        write_json(
-            client,
-            "400 Bad Request",
-            r#"{"error":"missing conversation query parameter"}"#,
-        )
-        .await;
+    let Some(param) = ws_required_param(path) else {
+        write_json(client, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
+        return;
+    };
+    if !query_has_param(&query, param) {
+        let body = format!(r#"{{"error":"missing {param} query parameter"}}"#);
+        write_json(client, "400 Bad Request", &body).await;
         return;
     }
     let target = if query.is_empty() {
@@ -1339,6 +1348,52 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/sessions/events"));
         assert!(!allowlisted_http("GET", "/cli/awareness/subscribe"));
         assert!(!allowlisted_http("GET", "/cli/ops/stream"));
+    }
+
+    #[test]
+    fn ws_required_param_names_each_socket_ga1() {
+        assert_eq!(
+            ws_required_param("/cli/overlay/events"),
+            Some("conversation")
+        );
+        assert_eq!(ws_required_param("/cli/fs/events"), Some("workspace"));
+        assert_eq!(
+            ws_required_param("/cli/activity/events?workspace=sales"),
+            Some("workspace")
+        );
+        assert_eq!(ws_required_param("/cli/activity/events"), Some("workspace"));
+        assert_eq!(ws_required_param("/cli/sessions/events"), None);
+        assert_eq!(ws_required_param("/cli/activity/events/foo"), None);
+        assert_eq!(ws_required_param("/cli/awareness/subscribe"), None);
+        for p in [
+            "/cli/overlay/events",
+            "/cli/fs/events",
+            "/cli/activity/events",
+            "/cli/sessions/events",
+            "/cli/activity/events/foo",
+            "/cli/awareness/subscribe",
+            "/cli/ops/stream",
+            "/cli/grid",
+            "/events",
+        ] {
+            assert_eq!(
+                allowlisted_ws(p),
+                ws_required_param(p).is_some(),
+                "allowlisted_ws and ws_required_param disagree on {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_has_param_checks_the_key_not_a_substring_ga2() {
+        assert!(query_has_param("workspace=a", "workspace"));
+        assert!(query_has_param("x=1&workspace=a", "workspace"));
+        assert!(!query_has_param("xworkspace=a", "workspace"));
+        assert!(!query_has_param("workspace=", "workspace"));
+        assert!(!query_has_param("workspace", "workspace"));
+        assert!(!query_has_param("conversation=a", "workspace"));
+        assert!(!query_has_param("", "workspace"));
+        assert!(query_has_param("conversation=c1", "conversation"));
     }
 
     #[test]

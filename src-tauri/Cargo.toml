@@ -151,6 +151,15 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
 # `tao::platform::macos::set_event_fault_hook` (src/event_faults.rs).
 tao = "0.37"
 log = "0.4"
+# Traffic-light positioning + observers (commands/traffic_lights.rs): objc2
+# sends are `C-unwind`, so `objc2::exception::catch` can stop an ObjC
+# exception before it reaches an `extern "C"` IMP. Same lines tao uses.
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSGeometry",
+] }
 
 # Linux page history is webkit2gtk::WebView on the child tauri already
 # stores. Same pin as wry 0.57 (=2.0.2) so this is not a second webkit.

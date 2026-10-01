@@ -2,25 +2,147 @@
 //! styles (Glass/Bezel/spacious presets): when the chrome is inset from the
 //! window edge, the close/minimize/zoom buttons must move down-right with it.
 //!
-//! AppKit resets standard-button frames on resize/fullscreen transitions, so
-//! the renderer re-invokes this after style changes AND on window-resize
-//! events (see stores/style.ts). `extra_x`/`extra_y` are logical px offsets
-//! from the system default position; (0, 0) restores the default exactly
-//! (defaults are captured on first call, before any modification).
+//! AppKit resets standard-button frames whenever it re-lays out the title
+//! bar (resize, screen or backing-scale change, wake, appearance change,
+//! fullscreen, setTitle). Rust owns the re-apply: `ensure_observers` routes
+//! those notifications back to `position_ns`, once now and once on the next
+//! run-loop turn so ours lands after AppKit's layout pass. The renderer's
+//! resize / fullscreen / setTitle hooks (stores/style.ts) stay as a backup.
+//! `extra_x`/`extra_y` are logical px offsets from the system default
+//! position; (0, 0) at zoom 1 restores the default exactly (defaults are
+//! captured on first call, before any modification). The math is the pure
+//! [`geometry::place`].
 //!
 //! When `square` is set, the same call paints those three buttons as sharp
 //! squares (style id `square` only). Any other style restores the system
 //! cells so AppKit draws circles again. The square is centered in the
 //! button frame; frame size and origin gaps are not changed.
 
+/// Pure stoplight geometry. No AppKit, so it is unit-tested on every host.
+///
+/// Coordinates are AppKit's: y grows upward. The title-bar container's top
+/// is pinned to the window top, and the button y is measured from the
+/// container's bottom edge.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) mod geometry {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Rect {
+        pub x: f64,
+        pub y: f64,
+        pub w: f64,
+        pub h: f64,
+    }
+
+    /// System geometry, captured once before K2 moves anything.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Defaults {
+        /// Close button origin x.
+        pub button_x: f64,
+        /// Close button origin y inside the title-bar container.
+        pub button_y: f64,
+        /// Close button height.
+        pub button_h: f64,
+        /// Distance from one button's x to the next one's.
+        pub spacing: f64,
+        /// Title-bar container height.
+        pub titlebar_h: f64,
+    }
+
+    /// Title-bar container frame plus close / minimize / zoom frames.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Frames {
+        pub container: Rect,
+        pub buttons: [Rect; 3],
+    }
+
+    /// What the renderer asked for: logical px from the system position,
+    /// and the app zoom (`document.documentElement.style.zoom`, 1 = 100%).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Offset {
+        pub x: f64,
+        pub y: f64,
+        pub zoom: f64,
+    }
+
+    fn finite_or(v: f64, fallback: f64) -> f64 {
+        if v.is_finite() {
+            v
+        } else {
+            fallback
+        }
+    }
+
+    /// The zoom the renderer sent, or 1 when it is non-finite or <= 0.
+    pub fn sane_zoom(zoom: f64) -> f64 {
+        if zoom.is_finite() && zoom > 0.0 {
+            zoom
+        } else {
+            1.0
+        }
+    }
+
+    /// How far the title-bar container grows below its system height.
+    ///
+    /// At 100% this is `offset.y`. The renderer's top bar is centered on
+    /// the buttons there, so the button center sits `c0 + y` below the
+    /// window top, where `c0` is the system center. CSS zoom scales the DOM
+    /// top bar but not the native buttons, so at zoom `z` the bar center is
+    /// `z * (c0 + y)`; the container grows to put the button center there.
+    /// Never so little that the button top leaves the window (zoom < 1).
+    pub fn effective_y(d: Defaults, offset: Offset) -> f64 {
+        let y = finite_or(offset.y, 0.0);
+        let z = sane_zoom(offset.zoom);
+        if z == 1.0 {
+            return y;
+        }
+        let c0 = d.titlebar_h - d.button_y - d.button_h / 2.0;
+        let grown = z * (c0 + y) - c0;
+        let floor = d.button_y + d.button_h - d.titlebar_h;
+        grown.max(floor)
+    }
+
+    /// The single absolute placement. Every output comes from `d`, the
+    /// window height and `offset`; from `current` only the container's x and
+    /// width and each button's size are kept. Feeding the result back in as
+    /// `current` returns it unchanged, so a re-apply never accumulates.
+    pub fn place(d: Defaults, current: Frames, window_h: f64, offset: Offset) -> Frames {
+        let extra_y = effective_y(d, offset);
+        let extra_x = finite_or(offset.x, 0.0);
+        let container_h = d.titlebar_h + extra_y;
+        let container = Rect {
+            x: current.container.x,
+            y: window_h - container_h,
+            w: current.container.w,
+            h: container_h,
+        };
+        let mut buttons = current.buttons;
+        for (i, b) in buttons.iter_mut().enumerate() {
+            b.x = d.button_x + extra_x + (i as f64) * d.spacing;
+            b.y = d.button_y;
+        }
+        Frames { container, buttons }
+    }
+
+    /// Close-button center, measured down from the window top.
+    #[cfg(test)]
+    pub fn button_center_from_top(frames: Frames) -> f64 {
+        let b = frames.buttons[0];
+        frames.container.h - b.y - b.h / 2.0
+    }
+}
+
 #[cfg(target_os = "macos")]
 // cocoa/objc are deprecated in favor of objc2 but frozen as house deps for
 // now (see the objc2-migration note in Cargo.toml); same allow as
-// commands/permissions.rs.
+// commands/permissions.rs. The positioning path and the observer plumbing
+// send through objc2 (`C-unwind`), so an ObjC exception there reaches the
+// `guarded` catch instead of a no-unwind call site. The square-paint
+// helpers still use the `objc` crate; see `guarded`.
 #[allow(deprecated)]
 mod imp {
     use std::collections::HashMap;
     use std::ffi::{c_char, c_void, CStr};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::{Mutex, OnceLock};
 
     use cocoa::appkit::{NSWindow, NSWindowButton};
@@ -29,18 +151,15 @@ mod imp {
     use objc::declare::ClassDecl;
     use objc::runtime::{Class, Object, Sel};
     use objc::{class, msg_send, sel, sel_impl};
+    use objc2::runtime::{AnyClass, AnyObject};
 
-    #[derive(Clone, Copy)]
-    struct Defaults {
-        button_x: f64,
-        button_y: f64,
-        titlebar_h: f64,
-    }
+    use super::geometry::{self, Defaults, Frames, Offset, Rect};
 
     #[derive(Clone, Copy)]
     struct SavedInset {
         x: f64,
         y: f64,
+        zoom: f64,
         square: bool,
     }
 
@@ -98,44 +217,198 @@ mod imp {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    pub unsafe fn position(window: &tauri::Window, extra_x: f64, extra_y: f64, square: bool) {
+    // ── fault guard ──────────────────────────────────────────────────
+    // Same nesting as tao's `guard_send_event`
+    // (third_party/tao/src/platform_impl/macos/event_fault.rs):
+    // `catch_unwind` outside, `objc2::exception::catch` inside. An ObjC
+    // exception is caught before any Rust `catch_unwind` frame sees it; a
+    // Rust panic passes the ObjC catch and stops at `catch_unwind`. Nothing
+    // unwinds into an `extern "C"` IMP. A fault drops that one re-apply and
+    // writes one line to ~/.k2/client-event-faults.log.
+    //
+    // Limit: an ObjC exception raised inside an `objc`-crate `msg_send!`
+    // (plain `extern "C"`: the square-paint helpers) cannot unwind through
+    // that call site. The positioning path uses objc2 sends for that reason.
+    pub(super) fn guarded(source: &'static str, body: impl FnOnce()) {
+        guarded_with(source, body, crate::event_faults::record_line);
+    }
+
+    /// `guarded` with the reporter passed in. `report` gets one line per
+    /// fault and runs inside its own catch.
+    pub(super) fn guarded_with(
+        source: &'static str,
+        body: impl FnOnce(),
+        report: impl FnOnce(&str),
+    ) {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            objc2::exception::catch(AssertUnwindSafe(body))
+        }));
+        let detail = match outcome {
+            Ok(Ok(())) => return,
+            Ok(Err(exception)) => {
+                let detail = quietly(|| match exception.as_deref() {
+                    Some(e) => format!("objc-exception: {e:?}"),
+                    None => "objc-exception: nil".to_owned(),
+                });
+                quietly(move || drop(exception));
+                detail
+            }
+            Err(payload) => {
+                let detail = if let Some(s) = payload.downcast_ref::<&str>() {
+                    format!("panic: {s}")
+                } else if let Some(s) = payload.downcast_ref::<String>() {
+                    format!("panic: {s}")
+                } else {
+                    "panic: <non-string payload>".to_owned()
+                };
+                if let Err(again) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+                    std::mem::forget(again);
+                }
+                Some(detail)
+            }
+        };
+        let detail = detail.unwrap_or_else(|| "fault while describing the fault".to_owned());
+        quietly(|| report(&format!("traffic-lights {source} {detail}")));
+    }
+
+    /// Raise an `NSException` through an objc2 send.
+    #[cfg(test)]
+    pub(super) unsafe fn raise_for_test() {
+        let reason = ns_string(c"k2-traffic-light-test-exception");
+        let Some(exc) = cls(c"NSException") else {
+            panic!("NSException class missing");
+        };
+        let name = ns_string(c"NSRangeException");
+        let null: Obj = std::ptr::null_mut();
+        let e: Obj = objc2::msg_send![exc, exceptionWithName: name, reason: reason, userInfo: null];
+        let _: () = objc2::msg_send![e, raise];
+    }
+
+    /// Run `f` so that it can never unwind. `None` when it raised or panicked.
+    fn quietly<T>(f: impl FnOnce() -> T) -> Option<T> {
+        match catch_unwind(AssertUnwindSafe(|| {
+            objc2::exception::catch(AssertUnwindSafe(f))
+        })) {
+            Ok(Ok(v)) => Some(v),
+            Ok(Err(exception)) => {
+                std::mem::forget(exception);
+                None
+            }
+            Err(payload) => {
+                std::mem::forget(payload);
+                None
+            }
+        }
+    }
+
+    // ── objc2 sends for the positioning path ─────────────────────────
+    type Obj = *mut AnyObject;
+
+    fn o(x: id) -> Obj {
+        x as Obj
+    }
+
+    fn cls(name: &CStr) -> Option<&'static AnyClass> {
+        AnyClass::get(name)
+    }
+
+    unsafe fn frame_of(view: Obj) -> Rect {
+        let r: objc2_foundation::NSRect = objc2::msg_send![view, frame];
+        Rect {
+            x: r.origin.x,
+            y: r.origin.y,
+            w: r.size.width,
+            h: r.size.height,
+        }
+    }
+
+    unsafe fn set_frame(view: Obj, r: Rect) {
+        let ns = objc2_foundation::NSRect::new(
+            objc2_foundation::NSPoint::new(r.x, r.y),
+            objc2_foundation::NSSize::new(r.w, r.h),
+        );
+        let _: () = objc2::msg_send![view, setFrame: ns];
+    }
+
+    unsafe fn set_frame_origin(view: Obj, x: f64, y: f64) {
+        let p = objc2_foundation::NSPoint::new(x, y);
+        let _: () = objc2::msg_send![view, setFrameOrigin: p];
+    }
+
+    /// `NSWindowButton`: close 0, miniaturize 1, zoom 2.
+    unsafe fn std_button(window: Obj, kind: usize) -> Obj {
+        objc2::msg_send![window, standardWindowButton: kind]
+    }
+
+    unsafe fn superview(view: Obj) -> Obj {
+        objc2::msg_send![view, superview]
+    }
+
+    unsafe fn ns_string(s: &CStr) -> Obj {
+        let Some(c) = cls(c"NSString") else {
+            return std::ptr::null_mut();
+        };
+        objc2::msg_send![c, stringWithUTF8String: s.as_ptr()]
+    }
+
+    unsafe fn is_main_thread() -> bool {
+        let Some(c) = cls(c"NSThread") else {
+            return false;
+        };
+        objc2::msg_send![c, isMainThread]
+    }
+
+    pub unsafe fn position(
+        window: &tauri::Window,
+        extra_x: f64,
+        extra_y: f64,
+        zoom: f64,
+        square: bool,
+    ) {
         let Ok(handle) = window.ns_window() else {
             return;
         };
-        position_ns(handle as id, extra_x, extra_y, square);
+        position_ns(handle as id, extra_x, extra_y, zoom, square);
+        schedule_next_turn();
     }
 
-    unsafe fn position_ns(ns_window: id, extra_x: f64, extra_y: f64, square: bool) {
+    /// The one absolute positioning function. The renderer command, every
+    /// observer and the next-turn re-apply all go through here.
+    unsafe fn position_ns(ns_window: id, extra_x: f64, extra_y: f64, zoom: f64, square: bool) {
         if ns_window == nil {
             return;
         }
-        let close = ns_window.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
-        let mini = ns_window.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
-        let zoom = ns_window.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
-        if close == nil || mini == nil || zoom == nil {
+        let w = o(ns_window);
+        let close = std_button(w, 0);
+        let mini = std_button(w, 1);
+        let zoom_btn = std_button(w, 2);
+        if close.is_null() || mini.is_null() || zoom_btn.is_null() {
             return;
         }
 
-        let title_bar_container: id = {
-            let sv: id = msg_send![close, superview];
-            if sv == nil {
+        let title_bar_container: Obj = {
+            let sv = superview(close);
+            if sv.is_null() {
                 return;
             }
-            msg_send![sv, superview]
+            superview(sv)
         };
-        if title_bar_container == nil {
+        if title_bar_container.is_null() {
             return;
         }
 
         // System-default geometry, captured before the first modification so
         // (0, 0) can restore it byte-exactly when switching back to Square.
         let defaults = *DEFAULTS.get_or_init(|| {
-            let close_rect: NSRect = msg_send![close, frame];
-            let tb_rect: NSRect = msg_send![title_bar_container, frame];
+            let close_rect = frame_of(close);
+            let mini_rect = frame_of(mini);
+            let tb_rect = frame_of(title_bar_container);
             Defaults {
-                button_x: close_rect.origin.x,
-                button_y: close_rect.origin.y,
-                titlebar_h: tb_rect.size.height,
+                button_x: close_rect.x,
+                button_y: close_rect.y,
+                button_h: close_rect.h,
+                spacing: mini_rect.x - close_rect.x,
+                titlebar_h: tb_rect.h,
             }
         });
 
@@ -144,22 +417,20 @@ mod imp {
         // again; leaving AppKit's autoresize in place kept them at the first drop.
         // `extra_y` already includes the renderer's 3px nudge. Do not add it
         // to origin.y a second time.
-        let title_bar_h = defaults.titlebar_h + extra_y;
-        let win_frame: NSRect = msg_send![ns_window, frame];
-        let mut tb_rect: NSRect = msg_send![title_bar_container, frame];
-        tb_rect.size.height = title_bar_h;
-        tb_rect.origin.y = win_frame.size.height - title_bar_h;
-        let _: () = msg_send![title_bar_container, setFrame: tb_rect];
-
-        // Shift the three buttons right, preserving the system spacing.
-        let close_f: NSRect = msg_send![close, frame];
-        let mini_f: NSRect = msg_send![mini, frame];
-        let spacing = mini_f.origin.x - close_f.origin.x;
-        for (i, btn) in [close, mini, zoom].iter().enumerate() {
-            let mut r: NSRect = msg_send![*btn, frame];
-            r.origin.x = defaults.button_x + extra_x + (i as f64) * spacing;
-            r.origin.y = defaults.button_y;
-            let _: () = msg_send![*btn, setFrameOrigin: r.origin];
+        let window_h = frame_of(w).h;
+        let current = Frames {
+            container: frame_of(title_bar_container),
+            buttons: [frame_of(close), frame_of(mini), frame_of(zoom_btn)],
+        };
+        let offset = Offset {
+            x: extra_x,
+            y: extra_y,
+            zoom,
+        };
+        let next = geometry::place(defaults, current, window_h, offset);
+        set_frame(title_bar_container, next.container);
+        for (btn, r) in [close, mini, zoom_btn].into_iter().zip(next.buttons) {
+            set_frame_origin(btn, r.x, r.y);
         }
 
         insets().insert(
@@ -167,6 +438,7 @@ mod imp {
             SavedInset {
                 x: extra_x,
                 y: extra_y,
+                zoom,
                 square,
             },
         );
@@ -420,6 +692,10 @@ mod imp {
             };
             decl.add_method(sel!(k2OnNote:), on_note as extern "C" fn(&Object, Sel, id));
             decl.add_method(
+                sel!(k2ReapplyAll:),
+                on_reapply_all as extern "C" fn(&Object, Sel, id),
+            );
+            decl.add_method(
                 sel!(mouseEntered:),
                 mouse_hover as extern "C" fn(&Object, Sel, id),
             );
@@ -461,7 +737,11 @@ mod imp {
                 return nil;
             }
             let answers: BOOL = msg_send![orig, respondsToSelector: asked];
-            if answers == YES { orig } else { nil }
+            if answers == YES {
+                orig
+            } else {
+                nil
+            }
         }
     }
 
@@ -511,48 +791,206 @@ mod imp {
     }
 
     extern "C" fn mouse_hover(_this: &Object, _: Sel, event: id) {
-        let window: id = unsafe { msg_send![event, window] };
-        if window_has_square_paint(window) {
-            mark_buttons_dirty(window);
-        }
+        guarded("mouse_hover", || {
+            let window: id = unsafe { msg_send![event, window] };
+            if window_has_square_paint(window) {
+                mark_buttons_dirty(window);
+            }
+        });
+    }
+
+    /// What a notification asks the observer to do.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum NoteAction {
+        /// Forget the window's saved inset.
+        Forget,
+        /// Re-apply the window that posted it, now and next turn.
+        ReapplyWindow,
+        /// Re-apply, then repaint (key change also flips the square colors).
+        ReapplyWindowAndRepaint,
+        /// Repaint only: the title bar was not re-laid out.
+        RepaintWindow,
+        /// No window object: re-apply every K2 window, now and next turn.
+        ReapplyAll,
+        /// App active / inactive: repaint every square window.
+        RepaintAll,
+    }
+
+    /// Window notifications on the default center. `object: nil`, so they
+    /// fire for every K2 window (main, `window-*`, Focus) with no
+    /// per-window observer to remove on close.
+    pub(super) const WINDOW_NOTES: &[&CStr] = &[
+        c"NSWindowDidEnterFullScreenNotification",
+        c"NSWindowDidExitFullScreenNotification",
+        c"NSWindowDidResizeNotification",
+        c"NSWindowDidEndLiveResizeNotification",
+        c"NSWindowDidChangeScreenNotification",
+        c"NSWindowDidChangeBackingPropertiesNotification",
+        c"NSWindowDidDeminiaturizeNotification",
+        c"NSWindowDidBecomeKeyNotification",
+        c"NSWindowDidBecomeMainNotification",
+        c"NSWindowDidResignKeyNotification",
+        c"NSWindowWillCloseNotification",
+        c"NSApplicationDidBecomeActiveNotification",
+        c"NSApplicationDidResignActiveNotification",
+        c"NSApplicationDidChangeScreenParametersNotification",
+    ];
+    /// On `NSWorkspace.sharedWorkspace.notificationCenter`.
+    pub(super) const WORKSPACE_NOTES: &[&CStr] = &[
+        c"NSWorkspaceDidWakeNotification",
+        c"NSWorkspaceScreensDidWakeNotification",
+    ];
+    /// On `NSDistributedNotificationCenter`.
+    pub(super) const DISTRIBUTED_NOTES: &[&CStr] = &[c"AppleInterfaceThemeChangedNotification"];
+
+    pub(super) fn note_action(name: &str) -> Option<NoteAction> {
+        Some(match name {
+            "NSWindowWillCloseNotification" => NoteAction::Forget,
+            "NSWindowDidEnterFullScreenNotification"
+            | "NSWindowDidExitFullScreenNotification"
+            | "NSWindowDidResizeNotification"
+            | "NSWindowDidEndLiveResizeNotification"
+            | "NSWindowDidChangeScreenNotification"
+            | "NSWindowDidChangeBackingPropertiesNotification"
+            | "NSWindowDidDeminiaturizeNotification"
+            | "NSWindowDidBecomeMainNotification" => NoteAction::ReapplyWindow,
+            "NSWindowDidBecomeKeyNotification" => NoteAction::ReapplyWindowAndRepaint,
+            "NSWindowDidResignKeyNotification" => NoteAction::RepaintWindow,
+            "NSApplicationDidChangeScreenParametersNotification"
+            | "NSWorkspaceDidWakeNotification"
+            | "NSWorkspaceScreensDidWakeNotification"
+            | "AppleInterfaceThemeChangedNotification" => NoteAction::ReapplyAll,
+            "NSApplicationDidBecomeActiveNotification"
+            | "NSApplicationDidResignActiveNotification" => NoteAction::RepaintAll,
+            _ => return None,
+        })
     }
 
     extern "C" fn on_note(_this: &Object, _: Sel, note: id) {
-        let name: id = unsafe { msg_send![note, name] };
-        let obj: id = unsafe { msg_send![note, object] };
-        if ns_eq(name, "NSWindowWillCloseNotification") {
-            if obj != nil {
-                insets().remove(&(obj as usize));
+        guarded("on_note", || unsafe { handle_note(o(note)) });
+    }
+
+    extern "C" fn on_reapply_all(_this: &Object, _: Sel, _arg: id) {
+        guarded("next_turn", || unsafe { reapply_all() });
+    }
+
+    unsafe fn handle_note(note: Obj) {
+        if note.is_null() {
+            return;
+        }
+        let name: Obj = objc2::msg_send![note, name];
+        let obj: Obj = objc2::msg_send![note, object];
+        let Some(name) = utf8(name) else {
+            return;
+        };
+        let Some(action) = note_action(&name) else {
+            return;
+        };
+        // The workspace and distributed centers can post off the main
+        // thread. AppKit views are main-thread only: hop, do not touch.
+        if !is_main_thread() {
+            if matches!(action, NoteAction::Forget) {
+                // Never expected off-main; still nothing to touch.
+                return;
             }
-            return;
-        }
-        if ns_eq(name, "NSWindowDidEnterFullScreenNotification")
-            || ns_eq(name, "NSWindowDidExitFullScreenNotification")
-        {
-            reapply_window(obj);
-            return;
-        }
-        if ns_eq(name, "NSWindowDidBecomeKeyNotification")
-            || ns_eq(name, "NSWindowDidResignKeyNotification")
-        {
-            if window_has_square_paint(obj) {
-                mark_buttons_dirty(obj);
+            let owner = o(tracker());
+            if owner.is_null() {
+                return;
             }
+            let null: Obj = std::ptr::null_mut();
+            let _: () = objc2::msg_send![
+                owner,
+                performSelectorOnMainThread: objc2::sel!(k2ReapplyAll:),
+                withObject: null,
+                waitUntilDone: false
+            ];
             return;
         }
-        redraw_square_windows();
+        let window = obj as id;
+        match action {
+            NoteAction::Forget => {
+                if window != nil {
+                    insets().remove(&(window as usize));
+                }
+            }
+            NoteAction::ReapplyWindow => {
+                reapply_window(window);
+                schedule_next_turn();
+            }
+            NoteAction::ReapplyWindowAndRepaint => {
+                reapply_window(window);
+                if window_has_square_paint(window) {
+                    mark_buttons_dirty(window);
+                }
+                schedule_next_turn();
+            }
+            NoteAction::RepaintWindow => {
+                if window_has_square_paint(window) {
+                    mark_buttons_dirty(window);
+                }
+            }
+            NoteAction::ReapplyAll => {
+                reapply_all();
+                schedule_next_turn();
+            }
+            NoteAction::RepaintAll => redraw_square_windows(),
+        }
+    }
+
+    unsafe fn utf8(s: Obj) -> Option<String> {
+        if s.is_null() {
+            return None;
+        }
+        let ptr: *const c_char = objc2::msg_send![s, UTF8String];
+        if ptr.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
+    }
+
+    /// One more re-apply of every K2 window on the next run-loop turn, after
+    /// AppKit's own layout pass. Common modes, so it also runs during a live
+    /// resize (event-tracking mode). A burst coalesces into one.
+    unsafe fn schedule_next_turn() {
+        let owner = o(tracker());
+        let Some(nsobject) = cls(c"NSObject") else {
+            return;
+        };
+        let Some(nsarray) = cls(c"NSArray") else {
+            return;
+        };
+        if owner.is_null() {
+            return;
+        }
+        let null: Obj = std::ptr::null_mut();
+        let sel = objc2::sel!(k2ReapplyAll:);
+        let _: () = objc2::msg_send![
+            nsobject,
+            cancelPreviousPerformRequestsWithTarget: owner,
+            selector: sel,
+            object: null
+        ];
+        // NSRunLoopCommonModes == kCFRunLoopCommonModes.
+        let common = ns_string(c"kCFRunLoopCommonModes");
+        if common.is_null() {
+            return;
+        }
+        let modes: Obj = objc2::msg_send![nsarray, arrayWithObject: common];
+        if modes.is_null() {
+            return;
+        }
+        let _: () = objc2::msg_send![
+            owner,
+            performSelector: sel,
+            withObject: null,
+            afterDelay: 0.0f64,
+            inModes: modes
+        ];
     }
 
     extern "C" fn flags_invoke(_block: *mut BlockLiteral, event: id) -> id {
-        redraw_square_windows();
+        guarded("flags_changed", redraw_square_windows);
         event
-    }
-
-    fn ns_eq(s: id, expected: &str) -> bool {
-        if s == nil {
-            return false;
-        }
-        unsafe { NSString::isEqualToString(s, expected) }
     }
 
     fn reapply_window(window: id) {
@@ -561,7 +999,29 @@ mod imp {
         }
         let saved = insets().get(&(window as usize)).copied();
         if let Some(saved) = saved {
-            unsafe { position_ns(window, saved.x, saved.y, saved.square) };
+            unsafe { position_ns(window, saved.x, saved.y, saved.zoom, saved.square) };
+        }
+    }
+
+    /// Re-apply each open window that K2 has positioned. Walks
+    /// `NSApp.windows` rather than the saved keys, so a stale key can never
+    /// be messaged.
+    unsafe fn reapply_all() {
+        let Some(app_cls) = cls(c"NSApplication") else {
+            return;
+        };
+        let app: Obj = objc2::msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: Obj = objc2::msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = objc2::msg_send![windows, count];
+        for i in 0..count {
+            let window: Obj = objc2::msg_send![windows, objectAtIndex: i];
+            reapply_window(window as id);
         }
     }
 
@@ -605,27 +1065,58 @@ mod imp {
 
     fn ensure_observers() {
         static ONCE: OnceLock<()> = OnceLock::new();
+        // One app-lifetime observer object for every window and center, so a
+        // closing window leaves nothing registered behind it (WillClose only
+        // drops its saved inset).
         ONCE.get_or_init(|| unsafe {
-      let owner = tracker();
-      if owner == nil {
-        return;
-      }
-      let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
-      for name in [
-        "NSWindowDidEnterFullScreenNotification",
-        "NSWindowDidExitFullScreenNotification",
-        "NSWindowDidBecomeKeyNotification",
-        "NSWindowDidResignKeyNotification",
-        "NSWindowWillCloseNotification",
-        "NSApplicationDidBecomeActiveNotification",
-        "NSApplicationDidResignActiveNotification",
-      ] {
-        let nsname = NSString::alloc(nil).init_str(name);
-        let _: () = msg_send![center, addObserver: owner selector: sel!(k2OnNote:) name: nsname object: nil];
-        let _: () = msg_send![nsname, release];
-      }
-      install_flags_monitor();
-    });
+            let owner = o(tracker());
+            if owner.is_null() {
+                return;
+            }
+            let default_center: Obj = match cls(c"NSNotificationCenter") {
+                Some(c) => objc2::msg_send![c, defaultCenter],
+                None => std::ptr::null_mut(),
+            };
+            let workspace_center: Obj = match cls(c"NSWorkspace") {
+                Some(c) => {
+                    let ws: Obj = objc2::msg_send![c, sharedWorkspace];
+                    if ws.is_null() {
+                        std::ptr::null_mut()
+                    } else {
+                        objc2::msg_send![ws, notificationCenter]
+                    }
+                }
+                None => std::ptr::null_mut(),
+            };
+            let distributed_center: Obj = match cls(c"NSDistributedNotificationCenter") {
+                Some(c) => objc2::msg_send![c, defaultCenter],
+                None => std::ptr::null_mut(),
+            };
+            for (center, names) in [
+                (default_center, WINDOW_NOTES),
+                (workspace_center, WORKSPACE_NOTES),
+                (distributed_center, DISTRIBUTED_NOTES),
+            ] {
+                if center.is_null() {
+                    continue;
+                }
+                for name in names {
+                    let nsname = ns_string(name);
+                    if nsname.is_null() {
+                        continue;
+                    }
+                    let null: Obj = std::ptr::null_mut();
+                    let _: () = objc2::msg_send![
+                        center,
+                        addObserver: owner,
+                        selector: objc2::sel!(k2OnNote:),
+                        name: nsname,
+                        object: null
+                    ];
+                }
+            }
+            install_flags_monitor();
+        });
     }
 
     fn install_flags_monitor() {
@@ -975,24 +1466,322 @@ mod imp {
 
 /// Offset the macOS traffic lights by (x, y) logical px from their default
 /// position, and paint them square when `square` is true. (0, 0) restores
-/// the default position. No-op on other platforms.
+/// the default position. `zoom` is the renderer's app zoom (1 when absent):
+/// above or below 100% the buttons follow the scaled top bar's center.
+/// No-op on other platforms.
 #[tauri::command]
 pub fn set_traffic_light_inset(
     window: tauri::Window,
     x: f64,
     y: f64,
     square: bool,
+    zoom: Option<f64>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let zoom = geometry::sane_zoom(zoom.unwrap_or(1.0));
         let w = window.clone();
         window
-            .run_on_main_thread(move || unsafe { imp::position(&w, x, y, square) })
+            .run_on_main_thread(move || {
+                imp::guarded("set_traffic_light_inset", || unsafe {
+                    imp::position(&w, x, y, zoom, square)
+                })
+            })
             .map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, x, y, square);
+        let _ = (window, x, y, square, zoom);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::geometry::{
+        button_center_from_top, effective_y, place, sane_zoom, Defaults, Frames, Offset, Rect,
+    };
+
+    /// The research note's example: close at (7, 6), 28 px title bar.
+    const D: Defaults = Defaults {
+        button_x: 7.0,
+        button_y: 6.0,
+        button_h: 14.0,
+        spacing: 20.0,
+        titlebar_h: 28.0,
+    };
+    const WINDOW_H: f64 = 900.0;
+    const WINDOW_W: f64 = 1400.0;
+
+    /// What AppKit lays out before K2 moves anything.
+    fn system_frames(window_h: f64) -> Frames {
+        let button = |i: usize| Rect {
+            x: D.button_x + (i as f64) * D.spacing,
+            y: D.button_y,
+            w: 14.0,
+            h: D.button_h,
+        };
+        Frames {
+            container: Rect {
+                x: 0.0,
+                y: window_h - D.titlebar_h,
+                w: WINDOW_W,
+                h: D.titlebar_h,
+            },
+            buttons: [button(0), button(1), button(2)],
+        }
+    }
+
+    fn at(x: f64, y: f64) -> Offset {
+        Offset { x, y, zoom: 1.0 }
+    }
+
+    #[test]
+    fn places_container_and_buttons_from_the_defaults() {
+        for (x, y) in [(0.0, 3.0), (10.0, 13.0), (12.0, 15.0), (6.0, 9.0)] {
+            let f = place(D, system_frames(WINDOW_H), WINDOW_H, at(x, y));
+            assert_eq!(f.container.h, 28.0 + y);
+            assert_eq!(f.container.y, WINDOW_H - 28.0 - y);
+            assert_eq!(f.container.x, 0.0);
+            assert_eq!(f.container.w, WINDOW_W);
+            for (i, b) in f.buttons.iter().enumerate() {
+                assert_eq!(b.y, 6.0, "button {i} y");
+                assert_eq!(b.x, 7.0 + x + (i as f64) * 20.0, "button {i} x");
+                assert_eq!((b.w, b.h), (14.0, 14.0), "button {i} size");
+            }
+        }
+    }
+
+    #[test]
+    fn reapplying_100_times_never_accumulates() {
+        for offset in [
+            at(10.0, 13.0),
+            at(0.0, 3.0),
+            Offset {
+                x: 10.0,
+                y: 13.0,
+                zoom: 1.5,
+            },
+            Offset {
+                x: 0.0,
+                y: 3.0,
+                zoom: 0.5,
+            },
+            Offset {
+                x: 6.0,
+                y: 9.0,
+                zoom: 2.0,
+            },
+        ] {
+            let first = place(D, system_frames(WINDOW_H), WINDOW_H, offset);
+            let mut current = first;
+            for round in 0..100 {
+                current = place(D, current, WINDOW_H, offset);
+                assert_eq!(current, first, "round {round} for {offset:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_system_reset_between_applies_lands_on_the_same_place() {
+        // AppKit parks the buttons back at the system frames; the next apply
+        // must restore exactly what the first one produced.
+        let offset = at(10.0, 13.0);
+        let first = place(D, system_frames(WINDOW_H), WINDOW_H, offset);
+        for _ in 0..100 {
+            let again = place(D, system_frames(WINDOW_H), WINDOW_H, offset);
+            assert_eq!(again, first);
+        }
+    }
+
+    #[test]
+    fn zero_offset_at_100_percent_returns_the_captured_defaults_exactly() {
+        let system = system_frames(WINDOW_H);
+        let moved = place(D, system, WINDOW_H, at(12.0, 15.0));
+        assert_ne!(moved, system);
+        let back = place(D, moved, WINDOW_H, at(0.0, 0.0));
+        assert_eq!(back, system);
+        assert_eq!(place(D, system, WINDOW_H, at(0.0, 0.0)), system);
+    }
+
+    #[test]
+    fn window_height_moves_only_the_container_origin() {
+        let offset = at(10.0, 13.0);
+        let short = place(D, system_frames(WINDOW_H), WINDOW_H, offset);
+        let tall = place(D, short, 1200.0, offset);
+        assert_eq!(tall.container.y, 1200.0 - 28.0 - 13.0);
+        assert_eq!(tall.container.h, short.container.h);
+        assert_eq!(tall.container.x, short.container.x);
+        assert_eq!(tall.container.w, short.container.w);
+        assert_eq!(tall.buttons, short.buttons);
+    }
+
+    #[test]
+    fn zoom_keeps_the_button_center_on_the_scaled_top_bar() {
+        for (x, y) in [(0.0, 3.0), (10.0, 13.0)] {
+            let at_100 =
+                button_center_from_top(place(D, system_frames(WINDOW_H), WINDOW_H, at(x, y)));
+            for zoom in [1.1, 1.25, 1.5, 2.0] {
+                let f = place(D, system_frames(WINDOW_H), WINDOW_H, Offset { x, y, zoom });
+                let center = button_center_from_top(f);
+                assert!(
+                    (center - zoom * at_100).abs() < 1e-9,
+                    "zoom {zoom}: center {center}, want {}",
+                    zoom * at_100
+                );
+                // Horizontal position does not follow zoom.
+                assert_eq!(f.buttons[0].x, 7.0 + x);
+                assert_eq!(f.buttons[0].y, 6.0);
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_below_100_never_lifts_the_buttons_out_of_the_window() {
+        for zoom in [0.9, 0.5, 0.1] {
+            let f = place(
+                D,
+                system_frames(WINDOW_H),
+                WINDOW_H,
+                Offset {
+                    x: 0.0,
+                    y: 3.0,
+                    zoom,
+                },
+            );
+            let b = f.buttons[0];
+            let top_gap = f.container.h - (b.y + b.h);
+            assert!(
+                top_gap >= 0.0,
+                "zoom {zoom}: button top {top_gap} above the window"
+            );
+        }
+        // 90% with the 3px nudge is still a plain scale, no clamp.
+        let at_100 =
+            button_center_from_top(place(D, system_frames(WINDOW_H), WINDOW_H, at(0.0, 3.0)));
+        let f = place(
+            D,
+            system_frames(WINDOW_H),
+            WINDOW_H,
+            Offset {
+                x: 0.0,
+                y: 3.0,
+                zoom: 0.9,
+            },
+        );
+        assert!((button_center_from_top(f) - 0.9 * at_100).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bad_zoom_and_offsets_fall_back_to_100_percent() {
+        for zoom in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(sane_zoom(zoom), 1.0, "zoom {zoom}");
+            assert_eq!(
+                effective_y(
+                    D,
+                    Offset {
+                        x: 0.0,
+                        y: 13.0,
+                        zoom
+                    }
+                ),
+                13.0
+            );
+        }
+        let f = place(
+            D,
+            system_frames(WINDOW_H),
+            WINDOW_H,
+            Offset {
+                x: f64::NAN,
+                y: f64::INFINITY,
+                zoom: 1.0,
+            },
+        );
+        assert_eq!(f, system_frames(WINDOW_H));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_registered_notification_has_an_action() {
+        use super::imp::{
+            note_action, NoteAction, DISTRIBUTED_NOTES, WINDOW_NOTES, WORKSPACE_NOTES,
+        };
+        for name in WINDOW_NOTES
+            .iter()
+            .chain(WORKSPACE_NOTES)
+            .chain(DISTRIBUTED_NOTES)
+        {
+            let name = name.to_str().expect("notification names are ASCII");
+            assert!(note_action(name).is_some(), "{name} has no action");
+        }
+        for name in [
+            "NSWindowDidResizeNotification",
+            "NSWindowDidEndLiveResizeNotification",
+            "NSWindowDidChangeScreenNotification",
+            "NSWindowDidChangeBackingPropertiesNotification",
+            "NSWindowDidDeminiaturizeNotification",
+            "NSWindowDidBecomeMainNotification",
+            "NSWindowDidEnterFullScreenNotification",
+            "NSWindowDidExitFullScreenNotification",
+        ] {
+            assert_eq!(note_action(name), Some(NoteAction::ReapplyWindow), "{name}");
+        }
+        assert_eq!(
+            note_action("NSWindowDidBecomeKeyNotification"),
+            Some(NoteAction::ReapplyWindowAndRepaint)
+        );
+        for name in [
+            "NSApplicationDidChangeScreenParametersNotification",
+            "NSWorkspaceDidWakeNotification",
+            "NSWorkspaceScreensDidWakeNotification",
+            "AppleInterfaceThemeChangedNotification",
+        ] {
+            assert_eq!(note_action(name), Some(NoteAction::ReapplyAll), "{name}");
+        }
+        assert_eq!(
+            note_action("NSWindowWillCloseNotification"),
+            Some(NoteAction::Forget)
+        );
+        assert_eq!(note_action("NSWindowDidMoveNotification"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn guarded_stops_a_panic_and_reports_it_once() {
+        let mut reports: Vec<String> = Vec::new();
+        super::imp::guarded_with(
+            "test",
+            || panic!("k2-traffic-light-test-panic {}", 7),
+            |line| reports.push(line.to_owned()),
+        );
+        assert_eq!(
+            reports,
+            vec!["traffic-lights test panic: k2-traffic-light-test-panic 7"]
+        );
+
+        let mut quiet: Vec<String> = Vec::new();
+        let mut ran = false;
+        super::imp::guarded_with("test", || ran = true, |line| quiet.push(line.to_owned()));
+        assert!(ran);
+        assert!(quiet.is_empty(), "a clean run reported {quiet:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn guarded_catches_an_objc_exception() {
+        let mut reports: Vec<String> = Vec::new();
+        super::imp::guarded_with(
+            "test",
+            || unsafe { super::imp::raise_for_test() },
+            |line| reports.push(line.to_owned()),
+        );
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(
+            reports[0].starts_with("traffic-lights test objc-exception: ")
+                && reports[0].contains("k2-traffic-light-test-exception"),
+            "{}",
+            reports[0]
+        );
     }
 }

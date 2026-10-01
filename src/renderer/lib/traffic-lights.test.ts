@@ -7,6 +7,7 @@ import {
   createTrafficLightController,
   trafficLightCommand,
   trafficLightShape,
+  trafficLightZoom,
   type TrafficLightCommand,
 } from './traffic-lights'
 
@@ -82,17 +83,17 @@ describe('traffic light re-apply', () => {
     lights.onResize()
     expect(scheduled).toHaveLength(1)
     scheduled[0]()
-    expect(applied).toEqual([{ x: 0, y: 3, square: true }])
+    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1 }])
 
     lights.onFullscreen()
     expect(scheduled).toHaveLength(2)
     scheduled[1]()
-    expect(applied[1]).toEqual({ x: 0, y: 3, square: true })
+    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1 })
 
     lights.onFullscreen()
     expect(scheduled).toHaveLength(3)
     scheduled[2]()
-    expect(applied[2]).toEqual({ x: 0, y: 3, square: true })
+    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1 })
 
     // A burst before the frame runs schedules once.
     const before = scheduled.length
@@ -103,11 +104,58 @@ describe('traffic light re-apply', () => {
     styleId = 'glass'
     inset = 10
     lights.syncIfChanged()
-    expect(applied.at(-1)).toEqual({ x: 10, y: 13, square: false })
+    expect(applied.at(-1)).toEqual({ x: 10, y: 13, square: false, zoom: 1 })
 
     const glassAt = applied.length
     scheduled.at(-1)!()
-    expect(applied[glassAt]).toEqual({ x: 10, y: 13, square: false })
+    expect(applied[glassAt]).toEqual({ x: 10, y: 13, square: false, zoom: 1 })
+  })
+
+  it('sends the app zoom and re-sends when only the zoom changes', () => {
+    const applied: TrafficLightCommand[] = []
+    let zoom: number | undefined = undefined
+    const lights = createTrafficLightController({
+      isMac: () => true,
+      read: () => ({ styleId: 'square', inset: 0, zoom }),
+      apply: (cmd) => {
+        applied.push(cmd)
+      },
+      schedule: (fn) => fn(),
+    })
+
+    lights.syncIfChanged()
+    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1 }])
+
+    lights.syncIfChanged()
+    expect(applied).toHaveLength(1)
+
+    zoom = 1.2
+    lights.syncIfChanged()
+    expect(applied).toHaveLength(2)
+    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2 })
+
+    zoom = 1.2
+    lights.syncIfChanged()
+    expect(applied).toHaveLength(2)
+
+    lights.reapply()
+    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2 })
+  })
+
+  it('falls back to zoom 1 for a missing or bad zoom', () => {
+    expect(trafficLightZoom(undefined)).toBe(1)
+    expect(trafficLightZoom(null)).toBe(1)
+    expect(trafficLightZoom(0)).toBe(1)
+    expect(trafficLightZoom(-1)).toBe(1)
+    expect(trafficLightZoom(Number.NaN)).toBe(1)
+    expect(trafficLightZoom(Number.POSITIVE_INFINITY)).toBe(1)
+    expect(trafficLightZoom(1.5)).toBe(1.5)
+    expect(trafficLightCommand({ styleId: 'glass', inset: 10, zoom: 2 })).toEqual({
+      x: 10,
+      y: 13,
+      square: false,
+      zoom: 2,
+    })
   })
 })
 

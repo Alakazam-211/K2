@@ -12,6 +12,16 @@ export type TrafficLightCommand = {
   x: number
   y: number
   square: boolean
+  /**
+   * App zoom (`documentElement.style.zoom`, 1 = 100%). CSS zoom scales the
+   * top bar but not the native buttons, so Rust re-centers them on it.
+   */
+  zoom: number
+}
+
+/** A finite zoom above 0, else 1. */
+export function trafficLightZoom(zoom: number | null | undefined): number {
+  return typeof zoom === 'number' && Number.isFinite(zoom) && zoom > 0 ? zoom : 1
 }
 
 /** `square` only. A missing or unknown id is round. */
@@ -34,13 +44,19 @@ export function trafficLightCommand(input: {
   scheme?: string | null
   palette?: string | null
   density?: string | null
+  zoom?: number | null
 }): TrafficLightCommand {
   const { x, y } = trafficLightOffsets(input.inset)
-  return { x, y, square: trafficLightShape(input.styleId) === 'square' }
+  return {
+    x,
+    y,
+    square: trafficLightShape(input.styleId) === 'square',
+    zoom: trafficLightZoom(input.zoom),
+  }
 }
 
 export type TrafficLightController = {
-  /** Invoke only when the inset or square-vs-round bit changed. */
+  /** Invoke only when the inset, zoom, or square-vs-round bit changed. */
   syncIfChanged: () => void
   /** Invoke with the current inset and shape, even when inset is 0. */
   reapply: () => void
@@ -54,17 +70,19 @@ export type TrafficLightController = {
 
 export function createTrafficLightController(opts: {
   isMac: () => boolean
-  read: () => { styleId: string | null | undefined; inset: number }
+  read: () => { styleId: string | null | undefined; inset: number; zoom?: number | null }
   apply: (cmd: TrafficLightCommand) => void
   schedule: (fn: () => void) => void
 }): TrafficLightController {
   let insetSeen: number | null = null
   let squareSeen: boolean | null = null
+  let zoomSeen: number | null = null
   let queued = false
 
   function emit(cmd: TrafficLightCommand, inset: number): void {
     insetSeen = inset
     squareSeen = cmd.square
+    zoomSeen = cmd.zoom
     opts.apply(cmd)
   }
 
@@ -78,13 +96,14 @@ export function createTrafficLightController(opts: {
     if (!opts.isMac()) return
     const ctx = opts.read()
     const cmd = trafficLightCommand(ctx)
-    if (ctx.inset === insetSeen && cmd.square === squareSeen) return
+    if (ctx.inset === insetSeen && cmd.square === squareSeen && cmd.zoom === zoomSeen) return
     emit(cmd, ctx.inset)
   }
 
   function resetBaseline(): void {
     insetSeen = null
     squareSeen = null
+    zoomSeen = null
   }
 
   function scheduleReapply(): void {

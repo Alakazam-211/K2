@@ -3413,6 +3413,8 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "objc",
+ "objc2",
+ "objc2-foundation",
  "objc2-web-kit",
  "parking_lot",
  "polling",

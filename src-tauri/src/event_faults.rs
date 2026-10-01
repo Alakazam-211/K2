@@ -40,6 +40,21 @@ fn on_fault(fault: &EventFault<'_>) {
     }
 }
 
+/// One K2-side record in the same log (for example a traffic-light observer
+/// that caught a fault): `<rfc3339> k2=<version> <what>`. Best-effort.
+pub fn record_line(what: &str) {
+    let what = what.replace(['\r', '\n'], " ");
+    let line = format!(
+        "{} k2={} {what}",
+        chrono::Utc::now().to_rfc3339(),
+        env!("CARGO_PKG_VERSION"),
+    );
+    log::error!("{line}");
+    if let Some(path) = log_path() {
+        append_capped(&path, &line, MAX_LOG_BYTES);
+    }
+}
+
 fn log_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)

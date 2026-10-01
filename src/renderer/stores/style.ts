@@ -144,7 +144,10 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 // down-right with it. Square paints those buttons as squares; every
 // other style id keeps Apple's circles. AppKit resets standard-button
 // frames on resize, fullscreen, and title changes, so re-apply on all
-// three — including Square compact, whose inset is 0.
+// three — including Square compact, whose inset is 0. Rust owns the
+// re-apply (commands/traffic_lights.rs observes resize, screen, backing
+// scale, wake, appearance, key/main); these hooks are the backup. The app
+// zoom rides along so the buttons stay centered on the zoomed top bar.
 // Fire-and-forget: in non-Tauri contexts (parity harness, plain browser)
 // the invoke rejects and the miss is purely cosmetic.
 const trafficLights = createTrafficLightController({
@@ -156,6 +159,8 @@ const trafficLights = createTrafficLightController({
     return {
       styleId: el.getAttribute('data-style'),
       inset: Number.parseFloat(raw) || 0,
+      // App.tsx sets this with documentElement.style.zoom (Cmd+= / Cmd+-).
+      zoom: (window as { __k2soZoom?: number }).__k2soZoom,
     }
   },
   apply: (cmd) => {

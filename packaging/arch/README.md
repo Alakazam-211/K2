@@ -73,6 +73,8 @@ A later `k2-bin` package may consume the already-baked GitHub `k2-daemon-linux-x
 
 The k2-arch runner builds this on a release tag (`packaging/arch/build-release-pkg.sh`) and uploads `dist/k2-$VERSION-x86_64.pkg.tar.zst`. The Mac does not compile the GUI. AUR and `pkgs.omarchy.org` are out of scope.
 
+Before the tag, `release.sh` builds the same package once on k2-arch with `upload=false` (`scripts/arch-build-gate.sh`) and stops the release if it fails. `scripts/check-arch-pkgbuild.sh` checks the PKGBUILD sources and sums on every push.
+
 That script runs `makepkg` without installing. `release.sh` attaches the file when it is already in `$DIST_DIR` and does not stop the tag when it is absent. No `.sig` — pacman is the install path. No Linux GUI key in `latest.json`.
 
 ## Out of this package

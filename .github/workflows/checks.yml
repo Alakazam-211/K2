@@ -40,6 +40,10 @@ jobs:
       - name: Arch PKGBUILD check fails on broken fixtures
         run: bash tests/packaging/check-arch-pkgbuild.sh
 
+      # release.sh pre-tag Arch gate, with stub gh/ssh (no GitHub, no k2-arch).
+      - name: Arch build gate script (stubbed)
+        run: bash tests/packaging/arch-build-gate.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

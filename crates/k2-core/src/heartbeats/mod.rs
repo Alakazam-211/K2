@@ -48,6 +48,81 @@ fn refresh_wait_after_write(project_path: &str) {
 // Heartbeat S2: missed-run (D7) and next-slot (D4) tests.
 #[cfg(test)]
 mod missed_run_tests;
+// App heartbeats surface: not-found, instructions writer, change rows.
+#[cfg(test)]
+mod change_tests;
+
+/// AH13 — error prefix for a heartbeat name that is not in the workspace.
+/// Routes map an error starting with this to `404 no_such_heartbeat`.
+pub const NO_SUCH_HEARTBEAT: &str = "no_such_heartbeat";
+
+/// AH18 — `heartbeat_fires.decision` for a change row (add, edit, enable,
+/// rename, archive, …). Never `wakeup_empty` / `wakeup_added`, so the
+/// wait episode (`wait::open_episode`) never reads it.
+pub const DECISION_CHANGED: &str = "changed";
+
+/// The `no_such_heartbeat` error for `name`.
+pub fn no_such_heartbeat(name: &str) -> String {
+    format!("{NO_SUCH_HEARTBEAT}: heartbeat '{name}' not found")
+}
+
+/// True when `err` came from [`no_such_heartbeat`].
+pub fn is_no_such_heartbeat(err: &str) -> bool {
+    err.starts_with(NO_SUCH_HEARTBEAT)
+}
+
+/// AH18 — the words History shows for an actor stamp. `None` = the
+/// scheduler. Unknown shapes are shown as-is.
+pub fn actor_phrase(actor: Option<&str>) -> String {
+    let Some(a) = actor.map(str::trim).filter(|a| !a.is_empty()) else {
+        return "the scheduler".to_string();
+    };
+    if a == "owner-token" {
+        return "the owner".to_string();
+    }
+    for (prefix, words) in [
+        ("user:", "user"),
+        ("agent:", "agent"),
+        ("app:", "app user"),
+        ("app-token:", "app token"),
+    ] {
+        if let Some(rest) = a.strip_prefix(prefix) {
+            return format!("{words} {rest}");
+        }
+    }
+    a.to_string()
+}
+
+/// AH18 — write one `changed` row for a successful heartbeat write.
+/// `reason` names the verb (`enabled`, `renamed from x`, `instructions
+/// edited`). A failure here never fails the caller's write.
+pub fn record_change(project_path: &str, name: &str, reason: &str, actor: Option<&str>) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(project_id) = resolve_project_id(&conn, project_path) else {
+        return;
+    };
+    let mode = AgentHeartbeat::get_by_name(&conn, &project_id, name)
+        .ok()
+        .flatten()
+        .map(|h| h.frequency)
+        .unwrap_or_else(|| "change".to_string());
+    if let Err(e) = HeartbeatFire::insert_with_actor(
+        &conn,
+        &project_id,
+        None,
+        Some(name),
+        &mode,
+        DECISION_CHANGED,
+        Some(reason),
+        None,
+        None,
+        None,
+        actor,
+    ) {
+        log_debug!("[heartbeat-change] WARN: audit row for {name}: {e}");
+    }
+}
 
 /// Create a new heartbeat row + scaffold its `WAKEUP.md` file.
 ///
@@ -269,9 +344,17 @@ pub fn k2so_heartbeat_archive(
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::archive(&conn, &project_id, &name)
-        .map(|_| ())
+    let changed = AgentHeartbeat::archive(&conn, &project_id, &name)
         .map_err(|e| e.to_string())?;
+    if changed == 0
+        && AgentHeartbeat::get_by_name(&conn, &project_id, &name)
+            .map_err(|e| e.to_string())?
+            .is_none()
+    {
+        // AH13: a missing name is never a success. Re-archiving an
+        // already-archived row stays an idempotent no-op.
+        return Err(no_such_heartbeat(&name));
+    }
     drop(conn);
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
@@ -287,9 +370,11 @@ pub fn k2so_heartbeat_unarchive(
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::unarchive(&conn, &project_id, &name)
-        .map(|_| ())
+    let changed = AgentHeartbeat::unarchive(&conn, &project_id, &name)
         .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(no_such_heartbeat(&name));
+    }
     drop(conn);
     refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
@@ -308,7 +393,12 @@ pub fn k2so_heartbeat_remove(project_path: String, name: String) -> Result<(), S
     // agent name doesn't influence it. We trust the heartbeat row's
     // existence as proof the workspace was once configured to schedule.
 
-    AgentHeartbeat::delete(&conn, &project_id, &name).map_err(|e| e.to_string())?;
+    // AH13: a missing name is never a success — and never trashes a
+    // folder that has no row (row names were validated at insert).
+    let deleted = AgentHeartbeat::delete(&conn, &project_id, &name).map_err(|e| e.to_string())?;
+    if deleted == 0 {
+        return Err(no_such_heartbeat(&name));
+    }
     // 0.37.0: heartbeats live at .k2so/heartbeats/<sched>/ now.
     // 0.37.6: route to recycle bin — heartbeat dir contains the
     // user-edited WAKEUP.md + history files; recoverable on change-of-mind.
@@ -337,9 +427,11 @@ pub fn k2so_heartbeat_set_enabled(
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::set_enabled(&conn, &project_id, &name, enabled)
-        .map(|_| ())
+    let changed = AgentHeartbeat::set_enabled(&conn, &project_id, &name, enabled)
         .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(no_such_heartbeat(&name));
+    }
     drop(conn);
     refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
@@ -737,13 +829,106 @@ pub fn k2so_heartbeat_edit(
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::update_schedule(&conn, &project_id, &name, &frequency, &spec_json)
-        .map(|_| ())
+    let changed = AgentHeartbeat::update_schedule(&conn, &project_id, &name, &frequency, &spec_json)
         .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(no_such_heartbeat(&name));
+    }
     drop(conn);
     refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
+}
+
+/// AH12 — replace a heartbeat's WAKEUP.md instructions. The one writer for
+/// owner, CLI and app. Keeps the file's frontmatter (the `description:`
+/// key other wakeups show), refuses a blank body, and runs the S3 refresh.
+/// It never writes the `wakeup_added` marker: the next tick does, so new
+/// instructions on an empty row wait for the next slot (D4).
+pub fn k2so_heartbeat_set_instructions(
+    project_path: String,
+    name: String,
+    instructions: String,
+) -> Result<(), String> {
+    if instructions.trim().is_empty() {
+        return Err("instructions_required: instructions cannot be blank".to_string());
+    }
+    let wakeup_abs = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let project_id = resolve_project_id(&conn, &project_path)
+            .ok_or_else(|| format!("Project not found: {}", project_path))?;
+        let hb = AgentHeartbeat::get_by_name(&conn, &project_id, &name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| no_such_heartbeat(&name))?;
+        wakeup_abs_path(&project_path, &hb.wakeup_path)
+    };
+    let existing = fs::read_to_string(&wakeup_abs).unwrap_or_default();
+    let next = wakeup_file_replacing_body(&existing, &instructions);
+    if let Some(parent) = wakeup_abs.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create heartbeat folder: {e}"))?;
+    }
+    fs::write(&wakeup_abs, next)
+        .map_err(|e| format!("Failed to write WAKEUP.md instructions: {e}"))?;
+    refresh_wait_after_write(&project_path); // S3 (HB19)
+    Ok(())
+}
+
+/// AH9 — a heartbeat's WAKEUP.md body (frontmatter stripped) and its
+/// workspace-relative path. A missing file reads as an empty body.
+pub fn k2so_heartbeat_instructions(
+    project_path: &str,
+    name: &str,
+) -> Result<(String, String), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let project_id = resolve_project_id(&conn, project_path)
+        .ok_or_else(|| format!("Project not found: {}", project_path))?;
+    let hb = AgentHeartbeat::get_by_name(&conn, &project_id, name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| no_such_heartbeat(name))?;
+    drop(conn);
+    let abs = wakeup_abs_path(project_path, &hb.wakeup_path);
+    let raw = fs::read_to_string(&abs).unwrap_or_default();
+    let body = crate::workspace::wake_prompts::strip_frontmatter(&raw);
+    let rel = abs
+        .strip_prefix(project_path)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| format!(".k2/heartbeats/{}/WAKEUP.md", hb.name));
+    Ok((body, rel))
+}
+
+/// `wakeup_path` is stored workspace-relative, with an absolute fallback
+/// for rows written before that (add path).
+fn wakeup_abs_path(project_path: &str, wakeup_path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(wakeup_path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::path::Path::new(project_path).join(p)
+    }
+}
+
+/// AH12 — `existing` with its body replaced by `text`. A `text` that
+/// brings its own frontmatter is written as given.
+fn wakeup_file_replacing_body(existing: &str, text: &str) -> String {
+    let body = text.trim_end();
+    if body.trim_start().starts_with("---") {
+        return format!("{body}\n");
+    }
+    let frontmatter = existing_frontmatter(existing).unwrap_or("---\ndescription:\n---");
+    format!("{frontmatter}\n\n{}\n", body.trim_start_matches('\n'))
+}
+
+/// The leading `---` … `---` block of `content`, fences included.
+fn existing_frontmatter(content: &str) -> Option<&str> {
+    if !content.starts_with("---") {
+        return None;
+    }
+    let end = content[3..].find("\n---")?;
+    let close = 3 + end + 4; // past "\n---"
+    Some(&content[..close])
 }
 
 /// Result of a multi-heartbeat tick — one entry per heartbeat eligible
@@ -1061,7 +1246,7 @@ pub fn k2so_heartbeat_rename(
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     let hb = AgentHeartbeat::get_by_name(&conn, &project_id, &old_name)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Heartbeat '{}' not found", old_name))?;
+        .ok_or_else(|| no_such_heartbeat(&old_name))?;
     if AgentHeartbeat::get_by_name(&conn, &project_id, &new_name)
         .map_err(|e| e.to_string())?
         .is_some()

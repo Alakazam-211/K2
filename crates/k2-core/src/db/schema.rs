@@ -1852,6 +1852,9 @@ pub enum LeaseCheck<'a> {
     /// Scheduler-origin launch: `last_fired` must still equal this value
     /// (`None` = the row has never fired).
     Scheduled(Option<&'a str>),
+    /// AH27 — an app's fire now: refuses when a fire holds the lease under
+    /// ANY `concurrency_policy`, inside the same `BEGIN IMMEDIATE`.
+    App,
 }
 
 /// Result of a lease claim.
@@ -2550,7 +2553,8 @@ impl AgentHeartbeat {
             }
         }
 
-        if policy == "forbid" && in_flight.is_some() {
+        let any_policy_blocks = matches!(check, LeaseCheck::App);
+        if in_flight.is_some() && (policy == "forbid" || any_policy_blocks) {
             conn.execute_batch("ROLLBACK;")?;
             return Ok(LeaseOutcome::InFlight);
         }
@@ -3217,6 +3221,11 @@ pub struct HeartbeatFire {
     pub inbox_priority: Option<String>,
     pub inbox_count: Option<i64>,
     pub duration_ms: Option<i64>,
+    /// 0125 (AH18) — who caused this row. NULL for scheduler rows.
+    /// `owner-token`, `user:<name>`, `agent:<handle>`, `app:<username>`,
+    /// `app-token:<name>`. Never a secret.
+    #[serde(default)]
+    pub actor: Option<String>,
 }
 
 impl HeartbeatFire {
@@ -3256,11 +3265,32 @@ impl HeartbeatFire {
         inbox_count: Option<i64>,
         duration_ms: Option<i64>,
     ) -> Result<i64> {
+        Self::insert_with_actor(
+            conn, project_id, agent_name, schedule_name, mode, decision, reason,
+            inbox_priority, inbox_count, duration_ms, None,
+        )
+    }
+
+    /// [`Self::insert_with_schedule`] plus the 0125 `actor` (AH18).
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_with_actor(
+        conn: &Connection,
+        project_id: &str,
+        agent_name: Option<&str>,
+        schedule_name: Option<&str>,
+        mode: &str,
+        decision: &str,
+        reason: Option<&str>,
+        inbox_priority: Option<&str>,
+        inbox_count: Option<i64>,
+        duration_ms: Option<i64>,
+        actor: Option<&str>,
+    ) -> Result<i64> {
         // Fires on every heartbeat tick — high-volume INSERT, cached.
         let mut stmt = conn.prepare_cached(
             "INSERT INTO heartbeat_fires \
-             (project_id, agent_name, fired_at, mode, decision, reason, inbox_priority, inbox_count, duration_ms, schedule_name) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (project_id, agent_name, fired_at, mode, decision, reason, inbox_priority, inbox_count, duration_ms, schedule_name, actor) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?;
         stmt.execute(params![
             project_id,
@@ -3273,6 +3303,7 @@ impl HeartbeatFire {
             inbox_count,
             duration_ms,
             schedule_name,
+            actor,
         ])?;
         Ok(conn.last_insert_rowid())
     }
@@ -3287,7 +3318,7 @@ impl HeartbeatFire {
         let mut stmt = conn.prepare(
             "SELECT h.id, h.project_id, h.agent_name, h.schedule_name, h.fired_at, h.mode, \
                     h.decision, h.reason, h.inbox_priority, h.inbox_count, h.duration_ms, \
-                    p.name AS project_name \
+                    p.name AS project_name, h.actor \
              FROM heartbeat_fires h JOIN projects p ON p.id = h.project_id \
              ORDER BY h.fired_at DESC LIMIT ?1"
         )?;
@@ -3304,6 +3335,7 @@ impl HeartbeatFire {
                 inbox_priority: row.get(8)?,
                 inbox_count: row.get(9)?,
                 duration_ms: row.get(10)?,
+                actor: row.get(12)?,
             };
             let project_name: String = row.get(11)?;
             Ok((fire, project_name))
@@ -3319,7 +3351,7 @@ impl HeartbeatFire {
     ) -> Result<Vec<HeartbeatFire>> {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, agent_name, schedule_name, fired_at, mode, decision, reason, \
-                    inbox_priority, inbox_count, duration_ms \
+                    inbox_priority, inbox_count, duration_ms, actor \
              FROM heartbeat_fires WHERE project_id = ?1 \
              ORDER BY fired_at DESC LIMIT ?2"
         )?;
@@ -3336,6 +3368,7 @@ impl HeartbeatFire {
                 inbox_priority: row.get(8)?,
                 inbox_count: row.get(9)?,
                 duration_ms: row.get(10)?,
+                actor: row.get(11)?,
             })
         })?;
         rows.collect()
@@ -3350,7 +3383,7 @@ impl HeartbeatFire {
     ) -> Result<Vec<HeartbeatFire>> {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, agent_name, schedule_name, fired_at, mode, decision, reason, \
-                    inbox_priority, inbox_count, duration_ms \
+                    inbox_priority, inbox_count, duration_ms, actor \
              FROM heartbeat_fires WHERE project_id = ?1 AND schedule_name = ?2 \
              ORDER BY fired_at DESC LIMIT ?3"
         )?;
@@ -3367,6 +3400,7 @@ impl HeartbeatFire {
                 inbox_priority: row.get(8)?,
                 inbox_count: row.get(9)?,
                 duration_ms: row.get(10)?,
+                actor: row.get(11)?,
             })
         })?;
         rows.collect()

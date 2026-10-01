@@ -74,6 +74,14 @@ pub const CAP_STORE_READ: &str = "store:read";
 pub const CAP_STORE_WRITE: &str = "store:write";
 /// Agent working mark (`WS /cli/activity/events`). Not implied by files.
 pub const CAP_ACTIVITY_READ: &str = "activity:read";
+/// Room heartbeats read (`GET /cli/heartbeat/list|show|status|fires-list`,
+/// `heartbeat_changed` frames on `WS /cli/activity/events`). The WAKEUP.md
+/// body also needs `files:read` (prd-app-heartbeats-surface-v1 AH9).
+pub const CAP_HEARTBEATS_READ: &str = "heartbeats:read";
+/// Room heartbeats write (`POST /cli/heartbeat/add|edit|enable|rename|
+/// archive|fire`) and exactly each heartbeat's WAKEUP.md through
+/// `/cli/fs/write-file` (Rosson R2). Does not imply read.
+pub const CAP_HEARTBEATS_WRITE: &str = "heartbeats:write";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -91,6 +99,8 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_STORE_READ,
     CAP_STORE_WRITE,
     CAP_ACTIVITY_READ,
+    CAP_HEARTBEATS_READ,
+    CAP_HEARTBEATS_WRITE,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -766,6 +776,22 @@ impl SkinPass {
         } else {
             self.has_cap(cap)
         }
+    }
+
+    /// AH29 any-of door (one socket, several caps). Session defers to the
+    /// room check. Platform needs at least one listed cap on the pass.
+    pub fn dispatcher_admits_any(&self, caps: &[&str]) -> bool {
+        if self.session {
+            true
+        } else {
+            caps.iter().any(|c| self.has_cap(c))
+        }
+    }
+
+    /// AH29: at least one of `caps` in that room (same rules as
+    /// [`Self::has_cap_in_room`]).
+    pub fn has_any_cap_in_room(&self, project_id: &str, caps: &[&str]) -> bool {
+        caps.iter().any(|c| self.has_cap_in_room(project_id, c))
     }
 
     pub fn rooms_empty(&self) -> bool {
@@ -4278,6 +4304,70 @@ mod tests {
         let err = parse_caps(Some(&["activity:write".into()])).unwrap_err();
         assert!(err.contains("unknown capability"), "{err}");
         assert!(err.contains("activity:write"), "{err}");
+    }
+
+    #[test]
+    fn parse_caps_accepts_heartbeat_caps_never_implied_ah1() {
+        let empty = parse_caps(None).expect("empty default");
+        assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        let both = parse_caps(Some(&[
+            "heartbeats:read".into(),
+            "heartbeats:write".into(),
+        ]))
+        .expect("heartbeat caps");
+        assert_eq!(both, vec![CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE]);
+
+        let room = "room-ah1".to_string();
+        let pass_with = |caps: &[&str]| {
+            let mut room_policy = RoomPolicy::new();
+            room_policy.insert(
+                room.clone(),
+                caps.iter().map(|c| (*c).to_string()).collect(),
+            );
+            SkinPass {
+                id: "p".into(),
+                principal_id: Some("u".into()),
+                username: "guest".into(),
+                caps: caps.iter().map(|c| (*c).to_string()).collect(),
+                rooms: vec![room.clone()],
+                session: true,
+                room_policy,
+            }
+        };
+        for caps in [
+            vec![CAP_FILES_READ],
+            vec![CAP_FILES_WRITE],
+            vec![CAP_ACTIVITY_READ],
+            vec![CAP_FILES_READ, CAP_FILES_WRITE, CAP_ACTIVITY_READ],
+        ] {
+            let p = pass_with(&caps);
+            assert!(!p.has_cap_in_room(&room, CAP_HEARTBEATS_READ), "{caps:?}");
+            assert!(!p.has_cap_in_room(&room, CAP_HEARTBEATS_WRITE), "{caps:?}");
+        }
+        let w = pass_with(&[CAP_HEARTBEATS_WRITE]);
+        assert!(!w.has_cap_in_room(&room, CAP_HEARTBEATS_READ), "write must not imply read");
+        let r = pass_with(&[CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE]);
+        for cap in [CAP_FILES_READ, CAP_FILES_WRITE, CAP_ACTIVITY_READ] {
+            assert!(!r.has_cap_in_room(&room, cap), "heartbeat caps must not imply {cap}");
+        }
+        assert!(r.has_any_cap_in_room(&room, &[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
+        assert!(!w.has_any_cap_in_room(&room, &[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
+
+        let platform = SkinPass {
+            id: "t".into(),
+            principal_id: None,
+            username: "bot".into(),
+            caps: vec![CAP_HEARTBEATS_READ.into()],
+            rooms: vec![room.clone()],
+            session: false,
+            room_policy: RoomPolicy::new(),
+        };
+        assert!(platform.dispatcher_admits_any(&[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
+        assert!(!platform.dispatcher_admits_cap(CAP_ACTIVITY_READ));
+        assert!(!platform.dispatcher_admits_any(&[CAP_ACTIVITY_READ, CAP_FILES_READ]));
+
+        let err = parse_caps(Some(&["heartbeats:admin".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
     }
 
     #[test]

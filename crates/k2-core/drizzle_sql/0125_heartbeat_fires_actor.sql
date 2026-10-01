@@ -1,0 +1,12 @@
+-- App heartbeats surface (prd-app-heartbeats-surface-v1.md AH18): every
+-- heartbeat change and every manual fire names who did it.
+--
+-- `actor`  NULL for scheduler rows. Otherwise one of `owner-token`,
+--          `user:<connect username>`, `agent:<workspace handle>`,
+--          `app:<username>` (app login), `app-token:<name>` (platform
+--          app token). Never a secret.
+--
+-- Change rows use decision `changed` with the verb in `reason`; they
+-- never use the `wakeup_empty` / `wakeup_added` decisions the wait
+-- episode reads.
+ALTER TABLE heartbeat_fires ADD COLUMN actor TEXT;

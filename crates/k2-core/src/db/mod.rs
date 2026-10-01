@@ -1018,6 +1018,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0124_heartbeat_next_fire",
             include_str!("../../drizzle_sql/0124_heartbeat_next_fire.sql"),
         ),
+        // 0125 — app heartbeats surface (AH18): heartbeat_fires.actor.
+        // NULL for scheduler rows; `changed` rows and manual fires name
+        // the caller (owner-token / user: / agent: / app: / app-token:).
+        (
+            "0125_heartbeat_fires_actor",
+            include_str!("../../drizzle_sql/0125_heartbeat_fires_actor.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1678,7 +1685,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0124_heartbeat_next_fire",
+            last_name, "0125_heartbeat_fires_actor",
             "unexpected last migration name: {last_name}"
         );
     }

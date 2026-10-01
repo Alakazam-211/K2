@@ -94,15 +94,9 @@ fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
 #[test]
 fn ensure_cli_arm_is_exact_post_only() {
     let src = include_str!("../src/routes/dispatcher.rs");
-    let start = src
-        .find("let post_allowed = matches!")
-        .expect("post_allowed");
-    let end_rel = src[start..]
-        .find("if method != \"GET\"")
-        .expect("method gate");
-    let block = &src[start..start + end_rel];
+    // The POST allowlist is the route policy table (routes/route_policy.rs).
     assert!(
-        block.contains("\"/cli/agents/ensure-cli\""),
+        k2_daemon::routes::route_policy::post_allowed("/cli/agents/ensure-cli"),
         "ensure-cli must be on post_allowed or POST is rejected before the arm"
     );
     let marker = "\"/cli/agents/ensure-cli\" =>";

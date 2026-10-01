@@ -426,14 +426,9 @@ mod tests {
         assert_ne!(CHAT_TRANSCRIPT_WS_PATH, "/cli/overlay/events");
         assert_ne!(CHAT_TRANSCRIPT_WS_PATH, "/cli/fs/events");
         let dispatcher = include_str!("routes/dispatcher.rs");
-        let start = dispatcher
-            .find("let post_allowed = matches!")
-            .expect("post_allowed");
-        let rest = &dispatcher[start..];
-        let end = rest.find("if method != \"GET\"").expect("method gate");
-        let block = &rest[..end];
+        // The POST allowlist is the route policy table.
         assert!(
-            !block.contains(CHAT_TRANSCRIPT_WS_PATH),
+            !crate::routes::route_policy::post_allowed(CHAT_TRANSCRIPT_WS_PATH),
             "transcript socket must not be POST-allowed"
         );
         assert!(dispatcher.contains("crate::chat_overlay_ws::CHAT_TRANSCRIPT_WS_PATH"));

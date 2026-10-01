@@ -216,11 +216,20 @@ async fn owner_token_409s_and_non_owner_tokens_are_rejected() {
             Some(&ok_body),
         );
         assert_eq!(denied.status, 403, "token {token} body={}", denied.body);
-        assert!(
-            denied.body.contains("invalid or missing token"),
-            "{}",
-            denied.body
-        );
+        if token == session.as_str() {
+            // A Connect login: refused by the route policy table — no
+            // login can use sandbox/open (prd-remove-viewer-role-v1.md).
+            let v: serde_json::Value =
+                serde_json::from_str(&denied.body).expect("403 body is JSON");
+            assert_eq!(v["error"], "role_required", "{}", denied.body);
+            assert_eq!(v["required"], "owner-token", "{}", denied.body);
+        } else {
+            assert!(
+                denied.body.contains("invalid or missing token"),
+                "{}",
+                denied.body
+            );
+        }
     }
     assert_eq!(rows_for(&handle), 0);
 

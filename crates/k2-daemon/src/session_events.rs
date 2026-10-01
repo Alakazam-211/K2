@@ -437,7 +437,7 @@ pub enum SessionEvent {
 
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
-    /// deregistered, or — from S4 on — an edit grant toggled).
+    /// deregistered). `grantedEdit` is retired and always false.
     /// APP-LEVEL: forwarded to EVERY subscriber regardless of `?path=`
     /// (see `event_matches_workspace`). Carries the WHOLE aggregated
     /// per-user set, not a diff, so client convergence is last-write-

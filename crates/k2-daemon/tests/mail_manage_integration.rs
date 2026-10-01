@@ -199,6 +199,18 @@ fn assert_owner_only(r: &Resp, label: &str) {
     );
 }
 
+/// A Connect LOGIN below the route's floor is refused by the route policy
+/// table with `role_required` (prd-remove-viewer-role-v1.md RV11) — not the
+/// classic invalid-token text and not the agent `owner_only` teaching.
+fn assert_login_role_refused(r: &Resp, label: &str, required: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body)
+        .unwrap_or_else(|e| panic!("{label}: body is not JSON ({e}): {}", r.body));
+    assert_eq!(v["error"], "role_required", "{label}: {}", r.body);
+    assert_eq!(v["required"], required, "{label}: {}", r.body);
+    assert!(!r.body.contains("owner_only"), "{label} must not be owner_only: {}", r.body);
+}
+
 fn assert_classic_forbidden(r: &Resp, label: &str) {
     assert_eq!(r.status, 403, "{label}; {}", r.body);
     assert!(
@@ -417,14 +429,14 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             &format!("/cli/mail-manage?token={member}"),
             Some(&format!(r#"{{"project":"{a_id}","enable":1}}"#)),
         );
-        assert_classic_forbidden(&member_toggle, "Connect member toggle");
+        assert_login_role_refused(&member_toggle, "Connect member toggle", "admin");
         let member_disable = http(
             port,
             "POST",
             &format!("/cli/mail/server/disable?token={member}"),
             Some("{}"),
         );
-        assert_owner_only(&member_disable, "Connect member cannot drive M5");
+        assert_login_role_refused(&member_disable, "Connect member cannot drive M5", "admin");
 
         let admin = provision_role(port, "mailadmin", "hunter2-strong-9", "admin");
         let admin_disable_off = http(

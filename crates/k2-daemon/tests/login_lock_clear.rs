@@ -316,10 +316,11 @@ async fn app_unlock_deletes_only_the_login_row() {
         let deputy = connect_users::create_session("deputy");
         let refused = post_unlock_skin(port, &deputy, "held");
         assert_eq!(refused.status, 403, "{}", refused.body);
-        assert_eq!(
-            refused.body.trim(),
-            r#"{"error":"Invalid or missing auth token"}"#
-        );
+        // An Admin login is below the Owner floor of the route policy
+        // table (prd-remove-viewer-role-v1.md RV11).
+        let v: serde_json::Value = serde_json::from_str(&refused.body).expect("json body");
+        assert_eq!(v["error"], "role_required", "{}", refused.body);
+        assert_eq!(v["required"], "owner", "{}", refused.body);
         assert!(lock_row("held").is_some(), "403 must leave the row");
 
         let principals_before = {
@@ -488,7 +489,9 @@ async fn box_unlock_deletes_only_the_lock_entry() {
         );
         let refused = post_unlock_box(port, &deputy, "stuck");
         assert_eq!(refused.status, 403, "{}", refused.body);
-        assert_eq!(refused.body.trim(), r#"{"error":"invalid or missing token"}"#);
+        let v: serde_json::Value = serde_json::from_str(&refused.body).expect("json body");
+        assert_eq!(v["error"], "role_required", "{}", refused.body);
+        assert_eq!(v["required"], "owner", "{}", refused.body);
         assert_eq!(
             connect_users::lockout_failed_count("stuck"),
             1,

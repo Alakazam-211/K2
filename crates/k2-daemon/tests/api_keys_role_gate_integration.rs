@@ -212,8 +212,23 @@ fn provision_and_login(
     v["token"].as_str().expect("login token").to_string()
 }
 
-/// Assert all three api-keys routes reject `token` with the shared 403
-/// role-gate body.
+/// Assert one api-keys refusal. A Connect login below Owner is refused by
+/// the route policy table (`role_required`, required `owner`, the login's
+/// role — prd-remove-viewer-role-v1.md RV11); anything that is not a login
+/// (an API key) still gets the handler's pinned FORBIDDEN body.
+fn assert_key_refusal(r: &Resp, ctx: &str, what: &str) {
+    assert_eq!(r.status, 403, "{ctx}: {what} must 403; body={}", r.body);
+    if ctx == "admin" || ctx == "member" {
+        let v = json(&r.body);
+        assert_eq!(v["error"], "role_required", "{ctx}: {what} body: {}", r.body);
+        assert_eq!(v["required"], "owner", "{ctx}: {what} body: {}", r.body);
+        assert_eq!(v["role"], ctx, "{ctx}: {what} body: {}", r.body);
+    } else {
+        assert_eq!(r.body, FORBIDDEN, "{ctx}: {what} 403 body is pinned");
+    }
+}
+
+/// Assert all three api-keys routes reject `token` with a 403.
 fn assert_all_key_routes_403(port: u16, token: &str, ctx: &str) {
     let create = http(
         port,
@@ -221,12 +236,10 @@ fn assert_all_key_routes_403(port: u16, token: &str, ctx: &str) {
         &format!("/cli/api-keys/create?token={token}"),
         Some(&format!(r#"{{"label":"forbidden-{ctx}"}}"#)),
     );
-    assert_eq!(create.status, 403, "{ctx}: create must 403; body={}", create.body);
-    assert_eq!(create.body, FORBIDDEN, "{ctx}: create 403 body is pinned");
+    assert_key_refusal(&create, ctx, "create");
 
     let list = http(port, "GET", &format!("/cli/api-keys/list?token={token}"), None);
-    assert_eq!(list.status, 403, "{ctx}: list must 403; body={}", list.body);
-    assert_eq!(list.body, FORBIDDEN, "{ctx}: list 403 body is pinned");
+    assert_key_refusal(&list, ctx, "list");
 
     let revoke = http(
         port,
@@ -234,8 +247,7 @@ fn assert_all_key_routes_403(port: u16, token: &str, ctx: &str) {
         &format!("/cli/api-keys/revoke?token={token}"),
         Some(r#"{"id":"not-a-real-id"}"#),
     );
-    assert_eq!(revoke.status, 403, "{ctx}: revoke must 403; body={}", revoke.body);
-    assert_eq!(revoke.body, FORBIDDEN, "{ctx}: revoke 403 body is pinned");
+    assert_key_refusal(&revoke, ctx, "revoke");
 }
 
 /// Owner-token list → the set of key labels currently stored (proves a

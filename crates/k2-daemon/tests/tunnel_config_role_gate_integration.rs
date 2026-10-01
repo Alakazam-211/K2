@@ -48,7 +48,6 @@ const OWNER_TOKEN: &str = "owner-token-deadbeef-tunnel-repair";
 
 /// The pinned rejection bodies. The tunnel arm keeps its historical 403
 /// shape; the password chokepoint has its own.
-const FORBIDDEN: &str = r#"{"error":"invalid or missing token"}"#;
 const PASSWORD_GATE: &str = r#"{"error":"password_change_required"}"#;
 
 /// A minimal parsed HTTP response: numeric status + body.
@@ -303,7 +302,13 @@ async fn admin_and_member_sessions_cannot_write_config() {
                     Some(&format!(r#"{{"subdomain":"hijack-{role}"}}"#)),
                 );
                 assert_eq!(r.status, 403, "{role}: config POST must 403; body={}", r.body);
-                assert_eq!(r.body, FORBIDDEN, "{role}: 403 body is pinned");
+                // A login below the Owner floor is refused by the route
+                // policy table (prd-remove-viewer-role-v1.md RV11).
+                let v: serde_json::Value =
+                    serde_json::from_str(&r.body).expect("403 body is JSON");
+                assert_eq!(v["error"], "role_required", "{role}: body={}", r.body);
+                assert_eq!(v["required"], "owner", "{role}: body={}", r.body);
+                assert_eq!(v["role"], role, "{role}: body={}", r.body);
                 assert_eq!(
                     tunnel_json_raw(),
                     before,

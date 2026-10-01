@@ -2582,6 +2582,18 @@ fn assert_owner_only(r: &Resp, label: &str) {
     );
 }
 
+/// A Connect LOGIN below the route's floor is refused by the route policy
+/// table with `role_required` (prd-remove-viewer-role-v1.md RV11) — not the
+/// classic invalid-token text and not the agent `owner_only` teaching.
+fn assert_login_role_refused(r: &Resp, label: &str, required: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body)
+        .unwrap_or_else(|e| panic!("{label}: body is not JSON ({e}): {}", r.body));
+    assert_eq!(v["error"], "role_required", "{label}: {}", r.body);
+    assert_eq!(v["required"], required, "{label}: {}", r.body);
+    assert!(!r.body.contains("owner_only"), "{label} must not be owner_only: {}", r.body);
+}
+
 fn assert_classic_forbidden(r: &Resp, label: &str) {
     assert_eq!(r.status, 403, "{label}; {}", r.body);
     assert!(
@@ -2709,14 +2721,14 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             &format!("/cli/agents-manage-skin?token={member}"),
             Some(&format!(r#"{{"project":"{sales_id}","enable":1}}"#)),
         );
-        assert_classic_forbidden(&member_toggle, "Connect member toggle");
+        assert_login_role_refused(&member_toggle, "Connect member toggle", "owner");
         let member_mutate = http(
             port,
             "POST",
             &format!("/cli/skin/users?token={member}"),
             Some(r#"{"username":"frommember"}"#),
         );
-        assert_classic_forbidden(&member_mutate, "Connect member skin mutate");
+        assert_login_role_refused(&member_mutate, "Connect member skin mutate", "owner");
 
         let ws_set = http(
             port,

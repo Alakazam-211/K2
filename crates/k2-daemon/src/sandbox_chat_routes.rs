@@ -456,14 +456,7 @@ mod tests {
             !window.contains("handle_sandbox_open(&body_bytes,"),
             "the handler must not receive the daemon token"
         );
-        let allowed = src
-            .find("let post_allowed = matches!")
-            .expect("post_allowed");
-        let allowed_end = src[allowed..]
-            .find("if method != \"GET\"")
-            .expect("method gate");
-        let block = &src[allowed..allowed + allowed_end];
-        assert!(block.contains("\"/cli/sandbox/open\""));
+        assert!(crate::routes::route_policy::post_allowed("/cli/sandbox/open"));
     }
 
     #[test]

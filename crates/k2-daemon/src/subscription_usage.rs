@@ -2061,15 +2061,11 @@ mod tests {
         assert!(response.body.contains("POST required"), "{}", response.body);
 
         let dispatcher = include_str!("routes/dispatcher.rs");
-        let start = dispatcher
-            .find("let post_allowed = matches!")
-            .expect("post_allowed");
-        let end_rel = dispatcher[start..]
-            .find("if method != \"GET\"")
-            .expect("method gate");
-        let block = &dispatcher[start..start + end_rel];
-        assert_eq!(block.matches("/cli/usage/subscriptions").count(), 1);
-        assert!(block.contains("/cli/usage/subscriptions/refresh"));
+        // POST allowlist = the route policy table: only the refresh verb.
+        assert!(crate::routes::route_policy::post_allowed(
+            "/cli/usage/subscriptions/refresh"
+        ));
+        assert!(!crate::routes::route_policy::post_allowed("/cli/usage/subscriptions"));
         let arm = dispatcher
             .find("\"/cli/usage/subscriptions/refresh\" =>")
             .expect("refresh arm");

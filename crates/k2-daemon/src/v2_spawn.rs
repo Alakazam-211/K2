@@ -3345,31 +3345,35 @@ mod tests {
         assert!(!on_closed_list(&agent), "non-tab names are never recorded");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn refresh_is_not_refused_by_a_closed_entry() {
-        k2_core::db::init_for_tests();
-        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-        let pid = format!("closed-refresh-{n}");
-        let cwd = format!("/tmp/{pid}");
-        let agent = format!("tab-{pid}");
-        let _reap = ReapAgent(agent.clone());
-        let stub = write_agent_stub("claude");
-        let stub_s = stub.to_string_lossy().into_owned();
-        let sid = "01920000-cccc-7000-8000-0000000000cc";
-        seed_project_and_tab_row(&pid, &cwd, &agent, Some(stub_s.as_str()), Some(sid), &[]);
-
+    /// Refresh always respawns with the recovered command, so the V23 gate
+    /// lets it through and clears the entry. Checked at the gate itself: a
+    /// full refresh spawns the agent stub, which the temp-HOME guard refuses
+    /// whenever a parallel test has HOME under temp (the same race the
+    /// existing `refresh_*` PTY tests hit).
+    #[test]
+    fn spawn_with_a_command_is_not_refused_and_clears_the_closed_entry() {
+        let agent = closed_tab_name();
+        let cwd = unique_cwd("command-clears");
         CLOSED_TABS.lock().record(&agent, std::time::Instant::now());
-        let refreshed = handle_v2_refresh(
-            serde_json::json!({ "agent_name": agent, "cwd": cwd })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(refreshed.status, "200 OK", "{}", refreshed.body);
-        assert_eq!(json_body(&refreshed.body)["conversationId"].as_str(), Some(sid));
-        assert!(
-            !on_closed_list(&agent),
-            "refresh spawns with a command, which clears the entry"
-        );
-        let _ = std::fs::remove_dir_all(stub.parent().unwrap());
+
+        let empty: SpawnRequest =
+            serde_json::from_value(serde_json::json!({ "agent_name": agent, "cwd": cwd }))
+                .expect("spawn request");
+        let refused = closed_tab_gate(&empty).expect("empty-command spawn of a closed tab is refused");
+        assert_eq!(refused.status, "409 Conflict");
+        assert_eq!(json_body(&refused.body)["error"].as_str(), Some("tab_closed"));
+        assert!(on_closed_list(&agent), "a refusal keeps the entry");
+
+        let with_command: SpawnRequest = serde_json::from_value(serde_json::json!({
+            "agent_name": agent,
+            "cwd": cwd,
+            "command": "claude",
+            "args": ["--resume", "01920000-cccc-7000-8000-0000000000cc"],
+        }))
+        .expect("spawn request");
+        assert!(closed_tab_gate(&with_command).is_none(), "a spawn with a command proceeds");
+        assert!(!on_closed_list(&agent), "a spawn with a command clears the entry");
+        assert!(closed_tab_gate(&empty).is_none(), "after clearing, an empty spawn proceeds too");
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

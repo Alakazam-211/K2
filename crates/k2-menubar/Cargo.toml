@@ -1,6 +1,6 @@
 [package]
 name = "k2-menubar"
-version = "0.41.6"
+version = "0.43.0"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
 description = "macOS menu-bar helper for this Mac's K2 daemon. Bare Mach-O LaunchAgent; not the Tauri app and not k2-daemon."

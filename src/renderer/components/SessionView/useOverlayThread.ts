@@ -12,6 +12,7 @@ import {
   type OverlayWsFrame,
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
+import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 
 export function useOverlayThread(opts: {
   /** The server this room lives on (Home M1). */
@@ -76,7 +77,8 @@ export function useOverlayThread(opts: {
         const creds = await getDaemonWs(scope)
         if (cancelled) return
         const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
-        ws = new WebSocket(url)
+        // MS70: through the per-server dial queue.
+        ws = await openQueuedWebSocket(scope, url)
         if (cancelled) {
           releaseOverlayWebSocket(ws)
           ws = null

@@ -33,9 +33,31 @@ class FakeWebSocket {
   onmessage: ((ev: { data: unknown }) => void) | null = null
   onerror: (() => void) | null = null
   onclose: ((ev: { code: number; reason?: string; wasClean?: boolean }) => void) | null = null
+  private listeners = new Map<string, Set<() => void>>()
   constructor(url: string) {
     this.url = url
     FakeWebSocket.instances.push(this)
+  }
+  addEventListener(type: string, fn: () => void): void {
+    let set = this.listeners.get(type)
+    if (!set) {
+      set = new Set()
+      this.listeners.set(type, set)
+    }
+    set.add(fn)
+  }
+  removeEventListener(type: string, fn: () => void): void {
+    this.listeners.get(type)?.delete(fn)
+  }
+  /** Deliver a socket event the way a browser does: listeners, then the
+   *  on* handler. */
+  fire(type: 'open' | 'error' | 'close'): void {
+    if (type === 'open') this.readyState = 1
+    else this.readyState = 3
+    for (const fn of [...(this.listeners.get(type) ?? [])]) fn()
+    if (type === 'open') this.onopen?.()
+    if (type === 'error') this.onerror?.()
+    if (type === 'close') this.onclose?.({ code: 1006 })
   }
   close(): void {
     this.readyState = 3
@@ -59,7 +81,10 @@ import {
   gridDialInflightForTests,
   noteGridDialFailure,
   openQueuedGridWebSocket,
+  openQueuedWebSocket,
+  remoteDialInflightForTests,
   resetGridDialQueueForTests,
+  setGridDialMaxForTests,
 } from '@/lib/grid-dial-queue'
 import {
   useConnectHostStore,
@@ -261,27 +286,68 @@ describe('grid dial queue per server', () => {
     expect(gridDialInflightForTests(null)).toBe(0)
   })
 
-  it('the global cap still bounds every server together', async () => {
-    // Window on a remote → global cap 2 (unchanged from before M1).
+  it('MS25 / MS70: per server 2, and 4 remote handshakes across the whole window', async () => {
+    const C = host({ id: 'c', label: 'C', hostname: 'c.k2.dev', token: 'tok-c' })
+    useConnectHostStore.getState().addHost(C)
     useConnectHostStore.getState().selectHost(A)
-    const a = scopeForHost(A)
-    const b = scopeForHost(B)
-    const p1 = openQueuedGridWebSocket(a, 'wss://rosson.k2.dev/grid')
-    const p2 = openQueuedGridWebSocket(b, 'wss://z3thon.k2.dev/grid')
-    const p3 = openQueuedGridWebSocket(b, 'wss://z3thon.k2.dev/grid')
-    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2))
-    await new Promise((r) => setTimeout(r, 0))
-    expect(FakeWebSocket.instances).toHaveLength(2)
-    expect(gridDialInflightForTests(null)).toBe(2)
-    for (const ws of FakeWebSocket.instances) {
-      ws.readyState = 1
-      ws.onopen!()
+    const scopes = [scopeForHost(A), scopeForHost(B), scopeForHost(C)]
+    const hostsOf = ['wss://rosson.k2.dev/', 'wss://z3thon.k2.dev/', 'wss://c.k2.dev/']
+    const dials: Array<Promise<unknown>> = []
+    for (let i = 0; i < 3; i++) {
+      for (let n = 0; n < 3; n++) dials.push(openQueuedGridWebSocket(scopes[i]!, `${hostsOf[i]}grid?n=${n}`))
     }
-    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3))
-    const third = FakeWebSocket.instances[2]!
-    third.readyState = 1
-    third.onopen!()
-    await Promise.all([p1, p2, p3])
+    // The primary scope is the same server as A: it shares A's queue.
+    dials.push(openQueuedGridWebSocket(primaryScope(), 'wss://rosson.k2.dev/grid?n=primary'))
+    const pending = (): FakeWebSocket[] => FakeWebSocket.instances.filter((w) => w.readyState === 0)
+    const assertCaps = (): void => {
+      const live = pending()
+      expect(live.length).toBeLessThanOrEqual(4)
+      for (const prefix of hostsOf) {
+        expect(live.filter((w) => w.url.startsWith(prefix)).length).toBeLessThanOrEqual(2)
+      }
+      expect(remoteDialInflightForTests()).toBe(live.length)
+    }
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(4))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(FakeWebSocket.instances).toHaveLength(4)
+    assertCaps()
+    // Open one at a time; every step stays under both caps until all ten
+    // have dialed.
+    for (let opened = 0; opened < 10; opened++) {
+      const next = pending()[0]
+      if (!next) throw new Error(`nothing pending after ${opened} opens`)
+      next.readyState = 1
+      next.onopen!()
+      await new Promise((r) => setTimeout(r, 0))
+      assertCaps()
+    }
+    await Promise.all(dials)
+    expect(FakeWebSocket.instances).toHaveLength(10)
+    expect(gridDialInflightForTests(null)).toBe(0)
+    expect(remoteDialInflightForTests()).toBe(0)
+  })
+
+  it('MS70: an events / overlay socket holds its server slot until it opens', async () => {
+    setGridDialMaxForTests(1)
+    const a = scopeForHost(A)
+    const first = await openQueuedWebSocket(a, 'wss://rosson.k2.dev/cli/sessions/events?path=')
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    // A second socket for A waits for the first handshake; B is not held up.
+    const second = openQueuedWebSocket(a, 'wss://rosson.k2.dev/cli/overlay/events')
+    const onB = await openQueuedWebSocket(scopeForHost(B), 'wss://z3thon.k2.dev/cli/sessions/events?path=')
+    expect(FakeWebSocket.instances.map((w) => w.url)).toEqual([
+      'wss://rosson.k2.dev/cli/sessions/events?path=',
+      'wss://z3thon.k2.dev/cli/sessions/events?path=',
+    ])
+    expect(gridDialInflightForTests(a)).toBe(1)
+    ;(first as unknown as FakeWebSocket).fire('open')
+    const ws2 = (await second) as unknown as FakeWebSocket
+    expect(ws2.url).toBe('wss://rosson.k2.dev/cli/overlay/events')
+    expect(gridDialInflightForTests(a)).toBe(1)
+    // A handshake that closes before it opens frees the slot too.
+    ws2.fire('close')
+    expect(gridDialInflightForTests(a)).toBe(0)
+    ;(onB as unknown as FakeWebSocket).fire('open')
     expect(gridDialInflightForTests(null)).toBe(0)
   })
 })

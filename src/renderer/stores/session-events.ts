@@ -32,6 +32,8 @@ import {
   noteRemoteEventsOpened,
 } from '@/lib/remote-ws-drop'
 import type { ServerScope } from '@/kessel/server-scope'
+import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+import { notePoolSocketClose } from '@/lib/pool-hooks'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -603,11 +605,21 @@ export function subscribeToWorkspaceSessionEvents(
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=${encodeURIComponent(projectPath)}&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket
     try {
-      ws = new WebSocket(url)
+      // MS70: every daemon socket dials through the per-server queue under
+      // the window-wide handshake cap.
+      ws = await openQueuedWebSocket(scope, url)
     } catch (err) {
       console.warn('[session-events] WS construction failed:', err)
       noteClosed(scope)
       scheduleReconnect()
+      return
+    }
+    if (stopped) {
+      try {
+        ws.close(1000, 'stopped')
+      } catch {
+        // ignore
+      }
       return
     }
     socket = ws
@@ -701,6 +713,8 @@ export function subscribeToWorkspaceSessionEvents(
       if (socket === ws) {
         socket = null
       }
+      // MS71: the pool tells a kick (4001) from a network drop.
+      notePoolSocketClose(scope.hostKey, ev.code)
       if (stopped) return
       // A clean close (code 1000) from the server with no reason is
       // ambiguous — could be daemon shutdown, could be route gone.
@@ -1314,11 +1328,21 @@ export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket
     try {
-      ws = new WebSocket(url)
+      // MS70: every daemon socket dials through the per-server queue under
+      // the window-wide handshake cap.
+      ws = await openQueuedWebSocket(scope, url)
     } catch (err) {
       console.warn('[active-state] WS construction failed:', err)
       noteClosed(scope)
       scheduleReconnect()
+      return
+    }
+    if (stopped) {
+      try {
+        ws.close(1000, 'stopped')
+      } catch {
+        // ignore
+      }
       return
     }
     socket = ws
@@ -1407,6 +1431,8 @@ export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
 
     ws.onclose = (ev) => {
       if (socket === ws) socket = null
+      // MS71: the pool tells a kick (4001) from a network drop.
+      notePoolSocketClose(scope.hostKey, ev.code)
       if (stopped) return
       console.debug(
         `[active-state] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
@@ -1562,11 +1588,21 @@ export function subscribeToWorkspaceTabEvents(
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=${encodeURIComponent(workspacePath)}&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket
     try {
-      ws = new WebSocket(url)
+      // MS70: every daemon socket dials through the per-server queue under
+      // the window-wide handshake cap.
+      ws = await openQueuedWebSocket(scope, url)
     } catch (err) {
       console.warn('[tab-events] WS construction failed:', err)
       noteClosed(scope)
       scheduleReconnect()
+      return
+    }
+    if (stopped) {
+      try {
+        ws.close(1000, 'stopped')
+      } catch {
+        // ignore
+      }
       return
     }
     socket = ws
@@ -1616,6 +1652,8 @@ export function subscribeToWorkspaceTabEvents(
 
     ws.onclose = (ev) => {
       if (socket === ws) socket = null
+      // MS71: the pool tells a kick (4001) from a network drop.
+      notePoolSocketClose(scope.hostKey, ev.code)
       if (stopped) return
       console.debug(
         `[tab-events] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,

@@ -9,6 +9,7 @@ import {
 } from './chatTranscript'
 import type { SessionViewTab } from './sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
+import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 
 /**
  * Tail socket for the chat face. `enabled` is only true while Chat is the
@@ -48,7 +49,8 @@ export function useChatTranscript(opts: {
           conversationId: conversation,
           agentName,
         })
-        ws = new WebSocket(url)
+        // MS70: through the per-server dial queue.
+        ws = await openQueuedWebSocket(scope, url)
         if (cancelled) {
           ws.close()
           ws = null

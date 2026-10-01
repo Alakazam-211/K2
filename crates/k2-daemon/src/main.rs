@@ -78,6 +78,7 @@ mod git_routes;
 mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;
+mod power;
 mod inbox_routes;
 mod wiki_routes;
 mod llm_host;

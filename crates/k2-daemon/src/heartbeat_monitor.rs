@@ -1,115 +1,145 @@
-//! Heartbeat reliability monitor — boot overdue scan, wall-clock-jump
-//! detection, and tick-transport self-heal.
+//! Heartbeat scheduler loop — the daemon fires heartbeats on its own.
 //!
-//! The misfire study established that the ONLY autonomous heartbeat
-//! driver is the OS scheduler (`dev.k2.heartbeat` launchd agent /
-//! crontab entry). Two consequences it documented empirically:
+//! Heartbeat S2 (`prd-heartbeat-firing-v1.md`, HB12–HB17): until S2 the
+//! ONLY autonomous heartbeat driver was the OS scheduler
+//! (`dev.k2.heartbeat` launchd agent / crontab line). On 2026-09-30 a
+//! test run left that job loaded from a deleted temp folder and nothing
+//! fired for ~8h; on a stock Arch box there is no `crontab` at all.
+//! The daemon now ticks itself, on every OS, headless or not:
 //!
-//! 1. **Recovery after downtime waited for the next external tick.**
-//!    A daemon that boots after the laptop was dead through a fire
-//!    window did nothing until launchd's next 60s tick — and nothing
-//!    EVER if the transport was broken. The boot scan below runs the
-//!    due-evaluation immediately, so "kill daemon through the window →
-//!    restart" fires the catch-up without depending on the plist.
+//! 1. **Boot scan.** After boot settles, one due scan runs at once, so
+//!    a slot missed while the daemon was down catches up (once, within
+//!    12 h — D7) without waiting for anything.
+//! 2. **60 s tick (HB12).** The same due scan an OS tick drives
+//!    (`triage::handle_scheduler_fire`), every 60 s. Each pass runs in
+//!    its own task (HB17): a panic is logged, the loop carries on, and a
+//!    dead loop shows as a stale `last_daemon_tick_at`. Passes never
+//!    overlap; per-project single-flight (HB13) and the lease's due
+//!    re-check (HB14) make a leftover OS tick harmless.
+//! 3. **Wake (W7).** Every 5 s the loop compares wall-clock time with
+//!    monotonic time. A gap over 2 minutes means the machine slept. The
+//!    daemon then takes a short keep-awake hold (a scheduled wake may be
+//!    a short dark wake), runs the due scan at once, and re-plans the
+//!    next wake.
+//! 4. **Old OS job.** The launchd job / crontab line is retired (HB15,
+//!    W1): checked at boot and every 10 minutes, and removed when found.
+//!    `WakeSystem` was never a launchd key; waking is the daemon's job
+//!    now (`crate::power`).
 //!
-//! 2. **The transport can die silently for WEEKS** (study bonus
-//!    finding: this very box's LaunchAgent was missing for ~3 weeks —
-//!    `heartbeat.log`'s last tick 2026-06-10 — while every enabled
-//!    heartbeat reported enabled=yes). The self-heal below verifies
-//!    the transport whenever enabled heartbeats exist, and repairs it
-//!    when it is not `ok`.
-//!
-//! 3. **Loaded is not the same as working** (heartbeat S1, HB10). On
-//!    2026-09-30 a test run left `dev.k2.heartbeat` loaded from a
-//!    deleted temp folder: launchd said "loaded", every run exited 127,
-//!    and no heartbeat fired for ~8h. The check now asks
-//!    `transport_state()` which plist and script the LOADED job uses,
-//!    its last exit code, and whether OS ticks arrive. Anything but
-//!    `ok` is booted out and re-bootstrapped from the real plist, at
-//!    boot, after a wake, and every 10 minutes.
-//!
-//! The monitor loop also compares wall-clock against monotonic time:
-//! a jump (sleep, suspend, clock change) triggers an immediate
-//! due-evaluation instead of waiting for launchd's post-wake tick —
-//! and doubles as the tick-loop drift detector the overhaul asked for.
-//!
-//! Escape hatch: `K2_HEARTBEAT_NO_SELF_HEAL=1` skips the launchctl /
-//! crontab side effects (used by the headless e2e harness, whose
-//! scratch-HOME daemon must never bootstrap a real `dev.k2.heartbeat`
-//! label into the box's launchd).
+//! Escape hatch: `K2_HEARTBEAT_NO_SELF_HEAL=1` skips every OS side
+//! effect of this loop (removing the old job, scheduling wake events) —
+//! the headless e2e harness and scratch-HOME daemons set it. The due
+//! scan itself always runs.
 
 use std::time::{Duration, Instant};
 
 use k2_core::log_debug;
 
-/// Monitor cadence. Also the resolution of wall-clock-jump detection.
-const MONITOR_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the loop wakes up. Also the resolution of sleep/wake
+/// detection, so a dark wake is noticed within seconds.
+const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Wall-vs-monotonic divergence that counts as a jump. 2 minutes:
+/// HB12 — the daemon's own due-scan cadence.
+const TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Wall-vs-monotonic divergence that counts as a sleep. 2 minutes:
 /// big enough to never trip on scheduler jitter, small enough that a
 /// laptop-lid sleep of any consequence triggers an immediate scan.
 const WALL_JUMP_THRESHOLD_SECS: i64 = 120;
 
-/// How often (in monitor iterations) to re-verify the tick transport.
-/// 10 iterations ≈ 10 minutes (HB10) — cheap (`launchctl print`).
-const TRANSPORT_CHECK_EVERY_ITERS: u64 = 10;
+/// How often to look for (and remove) the old OS tick job.
+const TRANSPORT_CHECK_INTERVAL: Duration = Duration::from_secs(600);
 
-/// Spawn the monitor. Called once from `async_main` after the boot
+/// Keep-awake hold taken on wake, before the scan: long enough for the
+/// scan to start launches, which then hold their own lease-time guard.
+const WAKE_HOLD: Duration = Duration::from_secs(120);
+
+/// Spawn the loop. Called once from `async_main` after the boot
 /// readiness gate opens (the scan drives the same handlers HTTP ticks
 /// do, so the daemon must be fully migrated first).
 pub fn spawn() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        // Boot pass: let boot settle, then verify the transport and
-        // run the overdue scan — recovery no longer depends on the
-        // plist being alive.
         tokio::time::sleep(Duration::from_secs(3)).await;
-        // The "no OS tick in three intervals" clock starts now.
-        k2_core::heartbeats::install::reset_observation_window();
         ensure_transport("boot").await;
-        run_due_scan("boot overdue scan").await;
+        crate::power::boot().await;
+        let mut pass = Some(spawn_pass("boot overdue scan"));
 
         let mut last_mono = Instant::now();
         let mut last_wall = chrono::Utc::now();
-        let mut iter: u64 = 0;
+        let mut last_tick = Instant::now();
+        let mut last_transport_check = Instant::now();
         loop {
-            tokio::time::sleep(MONITOR_INTERVAL).await;
-            iter += 1;
+            tokio::time::sleep(POLL_INTERVAL).await;
 
-            // Wall-clock jump vs monotonic: on sleep/suspend the
-            // monotonic clock (and this task) pauses with the machine,
-            // so wall delta >> mono delta on wake.
+            // Sleep/wake: on suspend the monotonic clock (and this task)
+            // pauses with the machine, so wall delta >> mono delta.
             let mono_delta = last_mono.elapsed().as_secs() as i64;
             let wall_delta = (chrono::Utc::now() - last_wall).num_seconds();
             last_mono = Instant::now();
             last_wall = chrono::Utc::now();
-            if wall_delta - mono_delta > WALL_JUMP_THRESHOLD_SECS {
+            let woke = wall_delta - mono_delta > WALL_JUMP_THRESHOLD_SECS;
+
+            if woke {
                 log_debug!(
-                    "[daemon/heartbeat-monitor] wall-clock jump: wall {}s vs monotonic {}s — running due-evaluation now",
+                    "[daemon/heartbeat-monitor] woke: wall {}s vs monotonic {}s — due scan now",
                     wall_delta,
                     mono_delta
                 );
-                // The job could not tick while the machine slept: restart
-                // the silence clock, then check paths / exit code now.
-                k2_core::heartbeats::install::reset_observation_window();
-                ensure_transport("wake").await;
-                run_due_scan("wall-clock jump").await;
+                crate::power::hold_for("heartbeat wake scan", WAKE_HOLD);
             }
 
-            if iter % TRANSPORT_CHECK_EVERY_ITERS == 0 {
-                ensure_transport("periodic").await;
+            let tick_due = woke || last_tick.elapsed() >= TICK_INTERVAL;
+            if tick_due {
+                last_tick = Instant::now();
+                pass = Some(match pass.take() {
+                    // HB17: never overlap passes. A pass still running
+                    // (slow spawns) keeps its slot; the next tick retries.
+                    Some(running) if !running.is_finished() => {
+                        log_debug!("[daemon/heartbeat-monitor] previous pass still running — tick skipped");
+                        running
+                    }
+                    Some(done) => {
+                        if let Err(e) = done.await {
+                            log_debug!("[daemon/heartbeat-monitor] previous pass panicked: {e}");
+                        }
+                        spawn_pass(if woke { "wake" } else { "daemon tick" })
+                    }
+                    None => spawn_pass(if woke { "wake" } else { "daemon tick" }),
+                });
+            }
+
+            if woke || last_transport_check.elapsed() >= TRANSPORT_CHECK_INTERVAL {
+                last_transport_check = Instant::now();
+                ensure_transport(if woke { "wake" } else { "periodic" }).await;
             }
         }
     })
 }
 
+/// HB17 — one due scan in its own task, then a wake re-plan. A panic
+/// inside surfaces as the handle's `JoinError` and is logged by the loop.
+fn spawn_pass(reason: &'static str) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        run_due_scan(reason).await;
+        crate::power::replan_wake(reason).await;
+    })
+}
+
 /// Run the full due-evaluation over every project with enabled
 /// heartbeats — the same `handle_scheduler_fire` an external tick
-/// drives, so gap detection, catch-up coalescing, windows, and
-/// backoff all apply identically.
-async fn run_due_scan(reason: &str) {
+/// drives, so gap detection, catch-up, windows, and backoff all apply
+/// identically. Public for the integration tests.
+pub async fn run_due_scan(reason: &str) {
     // HB9: stamps `last_daemon_tick_at`, never the OS key — a daemon
     // restart must not make a dead OS job look alive.
-    let paths: Vec<String> = crate::triage::daemon_scan_project_paths();
+    let paths: Vec<String> =
+        match tokio::task::spawn_blocking(crate::triage::daemon_scan_project_paths).await {
+            Ok(p) => p,
+            Err(e) => {
+                log_debug!("[daemon/heartbeat-monitor] project list join error: {e}");
+                return;
+            }
+        };
     if paths.is_empty() {
         return;
     }
@@ -132,58 +162,36 @@ async fn run_due_scan(reason: &str) {
     }
 }
 
-/// HB10 — verify the tick transport (launchd agent / crontab entry)
-/// and repair it when enabled heartbeats exist and it is not `ok`.
-/// Every saved mode wants a job in S1 (Rosson D2: Off = never wake the
-/// machine, still fire while awake), so there is no mode opt-out here.
-/// The k2-core guard (HB6) still refuses for a scratch-HOME daemon.
+/// HB15 / W1 — find the old OS tick job (launchd `dev.k2.heartbeat` /
+/// the `k2so-agent-heartbeat` crontab line) and remove it. The daemon
+/// ticks itself now; the job adds nothing. The k2-core guard (HB6)
+/// still refuses for a scratch-HOME daemon.
 async fn ensure_transport(context: &'static str) {
     if std::env::var("K2_HEARTBEAT_NO_SELF_HEAL").map(|v| v == "1").unwrap_or(false) {
         log_debug!(
-            "[daemon/heartbeat-monitor] transport self-heal SKIPPED ({context}) — K2_HEARTBEAT_NO_SELF_HEAL=1"
+            "[daemon/heartbeat-monitor] transport check SKIPPED ({context}) — K2_HEARTBEAT_NO_SELF_HEAL=1"
         );
         return;
     }
-
-    let enabled_count = count_enabled_heartbeats();
-    if enabled_count == 0 {
-        return; // nothing scheduled — a missing transport is fine
-    }
-
-    // launchctl / crontab calls (and a bootstrap retry sleep) — keep
-    // them off the async workers.
+    // launchctl / crontab calls — keep them off the async workers.
     let joined = tokio::task::spawn_blocking(move || {
         k2_core::heartbeats::install::self_check_and_repair(context)
     })
     .await;
     match joined {
         Ok((report, None)) => {
-            if report.state != k2_core::heartbeats::install::TransportState::Ok {
-                log_debug!(
-                    "[daemon/heartbeat-monitor] transport {:?} ({context}): {}",
-                    report.state,
-                    report.detail
-                );
-            }
+            log_debug!(
+                "[daemon/heartbeat-monitor] transport {:?} ({context}): {}",
+                report.state,
+                report.detail
+            );
         }
         Ok((_report, Some(rec))) => log_debug!(
-            "[daemon/heartbeat-monitor] {enabled_count} enabled heartbeat(s); transport              {:?} ({context}) → {}: {}",
+            "[daemon/heartbeat-monitor] transport {:?} ({context}) → {}: {}",
             rec.before,
             rec.action,
             rec.detail
         ),
         Err(e) => log_debug!("[daemon/heartbeat-monitor] transport check join error: {e}"),
     }
-}
-
-fn count_enabled_heartbeats() -> i64 {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    conn.query_row(
-        "SELECT COUNT(*) FROM workspace_heartbeats \
-         WHERE enabled = 1 AND archived_at IS NULL",
-        [],
-        |r| r.get(0),
-    )
-    .unwrap_or(0)
 }

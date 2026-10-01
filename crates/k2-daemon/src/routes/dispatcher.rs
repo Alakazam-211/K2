@@ -3514,6 +3514,36 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Heartbeat S2 (D8, D11): the one switch, "Wake this computer for
+        // heartbeats". On a Mac without the helper, turning it on shows
+        // ONE admin dialog on that Mac (up to 2 minutes), so it runs on
+        // the blocking pool.
+        "/cli/heartbeat/wake" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::heartbeat_routes::handle_set_wake(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") })
+                    .to_string(),
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         "/cli/heartbeat/apply-wake-scheduler" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {

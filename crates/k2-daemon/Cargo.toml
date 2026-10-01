@@ -15,6 +15,13 @@ path = "src/main.rs"
 name = "k2-mail-helper"
 path = "src/bin/k2-mail-helper.rs"
 
+# Heartbeat S2 (D11) — macOS power door: wake events (and S6's lid-closed
+# keep-awake). Copied to /Library/PrivilegedHelperTools by one admin
+# dialog; run only via sudo -n. A stub that exits 1 off macOS.
+[[bin]]
+name = "k2-power-helper"
+path = "src/bin/k2-power-helper.rs"
+
 # Sandbox P2b — the privilege-dropped libkrun VMM jail. The real body is
 # linux+sandbox-microvm only and links libkrun (see build.rs); on every other
 # build it is the stub `main` that exits 1. `required-features` keeps it out of

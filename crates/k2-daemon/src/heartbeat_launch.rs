@@ -32,7 +32,7 @@ use std::path::Path;
 
 use k2_core::workspace::agent_identity::{resolve_agent_name, resolve_project_id};
 use k2_core::workspace::wake_prompts as wake;
-use k2_core::db::schema::{AgentHeartbeat, HeartbeatFire};
+use k2_core::db::schema::{AgentHeartbeat, HeartbeatFire, LeaseCheck, LeaseOutcome};
 use k2_core::session::SessionId;
 
 use crate::session_lookup;
@@ -75,6 +75,34 @@ pub fn smart_launch_with_origin(
     name: &str,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
+    smart_launch_checked(project_path, name, catchup_of, LeaseCheck::Manual)
+}
+
+/// Scheduler-origin launch (HB14). `evaluated_last_fired` is the
+/// `last_fired` the due evaluator read; the lease is taken only if it is
+/// unchanged, so two tickers that judged the same slot due fire it once
+/// (HB3). A lost race returns `decision: "skipped_already_fired"` and
+/// writes no audit row — it is a non-event, like a not-yet-due tick.
+pub fn smart_launch_scheduled(
+    project_path: &str,
+    name: &str,
+    catchup_of: Option<&str>,
+    evaluated_last_fired: Option<&str>,
+) -> serde_json::Value {
+    smart_launch_checked(
+        project_path,
+        name,
+        catchup_of,
+        LeaseCheck::Scheduled(evaluated_last_fired),
+    )
+}
+
+fn smart_launch_checked(
+    project_path: &str,
+    name: &str,
+    catchup_of: Option<&str>,
+    check: LeaseCheck<'_>,
+) -> serde_json::Value {
     if name.is_empty() {
         return error_value("error", "missing 'name' parameter", name);
     }
@@ -101,15 +129,26 @@ pub fn smart_launch_with_origin(
     // sees `in_flight_started_at IS NOT NULL` and gets `false`.
     // Boot-time `sweep_stale_leases` clears leases left behind by
     // a daemon that crashed mid-spawn.
-    if !acquire_lease(&project_id, &hb.name) {
-        write_audit(&project_id, &agent_name, &hb, "skipped_locked",
-            "smart_launch: heartbeat already in flight");
-        return serde_json::json!({
-            "success": false,
-            "decision": "skipped_locked",
-            "reason": "heartbeat already in flight",
-            "name": hb.name,
-        });
+    match acquire_lease(&project_id, &hb.name, check) {
+        LeaseOutcome::Acquired => {}
+        LeaseOutcome::AlreadyFired => {
+            return serde_json::json!({
+                "success": false,
+                "decision": "skipped_already_fired",
+                "reason": "another tick already fired this slot",
+                "name": hb.name,
+            });
+        }
+        LeaseOutcome::InFlight | LeaseOutcome::Missing => {
+            write_audit(&project_id, &agent_name, &hb, "skipped_locked",
+                "smart_launch: heartbeat already in flight");
+            return serde_json::json!({
+                "success": false,
+                "decision": "skipped_locked",
+                "reason": "heartbeat already in flight",
+                "name": hb.name,
+            });
+        }
     }
 
     // 0.37.8 — opt-in: deliver into the workspace's pinned chat
@@ -1015,10 +1054,39 @@ pub(crate) fn force_release_hung_lease(
 
 // ── Lease + stamp helpers ─────────────────────────────────────────
 
-fn acquire_lease(project_id: &str, hb_name: &str) -> bool {
+fn acquire_lease(project_id: &str, hb_name: &str, check: LeaseCheck<'_>) -> LeaseOutcome {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    AgentHeartbeat::try_acquire_heartbeat(&conn, project_id, hb_name).unwrap_or(false)
+    match AgentHeartbeat::try_acquire_heartbeat_checked(&conn, project_id, hb_name, check) {
+        Ok(o) => o,
+        Err(e) => {
+            k2_core::log_debug!("[heartbeat] lease claim for {hb_name} failed: {e}");
+            LeaseOutcome::InFlight
+        }
+    }
+}
+
+/// HB16 — a launch that PANICKED (a `JoinError` in the scheduler's
+/// fan-out) releases the in-flight lease and counts one failure, the
+/// same as an error result, so the row is never wedged until the next
+/// restart's sweep. Returns false when the row is gone.
+pub fn release_after_panic(project_path: &str, hb_name: &str, panic_text: &str) -> bool {
+    let (hb, agent_name, project_id) = match resolve_row(project_path, hb_name) {
+        Ok(t) => t,
+        Err(e) => {
+            k2_core::log_debug!(
+                "[heartbeat] panic release skipped for {hb_name} — row unresolvable: {e}"
+            );
+            return false;
+        }
+    };
+    let _ = record_fire_failure(
+        &project_id,
+        &agent_name,
+        &hb,
+        &format!("launch panicked: {panic_text}"),
+    );
+    true
 }
 
 fn release_lease(project_id: &str, hb_name: &str) {

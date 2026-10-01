@@ -75,10 +75,11 @@ struct ApplyWakeSchedulerBody {
     wake_system: Option<bool>,
 }
 
-/// Handler for `POST /cli/heartbeat/install-launchd`.
+/// Handler for `POST /cli/heartbeat/install-launchd` (older clients).
 ///
-/// Writes `~/.k2so/heartbeat.sh` + installs the launchd plist (macOS)
-/// or crontab entry (Linux). Idempotent.
+/// Heartbeat S2: there is no OS tick job to install any more — the
+/// daemon ticks itself. This removes any leftover job instead and says
+/// so. Idempotent.
 pub fn handle_install_launchd(body: &[u8]) -> CliResponse {
     let parsed: InstallLaunchdBody = if body.is_empty() {
         InstallLaunchdBody::default()
@@ -88,11 +89,9 @@ pub fn handle_install_launchd(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
         }
     };
-    // HB11: one installer, from saved settings. The body's interval /
-    // wake values are accepted for old clients but never override the
-    // saved `wake_scheduler` — the job always matches Settings.
+    // The body is still parsed (400 on garbage) but decides nothing.
     let _ = (parsed.interval_seconds, parsed.wake_system);
-    match heartbeat_install::install_from_saved_settings() {
+    match heartbeat_install::retire_os_tick_job() {
         Ok(out) => CliResponse::ok_json(
             serde_json::json!({ "success": true, "message": out.message }).to_string(),
         ),
@@ -114,10 +113,9 @@ pub fn handle_uninstall_launchd(_body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/heartbeat/apply-wake-scheduler`.
 ///
-/// Re-applies the SAVED Wake Scheduler settings through the one
-/// installer (HB11). Mode "heartbeat" installs the user's interval +
-/// wake_system; "on_demand" and "off" install the 60 s no-wake job
-/// (Rosson D2: Off = never wake the machine, still fire while awake).
+/// Older clients' Settings → Apply. Heartbeat S2: removes any leftover
+/// OS tick job (every mode, HB15/W1), re-plans the daemon's wake event
+/// from the saved settings, and reports what the daemon does now.
 pub fn handle_apply_wake_scheduler(body: &[u8]) -> CliResponse {
     let parsed: ApplyWakeSchedulerBody = if body.is_empty() {
         ApplyWakeSchedulerBody::default()
@@ -132,9 +130,51 @@ pub fn handle_apply_wake_scheduler(body: &[u8]) -> CliResponse {
     // body is still parsed (400 on garbage) but no longer decides.
     let _ = (parsed.mode, parsed.interval_minutes, parsed.wake_system);
     match heartbeat_install::apply_wake_scheduler() {
-        Ok(msg) => CliResponse::ok_json(
-            serde_json::json!({ "success": true, "message": msg }).to_string(),
-        ),
+        Ok(msg) => {
+            crate::power::replan_wake_now();
+            CliResponse::ok_json(
+                serde_json::json!({ "success": true, "message": msg }).to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// Body for `POST /cli/heartbeat/wake`.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SetWakeBody {
+    /// "Wake this computer for heartbeats" (D8).
+    enabled: bool,
+    /// "Also on battery" (D12). Omitted = unchanged.
+    on_battery: Option<bool>,
+}
+
+/// Handler for `POST /cli/heartbeat/wake` — the one wake switch (D8).
+///
+/// Turning it on, on a Mac without the helper, shows ONE admin dialog
+/// (D11). If the user declines, the switch is saved OFF and `message`
+/// says why. Returns `{ success, wakeForHeartbeats, message, wake,
+/// awake }` — the same `wake` / `awake` objects as `scheduler-status`.
+pub fn handle_set_wake(body: &[u8]) -> CliResponse {
+    let parsed: SetWakeBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
+    };
+    match crate::power::set_wake_enabled(parsed.enabled, parsed.on_battery) {
+        Ok((on, message)) => {
+            let status = crate::power::power().status_json();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "success": on == parsed.enabled,
+                    "wakeForHeartbeats": on,
+                    "message": message,
+                    "wake": status["wake"],
+                    "awake": status["awake"],
+                })
+                .to_string(),
+            )
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

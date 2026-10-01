@@ -859,12 +859,21 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds());
-            // HB8/HB9/HB10: the honest transport check, per-source tick
-            // stamps, and the last self-check repair. `transportInstalled`
-            // stays for old clients and means `transport.state == ok`.
+            // HB9: per-source tick stamps. S2 (HB12, HB15, W8): the daemon
+            // ticks itself every 60 s (`ticker`); `transport` now says
+            // whether an OLD OS tick job is left over (it is removed);
+            // `wake` / `awake` say what the power layer really has
+            // scheduled and held. `transportInstalled` and `wakeMode`
+            // stay for old clients.
             let transport = k2_core::heartbeats::install::transport_state();
             let transport_ok =
-                transport.state == k2_core::heartbeats::install::TransportState::Ok;
+                transport.state == k2_core::heartbeats::install::TransportState::Retired;
+            let settings = k2_core::app_settings::load().wake_scheduler;
+            let power = crate::power::power().status_json();
+            let daemon_stale = last_daemon_tick_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds());
             CliResponse::ok_json(
                 serde_json::json!({
                     "lastTickAt": last_tick_at,
@@ -872,11 +881,21 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     "lastDaemonTickAt": last_daemon_tick_at,
                     "staleSecs": stale_secs,
                     "enabledCount": enabled_count,
+                    "ticker": {
+                        "source": "daemon",
+                        "intervalSecs": 60,
+                        "lastTickAt": last_daemon_tick_at,
+                        "staleSecs": daemon_stale,
+                    },
                     "transportInstalled": transport_ok,
                     "transport": transport,
                     "lastTransportRepair":
                         k2_core::heartbeats::install::last_transport_repair(),
-                    "wakeMode": k2_core::app_settings::load().wake_scheduler.mode,
+                    "wakeMode": settings.mode,
+                    "wakeForHeartbeats": settings.wake_wanted(),
+                    "wakeOnBattery": settings.wake_on_battery,
+                    "wake": power["wake"],
+                    "awake": power["awake"],
                 })
                 .to_string(),
             )

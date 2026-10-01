@@ -249,6 +249,20 @@ fn stamp_tick_with_gap_audit(source: TickSource, paths: &[String]) {
 ///   5. `stamp_heartbeat_fired` on the ones that actually spawned.
 ///   6. Return the count for `heartbeat.sh` to parse.
 pub fn handle_scheduler_fire(project_path: &str) -> String {
+    // HB13 — one due scan per project at a time. The daemon's own 60 s
+    // tick and a leftover OS tick (or a manual curl) can arrive
+    // together; the second returns at once. `heartbeat.sh` logs the
+    // `skipped` value.
+    let Some(_scan) = ScanGuard::try_begin(project_path) else {
+        return serde_json::json!({
+            "skipped": "tick_in_progress",
+            "count": 0,
+            "launched": [],
+            "heartbeats": [],
+        })
+        .to_string();
+    };
+
     // Per-project ticks that DIDN'T come through active-projects
     // (manual "tick now", boot overdue scan, direct curl) still stamp
     // the tick and surface a gap for this project. When heartbeat.sh
@@ -355,20 +369,61 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
     .to_string()
 }
 
+/// HB13 — projects with a due scan running in this daemon right now.
+static SCANS_IN_PROGRESS: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
+
+/// Holds a project's single-flight slot; releases it on drop (also on
+/// panic unwind).
+pub struct ScanGuard {
+    project_path: String,
+}
+
+impl ScanGuard {
+    /// `None` when a scan for `project_path` is already running.
+    pub fn try_begin(project_path: &str) -> Option<Self> {
+        let mut set = SCANS_IN_PROGRESS.lock();
+        if !set.insert(project_path.to_string()) {
+            return None;
+        }
+        Some(Self { project_path: project_path.to_string() })
+    }
+}
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        SCANS_IN_PROGRESS.lock().remove(&self.project_path);
+    }
+}
+
 /// Bounded-concurrent fan-out of `smart_launch` over the heartbeat
 /// candidates. Returns the names that fired successfully.
+///
+/// Every launch here is scheduler-origin, so it passes the
+/// `last_fired` the evaluator read (HB14): a slot another tick already
+/// fired is skipped at the lease.
 fn run_candidates_bounded(
     project_path: &str,
     candidates: Vec<heartbeat::HeartbeatFireCandidate>,
 ) -> Vec<String> {
-    run_candidates_bounded_with(project_path, candidates, |pp, cand| {
-        crate::heartbeat_launch::smart_launch_with_origin(
+    let fired = run_candidates_bounded_with(project_path, candidates, |pp, cand| {
+        crate::heartbeat_launch::smart_launch_scheduled(
             pp,
             &cand.name,
             cand.catchup_of.as_deref(),
+            cand.evaluated_last_fired.as_deref(),
         )
-    })
+    });
+    // W2 tail: a heartbeat that just fired gets a few minutes of awake
+    // time to do its work (a scheduled wake may be a short dark wake).
+    if !fired.is_empty() {
+        crate::power::hold_for("heartbeat run", HEARTBEAT_RUN_AWAKE_TAIL);
+    }
+    fired
 }
+
+/// W2 — keep the machine awake this long after a heartbeat fires.
+const HEARTBEAT_RUN_AWAKE_TAIL: Duration = Duration::from_secs(5 * 60);
 
 /// [`run_candidates_bounded`] with the launcher injected — production
 /// passes `smart_launch_with_origin`; the lease-watchdog integration
@@ -411,6 +466,10 @@ where
         return Vec::new();
     }
 
+    // W2 — hold the OS awake from the first lease to the last release.
+    // Dropped when this function returns, panic paths included.
+    let _awake = crate::power::hold("heartbeat fire");
+
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let sem = Arc::new(Semaphore::new(MAX_PARALLEL_HEARTBEAT_SPAWNS));
@@ -432,10 +491,26 @@ where
                     let result = match tokio::time::timeout(deadline, &mut handle).await {
                         Ok(Ok(v)) => v,
                         Ok(Err(e)) => {
+                            // HB16 — a panicking launch must not wedge
+                            // the row: release the lease and count one
+                            // failure, like an error result.
                             k2_core::log_debug!(
-                                "[daemon/scheduler-fire] hb {} join error: {}",
+                                "[daemon/scheduler-fire] hb {} join error: {} — releasing lease",
                                 cand_for_log, e
                             );
+                            let pp = project_path.to_string();
+                            let name = cand_for_log.clone();
+                            let text = e.to_string();
+                            let released = spawn_blocking(move || {
+                                crate::heartbeat_launch::release_after_panic(&pp, &name, &text)
+                            })
+                            .await;
+                            if let Err(e2) = released {
+                                k2_core::log_debug!(
+                                    "[daemon/scheduler-fire] hb {} panic release failed: {}",
+                                    cand_for_log, e2
+                                );
+                            }
                             drop(permit);
                             return None;
                         }

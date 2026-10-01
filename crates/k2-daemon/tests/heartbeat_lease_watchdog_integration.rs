@@ -237,3 +237,77 @@ async fn hung_spawn_lease_is_released_by_watchdog_without_restart() {
 
     let _ = std::fs::remove_dir_all(&project);
 }
+
+/// T-S2c (HB16) — a launch that PANICS after taking the lease must not
+/// wedge the row: the JoinError path releases the lease and counts one
+/// failure, exactly like an error result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn panicking_launch_releases_lease_and_counts_one_failure() {
+    let _g = lock();
+    init_for_tests();
+    k2_daemon::power::install_os(std::sync::Arc::new(k2_daemon::power::fake::FakePowerOs::ready()));
+
+    let workspace_id = "hb-watchdog-ws-panic";
+    let project = setup_project(workspace_id);
+    let project_path = project.to_string_lossy().into_owned();
+    {
+        let dir = project.join(".k2so/agents/manager");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("AGENT.md"),
+            "---\nname: manager\ntype: manager\n---\n# manager\n",
+        )
+        .unwrap();
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::insert(
+            &conn,
+            "watchdog-panic-hb-id",
+            workspace_id,
+            "panic-hb",
+            "hourly",
+            r#"{"every_seconds":3600}"#,
+            "WAKEUP.md",
+            true,
+        )
+        .expect("seed heartbeat");
+    }
+
+    let candidates = vec![k2_core::heartbeats::HeartbeatFireCandidate {
+        name: "panic-hb".to_string(),
+        agent_name: "manager".to_string(),
+        wakeup_path_abs: project.join("WAKEUP.md").to_string_lossy().into_owned(),
+        wakeup_path_rel: "WAKEUP.md".to_string(),
+        catchup_of: None,
+        evaluated_last_fired: None,
+    }];
+
+    let ws = workspace_id.to_string();
+    let fired = run_candidates_bounded_with(&project_path, candidates, move |_pp, cand| {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let won = AgentHeartbeat::try_acquire_heartbeat(&conn, &ws, &cand.name)
+                .expect("acquire lease");
+            assert!(won, "test launcher must win the lease");
+        }
+        panic!("simulated launch panic");
+    });
+    assert!(fired.is_empty(), "a panicked launch must not report a fire");
+
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = AgentHeartbeat::get_by_name(&conn, workspace_id, "panic-hb")
+        .unwrap()
+        .expect("row exists");
+    assert!(
+        row.in_flight_started_at.is_none(),
+        "HB16: the panicked launch's lease must be released at once",
+    );
+    assert_eq!(row.consecutive_failures, 1, "HB16: a panic counts one failure");
+    assert!(row.next_retry_at.is_some(), "the failure must schedule a backoff window");
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&project);
+}

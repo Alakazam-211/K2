@@ -105,6 +105,13 @@ export const FEATURES = {
    *  needs (`lib/room-failure.ts`). `home-room-write` (the P0 layout
    *  revision release) is added when that release is cut. */
   'home-room': '0.40.39',
+  /** Heartbeat S3 (prd-heartbeat-firing-v1 HB24/HB25): heartbeat list /
+   *  list-all rows carry daemon-stored `nextFireAt`, `waitReason`,
+   *  `waitDetail`, `waitSince` (the single source; S5's `wakeup_empty` /
+   *  `schedule_error` included). Gates the S4 drawer countdown; an older
+   *  server shows schedule text only (HB30). Set to the release that
+   *  ships S3 — confirm at release cut. */
+  'heartbeat-next-fire': '0.41.7',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

@@ -1823,8 +1823,27 @@ try:
         sys.exit(1)
     if not rows:
         print('No heartbeats configured for this workspace.'); sys.exit(0)
-    print(f'{\"Name\":<20} {\"Frequency\":<10} {\"Schedule\":<30} {\"Last Fired\":<22} Enabled')
-    print('-' * 100)
+    # Heartbeat S3 (HB24): Next + Waiting come from the daemon's stored
+    # nextFireAt / waitReason / waitDetail. The CLI does no schedule
+    # math; an older daemon without the fields shows '-'.
+    from datetime import datetime
+    def hb_next(r):
+        s = r.get('nextFireAt')
+        if not s: return '-'
+        try:
+            return datetime.fromisoformat(s.replace('Z', '+00:00')).astimezone().strftime('%Y-%m-%d %H:%M')
+        except ValueError:
+            return s
+    def hb_waiting(r):
+        reason = r.get('waitReason')
+        if not reason: return '-'
+        detail = r.get('waitDetail')
+        # S5's two reasons keep their own line below.
+        if detail and reason not in ('wakeup_empty', 'schedule_error'):
+            return f'{reason}: {detail}'
+        return reason
+    print(f'{\"Name\":<20} {\"Frequency\":<10} {\"Schedule\":<30} {\"Last Fired\":<22} {\"Enabled\":<8} {\"Next\":<17} Waiting')
+    print('-' * 140)
     for r in rows:
         spec = json.loads(r.get('specJson', '{}'))
         sched_parts = []
@@ -1848,15 +1867,13 @@ try:
         sched = ' '.join(sched_parts) or '-'
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         en = 'yes' if r.get('enabled') else 'no'
-        print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en}')
-        # S5: the daemon names why an enabled row is waiting.
+        print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
+        # S5: the two creation-trap reasons get a line that says what to do.
         wr = r.get('waitReason')
         if wr == 'wakeup_empty':
             print('    waiting: WAKEUP.md is empty (needs instructions)')
         elif wr == 'schedule_error':
             print(f\"    invalid schedule: {r.get('waitDetail') or r.get('scheduleError') or '?'}\")
-        elif wr:
-            print(f\"    waiting: {wr}\")
         if not r.get('enabled') and r.get('disabledReason') == 'wakeup_empty':
             print('    disabled: WAKEUP.md was empty (add instructions, then enable)')
 except Exception as e:
@@ -2260,6 +2277,12 @@ try:
     print(f'Enabled:        {enabled}')
     print(f'Pinned chat:    {pinned}')
     print(f'Last fired:     {last}')
+    # Heartbeat S3 (HB24): daemon-owned next fire + wait reason.
+    print(f'Next fire:      {row.get(\"nextFireAt\") or \"-\"}')
+    waiting = row.get('waitReason') or '-'
+    if row.get('waitDetail'): waiting += f' ({row.get(\"waitDetail\")})'
+    if row.get('waitSince'): waiting += f' since {row.get(\"waitSince\")}'
+    print(f'Waiting:        {waiting}')
     print(f'Wakeup file:    {row.get(\"wakeupPath\")}')
     print(f'Created:        {created}')
     print(f'Spec:')
@@ -2357,9 +2380,15 @@ except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 if isinstance(rows, dict):
     print(f\"Error: {rows.get('error', rows)}\", file=sys.stderr); sys.exit(1)
-if not any(r.get('name') == os.environ['NAME'] for r in rows):
+row = next((r for r in rows if r.get('name') == os.environ['NAME']), None)
+if row is None:
     print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
     sys.exit(1)
+# Heartbeat S3 (HB24): what the daemon is waiting on, before the history.
+if row.get('waitReason'):
+    detail = f' ({row[\"waitDetail\"]})' if row.get('waitDetail') else ''
+    print(f'Next fire: {row.get(\"nextFireAt\") or \"-\"}   Waiting: {row[\"waitReason\"]}{detail}')
+    print()
 " || exit 1
     cli_send cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
 import json, sys

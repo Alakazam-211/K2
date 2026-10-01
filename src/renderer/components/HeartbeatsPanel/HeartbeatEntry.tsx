@@ -6,6 +6,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
+import { scopeMayWrite } from '@/kessel/server-scope'
 import {
   type HeartbeatEntry,
 } from '@/stores/heartbeat-sessions'
@@ -71,8 +72,8 @@ export function HeartbeatEntryRow({
   const handleLaunch = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (busy || !projectPath || entry.state === 'archived') return
-    // Home M4: a view-only room fires nothing on its server.
-    if (room.readOnly) return
+    // Home M4/M5: the room's write rules (view-only fires nothing).
+    if (!scopeMayWrite(room.scope, 'heartbeat/launch')) return
     setBusy(true)
     try {
       await launchHeartbeat(room, projectPath, entry.row.name)
@@ -84,9 +85,9 @@ export function HeartbeatEntryRow({
   const handleToggle = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (busy || !projectPath || entry.state === 'archived') return
-    // Home M4: `heartbeat/enable` is a GET that writes: not from a
-    // view-only room.
-    if (room.readOnly) return
+    // Home M4/M5: `heartbeat/enable` is a GET that writes: held to the
+    // room's write rules.
+    if (!scopeMayWrite(room.scope, 'heartbeat/enable')) return
     setBusy(true)
     try {
       await daemonCliGet(room.scope, 'heartbeat/enable', {
@@ -95,7 +96,9 @@ export function HeartbeatEntryRow({
         enabled: entry.row.enabled ? '0' : '1',
       })
       void room.heartbeats.getState().refresh(projectPath)
-      void emit('sync:projects').catch(() => {})
+      // MS67: `sync:projects` tells THIS computer's windows; not from a room
+      // on another server.
+      if (room.localCommands) void emit('sync:projects').catch(() => {})
     } catch (err) {
       useToastStore.getState().addToast(`Toggle failed: ${String(err)}`, 'error', 4000)
     } finally {

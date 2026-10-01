@@ -1,7 +1,7 @@
 import { daemonCliGetText } from '@/lib/daemon-cli'
 import type { HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
-import { ViewOnlyWriteError, type ServerScope } from '@/kessel/server-scope'
+import { assertScopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 
 /** Manual Launch / test-fire. Always passes `force=1` so a disabled
  *  heartbeat still runs (scheduler ticks still skip disabled rows). */
@@ -11,8 +11,9 @@ export async function launchHeartbeat(
   name: string,
 ): Promise<boolean> {
   const toast = useToastStore.getState()
-  // `heartbeat/launch` is a GET that fires: never from a view-only room.
-  if (room.scope.viewOnly) throw new ViewOnlyWriteError(room.scope.hostKey, 'heartbeat/launch')
+  // `heartbeat/launch` is a GET that fires: held to the room's write rules
+  // (never from a view-only room; on the allowlist for a usable one).
+  assertScopeMayWrite(room.scope, 'heartbeat/launch')
   try {
     const resp = await daemonCliGetText(room.scope, 'heartbeat/launch', {
       project: projectPath,

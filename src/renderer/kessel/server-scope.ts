@@ -46,6 +46,7 @@ import {
 import { LOCAL_HOME_HOST, canonicalHostKey, homeHostKey, savedHostForKey } from '@/lib/host-key'
 import { FEATURES, gte, serverSupports, type FeatureKey } from '@/lib/server-capabilities'
 import { hostScopedKey } from '@/lib/host-scoped-storage'
+import { ROOM_WRITE_ROUTES } from '@/kessel/room-writes'
 
 export interface ServerScope {
   /** Registry identity: `primary`, or `host:<hostKey>` for a pinned scope. */
@@ -82,6 +83,11 @@ export interface ServerScope {
    *  refuses every POST on it except the keep-alive (`projects/activate`).
    *  Absent / false for every other scope. */
   readonly viewOnly?: boolean
+  /** Home M5: a usable remote room's scope (`remoteRoomScope`). The request
+   *  layer sends a write on it only when the route is in the room write
+   *  allowlist (`kessel/room-writes.ts`), so a room can do what a room does
+   *  on its server and nothing else. Absent / false for every other scope. */
+  readonly remoteRoom?: boolean
 }
 
 /** What `scopeForHost` accepts: `local`, a Home host key string, or a saved
@@ -279,12 +285,75 @@ export function viewOnlyScope(base: ServerScope): ServerScope {
   return twin
 }
 
-/** Throws `ViewOnlyWriteError` when `scope` is view-only and `route` is not
- *  allowed. The request layer calls it before every POST. */
-export function assertScopeMayPost(scope: ServerScope, route: string): void {
+// ── Usable remote rooms (Home M5) ────────────────────────────────────────
+//
+// A Home room on another server that the user can USE (type, open / close /
+// split tabs, rename, file writes, chat-history resume, heartbeat launch …)
+// runs on a remote-room twin of that server's scope: the same server, id and
+// creds, so every write goes to THAT server and nowhere else. On top, the
+// request layer sends a write only when its route is in `ROOM_WRITE_ROUTES`
+// (`kessel/room-writes.ts`) — a narrow, explicit list of what a room does on
+// its server. Anything else (projects/delete, presets, settings, mail,
+// Finder on the daemon's machine …) is refused with `RoomWriteRefusedError`
+// before any request leaves. This computer's Tauri commands stay behind the
+// MS67 local-only gates (`lib/local-only-actions.ts`).
+
+/** A write from a usable remote room that is not on the room allowlist. */
+export class RoomWriteRefusedError extends Error {
+  readonly hostKey: string
+  readonly route: string
+  constructor(hostKey: string, route: string) {
+    super(`Remote room: ${route} is not something a room sends to ${hostKey}`)
+    this.name = 'RoomWriteRefusedError'
+    this.hostKey = hostKey
+    this.route = route
+  }
+}
+
+const remoteRoomTwins = new WeakMap<ServerScope, ServerScope>()
+
+/** The usable remote-room twin of `base` (one object per base scope). Every
+ *  field and method is `base`'s; only `remoteRoom` differs. A view-only
+ *  scope never becomes usable, and the window's primary scope never becomes
+ *  a room scope (a pinned room is always pinned to one server). */
+export function remoteRoomScope(base: ServerScope): ServerScope {
+  if (base.remoteRoom) return base
+  if (base.viewOnly) throw new Error('remoteRoomScope: a view-only scope cannot become a usable room scope')
+  if (base.isPrimary) throw new Error('remoteRoomScope: a room scope is pinned to one server (scopeForHost)')
+  let twin = remoteRoomTwins.get(base)
+  if (!twin) {
+    twin = Object.create(base, { remoteRoom: { value: true, enumerable: true } }) as ServerScope
+    remoteRoomTwins.set(base, twin)
+  }
+  return twin
+}
+
+/** Throws when a write on `scope` to `route` is not allowed: a view-only
+ *  room sends only the keep-alive (`ViewOnlyWriteError`); a usable remote
+ *  room only the room allowlist (`RoomWriteRefusedError`). Every other scope
+ *  passes. The request layer calls it before every POST; code that sends a
+ *  write any other way (a raw spawn / close fetch, a GET-shaped verb such as
+ *  `heartbeat/launch`) calls it itself. */
+export function assertScopeMayWrite(scope: ServerScope, route: string): void {
   if (scope.viewOnly && !VIEW_ONLY_POST_ROUTES.has(route)) {
     throw new ViewOnlyWriteError(scope.hostKey, route)
   }
+  if (scope.remoteRoom && !ROOM_WRITE_ROUTES.has(route)) {
+    throw new RoomWriteRefusedError(scope.hostKey, route)
+  }
+}
+
+/** May `scope` send a write to `route`? (UI: hide what the request layer
+ *  would refuse.) */
+export function scopeMayWrite(scope: ServerScope, route: string): boolean {
+  if (scope.viewOnly) return VIEW_ONLY_POST_ROUTES.has(route)
+  if (scope.remoteRoom) return ROOM_WRITE_ROUTES.has(route)
+  return true
+}
+
+/** The request layer's POST check (`daemonCliPost`). */
+export function assertScopeMayPost(scope: ServerScope, route: string): void {
+  assertScopeMayWrite(scope, route)
 }
 
 /** Prefix a workspace-only storage key (or in-memory map key) with the

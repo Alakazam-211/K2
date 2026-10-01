@@ -49,29 +49,30 @@ const LOCKOUT_THRESHOLD: u32 = 3;
 /// How long a username stays locked once the threshold is hit.
 const LOCKOUT_DURATION_MINUTES: i64 = 15;
 
-/// Permission tier for a connect-user (K2SO #629; Viewer added by the
-/// presence/multiplayer arc S4). Strict hierarchy
-/// `Owner > Admin > Member > Viewer`. The local daemon-token holder (the
-/// host machine's owner) is ALWAYS treated as `Owner` regardless of any
-/// stored row — that authority lives in the token, not the file.
+/// Permission tier for a connect-user (K2SO #629). Strict hierarchy
+/// `Owner > Admin > Member`. The local daemon-token holder (the host
+/// machine's owner) is ALWAYS treated as `Owner` regardless of any stored
+/// row — that authority lives in the token, not the file.
 ///
 /// - **Owner**: add/remove/enable/disable ANY user + CHANGE ROLES + use
-///   K2SO. Assignable to a connect-user.
-/// - **Admin**: add/remove/enable/disable users + use K2SO. CANNOT change
-///   roles; CANNOT act on an Owner-role user.
-/// - **Member**: connect + use K2SO only. No user management. The DEFAULT
+///   K2. Assignable to a connect-user.
+/// - **Admin**: add/enable/disable users + use K2. CANNOT change roles;
+///   CANNOT act on an Owner-role user.
+/// - **Member**: connect + use K2 only. No user management. The DEFAULT
 ///   for existing rows (via `#[serde(default)]`) and newly added users.
-/// - **Viewer**: view-only (presence PRD §4) — connects and watches, but
-///   cannot claim/type/resize unless holding an ephemeral edit grant
-///   (`k2-daemon presence.rs::set_granted`), and manages nothing. Sits
-///   BELOW the `>= Member` capability floors (e.g. send-message).
+///
+/// **There is no Viewer.** The view-only tier was removed
+/// (`prd-remove-viewer-role-v1.md`): anyone with a login is a trusted
+/// operator, and limited access is what app passes (`k2skn_`) are for. A
+/// stored `"viewer"` row loads as a DISABLED Member flagged `was_viewer`
+/// (see [`ConnectUser`]'s deserializer and [`migrate_removed_viewers`]).
+/// Every role parser refuses `"viewer"` with [`VIEWER_ROLE_REMOVED`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Lowest tier — listed first so the derived `Ord` ranks
-    /// `Viewer < Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING
-    /// for `derive(Ord)`; the `role_ordering_*` test pins it.
-    Viewer,
+    /// `Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING for
+    /// `derive(Ord)`; the `role_ordering_*` test pins it.
     Member,
     Admin,
     Owner,
@@ -84,16 +85,32 @@ impl Default for Role {
     }
 }
 
+/// The error every role parser gives for the retired `"viewer"` string
+/// (`k2 users add --role viewer`, `POST /cli/users/set-role`, the boot
+/// seed-users file). The CLI and Settings show it as-is.
+pub const VIEWER_ROLE_REMOVED: &str = "the viewer role was removed: a login is owner, admin or member. For limited access, give the person an app pass instead (k2 app).";
+
 impl Role {
-    /// Parse a wire role string (`"owner"` | `"admin"` | `"member"` |
-    /// `"viewer"`). Case-insensitive; returns `None` for anything else.
+    /// Parse a wire role string (`"owner"` | `"admin"` | `"member"`).
+    /// Case-insensitive; `None` for anything else, including the retired
+    /// `"viewer"`. Use [`Role::parse_wire`] when the caller needs the error.
     pub fn from_wire(s: &str) -> Option<Role> {
+        Role::parse_wire(s).ok()
+    }
+
+    /// [`Role::from_wire`] with a caller-facing error: `"viewer"` gets
+    /// [`VIEWER_ROLE_REMOVED`]; anything else unknown gets
+    /// `invalid role '<s>' (expected owner|admin|member)`.
+    pub fn parse_wire(s: &str) -> Result<Role, String> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "owner" => Some(Role::Owner),
-            "admin" => Some(Role::Admin),
-            "member" => Some(Role::Member),
-            "viewer" => Some(Role::Viewer),
-            _ => None,
+            "owner" => Ok(Role::Owner),
+            "admin" => Ok(Role::Admin),
+            "member" => Ok(Role::Member),
+            "viewer" => Err(VIEWER_ROLE_REMOVED.to_string()),
+            _ => Err(format!(
+                "invalid role '{}' (expected owner|admin|member)",
+                s.trim()
+            )),
         }
     }
 
@@ -103,13 +120,12 @@ impl Role {
             Role::Owner => "owner",
             Role::Admin => "admin",
             Role::Member => "member",
-            Role::Viewer => "viewer",
         }
     }
 }
 
 /// Whether `role` may manage users at all (add/remove/enable/disable).
-/// True for `Admin` and `Owner`; false for `Member` and `Viewer`.
+/// True for `Admin` and `Owner`; false for `Member`.
 pub fn can_manage_users(role: Role) -> bool {
     matches!(role, Role::Admin | Role::Owner)
 }
@@ -122,21 +138,85 @@ pub fn can_change_roles(role: Role) -> bool {
 /// Whether an actor of `actor` role may perform a management action
 /// (remove/disable/etc.) on a target of `target` role.
 ///
-/// - `Owner` can act on anyone (Owner/Admin/Member/Viewer).
-/// - `Admin` can act on `Admin`/`Member`/`Viewer` but NOT on an `Owner`.
-/// - `Member` and `Viewer` can act on no one.
+/// - `Owner` can act on anyone (Owner/Admin/Member).
+/// - `Admin` can act on `Admin`/`Member` but NOT on an `Owner`.
+/// - `Member` can act on no one.
 pub fn can_act_on(actor: Role, target: Role) -> bool {
     match actor {
         Role::Owner => true,
         Role::Admin => target != Role::Owner,
-        Role::Member | Role::Viewer => false,
+        Role::Member => false,
+    }
+}
+
+/// On-disk role as it may appear in an OLD store: the retired `viewer`
+/// still parses here so a pre-removal `connect-users.json` loads (and is
+/// rewritten by [`migrate_removed_viewers`]) instead of failing the whole
+/// file. Never serialized; never leaves this module.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StoredRole {
+    Viewer,
+    #[default]
+    Member,
+    Admin,
+    Owner,
+}
+
+/// Deserialize-side twin of [`ConnectUser`]. Mirrors every field (same
+/// serde defaults) plus the legacy [`StoredRole`]; `From` folds a stored
+/// Viewer into a disabled Member flagged `was_viewer`.
+#[derive(Deserialize)]
+struct StoredConnectUser {
+    username: String,
+    password_hash: String,
+    created_at: DateTime<Utc>,
+    #[serde(default)]
+    disabled: bool,
+    #[serde(default)]
+    role: StoredRole,
+    #[serde(default)]
+    token_epoch: u64,
+    #[serde(default)]
+    must_change_password: bool,
+    #[serde(default)]
+    was_viewer: bool,
+}
+
+impl From<StoredConnectUser> for ConnectUser {
+    fn from(s: StoredConnectUser) -> Self {
+        let legacy_viewer = s.role == StoredRole::Viewer;
+        let role = match s.role {
+            // Fail closed: a stored Viewer is NEVER loaded as an enabled
+            // login. It becomes a disabled Member that the owner must
+            // re-enable on purpose (nobody is silently upgraded).
+            StoredRole::Viewer | StoredRole::Member => Role::Member,
+            StoredRole::Admin => Role::Admin,
+            StoredRole::Owner => Role::Owner,
+        };
+        ConnectUser {
+            username: s.username,
+            password_hash: s.password_hash,
+            created_at: s.created_at,
+            disabled: s.disabled || legacy_viewer,
+            role,
+            token_epoch: s.token_epoch,
+            must_change_password: s.must_change_password,
+            was_viewer: s.was_viewer || legacy_viewer,
+            legacy_viewer_unmigrated: legacy_viewer,
+        }
     }
 }
 
 /// A provisioned connect-user account. Persisted to
 /// `~/.k2so/connect-users.json`. The `password_hash` is an argon2id
 /// PHC string and is NEVER exposed off-disk (see [`ConnectUserView`]).
+///
+/// Deserializes through [`StoredConnectUser`] so a row stored with the
+/// retired `"role":"viewer"` loads as a disabled Member with
+/// `was_viewer` set, never as an enabled login.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "StoredConnectUser")]
 pub struct ConnectUser {
     /// Unique, lowercased, `^[a-z0-9_-]{2,}$`.
     pub username: String,
@@ -173,6 +253,18 @@ pub struct ConnectUser {
     /// `#[serde(default)]` → `false` so pre-S1 stored rows load unchanged.
     #[serde(default)]
     pub must_change_password: bool,
+    /// Viewer removal (`prd-remove-viewer-role-v1.md`): this account was a
+    /// Viewer before the role was retired. It was disabled on the daemon
+    /// update; Settings shows "was Viewer" with an "Enable as Member"
+    /// action. Cleared when the account is enabled ([`set_disabled`]
+    /// with `false`). Omitted on disk when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub was_viewer: bool,
+    /// True only in memory, for a row that was read with the retired
+    /// `"role":"viewer"` and not yet rewritten. [`migrate_removed_viewers`]
+    /// persists the rewrite and writes the audit line. Never serialized.
+    #[serde(skip)]
+    pub legacy_viewer_unmigrated: bool,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -186,6 +278,10 @@ pub struct ConnectUserView {
     /// row so a view round-trips even from a pre-#629 source.
     #[serde(default)]
     pub role: Role,
+    /// Viewer removal: the account was a Viewer and was disabled on the
+    /// daemon update. Settings offers "Enable as Member".
+    #[serde(default)]
+    pub was_viewer: bool,
 }
 
 impl From<&ConnectUser> for ConnectUserView {
@@ -195,6 +291,7 @@ impl From<&ConnectUser> for ConnectUserView {
             created_at: u.created_at,
             disabled: u.disabled,
             role: u.role,
+            was_viewer: u.was_viewer,
         }
     }
 }
@@ -407,12 +504,15 @@ fn save_store(store: &Store) -> Result<(), String> {
 
 /// Load-modify-save under a process lock so concurrent mutations don't
 /// clobber each other.
-fn update_store<R>(f: impl FnOnce(&mut Store) -> Result<R, String>) -> Result<R, String> {
+fn store_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _g = LOCK
-        .get_or_init(|| Mutex::new(()))
+    LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|p| p.into_inner());
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+fn update_store<R>(f: impl FnOnce(&mut Store) -> Result<R, String>) -> Result<R, String> {
+    let _g = store_lock();
     let mut store = load_store()?;
     let r = f(&mut store)?;
     save_store(&store)?;
@@ -432,7 +532,7 @@ pub fn list_users() -> Result<Vec<ConnectUserView>, String> {
 }
 
 /// Humans on this box for agents: synthesized host owner + every stored
-/// connect-user (owner/admin/member/viewer, including disabled).
+/// connect-user (owner/admin/member, including disabled).
 ///
 /// `owner_display` is the same string as human `[from …]`
 /// (`resolve_owner_from` / `owner_from_or_default`). Empty/blank falls
@@ -492,6 +592,8 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             // K2 Cloud S1: provision flows that want a forced first-login
             // rotation flip this via set_must_change_password after add.
             must_change_password: false,
+            was_viewer: false,
+            legacy_viewer_unmigrated: false,
         });
         Ok(())
     })?;
@@ -564,6 +666,11 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.disabled = disabled;
+        // Viewer removal: enabling a former Viewer is the owner's explicit
+        // "Enable as Member" — the account is a plain Member from here on.
+        if !disabled {
+            user.was_viewer = false;
+        }
         // K2 Connect #4: bump the durable epoch ONLY when disabling so an
         // already-minted session is invalidated across a restart. (Even if
         // the epoch matched, `validate_session` also re-asserts `!disabled`,
@@ -604,6 +711,56 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
     revoke_user_sessions(&username);
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
+}
+
+/// Viewer removal boot migration (`prd-remove-viewer-role-v1.md` RV3).
+///
+/// A store written before the Viewer role was removed may still hold
+/// `"role":"viewer"` rows. Loading already folds them into DISABLED
+/// Members flagged `was_viewer` (fail closed — see [`StoredConnectUser`]);
+/// this persists that rewrite once, bumps each account's token epoch so
+/// every session minted as a Viewer is dead across restarts, and appends
+/// one auth-audit line per account:
+/// `{"event":"role-removed","user":<name>,"outcome":"viewer-disabled",
+///   "ingress":"boot","ip":"-","client":"daemon"}`.
+///
+/// Returns the migrated usernames (empty — and no write — when there is
+/// nothing to migrate, the normal boot). Errors only when the store can't
+/// be read or written; the daemon logs that and keeps booting, and the
+/// rows stay disabled in memory either way.
+pub fn migrate_removed_viewers() -> Result<Vec<String>, String> {
+    let migrated = {
+        let _g = store_lock();
+        let mut store = load_store()?;
+        let mut names = Vec::new();
+        for user in store.users.iter_mut() {
+            if user.legacy_viewer_unmigrated {
+                user.legacy_viewer_unmigrated = false;
+                user.disabled = true;
+                user.was_viewer = true;
+                user.token_epoch = user.token_epoch.wrapping_add(1);
+                names.push(user.username.clone());
+            }
+        }
+        if names.is_empty() {
+            return Ok(names);
+        }
+        save_store(&store)?;
+        names
+    };
+    for name in &migrated {
+        revoke_user_sessions(name);
+        crate::auth_audit::record(&crate::auth_audit::AuditEvent::new(
+            "role-removed",
+            name,
+            "viewer-disabled",
+            "boot",
+            "-",
+            "daemon",
+        ));
+    }
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
+    Ok(migrated)
 }
 
 /// K2 Cloud S1: set/clear the forced-password-rotation flag on an
@@ -1776,42 +1933,47 @@ mod tests {
     // ── K2SO #629 — role model ──────────────────────────────────────────
 
     #[test]
-    fn role_ordering_is_viewer_lt_member_lt_admin_lt_owner() {
-        // VARIANT ORDER IS LOAD-BEARING for derive(Ord) — Viewer must be
-        // declared FIRST so it ranks below every other tier (presence S4).
-        assert!(Role::Viewer < Role::Member);
+    fn role_ordering_is_member_lt_admin_lt_owner() {
+        // VARIANT ORDER IS LOAD-BEARING for derive(Ord).
         assert!(Role::Member < Role::Admin);
         assert!(Role::Admin < Role::Owner);
-        assert!(Role::Viewer < Role::Owner);
-        assert!(Role::Viewer < Role::Admin);
         assert!(Role::Member < Role::Owner);
-        // Viewer sits BELOW the `>= Member` capability floors
-        // (e.g. authorize_send_message).
-        assert!(Role::Viewer < Role::Member);
-        assert!(!(Role::Viewer >= Role::Member));
-        // Serde default is UNCHANGED by the Viewer addition: legacy rows
-        // (no `role` field) still deserialize as Member.
+        // Legacy rows (no `role` field) deserialize as Member.
         assert_eq!(Role::default(), Role::Member);
     }
 
     #[test]
     fn role_wire_round_trips() {
-        for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
+        for r in [Role::Owner, Role::Admin, Role::Member] {
             assert_eq!(Role::from_wire(r.as_wire()), Some(r));
         }
         // Case-insensitive + trimmed.
         assert_eq!(Role::from_wire("  OWNER "), Some(Role::Owner));
         assert_eq!(Role::from_wire("Admin"), Some(Role::Admin));
-        assert_eq!(Role::from_wire(" Viewer "), Some(Role::Viewer));
         assert_eq!(Role::from_wire("nonsense"), None);
         // serde uses the same snake_case strings.
         assert_eq!(serde_json::to_string(&Role::Owner).unwrap(), "\"owner\"");
         assert_eq!(serde_json::to_string(&Role::Member).unwrap(), "\"member\"");
-        assert_eq!(serde_json::to_string(&Role::Viewer).unwrap(), "\"viewer\"");
+    }
+
+    #[test]
+    fn viewer_wire_role_is_refused_with_the_removal_message() {
+        assert_eq!(Role::from_wire("viewer"), None);
+        assert_eq!(Role::from_wire(" Viewer "), None);
         assert_eq!(
-            serde_json::from_str::<Role>("\"viewer\"").unwrap(),
-            Role::Viewer
+            Role::parse_wire("viewer").expect_err("viewer must be refused"),
+            VIEWER_ROLE_REMOVED
         );
+        assert_eq!(
+            Role::parse_wire("VIEWER").expect_err("viewer must be refused"),
+            VIEWER_ROLE_REMOVED
+        );
+        let other = Role::parse_wire("guest").expect_err("unknown must be refused");
+        assert_eq!(other, "invalid role 'guest' (expected owner|admin|member)");
+        // The bare Role type no longer deserializes "viewer" — only the
+        // ConnectUser store row tolerates it (and disables the account).
+        let bare: Result<Role, _> = serde_json::from_str("\"viewer\"");
+        assert!(bare.is_err(), "Role must not deserialize viewer: {bare:?}");
     }
 
     #[test]
@@ -1819,7 +1981,6 @@ mod tests {
         assert!(can_manage_users(Role::Owner));
         assert!(can_manage_users(Role::Admin));
         assert!(!can_manage_users(Role::Member));
-        assert!(!can_manage_users(Role::Viewer));
     }
 
     #[test]
@@ -1827,7 +1988,6 @@ mod tests {
         assert!(can_change_roles(Role::Owner));
         assert!(!can_change_roles(Role::Admin));
         assert!(!can_change_roles(Role::Member));
-        assert!(!can_change_roles(Role::Viewer));
     }
 
     #[test]
@@ -1836,40 +1996,139 @@ mod tests {
         assert!(can_act_on(Role::Owner, Role::Owner));
         assert!(can_act_on(Role::Owner, Role::Admin));
         assert!(can_act_on(Role::Owner, Role::Member));
-        assert!(can_act_on(Role::Owner, Role::Viewer));
-        // Admin can act on Admin/Member/Viewer but NOT Owner.
+        // Admin can act on Admin/Member but NOT Owner.
         assert!(!can_act_on(Role::Admin, Role::Owner));
         assert!(can_act_on(Role::Admin, Role::Admin));
         assert!(can_act_on(Role::Admin, Role::Member));
-        assert!(can_act_on(Role::Admin, Role::Viewer));
         // Member can act on no one.
         assert!(!can_act_on(Role::Member, Role::Owner));
         assert!(!can_act_on(Role::Member, Role::Admin));
         assert!(!can_act_on(Role::Member, Role::Member));
-        assert!(!can_act_on(Role::Member, Role::Viewer));
-        // Viewer can act on no one — not even another Viewer.
-        assert!(!can_act_on(Role::Viewer, Role::Owner));
-        assert!(!can_act_on(Role::Viewer, Role::Admin));
-        assert!(!can_act_on(Role::Viewer, Role::Member));
-        assert!(!can_act_on(Role::Viewer, Role::Viewer));
+    }
+
+    /// Write a store the way a pre-removal daemon did: `"role":"viewer"`.
+    fn write_legacy_store_with_viewer(viewer: &str, member: &str) {
+        let hash = hash_password("password123").expect("hash");
+        let body = serde_json::json!({
+            "users": [
+                {
+                    "username": viewer,
+                    "password_hash": hash,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "disabled": false,
+                    "role": "viewer",
+                    "token_epoch": 4
+                },
+                {
+                    "username": member,
+                    "password_hash": hash,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "disabled": false,
+                    "role": "member",
+                    "token_epoch": 0
+                }
+            ]
+        });
+        let dir = config_dir();
+        fs::create_dir_all(&dir).expect("mkdir store dir");
+        fs::write(store_path(), body.to_string()).expect("write legacy store");
     }
 
     #[test]
-    fn viewer_role_persists_through_set_role_and_store_round_trip() {
+    fn stored_viewer_loads_disabled_was_viewer_and_cannot_log_in() {
         with_temp_home(|| {
-            add_user("viewy", "password").expect("add");
-            // New users still default to Member; Viewer is an explicit demote.
-            assert_eq!(role_for_user("viewy"), Some(Role::Member));
-            set_role("viewy", Role::Viewer).expect("demote to viewer");
-            assert_eq!(role_for_user("viewy"), Some(Role::Viewer));
-            // The stored row round-trips through the JSON store + wire view.
+            write_legacy_store_with_viewer("vera", "mel");
+            // Fail closed on LOAD — before any migration has run.
+            let views = list_users().expect("legacy store must still load");
+            let vera = views.iter().find(|v| v.username == "vera").expect("vera row");
+            assert_eq!(vera.role, Role::Member);
+            assert!(vera.disabled, "a stored viewer must load disabled");
+            assert!(vera.was_viewer, "a stored viewer must carry was_viewer");
+            let mel = views.iter().find(|v| v.username == "mel").expect("mel row");
+            assert!(!mel.disabled);
+            assert!(!mel.was_viewer);
+            assert!(!verify("vera", "password123"), "a former viewer must not log in");
+            assert!(verify("mel", "password123"), "members are untouched");
+            assert_eq!(
+                check_and_record("vera", "password123"),
+                LoginOutcome::BadCreds
+            );
+        });
+    }
+
+    #[test]
+    fn migrate_removed_viewers_persists_audits_and_revokes_once() {
+        with_temp_home(|| {
+            write_legacy_store_with_viewer("vera", "mel");
+            let migrated = migrate_removed_viewers().expect("migrate");
+            assert_eq!(migrated, vec!["vera".to_string()]);
+
+            // Persisted: the file no longer says viewer; the row is a
+            // disabled member with was_viewer and a bumped epoch.
+            let raw = fs::read_to_string(store_path()).expect("read store");
+            assert!(!raw.contains("\"viewer\""), "store still holds viewer: {raw}");
+            let v: serde_json::Value = serde_json::from_str(&raw).expect("store json");
+            let users = v["users"].as_array().expect("users array");
+            let vera = users
+                .iter()
+                .find(|u| u["username"] == "vera")
+                .expect("vera persisted");
+            assert_eq!(vera["role"], "member");
+            assert_eq!(vera["disabled"], true);
+            assert_eq!(vera["was_viewer"], true);
+            assert_eq!(vera["token_epoch"], 5);
+            let mel = users.iter().find(|u| u["username"] == "mel").expect("mel");
+            assert!(mel.get("was_viewer").is_none(), "false was_viewer is omitted: {mel}");
+
+            // One audit line for vera.
+            let events = crate::auth_audit::tail(50).expect("audit tail");
+            let lines: Vec<&serde_json::Value> = events
+                .iter()
+                .filter(|e| e["event"] == "role-removed")
+                .collect();
+            assert_eq!(lines.len(), 1, "audit: {events:?}");
+            assert_eq!(lines[0]["user"], "vera");
+            assert_eq!(lines[0]["outcome"], "viewer-disabled");
+            assert_eq!(lines[0]["ingress"], "boot");
+            assert_eq!(lines[0]["client"], "daemon");
+
+            // Second boot: nothing left to migrate, no second audit line.
+            let again = migrate_removed_viewers().expect("migrate again");
+            assert!(again.is_empty(), "second run migrated {again:?}");
+            let events = crate::auth_audit::tail(50).expect("audit tail");
+            assert_eq!(
+                events.iter().filter(|e| e["event"] == "role-removed").count(),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn enabling_a_former_viewer_makes_a_plain_member() {
+        with_temp_home(|| {
+            write_legacy_store_with_viewer("vera", "mel");
+            migrate_removed_viewers().expect("migrate");
+            set_disabled("vera", false).expect("enable as member");
             let views = list_users().expect("list");
-            assert_eq!(views[0].role, Role::Viewer);
-            let json = serde_json::to_string(&views[0]).unwrap();
-            assert!(json.contains("\"role\":\"viewer\""), "got: {json}");
-            // A session for a viewer resolves the viewer role.
-            let tok = create_session("viewy");
-            assert_eq!(role_for_session(&tok), Some(Role::Viewer));
+            let vera = views.iter().find(|v| v.username == "vera").expect("vera");
+            assert!(!vera.disabled);
+            assert!(!vera.was_viewer, "enable must clear was_viewer");
+            assert_eq!(vera.role, Role::Member);
+            assert!(verify("vera", "password123"));
+            let tok = create_session("vera");
+            assert_eq!(role_for_session(&tok), Some(Role::Member));
+        });
+    }
+
+    #[test]
+    fn migrate_removed_viewers_is_a_no_op_without_viewers() {
+        with_temp_home(|| {
+            add_user("plain", "password").expect("add");
+            let before = fs::read_to_string(store_path()).expect("read");
+            let migrated = migrate_removed_viewers().expect("migrate");
+            assert!(migrated.is_empty());
+            let after = fs::read_to_string(store_path()).expect("read");
+            assert_eq!(before, after, "no-op migration must not rewrite the store");
         });
     }
 
@@ -1948,13 +2207,12 @@ mod tests {
     }
 
     #[test]
-    fn list_people_for_agents_includes_member_viewer_and_disabled() {
+    fn list_people_for_agents_includes_member_admin_and_disabled() {
         with_temp_home(|| {
             add_user("julie", "password1").expect("add");
             set_role("julie", Role::Admin).expect("promote");
             add_user("member1", "password1").expect("add");
             add_user("viewy", "password1").expect("add");
-            set_role("viewy", Role::Viewer).expect("demote");
             add_user("ghost", "password1").expect("add");
             set_disabled("ghost", true).expect("disable");
             let rows = list_people_for_agents("Rosson").expect("people");
@@ -1965,7 +2223,7 @@ mod tests {
             assert!(!find("Rosson").disabled);
             assert_eq!(find("julie").role, Role::Admin);
             assert_eq!(find("member1").role, Role::Member);
-            assert_eq!(find("viewy").role, Role::Viewer);
+            assert_eq!(find("viewy").role, Role::Member);
             assert_eq!(find("ghost").role, Role::Member);
             assert!(find("ghost").disabled, "disabled connect-user must appear");
             for r in &rows {

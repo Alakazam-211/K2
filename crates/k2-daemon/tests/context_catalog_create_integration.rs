@@ -194,11 +194,10 @@ async fn catalog_get_includes_user_pack_for_member() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn catalog_create_member_and_viewer_403_owner_admin_200() {
+async fn catalog_create_member_403_owner_admin_200() {
     let _g = lock();
     with_temp_home(|| {
         let member = seed_user_session("cmember", "password123", Role::Member);
-        let viewer = seed_user_session("cviewer", "password123", Role::Viewer);
         let admin = seed_user_session("cadmin", "password123", Role::Admin);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
 
@@ -209,14 +208,6 @@ async fn catalog_create_member_and_viewer_403_owner_admin_200() {
             Some(r#"{"id":"user:from-member"}"#),
         );
         assert_eq!(r.status, 403, "member create must 403; {}", r.body);
-
-        let r = http(
-            d.port,
-            "POST",
-            &format!("/cli/context/catalog/create?token={viewer}"),
-            Some(r#"{"id":"user:from-viewer"}"#),
-        );
-        assert_eq!(r.status, 403, "viewer create must 403; {}", r.body);
 
         let r = http(
             d.port,

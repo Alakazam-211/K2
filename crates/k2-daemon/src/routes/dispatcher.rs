@@ -553,10 +553,6 @@ async fn handle_one_request(
             // K2SO #629 — change a connect-user's role. Owner-only (gated
             // per-handler below); method-gated POST.
             | "/cli/users/set-role"
-            // Presence S4 — toggle a viewer-role user's ephemeral edit
-            // grant. Owner-or-admin (require_manage) + POST-gated
-            // per-handler below (feedback_post_only_route_guards).
-            | "/cli/presence/grant"
             // K2SO #620 — owner-only password-policy write. GET (read) goes
             // through the GET arm below; POST is method-gated per-handler.
             | "/cli/users/policy"
@@ -3605,24 +3601,6 @@ async fn handle_one_request(
             let r = crate::presence::handle_kick(actor_role, &body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // POST /cli/presence/grant — S4 (presence/multiplayer arc §4).
-        // Toggle a viewer-role user's ephemeral edit grant:
-        // `{"username":..,"granted":bool}` → `{"success":true,...}`.
-        // Owner-or-admin (`require_manage`, the users-management gate);
-        // POST-gated per feedback_post_only_route_guards. Target
-        // validation (exists + role viewer + currently connected) lives
-        // in the handler — grants attach to a live connection and are
-        // auto-revoked when the user's last connection deregisters.
-        "/cli/presence/grant" => {
-            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
-            let actor_role = match super::http::require_manage(&mut *stream, &mut buf, &query, state.token.as_str()).await {
-                Some(r) => r,
-                None => return DispatchOutcome::Done,
-            };
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = crate::presence::handle_grant(actor_role, &body_bytes);
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-        }
         // GET /cli/whoami — cell identity (canonical | sidecar). Dual-auth:
         // owner/connect-user (TCP fallback via env/query) OR scoped hook.
         // Distinct from /cli/auth/whoami (connect-user role).
@@ -4424,7 +4402,7 @@ async fn handle_one_request(
                 .await;
         }
         // Host catalog library create/delete — isolated from the
-        // `/cli/context/` token_ok prefix so Member/Viewer cannot author
+        // `/cli/context/` token_ok prefix so a Member cannot author
         // packs. require_post + require_manage (owner token or Admin/Owner).
         p if is_post
             && post_allowed
@@ -5925,13 +5903,13 @@ async fn handle_one_request(
         // dashboard/reorder).
         // JSON-bodied POSTs; token_ok (owner OR connect-user session —
         // connect users see projects too, PRD §4.1) + require_post per
-        // feedback_post_only_route_guards. Project chat post (`msg`)
-        // additionally requires role ≥ Member (Owner/Admin/Member;
-        // Viewers may read but cannot post). The `dashboard/*` mutations
+        // feedback_post_only_route_guards. Project chat post (`msg`) is
+        // open to every login (the Viewer role it once refused is gone —
+        // prd-remove-viewer-role-v1.md). The `dashboard/*` mutations
         // — and the §6.7.7 `set-icon`/`set-color` appearance mutations
         // — are additionally owner-or-admin-gated (PRD §6.3 resolved
-        // Q2: owners and admins create/rearrange/save; viewers and
-        // non-admin users see but cannot change). Handlers run in
+        // Q2: owners and admins create/rearrange/save; members see but
+        // cannot change). Handlers run in
         // spawn_blocking (SQLite writes + the PoC injection's wake path
         // can block). Session author for chat attribution is resolved
         // HERE from the token (owner → "owner", connect-user → username)
@@ -5948,22 +5926,6 @@ async fn handle_one_request(
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            // Project chat: Owner / Admin / Member can post; Viewer → 403.
-            // Does NOT tighten dashboard/* / set-icon / set-color (those
-            // stay owner-or-admin below).
-            if p == "/cli/project-group/msg"
-                && !super::http::token_is_at_least_member(&query, state.token.as_str())
-            {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"viewers can read project chat but cannot post"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

@@ -532,16 +532,6 @@ pub(crate) fn token_is_owner_or_admin(query: &str, owner_token: &str) -> bool {
     actor_role(query, owner_token).is_some_and(k2_core::connect_users::can_manage_users)
 }
 
-/// Owner|Admin|Member gate in the SYNC boolean shape (mirrors
-/// [`token_is_owner_or_admin`]). True when the actor's role is at least
-/// Member — the project-chat post floor (`POST /cli/project-group/msg`).
-/// Viewers can read project chat but cannot post; unknown/missing/empty
-/// tokens fail closed.
-pub(crate) fn token_is_at_least_member(query: &str, owner_token: &str) -> bool {
-    actor_role(query, owner_token)
-        .is_some_and(|r| r >= k2_core::connect_users::Role::Member)
-}
-
 /// F4 (prd-v1-api-completion §6) — OWNER-TIER gate for `/cli/api-keys/*`,
 /// resolving the ACTING IDENTITY for the audit trail.
 ///
@@ -553,7 +543,7 @@ pub(crate) fn token_is_at_least_member(query: &str, owner_token: &str) -> bool {
 ///   (Owner ONLY — the same bar as `/cli/users/set-role`; Admin does NOT
 ///   get key management) → `Some("user:<username>")`.
 ///
-/// Everything else → `None` (reject): Admin/Member/Viewer sessions, unknown/
+/// Everything else → `None` (reject): Admin/Member sessions, unknown/
 /// empty tokens, and — critically — API keys themselves: a `k2sk_…` key is
 /// not the owner token and never resolves to a connect session, so a key can
 /// NEVER mint/list/revoke keys (the `/v1` boundary invariant — see the
@@ -571,7 +561,7 @@ pub(crate) fn api_key_manager_identity(query: &str, owner_token: &str) -> Option
 /// generalized): authorizes the owner TOKEN (`Some("owner-token")`) OR a
 /// live connect-user session whose role passes `can_change_roles` — Owner
 /// ONLY, the `/cli/users/set-role` bar; Admin does NOT pass — yielding
-/// `Some("user:<username>")`. Everything else (Admin/Member/Viewer
+/// `Some("user:<username>")`. Everything else (Admin/Member
 /// sessions, unknown/empty tokens, `k2sk_…` API keys — a key is neither
 /// the owner token nor a session) → `None` (reject).
 ///
@@ -670,7 +660,7 @@ pub(crate) fn actor_role(
 /// PRD connect-login-edge-only R1 — resolve WHO is calling
 /// `POST /cli/users/set-password`: the owner token, or an Owner-ROLE
 /// connect-user session (with its username, so the handler can refuse a
-/// self-target). Admin/Member/Viewer sessions and unknown tokens → `None`
+/// self-target). Admin/Member sessions and unknown tokens → `None`
 /// (the dispatcher 403s). Password reset stays Owner-level.
 pub(crate) fn set_password_actor(
     query: &str,
@@ -1277,14 +1267,13 @@ pub(crate) fn v1_principal(
 ///   owner is ALWAYS allowed (unchanged from 1a), independent of the opt-in
 ///   flag. The caller resolves the attributed `from` server-side via
 ///   `workspace_msg::resolve_owner_from()`.
-/// - [`SendMessageAuth::ConnectUser`] — a live connect-user session whose
-///   role is `>= Member` (the inert capability check; a future Viewer role
-///   below Member slots in here automatically, D4) AND the host has opted
-///   into remote multi-user instruction (`remote_instruct_opt_in`, default
-///   OFF). Carries the daemon-resolved `username` — the `from` attribution
+/// - [`SendMessageAuth::ConnectUser`] — a live connect-user session (any
+///   role; the Viewer role this once excluded was removed) AND the host has
+///   opted into remote multi-user instruction (`remote_instruct_opt_in`,
+///   default OFF). Carries the daemon-resolved `username` — the `from` attribution
 ///   (D3: resolved from the token, NEVER the request body).
 /// - [`SendMessageAuth::Denied`] — anything else (missing/unknown/expired
-///   token, opt-in OFF, role below Member). The caller MUST drain-then-403
+///   token, opt-in OFF). The caller MUST drain-then-403
 ///   (mirror [`require_manage`]).
 ///
 /// A revoked connect-user fails here at request time (`validate_session`
@@ -1295,7 +1284,7 @@ pub(crate) fn v1_principal(
 pub(crate) enum SendMessageAuth {
     /// Owner token — always allowed.
     Owner,
-    /// Connect-user (role >= Member) on an opted-in host. Carries the
+    /// Connect-user on an opted-in host. Carries the
     /// daemon-resolved username used as the `from` attribution.
     ConnectUser { username: String },
     /// Reject — caller drains the body then sends 403.
@@ -1320,14 +1309,10 @@ pub(crate) fn authorize_send_message(
     if token_is_owner(query, owner_token) {
         return SendMessageAuth::Owner;
     }
-    // Connect-user path: the host must have opted in, AND the actor's role
-    // must clear the capability floor (>= Member). Both fail CLOSED.
+    // Connect-user path: the host must have opted in. Every login role is
+    // Member or above (the Viewer role was removed), so the opt-in plus a
+    // live session is the whole decision. Fails CLOSED.
     if !remote_instruct_opt_in {
-        return SendMessageAuth::Denied;
-    }
-    let role_ok = actor_role(query, owner_token)
-        .is_some_and(|r| r >= k2_core::connect_users::Role::Member);
-    if !role_ok {
         return SendMessageAuth::Denied;
     }
     // Resolve the username server-side from the token (D3) — never the body.
@@ -2149,84 +2134,6 @@ mod tests {
                 !token_is_owner_or_admin("project=/tmp/x", owner),
                 "missing token param must be rejected",
             );
-        });
-    }
-
-    // ── token_is_at_least_member: project-chat post floor (Owner|Admin|Member)
-    //
-    // `POST /cli/project-group/msg` admits Owner/Admin/Member; Viewers may
-    // read project chat but cannot post. Mirrors the owner-or-admin gate's
-    // shape; uses the Role Ord floor `>= Member`. set_role revokes live
-    // sessions, so the role is set BEFORE the session is minted.
-
-    #[test]
-    fn token_is_at_least_member_accepts_owner_token() {
-        assert!(token_is_at_least_member("token=owner-secret", "owner-secret"));
-    }
-
-    #[test]
-    fn token_is_at_least_member_accepts_admin_session() {
-        with_temp_home(|| {
-            let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("admin_chat", "password123").expect("add_user");
-            k2_core::connect_users::set_role(
-                "admin_chat",
-                k2_core::connect_users::Role::Admin,
-            )
-            .expect("set_role admin");
-            let session = k2_core::connect_users::create_session("admin_chat");
-            assert!(
-                token_is_at_least_member(&format!("token={session}"), owner),
-                "Admin-role session must pass the ≥ Member gate",
-            );
-        });
-    }
-
-    #[test]
-    fn token_is_at_least_member_accepts_member_session() {
-        // THE positive regression lock: Member (add_user default) can post.
-        with_temp_home(|| {
-            let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("member_chat", "password123").expect("add_user");
-            let session = k2_core::connect_users::create_session("member_chat");
-            assert!(
-                token_is_at_least_member(&format!("token={session}"), owner),
-                "Member-role session must pass the ≥ Member gate",
-            );
-        });
-    }
-
-    #[test]
-    fn token_is_at_least_member_rejects_viewer_session() {
-        // THE negative regression lock: Viewer is token_ok but cannot post.
-        with_temp_home(|| {
-            let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("viewer_chat", "password123").expect("add_user");
-            k2_core::connect_users::set_role(
-                "viewer_chat",
-                k2_core::connect_users::Role::Viewer,
-            )
-            .expect("set_role viewer");
-            let session = k2_core::connect_users::create_session("viewer_chat");
-            // Sanity: token_ok still admits the Viewer (read path).
-            assert!(
-                token_ok(&format!("token={session}"), owner),
-                "Viewer sessions remain token_ok (can read)",
-            );
-            assert!(
-                !token_is_at_least_member(&format!("token={session}"), owner),
-                "Viewer-role session must NOT pass the ≥ Member gate",
-            );
-        });
-    }
-
-    #[test]
-    fn token_is_at_least_member_rejects_unknown_and_empty() {
-        with_temp_home(|| {
-            let owner = "owner-token-xyz";
-            assert!(!token_is_at_least_member("token=not-a-session", owner));
-            assert!(!token_is_at_least_member("token=", owner));
-            assert!(!token_is_at_least_member("project=/tmp/x", owner));
         });
     }
 

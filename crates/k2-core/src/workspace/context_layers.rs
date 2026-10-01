@@ -3114,9 +3114,7 @@ mod tests {
             crate::connect_users::set_role("julie", crate::connect_users::Role::Admin)
                 .expect("promote");
             crate::connect_users::add_user("member1", "password1").expect("add member");
-            crate::connect_users::add_user("viewy", "password1").expect("add viewer");
-            crate::connect_users::set_role("viewy", crate::connect_users::Role::Viewer)
-                .expect("demote");
+            crate::connect_users::add_user("viewy", "password1").expect("add second member");
             crate::connect_users::add_user("ghost", "password1").expect("add ghost");
             crate::connect_users::set_disabled("ghost", true).expect("disable");
 
@@ -3131,8 +3129,8 @@ mod tests {
                 "missing member; body:\n{body}"
             );
             assert!(
-                body.contains("viewy") && body.contains("viewer"),
-                "missing viewer; body:\n{body}"
+                body.contains("viewy") && !body.contains("viewer"),
+                "second member must be listed with no viewer role; body:\n{body}"
             );
             assert!(
                 body.contains("ghost") && body.contains("yes"),

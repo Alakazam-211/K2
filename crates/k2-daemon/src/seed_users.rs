@@ -48,7 +48,8 @@ pub fn seed_file_path() -> std::path::PathBuf {
 struct SeedUser {
     username: String,
     password: String,
-    /// "owner" | "admin" | "member" | "viewer".
+    /// "owner" | "admin" | "member". The retired "viewer" fails the row
+    /// with [`connect_users::VIEWER_ROLE_REMOVED`] (nobody is created).
     role: String,
     #[serde(default, rename = "mustChangePassword")]
     must_change_password: bool,
@@ -130,11 +131,9 @@ pub fn consume_seed_file() -> Vec<(String, SeedOutcome)> {
 }
 
 fn apply_row(row: &SeedUser) -> SeedOutcome {
-    let Some(role) = Role::from_wire(&row.role) else {
-        return SeedOutcome::Failed(format!(
-            "invalid role '{}' (expected owner|admin|member|viewer)",
-            row.role
-        ));
+    let role = match Role::parse_wire(&row.role) {
+        Ok(r) => r,
+        Err(e) => return SeedOutcome::Failed(e),
     };
     // Existing user → skip, never modify. role_for_user resolves any
     // stored account (every row has a role, defaulted on load).

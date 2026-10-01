@@ -19,9 +19,11 @@
 use crate::cli_response::CliResponse;
 use k2_core::connect_users;
 
-/// `GET /cli/users` → `{"users":[{username,createdAt,disabled,role}, ...]}`.
+/// `GET /cli/users` → `{"users":[{username,createdAt,disabled,role,wasViewer}, ...]}`.
 /// Redacted views only — never the password hash. `role` is the #629
-/// permission tier ("owner" | "admin" | "member").
+/// permission tier ("owner" | "admin" | "member"). `wasViewer` is true for
+/// an account that was a Viewer before the role was removed and was
+/// disabled on the update; Settings offers "Enable as Member" for it.
 pub fn handle_list() -> CliResponse {
     match connect_users::list_users() {
         Ok(views) => {
@@ -34,6 +36,7 @@ pub fn handle_list() -> CliResponse {
                         "createdAt": v.created_at.to_rfc3339(),
                         "disabled": v.disabled,
                         "role": v.role.as_wire(),
+                        "wasViewer": v.was_viewer,
                     })
                 })
                 .collect();
@@ -129,7 +132,7 @@ pub enum SetPasswordActor {
     /// The on-box owner daemon token (CLI / local Settings).
     OwnerToken,
     /// A live connect-user session — only an Owner-ROLE session reaches
-    /// the handler (the dispatcher 403s Admin/Member/Viewer).
+    /// the handler (the dispatcher 403s Admin/Member).
     Session {
         username: String,
         role: connect_users::Role,
@@ -297,7 +300,9 @@ struct SetRoleReq {
 ///
 /// CHANGE-ROLES is OWNER-ONLY (the dispatcher gates this route to an
 /// owner-token OR an Owner-role session via `can_change_roles`). The
-/// `role` is one of `"owner" | "admin" | "member" | "viewer"`.
+/// `role` is one of `"owner" | "admin" | "member"`. The retired
+/// `"viewer"` is a 400 carrying [`connect_users::VIEWER_ROLE_REMOVED`]
+/// (`prd-remove-viewer-role-v1.md`).
 ///
 /// Last-Owner guard: the route never strips the LAST stored Owner if that
 /// would leave management unreachable. In practice the host owner token
@@ -311,14 +316,9 @@ pub fn handle_set_role(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    let role = match connect_users::Role::from_wire(&req.role) {
-        Some(r) => r,
-        None => {
-            return CliResponse::bad_request(format!(
-                "invalid role '{}' (expected owner|admin|member|viewer)",
-                req.role
-            ))
-        }
+    let role = match connect_users::Role::parse_wire(&req.role) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::bad_request(e),
     };
     match connect_users::set_role(&req.username, role) {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
@@ -967,17 +967,18 @@ mod tests {
     }
 
     #[test]
-    fn set_role_accepts_viewer_via_from_wire() {
-        // Presence S4: the existing route accepts "viewer" purely through
-        // Role::from_wire — no route restructuring. Seed a store in a
-        // sandboxed HOME so set_role resolves the target.
+    fn set_role_refuses_viewer_with_the_removal_message() {
+        // The Viewer role was removed: "viewer" is a 400 with the
+        // removal text, and the stored role is untouched.
         with_temp_home(|| {
             connect_users::add_user("viewer_wire", "password1").expect("add");
             let r = handle_set_role(br#"{"username":"viewer_wire","role":"viewer"}"#);
-            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert_eq!(r.status, "400 Bad Request", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json body");
+            assert_eq!(v["error"], connect_users::VIEWER_ROLE_REMOVED);
             assert_eq!(
                 connect_users::role_for_user("viewer_wire"),
-                Some(connect_users::Role::Viewer)
+                Some(connect_users::Role::Member)
             );
         });
     }

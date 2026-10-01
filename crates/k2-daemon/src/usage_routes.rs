@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 
-/// Owner token, or a connect user whose role is Owner. Admin, Member,
-/// and Viewer fail. Skin tokens are not sessions and are not the owner
+/// Owner token, or a connect user whose role is Owner. Admin and Member
+/// fail. Skin tokens are not sessions and are not the owner
 /// token, so they fail too.
 pub fn usage_allowed(query: &str, owner_token: &str) -> bool {
     crate::routes::http::owner_role_identity(query, owner_token).is_some()

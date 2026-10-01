@@ -2791,14 +2791,13 @@ mod connections_list_users_tests {
     }
 
     #[test]
-    fn users_query_adds_redacted_people_including_member_viewer_disabled() {
+    fn users_query_adds_redacted_people_including_members_and_disabled() {
         crate::test_support::with_temp_home(|| {
             let (_id, path) = make_project("with-users");
             connect_users::add_user("julie", "password1").expect("add");
             connect_users::set_role("julie", Role::Admin).expect("role");
             connect_users::add_user("member1", "password1").expect("add");
             connect_users::add_user("viewy", "password1").expect("add");
-            connect_users::set_role("viewy", Role::Viewer).expect("role");
             connect_users::add_user("ghost", "password1").expect("add");
             connect_users::set_disabled("ghost", true).expect("disable");
 
@@ -2823,7 +2822,7 @@ mod connections_list_users_tests {
                 "empty-settings owner row must be present; got {names:?}"
             );
             assert!(names.contains(&"member1"), "member must appear: {names:?}");
-            assert!(names.contains(&"viewy"), "viewer must appear: {names:?}");
+            assert!(names.contains(&"viewy"), "second member must appear: {names:?}");
             assert!(names.contains(&"ghost"), "disabled must appear: {names:?}");
             let ghost = users
                 .as_array()
@@ -2839,7 +2838,7 @@ mod connections_list_users_tests {
                     .iter()
                     .find(|u| u["username"] == "viewy")
                     .unwrap()["role"],
-                serde_json::json!("viewer")
+                serde_json::json!("member")
             );
             assert_eq!(
                 users

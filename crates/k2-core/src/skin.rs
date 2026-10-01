@@ -93,7 +93,10 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_ACTIVITY_READ,
 ];
 
-/// Connect / Server Access names — never a skin role.
+/// Connect / Server Access names — never a skin role. `viewer` stays
+/// reserved after the Connect Viewer role was removed
+/// (`prd-remove-viewer-role-v1.md`), so the retired word can't come back
+/// as an app role and be read as the old view-only login.
 const CONNECT_ROLE_NAMES: &[&str] = &["owner", "admin", "member", "viewer"];
 const CONNECT_ROLE_NAME_ERR: &str = "Connect role names cannot be skin roles (owner/admin/member/viewer). Skin roles are named bundles of scopes+agents, not Server Access.";
 

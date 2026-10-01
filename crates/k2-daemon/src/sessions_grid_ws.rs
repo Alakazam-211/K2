@@ -123,10 +123,12 @@ pub(crate) enum Outbound<'a> {
     /// S5 viewer/claimer — mode ACK. Sent once at connect (right after
     /// the pin slot) and again on EVERY inbound `set_mode`, so the UI
     /// always renders the daemon's truth. `mode` is the connection's
-    /// STORED mode ("viewer" | "claimer"); `capable` is whether the
-    /// connection may currently ACT as a claimer (owner/stream token,
-    /// role >= Member, or viewer-role with a live edit grant). A
-    /// non-capable connection can store mode=claimer, but the gates
+    /// STORED mode ("viewer" | "claimer" — the per-window eye/pencil
+    /// mode, not a login role); `capable` is whether the connection may
+    /// currently ACT as a claimer (owner/stream token or any live Connect
+    /// login — the Viewer role and its edit grants were removed,
+    /// `prd-remove-viewer-role-v1.md`). A non-capable connection (a
+    /// session revoked mid-socket) can store mode=claimer, but the gates
     /// re-check capability per frame — `capable:false` tells the UI to
     /// render the claimer option disabled.
     Mode { mode: &'static str, capable: bool },
@@ -567,25 +569,21 @@ enum ConnIdentity {
     Unknown,
 }
 
-/// Whether `identity` may ACT as a claimer right now (PRD §4 matrix):
-/// owner/stream token → always; connect user → role >= Member, or
-/// Viewer holding a live edit grant. Recomputed at each gate — the
-/// role/grant lookups only run for the connect-user class (the local
-/// owner path short-circuits with zero I/O), and gated frames arrive
-/// at human rates, so the per-frame store read is cheap.
+/// Whether `identity` may ACT as a claimer right now: owner/stream token
+/// → always; connect user → any account that still exists (every login
+/// role is Member or above since the Viewer role was removed —
+/// `prd-remove-viewer-role-v1.md` RV5; there are no edit grants).
+/// Recomputed at each gate so a user removed mid-session stops typing at
+/// once — the store lookup only runs for the connect-user class (the
+/// local owner path short-circuits with zero I/O), and gated frames
+/// arrive at human rates, so the per-frame store read is cheap.
 fn connection_claimer_capable(identity: &ConnIdentity) -> bool {
     match identity {
         ConnIdentity::Owner | ConnIdentity::StreamToken => true,
+        // User removed / store unreadable mid-session → `None` → fail
+        // closed (the re-auth tick will close the socket).
         ConnIdentity::ConnectUser { username } => {
-            match k2_core::connect_users::role_for_user(username) {
-                // User removed / store unreadable mid-session — fail
-                // closed (the re-auth tick will close the socket).
-                None => false,
-                Some(role) => {
-                    role >= k2_core::connect_users::Role::Member
-                        || crate::presence::is_granted(username)
-                }
-            }
+            k2_core::connect_users::role_for_user(username).is_some()
         }
         ConnIdentity::Unknown => false,
     }

@@ -211,8 +211,8 @@ async fn must_change_password_round_trip_restricts_then_releases() {
             let r = http(
                 d.port,
                 "POST",
-                &format!("/cli/presence/grant?token={sess}"),
-                Some(r#"{"username":"prov_alice","granted":true}"#),
+                &format!("/cli/presence/kick?token={sess}"),
+                Some(r#"{"username":"prov_alice"}"#),
             );
             assert_eq!(r.status, 403, "restricted POST must 403; body={}", r.body);
             assert!(
@@ -375,8 +375,9 @@ async fn seed_users_file_provisions_and_is_deleted() {
             r#"[
                 {"username":"seed_owner","password":"seed-pass-1","role":"owner","mustChangePassword":true},
                 {"username":"seed_ops","password":"seed-pass-2","role":"admin"},
-                {"username":"seed_existing","password":"OVERWRITE-attempt","role":"viewer","mustChangePassword":true},
-                {"username":"seed_bad","password":"seed-pass-4","role":"superuser"}
+                {"username":"seed_existing","password":"OVERWRITE-attempt","role":"admin","mustChangePassword":true},
+                {"username":"seed_bad","password":"seed-pass-4","role":"superuser"},
+                {"username":"seed_viewer","password":"seed-pass-5","role":"viewer"}
             ]"#,
         )
         .expect("write seed file");
@@ -391,7 +392,7 @@ async fn seed_users_file_provisions_and_is_deleted() {
         );
 
         // Per-user outcomes.
-        assert_eq!(results.len(), 4, "one outcome per row: {results:?}");
+        assert_eq!(results.len(), 5, "one outcome per row: {results:?}");
         assert_eq!(results[0], ("seed_owner".to_string(), SeedOutcome::Created));
         assert_eq!(results[1], ("seed_ops".to_string(), SeedOutcome::Created));
         assert_eq!(
@@ -405,6 +406,16 @@ async fn seed_users_file_provisions_and_is_deleted() {
             }
             other => panic!("bad-role row must fail loudly, got {other:?}"),
         }
+        // The retired viewer role fails its row with the removal message
+        // and creates nobody (prd-remove-viewer-role-v1.md).
+        match &results[4] {
+            (u, SeedOutcome::Failed(e)) => {
+                assert_eq!(u, "seed_viewer");
+                assert_eq!(e, connect_users::VIEWER_ROLE_REMOVED);
+            }
+            other => panic!("viewer row must fail loudly, got {other:?}"),
+        }
+        assert_eq!(connect_users::role_for_user("seed_viewer"), None, "viewer row not created");
 
         // Roles + flags landed.
         assert_eq!(connect_users::role_for_user("seed_owner"), Some(Role::Owner));

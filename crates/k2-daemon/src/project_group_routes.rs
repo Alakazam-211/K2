@@ -13,8 +13,7 @@
 //! `routes::dispatcher` with `token_ok` auth (owner AND connect-user
 //! sessions — connect users see projects too). GET-chain hits on POST
 //! paths return 405 (`feedback_post_only_route_guards` house rule).
-//! Project chat post (`msg`) additionally requires role ≥ Member
-//! (Owner/Admin/Member; Viewers may read but cannot post). The
+//! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations — additionally require the owner-or-admin bit
 //! (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced in
@@ -956,8 +955,8 @@ fn project_payload(group_name: &str, body: &str) -> String {
 /// failure never fails the store; the outcome rides the response
 /// (`delivered` / `deliveryReason` / `deliveredSessionId`).
 ///
-/// Role gate (Owner|Admin|Member; Viewer → 403) is enforced in the
-/// dispatcher before this handler runs.
+/// Every login may post (the Viewer role it once refused was removed);
+/// the dispatcher's `token_ok` gate runs before this handler.
 pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
     let b: MsgBody = match serde_json::from_slice(body) {
         Ok(b) => b,

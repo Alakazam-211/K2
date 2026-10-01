@@ -6,12 +6,9 @@
 //! sessions, events-WS presence registration) and the S7a pin harness
 //! (real `/bin/cat` PTY spawn, grid-WS client, in-process Term reads):
 //!
-//!   1. a VIEWER-role user's grid connection: input dropped (the PTY
-//!      echo never reaches the grid), resize ignored (dims unchanged),
-//!      `input_denied` received exactly ONCE per connection;
-//!   2. after `POST /cli/presence/grant` the SAME connection's input
-//!      flows (capability is computed per frame, not at accept);
-//!   3. revoking the grant blocks the SAME connection again;
+//!   1. (Viewer role removed — prd-remove-viewer-role-v1.md) a Member
+//!      grid connection is claimer-CAPABLE at connect and the old
+//!      `POST /cli/presence/grant` edit-grant route is gone (405);
 //!   4. a MEMBER in viewer MODE (the non-owner default) is blocked;
 //!      flipping `set_mode` to claimer lets input/resize flow; flipping
 //!      back re-blocks;
@@ -167,27 +164,6 @@ async fn close_session(port: u16, agent_name: &str) {
     assert!(status.contains("200"), "close failed: {status} {body}");
 }
 
-/// Open a `/cli/sessions/events` WS with `token` and consume the `hello`
-/// frame — after which the connection is REGISTERED in the presence
-/// registry (the grant route requires a live presence connection).
-async fn connect_events_ws(port: u16, token: &str) -> WsClient {
-    let url = format!("ws://127.0.0.1:{port}/cli/sessions/events?path=&token={token}");
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
-        .await
-        .expect("events WS connect");
-    let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("timed out waiting for hello")
-        .expect("stream closed before hello")
-        .expect("ws message Ok");
-    let hello: serde_json::Value = match msg {
-        Message::Text(t) => serde_json::from_str(&t).expect("frame is JSON"),
-        other => panic!("expected Text hello frame, got {other:?}"),
-    };
-    assert_eq!(hello["kind"], "hello", "first frame must be the hello: {hello}");
-    ws
-}
-
 /// Connect a grid-WS client with `token` and consume frames until the
 /// initial snapshot arrives (the mode ACK follows the snapshot in the
 /// initial-state slot, so callers `expect_event(.., "mode", ..)` next).
@@ -236,32 +212,6 @@ async fn expect_event(ws: &mut WsClient, event: &str, who: &str) -> serde_json::
                 return v["payload"].clone();
             }
             seen.push(ev);
-        }
-    }
-}
-
-/// Drain everything that arrives within `window` and count frames whose
-/// event name is `event`. Used to prove `input_denied` is one-time.
-async fn count_event_within(ws: &mut WsClient, event: &str, window: Duration) -> usize {
-    let deadline = tokio::time::Instant::now() + window;
-    let mut count = 0usize;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return count;
-        }
-        match tokio::time::timeout(remaining, ws.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                let v: serde_json::Value =
-                    serde_json::from_str(&text).expect("frame JSON");
-                if v["event"] == event {
-                    count += 1;
-                }
-            }
-            Ok(Some(Ok(_))) => {}
-            Ok(Some(Err(e))) => panic!("WS error while draining: {e}"),
-            Ok(None) => panic!("WS closed while draining for {event:?}"),
-            Err(_) => return count,
         }
     }
 }
@@ -340,145 +290,41 @@ async fn send_json(ws: &mut WsClient, value: serde_json::Value, what: &str) {
         .unwrap_or_else(|e| panic!("{what}: send failed: {e}"));
 }
 
-async fn set_grant(port: u16, username: &str, granted: bool) {
-    let (status, body) = http_post(
-        port,
-        &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
-        &serde_json::json!({ "username": username, "granted": granted }).to_string(),
-    )
-    .await;
-    assert!(status.contains("200"), "grant({granted}) failed: {status} {body}");
-}
-
 // ─────────────────────────────────────────────────────────────────────
-// 1+2+3 — viewer role: gated; grant unlocks the LIVE connection;
-//         revoke re-blocks it (dynamic capability)
+// 1 — Viewer role removed: a Member grid connection is claimer-CAPABLE
+//     at connect (only the per-window MODE gates it), and the Viewer
+//     edit-grant route is gone.
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn viewer_role_gated_then_grant_flows_then_revoke_blocks() {
+async fn member_connection_is_capable_and_grant_route_is_gone() {
     let _g = lock();
     with_temp_home(|| {
-        let viewer_tok = seed_user_session("s5_viewer", "password123", Role::Viewer);
+        let member_tok = seed_user_session("s5_capable", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
 
         futures_block(async {
-            let ws_id = format!("s5-viewer-ws-{}", std::process::id());
+            let ws_id = format!("s5-capable-ws-{}", std::process::id());
             let project_path = setup_project(&ws_id);
-            let agent = "tab-s5-viewer";
+            let agent = "tab-s5-capable";
             let session_id =
                 spawn_cat_session(d.port, agent, &project_path.to_string_lossy()).await;
 
-            // Presence registration — the grant route requires the
-            // target to hold a live presence connection.
-            let _events_ws = connect_events_ws(d.port, &viewer_tok).await;
-
-            let mut grid = connect_grid_client(d.port, &session_id, &viewer_tok).await;
-
-            // Connect-time mode ACK: non-owner default is viewer, and a
-            // viewer-role user without a grant is not capable.
-            let mode = expect_event(&mut grid, "mode", "viewer connect").await;
+            let mut grid = connect_grid_client(d.port, &session_id, &member_tok).await;
+            // Non-owner default MODE is still viewer (the eye), but every
+            // login is CAPABLE — there is no ungranted Viewer any more.
+            let mode = expect_event(&mut grid, "mode", "member connect").await;
             assert_eq!(mode["mode"], "viewer", "connect ACK: {mode}");
-            assert_eq!(mode["capable"], false, "connect ACK: {mode}");
+            assert_eq!(mode["capable"], true, "connect ACK: {mode}");
 
-            // (1) Input dropped + one-time input_denied.
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "input", "text": "S5_DENY_ONE\r" }),
-                "viewer input 1",
+            // The Viewer edit-grant route is gone: POST is not allowed.
+            let (status, body) = http_post(
+                d.port,
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                &serde_json::json!({ "username": "s5_capable", "granted": true }).to_string(),
             )
             .await;
-            let denied = expect_event(&mut grid, "input_denied", "viewer input").await;
-            assert_eq!(denied["reason"], "viewer", "input_denied payload: {denied}");
-            // A second dropped input must NOT produce a second frame.
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "input", "text": "S5_DENY_TWO\r" }),
-                "viewer input 2",
-            )
-            .await;
-            let repeats =
-                count_event_within(&mut grid, "input_denied", Duration::from_millis(600))
-                    .await;
-            assert_eq!(repeats, 0, "input_denied must be one-time per connection");
-            assert_text_never_appears(&session_id, "S5_DENY_ONE", "viewer input 1").await;
-            assert_text_never_appears(&session_id, "S5_DENY_TWO", "viewer input 2").await;
-
-            // (1b) Resize ignored — dims stay at the spawn size.
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "resize", "cols": 100, "rows": 30 }),
-                "viewer resize",
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(400)).await;
-            assert_eq!(
-                live_dims(&session_id),
-                (80, 24),
-                "viewer resize must be ignored"
-            );
-
-            // (2) GRANT → the SAME connection becomes capable. Flip the
-            // window mode to claimer and both input + resize flow.
-            set_grant(d.port, "s5_viewer", true).await;
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "set_mode", "mode": "claimer" }),
-                "set_mode claimer",
-            )
-            .await;
-            let mode = expect_event(&mut grid, "mode", "post-grant set_mode").await;
-            assert_eq!(mode["mode"], "claimer", "post-grant ACK: {mode}");
-            assert_eq!(mode["capable"], true, "post-grant ACK: {mode}");
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "input", "text": "S5_GRANTED\r" }),
-                "granted input",
-            )
-            .await;
-            assert_text_appears(&session_id, "S5_GRANTED", "granted input").await;
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "resize", "cols": 100, "rows": 30 }),
-                "granted resize",
-            )
-            .await;
-            assert_dims_settle(&session_id, (100, 30), "granted resize").await;
-
-            // (3) REVOKE → the SAME connection (mode still claimer) is
-            // blocked again: capability is recomputed per frame.
-            set_grant(d.port, "s5_viewer", false).await;
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "input", "text": "S5_REVOKED\r" }),
-                "post-revoke input",
-            )
-            .await;
-            assert_text_never_appears(&session_id, "S5_REVOKED", "post-revoke input")
-                .await;
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "resize", "cols": 90, "rows": 25 }),
-                "post-revoke resize",
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(400)).await;
-            assert_eq!(
-                live_dims(&session_id),
-                (100, 30),
-                "post-revoke resize must be ignored"
-            );
-            // And the ACK now reports the truth: mode stored claimer,
-            // capable false.
-            send_json(
-                &mut grid,
-                serde_json::json!({ "action": "set_mode", "mode": "claimer" }),
-                "post-revoke set_mode",
-            )
-            .await;
-            let mode = expect_event(&mut grid, "mode", "post-revoke set_mode").await;
-            assert_eq!(mode["mode"], "claimer", "post-revoke ACK: {mode}");
-            assert_eq!(mode["capable"], false, "post-revoke ACK: {mode}");
+            assert!(status.contains("405"), "presence/grant must be gone: {status} {body}");
 
             close_session(d.port, agent).await;
         });

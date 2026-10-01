@@ -17,7 +17,7 @@
 //!
 //! Auth: `token_ok` (owner or connect-user session) for stack reads/mutates
 //! and `GET /cli/context/catalog`. Host library create/delete are isolated
-//! (`require_manage`) so Member/Viewer cannot author packs. POST-only
+//! (`require_manage`) so a Member cannot author packs. POST-only
 //! mutations 405 on GET.
 
 use std::collections::HashMap;

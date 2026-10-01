@@ -57,6 +57,14 @@ function isProbedHarness(id: string): id is ProbedHarness {
   return (PROBED_HARNESSES as readonly string[]).includes(id)
 }
 
+/** Claude's chip is the greater of its Session (5-hour) and Weekly windows. Model-scoped limits such as "Fable Weekly" stay in the menu but never drive the chip. Other harnesses use every window. */
+const CLAUDE_CHIP_LABELS = new Set(['Session', 'Weekly'])
+
+function chipWindows<W extends { label: string }>(harness: ProbedHarness, windows: W[]): W[] {
+  if (harness !== 'claude') return windows
+  return windows.filter((window) => CLAUDE_CHIP_LABELS.has(window.label))
+}
+
 /** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok. */
 export function buttonChips(
   doc: SubscriptionDoc | null,
@@ -67,7 +75,7 @@ export function buttonChips(
     if (!isProbedHarness(row.harness)) continue
     if (!isSignedIn(row) || row.windows.length === 0) continue
     let used = 0
-    for (const window of row.windows) {
+    for (const window of chipWindows(row.harness, row.windows)) {
       used = Math.max(used, percentUsed(window.used))
     }
     chips.push({ harness: row.harness, used })

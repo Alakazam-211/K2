@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  buttonChips,
   buttonLabel,
   formatResetsIn,
   harnessName,
@@ -30,6 +31,27 @@ function doc(partial: SubscriptionDoc): SubscriptionDoc {
 }
 
 describe('subscription window math', () => {
+  it('drives the Claude chip from the greater of Session and Weekly, never a model-scoped limit', () => {
+    const chips = buttonChips(
+      doc({
+        harnesses: [
+          {
+            harness: 'claude',
+            plan: 'Max 20x',
+            windows: [
+              { label: 'Session', used: 0.42, resetsAt: '2026-09-26T20:00:00Z' },
+              { label: 'Weekly', used: 0.31, resetsAt: '2026-10-03T00:00:00Z' },
+              { label: 'Fable Weekly', used: 0.97, resetsAt: '2026-10-03T00:00:00Z' },
+            ],
+            checkedAt: '2026-09-26T15:00:00Z',
+            status: '',
+          },
+        ],
+      }),
+    )
+    expect(chips).toEqual([{ harness: 'claude', used: 42 }])
+  })
+
   it('turns weekly used 0.31 into 31% used and labels Claude', () => {
     expect(percentUsed(0.31)).toBe(31)
     const label = buttonLabel(

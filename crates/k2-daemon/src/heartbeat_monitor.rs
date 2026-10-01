@@ -16,8 +16,17 @@
 //!    finding: this very box's LaunchAgent was missing for ~3 weeks —
 //!    `heartbeat.log`'s last tick 2026-06-10 — while every enabled
 //!    heartbeat reported enabled=yes). The self-heal below verifies
-//!    the transport exists + is loaded whenever enabled heartbeats
-//!    exist, and reinstalls it if not.
+//!    the transport whenever enabled heartbeats exist, and repairs it
+//!    when it is not `ok`.
+//!
+//! 3. **Loaded is not the same as working** (heartbeat S1, HB10). On
+//!    2026-09-30 a test run left `dev.k2.heartbeat` loaded from a
+//!    deleted temp folder: launchd said "loaded", every run exited 127,
+//!    and no heartbeat fired for ~8h. The check now asks
+//!    `transport_state()` which plist and script the LOADED job uses,
+//!    its last exit code, and whether OS ticks arrive. Anything but
+//!    `ok` is booted out and re-bootstrapped from the real plist, at
+//!    boot, after a wake, and every 10 minutes.
 //!
 //! The monitor loop also compares wall-clock against monotonic time:
 //! a jump (sleep, suspend, clock change) triggers an immediate
@@ -42,10 +51,8 @@ const MONITOR_INTERVAL: Duration = Duration::from_secs(60);
 const WALL_JUMP_THRESHOLD_SECS: i64 = 120;
 
 /// How often (in monitor iterations) to re-verify the tick transport.
-/// 60 iterations ≈ hourly — cheap (`launchctl print`), and an hour is
-/// a short outage compared to the weeks-long silent failure it guards
-/// against.
-const TRANSPORT_CHECK_EVERY_ITERS: u64 = 60;
+/// 10 iterations ≈ 10 minutes (HB10) — cheap (`launchctl print`).
+const TRANSPORT_CHECK_EVERY_ITERS: u64 = 10;
 
 /// Spawn the monitor. Called once from `async_main` after the boot
 /// readiness gate opens (the scan drives the same handlers HTTP ticks
@@ -56,7 +63,9 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
         // run the overdue scan — recovery no longer depends on the
         // plist being alive.
         tokio::time::sleep(Duration::from_secs(3)).await;
-        ensure_transport("boot");
+        // The "no OS tick in three intervals" clock starts now.
+        k2_core::heartbeats::install::reset_observation_window();
+        ensure_transport("boot").await;
         run_due_scan("boot overdue scan").await;
 
         let mut last_mono = Instant::now();
@@ -79,11 +88,15 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
                     wall_delta,
                     mono_delta
                 );
+                // The job could not tick while the machine slept: restart
+                // the silence clock, then check paths / exit code now.
+                k2_core::heartbeats::install::reset_observation_window();
+                ensure_transport("wake").await;
                 run_due_scan("wall-clock jump").await;
             }
 
             if iter % TRANSPORT_CHECK_EVERY_ITERS == 0 {
-                ensure_transport("periodic");
+                ensure_transport("periodic").await;
             }
         }
     })
@@ -119,11 +132,12 @@ async fn run_due_scan(reason: &str) {
     }
 }
 
-/// Verify the tick transport (launchd agent / crontab entry) and
-/// reinstall it when enabled heartbeats exist but no transport does.
-/// Respects an explicit user opt-out: wake-scheduler mode "off" means
-/// the user chose no transport — never fight that.
-fn ensure_transport(context: &str) {
+/// HB10 — verify the tick transport (launchd agent / crontab entry)
+/// and repair it when enabled heartbeats exist and it is not `ok`.
+/// Every saved mode wants a job in S1 (Rosson D2: Off = never wake the
+/// machine, still fire while awake), so there is no mode opt-out here.
+/// The k2-core guard (HB6) still refuses for a scratch-HOME daemon.
+async fn ensure_transport(context: &'static str) {
     if std::env::var("K2_HEARTBEAT_NO_SELF_HEAL").map(|v| v == "1").unwrap_or(false) {
         log_debug!(
             "[daemon/heartbeat-monitor] transport self-heal SKIPPED ({context}) — K2_HEARTBEAT_NO_SELF_HEAL=1"
@@ -136,27 +150,29 @@ fn ensure_transport(context: &str) {
         return; // nothing scheduled — a missing transport is fine
     }
 
-    let ws = k2_core::app_settings::load().wake_scheduler;
-    if ws.mode == "off" {
-        // Explicit user choice (Settings → Heartbeats → Mode: Off).
-        return;
-    }
-
-    if k2_core::heartbeats::install::transport_installed() {
-        return;
-    }
-
-    log_debug!(
-        "[daemon/heartbeat-monitor] {enabled_count} enabled heartbeat(s) but the tick \
-         transport is missing/unloaded ({context}) — self-healing"
-    );
-    // HB11: the one installer, from saved settings.
-    let result = k2_core::heartbeats::install::install_from_saved_settings()
-        .map(|out| out.changed.then_some(out.message));
-    match result {
-        Ok(Some(msg)) => log_debug!("[daemon/heartbeat-monitor] self-heal OK: {msg}"),
-        Ok(None) => {}
-        Err(e) => log_debug!("[daemon/heartbeat-monitor] self-heal FAILED: {e}"),
+    // launchctl / crontab calls (and a bootstrap retry sleep) — keep
+    // them off the async workers.
+    let joined = tokio::task::spawn_blocking(move || {
+        k2_core::heartbeats::install::self_check_and_repair(context)
+    })
+    .await;
+    match joined {
+        Ok((report, None)) => {
+            if report.state != k2_core::heartbeats::install::TransportState::Ok {
+                log_debug!(
+                    "[daemon/heartbeat-monitor] transport {:?} ({context}): {}",
+                    report.state,
+                    report.detail
+                );
+            }
+        }
+        Ok((_report, Some(rec))) => log_debug!(
+            "[daemon/heartbeat-monitor] {enabled_count} enabled heartbeat(s); transport              {:?} ({context}) → {}: {}",
+            rec.before,
+            rec.action,
+            rec.detail
+        ),
+        Err(e) => log_debug!("[daemon/heartbeat-monitor] transport check join error: {e}"),
     }
 }
 

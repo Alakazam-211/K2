@@ -828,7 +828,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         }
 
         // Reliability overhaul — tick-transport health for the UI.
-        // `lastTickAt` is stamped by every scheduler tick
+        // `lastTickAt` is stamped by every scheduler tick of any source;
+        // `lastOsTickAt` only by the OS job, `lastDaemonTickAt` only by
+        // the daemon's own scans (HB9)
         // (scheduler_meta KV); a stale value while heartbeats are
         // enabled means the transport (launchd agent / crontab /
         // daemon) is not delivering ticks — the Settings page renders
@@ -836,13 +838,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Daemon-wide status, so no project param (must precede the
         // project-scoped catch-all arm below).
         "/cli/heartbeat/scheduler-status" => {
-            let (last_tick_at, enabled_count) = {
+            use k2_core::db::schema::SchedulerMeta;
+            let (last_tick_at, last_os_tick_at, last_daemon_tick_at, enabled_count) = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                let last = k2_core::db::schema::SchedulerMeta::get(
-                    &conn,
-                    k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
-                );
+                let last = SchedulerMeta::get(&conn, SchedulerMeta::LAST_TICK_AT);
+                let os = SchedulerMeta::get(&conn, SchedulerMeta::LAST_OS_TICK_AT);
+                let daemon = SchedulerMeta::get(&conn, SchedulerMeta::LAST_DAEMON_TICK_AT);
                 let count: i64 = conn
                     .query_row(
                         "SELECT COUNT(*) FROM workspace_heartbeats \
@@ -851,19 +853,29 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         |r| r.get(0),
                     )
                     .unwrap_or(0);
-                (last, count)
+                (last, os, daemon, count)
             };
             let stale_secs = last_tick_at
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds());
+            // HB8/HB9/HB10: the honest transport check, per-source tick
+            // stamps, and the last self-check repair. `transportInstalled`
+            // stays for old clients and means `transport.state == ok`.
+            let transport = k2_core::heartbeats::install::transport_state();
+            let transport_ok =
+                transport.state == k2_core::heartbeats::install::TransportState::Ok;
             CliResponse::ok_json(
                 serde_json::json!({
                     "lastTickAt": last_tick_at,
+                    "lastOsTickAt": last_os_tick_at,
+                    "lastDaemonTickAt": last_daemon_tick_at,
                     "staleSecs": stale_secs,
                     "enabledCount": enabled_count,
-                    "transportInstalled":
-                        k2_core::heartbeats::install::transport_installed(),
+                    "transportInstalled": transport_ok,
+                    "transport": transport,
+                    "lastTransportRepair":
+                        k2_core::heartbeats::install::last_transport_repair(),
                     "wakeMode": k2_core::app_settings::load().wake_scheduler.mode,
                 })
                 .to_string(),

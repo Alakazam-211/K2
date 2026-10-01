@@ -1032,6 +1032,147 @@ pub fn uninstall_heartbeat_scheduler() -> Result<(), String> {
     uninstall_with(&SystemRunner, Platform::current(), &home_dir())
 }
 
+// ── HB10 — repair, not trust ───────────────────────────────────────────
+
+/// One self-check that found the job not `ok`. Persisted as JSON in
+/// `scheduler_meta.last_transport_repair` and surfaced by
+/// `/cli/heartbeat/scheduler-status`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairRecord {
+    /// RFC3339 UTC.
+    pub at: String,
+    /// `boot`, `wake` or `periodic`.
+    pub context: String,
+    pub before: TransportState,
+    pub before_detail: String,
+    /// `repaired`, `failed`, or `refused` (the HB6 guard said no).
+    pub action: String,
+    pub after: Option<TransportState>,
+    pub detail: String,
+}
+
+/// Repair `before` through `runner`: boot out the label and bootstrap
+/// `home`'s real plist for `spec`. `None` when nothing needs doing (the
+/// job is `ok`, the platform has no job, or the mode wants no job).
+///
+/// Callers acting on the real session must pass the HB6 guard first.
+pub(crate) fn repair_with(
+    runner: &dyn CommandRunner,
+    platform: Platform,
+    home: &Path,
+    spec: Option<JobSpec>,
+    before: &TransportReport,
+    context: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<RepairRecord> {
+    if matches!(before.state, TransportState::Ok | TransportState::Unsupported) {
+        return None;
+    }
+    let spec = spec?;
+    let mut rec = RepairRecord {
+        at: now.to_rfc3339(),
+        context: context.to_string(),
+        before: before.state,
+        before_detail: before.detail.clone(),
+        action: "failed".to_string(),
+        after: None,
+        detail: String::new(),
+    };
+    match install_with(runner, platform, home, Some(spec), true) {
+        Ok(out) => {
+            // A just-reloaded job cannot have ticked yet: judge it on a
+            // fresh watch window.
+            let ev = TickEvidence { now, observed_since: now, last_os_tick: None };
+            let after = state_with(runner, platform, home, spec.interval_secs as u64, &ev);
+            rec.after = Some(after.state);
+            if after.state == TransportState::Ok {
+                rec.action = "repaired".to_string();
+                rec.detail = out.message;
+            } else {
+                rec.detail = format!("{} — still {:?}: {}", out.message, after.state, after.detail);
+            }
+        }
+        Err(e) => rec.detail = e,
+    }
+    Some(rec)
+}
+
+/// HB10 — check this machine's job and repair it when it is not `ok`.
+/// Run by the daemon monitor at boot, after a wake, and every 10
+/// minutes. Returns the check and, when one was attempted (or refused),
+/// the repair record, which is also logged and saved to
+/// `scheduler_meta.last_transport_repair`.
+pub fn self_check_and_repair(context: &str) -> (TransportReport, Option<RepairRecord>) {
+    let before = transport_state();
+    if matches!(before.state, TransportState::Ok | TransportState::Unsupported) {
+        return (before, None);
+    }
+    let now = chrono::Utc::now();
+    let refused = |action: &str, detail: String| RepairRecord {
+        at: now.to_rfc3339(),
+        context: context.to_string(),
+        before: before.state,
+        before_detail: before.detail.clone(),
+        action: action.to_string(),
+        after: None,
+        detail,
+    };
+    let record = if let Err(e) = transport_writes_allowed() {
+        Some(refused("refused", e))
+    } else {
+        match saved_job_spec() {
+            Err(e) => Some(refused("failed", e)),
+            Ok(spec) => {
+                let rec = repair_with(
+                    &SystemRunner,
+                    Platform::current(),
+                    &home_dir(),
+                    spec,
+                    &before,
+                    context,
+                    now,
+                );
+                if rec.as_ref().is_some_and(|r| r.action == "repaired") {
+                    reset_observation_window();
+                }
+                rec
+            }
+        }
+    };
+    if let Some(rec) = &record {
+        crate::log_debug!(
+            "[heartbeat-transport] self-check ({context}): {:?} ({}) → {} {}",
+            rec.before,
+            rec.before_detail,
+            rec.action,
+            rec.detail
+        );
+        match serde_json::to_string(rec) {
+            Ok(json) => {
+                use crate::db::schema::SchedulerMeta;
+                let db = crate::db::shared();
+                let conn = db.lock();
+                if let Err(e) = SchedulerMeta::set(&conn, SchedulerMeta::LAST_TRANSPORT_REPAIR, &json)
+                {
+                    crate::log_debug!("[heartbeat-transport] persist last_transport_repair: {e}");
+                }
+            }
+            Err(e) => crate::log_debug!("[heartbeat-transport] serialise repair record: {e}"),
+        }
+    }
+    (before, record)
+}
+
+/// The last saved [`RepairRecord`], for the status route.
+pub fn last_transport_repair() -> Option<serde_json::Value> {
+    use crate::db::schema::SchedulerMeta;
+    let db = crate::db::shared();
+    let conn = db.lock();
+    SchedulerMeta::get(&conn, SchedulerMeta::LAST_TRANSPORT_REPAIR)
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
 /// Bash script written to `~/.k2/heartbeat.sh` for this HOME.
 pub fn generate_heartbeat_script() -> String {
     heartbeat_script_for(&home_dir())
@@ -1788,5 +1929,190 @@ mod installer_tests {
         assert_eq!(runner.writes(), vec![format!("launchctl bootout {}", launchd_target())]);
         assert!(!plist_path(&home).exists());
         let _ = fs::remove_dir_all(&home);
+    }
+}
+
+/// HB10 — the self-check detects a wrong plist path, a nonzero exit or a
+/// stale tick, and repairs it by bootout + bootstrap of the real plist.
+/// Fake launchctl only.
+#[cfg(test)]
+mod repair_tests {
+    use super::fake_runner::FakeRunner;
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    const SPEC: Option<JobSpec> = Some(JobSpec { interval_secs: 60, wake_system: false });
+
+    fn temp_home(label: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "k2-hb-repair-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(plist_path(&d).parent().unwrap()).unwrap();
+        d
+    }
+
+    fn print_for(home: &Path, exit: &str) -> String {
+        include_str!("fixtures/launchctl-print-ok.txt")
+            .replace("/Users/k2fixture", &home.to_string_lossy())
+            .replace("run interval = 300 seconds", "run interval = 60 seconds")
+            .replace("last exit code = 0", &format!("last exit code = {exit}"))
+    }
+
+    fn fresh() -> TickEvidence {
+        let now = Utc::now();
+        TickEvidence { now, observed_since: now, last_os_tick: None }
+    }
+
+    fn expected_repair_writes(home: &Path) -> Vec<String> {
+        vec![
+            format!("launchctl bootout {}", launchd_target()),
+            format!("launchctl bootstrap {} {}", launchd_domain(), plist_path(home).display()),
+        ]
+    }
+
+    /// Run the check through the fake, then the repair; return the
+    /// before-state and the record.
+    fn check_and_repair(
+        runner: &FakeRunner,
+        home: &Path,
+        ev: &TickEvidence,
+    ) -> (TransportReport, Option<RepairRecord>) {
+        let before = state_with(runner, Platform::Launchd, home, 60, ev);
+        let rec = repair_with(runner, Platform::Launchd, home, SPEC, &before, "periodic", ev.now);
+        (before, rec)
+    }
+
+    #[test]
+    fn wrong_plist_path_is_repaired() {
+        let home = temp_home("foreign");
+        fs::write(plist_path(&home), plist_for_spec(&home, SPEC.unwrap())).unwrap();
+        let runner = FakeRunner::launchd(
+            Some(include_str!("fixtures/launchctl-print-foreign.txt").to_string()),
+            Some(print_for(&home, "(never exited)")),
+        );
+        let (before, rec) = check_and_repair(&runner, &home, &fresh());
+        assert_eq!(before.state, TransportState::Foreign, "{}", before.detail);
+        let rec = rec.expect("a foreign job must be repaired");
+        assert_eq!(rec.action, "repaired", "{}", rec.detail);
+        assert_eq!(rec.after, Some(TransportState::Ok));
+        assert_eq!(runner.writes(), expected_repair_writes(&home));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn nonzero_exit_is_repaired() {
+        let home = temp_home("failing");
+        fs::write(plist_path(&home), plist_for_spec(&home, SPEC.unwrap())).unwrap();
+        let runner = FakeRunner::launchd(
+            Some(print_for(&home, "127")),
+            Some(print_for(&home, "(never exited)")),
+        );
+        let (before, rec) = check_and_repair(&runner, &home, &fresh());
+        assert_eq!(before.state, TransportState::Failing, "{}", before.detail);
+        let rec = rec.expect("a failing job must be repaired");
+        assert_eq!(rec.action, "repaired", "{}", rec.detail);
+        // Plist already correct: force reload anyway.
+        assert_eq!(runner.writes(), expected_repair_writes(&home));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn stale_tick_is_repaired() {
+        let home = temp_home("silent");
+        fs::write(plist_path(&home), plist_for_spec(&home, SPEC.unwrap())).unwrap();
+        let runner =
+            FakeRunner::launchd(Some(print_for(&home, "0")), Some(print_for(&home, "0")));
+        let now = Utc::now();
+        let stale = TickEvidence {
+            now,
+            observed_since: now - Duration::minutes(30),
+            last_os_tick: Some(now - Duration::minutes(10)),
+        };
+        let (before, rec) = check_and_repair(&runner, &home, &stale);
+        assert_eq!(before.state, TransportState::Silent, "{}", before.detail);
+        let rec = rec.expect("a silent job must be repaired");
+        assert_eq!(rec.action, "repaired", "{}", rec.detail);
+        assert_eq!(runner.writes(), expected_repair_writes(&home));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn missing_job_is_bootstrapped_without_bootout() {
+        let home = temp_home("missing");
+        let runner = FakeRunner::launchd(None, Some(print_for(&home, "(never exited)")));
+        let (before, rec) = check_and_repair(&runner, &home, &fresh());
+        assert_eq!(before.state, TransportState::Missing);
+        let rec = rec.expect("a missing job must be installed");
+        assert_eq!(rec.action, "repaired", "{}", rec.detail);
+        assert_eq!(
+            runner.writes(),
+            vec![format!(
+                "launchctl bootstrap {} {}",
+                launchd_domain(),
+                plist_path(&home).display()
+            )]
+        );
+        assert_eq!(
+            fs::read_to_string(plist_path(&home)).unwrap(),
+            plist_for_spec(&home, SPEC.unwrap())
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn ok_job_is_left_alone() {
+        let home = temp_home("ok");
+        fs::write(plist_path(&home), plist_for_spec(&home, SPEC.unwrap())).unwrap();
+        let runner = FakeRunner::launchd(Some(print_for(&home, "0")), None);
+        let (before, rec) = check_and_repair(&runner, &home, &fresh());
+        assert_eq!(before.state, TransportState::Ok, "{}", before.detail);
+        assert_eq!(rec, None);
+        assert_eq!(runner.writes(), Vec::<String>::new());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn failed_bootstrap_is_recorded_as_failed() {
+        let home = temp_home("bootfail");
+        let mut runner = FakeRunner::launchd(
+            Some(include_str!("fixtures/launchctl-print-foreign.txt").to_string()),
+            None,
+        );
+        runner.bootstrap_ok = false;
+        runner.bootstrap_stderr = "Bootstrap failed: 5: Input/output error".into();
+        let (_before, rec) = check_and_repair(&runner, &home, &fresh());
+        let rec = rec.expect("a record");
+        assert_eq!(rec.action, "failed");
+        assert!(rec.detail.contains("Input/output error"), "{}", rec.detail);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// The real entry point never repairs in a test build: it either
+    /// finds nothing to do or records the guard's refusal. Either way
+    /// the system runner is never asked to write.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn self_check_in_test_build_never_writes() {
+        crate::db::init_for_tests();
+        with_temp_home("selfcheck", |home| {
+            test_recorder::take();
+            let (before, rec) = self_check_and_repair("periodic");
+            // cfg(test): `launchctl print` / `crontab -l` is refused, so
+            // the job reads as missing.
+            assert_eq!(before.state, TransportState::Missing, "{}", before.detail);
+            let rec = rec.expect("a not-ok job gets a record");
+            assert_eq!(rec.action, "refused");
+            assert!(rec.detail.contains("HOME is not the user home"), "{}", rec.detail);
+            let saved = last_transport_repair().expect("record persisted");
+            assert_eq!(saved["action"], "refused");
+            let calls = test_recorder::take();
+            assert!(
+                calls.iter().all(|c| c.starts_with("launchctl print") || c == "crontab -l"),
+                "self-check ran a write: {calls:?}"
+            );
+            assert!(!plist_path(home).exists());
+        });
     }
 }

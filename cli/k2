@@ -5427,7 +5427,7 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--apply-tokens]
                                         Set default rooms (unassigned guests only)
-  k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member/viewer)
+  k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
   k2 app role create <name> [--agent sales]
                                         Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
@@ -10143,10 +10143,13 @@ k2 users — local daemon connect-user accounts
 USAGE
   k2 users                      List accounts (username, role, disabled)
   k2 users list                 Same as above
-  k2 users add <username> [--role owner|admin|member|viewer]
+  k2 users add <username> [--role owner|admin|member]
                                 Create an account; prompts for password
                                 (hidden) + confirm. Default role is member;
                                 --role always calls set-role after add.
+                                There is no viewer role: a login is a
+                                trusted operator. For limited access use
+                                an app pass (k2 app).
   k2 users audit [--tail N] [--json]
                                 Last N auth-audit records (login /
                                 change-password / logout / set-password:
@@ -10157,7 +10160,7 @@ USAGE
                                 the password. Exit 0 when no lock is there.
 
 FLAGS
-  --role <r>                    owner | admin | member | viewer
+  --role <r>                    owner | admin | member
   --password-stdin              Read password from stdin (automation; no echo)
   --tail <N>                    audit: how many records (1..1000, default 50)
   --json                        unlock: daemon body; audit: raw JSON
@@ -10256,10 +10259,15 @@ rows = []
 for u in users:
     if not isinstance(u, dict):
         continue
+    disabled = "yes" if u.get("disabled") else "no"
+    if u.get("wasViewer"):
+        # Viewer role removed: disabled on the update until the owner
+        # enables it as a member (Settings, or POST users/set-disabled).
+        disabled += " (was viewer)"
     rows.append((
         str(u.get("username") or "?"),
         str(u.get("role") or "member"),
-        "yes" if u.get("disabled") else "no",
+        disabled,
         str(u.get("createdAt") or u.get("created_at") or "-"),
     ))
 if not rows:
@@ -10307,14 +10315,19 @@ for u, role, dis, created in rows:
                 esac
             done
             if [ -z "$username" ]; then
-                echo "Usage: k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]" >&2
+                echo "Usage: k2 users add <username> [--role owner|admin|member] [--password-stdin]" >&2
                 return 2
             fi
             if [ -n "$role" ]; then
                 case "$role" in
-                    owner|admin|member|viewer) ;;
+                    owner|admin|member) ;;
+                    viewer|Viewer|VIEWER)
+                        # Same text the daemon returns (k2_core VIEWER_ROLE_REMOVED).
+                        echo "Error: the viewer role was removed: a login is owner, admin or member. For limited access, give the person an app pass instead (k2 app)." >&2
+                        return 2
+                        ;;
                     *)
-                        echo "Error: invalid role '$role' (expected owner|admin|member|viewer)" >&2
+                        echo "Error: invalid role '$role' (expected owner|admin|member)" >&2
                         return 2
                         ;;
                 esac
@@ -10350,7 +10363,7 @@ if not (isinstance(d, dict) and d.get("success")):
 print("Created user %s." % username)
 '
             # Always call set-role when --role is given (default after add is
-            # member server-side; owner/admin/viewer need the explicit write).
+            # member server-side; owner/admin need the explicit write).
             if [ -n "$role" ]; then
                 local role_body role_resp
                 role_body=$(USERNAME="$username" ROLE="$role" python3 -c '
@@ -14404,11 +14417,11 @@ cmd_schema() {
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]",
+      "usage": "k2 users add <username> [--role owner|admin|member] [--password-stdin]",
       "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. --role calls set-role after add (default member server-side).",
       "args": [{"name": "username", "required": true}],
       "flags": [
-        {"name": "--role", "arg": "role", "description": "owner | admin | member | viewer"},
+        {"name": "--role", "arg": "role", "description": "owner | admin | member (there is no viewer role)"},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
       ]
     },
@@ -14492,7 +14505,7 @@ cmd_schema() {
     {
       "name": "app user role",
       "usage": "k2 app user role <username> <role>",
-      "description": "Assign an app role to a guest. Not Connect owner/admin/member/viewer. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}
@@ -14516,7 +14529,7 @@ cmd_schema() {
     {
       "name": "app role create",
       "usage": "k2 app role create <name> [--agent sales]",
-      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member/viewer are rejected.",
+      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member (and the retired viewer) are rejected.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable; 0 allowed)."}
@@ -14734,7 +14747,7 @@ cmd_schema() {
     {
       "name": "skin user role",
       "usage": "k2 skin user role <username> <role>",
-      "description": "Assign a skin role to a guest. Not Connect owner/admin/member/viewer. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign a skin role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}
@@ -14758,7 +14771,7 @@ cmd_schema() {
     {
       "name": "skin role create",
       "usage": "k2 skin role create <name> [--caps thread:read,thread:post,files:read] [--agent sales]",
-      "description": "Create a skin role. --agent optional (0 = Thread dark). --caps optional (Thread-only). Name charset is the same as usernames; Connect owner/admin/member/viewer are rejected.",
+      "description": "Create a skin role. --agent optional (0 = Thread dark). --caps optional (Thread-only). Name charset is the same as usernames; Connect owner/admin/member (and the retired viewer) are rejected.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."},
@@ -15493,7 +15506,7 @@ classic footgun. `k2 msg` talks to connected workspace AGENTS only.
 
 2. CONNECT USERS
    `k2 users` / `k2 users list`
-   Local daemon accounts (owner / admin / member / viewer) who log into
+   Local daemon accounts (owner / admin / member) who log into
    this server. Humans. Not agents. Never `k2 msg` those names.
    Mutations are owner-tier.
 
@@ -20779,7 +20792,7 @@ CONNECT (pair purchased k2.dev subdomain — headless account login)
 
 USERS (local daemon connect-user accounts)
   users | users list                            List accounts (username, role, disabled)
-  users add <username> [--role owner|admin|member|viewer] [--password-stdin]
+  users add <username> [--role owner|admin|member] [--password-stdin]
                                                 Create account (password via prompt or stdin)
 
 SKIN (guest list + roles + k2skn_ passes — Thread rooms, never grid)

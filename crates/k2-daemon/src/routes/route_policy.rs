@@ -344,7 +344,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/heartbeat/list", Member),
     get("/cli/heartbeat/list-all", Member),
     get("/cli/heartbeat/list-archived", Member),
-    get("/cli/heartbeat/remove", Member),
+    get("/cli/heartbeat/remove", Owner),
     both("/cli/heartbeat/rename", Member),
     get("/cli/heartbeat/schedule", Member),
     get("/cli/heartbeat/scheduler-status", Member),
@@ -1105,6 +1105,20 @@ mod tests {
             None => "pass",
             Some(resp) => resp.status,
         }
+    }
+
+    #[test]
+    fn heartbeat_hard_delete_is_owner_only() {
+        // Rosson R1 (prd-app-heartbeats-surface-v1): archive stays open to any
+        // login; hard delete is the Owner role only.
+        let remove = lookup("/cli/heartbeat/remove").expect("heartbeat remove is classified");
+        let floor = remove.get.expect("heartbeat remove is a GET route");
+        assert_eq!(floor.as_wire(), "owner");
+        assert!(!floor.admits(Role::Member));
+        assert!(!floor.admits(Role::Admin));
+        assert!(floor.admits(Role::Owner));
+        let archive = lookup("/cli/heartbeat/archive").expect("heartbeat archive is classified");
+        assert_eq!(archive.post.expect("archive accepts POST").as_wire(), "member");
     }
 
     #[test]

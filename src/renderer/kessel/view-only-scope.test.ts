@@ -65,7 +65,8 @@ describe('view-only scope', () => {
       await expect(daemonCliPost(twin, route, {})).rejects.toBeInstanceOf(ViewOnlyWriteError)
     }
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect([...VIEW_ONLY_POST_ROUTES]).toEqual(['projects/activate'])
+    // The keep-alive, and file search (a read the daemon takes as POST).
+    expect([...VIEW_ONLY_POST_ROUTES]).toEqual(['projects/activate', 'fs/search-tree'])
     fetchSpy.mockRestore()
   })
 })

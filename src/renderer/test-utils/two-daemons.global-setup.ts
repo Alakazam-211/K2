@@ -10,7 +10,7 @@
 // after this runs). Never the production daemon, never main's `target/`.
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -42,6 +42,9 @@ async function spawnDaemon(tag: string): Promise<Spawned> {
   mkdirSync(join(home, '.k2'), { recursive: true })
   const shim = join(home, 'agent-shim-empty')
   mkdirSync(shim, { recursive: true })
+  // Home M5: a terminal tab in a room runs a shell. `sh` is the one program
+  // the shim dir offers (the OS shell, never an agent CLI).
+  symlinkSync('/bin/sh', join(shim, 'sh'))
   const child = spawn(BINARY, [], {
     env: { ...process.env, HOME: home, K2_TEST_AGENT_SHIM_DIR: shim, K2SO_WATCHDOG_DISABLED: '1' },
     stdio: 'ignore',

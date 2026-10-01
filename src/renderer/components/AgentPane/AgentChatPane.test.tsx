@@ -199,6 +199,7 @@ vi.mock('@/lib/workspace-agent', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
   agentDisplayName: vi.fn(async () => 'Agent One'),
+  claimAgentLock: vi.fn(async () => null),
   setChatSession: primaryOnly(h.setChatSession),
   resumeChatArgs: primaryOnly(h.resumeChatArgs),
   // Mirrors the Slice-4 shape: resume/fresh carry the daemon's

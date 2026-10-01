@@ -63,19 +63,30 @@ function poolEntry(patch: Partial<HostEntry>): HostEntry {
 
 const presence = createStore<PresenceView>(() => ({ roster: [], supported: true }))
 
-function fakeRoom(): PinnedRoom {
+function fakeRoom(readOnly = false): PinnedRoom {
   return {
     key: `${KEY}|pb:pb-ws`,
     isPrimary: false,
-    readOnly: true,
-    scope: { id: `host:${KEY}`, hostKey: KEY, label: 'Box B', isRemote: true, isPrimary: false, viewOnly: true },
+    readOnly,
+    scope: readOnly
+      ? { id: `host:${KEY}`, hostKey: KEY, label: 'Box B', isRemote: true, isPrimary: false, viewOnly: true }
+      : { id: `host:${KEY}`, hostKey: KEY, label: 'Box B', isRemote: true, isPrimary: false, remoteRoom: true },
     presence,
     cwd: () => '/srv/anna',
   } as unknown as PinnedRoom
 }
 
 function openEntry(room: PinnedRoom): HomeRoomEntry {
-  return { address: `anna::${KEY}`, hostKey: KEY, label: 'Anna', phase: 'open', error: null, room, generation: 1 }
+  return {
+    address: `anna::${KEY}`,
+    hostKey: KEY,
+    label: 'Anna',
+    phase: 'open',
+    error: null,
+    room,
+    access: room.readOnly ? 'view-older-server' : 'use',
+    generation: 1,
+  }
 }
 
 let container: HTMLDivElement
@@ -120,14 +131,27 @@ function q(sel: string): Element {
 }
 
 describe('remote rooms in Home (M4)', () => {
-  it('a live server: the room renders with the View only (preview) bar and no failure banner', () => {
+  it('a live server: the usable room renders with its room bar and no failure banner (M5)', () => {
     hostPool.store.setState({ entries: { [KEY]: poolEntry({}) } })
     showRoom(fakeRoom())
     render()
-    expect(q(`[data-home-room="anna::${KEY}"] [data-view-only-chip]`).textContent).toBe('View only (preview)')
+    expect(q(`[data-home-room="anna::${KEY}"] [data-room-bar]`).getAttribute('data-room-access')).toBe('use')
+    expect(q('[data-room-chip]').textContent).toBe('Remote room (preview)')
     expect(q('[data-room-server]').textContent).toBe('Anna on Box B')
+    expect(container.querySelector('[data-room-note]')).toBe(null)
     expect(q('[data-stub-terminal-area]').getAttribute('data-stub-terminal-area')).toBe('/srv/anna')
     expect(container.querySelector('[data-room-failure]')).toBe(null)
+  })
+
+  it('an older server: the room says View only and why (MS43)', () => {
+    hostPool.store.setState({ entries: { [KEY]: poolEntry({}) } })
+    showRoom(fakeRoom(true))
+    render()
+    expect(q('[data-room-bar]').getAttribute('data-room-access')).toBe('view-older-server')
+    expect(q('[data-room-chip]').textContent).toBe('View only')
+    expect(q('[data-room-note]').textContent).toBe(
+      'Box B runs an older K2 that can\u2019t save this room\u2019s tabs safely. Update Box B to type and change tabs here.',
+    )
   })
 
   it('shows that server’s people on this agent (R7)', () => {
@@ -175,6 +199,7 @@ describe('remote rooms in Home (M4)', () => {
       phase: 'error',
       error: 'connection refused',
       room: null,
+      access: null,
       generation: 0,
     }
     useHomeRoomsStore.setState({ entries: { [entry.address]: entry }, shown: entry.address })

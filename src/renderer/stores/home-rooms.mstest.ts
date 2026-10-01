@@ -4,13 +4,13 @@
 //
 // The window is on A (`local` = daemon A). B is a saved server, signed in as
 // the Member `anna`. "Remote rooms (preview)" is on. Opening B's Home row:
-//   - opens B's room without switching the window, view-only;
+//   - opens B's room without switching the window (usable since M5; what
+//     it writes is `home-rooms-use.mstest.ts`);
 //   - shows B's tabs from B's layout;
 //   - B's who's-here lists `anna` on that workspace (R7), and the room's own
 //     roster comes from B;
 //   - B's Active set holds the workspace (projects/activate on B);
-//   - sends nothing to A, and writes no layout to B (not even after a local
-//     tab change);
+//   - sends nothing to A;
 //   - one workspace socket on B (MS46); off screen it goes warm (socket
 //     kept), then cold (socket closed, B drops `anna`), and opening the row
 //     again reopens it.
@@ -126,12 +126,6 @@ function layoutJson(tabIds: string[]): string {
   })
 }
 
-async function stored(port: number, owner: string, p: ProjectWithWorkspaces): Promise<{ layoutJson: string; revision: number }> {
-  return daemon(port, owner, 'workspace-layouts/load', {
-    query: { project_id: p.id, workspace_id: p.workspaces[0].id, with_revision: '1' },
-  })
-}
-
 interface RosterRow { user: string; workspaces?: string[] }
 
 async function rosterOnB(): Promise<RosterRow[]> {
@@ -193,7 +187,6 @@ let projA: ProjectWithWorkspaces
 let projB: ProjectWithWorkspaces
 let row: HomeRow
 let room: PinnedRoom
-let bRevisionAtOpen: number
 /** Requests and sockets from the moment the row was opened. */
 let sinceOpen: { requests: Array<{ url: string; method: string }>; sockets: string[] }
 
@@ -231,7 +224,6 @@ beforeAll(async () => {
   const handle = workspaceHandle(projB)
   if (!handle) throw new Error("B's workspace has no handle")
   row = { address: `${handle}::${B_KEY}`, workspaceId: projB.id, label: projB.name }
-  bRevisionAtOpen = (await stored(B_PORT, B_OWNER, projB)).revision
 
   // The window's own room on A boots on module load (projects, its layout,
   // its debounced save). Let that traffic go quiet first, so everything
@@ -250,11 +242,11 @@ afterAll(async () => {
   rmSync(CHECKOUT, { recursive: true, force: true })
 })
 
-describe("B's room on Home while the window is on A (Home M4)", () => {
-  it('opens view-only on B without switching the window', () => {
+describe("B's room on Home while the window is on A (Home M4: presence, Active, tiers)", () => {
+  it('opens on B without switching the window (usable: the room allowlist scope, M5)', () => {
     expect(useConnectHostStore.getState().activeHost).toBe('local')
-    expect(room.readOnly).toBe(true)
-    expect(room.scope.viewOnly).toBe(true)
+    expect(room.readOnly).toBe(false)
+    expect(room.scope.remoteRoom).toBe(true)
     expect(room.scope.hostKey).toBe(B_KEY)
     expect(homeRooms.store.getState().shown).toBe(row.address)
   })
@@ -286,19 +278,6 @@ describe("B's room on Home while the window is on A (Home M4)", () => {
     const tokens = new Set(toB.map((r) => new URL(r.url).searchParams.get('token')))
     expect(tokens.has(A_OWNER)).toBe(false)
     expect(tokens.has(B_OWNER)).toBe(false)
-  })
-
-  it('writes no layout to B, even after a tab change in the room', async () => {
-    expect(sinceOpen.requests.filter((r) => r.url.includes('/cli/workspace-layouts/save'))).toEqual([])
-    h.requests = []
-    room.tabs.getState().addTab(CHECKOUT)
-    room.tabs.getState().flushLayoutPersist()
-    await new Promise((r) => setTimeout(r, 1_500))
-    expect(h.requests.filter((r) => r.method === 'POST' && portOf(r.url) === B_PORT && !r.url.includes('/cli/projects/activate'))).toEqual([])
-    const after = await stored(B_PORT, B_OWNER, projB)
-    expect(after.revision).toBe(bRevisionAtOpen)
-    expect((JSON.parse(after.layoutJson) as { tabs: Array<{ id: string }> }).tabs.map((t) => t.id)).toEqual(['tab-b1', 'tab-b2'])
-    expect(room.tabs.getState().tabs.filter((t) => !t.isSystemAgent).length).toBe(3)
   })
 
   it('holds ONE workspace socket on B (MS46)', () => {

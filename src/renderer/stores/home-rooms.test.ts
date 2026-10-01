@@ -1,7 +1,9 @@
-// Home M4 — the Home rooms manager (stores/home-rooms.ts): opening a remote
-// row builds ONE view-only pinned room on its server, the tiers open and
-// close its sockets (hot = mounted, warm = its workspace socket only, cold =
-// disposed), re-showing a cold room rebuilds it, and the keep-alive follows.
+// Home M4/M5 — the Home rooms manager (stores/home-rooms.ts): opening a
+// remote row builds ONE pinned room on its server — usable when that server
+// answers its layout with a revision (M5), view only on an older server —
+// the tiers open and close its sockets (hot = mounted, warm = its workspace
+// socket only, cold = disposed), re-showing a cold room rebuilds it, the
+// keep-alive follows, and the room's project list follows its server.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -52,6 +54,12 @@ function harness() {
   const rooms: FakeRoom[] = []
   const keepAlives: Array<[string, string]> = []
   const lists = new Map<string, ProjectWithWorkspaces[] | Error>()
+  /** host key → does it answer `with_revision` (absent = yes). */
+  const revisions = new Map<string, boolean | Error>()
+  const revisionProbes: Array<[string, string, string]> = []
+  const knownServers: string[] = []
+  /** host key → its projects_changed handlers. */
+  const projectsChanged = new Map<string, Set<() => void>>()
   const scopes = new Map<string, ServerScope>()
   const scopeFor = (hostKey: string): ServerScope => {
     let s = scopes.get(hostKey)
@@ -100,6 +108,21 @@ function harness() {
       return 'sent'
     },
     scopeFor,
+    knowServer: async (hostKey) => {
+      knownServers.push(hostKey)
+    },
+    layoutRevisionSupported: async (scope, projectId, workspaceId) => {
+      revisionProbes.push([scope.hostKey, projectId, workspaceId])
+      const r = revisions.get(scope.hostKey)
+      if (r instanceof Error) throw r
+      return r === undefined ? true : r
+    },
+    onProjectsChanged: (scope, fn) => {
+      const set = projectsChanged.get(scope.hostKey) ?? new Set()
+      set.add(fn)
+      projectsChanged.set(scope.hostKey, set)
+      return () => set.delete(fn)
+    },
     now: () => now,
     setInterval: (fn, ms) => {
       const id = nextId++
@@ -126,7 +149,19 @@ function harness() {
     now = until
     await new Promise((r) => setTimeout(r, 0))
   }
-  return { tiers, homeRooms, rooms, keepAlives, lists, advance, intervals: () => timers.filter((t) => t.every !== null).length }
+  return {
+    tiers,
+    homeRooms,
+    rooms,
+    keepAlives,
+    lists,
+    revisions,
+    revisionProbes,
+    knownServers,
+    projectsChanged,
+    advance,
+    intervals: () => timers.filter((t) => t.every !== null).length,
+  }
 }
 
 function project(id: string, handle: string, path: string): ProjectWithWorkspaces {
@@ -143,7 +178,7 @@ function row(handle: string, host: string): HomeRow {
   return { address: `${handle}::${host}`, workspaceId: null, label: handle }
 }
 
-describe('Home rooms (M4)', () => {
+describe('Home rooms (M4, M5)', () => {
   let h: ReturnType<typeof harness>
   beforeEach(() => {
     h = harness()
@@ -151,12 +186,15 @@ describe('Home rooms (M4)', () => {
     h.lists.set('c.test', [project('pc', 'appa', '/srv/appa')])
   })
 
-  it('opens ONE view-only room on the row’s server, shows it hot, opens its socket and keeps it alive', async () => {
+  it('opens ONE usable room on the row’s server (it answers with_revision), shows it hot, opens its socket and keeps it alive', async () => {
     const entry = await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
     expect(entry.phase).toBe('open')
+    expect(entry.access).toBe('use')
+    expect(h.knownServers).toEqual(['b.test'])
+    expect(h.revisionProbes).toEqual([['b.test', 'pb', 'pb-ws']])
     expect(h.rooms.length).toBe(1)
     const fake = h.rooms[0]
-    expect(fake.input.readOnly).toBe(true)
+    expect(fake.input.readOnly).toBe(false)
     expect(fake.input.scope.hostKey).toBe('b.test')
     expect(fake.input.workspace).toEqual({ projectId: 'pb', workspaceId: 'pb-ws', path: '/srv/anna' })
     expect(fake.opened).toBe(1)
@@ -259,6 +297,40 @@ describe('Home rooms (M4)', () => {
     if (!retried) throw new Error('retry returned no entry')
     expect(retried.phase).toBe('open')
     expect(h.rooms.length).toBe(1)
+  })
+
+  it('an older server (no layout revision) opens the room view only (MS43)', async () => {
+    h.revisions.set('b.test', false)
+    const entry = await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    expect(entry.phase).toBe('open')
+    expect(entry.access).toBe('view-older-server')
+    expect(h.rooms.length).toBe(1)
+    expect(h.rooms[0].input.readOnly).toBe(true)
+    expect(h.rooms[0].opened).toBe(1)
+  })
+
+  it('a revision probe that fails leaves the row in error with no room', async () => {
+    h.revisions.set('b.test', new Error('B went away'))
+    const entry = await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    expect(entry.phase).toBe('error')
+    expect(entry.error).toBe('B went away')
+    expect(h.rooms.length).toBe(0)
+  })
+
+  it('the room’s project list follows its server’s projects_changed; closing the room stops listening', async () => {
+    await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    const fake = h.rooms[0]
+    const handlers = h.projectsChanged.get('b.test')
+    if (!handlers) throw new Error('no projects_changed handler on b.test')
+    expect(handlers.size).toBe(1)
+    const withWorktree = project('pb', 'anna', '/srv/anna')
+    withWorktree.workspaces.push({ id: 'pb-wt', tabOrder: 1, worktreePath: '/srv/anna-wt' } as never)
+    h.lists.set('b.test', [withWorktree])
+    for (const fn of handlers) fn()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fake.input.projects.getState().projects[0].workspaces.map((w) => w.id)).toEqual(['pb-ws', 'pb-wt'])
+    await h.homeRooms.close('anna::b.test')
+    expect(handlers.size).toBe(0)
   })
 
   it('a row whose agent is gone on that server is not-found', async () => {

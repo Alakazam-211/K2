@@ -17,18 +17,33 @@
 //!   row whose schedule can never fire, and relabels old
 //!   `wakeup_missing` auto-disables whose file is actually just empty.
 //!
-//! `wait_reason` is not a stored column until S3 (migration 0123). Until
-//! then the daemon computes it when a row is read
-//! ([`annotate_wait_state`]). Same names, same vocabulary (HB20), so S3
-//! only has to store what this already returns.
+//!
+//! S3 — the daemon owns next-fire (HB1, HB4, HB18–HB24). Every
+//! non-archived row stores `next_fire_at` (UTC RFC3339) and a
+//! `wait_reason` from one fixed vocabulary ([`ALL_REASONS`], S5's names
+//! included). The stored columns are the single source; the list routes
+//! read them and only overlay the read-time `no_ticks` (HB21).
+//!
+//! - [`derive`] is pure: row + workspace facts + `now` → the wait state.
+//!   Due-ness comes from `cron::evaluate_with_now` (S2's anchor and 12 h
+//!   catch-up window included), so there is no second copy of the rules.
+//! - [`refresh_project`] is the one writer. It re-derives every
+//!   non-archived row of a workspace, writes only what changed, and runs
+//!   the overdue watchdog (HB22): an enabled row more than
+//!   [`OVERDUE_AFTER_SECS`] past `next_fire_at` with no lease gets
+//!   `overdue` (unless a more specific reason is set) and exactly one
+//!   `overdue` audit row per episode, naming the gate that blocked it.
+//!   A change calls the listener the daemon registers ([`set_change_listener`]),
+//!   which emits `heartbeat_roster_changed` (HB23).
 
 use std::path::Path;
+use std::sync::OnceLock;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::cron;
-use crate::db::schema::{AgentHeartbeat, HeartbeatFire};
+use super::cron::{self, DueStatus};
+use crate::db::schema::{AgentHeartbeat, HeartbeatFire, SchedulerMeta};
 
 /// HB20 `wait_reason`: the WAKEUP.md body is empty.
 pub const WAIT_WAKEUP_EMPTY: &str = "wakeup_empty";
@@ -132,33 +147,410 @@ pub fn with_reference(hb: &AgentHeartbeat, at: DateTime<Local>) -> AgentHeartbea
     shifted
 }
 
-/// Why an enabled heartbeat is waiting, computed when the row is read.
-/// `(None, None)` when nothing is in the way (or the row is disabled or
-/// archived — `disabled_reason` already says why).
-pub fn wait_state_for(project_path: &str, hb: &AgentHeartbeat) -> (Option<String>, Option<String>) {
-    if !hb.enabled || hb.archived_at.is_some() {
-        return (None, None);
-    }
-    if let cron::DueStatus::Invalid { reason } = cron::evaluate(hb) {
-        return (Some(WAIT_SCHEDULE_ERROR.to_string()), Some(reason));
-    }
-    let abs = Path::new(project_path).join(&hb.wakeup_path);
-    if wakeup_body(&abs) == WakeupBody::Empty {
-        return (
-            Some(WAIT_WAKEUP_EMPTY.to_string()),
-            Some(WAKEUP_EMPTY_DETAIL.to_string()),
-        );
-    }
-    (None, None)
+// ── S3: the HB20 vocabulary ──────────────────────────────────────────
+// A new value needs a PRD amendment. Keep `ALL_REASONS` and
+// `fixtures/wait-reasons.json` in step (test `vocabulary_fixture_matches`).
+// S5's two names (`WAIT_WAKEUP_EMPTY`, `WAIT_SCHEDULE_ERROR`) are part of it.
+
+pub const WAIT_SCHEDULED: &str = "scheduled";
+pub const WAIT_IN_FLIGHT: &str = "in_flight";
+pub const WAIT_WINDOW_CLOSED: &str = "window_closed";
+pub const WAIT_BACKOFF: &str = "backoff";
+pub const WAIT_NO_AGENT: &str = "no_agent";
+pub const WAIT_NO_PROJECT: &str = "no_project";
+pub const WAIT_DISABLED_USER: &str = "disabled:user";
+pub const WAIT_DISABLED_FAILURES: &str = "disabled:failures";
+pub const WAIT_DISABLED_WAKEUP_MISSING: &str = "disabled:wakeup_missing";
+pub const WAIT_DISABLED_WAKEUP_EMPTY: &str = "disabled:wakeup_empty";
+pub const WAIT_OVERDUE: &str = "overdue";
+/// Read-time only (HB21). Never written to the row.
+pub const WAIT_NO_TICKS: &str = "no_ticks";
+
+pub const ALL_REASONS: &[&str] = &[
+    WAIT_SCHEDULED,
+    WAIT_IN_FLIGHT,
+    WAIT_WINDOW_CLOSED,
+    WAIT_BACKOFF,
+    WAIT_SCHEDULE_ERROR,
+    WAIT_WAKEUP_EMPTY,
+    WAIT_NO_AGENT,
+    WAIT_NO_PROJECT,
+    WAIT_DISABLED_USER,
+    WAIT_DISABLED_FAILURES,
+    WAIT_DISABLED_WAKEUP_MISSING,
+    WAIT_DISABLED_WAKEUP_EMPTY,
+    WAIT_OVERDUE,
+    WAIT_NO_TICKS,
+];
+
+/// HB4 / HB22: an enabled row this far past `next_fire_at` is overdue.
+pub const OVERDUE_AFTER_SECS: i64 = 120;
+/// HB21: no daemon tick (S2's ticker, `last_daemon_tick_at`) for this
+/// long while a row is overdue → the list routes say `no_ticks`.
+pub const NO_TICKS_AFTER_SECS: i64 = 180;
+/// Display only ("failure 2 of 5"). The daemon's auto-disable threshold
+/// is `heartbeat_launch::MAX_CONSECUTIVE_FAILURES`; keep them equal.
+pub const MAX_CONSECUTIVE_FAILURES: i64 = 5;
+
+/// Facts about the workspace the pure derivation needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitInputs {
+    pub project_dir_exists: bool,
+    pub agent_resolvable: bool,
+    pub wakeup: WakeupBody,
 }
 
-/// Fill `wait_reason` / `wait_detail` on rows read from the database.
-pub fn annotate_wait_state(project_path: &str, rows: &mut [AgentHeartbeat]) {
-    for hb in rows.iter_mut() {
-        let (reason, detail) = wait_state_for(project_path, hb);
-        hb.wait_reason = reason;
-        hb.wait_detail = detail;
+/// One row's derived wait state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitState {
+    pub next_fire_at: Option<String>,
+    pub reason: String,
+    pub detail: Option<String>,
+}
+
+impl WaitState {
+    fn new(next: Option<DateTime<Local>>, reason: &str, detail: Option<String>) -> Self {
+        WaitState { next_fire_at: next.map(fmt_utc), reason: reason.to_string(), detail }
     }
+}
+
+/// UTC RFC3339 with whole seconds and a `Z` — the stored form. Stable
+/// across passes, so an unchanged schedule never rewrites the row.
+pub fn fmt_utc<Tz: TimeZone>(t: DateTime<Tz>) -> String {
+    t.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc))
+}
+
+/// HB19 — derive a row's wait state. Pure: no DB, no IO. `hb` is the row
+/// as the evaluator should see it (an open S5 `wakeup_added` episode
+/// already shifted by [`with_reference`]).
+///
+/// Precedence (first match wins): disabled → invalid schedule → project
+/// folder gone → lease held → empty WAKEUP.md → no agent → failure
+/// backoff → the evaluator's own answer (scheduled / window closed).
+/// Archived rows are not derived (the caller skips them).
+pub fn derive(hb: &AgentHeartbeat, inputs: &WaitInputs, now: DateTime<Local>) -> WaitState {
+    if !hb.enabled {
+        let (reason, detail) = match hb.disabled_reason.as_deref() {
+            None => (WAIT_DISABLED_USER, None),
+            Some("failures") => (
+                WAIT_DISABLED_FAILURES,
+                Some(format!("{} consecutive failed fires", hb.consecutive_failures)),
+            ),
+            Some(DISABLED_WAKEUP_MISSING) => {
+                (WAIT_DISABLED_WAKEUP_MISSING, Some(hb.wakeup_path.clone()))
+            }
+            Some(DISABLED_WAKEUP_EMPTY) => (WAIT_DISABLED_WAKEUP_EMPTY, Some(hb.wakeup_path.clone())),
+            // A system reason this vocabulary has no slot for: keep the
+            // fixed reason, carry the raw value as detail.
+            Some(other) => (WAIT_DISABLED_USER, Some(other.to_string())),
+        };
+        return WaitState::new(None, reason, detail);
+    }
+
+    // The evaluator's slot: the next (or first missed) occurrence.
+    let (slot, base_reason, base_detail): (Option<DateTime<Local>>, &str, Option<String>) =
+        match cron::evaluate_with_now(hb, now) {
+            DueStatus::Invalid { reason } => {
+                return WaitState::new(None, WAIT_SCHEDULE_ERROR, Some(reason));
+            }
+            // Due: store the FIRST slot after the reference (when it
+            // should have fired), not the latest occurrence, so the
+            // overdue clock does not slide forward each interval.
+            DueStatus::Due { scheduled_for } => (
+                Some(cron::first_slot_after_reference(hb).unwrap_or(scheduled_for)),
+                WAIT_SCHEDULED,
+                None,
+            ),
+            DueStatus::DueCatchUp { missed_at } => (
+                Some(cron::first_slot_after_reference(hb).unwrap_or(missed_at)),
+                WAIT_SCHEDULED,
+                Some("missed slot; the next tick fires one catch-up".to_string()),
+            ),
+            // S2 owns the window-open and 12 h-skip math.
+            DueStatus::HoldWindow { .. } => {
+                let opens = cron::next_fire_estimate(hb, now);
+                (
+                    opens,
+                    WAIT_WINDOW_CLOSED,
+                    opens.map(|t| format!("window opens {}", t.format("%H:%M"))),
+                )
+            }
+            DueStatus::SkippedMissed { .. } => (
+                cron::next_fire_estimate(hb, now),
+                WAIT_SCHEDULED,
+                Some("missed slot older than 12 h is skipped".to_string()),
+            ),
+            DueStatus::NotYet { next: Some(next) } => (Some(next), WAIT_SCHEDULED, None),
+            DueStatus::NotYet { next: None } => {
+                return WaitState::new(
+                    None,
+                    WAIT_SCHEDULE_ERROR,
+                    Some("no upcoming slot falls inside the firing window".to_string()),
+                );
+            }
+        };
+
+    if !inputs.project_dir_exists {
+        return WaitState::new(slot, WAIT_NO_PROJECT, Some("workspace folder not found".to_string()));
+    }
+    if hb.in_flight_started_at.is_some() {
+        return WaitState::new(slot, WAIT_IN_FLIGHT, None);
+    }
+    // S5 HB33: the row's own missing instructions come before the
+    // workspace-wide gates — it is what the user can fix on this row.
+    // D4: once its slot has passed while empty, the next fire is the
+    // first slot after instructions are seen — not known yet, so no time
+    // is stored (and an empty row is a designed wait, never `overdue`;
+    // S5's one `wakeup_empty` audit row is the episode's record).
+    if inputs.wakeup == WakeupBody::Empty {
+        let next = slot.filter(|s| *s > now);
+        return WaitState::new(next, WAIT_WAKEUP_EMPTY, Some(WAKEUP_EMPTY_DETAIL.to_string()));
+    }
+    if !inputs.agent_resolvable {
+        return WaitState::new(
+            slot,
+            WAIT_NO_AGENT,
+            Some("no scheduleable agent in this workspace".to_string()),
+        );
+    }
+    if let Some(retry_at) = hb.next_retry_at.as_deref().and_then(parse_utc) {
+        let retry_local = retry_at.with_timezone(&Local);
+        if retry_local > now && slot.map_or(true, |s| retry_local >= s) {
+            return WaitState::new(
+                Some(retry_local),
+                WAIT_BACKOFF,
+                Some(format!(
+                    "failure {} of {}",
+                    hb.consecutive_failures, MAX_CONSECUTIVE_FAILURES
+                )),
+            );
+        }
+    }
+    WaitState::new(slot, base_reason, base_detail)
+}
+
+/// The daemon's own tick — S2's ticker (`ticker.lastTickAt` on
+/// `/cli/heartbeat/scheduler-status`, stored as `last_daemon_tick_at`).
+pub fn last_tick_at(conn: &Connection) -> Option<DateTime<Utc>> {
+    SchedulerMeta::get(conn, SchedulerMeta::LAST_DAEMON_TICK_AT).and_then(|s| parse_utc(&s))
+}
+
+fn ticks_stale(last_tick: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    last_tick.map_or(true, |t| (now - t).num_seconds() > NO_TICKS_AFTER_SECS)
+}
+
+fn is_overdue(next_fire_at: Option<&str>, now: DateTime<Utc>) -> bool {
+    next_fire_at
+        .and_then(parse_utc)
+        .map_or(false, |t| (now - t).num_seconds() > OVERDUE_AFTER_SECS)
+}
+
+/// HB22 — the gate that kept an overdue row from firing, for the audit
+/// row and the `overdue` detail. Stable across passes (no durations), so
+/// an unchanged episode never rewrites the row.
+fn overdue_gate(state: &WaitState, last_tick: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
+    if state.reason != WAIT_SCHEDULED {
+        return match &state.detail {
+            Some(d) => format!("{}: {d}", state.reason),
+            None => state.reason.clone(),
+        };
+    }
+    if ticks_stale(last_tick, now) {
+        return match last_tick {
+            Some(t) => format!("{WAIT_NO_TICKS}: no scheduler tick since {}", fmt_utc(t)),
+            None => format!("{WAIT_NO_TICKS}: no scheduler tick recorded"),
+        };
+    }
+    "not_fired: the scheduler is ticking but has not fired this slot".to_string()
+}
+
+/// HB23 — called with the workspace path whenever [`refresh_project`]
+/// changed a row. The daemon registers one that emits
+/// `heartbeat_roster_changed`; k2-core alone has no event bus.
+static CHANGE_LISTENER: OnceLock<fn(&str)> = OnceLock::new();
+
+/// Register the change listener (first call wins; later calls no-op).
+pub fn set_change_listener(f: fn(&str)) {
+    let _ = CHANGE_LISTENER.set(f);
+}
+
+/// HB19 + HB22 — re-derive and store every non-archived heartbeat of a
+/// workspace, run the overdue watchdog, and write the one `overdue`
+/// audit row per episode. Returns `true` when any row's `next_fire_at`,
+/// `wait_reason` or `wait_detail` changed (and then calls the change
+/// listener, HB23). Unknown workspace → `Ok(false)`.
+pub fn refresh_project(project_path: &str) -> Result<bool, String> {
+    refresh_project_at(project_path, Local::now())
+}
+
+/// [`refresh_project`] with an explicit clock (tests).
+pub fn refresh_project_at(project_path: &str, now: DateTime<Local>) -> Result<bool, String> {
+    let changed = refresh_rows(project_path, now)?;
+    if changed {
+        if let Some(f) = CHANGE_LISTENER.get() {
+            f(project_path);
+        }
+    }
+    Ok(changed)
+}
+
+fn refresh_rows(project_path: &str, now: DateTime<Local>) -> Result<bool, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(project_id) =
+        crate::workspace::agent_identity::resolve_project_id(&conn, project_path)
+    else {
+        return Ok(false);
+    };
+    let rows = AgentHeartbeat::list_active(&conn, &project_id).map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let project_dir_exists = Path::new(project_path).is_dir();
+    let agent_name = crate::workspace::agent_identity::resolve_agent_name(project_path);
+    let now_utc = now.with_timezone(&Utc);
+    let now_s = fmt_utc(now);
+    let last_tick = last_tick_at(&conn);
+
+    let mut changed = false;
+    for hb in rows {
+        let wakeup = wakeup_body(&Path::new(project_path).join(&hb.wakeup_path));
+        // S5 D4: while a `wakeup_added` episode is open the schedule
+        // counts from when the instructions were seen. A body that
+        // appeared since the last tick (episode still `Empty`) will be
+        // seen now: its next fire is the first slot after now.
+        let seen = match open_episode(&conn, &project_id, &hb.name, hb.last_fired.as_deref()) {
+            Some(WakeupEpisode::Added(at)) => Some(at),
+            Some(WakeupEpisode::Empty) if wakeup == WakeupBody::Present => Some(now),
+            _ => None,
+        };
+        let eval_hb = match seen {
+            Some(at) => with_reference(&hb, at),
+            None => hb.clone(),
+        };
+        let inputs = WaitInputs {
+            project_dir_exists,
+            agent_resolvable: agent_name.is_some(),
+            wakeup,
+        };
+        let mut state = derive(&eval_hb, &inputs, now);
+
+        let overdue = hb.enabled
+            && hb.in_flight_started_at.is_none()
+            && is_overdue(state.next_fire_at.as_deref(), now_utc);
+        let gate = overdue.then(|| overdue_gate(&state, last_tick, now_utc));
+        if let (Some(gate), true) = (&gate, state.reason == WAIT_SCHEDULED) {
+            // HB22: `overdue` only when no more specific reason is set.
+            state.reason = WAIT_OVERDUE.to_string();
+            state.detail = Some(gate.clone());
+        }
+
+        changed |= AgentHeartbeat::set_wait_state(
+            &conn,
+            &project_id,
+            &hb.name,
+            state.next_fire_at.as_deref(),
+            &state.reason,
+            state.detail.as_deref(),
+            &now_s,
+        )
+        .map_err(|e| e.to_string())?;
+
+        match gate {
+            Some(gate) => {
+                let opened = AgentHeartbeat::open_overdue_episode(&conn, &project_id, &hb.name, &now_s)
+                    .map_err(|e| e.to_string())?;
+                if opened {
+                    HeartbeatFire::insert_with_schedule(
+                        &conn,
+                        &project_id,
+                        agent_name.as_deref(),
+                        Some(&hb.name),
+                        &hb.frequency,
+                        WAIT_OVERDUE,
+                        Some(&format!(
+                            "next fire {} not delivered; blocked by gate {gate}",
+                            state.next_fire_at.as_deref().unwrap_or("?"),
+                        )),
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    crate::log_debug!("[heartbeat-wait] {} overdue — gate {}", hb.name, gate);
+                }
+            }
+            None => {
+                AgentHeartbeat::close_overdue_episode(&conn, &project_id, &hb.name)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Every workspace with at least one non-archived heartbeat. The
+/// daemon's wait pass refreshes each (boot fill, HB18, and the
+/// watchdog, HB22).
+pub fn projects_with_heartbeats() -> Vec<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = match conn.prepare(
+        "SELECT DISTINCT p.path FROM workspace_heartbeats h \
+         JOIN projects p ON h.project_id = p.id \
+         WHERE h.archived_at IS NULL ORDER BY p.path",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    rows.filter_map(|r| r.ok()).collect()
+}
+
+/// HB21 — read-time `no_ticks`. An enabled row whose stored
+/// `next_fire_at` is more than [`OVERDUE_AFTER_SECS`] past, while the
+/// daemon ticker has not ticked for [`NO_TICKS_AFTER_SECS`], reads
+/// `no_ticks` with `wait_since` = the last tick (None when none was ever
+/// recorded). Only the returned rows change; the stored row is untouched.
+pub fn overlay_no_ticks(
+    rows: &mut [AgentHeartbeat],
+    last_tick: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) {
+    if !ticks_stale(last_tick, now) {
+        return;
+    }
+    for hb in rows.iter_mut() {
+        let disabled_or_error = hb
+            .wait_reason
+            .as_deref()
+            .map_or(false, |r| r.starts_with("disabled:") || r == WAIT_SCHEDULE_ERROR);
+        if hb.enabled
+            && hb.archived_at.is_none()
+            && !disabled_or_error
+            && is_overdue(hb.next_fire_at.as_deref(), now)
+        {
+            hb.wait_reason = Some(WAIT_NO_TICKS.to_string());
+            hb.wait_detail = Some(match last_tick {
+                Some(t) => format!("no scheduler tick since {}", fmt_utc(t)),
+                None => "no scheduler tick recorded".to_string(),
+            });
+            hb.wait_since = last_tick.map(fmt_utc);
+        }
+    }
+}
+
+/// [`overlay_no_ticks`] against the live clock and the stored ticker
+/// stamp — what the list routes call.
+pub fn overlay_no_ticks_now(conn: &Connection, rows: &mut [AgentHeartbeat]) {
+    overlay_no_ticks(rows, last_tick_at(conn), Utc::now());
 }
 
 /// What [`boot_reconcile`] changed.
@@ -385,7 +777,13 @@ mod tests {
             vec![DECISION_WAKEUP_EMPTY.to_string(), DECISION_WAKEUP_ADDED.to_string()]
         );
         assert_waiting_enabled(&ws, "minutely");
-        assert_eq!(listed(&ws, "minutely").wait_reason, None, "a body clears the empty wait");
+        // S3: the stored reason moves from `wakeup_empty` to `scheduled`,
+        // and the next fire is the first slot after the body was seen (D4).
+        let after = listed(&ws, "minutely");
+        assert_eq!(after.wait_reason.as_deref(), Some(WAIT_SCHEDULED), "a body clears the empty wait");
+        let next = DateTime::parse_from_rfc3339(after.next_fire_at.as_deref().expect("next fire"))
+            .expect("RFC3339");
+        assert!(next > chrono::Utc::now(), "no catch-up: the next fire is ahead");
 
         // Next slot: age both markers (order kept), so the body was seen
         // 61s ago and the first slot after it has just passed.
@@ -485,7 +883,9 @@ mod tests {
             }
         }
 
-        // Flagged on read, before any boot pass.
+        // S3: the stored wait state (single source) is written by the
+        // daemon's wait pass; one pass flags reggie before boot_reconcile.
+        refresh_project(&ws.path).expect("wait pass");
         let reggie = listed(&ws, "reggie");
         assert_eq!(reggie.wait_reason.as_deref(), Some(WAIT_SCHEDULE_ERROR));
         assert_eq!(reggie.wait_detail.as_deref(), Some("unknown frequency 'list'"));
@@ -523,5 +923,211 @@ mod tests {
             vec!["schedule_invalid".to_string()],
             "one audit row per episode, not per boot"
         );
+    }
+}
+
+#[cfg(test)]
+mod s3_derive_tests {
+    //! Heartbeat S3 — the pure derivation (HB19, HB20) and the read-time
+    //! `no_ticks` overlay (HB21).
+
+    use super::*;
+    use chrono::Duration;
+
+    fn row(frequency: &str, spec: &str) -> AgentHeartbeat {
+        AgentHeartbeat {
+            id: "t".into(),
+            project_id: "p".into(),
+            name: "t".into(),
+            frequency: frequency.into(),
+            spec_json: spec.into(),
+            wakeup_path: ".k2/heartbeats/t/WAKEUP.md".into(),
+            enabled: true,
+            last_fired: None,
+            last_session_id: None,
+            archived_at: None,
+            created_at: 0,
+            concurrency_policy: "forbid".into(),
+            starting_deadline_secs: 600,
+            active_deadline_secs: 30,
+            in_flight_started_at: None,
+            active_terminal_id: None,
+            use_workspace_session: true,
+            consecutive_failures: 0,
+            next_retry_at: None,
+            disabled_reason: None,
+            schedule_error: None,
+            session_provider: None,
+            wait_reason: None,
+            wait_detail: None,
+            schedule_anchor_at: None,
+            next_fire_at: None,
+            wait_since: None,
+            overdue_noted_at: None,
+        }
+    }
+
+    fn ok_inputs() -> WaitInputs {
+        WaitInputs { project_dir_exists: true, agent_resolvable: true, wakeup: WakeupBody::Present }
+    }
+
+    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
+        Local.with_ymd_and_hms(y, mo, d, h, mi, 0).single().expect("unambiguous test time")
+    }
+
+    #[test]
+    fn interval_never_fired_is_created_plus_every() {
+        let now = at(2026, 10, 1, 12, 0);
+        let mut hb = row("hourly", r#"{"every_seconds":900}"#);
+        hb.created_at = (now - Duration::seconds(10)).timestamp();
+        let st = derive(&hb, &ok_inputs(), now);
+        assert_eq!(st.reason, WAIT_SCHEDULED);
+        assert_eq!(
+            st.next_fire_at.as_deref(),
+            Some(fmt_utc(now - Duration::seconds(10) + Duration::seconds(900)).as_str()),
+        );
+    }
+
+    /// The research case: sew-build-drive last fired 07:06:32, every
+    /// 900 s, nothing ticked. next_fire_at stays at the first missed
+    /// slot (07:21:32), so the overdue clock starts there.
+    #[test]
+    fn missed_interval_keeps_the_first_missed_slot() {
+        let last = at(2026, 10, 1, 7, 6) + Duration::seconds(32);
+        let mut hb = row("hourly", r#"{"every_seconds":900}"#);
+        hb.last_fired = Some(last.with_timezone(&Utc).to_rfc3339());
+        for later_mins in [16, 30, 8 * 60] {
+            let st = derive(&hb, &ok_inputs(), last + Duration::minutes(later_mins));
+            assert_eq!(st.reason, WAIT_SCHEDULED);
+            assert_eq!(
+                st.next_fire_at.as_deref(),
+                Some(fmt_utc(last + Duration::seconds(900)).as_str()),
+                "{later_mins} min after the fire",
+            );
+        }
+    }
+
+    #[test]
+    fn closed_window_stores_the_open_time() {
+        // Every 30 min, window 09:00–17:00, last fired 16:00; at 18:05
+        // the clock is outside the window with a due slot held.
+        let mut hb = row("hourly", r#"{"every_seconds":1800,"start":"09:00","end":"17:00"}"#);
+        hb.last_fired = Some(at(2026, 7, 2, 16, 0).to_rfc3339());
+        let st = derive(&hb, &ok_inputs(), at(2026, 7, 2, 18, 5));
+        assert_eq!(st.reason, WAIT_WINDOW_CLOSED, "got {st:?}");
+        assert_eq!(st.next_fire_at.as_deref(), Some(fmt_utc(at(2026, 7, 3, 9, 0)).as_str()));
+        assert_eq!(st.detail.as_deref(), Some("window opens 09:00"));
+    }
+
+    #[test]
+    fn backoff_uses_next_retry_at_and_counts_failures() {
+        let now = at(2026, 10, 1, 12, 0);
+        let mut hb = row("hourly", r#"{"every_seconds":900}"#);
+        hb.last_fired = Some((now - Duration::seconds(1000)).to_rfc3339());
+        hb.consecutive_failures = 2;
+        let retry = now + Duration::seconds(120);
+        hb.next_retry_at = Some(retry.with_timezone(&Utc).to_rfc3339());
+        let st = derive(&hb, &ok_inputs(), now);
+        assert_eq!(st.reason, WAIT_BACKOFF);
+        assert_eq!(st.next_fire_at.as_deref(), Some(fmt_utc(retry).as_str()));
+        assert_eq!(st.detail.as_deref(), Some("failure 2 of 5"));
+    }
+
+    #[test]
+    fn disabled_reasons_map_to_the_fixed_vocabulary() {
+        let now = at(2026, 10, 1, 12, 0);
+        let mut hb = row("daily", r#"{"time":"07:00"}"#);
+        hb.enabled = false;
+        for (raw, want) in [
+            (None, WAIT_DISABLED_USER),
+            (Some("failures"), WAIT_DISABLED_FAILURES),
+            (Some("wakeup_missing"), WAIT_DISABLED_WAKEUP_MISSING),
+            (Some("wakeup_empty"), WAIT_DISABLED_WAKEUP_EMPTY),
+        ] {
+            hb.disabled_reason = raw.map(str::to_string);
+            let st = derive(&hb, &ok_inputs(), now);
+            assert_eq!(st.reason, want);
+            assert_eq!(st.next_fire_at, None, "a disabled row has no next fire");
+        }
+    }
+
+    #[test]
+    fn invalid_spec_is_schedule_error_with_null_next() {
+        let st = derive(&row("list", "{}"), &ok_inputs(), at(2026, 10, 1, 12, 0));
+        assert_eq!(st.reason, WAIT_SCHEDULE_ERROR);
+        assert_eq!(st.next_fire_at, None);
+        assert_eq!(st.detail.as_deref(), Some("unknown frequency 'list'"));
+    }
+
+    #[test]
+    fn gates_in_precedence_order() {
+        let now = at(2026, 10, 1, 12, 0);
+        let mut hb = row("hourly", r#"{"every_seconds":900}"#);
+        hb.created_at = now.timestamp();
+        let no_agent = WaitInputs { agent_resolvable: false, ..ok_inputs() };
+        assert_eq!(derive(&hb, &no_agent, now).reason, WAIT_NO_AGENT);
+        let empty = WaitInputs { wakeup: WakeupBody::Empty, ..ok_inputs() };
+        let st = derive(&hb, &empty, now);
+        assert_eq!(st.reason, WAIT_WAKEUP_EMPTY);
+        assert_eq!(st.detail.as_deref(), Some(WAKEUP_EMPTY_DETAIL), "S5's copy is kept");
+        let empty_no_agent = WaitInputs { agent_resolvable: false, ..empty };
+        assert_eq!(derive(&hb, &empty_no_agent, now).reason, WAIT_WAKEUP_EMPTY);
+        let gone = WaitInputs { project_dir_exists: false, ..empty_no_agent };
+        assert_eq!(derive(&hb, &gone, now).reason, WAIT_NO_PROJECT);
+        hb.in_flight_started_at = Some(now.to_rfc3339());
+        assert_eq!(derive(&hb, &empty, now).reason, WAIT_IN_FLIGHT);
+        // Every gate keeps the evaluator's slot as next_fire_at.
+        assert_eq!(
+            derive(&hb, &no_agent, now).next_fire_at.as_deref(),
+            Some(fmt_utc(now + Duration::seconds(900)).as_str()),
+        );
+    }
+
+    /// D4: an empty row whose slot passed has no known next fire (it is
+    /// the first slot after instructions are seen), so it is never
+    /// `overdue` — a designed wait, not a stuck one.
+    #[test]
+    fn empty_wakeup_past_its_slot_stores_no_next_fire() {
+        let now = at(2026, 10, 1, 12, 0);
+        let mut hb = row("hourly", r#"{"every_seconds":900}"#);
+        hb.created_at = (now - Duration::hours(1)).timestamp();
+        let empty = WaitInputs { wakeup: WakeupBody::Empty, ..ok_inputs() };
+        let st = derive(&hb, &empty, now);
+        assert_eq!(st.reason, WAIT_WAKEUP_EMPTY);
+        assert_eq!(st.next_fire_at, None);
+    }
+
+    #[test]
+    fn no_ticks_overlays_only_overdue_enabled_rows() {
+        let now = Utc::now();
+        let mut overdue = row("hourly", "{}");
+        overdue.next_fire_at = Some(fmt_utc(now - Duration::minutes(5)));
+        overdue.wait_reason = Some(WAIT_OVERDUE.into());
+        let mut future = row("hourly", "{}");
+        future.next_fire_at = Some(fmt_utc(now + Duration::minutes(5)));
+        future.wait_reason = Some(WAIT_SCHEDULED.into());
+        let mut rows = vec![overdue, future];
+        let last = now - Duration::minutes(10);
+
+        overlay_no_ticks(&mut rows, Some(last), now);
+        assert_eq!(rows[0].wait_reason.as_deref(), Some(WAIT_NO_TICKS));
+        assert_eq!(rows[0].wait_since.as_deref(), Some(fmt_utc(last).as_str()));
+        assert_eq!(rows[1].wait_reason.as_deref(), Some(WAIT_SCHEDULED));
+
+        // A tick 30 s ago: nothing is overlaid.
+        rows[0].wait_reason = Some(WAIT_OVERDUE.into());
+        overlay_no_ticks(&mut rows, Some(now - Duration::seconds(30)), now);
+        assert_eq!(rows[0].wait_reason.as_deref(), Some(WAIT_OVERDUE));
+    }
+
+    /// T-S3f (Rust half) — the HB20 vocabulary is pinned in a fixture the
+    /// renderer formatter test reads. A new reason must land in both.
+    #[test]
+    fn vocabulary_fixture_matches() {
+        let fixture = include_str!("fixtures/wait-reasons.json");
+        let parsed: Vec<String> =
+            serde_json::from_str(fixture).expect("wait-reasons.json is a JSON string array");
+        let want: Vec<String> = ALL_REASONS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(parsed, want, "fixtures/wait-reasons.json must list ALL_REASONS in order");
     }
 }

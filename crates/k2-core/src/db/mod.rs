@@ -1011,6 +1011,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0123_heartbeat_schedule_anchor",
             include_str!("../../drizzle_sql/0123_heartbeat_schedule_anchor.sql"),
         ),
+        // 0124 — heartbeat S3 (HB18): next_fire_at + wait_reason /
+        // wait_detail / wait_since + overdue_noted_at. Columns only; the
+        // daemon's first wait pass fills them.
+        (
+            "0124_heartbeat_next_fire",
+            include_str!("../../drizzle_sql/0124_heartbeat_next_fire.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1588,6 +1595,63 @@ mod tests {
         assert_eq!(first, second, "re-running migrations must not add rows");
     }
 
+    /// Heartbeat S3 T-S3e (migration half): 0124 applies on a DB that
+    /// predates it, keeps existing heartbeat rows, and adds the five
+    /// columns as NULL (no SQL backfill — the daemon's wait pass fills).
+    #[test]
+    fn heartbeat_next_fire_0124_applies_on_a_pre_0124_db() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES ('p-0124', 'p', '/tmp/p-0124')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspace_heartbeats \
+             (id, project_id, name, frequency, spec_json, wakeup_path, enabled, created_at) \
+             VALUES ('h-0124', 'p-0124', 'daily-brief', 'daily', '{\"time\":\"07:00\"}', \
+                     '.k2/heartbeats/daily-brief/WAKEUP.md', 1, unixepoch())",
+            [],
+        )
+        .unwrap();
+        // Roll the DB back to its pre-0124 shape.
+        for col in ["next_fire_at", "wait_reason", "wait_detail", "wait_since", "overdue_noted_at"] {
+            conn.execute_batch(&format!("ALTER TABLE workspace_heartbeats DROP COLUMN {col};"))
+                .unwrap();
+        }
+        conn.execute("DELETE FROM _migrations WHERE name = '0124_heartbeat_next_fire'", [])
+            .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _migrations WHERE name = '0124_heartbeat_next_fire'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1, "0124 is recorded once");
+        let (name, next, reason, detail, since, noted): (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT name, next_fire_at, wait_reason, wait_detail, wait_since, overdue_noted_at \
+                 FROM workspace_heartbeats WHERE id = 'h-0124'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "daily-brief", "the existing row survives");
+        assert_eq!((next, reason, detail, since, noted), (None, None, None, None, None));
+    }
+
     #[test]
     fn migrations_registers_every_file_in_migrations_table() {
         let conn = fresh_memory();
@@ -1614,7 +1678,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0123_heartbeat_schedule_anchor",
+            last_name, "0124_heartbeat_next_fire",
             "unexpected last migration name: {last_name}"
         );
     }

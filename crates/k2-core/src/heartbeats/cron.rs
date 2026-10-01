@@ -231,6 +231,20 @@ pub fn schedule_reference(hb: &AgentHeartbeat) -> DateTime<Local> {
     }
 }
 
+/// Heartbeat S3 (HB19/HB22): the FIRST in-window slot after the
+/// reference point — when the row should have fired. A due or overdue
+/// row stores this as `next_fire_at`, so the overdue clock starts at
+/// the first missed slot and stays put until a fire (an interval row's
+/// *latest* occurrence would slide forward every period and hide an
+/// 8 h outage behind a value never more than one interval old).
+/// `None` when the spec is invalid or no slot lands in the window.
+pub fn first_slot_after_reference(hb: &AgentHeartbeat) -> Option<DateTime<Local>> {
+    match evaluate_with_now(hb, schedule_reference(hb)) {
+        DueStatus::NotYet { next } => next,
+        _ => None,
+    }
+}
+
 /// Interval mode (`hourly`): occurrences at `reference + k·every_seconds`.
 fn evaluate_interval(
     spec: &Value,
@@ -722,6 +736,9 @@ mod tests {
             wait_reason: None,
             wait_detail: None,
             schedule_anchor_at: None,
+            next_fire_at: None,
+            wait_since: None,
+            overdue_noted_at: None,
         }
     }
 

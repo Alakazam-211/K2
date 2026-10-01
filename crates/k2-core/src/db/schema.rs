@@ -1953,16 +1953,17 @@ pub struct AgentHeartbeat {
     /// agent's adapter. Cleared alongside `last_session_id` by the
     /// self-heal path and by delivery mode `auto`.
     pub session_provider: Option<String>,
-    /// S5 (prd-heartbeat-firing-v1 HB33/HB35) — why an enabled row is
-    /// waiting, from the HB20 vocabulary (`wakeup_empty`,
-    /// `schedule_error`). Not a column yet: computed by the daemon when
-    /// the row is read ([`crate::heartbeats::annotate_wait_state`]) and
-    /// `None` straight out of the database. S3 (migration 0123) stores
-    /// it. Clients render it; they never derive it.
+    /// 0124 (heartbeat S3, HB18/HB20) — why the row is waiting, one of
+    /// `heartbeats::wait::ALL_REASONS` (S5's `wakeup_empty` and
+    /// `schedule_error` included). Stored, and written only by
+    /// `heartbeats::wait::refresh_project` — the single source. `no_ticks`
+    /// is never stored; the list routes overlay it at read time (HB21).
+    /// Clients render it; they never derive it.
     #[serde(default)]
     pub wait_reason: Option<String>,
-    /// S5 — the human detail for `wait_reason` (the schedule error
-    /// text, or what to do about an empty WAKEUP.md).
+    /// 0124 — the human detail for `wait_reason` (the schedule error
+    /// text, what to do about an empty WAKEUP.md, "failure 2 of 5", the
+    /// window open time, the overdue gate).
     #[serde(default)]
     pub wait_detail: Option<String>,
     /// 0123 (heartbeat S2, D4 + D7) — RFC3339 point the schedule counts
@@ -1972,6 +1973,20 @@ pub struct AgentHeartbeat {
     /// and this, so none of those actions fires a surprise catch-up.
     /// NULL = `last_fired`, else `created_at`.
     pub schedule_anchor_at: Option<String>,
+    /// 0124 (heartbeat S3, HB18) — UTC RFC3339 of the next fire the
+    /// daemon expects. A past value = due or overdue (it holds the FIRST
+    /// missed slot until a fire). NULL = none (disabled, invalid
+    /// schedule) or not yet filled. Written only by `heartbeats::wait`.
+    #[serde(default)]
+    pub next_fire_at: Option<String>,
+    /// 0124 — UTC RFC3339 when `wait_reason` last changed.
+    #[serde(default)]
+    pub wait_since: Option<String>,
+    /// 0124 — the open overdue episode (HB22). Set when the one
+    /// `overdue` audit row is written; cleared once the row is no
+    /// longer overdue.
+    #[serde(default)]
+    pub overdue_noted_at: Option<String>,
 }
 
 impl AgentHeartbeat {
@@ -2027,7 +2042,7 @@ impl AgentHeartbeat {
 
     /// Column list for SELECTs. Centralised so adding a new column means
     /// updating one constant + `from_row`, not five query strings.
-    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider, schedule_anchor_at";
+    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider, schedule_anchor_at, next_fire_at, wait_reason, wait_detail, wait_since, overdue_noted_at";
 
     pub fn get_by_name(conn: &Connection, project_id: &str, name: &str) -> Result<Option<AgentHeartbeat>> {
         let sql = format!(
@@ -2079,9 +2094,9 @@ impl AgentHeartbeat {
             let hb = Self::from_row(row)?;
             // Two extra columns appended in the SELECT above. Their
             // indices follow the AgentHeartbeat fields (which Self::COLS
-            // produced) — 23 fields + project_name (23) + project_path (24).
-            let project_name: String = row.get(23)?;
-            let project_path: String = row.get(24)?;
+            // produced) — COL_COUNT fields, then project_name, project_path.
+            let project_name: String = row.get(Self::COL_COUNT)?;
+            let project_path: String = row.get(Self::COL_COUNT + 1)?;
             Ok((hb, project_name, project_path))
         })?;
         rows.collect()
@@ -2665,10 +2680,75 @@ impl AgentHeartbeat {
             disabled_reason: row.get(19)?,
             schedule_error: row.get(20)?,
             session_provider: row.get(21)?,
-            wait_reason: None,
-            wait_detail: None,
             schedule_anchor_at: row.get(22)?,
+            next_fire_at: row.get(23)?,
+            wait_reason: row.get(24)?,
+            wait_detail: row.get(25)?,
+            wait_since: row.get(26)?,
+            overdue_noted_at: row.get(27)?,
         })
+    }
+
+    /// Number of columns in [`Self::COLS`] — the first index past the
+    /// row's own fields in a joined SELECT.
+    const COL_COUNT: usize = 28;
+
+    /// Heartbeat S3 (HB19) — the ONE writer of `next_fire_at` /
+    /// `wait_reason` / `wait_detail`. Writes only when a value differs
+    /// (null-safe `IS NOT`), and moves `wait_since` to `now` only when
+    /// the reason itself changes. Returns `true` when the row changed —
+    /// the caller then emits `heartbeat_roster_changed` (HB23).
+    pub fn set_wait_state(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        next_fire_at: Option<&str>,
+        wait_reason: &str,
+        wait_detail: Option<&str>,
+        now: &str,
+    ) -> Result<bool> {
+        let n = conn.execute(
+            "UPDATE workspace_heartbeats \
+             SET wait_since = CASE WHEN wait_reason IS ?4 THEN wait_since ELSE ?6 END, \
+                 next_fire_at = ?3, wait_reason = ?4, wait_detail = ?5 \
+             WHERE project_id = ?1 AND name = ?2 \
+               AND (next_fire_at IS NOT ?3 OR wait_reason IS NOT ?4 \
+                    OR wait_detail IS NOT ?5)",
+            params![project_id, name, next_fire_at, wait_reason, wait_detail, now],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Heartbeat S3 (HB22) — open an overdue episode. Compare-and-set on
+    /// `overdue_noted_at IS NULL`, so exactly one caller per episode gets
+    /// `true` and writes the single `overdue` audit row.
+    pub fn open_overdue_episode(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        now: &str,
+    ) -> Result<bool> {
+        let n = conn.execute(
+            "UPDATE workspace_heartbeats SET overdue_noted_at = ?3 \
+             WHERE project_id = ?1 AND name = ?2 AND overdue_noted_at IS NULL",
+            params![project_id, name, now],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Heartbeat S3 (HB22) — close the overdue episode (the row fired,
+    /// or its next fire moved back into the future).
+    pub fn close_overdue_episode(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+    ) -> Result<bool> {
+        let n = conn.execute(
+            "UPDATE workspace_heartbeats SET overdue_noted_at = NULL \
+             WHERE project_id = ?1 AND name = ?2 AND overdue_noted_at IS NOT NULL",
+            params![project_id, name],
+        )?;
+        Ok(n > 0)
     }
 
     /// 0.37.8 — flip the per-heartbeat opt-in to deliver WAKEUP.md

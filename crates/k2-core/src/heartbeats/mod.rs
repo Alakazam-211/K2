@@ -30,13 +30,21 @@ pub mod install;
 // `agents/commands.rs`; the legacy per-agent get/set/noop/action
 // control API was deleted in 0.40.31.
 pub mod control;
-// S5 (prd-heartbeat-firing-v1 HB33/HB35/D4): empty-WAKEUP wait state,
-// read-time wait reasons, and the boot relabel/flag pass.
+// S5 (prd-heartbeat-firing-v1 HB33/HB35/D4): empty-WAKEUP wait state and
+// the boot relabel/flag pass. S3 (HB18–HB24): the stored next_fire_at +
+// wait_reason, their one writer, and the overdue watchdog.
 pub mod wait;
 
-pub use wait::{
-    annotate_wait_state, boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY,
-};
+pub use wait::{boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY};
+
+/// Heartbeat S3 (HB19) — re-derive the workspace's stored wait state
+/// after a write. A failure here never fails the user's write; the
+/// daemon's wait pass retries within a minute.
+fn refresh_wait_after_write(project_path: &str) {
+    if let Err(e) = wait::refresh_project(project_path) {
+        log_debug!("[heartbeat-wait] WARN: refresh after write ({project_path}): {e}");
+    }
+}
 // Heartbeat S2: missed-run (D7) and next-slot (D4) tests.
 #[cfg(test)]
 mod missed_run_tests;
@@ -146,6 +154,15 @@ pub fn k2so_heartbeat_add_with_instructions(
     // Drop the DB lock before the cron-install path runs — it shells
     // out to launchctl which can be slow on first install.
     drop(conn);
+    // S3 (HB19): next_fire_at + wait_reason are stored at creation.
+    refresh_wait_after_write(&project_path);
+    let stored = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::get_by_name(&conn, &project_id, &name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("heartbeat '{name}' vanished after insert"))?
+    };
 
     // Daemon-first cron bootstrap: ensure ~/.k2so/heartbeat.sh + the
     // launchd plist (or crontab) are installed so this heartbeat
@@ -170,7 +187,10 @@ pub fn k2so_heartbeat_add_with_instructions(
         // S5: lets the CLI say "needs instructions" without reading a
         // file that may live on another machine.
         "instructionsWritten": has_instructions,
-        "waitReason": if has_instructions { None } else { Some(WAIT_WAKEUP_EMPTY) },
+        // S3: the stored values — the same single source the list reads.
+        "waitReason": stored.wait_reason,
+        "waitDetail": stored.wait_detail,
+        "nextFireAt": stored.next_fire_at,
     }))
 }
 
@@ -213,9 +233,9 @@ pub fn k2so_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, 
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     let mut rows = AgentHeartbeat::list_active(&conn, &project_id).map_err(|e| e.to_string())?;
-    drop(conn);
-    // S5: daemon-computed wait reasons (`wakeup_empty`, `schedule_error`).
-    annotate_wait_state(&project_path, &mut rows);
+    // S3: wait_reason / next_fire_at are the stored columns (single
+    // source). `no_ticks` is computed at read time, never stored (HB21).
+    wait::overlay_no_ticks_now(&conn, &mut rows);
     Ok(rows)
 }
 
@@ -271,6 +291,7 @@ pub fn k2so_heartbeat_unarchive(
         .map(|_| ())
         .map_err(|e| e.to_string())?;
     drop(conn);
+    refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
 }
@@ -320,6 +341,7 @@ pub fn k2so_heartbeat_set_enabled(
         .map(|_| ())
         .map_err(|e| e.to_string())?;
     drop(conn);
+    refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
 }
@@ -719,6 +741,7 @@ pub fn k2so_heartbeat_edit(
         .map(|_| ())
         .map_err(|e| e.to_string())?;
     drop(conn);
+    refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
 }
@@ -769,7 +792,18 @@ pub struct HeartbeatFireCandidate {
 /// disk — filesystem tampering recovery so the user notices. An EMPTY
 /// WAKEUP.md is different (S5 HB33): the row stays enabled and waits;
 /// see [`wait`].
+///
+/// Heartbeat S3 (HB19): every tick then rewrites the stored wait state
+/// of every row in the workspace (only what changed) — including the
+/// paths that return early, so a workspace with no agent is stored as
+/// `no_agent` instead of being skipped silently.
 pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandidate> {
+    let candidates = heartbeat_tick_candidates(project_path);
+    refresh_wait_after_write(project_path);
+    candidates
+}
+
+fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> {
     let db = crate::db::shared();
     let conn = db.lock();
     let Some(project_id) = resolve_project_id(&conn, project_path) else {
@@ -1069,6 +1103,7 @@ pub fn k2so_heartbeat_rename(
         hb.wakeup_path
     );
     drop(conn);
+    refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
 }
@@ -1144,10 +1179,14 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
     let conn = db.lock();
     let rows = AgentHeartbeat::list_all_active_with_project(&conn)
         .map_err(|e| format!("list_all_active: {}", e))?;
+    // S3: stored wait state (single source) + the read-time `no_ticks`
+    // overlay (HB21), same as the per-workspace list.
+    let last_tick = wait::last_tick_at(&conn);
+    let now = chrono::Utc::now();
     let out: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(hb, project_name, project_path)| {
-            let (wait_reason, wait_detail) = wait::wait_state_for(&project_path, &hb);
+        .map(|(mut hb, project_name, project_path)| {
+            wait::overlay_no_ticks(std::slice::from_mut(&mut hb), last_tick, now);
             serde_json::json!({
                 "id": hb.id,
                 "projectId": hb.project_id,
@@ -1167,8 +1206,11 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 "consecutiveFailures": hb.consecutive_failures,
                 "disabledReason": hb.disabled_reason,
                 "scheduleError": hb.schedule_error,
-                "waitReason": wait_reason,
-                "waitDetail": wait_detail,
+                "waitReason": hb.wait_reason,
+                "waitDetail": hb.wait_detail,
+                // S3 (HB24)
+                "nextFireAt": hb.next_fire_at,
+                "waitSince": hb.wait_since,
                 "projectName": project_name,
                 "projectPath": project_path,
             })
@@ -1835,7 +1877,10 @@ mod tests {
             let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
             assert_eq!(s5_body(&abs), "check inbox");
             assert_eq!(out["instructionsWritten"], serde_json::json!(true));
-            assert_eq!(out["waitReason"], serde_json::Value::Null);
+            // S3: the stored reason. This scratch workspace has no agent,
+            // so the body is fine and the workspace gate is named.
+            assert_eq!(out["waitReason"], serde_json::json!("no_agent"));
+            assert!(out["nextFireAt"].is_string(), "S3 stores the next fire: {out}");
 
             let out = k2so_heartbeat_add_with_instructions(
                 path.clone(),
@@ -1877,12 +1922,269 @@ mod tests {
             "detail={:?}",
             no_body.wait_detail
         );
-        assert_eq!(with_body.wait_reason, None);
+        // S3: stored reason; this scratch workspace has no agent.
+        assert_eq!(with_body.wait_reason.as_deref(), Some("no_agent"));
         assert_eq!(
             s5_body(&dir.join(&with_body.wakeup_path).to_string_lossy()),
             "check inbox",
             "the duplicate add must leave the first body alone"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod s3_next_fire_tests {
+    //! Heartbeat S3 T4 + T-S3e (fill half): the daemon stores
+    //! `next_fire_at` / `wait_reason` at create and rewrites them on
+    //! every outcome.
+
+    use super::*;
+    use crate::heartbeats::wait;
+    use chrono::{Duration, Local, Timelike, Utc};
+
+    fn scratch_workspace(label: &str) -> (std::path::PathBuf, String) {
+        crate::db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-hb-s3-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch workspace");
+        let path = dir.to_string_lossy().to_string();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let db = crate::db::shared();
+        let conn = db.lock();
+        // agent_enabled = 1 → resolve_agent_name falls back to the
+        // folder name, so the no_agent gate stays open.
+        conn.execute(
+            "INSERT INTO projects (id, name, path, agent_enabled) VALUES (?1, 's3', ?2, 1)",
+            rusqlite::params![project_id, path],
+        )
+        .expect("insert project");
+        (dir, project_id)
+    }
+
+    fn row(project_id: &str, name: &str) -> AgentHeartbeat {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::get_by_name(&conn, project_id, name)
+            .expect("query heartbeat")
+            .expect("heartbeat row exists")
+    }
+
+    fn utc(s: &str) -> chrono::DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("next_fire_at is RFC3339")
+            .with_timezone(&Utc)
+    }
+
+    fn write_body(dir: &std::path::Path, name: &str) {
+        let wakeup = dir.join(".k2/heartbeats").join(name).join("WAKEUP.md");
+        std::fs::write(&wakeup, "---\ndescription:\n---\n\ncheck the inbox\n")
+            .expect("write WAKEUP body");
+    }
+
+    #[test]
+    fn next_fire_set_at_create_and_rewritten_for_each_outcome() {
+        let (dir, project_id) = scratch_workspace("outcomes");
+        let path = dir.to_string_lossy().to_string();
+
+        // ── create (no instructions) ────────────────────────────────
+        let out = crate::heartbeats::install::with_temp_home("s3-outcomes", |_home| {
+            k2so_heartbeat_add(
+                path.clone(),
+                "drive".into(),
+                "hourly".into(),
+                r#"{"every_seconds":900}"#.into(),
+            )
+            .expect("add hourly heartbeat")
+        });
+        let hb = row(&project_id, "drive");
+        let created = chrono::DateTime::from_timestamp(hb.created_at, 0).expect("created_at");
+        let want = wait::fmt_utc(created + Duration::seconds(900));
+        assert_eq!(hb.next_fire_at.as_deref(), Some(want.as_str()), "created_at + every_seconds");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_WAKEUP_EMPTY), "S5's name, stored");
+        assert_eq!(hb.wait_detail.as_deref(), Some(wait::WAKEUP_EMPTY_DETAIL));
+        assert!(hb.wait_since.is_some(), "wait_since is stamped with the reason");
+        assert_eq!(out["waitReason"], serde_json::json!(wait::WAIT_WAKEUP_EMPTY));
+        assert_eq!(out["nextFireAt"], serde_json::json!(want), "add answers from the store");
+
+        write_body(&dir, "drive");
+        wait::refresh_project(&path).expect("refresh");
+        assert_eq!(row(&project_id, "drive").wait_reason.as_deref(), Some(wait::WAIT_SCHEDULED));
+
+        // ── fired ───────────────────────────────────────────────────
+        // Created 10 min ago (so the fire's slot differs from create's).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE workspace_heartbeats SET created_at = created_at - 600 \
+                 WHERE project_id = ?1 AND name = 'drive'",
+                rusqlite::params![project_id],
+            )
+            .expect("backdate created_at");
+        }
+        wait::refresh_project(&path).expect("refresh");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::stamp_fired_and_release(&conn, &project_id, "drive")
+                .expect("stamp fired");
+        }
+        assert!(wait::refresh_project(&path).expect("refresh"), "a fire changes the row");
+        let hb = row(&project_id, "drive");
+        let last = utc(hb.last_fired.as_deref().expect("last_fired after a fire"));
+        assert_eq!(
+            hb.next_fire_at.as_deref(),
+            Some(wait::fmt_utc(last + Duration::seconds(900)).as_str()),
+            "after a fire, next_fire_at = last_fired + every_seconds",
+        );
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_SCHEDULED));
+        assert!(utc(hb.next_fire_at.as_deref().expect("next")) > Utc::now());
+        assert!(!wait::refresh_project(&path).expect("refresh"), "no-op pass writes nothing");
+
+        // ── failure → backoff ───────────────────────────────────────
+        let retry = Utc::now() + Duration::seconds(60 * 30);
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::note_fire_failure(&conn, &project_id, "drive", Some(&retry.to_rfc3339()))
+                .expect("note failure");
+        }
+        wait::refresh_project(&path).expect("refresh");
+        let hb = row(&project_id, "drive");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_BACKOFF));
+        assert_eq!(hb.next_fire_at.as_deref(), Some(wait::fmt_utc(retry).as_str()));
+        assert_eq!(hb.wait_detail.as_deref(), Some("failure 1 of 5"));
+
+        // ── auto-disable ────────────────────────────────────────────
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::auto_disable(&conn, &project_id, "drive", "failures")
+                .expect("auto-disable");
+        }
+        wait::refresh_project(&path).expect("refresh");
+        let hb = row(&project_id, "drive");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_DISABLED_FAILURES));
+        assert_eq!(hb.next_fire_at, None, "a disabled row has no next fire");
+
+        // ── enable (core CRUD writes the state; S2 anchors at now) ──
+        let before_enable = Utc::now();
+        k2so_heartbeat_set_enabled(path.clone(), "drive".into(), true).expect("enable");
+        let hb = row(&project_id, "drive");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_SCHEDULED));
+        let next = utc(hb.next_fire_at.as_deref().expect("enabled valid row has a next fire"));
+        assert!(next > before_enable, "D4: enable waits for the next slot, no catch-up");
+
+        // ── user disable ────────────────────────────────────────────
+        k2so_heartbeat_set_enabled(path.clone(), "drive".into(), false).expect("disable");
+        let hb = row(&project_id, "drive");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_DISABLED_USER));
+        assert_eq!(hb.next_fire_at, None);
+
+        // ── window closed ───────────────────────────────────────────
+        // A second row, created 4h ago, every 15 min, window
+        // [now-3h, now-2h): its slots there are due (< 12 h old, D7) but
+        // the clock is past the window → HoldWindow until it opens
+        // again tomorrow (start + 24 h).
+        let now = Local::now();
+        let start = (now - Duration::hours(3))
+            .with_second(0)
+            .and_then(|t| t.with_nanosecond(0))
+            .expect("truncate to minute");
+        let end = start + Duration::hours(1);
+        let spec = format!(
+            r#"{{"every_seconds":900,"start":"{}","end":"{}"}}"#,
+            start.format("%H:%M"),
+            end.format("%H:%M"),
+        );
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::insert(
+                &conn,
+                &uuid::Uuid::new_v4().to_string(),
+                &project_id,
+                "win",
+                "hourly",
+                &spec,
+                ".k2/heartbeats/drive/WAKEUP.md",
+                true,
+            )
+            .expect("insert windowed row");
+            conn.execute(
+                "UPDATE workspace_heartbeats SET created_at = ?1 WHERE project_id = ?2 AND name = 'win'",
+                rusqlite::params![(now - Duration::hours(4)).timestamp(), project_id],
+            )
+            .expect("backdate created_at");
+        }
+        wait::refresh_project_at(&path, now).expect("refresh");
+        let hb = row(&project_id, "win");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_WINDOW_CLOSED), "row: {hb:?}");
+        assert_eq!(
+            hb.next_fire_at.as_deref(),
+            Some(wait::fmt_utc(start + Duration::hours(24)).as_str()),
+            "window_closed stores the window open time",
+        );
+
+        // ── invalid spec ────────────────────────────────────────────
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE workspace_heartbeats SET frequency = 'list' WHERE project_id = ?1 AND name = 'win'",
+                rusqlite::params![project_id],
+            )
+            .expect("corrupt frequency");
+        }
+        wait::refresh_project(&path).expect("refresh");
+        let hb = row(&project_id, "win");
+        assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_SCHEDULE_ERROR));
+        assert_eq!(hb.wait_detail.as_deref(), Some("unknown frequency 'list'"));
+        assert_eq!(hb.next_fire_at, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-S3e (fill half): a row that predates 0124 has NULL wait columns;
+    /// one wait pass fills every enabled valid row.
+    #[test]
+    fn wait_pass_fills_rows_written_before_0124() {
+        let (dir, project_id) = scratch_workspace("fill");
+        let path = dir.to_string_lossy().to_string();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            for name in ["a", "b"] {
+                AgentHeartbeat::insert(
+                    &conn,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &project_id,
+                    name,
+                    "daily",
+                    r#"{"time":"07:00"}"#,
+                    &format!(".k2/heartbeats/{name}/WAKEUP.md"),
+                    true,
+                )
+                .expect("insert legacy-shaped row");
+            }
+        }
+        assert_eq!(row(&project_id, "a").next_fire_at, None, "raw insert leaves it NULL");
+        assert!(
+            wait::projects_with_heartbeats().contains(&path),
+            "the wait pass enumerates this workspace",
+        );
+        assert!(wait::refresh_project(&path).expect("refresh"));
+        for name in ["a", "b"] {
+            let hb = row(&project_id, name);
+            let next = utc(hb.next_fire_at.as_deref().expect("filled next_fire_at"));
+            assert!(next > Utc::now(), "a daily 07:00 row's next fire is ahead");
+            assert_eq!(next.with_timezone(&Local).format("%H:%M").to_string(), "07:00");
+            assert!(hb.wait_reason.is_some(), "filled wait_reason");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

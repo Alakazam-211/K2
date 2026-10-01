@@ -2,6 +2,7 @@ import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } fro
 import type { BrowserItemData, TerminalItemData } from '@/stores/tabs'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { workingAgentsInTab } from '@/lib/room-close-guard'
+import { scopeMayWrite } from '@/kessel/server-scope'
 import { roomActiveProject, roomProjectForCwd, type Room } from '@/stores/room'
 import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
@@ -262,6 +263,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const rect = e.currentTarget.getBoundingClientRect()
     const presets = usePresetsStore.getState().presets
     const defaultId = defaultPresetIdForCwd(room, barCwd, presets)
+    // Home M5: open in sandbox takes the owner daemon token on the server
+    // (`sandbox/open`), so a Home room on another server never offers it.
+    const canSandbox = scopeMayWrite(room.scope, 'sandbox/open')
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
@@ -271,7 +275,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       if (shown === optionHeld) return
       shown = optionHeld
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox),
       )
     }
     const onKeyDown = (ev: KeyboardEvent): void => {
@@ -312,7 +316,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -329,7 +333,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       }
       if (picked.startsWith('preset:')) {
         const id = picked.slice('preset:'.length)
-        if (optionHeld) {
+        if (optionHeld && canSandbox) {
           await openPresetInSandbox(room, id, barCwd, group)
           return
         }

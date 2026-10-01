@@ -1908,8 +1908,10 @@ pub struct AgentHeartbeat {
     /// backoff pending. Manual launches bypass this gate.
     pub next_retry_at: Option<String>,
     /// 0062 — why `enabled` is 0, when the system (not the user)
-    /// flipped it: `failures` (backoff exhaustion) or `wakeup_missing`
-    /// (WAKEUP.md deleted). NULL for user-disabled rows. Cleared by
+    /// flipped it: `failures` (backoff exhaustion), `wakeup_missing`
+    /// (WAKEUP.md deleted), or `wakeup_empty` (S5: an old auto-disable
+    /// relabelled at boot because the file was only empty — new empty
+    /// bodies never disable). NULL for user-disabled rows. Cleared by
     /// any manual enable/disable so re-enabling resets the state.
     pub disabled_reason: Option<String>,
     /// 0062 — human-readable reason the evaluator can't parse this
@@ -1927,6 +1929,18 @@ pub struct AgentHeartbeat {
     /// agent's adapter. Cleared alongside `last_session_id` by the
     /// self-heal path and by delivery mode `auto`.
     pub session_provider: Option<String>,
+    /// S5 (prd-heartbeat-firing-v1 HB33/HB35) — why an enabled row is
+    /// waiting, from the HB20 vocabulary (`wakeup_empty`,
+    /// `schedule_error`). Not a column yet: computed by the daemon when
+    /// the row is read ([`crate::heartbeats::annotate_wait_state`]) and
+    /// `None` straight out of the database. S3 (migration 0123) stores
+    /// it. Clients render it; they never derive it.
+    #[serde(default)]
+    pub wait_reason: Option<String>,
+    /// S5 — the human detail for `wait_reason` (the schedule error
+    /// text, or what to do about an empty WAKEUP.md).
+    #[serde(default)]
+    pub wait_detail: Option<String>,
 }
 
 impl AgentHeartbeat {
@@ -2552,6 +2566,8 @@ impl AgentHeartbeat {
             disabled_reason: row.get(19)?,
             schedule_error: row.get(20)?,
             session_provider: row.get(21)?,
+            wait_reason: None,
+            wait_detail: None,
         })
     }
 

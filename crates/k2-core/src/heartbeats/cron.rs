@@ -637,6 +637,8 @@ mod tests {
             disabled_reason: None,
             schedule_error: None,
             session_provider: None,
+            wait_reason: None,
+            wait_detail: None,
         }
     }
 

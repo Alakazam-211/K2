@@ -30,6 +30,13 @@ pub mod install;
 // `agents/commands.rs`; the legacy per-agent get/set/noop/action
 // control API was deleted in 0.40.31.
 pub mod control;
+// S5 (prd-heartbeat-firing-v1 HB33/HB35/D4): empty-WAKEUP wait state,
+// read-time wait reasons, and the boot relabel/flag pass.
+pub mod wait;
+
+pub use wait::{
+    annotate_wait_state, boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY,
+};
 
 /// Create a new heartbeat row + scaffold its `WAKEUP.md` file.
 ///
@@ -43,6 +50,26 @@ pub fn k2so_heartbeat_add(
     name: String,
     frequency: String,
     spec_json: String,
+) -> Result<serde_json::Value, String> {
+    k2so_heartbeat_add_with_instructions(project_path, name, frequency, spec_json, None)
+}
+
+/// S5 HB32 — [`k2so_heartbeat_add`] that also writes the WAKEUP.md body.
+///
+/// The daemon writes the instructions before it answers, on its own
+/// machine. Pre-S5 the CLI wrote the `wakeupAbs` path itself, which is
+/// the wrong disk when the daemon is remote. `None` or a blank string
+/// leaves the scaffold empty: the row is created enabled and waits with
+/// `waitReason = wakeup_empty` (HB33) until someone writes a body.
+///
+/// The body is written only AFTER the row insert succeeds, so a
+/// duplicate name can never clobber the existing heartbeat's file.
+pub fn k2so_heartbeat_add_with_instructions(
+    project_path: String,
+    name: String,
+    frequency: String,
+    spec_json: String,
+    instructions: Option<String>,
 ) -> Result<serde_json::Value, String> {
     AgentHeartbeat::validate_name(&name).map_err(|e| e.to_string())?;
     // GH#27: server-side spec validation. The CLI validates too, but
@@ -102,6 +129,17 @@ pub fn k2so_heartbeat_add(
     )
     .map_err(|e| friendly_heartbeat_insert_error(&name, &e.to_string()))?;
 
+    let instructions = instructions.filter(|t| !t.trim().is_empty());
+    let has_instructions = instructions.is_some();
+    if let Some(text) = instructions {
+        if let Err(e) = fs::write(&wakeup_file, wakeup_file_with_body(&text)) {
+            // Undo the insert: a row whose instructions silently failed
+            // to land would sit waiting on an empty file.
+            let _ = AgentHeartbeat::delete(&conn, &project_id, &name);
+            return Err(format!("Failed to write WAKEUP.md instructions: {e}"));
+        }
+    }
+
     // Drop the DB lock before the cron-install path runs — it shells
     // out to launchctl which can be slow on first install.
     drop(conn);
@@ -126,7 +164,23 @@ pub fn k2so_heartbeat_add(
         "name": name,
         "wakeupPath": workspace_relative,
         "wakeupAbs": wakeup_file.to_string_lossy(),
+        // S5: lets the CLI say "needs instructions" without reading a
+        // file that may live on another machine.
+        "instructionsWritten": has_instructions,
+        "waitReason": if has_instructions { None } else { Some(WAIT_WAKEUP_EMPTY) },
     }))
+}
+
+/// S5 HB32 — WAKEUP.md contents for a body supplied at add time. Keeps
+/// the scaffold's frontmatter (the `description:` key other wakeups
+/// display) unless the caller already brought their own.
+fn wakeup_file_with_body(text: &str) -> String {
+    let body = text.trim_end();
+    if body.trim_start().starts_with("---") {
+        format!("{body}\n")
+    } else {
+        format!("---\ndescription:\n---\n\n{body}\n")
+    }
 }
 
 /// GH#27 — translate the raw sqlite error from a heartbeat insert into
@@ -155,7 +209,11 @@ pub fn k2so_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, 
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::list_active(&conn, &project_id).map_err(|e| e.to_string())
+    let mut rows = AgentHeartbeat::list_active(&conn, &project_id).map_err(|e| e.to_string())?;
+    drop(conn);
+    // S5: daemon-computed wait reasons (`wakeup_empty`, `schedule_error`).
+    annotate_wait_state(&project_path, &mut rows);
+    Ok(rows)
 }
 
 /// List archived heartbeat rows for a workspace, newest archive first.
@@ -524,26 +582,59 @@ pub fn k2so_heartbeat_set_session(
     }
 }
 
+/// S5 HB34 — the frequencies `cron::evaluate` can run. Write paths
+/// (add, edit) refuse anything else with a 400 that lists these.
+pub const ALLOWED_FREQUENCIES: [&str; 6] =
+    ["hourly", "daily", "weekly", "monthly", "yearly", "scheduled"];
+
+/// S5 HB34 — the shortest interval an `hourly` heartbeat may use.
+pub const MIN_EVERY_SECONDS: u64 = 60;
+
 /// GH#27 — server-side schedule-spec validation shared by the add and
 /// edit paths (`/cli/heartbeat/add`, `/cli/heartbeat/edit`). The CLI
 /// validates the same fields client-side, but stale CLIs exist; without
 /// this gate a `--weekly --days foobar` row is stored verbatim and only
 /// surfaces as `schedule_invalid` at the next tick.
 ///
-/// Checks (tolerant of unknown fields/frequencies — only the fields the
-/// cron translator consumes are policed):
+/// Checks (tolerant of unknown spec fields — only the fields the cron
+/// translator consumes are policed):
+/// - S5 HB34: `frequency` ∈ [`ALLOWED_FREQUENCIES`] — the exact set
+///   `cron::evaluate` can run. Anything else (Reggie's `list`) used to
+///   be stored and then sat enabled-but-dark with `schedule_error`.
+/// - S5 HB34: hourly `every_seconds`, when present, is a whole number
+///   ≥ [`MIN_EVERY_SECONDS`]. Absent keeps the evaluator's 1h default.
 /// - weekly `days` entries ∈ mon|tue|wed|thu|fri|sat|sun (case-insensitive)
 /// - yearly `months` entries ∈ jan..dec (case-insensitive)
 /// - monthly/yearly `days_of_month` (and singular `day_of_month`) ∈ 1–31
 ///
 /// An empty spec is accepted unchanged (legacy rows / frequency-only
 /// edits); a non-empty spec that isn't valid JSON is rejected loudly.
+/// Every `Err` becomes a 400 on `/cli/heartbeat/add` and `/edit`.
 pub fn validate_spec_json(frequency: &str, spec_json: &str) -> Result<(), String> {
+    if !ALLOWED_FREQUENCIES.contains(&frequency) {
+        return Err(format!(
+            "unknown frequency '{}' — expected one of {}",
+            frequency,
+            ALLOWED_FREQUENCIES.join("|")
+        ));
+    }
     if spec_json.trim().is_empty() {
         return Ok(());
     }
     let v: serde_json::Value = serde_json::from_str(spec_json)
         .map_err(|e| format!("schedule spec is not valid JSON: {e}"))?;
+
+    if frequency == "hourly" {
+        if let Some(every) = v.get("every_seconds") {
+            let ok = every.as_u64().map(|n| n >= MIN_EVERY_SECONDS).unwrap_or(false);
+            if !ok {
+                return Err(format!(
+                    "invalid hourly every_seconds {} — expected a whole number of seconds, at least {}",
+                    every, MIN_EVERY_SECONDS
+                ));
+            }
+        }
+    }
 
     const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     const MONTHS: [&str; 12] = [
@@ -666,7 +757,9 @@ pub struct HeartbeatFireCandidate {
 /// `schedule_invalid` (on state transition), `wakeup_file_missing`.
 ///
 /// Auto-disables a heartbeat whose `WAKEUP.md` has been deleted from
-/// disk — filesystem tampering recovery so the user notices.
+/// disk — filesystem tampering recovery so the user notices. An EMPTY
+/// WAKEUP.md is different (S5 HB33): the row stays enabled and waits;
+/// see [`wait`].
 pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandidate> {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -702,7 +795,7 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
             }
         }
 
-        let catchup_of = match cron::evaluate(&hb) {
+        let mut catchup_of = match cron::evaluate(&hb) {
             cron::DueStatus::Due { .. } => None,
             cron::DueStatus::DueCatchUp { missed_at } => Some(missed_at.to_rfc3339()),
             cron::DueStatus::NotYet { .. } | cron::DueStatus::HoldWindow { .. } => {
@@ -768,6 +861,60 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
                 hb.wakeup_path
             );
             continue;
+        }
+
+        // S5 HB33 + D4: an empty body waits, enabled, with no failure
+        // and no disable. One `wakeup_empty` audit row per episode.
+        // Once a body appears, the first due tick records
+        // `wakeup_added` and the schedule counts from then: slots that
+        // passed while empty are skipped, never replayed as catch-ups.
+        let episode = wait::open_episode(&conn, &project_id, &hb.name, hb.last_fired.as_deref());
+        match wait::wakeup_body(&wakeup_abs) {
+            wait::WakeupBody::Empty => {
+                if episode != Some(wait::WakeupEpisode::Empty) {
+                    let _ = HeartbeatFire::insert_with_schedule(
+                        &conn,
+                        &project_id,
+                        Some(&agent_name),
+                        Some(&hb.name),
+                        &hb.frequency,
+                        wait::DECISION_WAKEUP_EMPTY,
+                        Some(wait::WAKEUP_EMPTY_DETAIL),
+                        None,
+                        None,
+                        Some(tick_start.elapsed().as_millis() as i64),
+                    );
+                }
+                continue;
+            }
+            wait::WakeupBody::Missing | wait::WakeupBody::Present => {}
+        }
+        match episode {
+            Some(wait::WakeupEpisode::Empty) => {
+                let _ = HeartbeatFire::insert_with_schedule(
+                    &conn,
+                    &project_id,
+                    Some(&agent_name),
+                    Some(&hb.name),
+                    &hb.frequency,
+                    wait::DECISION_WAKEUP_ADDED,
+                    Some("instructions added; waiting for the next scheduled slot"),
+                    None,
+                    None,
+                    Some(tick_start.elapsed().as_millis() as i64),
+                );
+                continue;
+            }
+            Some(wait::WakeupEpisode::Added(at)) => {
+                match cron::evaluate(&wait::with_reference(&hb, at)) {
+                    cron::DueStatus::Due { .. } => catchup_of = None,
+                    cron::DueStatus::DueCatchUp { missed_at } => {
+                        catchup_of = Some(missed_at.to_rfc3339())
+                    }
+                    _ => continue,
+                }
+            }
+            None => {}
         }
 
         candidates.push(HeartbeatFireCandidate {
@@ -946,6 +1093,7 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
     let out: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(hb, project_name, project_path)| {
+            let (wait_reason, wait_detail) = wait::wait_state_for(&project_path, &hb);
             serde_json::json!({
                 "id": hb.id,
                 "projectId": hb.project_id,
@@ -965,6 +1113,8 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 "consecutiveFailures": hb.consecutive_failures,
                 "disabledReason": hb.disabled_reason,
                 "scheduleError": hb.schedule_error,
+                "waitReason": wait_reason,
+                "waitDetail": wait_detail,
                 "projectName": project_name,
                 "projectPath": project_path,
             })
@@ -1529,13 +1679,156 @@ mod tests {
     }
 
     #[test]
-    fn validate_spec_tolerates_empty_spec_and_unknown_frequencies() {
+    fn validate_spec_tolerates_empty_spec() {
         // Legacy rows / frequency-only edits send an empty spec.
         validate_spec_json("weekly", "").unwrap();
         validate_spec_json("daily", "{}").unwrap();
-        // Unknown frequencies aren't this gate's business.
         validate_spec_json("hourly", r#"{"every_seconds":3600}"#).unwrap();
         // But non-empty garbage that isn't JSON fails loudly.
         assert!(validate_spec_json("weekly", "not-json").is_err());
+    }
+
+    // ── S5 (prd-heartbeat-firing-v1): creation traps ─────────────────
+
+    /// T-S5b (HB34): add and edit refuse an unknown frequency with a
+    /// message naming every allowed value; hourly intervals must be a
+    /// whole number of seconds, at least 60.
+    #[test]
+    fn s5_unknown_frequency_and_short_interval_are_refused_on_write() {
+        let allowed = "hourly|daily|weekly|monthly|yearly|scheduled";
+        let err = k2so_heartbeat_add_with_instructions(
+            "/fixture/s5-never-registered".into(),
+            "reggie".into(),
+            "list".into(),
+            "{}".into(),
+            Some("check inbox".into()),
+        )
+        .expect_err("frequency 'list' must be refused at add");
+        assert!(err.contains("unknown frequency 'list'"), "err={err}");
+        assert!(err.contains(allowed), "err={err}");
+
+        let err = k2so_heartbeat_edit(
+            "/fixture/s5-never-registered".into(),
+            "reggie".into(),
+            "list".into(),
+            "{}".into(),
+        )
+        .expect_err("frequency 'list' must be refused at edit");
+        assert!(err.contains("unknown frequency 'list'"), "err={err}");
+        assert!(err.contains(allowed), "err={err}");
+
+        for bad in [
+            r#"{"every_seconds":30}"#,
+            r#"{"every_seconds":0}"#,
+            r#"{"every_seconds":-60}"#,
+            r#"{"every_seconds":90.5}"#,
+            r#"{"every_seconds":"60"}"#,
+            r#"{"every_seconds":null}"#,
+        ] {
+            let err = validate_spec_json("hourly", bad)
+                .expect_err(&format!("hourly spec {bad} must be refused"));
+            assert!(err.contains("at least 60"), "spec={bad} err={err}");
+        }
+        validate_spec_json("hourly", r#"{"every_seconds":60}"#).expect("60s is the floor");
+        validate_spec_json("hourly", r#"{"start":"09:00"}"#)
+            .expect("absent every_seconds keeps the evaluator's 1h default");
+        for freq in ALLOWED_FREQUENCIES {
+            validate_spec_json(freq, "").expect("every allowed frequency passes");
+        }
+    }
+
+    /// Register a temp-dir workspace (unique path). Returns (path, id).
+    fn s5_workspace(label: &str) -> (std::path::PathBuf, String) {
+        crate::db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-hb-s5-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 's5', ?2)",
+            rusqlite::params![id, dir.to_string_lossy()],
+        )
+        .unwrap();
+        (dir, id)
+    }
+
+    fn s5_body(abs: &str) -> String {
+        let raw = std::fs::read_to_string(abs).expect("WAKEUP.md exists");
+        crate::workspace::wake_prompts::strip_frontmatter(&raw)
+    }
+
+    /// T-S5c (HB32): the daemon writes the instructions; without them
+    /// the row is enabled and says it needs instructions.
+    #[test]
+    fn s5_add_writes_instructions_and_names_the_empty_wait() {
+        let (dir, _id) = s5_workspace("add");
+        let path = dir.to_string_lossy().to_string();
+        crate::heartbeats::install::with_temp_home("s5-add", |_home| {
+            crate::heartbeats::install::test_recorder::take();
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "with-body".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                Some("check inbox".into()),
+            )
+            .expect("add with instructions");
+            let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
+            assert_eq!(s5_body(&abs), "check inbox");
+            assert_eq!(out["instructionsWritten"], serde_json::json!(true));
+            assert_eq!(out["waitReason"], serde_json::Value::Null);
+
+            let out = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "no-body".into(),
+                "daily".into(),
+                r#"{"time":"07:00"}"#.into(),
+                Some("   \n ".into()),
+            )
+            .expect("add without instructions still creates the row");
+            let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
+            assert_eq!(s5_body(&abs), "");
+            assert_eq!(out["instructionsWritten"], serde_json::json!(false));
+            assert_eq!(out["waitReason"], serde_json::json!("wakeup_empty"));
+
+            // A duplicate name never clobbers the existing file.
+            let err = k2so_heartbeat_add_with_instructions(
+                path.clone(),
+                "with-body".into(),
+                "daily".into(),
+                "{}".into(),
+                Some("second".into()),
+            )
+            .expect_err("duplicate name");
+            assert!(err.contains("already exists"), "err={err}");
+
+            assert_eq!(
+                crate::heartbeats::install::test_recorder::take(),
+                Vec::<String>::new(),
+                "heartbeat add must not run launchctl/crontab in tests"
+            );
+        });
+        let rows = k2so_heartbeat_list(path.clone()).expect("list");
+        let with_body = rows.iter().find(|r| r.name == "with-body").expect("with-body row");
+        let no_body = rows.iter().find(|r| r.name == "no-body").expect("no-body row");
+        assert!(no_body.enabled, "an empty WAKEUP.md row is created enabled");
+        assert_eq!(no_body.wait_reason.as_deref(), Some("wakeup_empty"));
+        assert!(
+            no_body.wait_detail.as_deref().expect("detail").contains("needs instructions"),
+            "detail={:?}",
+            no_body.wait_detail
+        );
+        assert_eq!(with_body.wait_reason, None);
+        assert_eq!(
+            s5_body(&dir.join(&with_body.wakeup_path).to_string_lossy()),
+            "check inbox",
+            "the duplicate add must leave the first body alone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

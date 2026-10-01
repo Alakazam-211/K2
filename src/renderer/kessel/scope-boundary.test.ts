@@ -115,7 +115,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/PaneLayout/PaneTabBar.tsx',
   'components/PaneLayout/PinDimensionsModal.tsx',
   'components/PaneLayout/pinSizeMenu.ts',
-  'components/Presence/PresenceGrantToggle.tsx',
   'components/Presence/PresenceKickButton.tsx',
   'components/Projects/ProjectChatPanel.tsx',
   'components/Projects/ProjectDashboard.tsx',

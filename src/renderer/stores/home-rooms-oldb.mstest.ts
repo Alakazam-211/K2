@@ -234,8 +234,10 @@ afterAll(async () => {
 
 describe('a view-only room on a released B (no spawn-attach-only) never starts a session there (Home M5)', () => {
   it('the control: old B does not report the key, and SPAWNS on an attach_only request', async () => {
-    expect(await bootFeatures(oldB.port)).toEqual([])
-    expect(await bootFeatures(B_PORT)).toEqual(['spawn-attach-only'])
+    // Scoped to the key under test: other reported keys (tickets-list-all)
+    // are not part of the attach-only simulation.
+    expect(await bootFeatures(oldB.port)).not.toContain('spawn-attach-only')
+    expect(await bootFeatures(B_PORT)).toContain('spawn-attach-only')
     const res = await realFetch(`http://127.0.0.1:${oldB.port}/cli/sessions/v2/spawn?token=${oldB.owner}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

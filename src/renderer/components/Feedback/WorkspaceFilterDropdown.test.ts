@@ -11,6 +11,7 @@ import {
   parseProjectFilter,
   projectFilterValue,
   rowsForWorkspaceFilter,
+  UNLINKED_FILTER_VALUE,
   workspaceMatchesSearch,
   type FilterableProjectGroup,
   type FilterableWorkspace,
@@ -145,5 +146,37 @@ describe('rowsForWorkspaceFilter', () => {
 
   it('a project value with unresolved membership (null) shows nothing', () => {
     expect(rowsForWorkspaceFilter(rows, projectFilterValue('pg-1'), null)).toEqual([])
+  })
+})
+
+describe('rowsForWorkspaceFilter — unlinked (prd-tickets-badge-orphans TB5)', () => {
+  const rows = [
+    { id: 'f1', projectId: 'ws-a', linked: true },
+    { id: 'f2', projectId: 'gone-1', linked: false },
+    { id: 'f3', projectId: '_orphan', linked: false },
+    { id: 'f4', projectId: 'ws-a', linked: true },
+  ]
+
+  it("'unlinked' keeps only rows whose workspace is gone", () => {
+    expect(UNLINKED_FILTER_VALUE).toBe('unlinked')
+    expect(rowsForWorkspaceFilter(rows, UNLINKED_FILTER_VALUE, null).map((r) => r.id)).toEqual([
+      'f2',
+      'f3',
+    ])
+  })
+
+  it('a workspace id never matches an unlinked row; All keeps them', () => {
+    expect(rowsForWorkspaceFilter(rows, 'ws-a', null).map((r) => r.id)).toEqual(['f1', 'f4'])
+    expect(rowsForWorkspaceFilter(rows, 'all', null).map((r) => r.id)).toEqual([
+      'f1',
+      'f2',
+      'f3',
+      'f4',
+    ])
+  })
+
+  it('fan-out rows (no linked field) are never treated as unlinked', () => {
+    const fanOut = [{ id: 'a', projectId: 'ws-a' }]
+    expect(rowsForWorkspaceFilter(fanOut, UNLINKED_FILTER_VALUE, null)).toEqual([])
   })
 })

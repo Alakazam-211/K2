@@ -37,8 +37,11 @@ import {
   assignFeedback,
   commentFeedback,
   fetchFeedbackShow,
+  formatFiledDate,
+  isUnlinked,
   optionsActionable,
   resolveFeedback,
+  UNLINKED_WORKSPACE_LABEL,
   type FeedbackListRow,
   type FeedbackSessionKind,
   type FeedbackShow,
@@ -121,9 +124,15 @@ export function FeedbackItemView({
     return () => clearTimeout(timer)
   }, [revision, load, id])
 
-  const projectPath = item?.projectPath ?? listRow.projectPath
-  const workspaceName = item?.workspace ?? listRow.projectName
+  // TB18: a ticket whose workspace is gone has no agent left to receive a
+  // reply. Thread only (read-only), Resolve and Dismiss; no Agent tab.
+  const unlinked = isUnlinked(listRow)
+  const projectPath = unlinked ? null : item?.projectPath ?? listRow.projectPath
+  const workspaceName = unlinked
+    ? UNLINKED_WORKSPACE_LABEL
+    : item?.workspace ?? listRow.projectName ?? UNLINKED_WORKSPACE_LABEL
   const view = item ?? listRow
+  const tabs = unlinked ? (['thread'] as const) : (['thread', 'terminal'] as const)
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -139,10 +148,13 @@ export function FeedbackItemView({
         </div>
         <div className="mt-1 text-[10px] text-[var(--color-text-muted)] truncate">
           {view.agentName}
-          <span className="opacity-60"> · {workspaceName} · asked {formatRelativeTime(view.createdAt, nowSec)}</span>
+          <span className="opacity-60">
+            {' '}· {workspaceName} · asked{' '}
+            {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
+          </span>
         </div>
         <div className="flex items-center gap-1 mt-2">
-          {(['thread', 'terminal'] as const).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               type="button"
@@ -159,13 +171,14 @@ export function FeedbackItemView({
         </div>
       </div>
 
-      {tab === 'thread' ? (
+      {tab === 'thread' || unlinked ? (
         <ThreadTab
           key={`thread-${id}`}
           item={item}
           error={error}
           nowSec={nowSec}
           ticketId={id}
+          unlinked={unlinked}
           onChanged={() => {
             void load()
             onMutated()
@@ -187,17 +200,20 @@ export function FeedbackItemView({
 
 // ── Thread tab ────────────────────────────────────────────────────────────
 
-function ThreadTab({
+export function ThreadTab({
   item,
   error,
   nowSec,
   ticketId,
+  unlinked = false,
   onChanged,
 }: {
   item: FeedbackShow | null
   error: string | null
   nowSec: number
   ticketId: string
+  /** Workspace removed: read-only thread, Resolve and Dismiss only. */
+  unlinked?: boolean
   onChanged: () => void
 }): React.JSX.Element {
   // Drafts survive unmount (leave ticket / switch pages).
@@ -348,14 +364,16 @@ function ThreadTab({
             </div>
           )}
 
-          <AssigneePicker
-            ticketId={item.id}
-            assignees={item.assignees ?? []}
-            busy={busy}
-            onChanged={onChanged}
-          />
+          {!unlinked && (
+            <AssigneePicker
+              ticketId={item.id}
+              assignees={item.assignees ?? []}
+              busy={busy}
+              onChanged={onChanged}
+            />
+          )}
 
-          {item.options && item.options.length > 0 && (
+          {!unlinked && item.options && item.options.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-2">
               {item.options.map((opt) => {
                 const accepted = item.answer === opt
@@ -398,6 +416,38 @@ function ThreadTab({
         </div>
       </SelectableRegion>
 
+      {unlinked ? (
+        <div
+          data-testid="unlinked-thread-footer"
+          className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0"
+        >
+          {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
+          <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
+            This ticket&apos;s workspace was removed from this server, so no agent can receive a
+            reply. Resolve or Dismiss it here.
+          </p>
+          {openItem && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Resolve
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
         {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
         {deliveryMiss && (
@@ -471,6 +521,7 @@ function ThreadTab({
           </button>
         </div>
       </div>
+      )}
     </div>
   )
 }

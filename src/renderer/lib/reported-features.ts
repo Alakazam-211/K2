@@ -20,6 +20,11 @@ export const REPORTED_FEATURES = {
    *  0.41.6 ignore the field and would SPAWN, so a view-only room on such a
    *  server never spawns a tab it has not seen live (`lib/room-spawn.ts`). */
   'spawn-attach-only': 'spawn-attach-only',
+  /** `GET /cli/feedback/list-all` exists and `waiting-count` counts only
+   *  tickets on a registered workspace. The Tickets page reads the host-wide
+   *  list in one GET (with an Unlinked workspace group); a server without
+   *  the key shows the badge as a dimmed `?` (prd-tickets-badge-orphans). */
+  'tickets-list-all': 'tickets-list-all',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

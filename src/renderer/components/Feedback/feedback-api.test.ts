@@ -9,9 +9,13 @@ import {
   countByStatus,
   filterByAssignee,
   filterBySearch,
+  formatFiledDate,
   groupByStatus,
+  isUnlinked,
   optionsActionable,
+  selectableStatusesFor,
   sortNewestFirst,
+  unlinkedDetails,
   type FeedbackListRow,
   type FeedbackStatus,
 } from './feedback-api'
@@ -40,7 +44,68 @@ describe('groupByStatus', () => {
     expect(g.needs_discussion.map((r) => r.id)).toEqual(['n'])
     expect(g.answered.map((r) => r.id)).toEqual(['a'])
     expect(g.planned.map((r) => r.id)).toEqual(['p'])
+    expect(g.unlinked).toEqual([])
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
+  })
+
+  it('open unlinked rows go in Unlinked workspace, never Waiting on you; closed ones go in Closed', () => {
+    const rows = [
+      { status: 'waiting' as FeedbackStatus, id: 'w-linked', linked: true },
+      { status: 'waiting' as FeedbackStatus, id: 'w-gone', linked: false },
+      { status: 'needs_discussion' as FeedbackStatus, id: 'n-gone', linked: false },
+      { status: 'answered' as FeedbackStatus, id: 'a-gone', linked: false },
+      { status: 'planned' as FeedbackStatus, id: 'p-gone', linked: false },
+      { status: 'dismissed' as FeedbackStatus, id: 'd-gone', linked: false },
+      { status: 'resolved' as FeedbackStatus, id: 'r-gone', linked: false },
+    ]
+    const g = groupByStatus(rows)
+    expect(g.waiting.map((r) => r.id)).toEqual(['w-linked'])
+    expect(g.needs_discussion).toEqual([])
+    expect(g.answered).toEqual([])
+    expect(g.planned).toEqual([])
+    expect(g.unlinked.map((r) => r.id)).toEqual(['w-gone', 'n-gone', 'a-gone', 'p-gone'])
+    expect(g.closed.map((r) => r.id)).toEqual(['d-gone', 'r-gone'])
+  })
+})
+
+describe('unlinked helpers (TB18 + Appa A1)', () => {
+  it('an unlinked row offers only Resolve and Dismiss; a linked row the full set', () => {
+    expect(selectableStatusesFor({ linked: false })).toEqual(['resolved', 'dismissed'])
+    expect(selectableStatusesFor({ linked: true })).toEqual([
+      'waiting',
+      'needs_discussion',
+      'planned',
+      'resolved',
+      'dismissed',
+    ])
+    expect(isUnlinked({ linked: false })).toBe(true)
+    expect(isUnlinked({ linked: true })).toBe(false)
+    expect(isUnlinked({})).toBe(false)
+  })
+
+  it('identifying details: title, exact UTC filing date, agent, short id', () => {
+    expect(
+      unlinkedDetails({
+        id: '3f2a9c1e-7b4d-4e0a-9d6f-0123456789ab',
+        title: 'Approve the vendor contract',
+        agentName: 'scout',
+        createdAt: 1_759_241_100,
+      }),
+    ).toEqual({
+      title: 'Approve the vendor contract',
+      filed: '2025-09-30 14:05 UTC',
+      agent: 'scout',
+      shortId: '3f2a9c1e',
+    })
+    expect(formatFiledDate(0)).toBe('1970-01-01 00:00 UTC')
+  })
+
+  it('search tolerates a null workspace name', () => {
+    const rows: Pick<FeedbackListRow, 'id' | 'title' | 'agentName' | 'projectName' | 'kind' | 'status'>[] = [
+      { id: 'fb-1', title: 'Approve PR', agentName: 'scout', projectName: null, kind: 'approval', status: 'waiting' },
+    ]
+    expect(filterBySearch(rows, 'scout approve').map((r) => r.id)).toEqual(['fb-1'])
+    expect(filterBySearch(rows, 'null')).toEqual([])
   })
 })
 

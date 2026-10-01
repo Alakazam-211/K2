@@ -20,11 +20,13 @@
 
 import { create } from 'zustand'
 import { onFeedbackChanged } from '@/stores/session-events'
-import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
 import { useWindowFocusStore } from '@/stores/window-focus'
+import { useConnectHostStore } from '@/stores/connect-host'
 import { fetchWaitingCount } from '@/components/Feedback/feedback-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { homeHostKey } from '@/lib/host-key'
+import { subscribeSoftResync } from '@/lib/soft-resync'
 
 interface FeedbackState {
   /** Whether the full-page Feedback view is shown. Mirrors
@@ -32,20 +34,33 @@ interface FeedbackState {
    *  kept as a field so pre-switcher consumers (the page gate, the
    *  notification visibility check, tests) read it unchanged. */
   isOpen: boolean
-  /** Waiting-item count across all workspaces (top-bar badge; 0 hides). */
+  /** Waiting tickets on the window's server that the page can show (top-bar
+   *  badge; 0 hides). Belongs to the window's server: reset on a switch. */
   waitingCount: number
+  /** The last refresh failed, or the connection dropped since the last good
+   *  one: `waitingCount` may be out of date. The badge dims and says so. */
+  waitingStale: boolean
+  /** The window's server does not report `tickets-list-all`: its count would
+   *  include tickets nobody can open, so the badge shows a dimmed `?`. */
+  waitingUnsupported: boolean
   /** Bumped on every feedback event so the open page refetches. */
   revision: number
   open: () => void
   close: () => void
   toggle: () => void
-  /** Re-count status=waiting across the already-loaded projects store. */
+  /** Re-read the host-wide waiting count from the window's server. */
   refreshWaitingCount: () => Promise<void>
 }
+
+/** Bumped on every server switch; a refresh that started under an older
+ *  epoch drops its result, so server A's late answer never lands on B. */
+let hostEpoch = 0
 
 export const useFeedbackStore = create<FeedbackState>((set) => ({
   isOpen: false,
   waitingCount: 0,
+  waitingStale: false,
+  waitingUnsupported: false,
   revision: 0,
   // open/close/toggle delegate to the page-view SSOT (§6.0): opening the
   // Feedback page IS selecting the Feedback tab; closing returns to the
@@ -58,12 +73,23 @@ export const useFeedbackStore = create<FeedbackState>((set) => ({
       .getState()
       .setPage(usePageViewStore.getState().page === 'feedback' ? 'agents' : 'feedback'),
   refreshWaitingCount: async () => {
-    const projects = useProjectsStore.getState().projects
+    const epoch = hostEpoch
+    if (!primaryScope().serverSupports('tickets-list-all')) {
+      // Older server: its waiting-count also counts tickets from removed
+      // workspaces (and a pre-0.40.106 one has no count at all), so no
+      // number it gives is one the page can back up.
+      set({ waitingCount: 0, waitingStale: false, waitingUnsupported: true })
+      return
+    }
     try {
-      const count = await fetchWaitingCount(projects)
-      set({ waitingCount: count })
+      const count = await fetchWaitingCount()
+      if (epoch !== hostEpoch) return
+      set({ waitingCount: count, waitingStale: false, waitingUnsupported: false })
     } catch (err) {
+      if (epoch !== hostEpoch) return
       console.warn('[feedback] waiting-count refresh failed:', err)
+      // Keep the last number; say it may be out of date.
+      set({ waitingStale: true })
     }
   },
 }))
@@ -136,5 +162,37 @@ export function initFeedbackEvents(notify: boolean): void {
         void notifyDesktop('Agent', 'New feedback')
       }
     }
+  })
+
+  // prd-tickets-badge-orphans TB15/TB16 — the badge's freshness follows the
+  // window's connection. A stopped daemon sends no feedback event, so
+  // without these the badge would never notice it is out of date.
+  let lastHostKey = homeHostKey(useConnectHostStore.getState().activeHost)
+  let lastRecoveryKind = useConnectHostStore.getState().recovery.kind
+  useConnectHostStore.subscribe((s) => {
+    const hostKey = homeHostKey(s.activeHost)
+    if (hostKey !== lastHostKey) {
+      // TB16: the count belongs to one server. Reset before the refresh the
+      // new server's projects trigger, so a dead new server shows no badge
+      // instead of the last server's number dimmed.
+      lastHostKey = hostKey
+      lastRecoveryKind = s.recovery.kind
+      hostEpoch++
+      useFeedbackStore.setState({ waitingCount: 0, waitingStale: false, waitingUnsupported: false })
+      return
+    }
+    const kind = s.recovery.kind
+    if (kind !== lastRecoveryKind) {
+      // TB15a: the connection left `connected` → keep the number, mark it
+      // stale until a refresh succeeds.
+      if (lastRecoveryKind === 'connected' && kind !== 'connected') {
+        useFeedbackStore.setState({ waitingStale: true })
+      }
+      lastRecoveryKind = kind
+    }
+  })
+  // TB15b: a recovery heal or an events-socket reopen re-reads the count.
+  subscribeSoftResync(() => {
+    void useFeedbackStore.getState().refreshWaitingCount()
   })
 }

@@ -69,7 +69,8 @@ import { setConnectedAirgap } from '@/lib/airgap'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
-import { primaryScope } from '@/kessel/server-scope'
+import { noteServerVersion, primaryScope } from '@/kessel/server-scope'
+import { homeHostKey } from '@/lib/host-key'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
  *  for the UI only — never branch on it. `instanceId` (0.40.48, optional —
@@ -84,6 +85,14 @@ interface DaemonBootStatus {
   instanceId?: string
   airgap?: { enabled: boolean }
   listen?: { lan: boolean }
+  /** Reported feature keys (`boot_status::features`); absent on old daemons. */
+  features?: unknown
+}
+
+/** `/boot-status` `features` as strings; a body without the list (an
+ *  older daemon) reports none. */
+export function reportedFeatureList(features: unknown): string[] {
+  return Array.isArray(features) ? features.filter((f): f is string => typeof f === 'string') : []
 }
 
 /**
@@ -1095,6 +1104,18 @@ export function ConnectionGate(): React.ReactElement {
           version: status?.version ?? (isRemote ? null : appVersionRef.current ?? null),
           protocol: status?.protocol ?? null,
         })
+        // The window's own server's REPORTED features (`/boot-status`
+        // `features`). The Home pool notes them only for servers it checks,
+        // so `primaryScope().serverSupports('tickets-list-all')` would read
+        // false on a remote window host without this. Local always
+        // supports everything, so only a remote is noted.
+        if (isRemote) {
+          noteServerVersion(
+            homeHostKey(useConnectHostStore.getState().activeHost),
+            status?.version ?? null,
+            reportedFeatureList(status?.features),
+          )
+        }
         // Remember this host reached 'accept' at least once → a later
         // drop becomes a SOFT reconnect (overlay) instead of a blank.
         acceptedOnce = true

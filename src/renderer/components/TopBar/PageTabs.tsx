@@ -16,21 +16,55 @@ import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 
-function PageTab({
+/** The Tickets tab's badge from the feedback store (prd-tickets-badge-
+ *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
+ *  when it may be out of date; a dimmed `?` on a server too old to count. */
+export function ticketsBadgeProps(s: {
+  waitingCount: number
+  waitingStale: boolean
+  waitingUnsupported: boolean
+}): { badge: number | '?'; badgeStale: boolean; badgeTitle: string | undefined } {
+  return {
+    badge: s.waitingUnsupported ? '?' : s.waitingCount,
+    badgeStale: s.waitingUnsupported || s.waitingStale,
+    badgeTitle: s.waitingUnsupported
+      ? 'This server is too old to count tickets'
+      : s.waitingStale
+        ? 'Tickets count may be out of date'
+        : undefined,
+  }
+}
+
+/** What a tab badge shows: nothing, a number, or `?` (unknown). */
+export function badgeText(badge: number | '?' | undefined): string | null {
+  if (badge === '?') return '?'
+  if (badge === undefined || badge <= 0) return null
+  return badge > 99 ? '99+' : String(badge)
+}
+
+export function PageTab({
   selected,
   onSelect,
   badge,
   badgeClass,
+  badgeStale = false,
+  badgeTitle,
   title,
   children,
 }: {
   selected: boolean
   onSelect: () => void
-  badge?: number
+  /** A count (0 hides) or `?` when the server cannot give one. */
+  badge?: number | '?'
   badgeClass?: string
+  /** Dim the badge: the number may be out of date, or is unknown. */
+  badgeStale?: boolean
+  /** Tooltip on the badge saying why it is dimmed. */
+  badgeTitle?: string
   title: string
   children: ReactNode
 }): React.JSX.Element {
+  const text = badgeText(badge)
   return (
     <button
       onClick={onSelect}
@@ -46,11 +80,14 @@ function PageTab({
       title={title}
     >
       {children}
-      {badge !== undefined && badge > 0 && (
+      {text !== null && (
         <span
-          className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-full px-0.5 ${badgeClass ?? 'bg-[var(--color-accent)]'}`}
+          data-testid="page-tab-badge"
+          data-stale={badgeStale ? 'true' : 'false'}
+          title={badgeTitle}
+          className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-full px-0.5 ${badgeClass ?? 'bg-[var(--color-accent)]'}${badgeStale ? ' opacity-50' : ''}`}
         >
-          {badge > 99 ? '99+' : badge}
+          {text}
         </span>
       )}
     </button>
@@ -62,6 +99,9 @@ export default function PageTabs(): React.JSX.Element {
   const setPage = usePageViewStore((s) => s.setPage)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const waitingCount = useFeedbackStore((s) => s.waitingCount)
+  const waitingStale = useFeedbackStore((s) => s.waitingStale)
+  const waitingUnsupported = useFeedbackStore((s) => s.waitingUnsupported)
+  const ticketsBadge = ticketsBadgeProps({ waitingCount, waitingStale, waitingUnsupported })
   const projectsUnread = useProjectGroupsStore((s) => s.unreadGroupIds.size)
   const projects = useProjectsStore((s) => s.projects)
   // Membership only — reorder/color must not re-fan-out waiting-count
@@ -139,8 +179,10 @@ export default function PageTabs(): React.JSX.Element {
       <PageTab
         selected={!settingsOpen && page === 'feedback'}
         onSelect={() => select('feedback')}
-        badge={waitingCount}
+        badge={ticketsBadge.badge}
         badgeClass="bg-[var(--color-status-working)]"
+        badgeStale={ticketsBadge.badgeStale}
+        badgeTitle={ticketsBadge.badgeTitle}
         title="Tickets — agents waiting on a human"
       >
         Tickets

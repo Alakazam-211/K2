@@ -92,16 +92,23 @@ export function filterProjectGroupsForFilter(
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/** Filter value for tickets whose workspace was removed. Workspace ids are
+ *  UUIDs and project filters carry `project:`, so it cannot collide. */
+export const UNLINKED_FILTER_VALUE = 'unlinked'
+export const UNLINKED_FILTER_LABEL = 'Unlinked workspace'
+
 /** The board's client-side workspace filter (unit-tested): 'all' passes
- *  everything; a `project:` value keeps rows whose host workspace is a
- *  MEMBER of that project (null membership = still resolving → empty);
- *  anything else is a single workspace id. */
-export function rowsForWorkspaceFilter<T extends { projectId: string }>(
+ *  everything; `unlinked` keeps rows whose workspace is gone; a `project:`
+ *  value keeps rows whose host workspace is a MEMBER of that project (null
+ *  membership = still resolving → empty); anything else is a single
+ *  workspace id (an unlinked row never matches one). */
+export function rowsForWorkspaceFilter<T extends { projectId: string; linked?: boolean }>(
   rows: T[],
   value: string,
   projectMemberIds: ReadonlySet<string> | null,
 ): T[] {
   if (value === 'all') return rows
+  if (value === UNLINKED_FILTER_VALUE) return rows.filter((r) => r.linked === false)
   if (parseProjectFilter(value) !== null) {
     return rows.filter((r) => projectMemberIds?.has(r.projectId) ?? false)
   }
@@ -143,15 +150,18 @@ export function groupWorkspacesForFilter(
 
 interface WorkspaceFilterDropdownProps {
   projects: FilterableWorkspace[]
-  /** 'all', a workspace id, or `project:<groupId>` (§6.6). */
+  /** 'all', a workspace id, `project:<groupId>` (§6.6), or `unlinked`. */
   value: string
   onChange: (value: string) => void
+  /** Offer the "Unlinked workspace" row (only while such tickets exist). */
+  showUnlinked?: boolean
 }
 
 export function WorkspaceFilterDropdown({
   projects,
   value,
   onChange,
+  showUnlinked = false,
 }: WorkspaceFilterDropdownProps): React.JSX.Element {
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
@@ -178,20 +188,23 @@ export function WorkspaceFilterDropdown({
   // Flattened selectable values for ArrowUp/Down + Enter (the settings
   // search's keyboard feel). The All row only shows without a query.
   const showAllRow = !query.trim()
+  const showUnlinkedRow = showUnlinked && workspaceMatchesSearch({ name: UNLINKED_FILTER_LABEL, path: '' }, query)
   const flatValues = useMemo(() => {
     const vals: string[] = showAllRow ? ['all'] : []
+    if (showUnlinkedRow) vals.push(UNLINKED_FILTER_VALUE)
     for (const g of groupRows) vals.push(projectFilterValue(g.id))
     for (const s of sections) for (const ws of s.workspaces) vals.push(ws.id)
     return vals
-  }, [sections, groupRows, showAllRow])
+  }, [sections, groupRows, showAllRow, showUnlinkedRow])
 
   const selectedGroupId = parseProjectFilter(value)
   const selectedGroup =
     selectedGroupId !== null
       ? (projectGroups ?? []).find((g) => g.id === selectedGroupId) ?? null
       : null
+  const unlinkedSelected = value === UNLINKED_FILTER_VALUE
   const selected =
-    value === 'all' || selectedGroupId !== null
+    value === 'all' || selectedGroupId !== null || unlinkedSelected
       ? null
       : projects.find((p) => p.id === value) ?? null
 
@@ -291,7 +304,13 @@ export function WorkspaceFilterDropdown({
         )}
         {selectedGroup && <ProjectGroupGlyph size={16} />}
         <span className="truncate">
-          {selected ? selected.name : selectedGroup ? selectedGroup.name : 'All workspaces'}
+          {selected
+            ? selected.name
+            : selectedGroup
+              ? selectedGroup.name
+              : unlinkedSelected
+                ? UNLINKED_FILTER_LABEL
+                : 'All workspaces'}
         </span>
         <svg
           className={`w-2.5 h-2.5 flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}
@@ -337,6 +356,24 @@ export function WorkspaceFilterDropdown({
                   </svg>
                 </span>
                 <span className="text-xs truncate flex-1">All workspaces</span>
+              </button>
+            )}
+
+            {showUnlinkedRow && (
+              <button
+                type="button"
+                data-ws-filter-value={UNLINKED_FILTER_VALUE}
+                onClick={() => pick(UNLINKED_FILTER_VALUE)}
+                className={rowClass(
+                  unlinkedSelected,
+                  flatValues.indexOf(UNLINKED_FILTER_VALUE) === keyboardIndex,
+                )}
+                title="Tickets whose workspace was removed from this server"
+              >
+                <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]">
+                  ?
+                </span>
+                <span className="text-xs truncate flex-1 italic">{UNLINKED_FILTER_LABEL}</span>
               </button>
             )}
 
@@ -417,7 +454,7 @@ export function WorkspaceFilterDropdown({
               </div>
             ))}
 
-            {sections.length === 0 && groupRows.length === 0 && (
+            {sections.length === 0 && groupRows.length === 0 && !showUnlinkedRow && (
               <div className="px-2 py-4 text-center text-[10px] text-[var(--color-text-muted)]">
                 No workspaces match
               </div>

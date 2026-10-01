@@ -38,16 +38,22 @@ import {
   filterByAssignee,
   filterBySearch,
   groupByStatus,
+  isUnlinked,
   resolveFeedback,
+  selectableStatusesFor,
   statusLabel,
+  UNLINKED_WORKSPACE_LABEL,
+  unlinkedDetails,
   type AssigneeFilter,
   type FeedbackListRow,
   type FeedbackStatus,
+  type SelectableStatus,
 } from './feedback-api'
 import { FeedbackItemView } from './FeedbackItemView'
 import {
   parseProjectFilter,
   rowsForWorkspaceFilter,
+  UNLINKED_FILTER_VALUE,
   WorkspaceFilterDropdown,
   type FilterableWorkspace,
 } from './WorkspaceFilterDropdown'
@@ -59,15 +65,6 @@ import { primaryScope } from '@/kessel/server-scope'
 const TOPBAR_HEIGHT = 38
 
 // ── Per-card status dropdown ──────────────────────────────────────────────
-
-/** Manually selectable statuses. Answered is display-only (via a reply). */
-const SELECTABLE_STATUSES = [
-  'waiting',
-  'needs_discussion',
-  'planned',
-  'resolved',
-  'dismissed',
-] as const
 
 /** StatusBadge's palette, shared by the trigger so the dropdown reads
  *  as the card's status badge with a chevron. */
@@ -145,7 +142,10 @@ function CardStatusDropdown({
     }
   }, [open])
 
-  const setStatus = async (status: (typeof SELECTABLE_STATUSES)[number]): Promise<void> => {
+  // Manually selectable statuses (Answered is display-only, via a reply).
+  // An unlinked ticket offers only Resolve and Dismiss (TB18).
+  const statuses = selectableStatusesFor(row)
+  const setStatus = async (status: SelectableStatus): Promise<void> => {
     if (busy || status === row.status) {
       setOpen(false)
       return
@@ -210,7 +210,7 @@ function CardStatusDropdown({
               <CheckGlyph />
             </div>
           )}
-          {SELECTABLE_STATUSES.map((s) => {
+          {statuses.map((s) => {
             const current = row.status === s
             return (
               <button
@@ -383,6 +383,8 @@ export function FeedbackCard({
 }): React.JSX.Element {
   const dimmed =
     row.status === 'resolved' || row.status === 'dismissed' || row.status === 'planned'
+  const unlinked = isUnlinked(row)
+  const details = unlinked ? unlinkedDetails(row) : null
   return (
     // NOT Surface (P2 final wave): the selected state's `ring-1` sets
     // box-shadow, and Surface's elevation slot `[box-shadow:var(--ring-surface)]`
@@ -404,7 +406,7 @@ export function FeedbackCard({
           the ask comes from) left, priority + status dropdown right. */}
       <div className="flex items-center gap-2 min-w-0">
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          {workspace && (
+          {workspace && !unlinked && (
             <ProjectAvatar
               projectPath={workspace.path}
               projectName={workspace.name}
@@ -414,8 +416,13 @@ export function FeedbackCard({
               size={18}
             />
           )}
-          <span className="text-[11px] text-[var(--color-text-secondary)] truncate selectable-copy">
-            {row.projectName}
+          <span
+            className={`text-[11px] truncate selectable-copy ${
+              unlinked ? 'text-[var(--color-text-muted)] italic' : 'text-[var(--color-text-secondary)]'
+            }`}
+            title={unlinked ? 'This ticket’s workspace was removed from this server' : undefined}
+          >
+            {unlinked ? UNLINKED_WORKSPACE_LABEL : row.projectName}
           </span>
         </div>
         <PriorityBadge priority={row.priority} />
@@ -449,6 +456,21 @@ export function FeedbackCard({
           </span>
         )}
       </div>
+      {/* Appa A1: an unlinked ticket has no workspace name to show, so it
+          carries what still identifies it — the agent it was filed as, the
+          exact filing date, and a short id for `k2 tickets show`. */}
+      {details && (
+        <div
+          data-testid="unlinked-details"
+          className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-[var(--color-text-muted)] selectable-copy"
+        >
+          <span>Filed by {details.agent}</span>
+          <span className="opacity-60">·</span>
+          <span className="tabular-nums">{details.filed}</span>
+          <span className="opacity-60">·</span>
+          <span className="font-mono">{details.shortId}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -612,6 +634,16 @@ export default function FeedbackPage(): React.JSX.Element | null {
     [rows, selectedId],
   )
 
+  // The workspace filter offers "Unlinked workspace" only while such rows
+  // exist; once the last one is gone, an active unlinked filter falls back
+  // to All rather than showing an empty board under a dead label.
+  const hasUnlinked = useMemo(() => (rows ?? []).some(isUnlinked), [rows])
+  useEffect(() => {
+    if (rows !== null && workspaceFilter === UNLINKED_FILTER_VALUE && !hasUnlinked) {
+      setWorkspaceFilter('all')
+    }
+  }, [rows, workspaceFilter, hasUnlinked])
+
   // Store rows by id for the cards' workspace avatar (icon + color).
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
 
@@ -685,6 +717,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         { label: 'Needs discussion', rows: grouped.needs_discussion },
         { label: 'Answered', rows: grouped.answered },
         { label: 'Planned', rows: grouped.planned },
+        { label: UNLINKED_WORKSPACE_LABEL, rows: grouped.unlinked },
         { label: 'Closed', rows: grouped.closed },
       ] as const)
     : []
@@ -774,6 +807,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
               projects={projects}
               value={workspaceFilter}
               onChange={setWorkspaceFilter}
+              showUnlinked={hasUnlinked}
             />
             </div>
 

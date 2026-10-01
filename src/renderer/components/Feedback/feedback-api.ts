@@ -45,11 +45,21 @@ export interface FeedbackItem {
   assignees: string[]
 }
 
-/** A list row tagged with the workspace it was fetched for (the list
- *  route is project-scoped; the page shows the workspace name). */
+/** A list row tagged with the workspace it lives on. `linked: false` =
+ *  its workspace was removed (or re-added under a new id): no workspace
+ *  name or path is recorded, so both are null (prd-tickets-badge-orphans). */
 export interface FeedbackListRow extends FeedbackItem {
-  projectPath: string
-  projectName: string
+  projectPath: string | null
+  projectName: string | null
+  linked: boolean
+}
+
+/** `list-all` wire row: the item plus where it lives (k2-core
+ *  `HostFeedbackItem`). */
+interface HostFeedbackWireRow extends FeedbackItem {
+  projectPath: string | null
+  projectName: string | null
+  linked: boolean
 }
 
 export interface FeedbackComment {
@@ -74,12 +84,43 @@ export interface FeedbackProjectRef {
   path: string
 }
 
+/** Every ticket the page shows. A server that reports `tickets-list-all`
+ *  answers in ONE GET (`list-all?all=1`), including tickets from removed
+ *  workspaces (`linked: false`). An older server keeps the per-workspace
+ *  fan-out, where every row is linked. */
+export async function fetchAllFeedback(
+  projects: FeedbackProjectRef[],
+): Promise<FeedbackListRow[]> {
+  if (primaryScope().serverSupports('tickets-list-all')) return fetchHostFeedback()
+  return fetchFeedbackFanOut(projects)
+}
+
+/** GET /cli/feedback/list-all?all=1 — every ticket on the host. Throws on
+ *  any failure (the page shows the error). */
+export async function fetchHostFeedback(): Promise<FeedbackListRow[]> {
+  const res = await daemonCliGet<{ ok: boolean; items: HostFeedbackWireRow[] }>(
+    primaryScope(),
+    'feedback/list-all',
+    { all: 1 },
+  )
+  if (!Array.isArray(res.items)) throw new Error('feedback/list-all: response has no items')
+  return sortNewestFirst(
+    res.items.map((item) => ({
+      ...item,
+      assignees: item.assignees ?? [],
+      projectPath: item.linked ? item.projectPath : null,
+      projectName: item.linked ? item.projectName : null,
+      linked: item.linked === true,
+    })),
+  )
+}
+
 /** GET /cli/feedback/list?project=<path>&all=1 for every registered
  *  workspace, tag rows with their host project, merge newest-first.
  *  Per-project failures are logged and skipped (one unreachable
  *  workspace must not blank the whole page); a fully-failed fan-out
  *  throws so the page shows a real error instead of a fake empty. */
-export async function fetchAllFeedback(
+async function fetchFeedbackFanOut(
   projects: FeedbackProjectRef[],
 ): Promise<FeedbackListRow[]> {
   if (projects.length === 0) return []
@@ -97,6 +138,7 @@ export async function fetchAllFeedback(
           assignees: item.assignees ?? [],
           projectPath: p.path,
           projectName: p.name,
+          linked: true,
         }))
       } catch (err) {
         failures++
@@ -112,33 +154,18 @@ export async function fetchAllFeedback(
   return sortNewestFirst(results.flat())
 }
 
-/** Waiting-count for the top-bar badge. Prefers one host-wide GET;
- *  falls back to per-workspace list on older daemons. */
-export async function fetchWaitingCount(
-  projects: FeedbackProjectRef[],
-): Promise<number> {
-  try {
-    const res = await daemonCliGet<{ ok: boolean; count: number }>(primaryScope(),
-      'feedback/waiting-count',
-    )
-    if (typeof res.count === 'number') return res.count
-  } catch {
-    // Pre-waiting-count daemon — fall through.
-  }
-  const counts = await Promise.all(
-    projects.map(async (p) => {
-      try {
-        const res = await daemonCliGet<{ ok: boolean; items: FeedbackItem[] }>(primaryScope(),
-          'feedback/list',
-          { project: p.path, status: 'waiting' },
-        )
-        return res.items?.length ?? 0
-      } catch {
-        return 0
-      }
-    }),
+/** Waiting-count for the top-bar badge: one host-wide GET. Throws on ANY
+ *  failure — there is no per-workspace fallback, because that turned a dead
+ *  host into a count of 0 (prd-tickets-badge-orphans TB8). The store keeps
+ *  the last number and marks it stale. */
+export async function fetchWaitingCount(): Promise<number> {
+  const res = await daemonCliGet<{ ok: boolean; count: number }>(primaryScope(),
+    'feedback/waiting-count',
   )
-  return counts.reduce((n, c) => n + c, 0)
+  if (typeof res.count !== 'number') {
+    throw new Error('feedback/waiting-count: response has no count')
+  }
+  return res.count
 }
 
 /** GET /cli/feedback/show?id=<id> — one item + its full thread. */
@@ -236,16 +263,25 @@ export function sortNewestFirst<T extends { createdAt: number }>(rows: T[]): T[]
 }
 
 /** Page grouping: waiting / needs discussion are open sections; answered
- *  and closed (resolved/dismissed) stay accessible below. */
+ *  and closed (resolved/dismissed) stay accessible below. An OPEN ticket
+ *  whose workspace is gone (`linked === false`) goes in `unlinked`, never
+ *  `waiting`, so "Waiting on you" still matches the badge; a closed one
+ *  goes in `closed`. */
 export interface GroupedFeedback<T> {
   waiting: T[]
   needs_discussion: T[]
   answered: T[]
   planned: T[]
+  unlinked: T[]
   closed: T[]
 }
 
-export function groupByStatus<T extends { status: FeedbackStatus }>(
+/** True for a row whose workspace was removed (only `list-all` sets it). */
+export function isUnlinked(row: { linked?: boolean }): boolean {
+  return row.linked === false
+}
+
+export function groupByStatus<T extends { status: FeedbackStatus; linked?: boolean }>(
   rows: T[],
 ): GroupedFeedback<T> {
   const grouped: GroupedFeedback<T> = {
@@ -253,10 +289,13 @@ export function groupByStatus<T extends { status: FeedbackStatus }>(
     needs_discussion: [],
     answered: [],
     planned: [],
+    unlinked: [],
     closed: [],
   }
   for (const row of rows) {
-    if (row.status === 'waiting') grouped.waiting.push(row)
+    const closed = row.status === 'resolved' || row.status === 'dismissed'
+    if (isUnlinked(row) && !closed) grouped.unlinked.push(row)
+    else if (row.status === 'waiting') grouped.waiting.push(row)
     else if (row.status === 'needs_discussion') grouped.needs_discussion.push(row)
     else if (row.status === 'answered') grouped.answered.push(row)
     else if (row.status === 'planned') grouped.planned.push(row)
@@ -317,6 +356,50 @@ export function filterBySearch<
       .toLowerCase()
     return terms.every((t) => haystack.includes(t))
   })
+}
+
+/** The label an unlinked ticket's workspace shows. */
+export const UNLINKED_WORKSPACE_LABEL = 'Unlinked workspace'
+
+/** The statuses a card's menu offers. An unlinked ticket gets only
+ *  Resolve and Dismiss (TB18): no agent is left to discuss or plan with,
+ *  and these may be legal or money items, so they close one at a time. */
+export function selectableStatusesFor(row: { linked?: boolean }): readonly SelectableStatus[] {
+  return isUnlinked(row) ? UNLINKED_STATUSES : SELECTABLE_STATUSES
+}
+
+export const SELECTABLE_STATUSES = [
+  'waiting',
+  'needs_discussion',
+  'planned',
+  'resolved',
+  'dismissed',
+] as const
+export type SelectableStatus = (typeof SELECTABLE_STATUSES)[number]
+const UNLINKED_STATUSES: readonly SelectableStatus[] = ['resolved', 'dismissed']
+
+/** What identifies an unlinked ticket when its workspace name is gone
+ *  (Appa A1): title, the date it was filed, the agent it was filed as (the
+ *  only name the row still records), and a short id for `k2 tickets show`. */
+export function unlinkedDetails(row: {
+  id: string
+  title: string
+  agentName: string
+  createdAt: number
+}): { title: string; filed: string; agent: string; shortId: string } {
+  return {
+    title: row.title,
+    filed: formatFiledDate(row.createdAt),
+    agent: row.agentName,
+    shortId: row.id.slice(0, 8),
+  }
+}
+
+/** `createdAt` (unix seconds) as a fixed UTC date + time, so the same
+ *  ticket reads the same on every machine: `2026-09-30 14:05 UTC`. */
+export function formatFiledDate(createdAtSec: number): string {
+  const iso = new Date(createdAtSec * 1000).toISOString()
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`
 }
 
 /** Assignee filter values for the board people dropdown. */

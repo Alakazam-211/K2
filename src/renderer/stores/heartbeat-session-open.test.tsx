@@ -90,6 +90,10 @@ import { HeartbeatEntryRow } from '@/components/HeartbeatsPanel/HeartbeatEntry'
 import { openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
 import type { HeartbeatEntry } from '@/stores/heartbeat-sessions'
 import { useTabsStore, type Tab, type TerminalItemData } from '@/stores/tabs'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+
+// Home M3 — the drawer row opens heartbeats in ITS room's tabs store.
+const room = testRoom({ tabs: useTabsStore })
 
 const PROJECT = '/ws/proj'
 const SID = '11111111-1111-4111-8111-111111111111'
@@ -267,7 +271,7 @@ describe('pinned chat is decided before any conversation search', () => {
 
   it('the open icon focuses the pinned Chat tab and does not append a companion', async () => {
     pinnedStrips()
-    await openHeartbeatTarget(PROJECT, 'daily', 'pinned')
+    await openHeartbeatTarget(useTabsStore, PROJECT, 'daily', 'pinned')
     const state = useTabsStore.getState()
     expect(state.activeTabId).toBe('chat')
     expect(state.tabs.map((t) => t.id)).toEqual(['chat', 'inbox', 'leftover'])
@@ -279,7 +283,7 @@ describe('pinned chat is decided before any conversation search', () => {
 
   it('the drawer row focuses the pinned Chat tab and does not append a companion', async () => {
     pinnedStrips()
-    render(
+    renderInRoom(room, 
       <HeartbeatEntryRow
         projectPath={PROJECT}
         entry={entry({ useWorkspaceSession: true, lastSessionId: SID, sessionProvider: 'claude' })}
@@ -314,7 +318,7 @@ describe('an already-open session is focused by conversation id', () => {
       sessionAlive: false,
       isV2: false,
     }
-    await openHeartbeatTarget(PROJECT, 'daily', 'session')
+    await openHeartbeatTarget(useTabsStore, PROJECT, 'daily', 'session')
     const state = useTabsStore.getState()
     expect(state.extraGroups[0].activeTabId).toBe('extra')
     expect(state.tabs.map((t) => t.id)).toEqual(['main-other'])
@@ -324,7 +328,7 @@ describe('an already-open session is focused by conversation id', () => {
     expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
 
     // Own-session mode uses the same open path.
-    await openHeartbeatTarget(PROJECT, 'daily', 'auto')
+    await openHeartbeatTarget(useTabsStore, PROJECT, 'daily', 'auto')
     expect(useTabsStore.getState().extraGroups[0].activeTabId).toBe('extra')
     expect(useTabsStore.getState().tabs).toHaveLength(1)
   })
@@ -336,7 +340,7 @@ describe('an already-open session is focused by conversation id', () => {
       splitCount: 2,
     })
     activePayload = { ...activePayload, claudeSessionId: SID, sessionAlive: false }
-    render(
+    renderInRoom(room, 
       <HeartbeatEntryRow
         projectPath={PROJECT}
         entry={entry({ useWorkspaceSession: false, lastSessionId: SID, sessionProvider: null })}

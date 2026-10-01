@@ -1,3 +1,7 @@
+// Settings is about the window's server: heartbeats open in the primary
+// room's tabs.
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
+import { useTabsStore } from '@/stores/tabs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
@@ -605,13 +609,15 @@ function WakeupPreview({
   const scopeId = `heartbeat-wakeup:${heartbeatName}:${path}`
   return (
     <div className="h-full overflow-hidden">
-      <FileViewerPane
-        filePath={path}
-        paneId={scopeId}
-        tabId={scopeId}
-        commandRef={commandRef}
-        onDirtyChange={onDirtyChange}
-      />
+      <PrimaryRoom>
+        <FileViewerPane
+          filePath={path}
+          paneId={scopeId}
+          tabId={scopeId}
+          commandRef={commandRef}
+          onDirtyChange={onDirtyChange}
+        />
+      </PrimaryRoom>
     </div>
   )
 }
@@ -1138,7 +1144,7 @@ export function HeartbeatsPanel({
                     />
                     <button
                       type="button"
-                      onClick={() => { void openHeartbeatTarget(project.path, r.name, deriveDeliveryTarget(r).mode) }}
+                      onClick={() => { void openHeartbeatTarget(useTabsStore, project.path, r.name, deriveDeliveryTarget(r).mode) }}
                       title={
                         deriveDeliveryTarget(r).mode === 'pinned'
                           ? 'Open the workspace’s pinned chat tab'

@@ -114,7 +114,7 @@ describe('show launch bar persistence', () => {
     })
     const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
     try {
-      await usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab', 1)
+      await usePresetsStore.getState().launchPreset(useTabsStore, 'c', '/tmp/proj', 'tab', 1)
       expect(post).toHaveBeenCalledWith(primaryScope(), 'agents/ensure-cli', { program: 'claude' })
       expect(useTabsStore.getState().tabs).toHaveLength(0)
       expect(useTabsStore.getState().activeGroupIndex).toBe(0)
@@ -135,7 +135,7 @@ describe('show launch bar persistence', () => {
     })
     const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
     try {
-      await usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab')
+      await usePresetsStore.getState().launchPreset(useTabsStore, 'c', '/tmp/proj', 'tab')
       expect(useTabsStore.getState().tabs).toHaveLength(0)
       expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])
     } finally {

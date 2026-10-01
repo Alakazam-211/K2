@@ -1,3 +1,4 @@
+import { registerPrimaryRoomActivity } from './room'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -588,7 +589,9 @@ function armUnseenDone(paneId: string): void {
     next.set(paneId, Date.now())
     useActiveAgentsStore.setState({ unseenDone: next })
     // Only UNSEEN completions chime — a watched pane never reaches here.
-    playCompletionSound(projectId)
+    // MS21 — the window's Active bar is the primary room: its chime reads
+    // the primary room's project list.
+    playCompletionSound(projectId, useProjectsStore.getState().projects)
   }, UNSEEN_DONE_DEBOUNCE_MS)
   _unseenDoneTimers.set(paneId, timer)
 }
@@ -1380,6 +1383,18 @@ function trackSessionRemoved(agentName: string, cwdHint: string): void {
   }
 }
 
+// Home M3 (MS68) — this store is the PRIMARY room's activity sink: the
+// window's Active bar, tab dots and chime. Terminal panes report through
+// their room's sink, never to this store directly.
+registerPrimaryRoomActivity({
+  recordOutput: (id) => useActiveAgentsStore.getState().recordOutput(id),
+  recordTitleActivity: (id, working) => useActiveAgentsStore.getState().recordTitleActivity(id, working),
+  recordTitlePermission: (id, active) => useActiveAgentsStore.getState().recordTitlePermission(id, active),
+  markSeen: (id) => useActiveAgentsStore.getState().markSeen(id),
+  bindPaneAgentName: (agentName, id) => useActiveAgentsStore.getState().bindPaneAgentName(agentName, id),
+  bindPaneProject: (id, projectId) => useActiveAgentsStore.getState().bindPaneProject(id, projectId),
+})
+
 export function startAgentPolling(): void {
   if (pollInterval || agentStatusUnsub) return
   // Initial poll — snapshot of current truth (paneStatuses derived from
@@ -1553,6 +1568,9 @@ export function startAgentPolling(): void {
       // discovers it via terminal_list_running_agents when the user navigates
       // there. Project-namespacing is required so two workspaces sharing an
       // agent name don't collide on a single PTY.
+      // MS3 — these Tauri events come from THIS computer's daemon and act on
+      // the primary room (MS14: active-agents is primary-only), so the path
+      // resolves in the primary room's own project list.
       const projectsStore = useProjectsStore.getState()
       const owningProject = projectsStore.projects.find((p) => p.path === cwd)
       if (!owningProject) {
@@ -1740,6 +1758,7 @@ export function startAgentPolling(): void {
           return
         }
 
+        // MS3 — primary room's own list (see `cli:agent-launch` above).
         const projects = useProjectsStore.getState().projects
         const project = projects.find((p) => p.path === projectPath)
         const activeProjectId = useProjectsStore.getState().activeProjectId
@@ -1898,6 +1917,7 @@ export function startAgentPolling(): void {
       // Resolve the default agent through the one seam (id-first,
       // legacy-token tolerant, first-enabled fallback). The target
       // project's own default (Slice 1) takes precedence once it exists.
+      // MS3 — primary room's own list (see `cli:agent-launch` above).
       const project = useProjectsStore
         .getState()
         .projects.find(

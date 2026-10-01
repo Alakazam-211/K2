@@ -2,11 +2,7 @@ import { useCallback, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import {
-  hydrateApiSandboxSessions,
-  minimizeApiSessionsForWorkspace,
-} from '@/stores/tabs'
-import { primaryScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 /** Per-workspace hide-sessions: do not auto-surface API tabs. */
 export function HideApiSessionsToggle({
@@ -14,6 +10,9 @@ export function HideApiSessionsToggle({
 }: {
   project: { id: string; path: string; hideApiSessions?: number }
 }): React.JSX.Element {
+  // Home M3 — the flag is written on the room's server, and the API tabs it
+  // hides or re-hydrates are the room's.
+  const room = useRoom()
   const [busy, setBusy] = useState(false)
   const enabled = (project.hideApiSessions ?? 0) === 1
 
@@ -22,27 +21,32 @@ export function HideApiSessionsToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliPost(primaryScope(), 'workspace/set', {
+      await daemonCliPost(room.scope, 'workspace/set', {
         project: project.path,
         fields: { hide_api_sessions: next ? '1' : '0' },
       })
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) =>
-          p.id === project.id ? { ...p, hideApiSessions: next ? 1 : 0 } : p,
-        ),
-      }))
-      void emit('sync:projects').catch(() => {})
+      // The projects store is the PRIMARY room's list (MS4: never write
+      // another server's record into it); `sync:projects` is this
+      // computer's local broadcast.
+      if (room.isPrimary) {
+        useProjectsStore.setState((s) => ({
+          projects: s.projects.map((p) =>
+            p.id === project.id ? { ...p, hideApiSessions: next ? 1 : 0 } : p,
+          ),
+        }))
+      }
+      if (room.localCommands) void emit('sync:projects').catch(() => {})
       if (next) {
-        minimizeApiSessionsForWorkspace(project.path)
+        room.tabs.room.minimizeApiSessionsForWorkspace(project.path)
       } else {
-        void hydrateApiSandboxSessions()
+        void room.tabs.room.hydrateApiSandboxSessions()
       }
     } catch (err) {
       console.error('[hide-api-sessions] write failed', err)
     } finally {
       setBusy(false)
     }
-  }, [busy, enabled, project.id, project.path])
+  }, [room, busy, enabled, project.id, project.path])
 
   return (
     <div className="flex items-start gap-3">

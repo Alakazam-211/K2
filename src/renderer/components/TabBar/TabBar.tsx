@@ -1,8 +1,9 @@
 import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
-import { placeClickedSandboxTab, useTabsStore, type BrowserItemData, type TerminalItemData } from '@/stores/tabs'
+import type { BrowserItemData, TerminalItemData } from '@/stores/tabs'
+import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
+import { roomActiveProject, roomProjectForCwd, type Room } from '@/stores/room'
 import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
-import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
@@ -24,7 +25,6 @@ import { isAgentPtyTerminalItem, persistChatRenameIfSessionTab, resolvePinnedCha
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
-import { primaryScope } from '@/kessel/server-scope'
 
 interface TabBarProps {
   cwd: string
@@ -66,12 +66,13 @@ function buildPlusMenuItems(
 }
 
 async function openPresetInSandbox(
+  room: Room,
   presetId: string,
   projectPath: string,
   groupIndex: number,
 ): Promise<void> {
   try {
-    const resp = await daemonCliPost<{ sessionId?: string; agentName?: string }>(primaryScope(), 'sandbox/open', {
+    const resp = await daemonCliPost<{ sessionId?: string; agentName?: string }>(room.scope, 'sandbox/open', {
       project_path: projectPath,
       preset_id: presetId,
     })
@@ -79,7 +80,7 @@ async function openPresetInSandbox(
       useToastStore.getState().addToast('Sandbox did not return a session', 'error')
       return
     }
-    placeClickedSandboxTab({
+    room.tabs.room.placeClickedSandboxTab({
       groupIndex,
       cwd: projectPath,
       sessionId: resp.sessionId,
@@ -91,13 +92,10 @@ async function openPresetInSandbox(
   }
 }
 
-/** Same resolution as ⌘⇧T: this folder's workspace default, then the global default, then the first enabled preset. */
-function defaultPresetIdForCwd(cwd: string, presets: AgentPreset[]): string | null {
-  const projects = useProjectsStore.getState()
-  const project =
-    projects.projects.find(
-      (p) => p.path === cwd || p.workspaces.some((w) => w.worktreePath === cwd),
-    ) ?? projects.projects.find((p) => p.id === projects.activeProjectId)
+/** Same resolution as ⌘⇧T: this folder's workspace default, then the global default, then the first enabled preset.
+ *  The folder is looked up in THIS room's project list only (MS3). */
+function defaultPresetIdForCwd(room: Room, cwd: string, presets: AgentPreset[]): string | null {
+  const project = roomProjectForCwd(room, cwd) ?? roomActiveProject(room)
   return (
     resolveAgentPreset(
       presets,
@@ -108,14 +106,15 @@ function defaultPresetIdForCwd(cwd: string, presets: AgentPreset[]): string | nu
 }
 
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
-  const tabs = useTabsStore((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
-  const activeTabId = useTabsStore((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
-  const splitCount = useTabsStore((s) => s.splitCount)
-  const removeTabFromGroup = useTabsStore((s) => s.removeTabFromGroup)
-  const setActiveTabInGroup = useTabsStore((s) => s.setActiveTabInGroup)
-  const splitTerminalArea = useTabsStore((s) => s.splitTerminalArea)
-  const unsplitTerminalArea = useTabsStore((s) => s.unsplitTerminalArea)
-  const reorderTabs = useTabsStore((s) => s.reorderTabs)
+  const room = useRoom()
+  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
+  const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
+  const splitCount = useRoomTabs((s) => s.splitCount)
+  const removeTabFromGroup = useRoomTabs((s) => s.removeTabFromGroup)
+  const setActiveTabInGroup = useRoomTabs((s) => s.setActiveTabInGroup)
+  const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
+  const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
+  const reorderTabs = useRoomTabs((s) => s.reorderTabs)
   const paneStatusMap = useActiveAgentsStore((s) => s.paneStatuses)
   // 0.40.39 — daemon-truth activity (visibility-independent). Subscribed
   // so the tab re-renders on daemon transitions; merged with the client
@@ -135,7 +134,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // The chat pane is keyed `agent-chat:<projectId>` in `paneStatuses` — it's
   // an `agent` item, NOT a `terminal` item, so the generic working-detection
   // below (which only inspects terminal panes) never sees it.
-  const projectId = useProjectsStore((s) => s.projects.find((p) => p.path === cwd)?.id ?? null)
+  // MS3 — resolved in THIS room's own project list: the same path on
+  // another server is another project.
+  const projectId = useRoomProjects((projects) => projects.find((p) => p.path === cwd)?.id ?? null)
 
   // ── Pin-to-size, right-click entry (PRD presence-multiplayer §5.5) ─────
   //
@@ -147,8 +148,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // (terminalId→daemon-sessionId in the pinned-size store, registered
   // by TerminalPane at spawn-resolve) doubles as the "is there a live
   // Kessel session?" gate for offering the menu entry.
-  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), primaryScope())
-  const projects = useProjectsStore((s) => s.projects)
+  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), room.scope)
+  const projects = useRoomProjects((p) => p)
   const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
   // Transient inline hint for pin-size failures (cleared after 4s) —
@@ -171,7 +172,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // Failures surface through the same transient hint.
   const handleUnpin = useCallback(
     (sessionId: string) => {
-      applyPinSize(sessionId, null).catch((err) => {
+      applyPinSize(room.scope, sessionId, null).catch((err) => {
         flashPinHint(
           `Unpin failed: ${err instanceof Error ? err.message : String(err)}`
         )
@@ -186,8 +187,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     async (e: React.MouseEvent, sessionId: string) => {
       e.preventDefault()
       e.stopPropagation()
-      const pinned = pinOf(usePinnedSizeStore.getState(), primaryScope(), sessionId) ?? null
-      const copyAddress = await resolvePinnedChatCopyableAddress(cwd, projectId)
+      const pinned = pinOf(usePinnedSizeStore.getState(), room.scope, sessionId) ?? null
+      const copyAddress = await resolvePinnedChatCopyableAddress(room.scope, cwd, projectId)
       const items = [
         pinned
           ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
@@ -248,7 +249,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const barCwd = cwd
     const rect = e.currentTarget.getBoundingClientRect()
     const presets = usePresetsStore.getState().presets
-    const defaultId = defaultPresetIdForCwd(barCwd, presets)
+    const defaultId = defaultPresetIdForCwd(room, barCwd, presets)
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
@@ -303,29 +304,29 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
-        useTabsStore.getState().addTabToGroup(group, barCwd)
+        room.tabs.getState().addTabToGroup(group, barCwd)
         return
       }
       if (picked === 'new-file') {
-        useTabsStore.getState().openUntitledDocument(barCwd, group)
+        room.tabs.getState().openUntitledDocument(barCwd, group)
         return
       }
       if (picked === 'browser') {
-        useTabsStore.getState().openUrlInNewTab('', group)
+        room.tabs.getState().openUrlInNewTab('', group)
         return
       }
       if (picked.startsWith('preset:')) {
         const id = picked.slice('preset:'.length)
         if (optionHeld) {
-          await openPresetInSandbox(id, barCwd, group)
+          await openPresetInSandbox(room, id, barCwd, group)
           return
         }
-        usePresetsStore.getState().launchPreset(id, barCwd, 'tab', group)
+        usePresetsStore.getState().launchPreset(room.tabs, id, barCwd, 'tab', group)
       }
     } finally {
       stop()
     }
-  }, [groupIndex, cwd])
+  }, [room, groupIndex, cwd])
 
   const [pendingClose, setPendingClose] = useState<{ tabId: string; agents: ActiveAgent[] } | null>(null)
 
@@ -344,13 +345,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // This is the USER rename path — mark it locked so the rename is sticky
     // and program-generated PTY/OSC/session titles can't snap it back.
     if (value) {
-      const store = useTabsStore.getState()
+      const store = room.tabs.getState()
       const tab = [...store.tabs, ...store.extraGroups.flatMap((g) => g.tabs)]
         .find((t) => t.id === tabId)
       const previousTitle = tab?.title ?? ''
       store.setTabTitle(tabId, value, { locked: true })
       if (tab) {
-        void persistChatRenameIfSessionTab(primaryScope(), tab, value, cwd)
+        void persistChatRenameIfSessionTab(room.scope, tab, value, cwd)
           .then((ok) => {
             if (!ok && tabLooksLikeChatSession(tab)) {
               useToastStore.getState().addToast(
@@ -423,7 +424,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       document.removeEventListener('selectstart', blockSelect)
-      startTabDrag({ groupIndex, tabId, tabTitle, mouseX: cx, mouseY: cy })
+      startTabDrag({ room, groupIndex, tabId, tabTitle, mouseX: cx, mouseY: cy })
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
@@ -501,7 +502,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         if (splitCount > 1) {
           const overGroup = groupUnderCursor(ev.clientX, ev.clientY)
           if (overGroup !== null && overGroup !== groupIndex) {
-            useTabsStore.getState().moveTabToGroup(groupIndex, overGroup, tabId)
+            room.tabs.getState().moveTabToGroup(groupIndex, overGroup, tabId)
             setReorderDragIndex(null)
             setReorderDropIndex(null)
             reorderDropRef.current = null
@@ -549,7 +550,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const settings = useSettingsStore.getState()
     const defaultTerminal = (settings.projectSettings['__global__'] as any)?.defaultTerminal ?? 'Terminal'
 
-    const allTabs = groupIndex === 0 ? useTabsStore.getState().tabs : useTabsStore.getState().extraGroups[groupIndex - 1]?.tabs ?? []
+    const allTabs = groupIndex === 0 ? room.tabs.getState().tabs : room.tabs.getState().extraGroups[groupIndex - 1]?.tabs ?? []
     const hasOtherTabs = allTabs.length > 1
 
     // Terminal id for agents / `k2 terminal write` — prefer the daemon
@@ -561,7 +562,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     let fileViewerPath: string | null = null
     let copyAddress: Awaited<ReturnType<typeof resolveSessionTabCopyableAddress>> = null
     if (tab) {
-      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())
+      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, room.scope)
       const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
       tabTerminalId = resolveCopyableTerminalId(items, sessions)
       for (const item of items) {
@@ -573,12 +574,14 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           }
         }
       }
-      copyAddress = await resolveSessionTabCopyableAddress(tab, cwd)
+      copyAddress = await resolveSessionTabCopyableAddress(room.scope, tab, cwd)
     }
 
     const menuItems = [
       { id: 'rename', label: 'Rename Tab' },
-      { id: 'open-terminal', label: `Open in ${defaultTerminal}` },
+      // MS57 — opening this computer's terminal app / Finder on a path only
+      // makes sense in a room whose files live here.
+      ...(room.localCommands ? [{ id: 'open-terminal', label: `Open in ${defaultTerminal}` }] : []),
       ...(tabTerminalId ? [
         { id: 'copy-terminal-id', label: 'Copy Terminal ID' },
       ] : []),
@@ -586,7 +589,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         { id: 'copy-address', label: copyAddress.label },
       ] : []),
       ...(fileViewerPath ? [
-        { id: 'show-in-finder', label: 'Show in Finder' },
+        ...(room.localCommands ? [{ id: 'show-in-finder', label: 'Show in Finder' }] : []),
         { id: 'copy-file-path', label: 'Copy Path' },
       ] : []),
       { id: 'separator', label: '', type: 'separator' as const },
@@ -601,7 +604,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       // entry flips to an instant Unpin.
       ...(pinSessionId ? [
         { id: 'pin-separator', label: '', type: 'separator' as const },
-        pinOf(usePinnedSizeStore.getState(), primaryScope(), pinSessionId)
+        pinOf(usePinnedSizeStore.getState(), room.scope, pinSessionId)
           ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
           : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
       ] : []),
@@ -635,9 +638,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         removeTabFromGroup(groupIndex, tab.id)
       }
     } else if (clickedId === 'force-reap-all') {
-      useTabsStore.getState().forceReapAllTabsInGroup(groupIndex)
+      room.tabs.getState().forceReapAllTabsInGroup(groupIndex)
     } else if (clickedId === 'show-in-finder' && fileViewerPath) {
-      daemonCliPost(primaryScope(), 'fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
+      daemonCliPost(room.scope, 'fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
     } else if (clickedId === 'copy-file-path' && fileViewerPath) {
       navigator.clipboard.writeText(fileViewerPath).catch((err) => console.warn('[tab-bar] copy-file-path', err))
     } else if (clickedId === 'copy-terminal-id' && tabTerminalId) {
@@ -652,7 +655,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       )
     } else if (clickedId === 'open-terminal') {
       // Find the cwd from the tab's first terminal pane
-      const tabsState = useTabsStore.getState()
+      const tabsState = room.tabs.getState()
       const allTabs = groupIndex === 0 ? tabsState.tabs : tabsState.extraGroups[groupIndex - 1]?.tabs ?? []
       const tab = allTabs.find((t) => t.id === tabId)
       if (tab) {

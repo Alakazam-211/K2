@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
-import { primaryScope } from '@/kessel/server-scope'
-import { useProjectsStore } from '@/stores/projects'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
 import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
@@ -121,6 +119,7 @@ export function PaneTabBar({
   tabId,
   paneGroupId
 }: PaneTabBarProps): React.JSX.Element {
+  const room = useRoom()
   const handleClose = useCallback(
     (e: React.MouseEvent, itemId: string) => {
       e.stopPropagation()
@@ -140,8 +139,9 @@ export function PaneTabBar({
   // store carries the terminalId→daemon-sessionId mapping (registered
   // at spawn-resolve), which is also the "is there a live session?"
   // gate for offering the menu at all.
-  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), primaryScope())
-  const projects = useProjectsStore((s) => s.projects)
+  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), room.scope)
+  // MS3 — this room's own project list.
+  const projects = useRoomProjects((p) => p)
   const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
   // Transient inline hint for pin-size failures (cleared after 4s).
@@ -163,7 +163,7 @@ export function PaneTabBar({
   // Failures surface through the same transient hint.
   const handleUnpin = useCallback(
     (sessionId: string) => {
-      applyPinSize(sessionId, null).catch((err) => {
+      applyPinSize(room.scope, sessionId, null).catch((err) => {
         flashPinHint(
           `Unpin failed: ${err instanceof Error ? err.message : String(err)}`
         )
@@ -180,14 +180,14 @@ export function PaneTabBar({
       e.stopPropagation()
       const x = e.clientX
       const y = e.clientY
-      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())
+      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, room.scope)
       const copyId = resolveCopyableTerminalId([item], sessions)
       const menuItems = [
         ...(copyId ? [{ id: 'copy-terminal-id', label: 'Copy Terminal ID' }] : []),
         ...(pinSessionId
           ? [
               ...(copyId ? [{ id: 'pin-separator', label: '', type: 'separator' as const }] : []),
-              pinOf(usePinnedSizeStore.getState(), primaryScope(), pinSessionId)
+              pinOf(usePinnedSizeStore.getState(), room.scope, pinSessionId)
                 ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
                 : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
             ]
@@ -258,7 +258,7 @@ export function PaneTabBar({
         if (!toTabId || !toPaneGroupId) return
         if (toTabId === tabId && toPaneGroupId === paneGroupId) return // same pane
 
-        useTabsStore.getState().moveItemBetweenPanes(tabId, paneGroupId, itemId, toTabId, toPaneGroupId)
+        room.tabs.getState().moveItemBetweenPanes(tabId, paneGroupId, itemId, toTabId, toPaneGroupId)
       }
 
       document.addEventListener('mousemove', onMouseMove)

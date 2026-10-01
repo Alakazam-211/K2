@@ -17,9 +17,8 @@ import { isFileDragActive, markDropConsumed, isImagePath, quotePathForImageDrop,
 import { detectWorkingSignal } from '@/lib/agent-signals'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom } from '@/components/Room/RoomContext'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById, stripOscIdleGlyphs } from '@/lib/chat-session-tab'
-import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useToastStore } from '@/stores/toast'
 import { useConnectHostStore } from '@/stores/connect-host'
 import {
@@ -27,7 +26,6 @@ import {
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
 import { filesFromDataTransfer } from '@/lib/external-drop-router'
-import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types matching Rust GridUpdate / CompactLine / StyleSpan ──────────
 
@@ -191,6 +189,8 @@ export function AlacrittyTerminalView({
   onExit,
   spawnedAt,
 }: AlacrittyTerminalViewProps): React.JSX.Element {
+  // Home M3 — the legacy pane's room: its server, tabs and activity sink.
+  const room = useRoom()
   const containerRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const ptyIdRef = useRef<string | null>(null)
@@ -282,7 +282,7 @@ export function AlacrittyTerminalView({
     if (update.display_offset === 0) {
       if (detectWorkingSignal(map, update.rows)) {
         lastSeenWorkingAtRef.current = Date.now()
-        useActiveAgentsStore.getState().recordTitleActivity(terminalId, true)
+        room.activity.recordTitleActivity(terminalId, true)
       }
     }
 
@@ -318,7 +318,7 @@ export function AlacrittyTerminalView({
       const last = lastSeenWorkingAtRef.current
       if (last === 0) return // never seen working — don't touch state
       if (Date.now() - last > IDLE_GRACE_MS) {
-        useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+        room.activity.recordTitleActivity(terminalId, false)
         lastSeenWorkingAtRef.current = 0
       }
     }, 500)
@@ -365,7 +365,7 @@ export function AlacrittyTerminalView({
     if (cols !== lastColsRef.current || rows !== lastRowsRef.current) {
       lastColsRef.current = cols
       lastRowsRef.current = rows
-      terminalResize(primaryScope(), ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
+      terminalResize(room.scope, ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
     }
   }, [fontSize, created, calculateDimensions, measureCell])
 
@@ -382,7 +382,7 @@ export function AlacrittyTerminalView({
       // Measure cell metrics first
       measureCell()
 
-      const exists = await terminalExists(primaryScope(), terminalId)
+      const exists = await terminalExists(room.scope, terminalId)
 
       if (!exists) {
         // Measure container and create terminal with correct initial dimensions
@@ -395,7 +395,7 @@ export function AlacrittyTerminalView({
           'color:#ff0;font-weight:bold',
           { cwd, command, args, cols, rows },
         )
-        await terminalCreate(primaryScope(), {
+        await terminalCreate(room.scope, {
           id: terminalId,
           cwd,
           command: command ?? null,
@@ -408,7 +408,7 @@ export function AlacrittyTerminalView({
       // Reattach: get current grid state
       if (exists) {
         try {
-          const grid = await terminalGetGrid<GridUpdate>(primaryScope(), terminalId)
+          const grid = await terminalGetGrid<GridUpdate>(room.scope, terminalId)
           if (mounted) applyGridUpdate(grid)
         } catch { /* fallback */ }
         // Reset so the resize poll fires on the next tick
@@ -441,7 +441,7 @@ export function AlacrittyTerminalView({
         })
       }
 
-      terminalSetFocus(primaryScope(), terminalId, true).catch((e) => console.warn('[terminal]', e))
+      terminalSetFocus(room.scope, terminalId, true).catch((e) => console.warn('[terminal]', e))
 
       // Parity instrumentation with Kessel's SessionStreamView.
       // first-frame = first grid update received.
@@ -517,7 +517,7 @@ export function AlacrittyTerminalView({
         }
         prevMode = payload.mode
         scheduleRender(payload)
-        useActiveAgentsStore.getState().recordOutput(terminalId)
+        room.activity.recordOutput(terminalId)
       })
 
       unlistenExit = await listen<{ exitCode: number }>(`terminal:exit:${terminalId}`, (event) => {
@@ -536,12 +536,12 @@ export function AlacrittyTerminalView({
         const isIdleMarker = /^[*✱✲✳✴✵✶✷✸✹⚹⁎∗※]/.test(raw)
         if (isIdleMarker) {
           lastSeenWorkingAtRef.current = 0
-          useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+          room.activity.recordTitleActivity(terminalId, false)
         }
 
         const newTitle = stripOscIdleGlyphs(raw)
         if (newTitle && tabId) {
-          const st = useTabsStore.getState()
+          const st = room.tabs.getState()
           applyUnlockedTabLabel(
             findTabById(collectStoreTabs(st), tabId),
             newTitle,
@@ -581,7 +581,7 @@ export function AlacrittyTerminalView({
       lastColsRef.current = cols
       lastRowsRef.current = rows
       if (ptyIdRef.current) {
-        terminalResize(primaryScope(), ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
+        terminalResize(room.scope, ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
       }
     }
 
@@ -603,10 +603,10 @@ export function AlacrittyTerminalView({
   // ── Focus tracking ─────────────────────────────────────────────────
 
   const handleFocus = useCallback(() => {
-    if (ptyIdRef.current) terminalSetFocus(primaryScope(), ptyIdRef.current, true).catch((e) => console.warn('[terminal]', e))
+    if (ptyIdRef.current) terminalSetFocus(room.scope, ptyIdRef.current, true).catch((e) => console.warn('[terminal]', e))
   }, [])
   const handleBlur = useCallback(() => {
-    if (ptyIdRef.current) terminalSetFocus(primaryScope(), ptyIdRef.current, false).catch((e) => console.warn('[terminal]', e))
+    if (ptyIdRef.current) terminalSetFocus(room.scope, ptyIdRef.current, false).catch((e) => console.warn('[terminal]', e))
   }, [])
 
   // ── Keyboard ───────────────────────────────────────────────────────
@@ -619,7 +619,7 @@ export function AlacrittyTerminalView({
       const seq = naturalTextEditingSequence(ne)
       if (seq) {
         e.preventDefault(); e.stopPropagation()
-        terminalWrite(primaryScope(), ptyIdRef.current, seq)
+        terminalWrite(room.scope, ptyIdRef.current, seq)
         return
       }
     }
@@ -627,7 +627,7 @@ export function AlacrittyTerminalView({
     const data = keyEventToSequence(ne, termModeRef.current)
     if (data) {
       e.preventDefault(); e.stopPropagation()
-      terminalWrite(primaryScope(), ptyIdRef.current, data)
+      terminalWrite(room.scope, ptyIdRef.current, data)
     }
   }, [naturalTextEditing])
 
@@ -649,7 +649,7 @@ export function AlacrittyTerminalView({
         )
         return
       }
-      terminalWrite(primaryScope(), ptyIdRef.current, payload)
+      terminalWrite(room.scope, ptyIdRef.current, payload)
     }
 
     // Finder path bridge only when the local macOS daemon owns the
@@ -660,11 +660,11 @@ export function AlacrittyTerminalView({
       return
     }
 
-    daemonCliGet<string[]>(primaryScope(), 'fs/clipboard-paths')
+    daemonCliGet<string[]>(room.scope, 'fs/clipboard-paths')
       .then((paths) => {
         if (!ptyIdRef.current) return
         if (paths && paths.length > 0) {
-          terminalWrite(primaryScope(), ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(room.scope, ptyIdRef.current, buildDropPayload(paths))
           return
         }
         writeText(text)
@@ -702,7 +702,7 @@ export function AlacrittyTerminalView({
         const lines = Math.round(accum / lineHeight)
         const delta = -lines
         if (delta !== 0) {
-          terminalScroll(primaryScope(), ptyIdRef.current, delta).catch((e) => console.warn('[terminal]', e))
+          terminalScroll(room.scope, ptyIdRef.current, delta).catch((e) => console.warn('[terminal]', e))
         }
       }, 50)
     }
@@ -751,16 +751,16 @@ export function AlacrittyTerminalView({
         // host-aware for parity when dragDropEnabled is off.
         if (useConnectHostStore.getState().activeHost !== 'local') {
           const pty = ptyIdRef.current
-          void executeRemoteDrop(primaryScope(),
+          void executeRemoteDrop(room.scope,
             paths,
             { kind: 'terminal' },
             { workspacePath: cwd },
             buildDropPayload,
           ).then((payload) => {
-            if (payload && pty) terminalWrite(primaryScope(), pty, payload)
+            if (payload && pty) terminalWrite(room.scope, pty, payload)
           })
         } else {
-          terminalWrite(primaryScope(), ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(room.scope, ptyIdRef.current, buildDropPayload(paths))
         }
         return
       }
@@ -769,13 +769,13 @@ export function AlacrittyTerminalView({
       const browserFiles = filesFromDataTransfer(e.dataTransfer)
       if (browserFiles.length > 0) {
         const pty = ptyIdRef.current
-        void executeBrowserFileDrop(primaryScope(),
+        void executeBrowserFileDrop(room.scope,
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: cwd || undefined },
           buildDropPayload,
         ).then((payload) => {
-          if (payload && pty) terminalWrite(primaryScope(), pty, payload)
+          if (payload && pty) terminalWrite(room.scope, pty, payload)
         })
         return
       }
@@ -784,7 +784,7 @@ export function AlacrittyTerminalView({
     // Handle text drops
     const text = e.dataTransfer.getData('text/plain')
     if (text && files.length === 0) {
-      terminalWrite(primaryScope(), ptyIdRef.current, text)
+      terminalWrite(room.scope, ptyIdRef.current, text)
     }
   }, [cwd])
 
@@ -899,9 +899,9 @@ export function AlacrittyTerminalView({
     e.stopPropagation()
 
     if (clicked.type === 'url') {
-      daemonCliPost(primaryScope(), 'fs/open-external', { target: clicked.target }).catch((e: unknown) => console.warn('[terminal-link]', e))
+      daemonCliPost(room.scope, 'fs/open-external', { target: clicked.target }).catch((e: unknown) => console.warn('[terminal-link]', e))
     } else if (clicked.type === 'file' && clicked.filePath) {
-      const tabsStore = useTabsStore.getState()
+      const tabsStore = room.tabs.getState()
       const openInSplit = useTerminalSettingsStore.getState().openLinksInSplitPane
 
       // If split pane setting is on, try to open in the sibling pane
@@ -1087,7 +1087,7 @@ export function AlacrittyTerminalView({
         sessionId={terminalId}
         workspacePath={cwd}
         onInjectInput={(data) => {
-          if (ptyIdRef.current) void terminalWrite(primaryScope(), ptyIdRef.current, data)
+          if (ptyIdRef.current) void terminalWrite(room.scope, ptyIdRef.current, data)
         }}
       />
     </div>

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { terminalExists } from '@/lib/terminal-daemon'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom } from '@/components/Room/RoomContext'
 import { useProjectsStore } from '@/stores/projects'
 import { addNavWorktree } from '@/components/Sidebar/Sidebar'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
@@ -11,7 +11,7 @@ import { AgentInboxPane } from './AgentInboxPane'
 import { PinnedChatGate } from './PinnedChatRetainer'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
 
 interface AgentPaneProps {
   agentName: string
@@ -92,8 +92,9 @@ interface WorktreeReviewItem {
 }
 
 function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; projectPath: string }): React.JSX.Element {
+  const room = useRoom()
   const [activeTab, setActiveTab] = useState<'task' | 'chat' | 'review'>(
-    worktreeLastTab.get(scopedKey(primaryScope(), worktreeId)) ?? 'chat'
+    worktreeLastTab.get(scopedKey(room.scope, worktreeId)) ?? 'chat'
   )
   // Phase 2.1 wrap-up — Task tab reads `<worktree>/CLAUDE.md` via the
   // `read_worktree_file` Tauri command (path-canonicalized, traversal-
@@ -227,7 +228,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
               onClick={() => {
                 if (!disabled) {
                   setActiveTab(key)
-                  worktreeLastTab.set(scopedKey(primaryScope(), worktreeId), key)
+                  worktreeLastTab.set(scopedKey(room.scope, worktreeId), key)
                 }
               }}
               disabled={disabled}
@@ -258,9 +259,9 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
         {projectId && (
           <button
             onClick={() => {
-              const currentTabId = useTabsStore.getState().activeTabId
+              const currentTabId = room.tabs.getState().activeTabId
               if (currentTabId) {
-                useTabsStore.getState().removeTab(currentTabId)
+                room.tabs.getState().removeTab(currentTabId)
               }
               addNavWorktree(worktreeId)
               setTimeout(() => setActiveWorkspace(projectId, worktreeId), 50)
@@ -418,6 +419,7 @@ function WorktreeChatTerminal({
   projectPath: string
   autoFocus: boolean
 }): React.JSX.Element {
+  const room = useRoom()
   const containerRef = useRef<HTMLDivElement>(null)
   const agentName = `wt-${worktreeId}`
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
@@ -429,7 +431,7 @@ function WorktreeChatTerminal({
     const resolve = async (): Promise<void> => {
       const myTerminalId = terminalIdRef.current
       try {
-        const exists = await terminalExists(primaryScope(), myTerminalId)
+        const exists = await terminalExists(room.scope, myTerminalId)
         if (!cancelled && exists) {
           setLaunchConfig(null)
           setReady(true)
@@ -444,7 +446,7 @@ function WorktreeChatTerminal({
         }>('k2so_agents_build_launch', { projectPath, agentName })
         if (!cancelled && result) {
           setLaunchConfig({ command: result.command, args: result.args, cwd: result.cwd })
-          daemonCliGet(primaryScope(), 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+          daemonCliGet(room.scope, 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
           setReady(true)
           return
         }
@@ -453,7 +455,7 @@ function WorktreeChatTerminal({
       }
       if (!cancelled) {
         setLaunchConfig({ command: 'claude', args: ['--dangerously-skip-permissions'], cwd })
-        daemonCliGet(primaryScope(), 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+        daemonCliGet(room.scope, 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
         setReady(true)
       }
     }

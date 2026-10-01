@@ -4,7 +4,7 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
 import { AgentPane } from '@/components/AgentPane/AgentPane'
 import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData } from '@/stores/tabs'
 import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
@@ -26,7 +26,8 @@ interface PaneGroupViewProps {
 // ── Component ────────────────────────────────────────────────────────────
 
 export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React.JSX.Element {
-  const paneGroup = useTabsStore((s) => {
+  const room = useRoom()
+  const paneGroup = useRoomTabs((s) => {
     let tab = s.tabs.find((t) => t.id === tabId)
     if (!tab) {
       for (const g of s.extraGroups) {
@@ -46,7 +47,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
   // events from `claude --resume` etc. can no longer overwrite.
   // Default `Terminal N` titles are filtered out so we don't
   // lock the label on a vanilla Cmd+T tab.
-  const tabTitle = useTabsStore((s) => {
+  const tabTitle = useRoomTabs((s) => {
     let tab = s.tabs.find((t) => t.id === tabId)
     if (!tab) {
       for (const g of s.extraGroups) {
@@ -56,7 +57,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
     }
     return tab?.title
   })
-  const seedLockedTitle = useTabsStore((s) => {
+  const seedLockedTitle = useRoomTabs((s) => {
     let tab = s.tabs.find((t) => t.id === tabId)
     if (!tab) {
       for (const g of s.extraGroups) {
@@ -81,13 +82,13 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
   const seedAndLock =
     (isMeaningfulTitle || seedLockedTitle) && !isHarnessTabLabel(tabTitle ?? '')
 
-  const activateItem = useTabsStore((s) => s.activateItemInPaneGroup)
-  const closeItem = useTabsStore((s) => s.closeItemInPaneGroup)
-  const removePaneFromTab = useTabsStore((s) => s.removePaneFromTab)
-  const removeTabFromGroup = useTabsStore((s) => s.removeTabFromGroup)
+  const activateItem = useRoomTabs((s) => s.activateItemInPaneGroup)
+  const closeItem = useRoomTabs((s) => s.closeItemInPaneGroup)
+  const removePaneFromTab = useRoomTabs((s) => s.removePaneFromTab)
+  const removeTabFromGroup = useRoomTabs((s) => s.removeTabFromGroup)
 
   // Check if this is a split (more than one pane in the mosaic tree)
-  const hasSplits = useTabsStore((s) => {
+  const hasSplits = useRoomTabs((s) => {
     let tab = s.tabs.find((t) => t.id === tabId)
     if (!tab) {
       for (const g of s.extraGroups) {
@@ -311,7 +312,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     if (hadCommand && !isFallback) {
                       setFallbackPanes((prev) => new Set(prev).add(item.id))
                     } else if (exitCode === 127) {
-                      const store = useTabsStore.getState()
+                      const store = room.tabs.getState()
                       const groupIdx = store.tabs.some((t) => t.id === tabId)
                         ? 0
                         : store.extraGroups.findIndex((g) => g.tabs.some((t) => t.id === tabId)) + 1

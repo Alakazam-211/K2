@@ -4,6 +4,7 @@ import { menuLayerForTrigger } from '@/components/Settings/controls/SettingContr
 import { usePresetsStore } from '@/stores/presets'
 import { showContextMenu } from '@/lib/context-menu'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { useRoom } from '@/components/Room/RoomContext'
 
 interface PresetsBarProps {
   cwd: string
@@ -18,6 +19,8 @@ interface InlineFormState {
 }
 
 export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
+  // Launches open in THIS room (its tab strip, its server).
+  const room = useRoom()
   const {
     presets,
     showPresetsBar,
@@ -144,9 +147,9 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
 
   const handleClick = useCallback(
     (presetId: string) => {
-      launchPreset(presetId, cwd, 'tab')
+      launchPreset(room.tabs, presetId, cwd, 'tab')
     },
-    [launchPreset, cwd]
+    [launchPreset, room, cwd]
   )
 
   const handleContextMenu = useCallback(
@@ -166,10 +169,10 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
 
       switch (clickedId) {
         case 'tab':
-          launchPreset(presetId, cwd, 'tab')
+          launchPreset(room.tabs, presetId, cwd, 'tab')
           break
         case 'split':
-          launchPreset(presetId, cwd, 'split')
+          launchPreset(room.tabs, presetId, cwd, 'split')
           break
         case 'edit': {
           const preset = presets.find((p) => p.id === presetId)
@@ -190,7 +193,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
         }
       }
     },
-    [presets, launchPreset, cwd, updatePreset]
+    [presets, launchPreset, room, cwd, updatePreset]
   )
 
   const openNewForm = useCallback(() => {

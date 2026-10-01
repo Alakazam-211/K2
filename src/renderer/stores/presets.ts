@@ -10,7 +10,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { ensureOneCli, installableCliProgram } from '@/lib/ensure-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { onActiveHostChange } from '@/stores/connect-host'
-import { useTabsStore, registerPresetsStore } from './tabs'
+import { registerPresetsStore, type TabsStore } from './tabs'
 import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
 import { primaryScope } from '@/kessel/server-scope'
 import { hostScopedKey } from '@/lib/host-scoped-storage'
@@ -182,6 +182,7 @@ interface PresetsState {
    * `activeGroupIndex` (launch strip, Cmd+Shift+T).
    */
   launchPreset: (
+    tabs: TabsStore,
     presetId: string,
     cwd: string,
     mode: 'tab' | 'split',
@@ -269,7 +270,9 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     await get().fetchPresets()
   },
 
-  launchPreset: async (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => {
+  // `tabs` is the room the launch opens in (Home M3): its tab strip, and its
+  // server for the CLI ensure. Never "the" store.
+  launchPreset: async (tabs: TabsStore, presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => {
     const preset = get().presets.find((p) => p.id === presetId)
     if (!preset) {
       console.error(`[presets] Preset not found: ${presetId}`)
@@ -281,14 +284,14 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     const program = installableCliProgram(command)
     if (program) {
       try {
-        await ensureOneCli(program)
+        await ensureOneCli(tabs.room.scope, program)
       } catch (err) {
         console.error('[presets] ensure-cli failed:', err)
         return
       }
     }
 
-    const tabsStore = useTabsStore.getState()
+    const tabsStore = tabs.getState()
     const openTab = (group: number): void => {
       tabsStore.addTabToGroup(group, cwd, {
         title: preset.label,

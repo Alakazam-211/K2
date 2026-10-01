@@ -9,7 +9,12 @@
 // asset: license-clean by construction, works offline, no CSP concerns,
 // and no binary blob in the repo.
 import { useSettingsStore } from '@/stores/settings'
-import { useProjectsStore } from '@/stores/projects'
+
+/** The fields of a project record the chime reads. */
+export interface ChimeProject {
+  id: string
+  completionSoundEnabled?: number
+}
 
 /** Chime-storm throttle — several agents finishing together (multi-agent
  *  fan-out) produce ONE chime, not a cluster. */
@@ -32,19 +37,25 @@ function note(ctx: AudioContext, freq: number, at: number, dur: number): void {
   osc.stop(at + dur + 0.05)
 }
 
-function workspaceSoundEnabled(projectId?: string | null): boolean {
+function workspaceSoundEnabled(projectId: string | null | undefined, projects: readonly ChimeProject[]): boolean {
   if (!projectId) return true
-  const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+  const project = projects.find((p) => p.id === projectId)
   // Missing field / unknown project → treat as ON (column default 1).
   return (project?.completionSoundEnabled ?? 1) !== 0
 }
 
-/** `projectId` is the fire-time pane bind. Null/undefined → global gate only. */
-export function playCompletionSound(projectId?: string | null): void {
+/** `projectId` is the fire-time pane bind. Null/undefined → global gate only.
+ *  `projects` is the project list of the ROOM the pane is in (MS21/MS68): the
+ *  workspace mute is read from that server's record, never looked up by id
+ *  in another server's list. */
+export function playCompletionSound(
+  projectId: string | null | undefined,
+  projects: readonly ChimeProject[],
+): void {
   if (!useSettingsStore.getState().completionSoundEnabled) return
   // Workspace mute is checked BEFORE the 3s throttle so a muted
   // workspace finishing does not swallow a later unmuted chime.
-  if (!workspaceSoundEnabled(projectId)) return
+  if (!workspaceSoundEnabled(projectId, projects)) return
   const now = Date.now()
   if (now - _lastPlayedAt < THROTTLE_MS) return
   _lastPlayedAt = now

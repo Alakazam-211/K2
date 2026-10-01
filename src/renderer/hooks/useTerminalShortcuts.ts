@@ -1,19 +1,22 @@
 import { useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { useTabsStore } from '@/stores/tabs'
 import { usePresetsStore } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
-import { useFocusGroupsStore } from '@/stores/focus-groups'
-import { useActiveAgentsStore } from '@/stores/active-agents'
-import { useTerminalSettingsStore } from '@/stores/terminal-settings'
-import { getActiveBarItems } from '@/components/Sidebar/ActiveBar'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { resolveAgentPreset, readProjectDefaultAgent } from '@/lib/agent-resolve'
+import { isFocusedRoom } from '@/stores/window-room'
+import { roomActiveProject, type Room } from '@/stores/room'
 import type { TerminalPane } from '@/stores/tabs'
 
 /**
- * Registers global keyboard shortcuts for terminal tab/pane management.
+ * Registers keyboard shortcuts for one room's tab/pane management.
+ *
+ * Every mounted terminal area installs this listener, so EVERY handler
+ * returns early unless its room is the window's focused room (Home M3,
+ * MS18): with two rooms mounted, Cmd+T opens one tab, in the focused room.
+ * The workspace-index chords (Cmd+1–9, Cmd+Option+1–9) pick which room to
+ * show, so they live in one window-level hook (`useWorkspaceIndexShortcuts`).
  *
  * Single keyboard owner for these chords — native menu accelerators for
  * the same keys MUST stay unbound in menu.rs (duplicate menu+keydown
@@ -29,13 +32,15 @@ import type { TerminalPane } from '@/stores/tabs'
  * - Cmd+O         — Open workspace
  * - Cmd+Alt+Left  — Previous tab
  * - Cmd+Alt+Right — Next tab
- * - Cmd+1-9       — Switch to workspace by index
  * - Cmd+K         — Clear active terminal (sends clear sequence)
  * - Ctrl+1-9      — Launch preset by position
  */
-export function useTerminalShortcuts(cwd: string): void {
+export function useTerminalShortcuts(room: Room, cwd: string): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      if (!isFocusedRoom(room)) return
+      const tabs = room.tabs
+
       // Ctrl+1-9: launch preset by position
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         const num = parseInt(e.key, 10)
@@ -45,25 +50,7 @@ export function useTerminalShortcuts(cwd: string): void {
           const enabledPresets = presetsState.presets.filter((p) => p.enabled)
           const targetIdx = num - 1
           if (targetIdx < enabledPresets.length) {
-            presetsState.launchPreset(enabledPresets[targetIdx].id, cwd, 'tab')
-          }
-          return
-        }
-      }
-
-      // Cmd+Option+1-9: switch to pinned or active workspace (depends on layout)
-      // (Cmd+Shift conflicts with macOS screenshots, Option+Shift produces UTF-8 chars)
-      // Use e.code (Digit1-Digit9) instead of e.key because Option modifies key values on macOS
-      if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey) {
-        const digitMatch = e.code.match(/^Digit(\d)$/)
-        const num = digitMatch ? parseInt(digitMatch[1], 10) : NaN
-        if (!isNaN(num) && num >= 1 && num <= 9) {
-          e.preventDefault()
-          const layout = useTerminalSettingsStore.getState().shortcutLayout
-          if (layout === 'cmd-active-cmdshift-pinned') {
-            switchToPinnedByIndex(num - 1)
-          } else {
-            switchToActiveByIndex(num - 1)
+            presetsState.launchPreset(tabs, enabledPresets[targetIdx].id, cwd, 'tab')
           }
           return
         }
@@ -72,7 +59,7 @@ export function useTerminalShortcuts(cwd: string): void {
       // Only handle Cmd (Meta) shortcuts
       if (!e.metaKey) return
 
-      const state = useTabsStore.getState()
+      const state = tabs.getState()
       // Shift reports uppercase letters on some platforms ('T' not 't').
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
 
@@ -83,19 +70,16 @@ export function useTerminalShortcuts(cwd: string): void {
           if (e.shiftKey) {
             // Cmd+Shift+T: Launch default agent in new tab — resolution goes
             // through the one seam (workspace default → global → first
-            // enabled; id-first, legacy-token tolerant).
+            // enabled; id-first, legacy-token tolerant). The workspace
+            // default is read from THIS room's project record (MS3).
             const presetsState = usePresetsStore.getState()
-            const projectsState = useProjectsStore.getState()
-            const activeProject = projectsState.projects.find(
-              (p) => p.id === projectsState.activeProjectId,
-            )
             const preset = resolveAgentPreset(
               presetsState.presets,
               useSettingsStore.getState().defaultAgent,
-              readProjectDefaultAgent(activeProject),
+              readProjectDefaultAgent(roomActiveProject(room) ?? undefined),
             )
             if (preset) {
-              presetsState.launchPreset(preset.id, cwd, 'tab')
+              presetsState.launchPreset(tabs, preset.id, cwd, 'tab')
             }
           } else {
             // Cmd+T: New blank tab
@@ -174,11 +158,14 @@ export function useTerminalShortcuts(cwd: string): void {
         }
 
         case 'f': {
-          // Cmd+Shift+F: Open current workspace in focus window
+          // Cmd+Shift+F: Open current workspace in focus window. The focus
+          // window looks the project up on THIS computer's daemon and has no
+          // host in its label (MS57), so only a room that may use local
+          // commands offers it.
           if (!e.shiftKey || e.altKey) return
           e.preventDefault()
-          const projectsState = useProjectsStore.getState()
-          const activeProjectId = projectsState.activeProjectId
+          if (!room.localCommands) return
+          const activeProjectId = room.activeProjectId()
           if (activeProjectId) {
             invoke('projects_open_focus_window', { projectId: activeProjectId }).catch((e) => console.warn('[shortcuts]', e))
           }
@@ -191,22 +178,6 @@ export function useTerminalShortcuts(cwd: string): void {
           // The terminal component forwards keystrokes to the pty
           break
         }
-
-        default: {
-          // Cmd+1-9/0 — switch to active or pinned workspace (depends on layout)
-          const num = parseInt(e.key, 10)
-          if (!isNaN(num) && !e.shiftKey && !e.altKey) {
-            e.preventDefault()
-            const layout = useTerminalSettingsStore.getState().shortcutLayout
-            const targetIdx = num === 0 ? 9 : num - 1
-            if (layout === 'cmd-active-cmdshift-pinned') {
-              switchToActiveByIndex(targetIdx)
-            } else {
-              switchToPinnedByIndex(targetIdx)
-            }
-          }
-          break
-        }
       }
     }
 
@@ -214,56 +185,7 @@ export function useTerminalShortcuts(cwd: string): void {
     return () => {
       window.removeEventListener('keydown', handler)
     }
-  }, [cwd])
-}
-
-// ── Shortcut helpers ─────────────────────────────────────────────────────
-
-function switchToPinnedByIndex(targetIdx: number): void {
-  const projectsState = useProjectsStore.getState()
-
-  // Agent workspaces (top of sidebar) + pinned workspaces
-  const agentProjects = projectsState.projects.filter(
-    (p) => p.agentMode === 'agent' || p.agentMode === 'custom',
-  )
-  const pinnedProjects = projectsState.projects.filter(
-    (p) => p.pinned && p.agentMode !== 'agent' && p.agentMode !== 'custom'
-  )
-  const topProjects = [...agentProjects, ...pinnedProjects]
-
-  // Build flat list of all workspaces across top-section projects
-  let flatIdx = 0
-  for (const project of topProjects) {
-    const workspaces = project.worktreeMode === 1 && project.workspaces.length > 0
-      ? project.workspaces
-      : project.workspaces.slice(0, 1)
-
-    for (const ws of workspaces) {
-      if (flatIdx === targetIdx) {
-        projectsState.setActiveWorkspace(project.id, ws.id)
-        return
-      }
-      flatIdx++
-    }
-  }
-}
-
-function switchToActiveByIndex(targetIdx: number): void {
-  const activeItems = getActiveBarItems()
-
-  if (targetIdx < activeItems.length) {
-    const project = activeItems[targetIdx]
-    const firstWorkspace = project.workspaces[0]
-    if (firstWorkspace) {
-      const focusState = useFocusGroupsStore.getState()
-      if (focusState.focusGroupsEnabled && project.focusGroupId !== focusState.activeFocusGroupId) {
-        // autoActivate: false — the shortcut's target is activated
-        // explicitly below (double-switch race otherwise).
-        focusState.setActiveFocusGroup(project.focusGroupId, { autoActivate: false })
-      }
-      useProjectsStore.getState().setActiveWorkspace(project.id, firstWorkspace.id)
-    }
-  }
+  }, [room, cwd])
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

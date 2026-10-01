@@ -4,7 +4,6 @@ import remarkGfm from 'remark-gfm'
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
-import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
 // DocxViewer pulls in mammoth (~200KB), CodeEditor pulls in
 // @codemirror/* (~100KB). Lazy-load heavy viewers so they only enter
@@ -28,7 +27,7 @@ import { HighlightedCodeBlock } from './CodeHighlighter'
 import { DiffViewer } from '@/components/DiffViewer/DiffViewer'
 import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 
@@ -75,7 +74,6 @@ import {
   type FileCategory,
   type ViewMode,
 } from './fileCategory'
-import { primaryScope } from '@/kessel/server-scope'
 export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
@@ -214,6 +212,9 @@ export function FileViewerPane(props: FileViewerPaneProps): React.JSX.Element {
 }
 
 function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScrollTop, initialCursorPos, onClose, commandRef, onDirtyChange }: Omit<FileViewerPaneProps, 'mode'>): React.JSX.Element {
+  // Home M3 — reads, writes and the server-switch guards are the room's
+  // (`connectionKey` is the window's connection for the primary room).
+  const room = useRoom()
   const [content, setContent] = useState<string>('')
   const [editedContent, setEditedContent] = useState<string | null>(null) // null = not edited
   const [loading, setLoading] = useState(true)
@@ -224,10 +225,10 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const category = getFileCategory(filePath)
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
   const isDirty = editedContent !== null && editedContent !== content
-  const setTabDirty = useTabsStore((s) => s.setTabDirty)
-  const setFileViewerState = useTabsStore((s) => s.setFileViewerState)
+  const setTabDirty = useRoomTabs((s) => s.setTabDirty)
+  const setFileViewerState = useRoomTabs((s) => s.setFileViewerState)
 
-  const pinned = useTabsStore((s) => {
+  const pinned = useRoomTabs((s) => {
     const tab = s.tabs.find((t) => t.id === tabId)
     if (!tab) return false
     // Search all paneGroups for an item matching paneId
@@ -240,14 +241,14 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     }
     return false
   })
-  const pinPane = useTabsStore((s) => s.pinPane)
-  const unpinPane = useTabsStore((s) => s.unpinPane)
+  const pinPane = useRoomTabs((s) => s.pinPane)
+  const unpinPane = useRoomTabs((s) => s.unpinPane)
 
   // #587 — HTML files get a *top-level tab* pin (next to the Inbox)
   // instead of the within-pane preview pin. `filePin` reflects whether
   // this file is currently in the workspace's pinned-HTML tab list;
   // the toolbar pin button toggles it for html files.
-  const filePin = useTabsStore((s) =>
+  const filePin = useRoomTabs((s) =>
     s.tabs.some((t) => {
       if (!t.isPinnedFile) return false
       const item = Array.from(t.paneGroups.values())[0]?.items[0]
@@ -255,8 +256,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       return (item.data as { filePath?: string }).filePath === filePath
     }),
   )
-  const pinFileAsTab = useTabsStore((s) => s.pinFileAsTab)
-  const unpinFileTab = useTabsStore((s) => s.unpinFileTab)
+  const pinFileAsTab = useRoomTabs((s) => s.pinFileAsTab)
+  const unpinFileTab = useRoomTabs((s) => s.unpinFileTab)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [searchVisible, setSearchVisible] = useState(false)
@@ -292,7 +293,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     }
 
     const gen = ++loadGenRef.current
-    const startedKey = activeHostKey(useConnectHostStore.getState().activeHost)
+    const startedKey = room.scope.connectionKey
     // Remote Mac tmp: quiet pane, no GET, no retry.
     if (isRemoteMacTmpPath(filePath)) {
       setLoading(false)
@@ -304,9 +305,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     setLoading(true)
     setError(null)
     try {
-      const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
+      const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
       if (gen !== loadGenRef.current) return
-      if (activeHostKey(useConnectHostStore.getState().activeHost) !== startedKey) return
+      if (room.scope.connectionKey !== startedKey) return
       setContent(result.content)
     } catch (err) {
       if (gen !== loadGenRef.current) return
@@ -343,18 +344,18 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // refs so the unmount cleanup writes the freshest values.
   const flushRef = useRef({ filePath, editedContent, content })
   flushRef.current = { filePath, editedContent, content }
-  const mountHostKeyRef = useRef(activeHostKey(useConnectHostStore.getState().activeHost))
+  const mountHostKeyRef = useRef(room.scope.connectionKey)
   useEffect(() => {
-    mountHostKeyRef.current = activeHostKey(useConnectHostStore.getState().activeHost)
+    mountHostKeyRef.current = room.scope.connectionKey
     return () => {
       const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
       // Nothing edited, or buffer matches disk — nothing to flush.
       if (edited === null || edited === undefined || edited === onDisk) return
       // User chose Discard for this tab — drop the edit, don't write.
-      if (useTabsStore.getState().consumeDiscardPending(tabId)) return
+      if (room.tabs.getState().consumeDiscardPending(tabId)) return
       // Host switch unmount: do not POST the old machine's path to the new daemon.
-      if (activeHostKey(useConnectHostStore.getState().activeHost) !== mountHostKeyRef.current) return
-      void daemonCliPost(primaryScope(), 'fs/write-file', { path: fp, content: edited }).catch((err) => {
+      if (room.scope.connectionKey !== mountHostKeyRef.current) return
+      void daemonCliPost(room.scope, 'fs/write-file', { path: fp, content: edited }).catch((err) => {
         if (isHostSwitchedError(err)) return
         console.error('[file-viewer] autosave-on-leave failed:', err)
       })
@@ -421,7 +422,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       intervalMs: FILE_POLL_INTERVAL,
       immediate: false,
       read: async () => {
-        const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
+        const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
         return result.content
       },
       apply: (next) => {
@@ -438,7 +439,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     if (toSave === content) return // Nothing changed
     setSaving(true)
     try {
-      await daemonCliPost(primaryScope(), 'fs/write-file', { path: filePath, content: toSave })
+      await daemonCliPost(room.scope, 'fs/write-file', { path: filePath, content: toSave })
       setContent(toSave)
       setEditedContent(null)
     } catch (err) {

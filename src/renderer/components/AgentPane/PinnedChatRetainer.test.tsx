@@ -77,6 +77,11 @@ import { PinnedChatRetainer, PinnedChatGate } from './PinnedChatRetainer'
 import { useRetainedChatStore, resetRetainedChatStore } from '@/stores/retained-chat'
 import { useActiveStore } from '@/stores/active'
 import { useProjectsStore } from '@/stores/projects'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+
+// Home M3 — the gate reads its room's own project list; this is the
+// primary room (the retainer holds primary-room chats only).
+const room = testRoom({ tabs: {}, projects: useProjectsStore as never })
 
 type AnyStore = { setState: (s: object) => void }
 
@@ -173,7 +178,7 @@ beforeEach(() => {
 describe('portal-move — the same instance survives container moves', () => {
   it('visit → mounts in the hidden host; slot register/unregister MOVES the same instance (no remount)', () => {
     setActive('a')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
 
     // Mounted once, parked in the hidden host.
@@ -210,7 +215,7 @@ describe('portal-move — the same instance survives container moves', () => {
 
   it('eviction unmounts the instance and removes its DOM', () => {
     setActive('a')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
     expect(paneFor('a')).not.toBeNull()
 
@@ -221,7 +226,7 @@ describe('portal-move — the same instance survives container moves', () => {
 
   it('leaving the Active set detaches the retained pane', () => {
     setActive('a', 'b')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => {
       visit('a')
       visit('b')
@@ -243,7 +248,7 @@ describe('portal-move — the same instance survives container moves', () => {
 describe('hidden host mirrors the foreground slot dims', () => {
   it('sizes the host to the visible slot box on register, then tracks its resizes', () => {
     setActive('a')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
 
     // Pre-first-measure fallback.
@@ -263,7 +268,7 @@ describe('hidden host mirrors the foreground slot dims', () => {
 
   it('keeps the last-known dims when the slot unregisters (workspace stashed)', () => {
     setActive('a')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
     const slotEl = mountSlot('a', 1280, 720)
 
@@ -280,7 +285,7 @@ describe('hidden host mirrors the foreground slot dims', () => {
 
   it('a zero-box measurement (hidden pane-item artifact) never shrinks the host', () => {
     setActive('a')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
     const slotEl = mountSlot('a', 1280, 720)
 
@@ -291,7 +296,7 @@ describe('hidden host mirrors the foreground slot dims', () => {
 
   it('re-registering after a switch re-mirrors the new slot box', () => {
     setActive('a', 'b')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => {
       visit('a')
       visit('b')
@@ -311,7 +316,7 @@ describe('MRU cap + pinned growth', () => {
   it('cap 5: the sixth visit evicts the least-recently-visited instance', () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f']
     setActive(...ids)
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     // One commit per visit so each pane actually MOUNTS before the
     // overflow evicts the oldest (mirrors real sequential switching).
     for (const id of ids) act(() => visit(id))
@@ -326,7 +331,7 @@ describe('MRU cap + pinned growth', () => {
   it('re-visiting rescues from eviction; the next-oldest becomes the victim', () => {
     const ids = ['a', 'b', 'c', 'd', 'e']
     setActive(...ids, 'f')
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => {
       for (const id of ids) visit(id)
     })
@@ -341,7 +346,7 @@ describe('MRU cap + pinned growth', () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f']
     setActive(...ids)
     setProjects(ids.map((id) => ({ id, path: `/ws/${id}`, manuallyActive: 1 })))
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => {
       for (const id of ids) visit(id)
     })
@@ -359,7 +364,7 @@ describe('seedBoot must not spawn — Active-list warming is display-only', () =
     setProjects(
       ids.map((id) => ({ id, path: `/ws/${id}`, manuallyActive: id === 'p6' ? 1 : 0 })),
     )
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
 
     // Let any leftover async seed effect (if reintroduced) flush.
     await act(async () => {
@@ -384,7 +389,7 @@ describe('seedBoot must not spawn — Active-list warming is display-only', () =
       { id: 'p2', path: '/ws/p2', manuallyActive: 0 },
       { id: 'p3', path: '/ws/p3', manuallyActive: 0 },
     ])
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => {
       useRetainedChatStore.getState().seedBoot(
         [
@@ -408,7 +413,7 @@ describe('seedBoot must not spawn — Active-list warming is display-only', () =
       { id: 'p1', path: '/ws/p1', manuallyActive: 0 },
       { id: 'p2', path: '/ws/p2', manuallyActive: 0 },
     ])
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     expect(h.ensures.value).toBe(0)
     act(() => visit('fg'))
     expect(paneFor('fg')).not.toBeNull()
@@ -423,7 +428,7 @@ describe('seedBoot must not spawn — Active-list warming is display-only', () =
       { id: 'a', path: '/ws/a', manuallyActive: 0 },
       { id: 'b', path: '/ws/b', manuallyActive: 0 },
     ])
-    render(<PinnedChatRetainer />)
+    renderInRoom(room, <PinnedChatRetainer />)
     act(() => visit('a'))
     expect(paneFor('a')).not.toBeNull()
 
@@ -445,7 +450,7 @@ describe('PinnedChatGate — exemption fallback', () => {
   it('exempt workspace renders a slot and the retainer portals the pane into it', () => {
     setActive('a')
     setProjects([{ id: 'a', path: '/ws/a', manuallyActive: 0 }])
-    render(
+    renderInRoom(room, 
       <>
         <PinnedChatRetainer />
         <PinnedChatGate agentName="agent-a" projectPath="/ws/a" />
@@ -462,7 +467,7 @@ describe('PinnedChatGate — exemption fallback', () => {
   it('non-Active workspace falls back to the inline pane (no slot, no retention)', () => {
     setActive() // 'a' not Active
     setProjects([{ id: 'a', path: '/ws/a', manuallyActive: 0 }])
-    render(
+    renderInRoom(room, 
       <>
         <PinnedChatRetainer />
         <PinnedChatGate agentName="agent-a" projectPath="/ws/a" />
@@ -478,7 +483,7 @@ describe('PinnedChatGate — exemption fallback', () => {
     h.supported.value = false
     setActive('a')
     setProjects([{ id: 'a', path: '/ws/a', manuallyActive: 0 }])
-    render(
+    renderInRoom(room, 
       <>
         <PinnedChatRetainer />
         <PinnedChatGate agentName="agent-a" projectPath="/ws/a" />

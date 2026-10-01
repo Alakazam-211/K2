@@ -9,7 +9,7 @@ import { agentDisplayName, agentHandle } from '@/lib/workspace-agent'
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { usePageViewStore } from '@/stores/page-view'
 import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
@@ -18,7 +18,7 @@ import { UrlsPortsSection } from './UrlsPortsSection'
 import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2so_inbox_count', ...)` so the only
@@ -29,6 +29,8 @@ import { primaryScope, scopedKey } from '@/kessel/server-scope'
 // ── Component ────────────────────────────────────────────────────────────
 
 export default function WorkspacePanel(): React.JSX.Element {
+  // Home M3 — the drawer's room: its server, its tabs, its collapse keys.
+  const room = useRoom()
   const [displayName, setDisplayName] = useState('')
   const [handle, setHandle] = useState('')
   const [wsInboxCount, setWsInboxCount] = useState(0)
@@ -39,13 +41,13 @@ export default function WorkspacePanel(): React.JSX.Element {
   const activeProject = useProjectsStore(useCallback((s) => {
     return s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null
   }, []))
-  const openAgentPane = useTabsStore((s) => s.openAgentPane)
+  const openAgentPane = useRoomTabs((s) => s.openAgentPane)
 
   // Worktrees section collapse state, persisted per-workspace.
   // Default OPEN — worktrees are the action surface for review work,
   // most users want them visible by default.
   const worktreesKey = activeProjectId
-    ? scopedKey(primaryScope(), `worktrees.section-collapsed.${activeProjectId}`)
+    ? scopedKey(room.scope, `worktrees.section-collapsed.${activeProjectId}`)
     : null
   const [worktreesOpen, setWorktreesOpen] = useState<boolean>(() => {
     if (!worktreesKey) return true
@@ -94,10 +96,10 @@ export default function WorkspacePanel(): React.JSX.Element {
     }
     let cancelled = false
     const loadName = (): void => {
-      void agentDisplayName(primaryScope(), activeProjectPath)
+      void agentDisplayName(room.scope, activeProjectPath)
         .then((n) => { if (!cancelled) setDisplayName(n) })
         .catch(() => { if (!cancelled) setDisplayName('') })
-      void agentHandle(primaryScope(), activeProjectPath)
+      void agentHandle(room.scope, activeProjectPath)
         .then((h) => { if (!cancelled) setHandle(h) })
         .catch(() => { if (!cancelled) setHandle('') })
     }
@@ -338,7 +340,8 @@ function WorktreeRow({
   branch: string | null
   agentTemplate?: string
 }): React.JSX.Element {
-  const openAgentPane = useTabsStore((s) => s.openAgentPane)
+  const room = useRoom()
+  const openAgentPane = useRoomTabs((s) => s.openAgentPane)
   const tabTitle = displayName || branch || 'Worktree'
 
   const handleContextMenu = useCallback(async (e: React.MouseEvent) => {
@@ -361,7 +364,7 @@ function WorktreeRow({
       await invoke('projects_open_in_finder', { path: worktreePath })
     } else if (clickedId === 'close') {
       // Remove from DB, keep files on disk
-      await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
+      await daemonCliPost(room.scope, 'workspaces/delete', { id: workspaceId })
       // Optimistic removal from store
       const state = useProjectsStore.getState()
       const updated = state.projects.map((p) => {
@@ -373,17 +376,17 @@ function WorktreeRow({
       // Remove git worktree from disk + remove from DB
       try {
         if (worktreePath) {
-          await daemonCliPost(primaryScope(), 'git/remove-worktree', {
+          await daemonCliPost(room.scope, 'git/remove-worktree', {
             projectPath,
             worktreePath,
             workspaceId,
           })
         } else {
-          await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
+          await daemonCliPost(room.scope, 'workspaces/delete', { id: workspaceId })
         }
       } catch {
         // If git remove fails, just delete the record
-        await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
+        await daemonCliPost(room.scope, 'workspaces/delete', { id: workspaceId })
       }
       // Optimistic removal from store
       const state = useProjectsStore.getState()

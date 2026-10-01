@@ -171,6 +171,7 @@ vi.mock('@/stores/tabs', () => ({
     }),
   },
   registerPresetsStore: () => {},
+  closeV2Session: vi.fn(async () => undefined),
 }))
 vi.mock('@/lib/terminal-id', () => ({
   agentChatId: (pid: string, agent: string) => `agent-chat:${pid}:${agent}`,
@@ -234,6 +235,18 @@ class FakeWS {
 vi.stubGlobal('WebSocket', FakeWS)
 
 import { AgentChatPane } from './AgentChatPane'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { useTabsStore } from '@/stores/tabs'
+
+// Home M3 — the pane reads its room: the mocked tabs store, this suite's
+// project list, and an activity sink (MS68). The scope is the primary one,
+// so the `primaryOnly` request mocks still hold.
+const bindPaneProject = vi.fn()
+const room = testRoom({
+  tabs: useTabsStore,
+  projects: [{ id: 'proj-1', path: '/ws', workspaces: [] } as never],
+  activity: { bindPaneProject },
+})
 
 beforeEach(() => {
   cleanup()
@@ -267,7 +280,7 @@ describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', (
   // must not. Visit still POSTs ensure-pinned-chat
   // (prd-active-window-wake-and-reap-v1 §3.4 / test 8).
   it('calls ensure-pinned-chat on mount (no forceRespawn) and attaches TerminalPane with NO command/args', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
 
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
@@ -289,7 +302,7 @@ describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', (
   })
 
   it('forwards restoredSessionId to ensure ONLY as an offline hint', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="hint-9" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="hint-9" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     const body = lastEnsureCall()
     expect(body?.restoredSessionId).toBe('hint-9')
@@ -299,14 +312,14 @@ describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', (
 describe('pinned-chat retention — retainWhileHidden threading', () => {
   it('workspace in the canonical Active set → TerminalPane gets retainWhileHidden=true', async () => {
     h.activeIds.value = new Set(['proj-1'])
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     expect(screen.getByTestId('terminal-pane').getAttribute('data-retain')).toBe('true')
   })
 
   it('workspace NOT in the Active set → retainWhileHidden=false (park-on-hidden preserved)', async () => {
     h.activeIds.value = new Set(['some-other-proj'])
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     expect(screen.getByTestId('terminal-pane').getAttribute('data-retain')).toBe('false')
   })
@@ -314,7 +327,7 @@ describe('pinned-chat retention — retainWhileHidden threading', () => {
 
 describe('#683 daemon-owned path — refresh & switch issue forceRespawn', () => {
   it('refresh button → ensure {forceRespawn:true}', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
 
@@ -333,7 +346,7 @@ describe('#683 daemon-owned path — refresh & switch issue forceRespawn', () =>
       }
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
     h.daemonCliGet.mockClear()
@@ -372,7 +385,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
       if (route === 'chat/custom-names') return {}
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
     fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
@@ -400,7 +413,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
       if (route === 'chat/custom-names') return {}
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
     const trigger = screen.getByLabelText('Switch pinned chat session')
@@ -417,7 +430,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
       if (route === 'chat/custom-names') return {}
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
 
@@ -443,7 +456,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
       if (route === 'chat/custom-names') return {}
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
     fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
@@ -459,7 +472,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
 
 describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
   it('SessionRemoved(this workspace) → idle pane, NO auto-respawn', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
 
@@ -475,7 +488,7 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
   })
 
   it('ignores SessionRemoved for a DIFFERENT workspace key', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
     h.sessionHandlers.current!.onRemoved!({ agent_name: 'some-other-proj', workspace_path: '/ws' })
@@ -486,7 +499,7 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
   })
 
   it('SessionAdded(this workspace) re-attaches after going idle (daemon respawn)', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
     h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws' })
@@ -503,7 +516,7 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
   })
 
   it('unsubscribes from session events on unmount', async () => {
-    const { unmount } = render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    const { unmount } = renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     unmount()
     expect(h.unsubscribe).toHaveBeenCalled()
@@ -520,7 +533,7 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
 
 describe('#689 remount guard — SessionAdded echo is a no-op', () => {
   it('SessionAdded for the ALREADY-ATTACHED session does NOT remount TerminalPane', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     // waitFor the mount counter, not just the DOM node: the probe increments
     // in useEffect, which can lag the first paint under full-suite load.
     await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
@@ -539,7 +552,7 @@ describe('#689 remount guard — SessionAdded echo is a no-op', () => {
   })
 
   it('SessionAdded for a DIFFERENT session DOES re-attach (remount)', async () => {
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
 
     // A genuine change — the daemon respawned on a new session.
@@ -555,7 +568,7 @@ describe('#689 remount guard — SessionAdded echo is a no-op', () => {
 
   it('refresh (forceRespawn) re-attaches, and the new session’s echo is then a no-op', async () => {
     // mount returns sess-1; the refresh ensure returns sess-2.
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
 
     h.daemonCliPost.mockResolvedValueOnce({
@@ -588,7 +601,7 @@ describe('#689 remount guard — SessionAdded echo is a no-op', () => {
 describe('#683 capability gate — fallback to legacy renderer-orchestrated path', () => {
   it('when daemon-pinned-chat is UNSUPPORTED, runs the legacy path (resume-chat-args + breaker wiring, NO ensure)', async () => {
     h.supported.value = false
-    render(<AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="hint-1" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="hint-1" />)
 
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
 
@@ -606,7 +619,7 @@ describe('#683 capability gate — fallback to legacy renderer-orchestrated path
 
 describe('S2 overlay chrome (C3/C4/C10)', () => {
   it('defaults to Terminal and keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
-    render(
+    renderInRoom(room, 
       <>
         <AgentChatPane agentName="agent" projectPath="/ws" />
         <ContextMenu />
@@ -732,7 +745,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
 
   it('pins Continue in a new chat… above the rows, including when the list is empty', async () => {
     listRows()
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     await openSwitcher()
 
@@ -755,7 +768,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       if (route === 'chat/custom-names') return {}
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     await openSwitcher()
     const emptyList = screen.getByTestId('pinned-session-list')
@@ -768,7 +781,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
   it('disables a null or empty provider id, and still opens for a premint missing from the list', async () => {
     listRows()
     h.daemonCliPost.mockRejectedValueOnce(new Error('ensure failed'))
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await screen.findByLabelText('Switch pinned chat session')
     await openSwitcher()
     expect(continueRow().disabled).toBe(true)
@@ -779,7 +792,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
     cleanup()
     listRows()
     h.daemonCliPost.mockResolvedValueOnce(mountEnsure({ claudeSessionId: '', pendingSessionDiscovery: true, resumedExisting: false, args: [] }))
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     await openSwitcher()
     expect(screen.getByLabelText('Switch pinned chat session').textContent).toContain('New chat')
@@ -799,7 +812,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       resumedExisting: false,
       args: ['--dangerously-skip-permissions', '--session-id', PREMINT],
     }))
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     await openSwitcher()
     expect(screen.getByLabelText('Switch pinned chat session').textContent).toContain('New chat')
@@ -812,7 +825,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
 
   it('opens the shared dialog without switching, seeding, or adding a tab', async () => {
     listRows()
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
     h.setChatSession.mockClear()
@@ -839,7 +852,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       if (route === 'terminal/send-message') return delivered()
       return mountEnsure()
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
 
@@ -877,7 +890,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       if (route === 'workspace/ensure-pinned-chat' && posted.freshProvider) return freshEnsure()
       return mountEnsure()
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
     h.setChatSession.mockClear()
@@ -942,7 +955,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       }
       return mountEnsure()
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     await openSwitcher()
     fireEvent.click(continueRow())
@@ -989,7 +1002,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       }
       return mountEnsure()
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.setChatSession.mockClear()
     await openSwitcher()
@@ -1031,7 +1044,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       }
       return mountEnsure()
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
     h.resumeChatArgs.mockClear()
@@ -1085,7 +1098,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       }
       return undefined
     })
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.resumeChatArgs.mockClear()
     h.daemonCliPost.mockClear()
@@ -1106,7 +1119,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
       resumeSession: 'claude-legacy',
       resumedExisting: true,
     }))
-    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.resumeChatArgs.mockClear()
     h.daemonCliPost.mockClear()

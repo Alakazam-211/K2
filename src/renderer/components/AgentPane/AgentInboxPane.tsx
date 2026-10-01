@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { daemonCliGet, isHostSwitchedError } from '@/lib/daemon-cli'
-import { useProjectsStore } from '@/stores/projects'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { InboxChatAboutDialog } from './InboxChatAboutDialog'
@@ -31,7 +31,6 @@ import {
   type MailMessageFull,
   type MailMessageSummary,
 } from './inbox-browser'
-import { primaryScope } from '@/kessel/server-scope'
 
 interface AgentInboxPaneProps {
   agentName: string
@@ -53,6 +52,9 @@ function shouldIgnoreFetchError(err: unknown): boolean {
  * is `AgentChatPane`; both are pinned by `tabs.ts`.
  */
 export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps): React.JSX.Element {
+  // Home M3 — inbox reads go to the room's server; the workspace id comes
+  // from the room's own project list (MS3).
+  const room = useRoom()
   const isWorkspaceBoard = agentName === '__workspace__'
 
   const [displayName, setDisplayName] = useState<string>(agentName)
@@ -78,8 +80,8 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   const [chatAboutStamp, setChatAboutStamp] = useState<ChatAboutStamp | null>(null)
   const [chatAboutOpen, setChatAboutOpen] = useState(false)
 
-  const workspaceId = useProjectsStore(
-    (s) => s.projects.find((p) => p.path === projectPath)?.id ?? null,
+  const workspaceId = useRoomProjects(
+    (projects) => projects.find((p) => p.path === projectPath)?.id ?? null,
   )
 
   const sources = useMemo(() => buildSourceList(mailSources), [mailSources])
@@ -92,7 +94,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (!projectPath) return
     setCatalogLoaded(false)
     try {
-      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/inboxes', { project: projectPath })
+      const raw = await daemonCliGet<unknown>(room.scope, 'mail/inboxes', { project: projectPath })
       setMailSources(parseMailCatalog(raw))
       setCatalogError(null)
     } catch (err) {
@@ -107,7 +109,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (!projectPath) return
     setListLoading(true)
     try {
-      const raw = await daemonCliGet<unknown>(primaryScope(), 'inbox/list', {
+      const raw = await daemonCliGet<unknown>(room.scope, 'inbox/list', {
         project: projectPath,
       })
       setTrayItems(parseTrayList(raw))
@@ -127,7 +129,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (append) setLoadingMore(true)
     else setListLoading(true)
     try {
-      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/messages', {
+      const raw = await daemonCliGet<unknown>(room.scope, 'mail/messages', {
         project: projectPath,
         address: selectedAddress,
         limit: MAIL_PAGE_LIMIT,
@@ -186,7 +188,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
       setDisplayName(agentName)
       return
     }
-    agentDisplayName(primaryScope(), projectPath)
+    agentDisplayName(room.scope, projectPath)
       .then((n) => { if (!cancelled && n) setDisplayName(n) })
       .catch(() => { /* keep agentName as fallback */ })
     return () => { cancelled = true }
@@ -194,15 +196,17 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
 
   useEffect(() => {
     if (isWorkspaceBoard) return
+    // `sync:projects` is THIS computer's daemon (MS14).
+    if (!room.localCommands) return
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      agentDisplayName(primaryScope(), projectPath)
+      agentDisplayName(room.scope, projectPath)
         .then((n) => { if (n) setDisplayName(n) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })
     return () => { cancelled = true; unlisten?.() }
-  }, [projectPath, isWorkspaceBoard])
+  }, [room, projectPath, isWorkspaceBoard])
 
   const openTrayItem = async (item: InboxItem): Promise<void> => {
     setSelectedRow({ kind: 'tray', id: item.id })
@@ -212,7 +216,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setBodyLoading(true)
     setBodyError(null)
     try {
-      const raw = await daemonCliGet<unknown>(primaryScope(), 'inbox/read', {
+      const raw = await daemonCliGet<unknown>(room.scope, 'inbox/read', {
         project: projectPath,
         id: item.id,
       })
@@ -241,7 +245,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setBodyError(null)
     const stampKind = selectedSource.kind
     try {
-      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/read', {
+      const raw = await daemonCliGet<unknown>(room.scope, 'mail/read', {
         project: projectPath,
         id: item.id,
         html: 1,

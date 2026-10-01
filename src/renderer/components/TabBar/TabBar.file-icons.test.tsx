@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, screen } from '@testing-library/react'
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { PaneTabBar } from '@/components/PaneLayout/PaneTabBar'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
@@ -69,7 +70,7 @@ function showTab(tab: Tab): HTMLElement {
     extraGroups: [],
     activeGroupIndex: 0,
   })
-  render(<TabBar cwd="/ws" />)
+  renderInPrimaryRoom(<TabBar cwd="/ws" />)
   const el = document.querySelector(`[data-tab-id="${tab.id}"]`)
   if (!(el instanceof HTMLElement)) throw new Error(`tab ${tab.id} did not render`)
   return el
@@ -142,7 +143,7 @@ describe('tab file and browser icons', () => {
     expect(pinIn(root)).toBeNull()
 
     cleanup()
-    render(<SetiFileIcon name="notes.md" />)
+    renderInPrimaryRoom(<SetiFileIcon name="notes.md" />)
     const drawer = setiIn(document.body)
     if (!drawer) throw new Error('default SetiFileIcon did not render')
     expect(drawer.style.fontSize).toBe('16px')
@@ -207,7 +208,7 @@ describe('tab file and browser icons', () => {
   })
 
   it('renders Seti on a file pane tab and not on a terminal pane tab', () => {
-    render(
+    renderInPrimaryRoom(
       <PaneTabBar
         items={[
           { id: 'f', type: 'file-viewer', data: { filePath: '/work/notes.md' } },
@@ -249,7 +250,7 @@ describe('tab file and browser icons', () => {
     expect(agentIconsIn(webRow)).toHaveLength(0)
 
     cleanup()
-    render(
+    renderInPrimaryRoom(
       <PaneTabBar
         items={[{ id: 'z', type: 'terminal', data: { terminalId: 'z1', cwd: '/ws', command: 'zsh' } }]}
         activeItemIndex={0}
@@ -271,7 +272,7 @@ describe('tab file and browser icons', () => {
       icon,
     })
     const root = document.querySelector(`[data-tab-id="${tab.id}"]`)
-    render(<TabBar cwd="/ws" />)
+    renderInPrimaryRoom(<TabBar cwd="/ws" />)
     const strip = document.querySelector(`[data-tab-id="${tab.id}"]`)
     if (!(strip instanceof HTMLElement)) throw new Error('browser tab did not render')
     expect(root).toBeNull()
@@ -287,7 +288,7 @@ describe('tab file and browser icons', () => {
 
     cleanup()
     const item = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
-    render(
+    renderInPrimaryRoom(
       <PaneTabBar
         items={[item]}
         activeItemIndex={0}
@@ -353,7 +354,7 @@ describe('tab file and browser icons', () => {
     })
     cleanup()
     const again = document.querySelector(`[data-tab-id="${live.id}"]`)
-    render(<TabBar cwd="/ws" />)
+    renderInPrimaryRoom(<TabBar cwd="/ws" />)
     const strip = document.querySelector(`[data-tab-id="${live.id}"]`)
     if (!(strip instanceof HTMLElement)) throw new Error('mixed tab did not render')
     expect(again).toBeNull()
@@ -372,7 +373,7 @@ describe('tab file and browser icons', () => {
     useTabsStore.getState().applyBrowserPageMeta(tab.id, pg.id, pg.items[0].id, {
       title: 'Example Domain',
     })
-    render(<TabBar cwd="/ws" />)
+    renderInPrimaryRoom(<TabBar cwd="/ws" />)
     const strip = document.querySelector(`[data-tab-id="${tab.id}"]`)
     if (!(strip instanceof HTMLElement)) throw new Error('locked tab did not render')
     expect(strip.querySelector('span.truncate')?.textContent).toBe('Kept')
@@ -380,7 +381,7 @@ describe('tab file and browser icons', () => {
 
     cleanup()
     const item = Array.from(useTabsStore.getState().tabs[0].paneGroups.values())[0].items[0]
-    render(
+    renderInPrimaryRoom(
       <PaneTabBar
         items={[item]}
         activeItemIndex={0}

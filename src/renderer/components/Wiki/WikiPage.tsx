@@ -11,7 +11,7 @@ import remarkGfm from 'remark-gfm'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore } from '@/stores/tabs'
+import { primaryRoom } from '@/stores/room'
 import { useToastStore } from '@/stores/toast'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
@@ -393,7 +393,9 @@ export default function WikiPage(): React.JSX.Element | null {
     closeWiki()
     // Next tick so overlay unmounts before tab focus shifts.
     window.setTimeout(() => {
-      useTabsStore.getState().openFileAsTab(path)
+      // The wiki is the window's server's: its notes open in the primary
+      // room, never in a room on another server (MS4).
+      primaryRoom().tabs.getState().openFileAsTab(path)
     }, 0)
   }
 

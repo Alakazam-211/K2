@@ -68,7 +68,7 @@ import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom } from '@/components/Room/RoomContext'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -78,7 +78,6 @@ import {
   noteViewerInteractionBlocked,
 } from '@/stores/window-mode'
 import { useSessionLabelsStore } from '@/stores/session-labels'
-import { useActiveAgentsStore } from '@/stores/active-agents'
 import { detectWorkingSignal, GROK_PERMISSION_TITLE_RE } from '@/lib/agent-signals'
 import {
   detectLinks,
@@ -170,7 +169,6 @@ import {
   probeCellMetrics,
 } from './measurePaneFit'
 import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
-import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Focus the terminal shadow input only when safe — never steal from the
@@ -559,6 +557,11 @@ const SHADOW_INPUT_FALLBACK_STYLE: React.CSSProperties = {
 }
 
 export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
+  // Home M3 — the pane's room: its spawn, grid dial, close fallbacks and
+  // pin-size calls go to the room's server, its tab mutations to the room's
+  // tabs store, and its activity (working / idle / bell / permission) to
+  // the room's sink (MS68). No provider ⇒ throw (MS2).
+  const room = useRoom()
   const config = useKesselConfig()
   const {
     terminalId,
@@ -1112,7 +1115,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     if (!isTabVisible) return
     const maybeMarkSeen = (): void => {
       if (!useWindowFocusStore.getState().isFocused) return
-      useActiveAgentsStore.getState().markSeen(terminalId)
+      room.activity.markSeen(terminalId)
     }
     maybeMarkSeen()
     return useWindowFocusStore.subscribe(maybeMarkSeen)
@@ -1228,7 +1231,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const lastWorkingStateRef = useRef(false)
   const recordActivityFromSnapshot = useCallback(
     (snap: TermGridSnapshot) => {
-      useActiveAgentsStore.getState().recordOutput(terminalId)
+      room.activity.recordOutput(terminalId)
 
       // Build the row→{text} map detectWorkingSignal expects from
       // the WHOLE viewport. We deliberately do NOT gate on
@@ -1244,7 +1247,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const isWorking = detectWorkingSignal(lines, snap.rows)
       if (isWorking) {
         lastSeenWorkingAtRef.current = Date.now()
-        useActiveAgentsStore.getState().recordTitleActivity(terminalId, true)
+        room.activity.recordTitleActivity(terminalId, true)
       }
 
       // DEV breadcrumbs.
@@ -1326,7 +1329,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const last = lastSeenWorkingAtRef.current
       if (last === 0) return
       if (Date.now() - last > IDLE_GRACE_MS) {
-        useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+        room.activity.recordTitleActivity(terminalId, false)
         lastSeenWorkingAtRef.current = 0
       }
     }, 500)
@@ -1342,7 +1345,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // (or a retained pane's next frame) re-arms within a second.
       // Never clobbers 'permission'/'review' (recordTitleActivity
       // guards those).
-      useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+      room.activity.recordTitleActivity(terminalId, false)
     }
   }, [terminalId])
 
@@ -1415,7 +1418,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // addressed by agentName (heartbeat / surfaced tabs whose agent_name
     // isn't `tab-<terminalId>`) resolve to this pane's terminalId. The
     // alias outlives the pane, so a hidden/unmounted tab still maps.
-    useActiveAgentsStore.getState().bindPaneAgentName(agentName, terminalId)
+    room.activity.bindPaneAgentName(agentName, terminalId)
 
     async function boot() {
       perfLog('mount', spawnedAt
@@ -1522,7 +1525,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         try {
           if (!creds) {
             perfLog('creds_start', { attempt: String(attempt) })
-            creds = await getDaemonWs(primaryScope())
+            creds = await getDaemonWs(room.scope)
             perfLog('creds_end', { elapsed_ms: (performance.now() - __t_attempt).toFixed(1) })
           }
           perfLog('spawn_fetch_start', { attempt: String(attempt) })
@@ -1560,7 +1563,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               (body.includes('session_owned_elsewhere') || body.includes('"tab_closed"'))
             ) {
               if (!cancelled) {
-                useTabsStore.getState().releasePaneOwnedElsewhere(terminalId)
+                room.tabs.getState().releasePaneOwnedElsewhere(terminalId)
               }
               return
             }
@@ -1662,12 +1665,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // ⇒ `sandbox` is undefined ⇒ the marker stays off. Truthful: a
       // degraded passthrough stamps 'passthrough', which renders no
       // orange (TabBar gates strictly on === 'microvm').
-      useTabsStore.getState().setTerminalSandboxBackend(
+      room.tabs.getState().setTerminalSandboxBackend(
         terminalId,
         spawn.sandbox,
       )
       if (spawn.conversationId && spawn.conversationId !== sessionId) {
-        useTabsStore.getState().setTerminalConversationId(
+        room.tabs.getState().setTerminalConversationId(
           terminalId,
           spawn.conversationId,
         )
@@ -1685,7 +1688,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // daemon session UUID the pin-size route wants. Registered at
       // the same moment the session becomes live; dropped in this
       // effect's cleanup.
-      usePinnedSizeStore.getState().registerSession(primaryScope(), terminalId, sessionId)
+      usePinnedSizeStore.getState().registerSession(room.scope, terminalId, sessionId)
       // Phase reflects spawn outcome only; the grid-WS effect will move
       // us to 'connecting'/'ready' (visible) or leave us 'parked'
       // (hidden). Reading the live visibility ref keeps the initial
@@ -1722,7 +1725,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // effect's cleanup (below) owns closing the socket.
       sessionIdRef.current = null
       // S7b — retract the tab-menu mapping; a re-run re-registers.
-      usePinnedSizeStore.getState().unregisterSession(primaryScope(), terminalId)
+      usePinnedSizeStore.getState().unregisterSession(room.scope, terminalId)
     }
     // 0.39.13 — STABLE deps only. `isTabVisible` is deliberately NOT
     // here: visibility no longer drives spawn. `reconnectAttempt` still
@@ -1777,7 +1780,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
     let creds: DaemonWsAvailable | null = null
     try {
-      creds = await getDaemonWs(primaryScope())
+      creds = await getDaemonWs(room.scope)
     } catch {
       // Creds unavailable (daemon mid-restart). The next visibility
       // reconcile / reconnect will retry. Leave phase as-is.
@@ -1825,7 +1828,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         gridProtoK1Ref.current = true
         let candidate: WebSocket
         try {
-          candidate = await openQueuedGridWebSocket(primaryScope(),
+          candidate = await openQueuedGridWebSocket(room.scope,
             `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
             {
               isCancelled: () => isStale() || dialAbort.signal.aborted,
@@ -1871,7 +1874,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             })
             return
           }
-          const extra = gridDialBackoffRemainingMs(primaryScope())
+          const extra = gridDialBackoffRemainingMs(room.scope)
           const delayMs = Math.max(
             extra,
             Math.min(250 * 2 ** Math.min(wsAttempt - 1, 3), 2000),
@@ -1947,7 +1950,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // local state and the tab-menu store can never diverge.
       const applyPinFrame = (pin: PinnedSize | null) => {
         setPinnedSize(pin)
-        usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, pin)
+        usePinnedSizeStore.getState().setPin(room.scope, sessionId, pin)
       }
       applyPinFrame(null)
       // S5 — declare this window's mode on the fresh daemon-side
@@ -2145,22 +2148,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               // title-owned so the title can also CLEAR it below — a
               // hook-set permission (claude) is never clearable from
               // here.
-              useActiveAgentsStore
-                .getState()
-                .recordTitlePermission(terminalId, true)
+              room.activity.recordTitlePermission(terminalId, true)
             } else {
               // Any non-⚠ title clears a TITLE-owned permission (the
               // grok gate resolved); no-op for every other pane —
               // including hook-owned permission states.
-              useActiveAgentsStore
-                .getState()
-                .recordTitlePermission(terminalId, false)
+              room.activity.recordTitlePermission(terminalId, false)
               if (isIdleMarker) {
                 lastSeenWorkingAtRef.current = 0
-                useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+                room.activity.recordTitleActivity(terminalId, false)
               } else if (isWorkingMarker) {
                 lastSeenWorkingAtRef.current = Date.now()
-                useActiveAgentsStore.getState().recordTitleActivity(terminalId, true)
+                room.activity.recordTitleActivity(terminalId, true)
               }
             }
             // Strip the leading marker chars + collapse whitespace
@@ -2194,9 +2193,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             const newLabel = parsed.payload.label ?? ''
             useSessionLabelsStore
               .getState()
-              .setSessionLabel(primaryScope(), sessionId, newLabel)
+              .setSessionLabel(room.scope, sessionId, newLabel)
             if (newLabel && tabId) {
-              const st = useTabsStore.getState()
+              const st = room.tabs.getState()
               applyUnlockedTabLabel(
                 findTabById(collectStoreTabs(st), tabId),
                 newLabel,
@@ -2243,7 +2242,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               console.warn(`[v2-activity] BELL tid=${terminalId.slice(0, 8)}`)
             }
             lastSeenWorkingAtRef.current = 0
-            useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+            room.activity.recordTitleActivity(terminalId, false)
             break
           }
           case 'clipboard': {
@@ -3272,7 +3271,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // window now" (keyed by daemon sessionId). Recorded even while
       // pinned, so match-after-unpin uses fresh numbers.
       const sid = sessionIdRef.current
-      if (sid) usePinnedSizeStore.getState().setDims(primaryScope(), sid, cols, rows)
+      if (sid) usePinnedSizeStore.getState().setDims(room.scope, sid, cols, rows)
       // S7b — while pinned the daemon clamps EVERY resize at
       // request_resize; emitting would be pure traffic/log noise
       // (and would arm a pointless 500ms resize hold). Measurements
@@ -3693,7 +3692,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (!canQueryLocalFinderPaths) {
         if (text) sendInput(text)
       } else {
-        daemonCliGet<string[]>(primaryScope(), 'fs/clipboard-paths')
+        daemonCliGet<string[]>(room.scope, 'fs/clipboard-paths')
           .then((paths) => {
             if (paths && paths.length > 0) {
               sendInput(buildDropPayload(paths))
@@ -4552,11 +4551,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       e.stopPropagation()
 
       if (clicked.type === 'url') {
-        daemonCliPost(primaryScope(), 'fs/open-external', { target: clicked.target }).catch((err) =>
+        daemonCliPost(room.scope, 'fs/open-external', { target: clicked.target }).catch((err) =>
           console.warn('[kessel-term/link]', err),
         )
       } else if (clicked.type === 'file' && clicked.filePath) {
-        const tabsStore = useTabsStore.getState()
+        const tabsStore = room.tabs.getState()
         const openInSplit =
           useTerminalSettingsStore.getState().openLinksInSplitPane
 
@@ -4672,7 +4671,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           // REMOTE host: local paths → upload + inject remote (rare DOM
           // fallback under Tauri; native drag-drop is the usual path).
           if (useConnectHostStore.getState().activeHost !== 'local') {
-            void executeRemoteDrop(primaryScope(),
+            void executeRemoteDrop(room.scope,
               paths,
               { kind: 'terminal' },
               { workspacePath: cwd },
@@ -4692,7 +4691,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // product path as remote desktop terminal drops.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
-          void executeBrowserFileDrop(primaryScope(),
+          void executeBrowserFileDrop(room.scope,
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: cwd || undefined },

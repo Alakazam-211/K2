@@ -22,6 +22,7 @@
 // username). This component holds it in local state only while the add
 // form is open and clears it on submit/close.
 
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -471,13 +472,15 @@ function OauthConnect({
         <div className="flex-1 min-h-[280px] relative bg-[var(--color-bg)]">
           <div className="absolute inset-0 flex flex-col">
             {webFeatures.browserPane ? (
-              <BrowserPane
-                itemId={gmailSession.browserItemId}
-                tabId="settings-oauth-gmail"
-                paneGroupId="settings-oauth-gmail"
-                url={gmailSession.authorizationUrl}
-                standalone
-              />
+              <PrimaryRoom>
+                <BrowserPane
+                  itemId={gmailSession.browserItemId}
+                  tabId="settings-oauth-gmail"
+                  paneGroupId="settings-oauth-gmail"
+                  url={gmailSession.authorizationUrl}
+                  standalone
+                />
+              </PrimaryRoom>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
                 <p className="text-[12px] text-[var(--color-text-secondary)] max-w-md">

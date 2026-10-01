@@ -36,6 +36,7 @@ import { AgentChatPane } from './AgentChatPane'
 import { TabVisibilityContext, useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { useActiveStore } from '@/stores/active'
 import { useProjectsStore } from '@/stores/projects'
+import { useRoom, useRoomProjects, useRoomSupports } from '@/components/Room/RoomContext'
 import { useServerSupports } from '@/lib/server-capabilities'
 import {
   useRetainedChatStore,
@@ -75,15 +76,19 @@ export function PinnedChatGate({
   projectPath,
   restoredSessionId,
 }: PinnedChatGateProps): React.JSX.Element {
-  const projectId = useProjectsStore(
-    (s) => s.projects.find((p) => p.path === projectPath)?.id ?? null,
+  const room = useRoom()
+  // MS3 — the room's own project list.
+  const projectId = useRoomProjects(
+    (projects) => projects.find((p) => p.path === projectPath)?.id ?? null,
   )
-  const daemonOwnsChat = useServerSupports('daemon-pinned-chat')
+  const daemonOwnsChat = useRoomSupports('daemon-pinned-chat')
   const isActive = useActiveStore(
     (s) => projectId !== null && s.activeProjectIds.has(projectId),
   )
+  // The retainer holds the PRIMARY room's chats only (MS14); a pinned
+  // room's chat renders inline.
   const exempt =
-    daemonOwnsChat && projectId !== null && isActive && !retentionDisabled()
+    room.isPrimary && daemonOwnsChat && projectId !== null && isActive && !retentionDisabled()
 
   if (!exempt || projectId === null) {
     return (

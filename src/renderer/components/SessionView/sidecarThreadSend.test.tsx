@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Sidecar Thread send keeps asking for its own address. An early Send shows
 // an error and leaves the draft. Fail loud — no skip.
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useSessionViewChrome } from './sessionViewChrome'
@@ -122,7 +123,7 @@ describe('sidecar thread send address', () => {
     )
     h.sticky.current = reviewer
 
-    render(<Harness />)
+    renderInPrimaryRoom(<Harness />)
 
     await waitFor(
       () => {
@@ -154,7 +155,7 @@ describe('sidecar thread send address', () => {
     h.listQueue.push(new Error('list failed'), [
       { agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' },
     ])
-    render(<Harness />)
+    renderInPrimaryRoom(<Harness />)
     await waitFor(
       () => {
         expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1')
@@ -167,7 +168,7 @@ describe('sidecar thread send address', () => {
 
   it('send before any address does not post and keeps the draft', async () => {
     h.sticky.current = []
-    render(<Harness />)
+    renderInPrimaryRoom(<Harness />)
     await waitFor(() => expect(listCalls().length).toBeGreaterThanOrEqual(1))
 
     const box = typeAndSend('  not yet  ')

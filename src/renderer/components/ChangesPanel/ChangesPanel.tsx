@@ -6,10 +6,9 @@ import { useState, useMemo, useCallback } from 'react'
 // the local `refetch()` after each mutation is the full contract.
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore } from '@/stores/tabs'
-import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { useRoom } from '@/components/Room/RoomContext'
+import { useRoomResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
-import { primaryScope } from '@/kessel/server-scope'
 
 // ── Status helpers ───────────────────────────────────────────────────────────
 
@@ -31,6 +30,8 @@ interface ChangeFile {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function ChangesPanel(): React.JSX.Element {
+  // Home M3 — diffs open in THIS room's tabs.
+  const room = useRoom()
   const [commitMsg, setCommitMsg] = useState('')
   const [committing, setCommitting] = useState(false)
 
@@ -60,26 +61,26 @@ export default function ChangesPanel(): React.JSX.Element {
 
   const handleStage = useCallback(async (filePath: string) => {
     if (!workspacePath) return
-    await daemonCliPost(primaryScope(), 'git/stage', { path: workspacePath, filePath }).catch(console.error)
+    await daemonCliPost(room.scope, 'git/stage', { path: workspacePath, filePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleUnstage = useCallback(async (filePath: string) => {
     if (!workspacePath) return
-    await daemonCliPost(primaryScope(), 'git/unstage', { path: workspacePath, filePath }).catch(console.error)
+    await daemonCliPost(room.scope, 'git/unstage', { path: workspacePath, filePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleStageAll = useCallback(async () => {
     if (!workspacePath) return
-    await daemonCliPost(primaryScope(), 'git/stage-all', { path: workspacePath }).catch(console.error)
+    await daemonCliPost(room.scope, 'git/stage-all', { path: workspacePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleUnstageAll = useCallback(async () => {
     if (!workspacePath) return
     for (const file of staged) {
-      await daemonCliPost(primaryScope(), 'git/unstage', { path: workspacePath, filePath: file.path }).catch(console.error)
+      await daemonCliPost(room.scope, 'git/unstage', { path: workspacePath, filePath: file.path }).catch(console.error)
     }
     refetch()
   }, [workspacePath, staged, refetch])
@@ -88,7 +89,7 @@ export default function ChangesPanel(): React.JSX.Element {
     if (!workspacePath || !commitMsg.trim() || staged.length === 0) return
     setCommitting(true)
     try {
-      await daemonCliPost(primaryScope(), 'git/commit', { path: workspacePath, message: commitMsg.trim() })
+      await daemonCliPost(room.scope, 'git/commit', { path: workspacePath, message: commitMsg.trim() })
       setCommitMsg('')
       refetch()
     } catch (e) {
@@ -102,7 +103,7 @@ export default function ChangesPanel(): React.JSX.Element {
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to the active workspace.
-  const resolvedAgent = useResolvedAgentCommand(activeWorkspace?.id)
+  const resolvedAgent = useRoomResolvedAgentCommand(activeWorkspace?.id)
   const isWorktree = activeWorkspace?.type === 'worktree'
   const branchName = gitInfo?.currentBranch ?? 'current branch'
 
@@ -130,7 +131,7 @@ export default function ChangesPanel(): React.JSX.Element {
       prompt += `\n\nAfter committing, merge the branch "${branchName}" back into main and resolve any conflicts. Once merged, remove the worktree with "git worktree remove" and delete the branch with "git branch -d ${branchName}".`
     }
 
-    const tabsStore = useTabsStore.getState()
+    const tabsStore = room.tabs.getState()
     const activeGroup = tabsStore.activeGroupIndex
     tabsStore.addTabToGroup(activeGroup, workspacePath, {
       title: includeMerge ? 'AI Commit & Merge' : 'AI Commit',
@@ -140,9 +141,9 @@ export default function ChangesPanel(): React.JSX.Element {
   }, [workspacePath, changes, resolvedAgent, branchName])
 
   const handleOpenDiff = useCallback((filePath: string) => {
-    const activeTab = useTabsStore.getState().getActiveTab()
+    const activeTab = room.tabs.getState().getActiveTab()
     if (activeTab) {
-      useTabsStore.getState().openDiffInPane(activeTab.id, filePath)
+      room.tabs.getState().openDiffInPane(activeTab.id, filePath)
     }
   }, [])
 

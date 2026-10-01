@@ -14,9 +14,6 @@ vi.mock('@/lib/daemon-cli', async () => {
 })
 
 const dropTabAfterFailedSidecarRefresh = vi.hoisted(() => vi.fn())
-vi.mock('@/stores/tabs', () => ({
-  dropTabAfterFailedSidecarRefresh,
-}))
 
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ host: '127.0.0.1', port: 1, token: 't', secure: false })),
@@ -53,6 +50,12 @@ import {
   takeSessionRemoved,
 } from '@/lib/sidecar-refresh-tab'
 import { AgentSessionChrome } from './AgentSessionChrome'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+
+// Home M3 — a failed refresh drops the tab from THIS room's strip.
+const room = testRoom({
+  tabs: { room: { dropTabAfterFailedSidecarRefresh } },
+})
 import { useSessionViewChrome } from './sessionViewChrome'
 import { overlayViewer } from './sessionViewTab'
 
@@ -71,7 +74,7 @@ function menuRow(label: string): HTMLButtonElement {
 }
 
 function renderChrome(command?: string, commandHint?: string) {
-  return render(
+  return renderInRoom(room, 
     <>
       <AgentSessionChrome
         title="sales/reviewer"
@@ -272,7 +275,7 @@ describe('sidecar refresh resumes on the server', () => {
   })
 
   function renderRefresh() {
-    return render(
+    return renderInRoom(room, 
       <AgentSessionChrome
         title="sales/reviewer"
         addr="sales/reviewer"
@@ -453,7 +456,7 @@ describe('sidecar refresh resumes on the server', () => {
 
   it('does not arm the guard for onRefresh or a non-tab agent name', async () => {
     const onRefresh = vi.fn()
-    const pinned = render(
+    const pinned = renderInRoom(room, 
       <AgentSessionChrome
         title="sales"
         addr="sales"
@@ -483,7 +486,7 @@ describe('sidecar refresh resumes on the server', () => {
       }
       return Promise.resolve({})
     })
-    render(
+    renderInRoom(room, 
       <AgentSessionChrome
         title="sales"
         addr="sales"

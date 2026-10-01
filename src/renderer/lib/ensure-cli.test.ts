@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as daemonCli from '@/lib/daemon-cli'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   CLI_INSTALL_COMMANDS,
   CLI_INSTALL_NOTICE_MS,
@@ -57,7 +58,7 @@ describe('ensureOneCli notice', () => {
   it('does not show Installing when the binary is already present', async () => {
     vi.useFakeTimers()
     vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
-    const pending = ensureOneCli('grok')
+    const pending = ensureOneCli(primaryScope(), 'grok')
     await pending
     expect(useCliInstallStore.getState().installing).toBeNull()
     await vi.advanceTimersByTimeAsync(CLI_INSTALL_NOTICE_MS + 1000)
@@ -73,7 +74,7 @@ describe('ensureOneCli notice', () => {
           resolvePost = resolve
         }),
     )
-    const pending = ensureOneCli('grok')
+    const pending = ensureOneCli(primaryScope(), 'grok')
     expect(useCliInstallStore.getState().installing).toBeNull()
     await vi.advanceTimersByTimeAsync(CLI_INSTALL_NOTICE_MS)
     expect(useCliInstallStore.getState().installing).toBe('grok')
@@ -87,7 +88,7 @@ describe('ensureOneCli notice', () => {
     vi.spyOn(daemonCli, 'daemonCliPost').mockRejectedValue(
       new Error('grok installed but not on PATH'),
     )
-    await expect(ensureOneCli('grok')).rejects.toThrow('installed but not on PATH')
+    await expect(ensureOneCli(primaryScope(), 'grok')).rejects.toThrow('installed but not on PATH')
     expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
       'grok installed but not on PATH',
     )

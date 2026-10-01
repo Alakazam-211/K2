@@ -551,12 +551,13 @@ export function daemonRowForCanonicalChat(
 }
 
 export async function resolveSessionTabCopyableAddress(
+  scope: ServerScope,
   tab: Pick<Tab, 'isSystemAgent' | 'paneGroups'>,
   projectPath: string,
 ): Promise<CopyableAddress | null> {
   if (tab.isSystemAgent || !projectPath) return null
   try {
-    const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
+    const rows = await daemonCliGet<DaemonHandleRow[]>(scope, 'sessions/list-for-workspace', {
       path: projectPath,
     })
     const row = daemonRowForTab(tab, Array.isArray(rows) ? rows : [])
@@ -567,12 +568,13 @@ export async function resolveSessionTabCopyableAddress(
 }
 
 export async function resolvePinnedChatCopyableAddress(
+  scope: ServerScope,
   projectPath: string,
   projectId?: string | null,
 ): Promise<CopyableAddress | null> {
   if (!projectPath) return null
   try {
-    const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
+    const rows = await daemonCliGet<DaemonHandleRow[]>(scope, 'sessions/list-for-workspace', {
       path: projectPath,
     })
     const row = daemonRowForCanonicalChat(Array.isArray(rows) ? rows : [], projectId)
@@ -582,7 +584,7 @@ export async function resolvePinnedChatCopyableAddress(
     /* fall through to workspace/handle */
   }
   try {
-    const r = await daemonCliGet<{ handle?: string }>(primaryScope(), 'workspace/handle', {
+    const r = await daemonCliGet<{ handle?: string }>(scope, 'workspace/handle', {
       project: projectPath,
     })
     return copyableAddressForWorkspaceHandle(r?.handle ?? '')

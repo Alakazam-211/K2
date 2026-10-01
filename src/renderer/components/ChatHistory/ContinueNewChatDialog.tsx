@@ -5,7 +5,8 @@ import { Button, DialogFrame, DialogScrim, SquareCheckbox, SquareRadio } from '@
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { type ComposeStatus } from '@/components/Terminal/terminalCompose'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 // Per-provider resume contract. Shared by Chat history and the pinned
 // chat so both dialogs list the same harnesses. Resume flags stay here;
@@ -60,10 +61,10 @@ export function withPreviousSessionPath(text: string, filePath: string): string 
   return `${text}\n\nPrevious session file: ${path}`
 }
 
-async function previousSessionFilePath(source: ContinueNewChatSource): Promise<string> {
+async function previousSessionFilePath(scope: ServerScope, source: ContinueNewChatSource): Promise<string> {
   const project = source.projectPath.trim()
   try {
-    const res = await daemonCliGet<{ path?: string | null }>(primaryScope(), 'chat/session-path', {
+    const res = await daemonCliGet<{ path?: string | null }>(scope, 'chat/session-path', {
       provider: source.provider,
       session_id: source.sessionId,
       project_path: project,
@@ -136,6 +137,8 @@ export function ContinueNewChatDialog({
   onClose: () => void
   onSpawn: (request: ContinueSpawnRequest, stillOpen: () => boolean) => Promise<void>
 }): React.JSX.Element {
+  // The chat being continued lives on the room's server.
+  const room = useRoom()
   const [target, setTarget] = useState(
     PROVIDER_CONFIG[source.provider] ? source.provider : 'claude',
   )
@@ -169,7 +172,7 @@ export function ContinueNewChatDialog({
     setInFlight(true)
     setError(null)
     try {
-      const seeded = await daemonCliPost<{ text?: unknown }>(primaryScope(), 'chat/continue-seed', {
+      const seeded = await daemonCliPost<{ text?: unknown }>(room.scope, 'chat/continue-seed', {
         provider: source.provider,
         sessionId: source.sessionId,
         projectPath: source.projectPath,
@@ -182,7 +185,7 @@ export function ContinueNewChatDialog({
       }
       let text = seeded.text
       if (includePath) {
-        const filePath = await previousSessionFilePath(source)
+        const filePath = await previousSessionFilePath(room.scope, source)
         if (!stillOpen()) return
         text = withPreviousSessionPath(text, filePath)
       }

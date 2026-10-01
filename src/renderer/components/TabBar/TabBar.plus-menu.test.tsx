@@ -26,6 +26,8 @@ import {
   type TerminalItemData,
 } from '@/stores/tabs'
 import { useToastStore } from '@/stores/toast'
+import { primaryRoom } from '@/stores/room'
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => null),
@@ -103,12 +105,12 @@ function watchAdds(): ReturnType<typeof vi.fn> {
 }
 
 function Shortcuts({ cwd }: { cwd: string }): null {
-  useTerminalShortcuts(cwd)
+  useTerminalShortcuts(primaryRoom(), cwd)
   return null
 }
 
 function renderBar(groupIndex = 0) {
-  return render(
+  return renderInPrimaryRoom(
     <>
       <TabBar cwd="/ws" groupIndex={groupIndex} />
       <ContextMenu />
@@ -390,21 +392,23 @@ describe('tab bar plus menu', () => {
     const launch = vi.fn()
     useTabsStore.setState({ addTab })
     usePresetsStore.setState({ launchPreset: launch })
-    render(<Shortcuts cwd="/ws" />)
+    renderInPrimaryRoom(<Shortcuts cwd="/ws" />)
 
     fireEvent.keyDown(window, { key: 't', metaKey: true })
     expect(addTab).toHaveBeenCalledWith('/ws')
     expect(useContextMenuStore.getState().isOpen).toBe(false)
 
     fireEvent.keyDown(window, { key: 'T', metaKey: true, shiftKey: true })
-    expect(launch).toHaveBeenCalledWith('claude', '/ws', 'tab')
-    expect(launch.mock.calls[0]).toHaveLength(3)
+    expect(launch).toHaveBeenCalledWith(useTabsStore, 'claude', '/ws', 'tab')
+    expect(launch.mock.calls[0]).toHaveLength(4)
     expect(useContextMenuStore.getState().isOpen).toBe(false)
   })
 
   it('menu:new-tab calls addTab and does not open the menu', () => {
     const addTab = vi.fn()
     useTabsStore.setState({ addTab })
+    // Window-level menu items act on the focused room (MS17/MS18).
+    renderInPrimaryRoom(<></>)
     menuNewTab()
     expect(addTab).toHaveBeenCalledWith('~')
     expect(useContextMenuStore.getState().isOpen).toBe(false)
@@ -425,12 +429,12 @@ describe('tab bar plus menu', () => {
     usePresetsStore.getState().setShowLaunchBar(false)
     expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('0')
 
-    const hidden = render(<PresetsBar cwd="/ws" />)
+    const hidden = renderInPrimaryRoom(<PresetsBar cwd="/ws" />)
     expect(hidden.container.firstChild).toBeNull()
     expect(usePresetsStore.getState().fetchPresets).toHaveBeenCalled()
     hidden.unmount()
 
-    const again = render(<PresetsBar cwd="/ws" />)
+    const again = renderInPrimaryRoom(<PresetsBar cwd="/ws" />)
     expect(again.container.firstChild).toBeNull()
     expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('0')
     again.unmount()
@@ -549,7 +553,7 @@ describe('tab bar plus menu', () => {
       fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
     })
     expect(launch).toHaveBeenCalledTimes(1)
-    expect(launch).toHaveBeenCalledWith('codex', '/ws', 'tab', 0)
+    expect(launch).toHaveBeenCalledWith(useTabsStore, 'codex', '/ws', 'tab', 0)
     expect(vi.mocked(daemonCliPost).mock.calls.some((call) => call[1] === 'sandbox/open')).toBe(false)
   })
 

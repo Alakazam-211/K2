@@ -2,8 +2,9 @@ import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { PaneLayout } from '@/components/PaneLayout/PaneLayout'
 import { PresetsBar } from '@/components/PresetsBar/PresetsBar'
-import { useTabsStore } from '@/stores/tabs'
-import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
+import type { Room } from '@/stores/room'
+import { useRoomResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { KeyCombo } from '@/components/KeySymbol'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
@@ -18,6 +19,9 @@ interface TerminalAreaProps {
 // because terminals swallow drag events and the overlay timing is unreliable.
 
 interface TabDragState {
+  /** The room the drag started in. A tab never moves to another room
+   *  (MS4): a drop on another room's column does nothing. */
+  room: Room
   groupIndex: number
   tabId: string
   tabTitle: string
@@ -32,7 +36,7 @@ function notifyDragListeners(): void {
   dragListeners.forEach((fn) => fn())
 }
 
-export function startTabDrag(data: { groupIndex: number; tabId: string; tabTitle: string; mouseX: number; mouseY: number }): void {
+export function startTabDrag(data: { room: Room; groupIndex: number; tabId: string; tabTitle: string; mouseX: number; mouseY: number }): void {
   globalDrag = data
   notifyDragListeners()
 
@@ -50,10 +54,11 @@ export function startTabDrag(data: { groupIndex: number; tabId: string; tabTitle
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
       const col = el?.closest('[data-tab-group-index]') as HTMLElement | null
       const attr = col?.dataset?.tabGroupIndex
-      if (attr !== undefined) {
+      const sameRoom = col?.closest('[data-room-key]')?.getAttribute('data-room-key') === globalDrag.room.key
+      if (attr !== undefined && sameRoom) {
         const targetGroup = parseInt(attr, 10)
         if (targetGroup !== globalDrag.groupIndex) {
-          useTabsStore.getState().moveTabToGroup(globalDrag.groupIndex, targetGroup, globalDrag.tabId)
+          globalDrag.room.tabs.getState().moveTabToGroup(globalDrag.groupIndex, targetGroup, globalDrag.tabId)
         }
       }
     }
@@ -151,12 +156,14 @@ function TabGroupColumn({
   onFocus: () => void
   style?: React.CSSProperties
 }): React.JSX.Element {
-  const tabs = useTabsStore((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
-  const activeTabId = useTabsStore((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
+  const room = useRoom()
+  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
+  const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
   const dragState = useTabDragState()
 
   // Show drop highlight when dragging a tab from a different group
-  const showDropHighlight = dragState !== null && dragState.groupIndex !== groupIndex
+  const showDropHighlight =
+    dragState !== null && dragState.room === room && dragState.groupIndex !== groupIndex
 
   return (
     <div
@@ -213,7 +220,7 @@ function TabGroupColumn({
 function EmptyWorkspaceHints(): React.JSX.Element {
   // Resolved through the one default-agent seam (id-first, legacy-token
   // tolerant, first-enabled fallback) so the hint names what ⇧⌘T launches.
-  const resolved = useResolvedAgentCommand()
+  const resolved = useRoomResolvedAgentCommand()
   const agentLabel = resolved?.preset.label || 'AI Agent'
 
   return (
@@ -273,14 +280,15 @@ function DragGhost(): React.JSX.Element | null {
 // ── Main Terminal Area ───────────────────────────────────────────────────
 
 export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
-  const splitCount = useTabsStore((s) => s.splitCount)
-  const activeGroupIndex = useTabsStore((s) => s.activeGroupIndex)
-  const setActiveGroup = useTabsStore((s) => s.setActiveGroup)
+  const room = useRoom()
+  const splitCount = useRoomTabs((s) => s.splitCount)
+  const activeGroupIndex = useRoomTabs((s) => s.activeGroupIndex)
+  const setActiveGroup = useRoomTabs((s) => s.setActiveGroup)
 
   const [flexes, setFlexes] = useState([50, 25, 25])
   const containerRef = useRef<HTMLDivElement>(null)
 
-  useTerminalShortcuts(cwd)
+  useTerminalShortcuts(room, cwd)
 
   const handleResize = useCallback((handleIndex: number, clientX: number) => {
     const container = containerRef.current
@@ -298,7 +306,9 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden">
+    // `data-room-key` — pointer-down / focus-in here focuses this room for
+    // window-level input (MS17), and tab drags stay inside it (MS4).
+    <div className="flex h-full w-full flex-col overflow-hidden" data-room-key={room.key}>
       <PresetsBar cwd={cwd} />
       {/* ST3: inter-column pane gap (0 in Square; resize handles keep their own width) */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">

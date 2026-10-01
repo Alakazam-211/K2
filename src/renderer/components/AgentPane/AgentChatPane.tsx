@@ -2,11 +2,10 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { terminalExists } from '@/lib/terminal-daemon'
-import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore } from '@/stores/tabs'
+import { closeV2Session } from '@/stores/tabs'
+import { useRoom, useRoomProjects, useRoomSupports } from '@/components/Room/RoomContext'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { agentChatId } from '@/lib/terminal-id'
-import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   mapMsgResponseToStatus,
@@ -21,9 +20,7 @@ import {
 } from '@/components/ChatHistory/ContinueNewChatDialog'
 import { agentDisplayName, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
-import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useActiveStore } from '@/stores/active'
-import { useServerSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
@@ -44,7 +41,7 @@ import {
   type BreakerState,
   type ResolveMemo,
 } from '@/lib/chat-spawn-breaker'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -106,13 +103,16 @@ export function AgentChatPane({ agentName, projectPath, restoredSessionId, onDae
   // Resolve project id synchronously from the projects store; the chat tab
   // will not render until a real id is available so the legacy collision
   // bug can never reappear via this surface.
-  const projectId = useProjectsStore((s) => {
-    return s.projects.find((p) => p.path === projectPath)?.id ?? null
+  //
+  // MS3 — resolved in THIS room's own project list: a path is only an
+  // identity inside the server it came from.
+  const projectId = useRoomProjects((projects) => {
+    return projects.find((p) => p.path === projectPath)?.id ?? null
   })
 
   // Capability gate (#683 / PRD §6). Subscribes so a host switch
   // (local↔remote) flips the path live. `local` always supports it.
-  const daemonOwnsChat = useServerSupports('daemon-pinned-chat')
+  const daemonOwnsChat = useRoomSupports('daemon-pinned-chat')
 
   if (!projectId) {
     return (
@@ -228,6 +228,7 @@ function ChatHeader({
   pinnedProvider,
   onContinueNewChat,
 }: ChatHeaderProps): React.JSX.Element {
+  const room = useRoom()
   useEffect(() => {
     if (!harnessReady || chatProvider) return
     if (viewTab === 'chat') onViewTabChange('terminal')
@@ -247,9 +248,9 @@ function ChatHeader({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyEpoch, setHistoryEpoch] = useState(0)
 
-  useEffect(() => onChatHistoryChanged(primaryScope(), () => {
+  useEffect(() => onChatHistoryChanged(room.scope, () => {
     setHistoryEpoch((n) => n + 1)
-  }), [])
+  }), [room])
 
   // 0.37.12 — fetch chat history for the dropdown title + popover list.
   // Runs on mount, when the current session changes (title converges
@@ -270,8 +271,8 @@ function ChatHeader({
         provider?: string
         archived?: boolean
         customName?: string | null
-      }>>(primaryScope(), 'chat/list', { project_path: projectPath }),
-      daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names').catch(() => ({}) as Record<string, string>),
+      }>>(room.scope, 'chat/list', { project_path: projectPath }),
+      daemonCliGet<Record<string, string>>(room.scope, 'chat/custom-names').catch(() => ({}) as Record<string, string>),
     ])
       .then(([rows, names]) => {
         if (cancelled) return
@@ -461,19 +462,23 @@ function ChatHeader({
 // Shared hook: resolve the AGENT.md `display_name:` (falls back to the
 // technical agent name). Used by both implementations.
 function useDisplayName(projectPath: string, agentName: string): string {
+  const room = useRoom()
   const [displayName, setDisplayName] = useState<string>(agentName)
   useEffect(() => {
     let cancelled = false
-    agentDisplayName(primaryScope(), projectPath)
+    agentDisplayName(room.scope, projectPath)
       .then((n) => { if (!cancelled && n) setDisplayName(n) })
       .catch(() => { /* keep agentName as fallback */ })
     return () => { cancelled = true }
   }, [projectPath, agentName])
   useEffect(() => {
+    // `sync:projects` is THIS computer's daemon (MS14): only a room that may
+    // use local commands hears it.
+    if (!room.localCommands) return
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      agentDisplayName(primaryScope(), projectPath)
+      agentDisplayName(room.scope, projectPath)
         .then((n) => { if (n) setDisplayName(n) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })
@@ -521,6 +526,7 @@ function freshArgvProblem(args: string[] | undefined, sourceId: string): string 
 }
 
 async function watchFreshProviderId(opts: {
+  scope: ServerScope
   projectPath: string
   sourceId: string
   targetProvider: string
@@ -530,7 +536,7 @@ async function watchFreshProviderId(opts: {
   const deadline = Date.now() + 20_000
   while (!opts.cancelled() && Date.now() < deadline) {
     try {
-      const rows = await daemonCliGet<Array<{ sessionId?: string; provider?: string }>>(primaryScope(),
+      const rows = await daemonCliGet<Array<{ sessionId?: string; provider?: string }>>(opts.scope,
         'chat/list',
         { project_path: opts.projectPath },
       )
@@ -552,6 +558,7 @@ async function watchFreshProviderId(opts: {
 }
 
 async function ensurePinnedChat(
+  scope: ServerScope,
   projectPath: string,
   opts?: { forceRespawn?: boolean; restoredSessionId?: string; explicitSelection?: boolean; freshProvider?: string },
 ): Promise<EnsurePinnedChatResponse> {
@@ -564,12 +571,12 @@ async function ensurePinnedChat(
   // so an older daemon that ignores the field reuses the live PTY instead
   // of resuming the source.
   if (opts?.freshProvider) {
-    return daemonCliPost<EnsurePinnedChatResponse>(primaryScope(), 'workspace/ensure-pinned-chat', {
+    return daemonCliPost<EnsurePinnedChatResponse>(scope, 'workspace/ensure-pinned-chat', {
       project: projectPath,
       freshProvider: opts.freshProvider,
     })
   }
-  return daemonCliPost<EnsurePinnedChatResponse>(primaryScope(), 'workspace/ensure-pinned-chat', {
+  return daemonCliPost<EnsurePinnedChatResponse>(scope, 'workspace/ensure-pinned-chat', {
     project: projectPath,
     ...(opts?.forceRespawn ? { forceRespawn: true } : {}),
     ...(opts?.restoredSessionId ? { restoredSessionId: opts.restoredSessionId } : {}),
@@ -600,6 +607,7 @@ async function ensurePinnedChat(
  * a clean re-attach after a forceRespawn / SessionAdded.
  */
 function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSessionId, onDaemonSessionRemoved }: AgentChatTerminalProps): React.JSX.Element {
+  const room = useRoom()
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
   const displayName = useDisplayName(projectPath, agentName)
@@ -607,7 +615,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // P1.A — bind this pinned-Chat pane to ITS OWN project upfront (see the
   // legacy body for the full rationale). Idempotent.
   useEffect(() => {
-    useActiveAgentsStore.getState().bindPaneProject(terminalIdRef.current, projectId)
+    room.activity.bindPaneProject(terminalIdRef.current, projectId)
   }, [projectId])
 
   // Resolve phase. `ensuring` → first ensure in flight; `ready` → the
@@ -684,7 +692,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
-    resolvePinnedChatCopyableAddress(projectPath, projectId)
+    resolvePinnedChatCopyableAddress(room.scope, projectPath, projectId)
       .then((a) => {
         if (!cancelled && a?.clipboard) setOverlayAddr(a.clipboard)
       })
@@ -724,7 +732,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           agentName?: string
           sessionId?: string
           conversationId?: string
-        }>>(primaryScope(), 'sessions/list-for-workspace', { path: projectPath })
+        }>>(room.scope, 'sessions/list-for-workspace', { path: projectPath })
         if (cancelled || !Array.isArray(rows)) return
         const row = rows.find((item) => item.agentName === projectId)
         const cid = row?.conversationId?.trim()
@@ -748,7 +756,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const ensure = useCallback(
     async (forceRespawn: boolean, explicitSelection = false): Promise<void> => {
       try {
-        const res = await ensurePinnedChat(projectPath, {
+        const res = await ensurePinnedChat(room.scope, projectPath, {
           forceRespawn,
           // Issue B — only true on a dropdown switch; honors the picked
           // session id at the daemon and skips the converge fallback.
@@ -809,7 +817,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   //   SessionRemoved(agent_name === projectId) → show idle. NO auto-respawn
   //     (PRD §4: the daemon never auto-spawns a pinned chat).
   useEffect(() => {
-    const unsubscribe = subscribeToWorkspaceSessionEvents(primaryScope(), projectPath, {
+    const unsubscribe = subscribeToWorkspaceSessionEvents(room.scope, projectPath, {
       onAdded: (event) => {
         if (event.agent_name !== projectId) return
         // #689 — remount-guard. Only re-attach on a GENUINE session change.
@@ -872,7 +880,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       try {
         // HOST-AWARE persist of the pinned session (same client the legacy
         // path uses; the route reads query params).
-        await setChatSession(primaryScope(), projectPath, newSessionId, provider)
+        await setChatSession(room.scope, projectPath, newSessionId, provider)
       } catch (err) {
         console.error('[AgentChatPane] switchToSession DB update failed:', err)
         setRefreshing(false)
@@ -883,7 +891,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       // Match the legacy path: stamp layout so offline restore matches the
       // dropdown pick across refresh / relaunch (not only after ensure).
       try {
-        useTabsStore.getState().stampAgentSessionId(agentName, projectPath, newSessionId, projectId)
+        room.tabs.getState().stampAgentSessionId(agentName, projectPath, newSessionId, projectId)
       } catch (err) {
         console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
       }
@@ -908,7 +916,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     freshHoldProviderIdRef.current = source.sessionId
     const known = new Set<string>([source.sessionId])
     try {
-      const rows = await daemonCliGet<Array<{ sessionId?: string }>>(primaryScope(), 'chat/list', {
+      const rows = await daemonCliGet<Array<{ sessionId?: string }>>(room.scope, 'chat/list', {
         project_path: projectPath,
       })
       for (const row of rows ?? []) {
@@ -925,7 +933,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     setPhase({ kind: 'ensuring' })
     let spawned = false
     try {
-      const res = await ensurePinnedChat(projectPath, { freshProvider: req.targetProvider })
+      const res = await ensurePinnedChat(room.scope, projectPath, { freshProvider: req.targetProvider })
       if (!stillOpen() || myGen !== discoveryGenRef.current) {
         freshHoldProviderIdRef.current = null
         setPhase(previous.kind === 'ensuring'
@@ -956,7 +964,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       setChatConversationId(null)
       setAttachNonce((n) => n + 1)
       if (!stillOpen()) return
-      const msg = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
+      const msg = await daemonCliPost<MsgResponse>(room.scope, 'terminal/send-message', {
         session_id: res.sessionId,
         text: req.text,
       })
@@ -967,13 +975,13 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       }
       const stamp = (id: string): void => {
         try {
-          useTabsStore.getState().stampAgentSessionId(agentName, projectPath, id, projectId)
+          room.tabs.getState().stampAgentSessionId(agentName, projectPath, id, projectId)
         } catch (err) {
           console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
         }
       }
       if (!res.pendingSessionDiscovery && premint) {
-        await setChatSession(primaryScope(), projectPath, premint, req.targetProvider)
+        await setChatSession(room.scope, projectPath, premint, req.targetProvider)
         stamp(premint)
         freshHoldProviderIdRef.current = null
         setPhase({
@@ -986,6 +994,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         return
       }
       void watchFreshProviderId({
+        scope: room.scope,
         projectPath,
         sourceId: source.sessionId,
         targetProvider: req.targetProvider,
@@ -994,7 +1003,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       }).then((id) => {
         if (!id || myGen !== discoveryGenRef.current) return
         freshHoldProviderIdRef.current = null
-        void setChatSession(primaryScope(), projectPath, id, req.targetProvider).then(() => {
+        void setChatSession(room.scope, projectPath, id, req.targetProvider).then(() => {
           stamp(id)
           setPhase((prev) => (
             prev.kind === 'ready' ? { ...prev, canonicalSessionId: id } : prev
@@ -1229,11 +1238,12 @@ function RetryButton({ onClick, refreshing }: { onClick: () => void; refreshing:
  * daemon-owned path above has neither the loop nor the band-aids.
  */
 function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSessionId }: AgentChatTerminalProps): React.JSX.Element {
+  const room = useRoom()
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
 
   useEffect(() => {
-    useActiveAgentsStore.getState().bindPaneProject(terminalIdRef.current, projectId)
+    room.activity.bindPaneProject(terminalIdRef.current, projectId)
   }, [projectId])
   const [launchConfig, setLaunchConfig] = useState<{
     command: string
@@ -1283,7 +1293,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
-    resolvePinnedChatCopyableAddress(projectPath, projectId)
+    resolvePinnedChatCopyableAddress(room.scope, projectPath, projectId)
       .then((a) => {
         if (!cancelled && a?.clipboard) setOverlayAddr(a.clipboard)
       })
@@ -1308,6 +1318,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
   // Listen for chat:refreshed broadcasts (cross-window remount).
   useEffect(() => {
+    // `chat:refreshed` is a Tauri broadcast between THIS computer's windows.
+    if (!room.localCommands) return
     let cancelled = false
     let unlisten: (() => void) | null = null
     listen<{ projectPath: string }>('chat:refreshed', (event) => {
@@ -1317,7 +1329,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       setRefreshNonce((n) => n + 1)
     }).then((u) => { if (cancelled) u(); else unlisten = u })
     return () => { cancelled = true; unlisten?.() }
-  }, [projectPath])
+  }, [room, projectPath])
 
   const handleRefresh = useCallback(async (): Promise<void> => {
     if (refreshing) return
@@ -1327,26 +1339,20 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     breakerRef.current = resetBreaker()
     setBreakerTripped(false)
     lastResolvedRef.current = null
-    // Kill the daemon-owned PTY (best-effort).
-    try {
-      const creds = await getDaemonWs(primaryScope())
-      await fetch(
-        `${daemonHttpBase(creds)}/cli/sessions/v2/close?token=${creds.token}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_name: projectId, force: true }),
-        },
-      ).catch(() => {})
-    } catch { /* ignore — refresh proceeds either way */ }
+    // Kill the daemon-owned PTY (best-effort) on THIS room's server (MS75).
+    // closeV2Session never throws; refresh proceeds either way.
+    await closeV2Session(room.scope, projectId)
 
-    invoke('k2so_chat_refresh_broadcast', { projectPath })
-      .catch((e) => console.warn('[chat-refresh] broadcast failed:', e))
+    // MS67 — the cross-window remount broadcast is a local Tauri command.
+    if (room.localCommands) {
+      invoke('k2so_chat_refresh_broadcast', { projectPath })
+        .catch((e) => console.warn('[chat-refresh] broadcast failed:', e))
+    }
 
     setLaunchConfig(null)
     setReady(false)
     setRefreshing(false)
-  }, [projectId, projectPath, agentName, refreshing])
+  }, [room, projectId, projectPath, agentName, refreshing])
 
   // Switch the pinned chat tab to a different past session. <ChatHeader>
   // closes its own popover before invoking this, so no dropdown state here.
@@ -1357,13 +1363,13 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       return
     }
     try {
-      await setChatSession(primaryScope(), projectPath, newSessionId, provider)
+      await setChatSession(room.scope, projectPath, newSessionId, provider)
     } catch (err) {
       console.error('[AgentChatPane] switchToSession DB update failed:', err)
       return
     }
     try {
-      useTabsStore.getState().stampAgentSessionId(agentName, projectPath, newSessionId, projectId)
+      room.tabs.getState().stampAgentSessionId(agentName, projectPath, newSessionId, projectId)
     } catch (err) {
       console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
     }
@@ -1396,7 +1402,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       }
       if (!sid) return
       try {
-        useTabsStore.getState().stampAgentSessionId(agentName, projectPath, sid, projectId)
+        room.tabs.getState().stampAgentSessionId(agentName, projectPath, sid, projectId)
       } catch (err) {
         console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
       }
@@ -1409,7 +1415,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       if (restoredSessionId && !cancelled) {
         let decision: ColdBootDecision = { kind: 'fallback', sessionId: restoredSessionId }
         try {
-          const canonical = await resumeChatArgs(primaryScope(), projectPath)
+          const canonical = await resumeChatArgs(room.scope, projectPath)
           decision = reconcileColdBootSession(restoredSessionId, canonical)
         } catch (err) {
           console.warn('[AgentChatPane] cold-boot SQLite reconcile failed, using layout hint:', err)
@@ -1450,7 +1456,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             cwd: projectPath,
           })
         }
-        daemonCliGet(primaryScope(), 'agents/lock', {
+        daemonCliGet(room.scope, 'agents/lock', {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,
@@ -1463,7 +1469,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
       // Step 1: Reattach if PTY already alive in this Tauri session
       try {
-        const exists = await terminalExists(primaryScope(), myTerminalId)
+        const exists = await terminalExists(room.scope, myTerminalId)
         if (!cancelled && exists) {
           setLaunchConfig(null)
           setReady(true)
@@ -1472,8 +1478,10 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       } catch { /* fall through */ }
 
       // Step 1b: Check the daemon for an existing session under this
-      // workspace's canonical key.
-      try {
+      // workspace's canonical key. Informational only. MS67 — the Tauri
+      // command asks THIS computer's daemon, so only a room that may use
+      // local commands runs it.
+      if (room.localCommands) try {
         const json = await invoke<string>('k2so_session_lookup_by_agent', {
           agent: projectId,
         })
@@ -1496,14 +1504,14 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
       // Step 2: Build a *bare resume* command for the chat tab.
       try {
-        const result = await resumeChatArgs(primaryScope(), projectPath)
+        const result = await resumeChatArgs(room.scope, projectPath)
         if (!cancelled && result) {
           setLaunchConfig({
             command: result.command,
             args: result.args,
             cwd: result.cwd,
           })
-          daemonCliGet(primaryScope(), 'agents/lock', {
+          daemonCliGet(room.scope, 'agents/lock', {
             project: projectPath,
             agent: agentName,
             terminal_id: myTerminalId,
@@ -1527,7 +1535,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           args: ['--dangerously-skip-permissions'],
           cwd: projectPath,
         })
-        daemonCliGet(primaryScope(), 'agents/lock', {
+        daemonCliGet(room.scope, 'agents/lock', {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,

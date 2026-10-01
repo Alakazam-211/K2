@@ -21,6 +21,7 @@ import {
   type InstallableCli,
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { primaryScope } from '@/kessel/server-scope'
 import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
 import { ClaudeAuthRefreshRow } from '../shared/ClaudeAuthRefreshRow'
@@ -944,7 +945,7 @@ function CLIInstallGuide(): React.JSX.Element {
       delete next[program]
       return next
     })
-    void ensureOneCli(program)
+    void ensureOneCli(primaryScope(), program)
       .then(() => {
         setInstallError((prev) => {
           if (!(program in prev)) return prev

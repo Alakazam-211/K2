@@ -21,6 +21,8 @@ import { useHomeRoomSelected } from '@/components/Home/home-room'
 import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { LeftPanelContent, RightPanelContent } from './WorkspaceDrawers'
+import { RoomProvider } from '@/components/Room/RoomContext'
+import { primaryRoom } from '@/stores/room'
 
 interface ShellProject {
   name: string
@@ -63,6 +65,12 @@ export default function AgentsShell({
   activeWorkspace: ShellWorkspace | undefined
   cwd: string
 }): React.JSX.Element {
+  // Home M3 — Agents and Home on the connected server show the window's
+  // PRIMARY room: today's tabs store on the window's server. Its drawers
+  // and its main area get it explicitly; the main area registers it as the
+  // shown (focused) room for window-level input (MS17). The sidebar is
+  // window-level, outside the room.
+  const room = primaryRoom()
   const onHome = usePageViewStore((s) => s.page === 'home')
   const homeEmpty = useHomesStore((s) => selectedHome(s).rows.length === 0)
   const roomShown = useRoomShown()
@@ -78,26 +86,36 @@ export default function AgentsShell({
     <Layout
       sidebar={onHome ? <HomeSidebar /> : <Sidebar />}
       rail={onHome ? <HomeIconRail /> : undefined}
-      leftPanel={roomShown ? <LeftPanelContent rootPath={rootPath} /> : undefined}
-      rightPanel={roomShown ? <RightPanelContent rootPath={rootPath} /> : undefined}
+      leftPanel={roomShown ? (
+        <RoomProvider room={room}>
+          <LeftPanelContent rootPath={rootPath} />
+        </RoomProvider>
+      ) : undefined}
+      rightPanel={roomShown ? (
+        <RoomProvider room={room}>
+          <RightPanelContent rootPath={rootPath} />
+        </RoomProvider>
+      ) : undefined}
       projectName={roomShown ? activeProject?.name : undefined}
       workspaceName={roomShown ? activeWorkspace?.name : undefined}
     >
-      {hasRoom ? (
-        <>
-          <div
-            className="h-full w-full"
-            style={roomShown ? undefined : { display: 'none' }}
-            aria-hidden={roomShown ? undefined : true}
-            data-room-area=""
-          >
-            <TerminalArea cwd={cwd} />
-          </div>
-          {!roomShown && <RoomEmptyState hint={emptyHint} />}
-        </>
-      ) : (
-        <RoomEmptyState hint={emptyHint} />
-      )}
+      <RoomProvider room={room} shown>
+        {hasRoom ? (
+          <>
+            <div
+              className="h-full w-full"
+              style={roomShown ? undefined : { display: 'none' }}
+              aria-hidden={roomShown ? undefined : true}
+              data-room-area=""
+            >
+              <TerminalArea cwd={cwd} />
+            </div>
+            {!roomShown && <RoomEmptyState hint={emptyHint} />}
+          </>
+        ) : (
+          <RoomEmptyState hint={emptyHint} />
+        )}
+      </RoomProvider>
     </Layout>
   )
 }

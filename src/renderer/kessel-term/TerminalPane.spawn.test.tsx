@@ -131,6 +131,24 @@ vi.mock('@/stores/connect-host', () => ({
 }))
 
 import { TerminalPane } from './TerminalPane'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { fakeScope } from '@/test-utils/fake-scope'
+import { useTabsStore } from '@/stores/tabs'
+import { getDaemonWs } from '../kessel/daemon-ws'
+
+// Home M3 — the pane's room: the mocked tabs store, an activity sink of
+// spies (MS68), the primary scope.
+function activitySpies() {
+  return {
+    recordOutput: vi.fn(),
+    recordTitleActivity: vi.fn(),
+    recordTitlePermission: vi.fn(),
+    markSeen: vi.fn(),
+    bindPaneAgentName: vi.fn(),
+    bindPaneProject: vi.fn(),
+  }
+}
+const room = testRoom({ tabs: useTabsStore, activity: activitySpies() })
 import {
   contentBoxSize,
   FALLBACK_SPAWN_COLS,
@@ -372,7 +390,7 @@ describe('session_owned_elsewhere', () => {
 
   it('drops the pane and does not retry, error, or POST v2/close', async () => {
     const { urls } = installStatus(409, '{"error":"session_owned_elsewhere"}')
-    render(pane(true))
+    renderInRoom(room, pane(true))
     await waitFor(() => expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledWith('pg-test'))
     expect(document.body.textContent ?? '').not.toContain('Kessel:')
     expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
@@ -388,7 +406,7 @@ describe('session_owned_elsewhere', () => {
   // pane is dropped the same way: no retry, no close, no error strip.
   it('409 tab_closed drops the pane and does not retry, error, or POST v2/close', async () => {
     const { urls } = installStatus(409, '{"error":"tab_closed","agent_name":"tab-pg-test"}')
-    render(pane(true))
+    renderInRoom(room, pane(true))
     await waitFor(() => expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledWith('pg-test'))
     expect(document.body.textContent ?? '').not.toContain('Kessel:')
     expect(document.body.textContent ?? '').not.toContain('spawn 409')
@@ -401,48 +419,85 @@ describe('session_owned_elsewhere', () => {
 
   it('other 4xx still surfaces the spawn error and does not drop the pane', async () => {
     installStatus(400, '{"error":"bad request"}')
-    render(pane(true))
+    renderInRoom(room, pane(true))
     await waitFor(() => expect(document.body.textContent ?? '').toContain('spawn 400'))
     expect(tabsApi.releasePaneOwnedElsewhere).not.toHaveBeenCalled()
     expect(document.body.textContent ?? '').toContain('bad request')
   })
 })
 
+describe("a pane in another server's room (Home M3)", () => {
+  it("spawns with that room's scope and drops the pane from that room's tabs, never the primary's", async () => {
+    const B = fakeScope('b.test')
+    const releaseInB = vi.fn()
+    const roomB = testRoom({
+      key: 'b.test|p1:w1',
+      isPrimary: false,
+      localCommands: false,
+      scope: B,
+      tabs: {
+        getState: () => ({
+          setTerminalSandboxBackend: vi.fn(),
+          setTerminalConversationId: vi.fn(),
+          setTabTitle: vi.fn(),
+          tabs: [],
+          extraGroups: [],
+          releasePaneOwnedElsewhere: releaseInB,
+        }),
+      },
+      activity: activitySpies(),
+    })
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({}),
+      text: async () => '{"error":"session_owned_elsewhere"}',
+    })) as unknown as typeof fetch
+
+    renderInRoom(roomB, pane(true))
+    await waitFor(() => expect(releaseInB).toHaveBeenCalledWith('pg-test'))
+    expect(tabsApi.releasePaneOwnedElsewhere).not.toHaveBeenCalled()
+    const scopes = vi.mocked(getDaemonWs).mock.calls.map((c) => c[0])
+    expect(scopes.length).toBeGreaterThan(0)
+    expect(scopes.every((s) => s === B)).toBe(true)
+  })
+})
+
 describe('lazy spawn — restored never-attached bare tabs', () => {
   it('a hidden bare tab (no command, no session) does NOT spawn on mount', async () => {
     const { spawnCalls } = installFetchSpy()
-    render(pane(false))
+    renderInRoom(room, pane(false))
     await settle()
     expect(spawnCalls()).toBe(0)
   })
 
   it('the visible (active) tab spawns on mount', async () => {
     const { spawnCalls } = installFetchSpy()
-    render(pane(true))
+    renderInRoom(room, pane(true))
     await waitFor(() => expect(spawnCalls()).toBe(1))
   })
 
   it('a hidden tab WITH a resumable sessionId spawns on mount (stays warm)', async () => {
     const { spawnCalls } = installFetchSpy()
-    render(pane(false, { sessionId: 'claude-session-uuid' }))
+    renderInRoom(room, pane(false, { sessionId: 'claude-session-uuid' }))
     await waitFor(() => expect(spawnCalls()).toBe(1))
   })
 
   it('a hidden tab with a real command spawns on mount (background work)', async () => {
     const { spawnCalls } = installFetchSpy()
-    render(pane(false, { command: 'claude', args: ['--resume', 'abc'] }))
+    renderInRoom(room, pane(false, { command: 'claude', args: ['--resume', 'abc'] }))
     await waitFor(() => expect(spawnCalls()).toBe(1))
   })
 
   it('a hidden tab attaching to an existing daemon session spawns on mount', async () => {
     const { spawnCalls } = installFetchSpy()
-    render(pane(false, { attachAgentName: 'proj-uuid' }))
+    renderInRoom(room, pane(false, { attachAgentName: 'proj-uuid' }))
     await waitFor(() => expect(spawnCalls()).toBe(1))
   })
 
   it('becoming visible fires the deferred spawn exactly once; later flips never re-spawn', async () => {
     const { spawnCalls } = installFetchSpy()
-    const view = render(pane(false))
+    const view = renderInRoom(room, pane(false))
     await settle()
     expect(spawnCalls()).toBe(0)
 
@@ -475,7 +530,7 @@ describe('measure-first spawn body cols/rows', () => {
       expect(expected).not.toEqual({ cols: 120, rows: 40 })
 
       const { spawnCalls, spawnBodies } = installFetchSpy()
-      render(pane(true))
+      renderInRoom(room, pane(true))
       await waitFor(() => expect(spawnCalls()).toBe(1))
 
       const body = spawnBodies()[0]
@@ -519,7 +574,7 @@ describe('measure-first spawn body cols/rows', () => {
       expect(borderFit!.cols).not.toBe(roFit!.cols)
 
       const { spawnCalls, spawnBodies } = installFetchSpy()
-      render(pane(true))
+      renderInRoom(room, pane(true))
       await waitFor(() => expect(spawnCalls()).toBe(1))
 
       const body = spawnBodies()[0]
@@ -546,7 +601,7 @@ describe('measure-first spawn body cols/rows', () => {
     })
     try {
       const { spawnCalls, spawnBodies } = installFetchSpy()
-      render(pane(true))
+      renderInRoom(room, pane(true))
       await waitFor(() => expect(spawnCalls()).toBe(1))
 
       const body = spawnBodies()[0]
@@ -566,7 +621,7 @@ describe('measure-first spawn body cols/rows', () => {
 describe('named chat spawn seed+lock', () => {
   it('POSTs display name as label and label_locked, not a harness basename', async () => {
     const { spawnCalls, spawnBodies } = installFetchSpy()
-    render(pane(true, {
+    renderInRoom(room, pane(true, {
       command: 'claude',
       args: ['--resume', '01920000-aaaa-7000-8000-000000000001'],
       seedLabel: 'Code Review',

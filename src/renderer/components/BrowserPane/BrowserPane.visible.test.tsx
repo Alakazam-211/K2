@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // Fail loud. Focus must not hide the native page. Cover and a hidden tab must.
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
@@ -168,7 +169,7 @@ describe('browser show and hide commands', () => {
 
   it('shows without navigate while unfocused, and hides without close', async () => {
     useWindowFocusStore.setState({ isFocused: false })
-    render(
+    renderInPrimaryRoom(
       <BrowserPane itemId="b1" tabId="tab-1" paneGroupId="pg-1" url="https://example.com" />,
     )
     await flush()
@@ -233,7 +234,7 @@ describe('browser show and hide commands', () => {
     async (focused) => {
       useWindowFocusStore.setState({ isFocused: focused })
 
-      const hiddenTab = render(
+      const hiddenTab = renderInPrimaryRoom(
         <TabVisibilityContext.Provider value={false}>
           <BrowserPane itemId="hidden" tabId="tab-h" paneGroupId="pg-h" url="https://example.com" />
         </TabVisibilityContext.Provider>,
@@ -245,7 +246,7 @@ describe('browser show and hide commands', () => {
       vi.mocked(invoke).mockClear()
 
       useSettingsStore.setState({ settingsOpen: true })
-      const settings = render(
+      const settings = renderInPrimaryRoom(
         <BrowserPane itemId="settings" tabId="tab-s" paneGroupId="pg-s" url="https://example.com" />,
       )
       await flush()
@@ -258,7 +259,7 @@ describe('browser show and hide commands', () => {
 
       for (const page of NON_AGENTS) {
         usePageViewStore.setState({ page })
-        const covered = render(
+        const covered = renderInPrimaryRoom(
           <BrowserPane itemId={page} tabId={`tab-${page}`} paneGroupId={`pg-${page}`} url="https://example.com" />,
         )
         await flush()
@@ -304,7 +305,7 @@ describe("another window's navigation does not move this page", () => {
   })
 
   it('a remote url change does not call browser_navigate; a navSeq bump does', async () => {
-    const view = render(
+    const view = renderInPrimaryRoom(
       <BrowserPane itemId="b2" tabId="tab-2" paneGroupId="pg-2" url="https://example.com/a" />,
     )
     await flush()
@@ -336,7 +337,7 @@ describe("another window's navigation does not move this page", () => {
   })
 
   it('a standalone embed (Settings OAuth) still follows its url prop', async () => {
-    const view = render(
+    const view = renderInPrimaryRoom(
       <BrowserPane itemId="oauth" tabId="settings-oauth" paneGroupId="settings-oauth" url="https://example.com/start" standalone />,
     )
     await flush()

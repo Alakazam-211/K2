@@ -55,6 +55,11 @@ import { useAssistantStore } from './stores/assistant'
 import { applyCmdL } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
 import { menuNewTab } from './lib/menu-new-tab'
+import { primaryRoom } from './stores/room'
+import { focusedRoom, installRoomFocusTracking } from './stores/window-room'
+import { RoomProvider } from './components/Room/RoomContext'
+import { mountWorkspaceOpsRouter } from './lib/workspace-ops-router'
+import { useWorkspaceIndexShortcuts } from './hooks/useWorkspaceIndexShortcuts'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
@@ -142,14 +147,25 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
   const rightHeader = focusHeaderSide === 'right' ? <FocusWorkspaceHeader side="right" /> : undefined
   const { data: gitInfo } = useGitInfo(activeProject?.path)
 
+  // Home M3 — a Focus window shows the window's primary room (MS13).
+  const room = primaryRoom()
   return (
     <FocusErrorBoundary>
       <FocusLayout
         projectName={activeProject?.name}
         branchName={gitInfo?.isRepo ? gitInfo.currentBranch : undefined}
-        leftPanel={<LeftPanelContent rootPath={cwd} header={leftHeader} />}
-        rightPanel={<RightPanelContent rootPath={cwd} header={rightHeader} />}
+        leftPanel={(
+          <RoomProvider room={room}>
+            <LeftPanelContent rootPath={cwd} header={leftHeader} />
+          </RoomProvider>
+        )}
+        rightPanel={(
+          <RoomProvider room={room}>
+            <RightPanelContent rootPath={cwd} header={rightHeader} />
+          </RoomProvider>
+        )}
       >
+        <RoomProvider room={room} shown>
         {activeProject ? (
           <TerminalArea cwd={cwd} />
         ) : (
@@ -162,6 +178,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
             </div>
           </div>
         )}
+        </RoomProvider>
       </FocusLayout>
     </FocusErrorBoundary>
   )
@@ -401,6 +418,16 @@ function AppRoot(): React.JSX.Element {
   // deps produced N copies of one drop). See external-drop-router.ts.
   useEffect(() => mountExternalDropRouter(), [])
 
+  // Home M3 (MS17/MS18) — window-level input acts on the FOCUSED room:
+  // pointer-down / focus-in inside a room root focuses it, and the
+  // assistant's `workspace:*` ops are delivered to it alone.
+  useEffect(() => installRoomFocusTracking(document), [])
+  useEffect(() => mountWorkspaceOpsRouter(), [])
+
+  // Cmd+1–9 / Cmd+Opt+1–9 — one window-level handler (MS18). On Home,
+  // Cmd+1–9 selects Home row N (answer Q5).
+  useWorkspaceIndexShortcuts()
+
   // New Window. Not inside useTerminalShortcuts — that hook exists
   // only while TerminalArea is mounted.
   useNewWindowShortcut()
@@ -437,14 +464,14 @@ function AppRoot(): React.JSX.Element {
         useSettingsStore.getState().closeSettings()
         usePageViewStore.getState().setPage('projects')
       }
-      // Cmd+[ to go back, Cmd+] to go forward
+      // Cmd+[ to go back, Cmd+] to go forward — in the focused room (MS18).
       if (e.metaKey && !e.shiftKey && e.key === '[') {
         e.preventDefault()
-        useTabsStore.getState().goBack()
+        focusedRoom()?.tabs.getState().goBack()
       }
       if (e.metaKey && !e.shiftKey && e.key === ']') {
         e.preventDefault()
-        useTabsStore.getState().goForward()
+        focusedRoom()?.tabs.getState().goForward()
       }
       // Terminal font size ONLY (not app chrome) — Cmd+Shift+= / Cmd+Shift+-
       // Shift+= often reports key "+" ; some platforms still report "=" with shiftKey.
@@ -658,30 +685,31 @@ function AppRoot(): React.JSX.Element {
         useSettingsStore.setState({ pendingUpdateCheck: true })
         openSettings('general')
       }).then(track)
+      // Room-scoped menu items act on the focused room only (MS18); with
+      // no focused room they do nothing (MS17).
       listen('menu:new-document', () => {
-        const ps = useProjectsStore.getState()
-        const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
-        const cwd = ws?.worktreePath ?? proj?.path ?? '~'
-        useTabsStore.getState().openUntitledDocument(cwd)
+        const room = focusedRoom()
+        if (!room) return
+        room.tabs.getState().openUntitledDocument(room.cwd())
       }).then(track)
       listen('menu:new-tab', () => {
         menuNewTab()
       }).then(track)
       listen('menu:launch-agent', async () => {
-        const ps = useProjectsStore.getState()
-        const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
-        const cwd = ws?.worktreePath ?? proj?.path ?? '~'
+        const room = focusedRoom()
+        if (!room) return
+        const cwd = room.cwd()
         const { usePresetsStore: presetsStore } = await import('@/stores/presets')
         const state = presetsStore.getState()
         const defaultPreset = state.presets.find((p: any) => p.enabled)
         if (defaultPreset) {
-          state.launchPreset(defaultPreset.id, cwd, 'tab')
+          state.launchPreset(room.tabs, defaultPreset.id, cwd, 'tab')
         }
       }).then(track)
       listen('menu:split-pane', () => {
-        const tabsState = useTabsStore.getState()
+        const room = focusedRoom()
+        if (!room) return
+        const tabsState = room.tabs.getState()
         const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
         if (!activeTab) return
         const getLeaf = (t: unknown): string | null => {
@@ -692,10 +720,7 @@ function AppRoot(): React.JSX.Element {
         }
         const firstPaneId = getLeaf(activeTab.mosaicTree)
         if (!firstPaneId) return
-        const ps = useProjectsStore.getState()
-        const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
-        const cwd = ws?.worktreePath ?? proj?.path ?? '~'
+        const cwd = room.cwd()
         const newPaneId = crypto.randomUUID()
         tabsState.splitPane(activeTab.id, firstPaneId, newPaneId, { type: 'terminal', terminalId: newPaneId, cwd }, 'column')
       }).then(track)
@@ -705,7 +730,9 @@ function AppRoot(): React.JSX.Element {
         })
       }).then(track)
       listen('menu:close-tab', () => {
-        const { activeTabId, removeTab } = useTabsStore.getState()
+        const room = focusedRoom()
+        if (!room) return
+        const { activeTabId, removeTab } = room.tabs.getState()
         if (activeTabId) removeTab(activeTabId)
       }).then(track)
       listen('menu:command-palette', () => {
@@ -960,7 +987,10 @@ function AppRoot(): React.JSX.Element {
   // WebGL contexts and re-paint when style-store.textGamma changes.
   return (
     <PageLiveContext.Provider value={page === 'agents' || (page === 'home' && homeRoomShown)}>
-      <PinnedChatRetainer />
+      {/* The retainer portals the primary room's pinned chats (room code). */}
+      <RoomProvider room={primaryRoom()}>
+        <PinnedChatRetainer />
+      </RoomProvider>
 
       {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
       {focusProjectId ? (

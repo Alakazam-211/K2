@@ -12,7 +12,9 @@ import { settingsUpdate } from '@/lib/daemon-settings'
 import { useAssistantStore, type DebugPass, type InteractionLogEntry } from '../../stores/assistant'
 import { useSettingsStore } from '../../stores/settings'
 import { usePageViewStore } from '../../stores/page-view'
-import { useTabsStore } from '../../stores/tabs'
+import { focusedRoom } from '../../stores/window-room'
+import { roomActiveProject } from '../../stores/room'
+import { assistantMayActOn } from '../../lib/workspace-ops-router'
 import { useProjectsStore } from '../../stores/projects'
 import { usePanelsStore } from '../../stores/panels'
 import { useMergeDialogStore } from '../MergeDialog/MergeDialog'
@@ -247,10 +249,18 @@ function resolveFilePath(relativePath: string, cwd: string): string {
 
 /** Execute validated tool calls on the tabs store */
 async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
-  const tabsStore = useTabsStore.getState()
-  const projectsStore = useProjectsStore.getState()
+  // Home M3 / answer Q4 — the assistant acts on the FOCUSED room, and only
+  // when that room is on the window's connected server. In a room on any
+  // other server it refuses and says why.
+  const room = focusedRoom()
+  if (!room) return 'No workspace is open'
+  if (!assistantMayActOn(room)) {
+    return `The assistant can arrange rooms on ${primaryScope().label} only.`
+  }
+  const tabs = room.tabs
+  const tabsStore = tabs.getState()
 
-  const activeProject = projectsStore.projects.find(p => p.id === projectsStore.activeProjectId)
+  const activeProject = roomActiveProject(room)
   const cwd = activeProject?.path ?? '~'
 
   const validCalls = validateAndSanitize(toolCalls, cwd)
@@ -322,18 +332,18 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
           // the live count each time; `tabsStore` is a snapshot taken before
           // the first split, so looping on it never ended.
           const targetCount = call.args.count as number | undefined
-          const liveSplitCount = (): number => useTabsStore.getState().splitCount
+          const liveSplitCount = (): number => tabs.getState().splitCount
           if (targetCount) {
             // Split to a specific column count (2 or 3)
             const target = Math.min(targetCount, 3)
             while (liveSplitCount() < target) {
               const before = liveSplitCount()
-              useTabsStore.getState().splitTerminalArea(cwd)
+              tabs.getState().splitTerminalArea(cwd)
               if (liveSplitCount() === before) break
             }
             results.push(`${liveSplitCount()} columns`)
           } else if (liveSplitCount() < 3) {
-            useTabsStore.getState().splitTerminalArea(cwd)
+            tabs.getState().splitTerminalArea(cwd)
             results.push(`${liveSplitCount()} columns`)
           } else {
             results.push('Already at max columns (3)')
@@ -342,9 +352,9 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
         }
 
         case 'unsplit_window': {
-          if (useTabsStore.getState().splitCount > 1) {
-            useTabsStore.getState().unsplitTerminalArea()
-            const after = useTabsStore.getState().splitCount
+          if (tabs.getState().splitCount > 1) {
+            tabs.getState().unsplitTerminalArea()
+            const after = tabs.getState().splitCount
             results.push(after === 1 ? 'Single column' : `${after} columns`)
           } else {
             results.push('Already single column')
@@ -455,7 +465,7 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
 
         case 'merge_branch': {
           const branch = call.args.branch as string
-          const project = projectsStore.projects.find(p => p.id === projectsStore.activeProjectId)
+          const project = activeProject
           if (project) {
             const workspace = project.workspaces.find(w => w.branch === branch)
             useMergeDialogStore.getState().show(branch, project.path, project.id, workspace?.id ?? null)
@@ -466,7 +476,7 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
 
         case 'create_worktree': {
           const branch = call.args.branch as string
-          const project = projectsStore.projects.find(p => p.id === projectsStore.activeProjectId)
+          const project = activeProject
           if (project) {
             daemonCliPost(primaryScope(), 'git/create-worktree', {
               projectPath: project.path,

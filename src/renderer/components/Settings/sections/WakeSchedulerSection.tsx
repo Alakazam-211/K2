@@ -1,3 +1,6 @@
+// Settings is about the window's server: heartbeats open in the primary
+// room's tabs.
+import { useTabsStore } from '@/stores/tabs'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { SquareRadio } from '@/components/ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -762,7 +765,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 />
                 <button
                   type="button"
-                  onClick={() => { void openHeartbeatTarget(row.projectPath, row.name, deriveDeliveryTarget(row).mode) }}
+                  onClick={() => { void openHeartbeatTarget(useTabsStore, row.projectPath, row.name, deriveDeliveryTarget(row).mode) }}
                   title={
                     deriveDeliveryTarget(row).mode === 'pinned'
                       ? 'Open the workspace’s pinned chat tab'

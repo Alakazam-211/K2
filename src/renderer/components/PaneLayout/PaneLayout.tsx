@@ -2,7 +2,7 @@ import React, { useCallback } from 'react'
 import { Mosaic, MosaicWindow } from 'react-mosaic-component'
 import type { MosaicBranch, MosaicNode } from 'react-mosaic-component'
 import { PaneGroupView } from './PaneGroupView'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoomTabs } from '@/components/Room/RoomContext'
 import 'react-mosaic-component/react-mosaic-component.css'
 
 // Error boundary to catch react-dnd "two MultiBackends" errors
@@ -35,7 +35,7 @@ interface PaneLayoutProps {
 }
 
 export function PaneLayout({ tabId }: PaneLayoutProps): React.JSX.Element | null {
-  const tab = useTabsStore((s) => {
+  const tab = useRoomTabs((s) => {
     const found = s.tabs.find((t) => t.id === tabId)
     if (found) return found
     for (const g of s.extraGroups) {
@@ -44,7 +44,7 @@ export function PaneLayout({ tabId }: PaneLayoutProps): React.JSX.Element | null
     }
     return undefined
   })
-  const updateMosaicTree = useTabsStore((s) => s.updateMosaicTree)
+  const updateMosaicTree = useRoomTabs((s) => s.updateMosaicTree)
 
   const handleChange = useCallback(
     (newTree: MosaicNode<string> | null) => {

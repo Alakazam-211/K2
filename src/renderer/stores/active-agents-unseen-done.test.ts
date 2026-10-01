@@ -164,7 +164,7 @@ describe('F4 — unseen-done state machine', () => {
     expect(s.unseenDone.has(PANE)).toBe(true)
     expect(projectHasUnseenDone(s.unseenDone, s.paneProjectMap, PROJECT)).toBe(true)
     expect(playCompletionSound).toHaveBeenCalledTimes(1)
-    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT)
+    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT, expect.any(Array))
   })
 
   it('re-entering working within the debounce cancels the mark (tool-boundary flicker)', () => {
@@ -195,7 +195,7 @@ describe('F4 — unseen-done state machine', () => {
 
     expect(useActiveAgentsStore.getState().unseenDone.has(PANE)).toBe(true)
     expect(playCompletionSound).toHaveBeenCalledTimes(1)
-    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT)
+    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT, expect.any(Array))
   })
 
   it('markSeen clears the mark (the pane became visible-and-focused)', () => {
@@ -234,7 +234,7 @@ describe('F4 — unseen-done state machine', () => {
     expect(s.unseenDone.has(PANE)).toBe(true)
     expect(projectHasUnseenDone(s.unseenDone, s.paneProjectMap, PROJECT)).toBe(true)
     expect(playCompletionSound).toHaveBeenCalledTimes(1)
-    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT)
+    expect(playCompletionSound).toHaveBeenCalledWith(PROJECT, expect.any(Array))
   })
 
   it('re-entering working clears an ALREADY-SET mark', () => {

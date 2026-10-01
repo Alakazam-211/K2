@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // Back / forward live on the browser tab. Fail loud — no skip.
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -70,7 +71,7 @@ function renderActivePane(): void {
   if (!tab) throw new Error('expected a tab to render')
   const paneGroupId = [...tab.paneGroups.keys()][0]
   if (!paneGroupId) throw new Error('expected a pane group to render')
-  render(<PaneGroupView tabId={tab.id} paneGroupId={paneGroupId} />)
+  renderInPrimaryRoom(<PaneGroupView tabId={tab.id} paneGroupId={paneGroupId} />)
 }
 
 function expectNoBrowserArrows(): void {
@@ -154,7 +155,7 @@ describe('browser tab back and forward', () => {
     const goForward = vi.fn()
     useTabsStore.setState({ goBack, goForward })
 
-    render(
+    renderInPrimaryRoom(
       <BrowserPane itemId="fresh" tabId="tab-fresh" paneGroupId="pg-fresh" url="" />,
     )
 
@@ -184,7 +185,7 @@ describe('browser tab back and forward', () => {
     const goForward = vi.fn()
     useTabsStore.setState({ goBack, goForward })
 
-    render(
+    renderInPrimaryRoom(
       <BrowserPane
         itemId="b1"
         tabId="tab-1"

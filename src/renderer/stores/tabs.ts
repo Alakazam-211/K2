@@ -30,10 +30,10 @@ import { useHeartbeatSessionsStore, type HeartbeatEntry } from '@/stores/heartbe
 // Phase 2.5 fix (finding #547) — retry the workspace-layouts load
 // when the daemon comes online after a slow boot.
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
-// #625 — reset per-machine workspace-session state on a host switch.
-// `activeHostKey` + the store guard in-flight layout loads so a response
-// from the PREVIOUS host can never land after a switch.
-import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores/connect-host'
+// #625 — the primary room resets its per-machine workspace-session state on
+// a host switch; its scope's `connectionKey` guards in-flight layout loads so
+// a response from the PREVIOUS host can never land after a switch.
+import { onActiveHostChange } from '@/stores/connect-host'
 // per-client-view-state.md — the user's SELECTED tab is per-client view
 // state, sourced from this local store (never the shared layout's leaked
 // `activeTabId`). Module-level fns avoid a React subscription in this store.
@@ -52,7 +52,6 @@ import {
   type TabOrderChangedEvent,
   type UnsubscribeFn,
 } from '@/stores/session-events'
-import { serverSupports } from '@/lib/server-capabilities'
 import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 import {
@@ -308,8 +307,9 @@ interface FetchedLayout {
 }
 
 /** POST `sessions/v2/close` to the ROOM's server (MS42: `closeV2Session`
- *  takes the room's scope — a close in B's room never reaches A). */
-async function closeV2Session(
+ *  takes the room's scope — a close in B's room never reaches A). Exported
+ *  for the pinned chat's Refresh (MS75), which closes its own session. */
+export async function closeV2Session(
   scope: ServerScope,
   agentName: string,
   opts?: { clearIndex?: boolean; reason?: 'tab_close' },
@@ -794,7 +794,7 @@ export interface AddTerminalTabOptions {
   conversationId?: string
 }
 
-interface TabsState {
+export interface TabsState {
   tabs: Tab[]
   activeTabId: string | null
 

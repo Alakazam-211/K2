@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PresetsBar } from './PresetsBar'
@@ -30,7 +31,7 @@ function renderInClip(ui: React.ReactElement): HTMLElement {
   clip.style.zIndex = '99999'
   clip.style.overflow = 'hidden'
   document.body.appendChild(clip)
-  render(ui, { container: clip })
+  renderInPrimaryRoom(ui, { container: clip })
   return clip
 }
 

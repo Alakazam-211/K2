@@ -7,7 +7,7 @@ import { beginFileDrag } from '@/lib/file-drag'
 import { showContextMenu } from '@/lib/context-menu'
 import { useFileTreeStore } from '@/stores/filetree'
 import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom } from '@/components/Room/RoomContext'
 import { useToastStore } from '@/stores/toast'
 import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
@@ -30,7 +30,6 @@ import {
 } from '@/components/Projects/projects-api'
 import { MiddleEllipsisName } from './MiddleEllipsisName'
 import { resourceNameSlotWidth, treeNameSlotWidth } from './middleEllipsis'
-import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -609,6 +608,8 @@ function textWidthFromSample(
 }
 
 export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element {
+  // Home M3 — files open as tabs in THIS room.
+  const room = useRoom()
   const searchQuery = useFileTreeStore((s) => s.searchQuery)
   const setSearchQuery = useFileTreeStore((s) => s.setSearchQuery)
   const showHiddenFiles = useFileTreeStore((s) => s.showHiddenFiles)
@@ -770,7 +771,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       const searchPaths = [rootPath]
       // Also check common config locations
       const rootEntries = normalizeFsReadDir(
-        await daemonCliGet(primaryScope(), 'fs/read-dir', { path: rootPath, show_hidden: true }),
+        await daemonCliGet(room.scope, 'fs/read-dir', { path: rootPath, show_hidden: true }),
       ) as FileEntry[]
       for (const e of rootEntries) {
         if (e.isDirectory && !e.name.startsWith('.') && !['node_modules', 'target', 'dist', 'build', '.git', 'vendor'].includes(e.name)) {
@@ -782,7 +783,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       for (const dir of searchPaths) {
         try {
           const entries = normalizeFsReadDir(
-            await daemonCliGet(primaryScope(), 'fs/read-dir', { path: dir, show_hidden: true }),
+            await daemonCliGet(room.scope, 'fs/read-dir', { path: dir, show_hidden: true }),
           ) as FileEntry[]
           for (const e of entries) {
             if (!e.isDirectory && (e.name.startsWith('.env') || e.name === 'env' || e.name.endsWith('.env'))) {
@@ -836,7 +837,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       return
     }
     try {
-      const rows = await fetchWorkspaceResources(primaryScope(), activeProjectId)
+      const rows = await fetchWorkspaceResources(room.scope, activeProjectId)
       setWorkspaceResources(rows)
     } catch {
       setWorkspaceResources([])
@@ -848,7 +849,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   }, [loadWorkspaceResources])
 
   useEffect(() => {
-    return onWorkspaceResourcesChanged(primaryScope(), (e) => {
+    return onWorkspaceResourcesChanged(room.scope, (e) => {
       if (!activeProjectId || e.workspaceId === activeProjectId) {
         void loadWorkspaceResources()
       }
@@ -858,7 +859,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const loadAiConfig = useCallback(async () => {
     try {
       const entries = normalizeFsReadDir(
-        await daemonCliGet(primaryScope(), 'fs/read-dir', {
+        await daemonCliGet(room.scope, 'fs/read-dir', {
           path: rootPath,
           show_hidden: true,
         }),
@@ -916,7 +917,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         // function" into the Files panel after host/auth churn (e.g.
         // visiting K2 Connect → Access).
         const raw = normalizeFsReadDir(
-          await daemonCliGet(primaryScope(), 'fs/read-dir', {
+          await daemonCliGet(room.scope, 'fs/read-dir', {
             path: dirPath,
             show_hidden: true,
           }),
@@ -1100,7 +1101,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     if (!rootPath || rootPath === '~' || !rootPath.startsWith('/')) {
       return
     }
-    return onFsChanged(primaryScope(), (e) => {
+    return onFsChanged(room.scope, (e) => {
       // Only paths under THIS tree's root. workspacePath is advisory
       // (may be a parent project when the tree is a worktree); filter
       // strictly on absolute paths so sibling workspaces never thrash.
@@ -1246,14 +1247,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             const doMove = async (): Promise<void> => {
               try {
                 if (isCopy) {
-                  await daemonCliPost(primaryScope(), 'fs/copy', { sources: paths, destination: dirPath })
+                  await daemonCliPost(room.scope, 'fs/copy', { sources: paths, destination: dirPath })
                   undo.push({
                     type: 'copy',
                     createdPaths: paths.map(p => `${dirPath}/${p.split('/').pop()}`)
                   })
                   toast.addToast(`Copied ${paths.length} item${paths.length > 1 ? 's' : ''}`, 'success')
                 } else {
-                  await daemonCliPost(primaryScope(), 'fs/move', { sources: paths, destination: dirPath })
+                  await daemonCliPost(room.scope, 'fs/move', { sources: paths, destination: dirPath })
                   undo.push({
                     type: 'move',
                     items: paths.map(p => ({
@@ -1343,7 +1344,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         selection.select(entry.path)
         // Open file on plain click — dedup: switch to existing tab if already open
         if (!entry.isDirectory) {
-          useTabsStore.getState().openFileAsTab(entry.path)
+          room.tabs.getState().openFileAsTab(entry.path)
           commitAncestorsToUser(entry.path)
         }
       }
@@ -1356,7 +1357,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const toast = useToastStore.getState()
     const undo = useFileUndoStore.getState()
     try {
-      const r = await daemonCliPost<{ path: string }>(primaryScope(), 'fs/rename', { old_path: oldPath, new_name: newName })
+      const r = await daemonCliPost<{ path: string }>(room.scope, 'fs/rename', { old_path: oldPath, new_name: newName })
       const newPath = r.path
       toast.addToast(`Renamed to ${newName}`, 'success')
       undo.push({ type: 'rename', oldPath, newPath })
@@ -1377,12 +1378,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const undo = useFileUndoStore.getState()
     const fullPath = `${parentPath}/${name}`
     try {
-      await daemonCliPost(primaryScope(), 'fs/create', { path: fullPath, is_directory: isDirectory })
+      await daemonCliPost(room.scope, 'fs/create', { path: fullPath, is_directory: isDirectory })
       toast.addToast(`Created ${name}`, 'success')
       undo.push({ type: 'create', path: fullPath })
       await loadDir(parentPath, true)
       if (!isDirectory) {
-        useTabsStore.getState().openFileInNewTab(fullPath)
+        room.tabs.getState().openFileInNewTab(fullPath)
       }
     } catch (err) {
       toast.addToast(`Create failed: ${err}`, 'error')
@@ -1416,7 +1417,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     if (!confirmed) return
 
     try {
-      await daemonCliPost(primaryScope(), 'fs/delete', { paths })
+      await daemonCliPost(room.scope, 'fs/delete', { paths })
       const label = paths.length === 1 ? `Moved ${names[0]} to Trash` : `Moved ${paths.length} items to Trash`
       toast.addToast(label, 'success')
       undo.push({ type: 'delete', paths, note: 'trashed' })
@@ -1437,14 +1438,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
     try {
       if (clipboard.mode === 'copy') {
-        await daemonCliPost(primaryScope(), 'fs/copy', { sources: clipboard.paths, destination: targetDir })
+        await daemonCliPost(room.scope, 'fs/copy', { sources: clipboard.paths, destination: targetDir })
         undo.push({
           type: 'copy',
           createdPaths: clipboard.paths.map(p => `${targetDir}/${p.split('/').pop()}`)
         })
         toast.addToast(`Pasted ${clipboard.paths.length} item(s)`, 'success')
       } else if (clipboard.mode === 'cut') {
-        await daemonCliPost(primaryScope(), 'fs/move', { sources: clipboard.paths, destination: targetDir })
+        await daemonCliPost(room.scope, 'fs/move', { sources: clipboard.paths, destination: targetDir })
         undo.push({
           type: 'move',
           items: clipboard.paths.map(p => ({
@@ -1471,7 +1472,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
     for (const p of paths) {
       try {
-        const r = await daemonCliPost<{ path: string }>(primaryScope(), 'fs/duplicate', { path: p })
+        const r = await daemonCliPost<{ path: string }>(room.scope, 'fs/duplicate', { path: p })
         const newPath = r.path
         created.push(newPath)
       } catch (err) {
@@ -1497,14 +1498,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     try {
       switch (op.type) {
         case 'create':
-          await daemonCliPost(primaryScope(), 'fs/delete', { paths: [op.path] })
+          await daemonCliPost(room.scope, 'fs/delete', { paths: [op.path] })
           toast.addToast('Undid create', 'success')
           await refreshDirs([op.path])
           break
         case 'rename':
           // Rename back: extract the old name from oldPath
           const oldName = op.oldPath.split('/').pop() || ''
-          await daemonCliPost(primaryScope(), 'fs/rename', { old_path: op.newPath, new_name: oldName })
+          await daemonCliPost(room.scope, 'fs/rename', { old_path: op.newPath, new_name: oldName })
           toast.addToast('Undid rename', 'success')
           await refreshDirs([op.newPath])
           break
@@ -1512,14 +1513,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
           // Move items back to their original locations
           for (const item of [...op.items].reverse()) {
             const origDir = parentDir(item.oldPath)
-            await daemonCliPost(primaryScope(), 'fs/move', { sources: [item.newPath], destination: origDir })
+            await daemonCliPost(room.scope, 'fs/move', { sources: [item.newPath], destination: origDir })
           }
           toast.addToast('Undid move', 'success')
           await refreshDirs([...op.items.map(i => i.oldPath), ...op.items.map(i => i.newPath)])
           break
         case 'copy':
           // Delete the copies
-          await daemonCliPost(primaryScope(), 'fs/delete', { paths: op.createdPaths })
+          await daemonCliPost(room.scope, 'fs/delete', { paths: op.createdPaths })
           toast.addToast('Undid copy', 'success')
           await refreshDirs(op.createdPaths)
           break
@@ -1672,7 +1673,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         return [...prev, { filePath: entry.path, fileName, missing: false }]
       })
       try {
-        await addWorkspaceResource(primaryScope(), workspace, entry.path)
+        await addWorkspaceResource(room.scope, workspace, entry.path)
       } catch (err) {
         void loadWorkspaceResources()
         useToastStore.getState().addToast(
@@ -1681,7 +1682,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         )
       }
     } else if (clickedId === 'open-finder') {
-      await daemonCliPost(primaryScope(), 'fs/open-finder', { target: entry.path })
+      await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
     } else if (clickedId === 'copy-path') {
       await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
     } else if (clickedId === 'rename') {
@@ -1925,7 +1926,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                   className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] bg-white/[0.04] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors"
                   onClick={() => {
                     useFileSelectionStore.getState().select(entry.path)
-                    useTabsStore.getState().openFileAsTab(entry.path)
+                    room.tabs.getState().openFileAsTab(entry.path)
                   }}
                   onContextMenu={async (e) => {
                     e.preventDefault()
@@ -1937,9 +1938,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     ]
                     const id = await showContextMenu(items)
                     if (id === 'open') {
-                      useTabsStore.getState().openFileAsTab(entry.path)
+                      room.tabs.getState().openFileAsTab(entry.path)
                     } else if (id === 'open-finder') {
-                      await daemonCliPost(primaryScope(), 'fs/open-finder', { target: entry.path })
+                      await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
                     } else if (id === 'copy-path') {
                       await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
                     }
@@ -1993,7 +1994,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                   className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] text-left text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors"
                   onClick={() => {
                     useFileSelectionStore.getState().select(row.filePath)
-                    useTabsStore.getState().openFileAsTab(row.filePath)
+                    room.tabs.getState().openFileAsTab(row.filePath)
                   }}
                   onContextMenu={async (e) => {
                     e.preventDefault()
@@ -2003,7 +2004,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     setWorkspaceResources((prev) => prev.filter((r) => r.filePath !== row.filePath))
                     if (!activeProjectId) return
                     try {
-                      await removeWorkspaceResource(primaryScope(), activeProjectId, row.filePath)
+                      await removeWorkspaceResource(room.scope, activeProjectId, row.filePath)
                     } catch (err) {
                       void loadWorkspaceResources()
                       useToastStore.getState().addToast(
@@ -2069,7 +2070,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                       useFileSelectionStore.getState().select(entry.path)
                     } else {
                       useFileSelectionStore.getState().select(entry.path)
-                      useTabsStore.getState().openFileAsTab(entry.path)
+                      room.tabs.getState().openFileAsTab(entry.path)
                     }
                   }}
                   onContextMenu={async (e) => {
@@ -2089,10 +2090,10 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                         loadDir(entry.path)
                         useFileSelectionStore.getState().select(entry.path)
                       } else {
-                        useTabsStore.getState().openFileAsTab(entry.path)
+                        room.tabs.getState().openFileAsTab(entry.path)
                       }
                     } else if (id === 'open-finder') {
-                      await daemonCliPost(primaryScope(), 'fs/open-finder', { target: entry.path })
+                      await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
                     } else if (id === 'copy-path') {
                       await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
                     }

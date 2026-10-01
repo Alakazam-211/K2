@@ -5,7 +5,8 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
-import { useTabsStore } from '@/stores/tabs'
+import type { TabsStore } from '@/stores/tabs'
+import { asArray } from '@/lib/as-array'
 import { onChatHistoryChanged } from '@/stores/session-events'
 import { chatDisplayName } from '@/lib/chat-session-tab'
 import {
@@ -350,16 +351,23 @@ export function HeartbeatSessionPicker({
  *     attach a live `<project>:hb:<name>` PTY, or cold-resume).
  */
 export async function openHeartbeatTarget(
+  room: TabsStore,
   projectPath: string,
   heartbeatName: string,
   mode: HeartbeatDeliveryMode,
 ): Promise<void> {
-  const tabs = useTabsStore.getState()
+  // Home M3 — `room` is the tabs store the heartbeat opens in: the drawer's
+  // room, or the primary room from Settings. Never "the" store.
+  const tabs = room.getState()
   if (mode === 'pinned') {
-    const agents = await invoke<Array<{ name: string; agentType: string }>>(
-      'k2so_agents_list',
-      { projectPath },
-    ).catch(() => [] as Array<{ name: string; agentType: string }>)
+    type AgentRow = { name: string; agentType: string }
+    // MS67 — `k2so_agents_list` reads THIS computer; a room that may not use
+    // local commands asks its own server.
+    const agents = room.room.localCommands
+      ? await invoke<AgentRow[]>('k2so_agents_list', { projectPath }).catch(() => [] as AgentRow[])
+      : asArray<AgentRow>(
+          await daemonCliGet(room.room.scope, 'agents/list', { project: projectPath }).catch(() => []),
+        )
     const agentName = agents.find((a) =>
       a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType),
     )?.name ?? agents[0]?.name ?? null

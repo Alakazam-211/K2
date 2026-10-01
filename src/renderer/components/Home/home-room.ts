@@ -106,6 +106,26 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
   const hostKey = parsed?.host ?? ''
   const entry = useStore(hostPool.store, (s) => s.entries[hostKey])
   const sameServerAs = useSameServerAs(hostKey)
+  return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs })
+}
+
+type RowStatusInputs = {
+  activeHost: ReturnType<typeof useConnectHostStore.getState>['activeHost']
+  hosts: ReturnType<typeof useConnectHostStore.getState>['hosts']
+  connectionStatus: ReturnType<typeof useConnectHostStore.getState>['connectionStatus']
+  projects: ReturnType<typeof useProjectsStore.getState>['projects']
+  entry: Extract<Parameters<typeof resolveRowStatus>[0], { where: 'other' }>['entry']
+  sameServerAs: string | null
+}
+
+/** The status a row paints, from plain store values (shared by the row's
+ *  hook and the Cmd+1–9 shortcut). */
+function computeRowStatus(
+  row: HomeRow,
+  { activeHost, hosts, connectionStatus, projects, entry, sameServerAs }: RowStatusInputs,
+): { status: RowStatus; place: string | null; onConnected: boolean } {
+  const parsed = parseHomeAddress(row.address)
+  const hostKey = parsed?.host ?? ''
   const connectedKey = activeHomeHostKey(activeHost)
   const onConnected = hostKey === connectedKey
   const place = rowPlace(hostKey, connectedKey, hosts)
@@ -140,6 +160,26 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
     place,
     onConnected,
   }
+}
+
+/** Would clicking this row open it right now? The row's own click rule
+ *  (`OtherHomeRow`'s `canOpen`; a connected-server row always opens), read
+ *  from the stores without a render — for the Cmd+1–9 shortcut on Home. */
+export function homeRowOpenableNow(row: HomeRow): boolean {
+  const parsed = parseHomeAddress(row.address)
+  const hostKey = parsed?.host ?? ''
+  const host = useConnectHostStore.getState()
+  const { status, onConnected } = computeRowStatus(row, {
+    activeHost: host.activeHost,
+    hosts: host.hosts,
+    connectionStatus: host.connectionStatus,
+    projects: useProjectsStore.getState().projects,
+    entry: hostPool.store.getState().entries[hostKey],
+    sameServerAs: null,
+  })
+  if (onConnected && host.connectionStatus === 'connected' && status.kind === 'idle') return true
+  if (isWebClient() && !onConnected) return false
+  return status.kind !== 'not-found' && status.kind !== 'no-access'
 }
 
 /** The "same server as …" note for a row on the connected server (its

@@ -19,6 +19,7 @@
 // conversation id; unknown kinds attach if live-by-id only).
 // PRD §4.3.1: open/attach ⇒ activate so active_reaper spares it.
 
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
@@ -828,12 +829,14 @@ function TerminalTab({
   return (
     <PageLiveContext.Provider value={true}>
     <div className="flex-1 min-h-0">
-      <TerminalPane
-        terminalId={`feedback-term:${feedbackId}`}
-        cwd={phase.cwd}
-        attachAgentName={phase.agentName}
-        sessionId={phase.sessionId}
-      />
+      <PrimaryRoom>
+        <TerminalPane
+          terminalId={`feedback-term:${feedbackId}`}
+          cwd={phase.cwd}
+          attachAgentName={phase.agentName}
+          sessionId={phase.sessionId}
+        />
+      </PrimaryRoom>
     </div>
     </PageLiveContext.Provider>
   )

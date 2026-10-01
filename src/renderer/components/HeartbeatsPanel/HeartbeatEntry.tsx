@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
 import { openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
+import { useRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
@@ -9,7 +10,6 @@ import {
   useHeartbeatSessionsStore,
 } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
-import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * One row in the Workspace panel's Heartbeats section.
@@ -34,6 +34,8 @@ export function HeartbeatEntryRow({
   entry: HeartbeatEntry
   projectPath: string
 }): React.JSX.Element {
+  // Opening a heartbeat target opens it in THIS drawer's room.
+  const room = useRoom()
   const [busy, setBusy] = useState(false)
 
   // 1Hz re-render so the "Next run: in Xs" countdown ticks smoothly.
@@ -61,7 +63,7 @@ export function HeartbeatEntryRow({
       lastSessionId: entry.row.lastSessionId,
       sessionProvider: entry.row.sessionProvider,
     }).mode
-    void openHeartbeatTarget(projectPath, entry.row.name, mode).catch((err) => {
+    void openHeartbeatTarget(room.tabs, projectPath, entry.row.name, mode).catch((err) => {
       console.warn('[heartbeats-panel] open heartbeat failed:', err)
     })
   }
@@ -82,7 +84,7 @@ export function HeartbeatEntryRow({
     if (busy || !projectPath || entry.state === 'archived') return
     setBusy(true)
     try {
-      await daemonCliGet(primaryScope(), 'heartbeat/enable', {
+      await daemonCliGet(room.scope, 'heartbeat/enable', {
         project: projectPath,
         name: entry.row.name,
         enabled: entry.row.enabled ? '0' : '1',

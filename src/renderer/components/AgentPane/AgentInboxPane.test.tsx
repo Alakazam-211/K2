@@ -64,6 +64,15 @@ vi.mock('@/components/Markdown/Markdown', () => ({
 }))
 
 import { AgentInboxPane } from './AgentInboxPane'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { useTabsStore } from '@/stores/tabs'
+
+// Home M3 — the pane's room: the mocked tabs store and this suite's live
+// project list (MS3: the workspace id resolves in the room's own list).
+const room = testRoom({
+  tabs: useTabsStore,
+  projects: () => h.projects.list as never,
+})
 
 const TRAY_ITEM = {
   id: 'pkg-1',
@@ -215,7 +224,7 @@ describe('AgentInboxPane module locks', () => {
 describe('AgentInboxPane sources + tray', () => {
   it('always shows K2 Inbox, loads workspace catalog with project=, omits Postal', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED, LINKED, POSTAL] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
 
     await waitFor(() => {
       expect(screen.getByTestId('inbox-source-tray').textContent).toContain('K2 Inbox')
@@ -241,16 +250,16 @@ describe('AgentInboxPane sources + tray', () => {
   })
 
   it('keeps Work Board chrome for __workspace__ and does not retitle agents to Work Board', async () => {
-    const board = render(<AgentInboxPane agentName="__workspace__" projectPath="/ws" />)
+    const board = renderInRoom(room, <AgentInboxPane agentName="__workspace__" projectPath="/ws" />)
     expect(board.getByText('Work Board')).toBeTruthy()
     board.unmount()
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByText('Sales')).toBeTruthy())
     expect(screen.queryByText('Work Board')).toBeNull()
   })
 
   it('opens a tray package via inbox/read → Markdown content, not a file tab', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-message-pkg-1')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-message-pkg-1'))
     await waitFor(() => expect(screen.getByTestId('markdown').textContent).toContain('# tray body'))
@@ -271,7 +280,7 @@ describe('AgentInboxPane sources + tray', () => {
         },
       ],
     })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-message-pkg-1')).toBeTruthy())
     expect(screen.getByTestId('inbox-message-pkg-active')).toBeTruthy()
     expect(screen.queryByTestId('inbox-folder-filter')).toBeNull()
@@ -287,7 +296,7 @@ describe('AgentInboxPane sources + tray', () => {
 
   it('empty mail catalog keeps tray and points at Settings → Email', async () => {
     mockDaemon({ inboxes: { ok: true, count: 0, inboxes: [] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByText(/Settings → Email/)).toBeTruthy())
     expect(screen.getByTestId('inbox-source-tray')).toBeTruthy()
     expect(screen.queryByTestId('inbox-source-mail-you@host.k2')).toBeNull()
@@ -297,7 +306,7 @@ describe('AgentInboxPane sources + tray', () => {
 describe('AgentInboxPane mail', () => {
   it('lists mail for the selected address and opens via mail/read (marks seen)', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-source-mail-you@host.k2')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-source-mail-you@host.k2'))
     await waitFor(() => expect(screen.getByTestId('inbox-message-mail-1')).toBeTruthy())
@@ -334,7 +343,7 @@ describe('AgentInboxPane mail', () => {
         },
       },
     })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-source-mail-you@host.k2')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-source-mail-you@host.k2'))
     await waitFor(() => expect(screen.getByTestId('inbox-message-mail-1')).toBeTruthy())
@@ -355,7 +364,7 @@ describe('AgentInboxPane mail', () => {
       inboxes: { ok: true, inboxes: [HOSTED] },
       mailMessages: { ok: true, count: 1, messages: [MAIL_ROW], nextOffset: 50 },
     })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-source-mail-you@host.k2')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-source-mail-you@host.k2'))
     const loadMore = await screen.findByTestId('inbox-load-more')
@@ -371,7 +380,7 @@ describe('AgentInboxPane mail', () => {
 describe('AgentInboxPane errors + view-only', () => {
   it('catalog failure is a loud one-line error, still shows K2 Inbox, not silent empty mail', async () => {
     mockDaemon({ catalogThrow: new Error('catalog down') })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-catalog-error').textContent).toContain('catalog down'))
     expect(screen.getByTestId('inbox-source-tray')).toBeTruthy()
     expect(screen.queryByText('No messages')).toBeNull()
@@ -382,7 +391,7 @@ describe('AgentInboxPane errors + view-only', () => {
       inboxes: { ok: true, inboxes: [HOSTED] },
       mailThrow: new Error(JSON.stringify({ error: { hint: 'IMAP auth failed' } })),
     })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-source-mail-you@host.k2')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-source-mail-you@host.k2'))
     await waitFor(() => expect(screen.getByTestId('inbox-list-error').textContent).toContain('IMAP auth failed'))
@@ -391,14 +400,14 @@ describe('AgentInboxPane errors + view-only', () => {
 
   it('wrong tray list shape fails loud instead of unwrapping {items:[]}', async () => {
     mockDaemon({ trayList: { items: [TRAY_ITEM] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-list-error').textContent).toMatch(/inbox\/list/))
     expect(screen.queryByTestId('inbox-message-pkg-1')).toBeNull()
   })
 
   it('has no compose/reply/send/draft/archive/move/respond controls', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-browser')).toBeTruthy())
     const root = screen.getByTestId('inbox-browser')
     expect(root.textContent).not.toMatch(/\b(Compose|Reply|Send|Draft|Archive|Move|Respond)\b/)
@@ -447,7 +456,7 @@ describe('AgentInboxPane Chat about this', () => {
       }
       throw new Error(`unexpected route ${route} ${JSON.stringify(params)}`)
     })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-message-pkg-1')).toBeTruthy())
     expect(screen.queryByTestId('inbox-chat-about')).toBeNull()
 
@@ -461,7 +470,7 @@ describe('AgentInboxPane Chat about this', () => {
     cleanup()
 
     mockDaemon({ bodyThrow: new Error('read failed') })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-message-pkg-1')).toBeTruthy())
     fireEvent.click(screen.getByTestId('inbox-message-pkg-1'))
     await waitFor(() => expect(screen.getByTestId('inbox-body-error').textContent).toContain('read failed'))
@@ -469,7 +478,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('keeps Send outside inbox-browser while the pane still matches I16', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
     const root = screen.getByTestId('inbox-browser')
     expect(root.textContent).not.toMatch(VIEW_ONLY)
@@ -482,7 +491,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('Esc / Cancel / scrim close without ensure or send-message', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
 
     fireEvent.click(screen.getByTestId('inbox-chat-about'))
@@ -505,7 +514,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('Enter sends and Shift+Enter stays a newline without POST', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
     const textarea = await typeChatAboutNote('enter note')
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
@@ -518,7 +527,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('disables Send on empty or whitespace notes and does not POST', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
     fireEvent.click(screen.getByTestId('inbox-chat-about'))
     const send = await screen.findByTestId('inbox-chat-about-send')
@@ -532,7 +541,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('tray send activates then ensures then injects the k2 stamp without body or [from', async () => {
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
     await typeChatAboutNote('please look at this')
     fireEvent.click(screen.getByTestId('inbox-chat-about-send'))
@@ -563,7 +572,7 @@ describe('AgentInboxPane Chat about this', () => {
 
   it('stamps hosted and linked from the source kind, not the mail id', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED, LINKED] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openMailSource('you@host.k2')
     await typeChatAboutNote('hosted note')
     fireEvent.click(screen.getByTestId('inbox-chat-about-send'))
@@ -591,7 +600,7 @@ describe('AgentInboxPane Chat about this', () => {
   })
 
   it('Work Board still ensures { project: path } and stays on Inbox', async () => {
-    render(<AgentInboxPane agentName="__workspace__" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="__workspace__" projectPath="/ws" />)
     expect(screen.getByText('Work Board')).toBeTruthy()
     await openTrayBody()
     await typeChatAboutNote('board note')
@@ -607,7 +616,7 @@ describe('AgentInboxPane Chat about this', () => {
 
   it('ensure throw / missing sessionId / pty_died / 403 fail in the dialog and restore the note', async () => {
     const note = 'keep this note'
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
 
     mockPosts({ ensureThrow: new Error('project not registered: /ws') })
@@ -646,7 +655,7 @@ describe('AgentInboxPane Chat about this', () => {
 
   it('skips activate when workspace id is missing and still ensures+sends', async () => {
     h.projects.list = []
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await openTrayBody()
     await typeChatAboutNote('no id')
     fireEvent.click(screen.getByTestId('inbox-chat-about-send'))
@@ -661,7 +670,7 @@ describe('AgentInboxPane Chat about this', () => {
 
   it('load still does not POST; dialog never hits mail/inbox mutate routes', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED] } })
-    render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
+    renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-browser')).toBeTruthy())
     expect(h.daemonCliPost).not.toHaveBeenCalled()
     await openMailSource('you@host.k2')

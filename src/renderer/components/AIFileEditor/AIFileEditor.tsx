@@ -1,3 +1,4 @@
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -478,12 +479,14 @@ export function AIFileEditor({
             // Hardcoded to v2 — system-driven mount inside the file
             // editor UI (not a workspace tab), so bypasses the user's
             // Settings → Renderer choice. See A8 plan.
-            <TerminalPane
-              terminalId={terminalIdRef.current}
-              cwd={cwd}
-              command={command}
-              args={resolvedArgs}
-            />
+            <PrimaryRoom>
+              <TerminalPane
+                terminalId={terminalIdRef.current}
+                cwd={cwd}
+                command={command}
+                args={resolvedArgs}
+              />
+            </PrimaryRoom>
           ) : (
             <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
               Checking for previous session...

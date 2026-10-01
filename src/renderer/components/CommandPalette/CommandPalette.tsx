@@ -4,7 +4,7 @@ import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
-import { useTabsStore } from '../../stores/tabs'
+import { focusedRoom } from '../../stores/window-room'
 import { webFeatures } from '@/web/features'
 import ProjectAvatar from '../Sidebar/ProjectAvatar'
 
@@ -167,7 +167,8 @@ export default function CommandPalette(): React.JSX.Element | null {
   const selectResult = useCallback(
     (result: Result) => {
       if (result.type === 'url') {
-        useTabsStore.getState().openUrlInNewTab(result.url)
+        // Window-level: the focused room (MS18).
+        focusedRoom()?.tabs.getState().openUrlInNewTab(result.url)
         close()
         return
       }

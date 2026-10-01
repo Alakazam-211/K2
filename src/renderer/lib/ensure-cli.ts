@@ -2,7 +2,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { useToastStore } from '@/stores/toast'
 import { create } from 'zustand'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** Installers the daemon will run. Copy buttons use these same strings. */
 export const CLI_INSTALL_COMMANDS = {
@@ -58,7 +58,8 @@ export interface EnsureCliResult {
   installed: boolean
 }
 
-const inflight = new Map<InstallableCli, Promise<EnsureCliResult>>()
+/** In-flight ensures by `<scope id>|<program>`: one per server and CLI. */
+const inflight = new Map<string, Promise<EnsureCliResult>>()
 
 export function resetEnsureCliForTests(): void {
   inflight.clear()
@@ -69,26 +70,28 @@ export function resetEnsureCliForTests(): void {
  * Ask the daemon to install one CLI if it is missing. Throws on installer
  * failure, timeout, or "installed but not on PATH" — callers must not open
  * a tab after a throw. An already-present basename resolves without the
- * installing notice.
+ * installing notice. `scope` is the server the agent's terminal runs on —
+ * the CLI must exist there (a pinned room's server, not the window's).
  */
-export function ensureOneCli(program: InstallableCli): Promise<EnsureCliResult> {
-  const existing = inflight.get(program)
+export function ensureOneCli(scope: ServerScope, program: InstallableCli): Promise<EnsureCliResult> {
+  const key = `${scope.id}|${program}`
+  const existing = inflight.get(key)
   if (existing) return existing
-  const pending = runEnsure(program).finally(() => {
-    inflight.delete(program)
+  const pending = runEnsure(scope, program).finally(() => {
+    inflight.delete(key)
   })
-  inflight.set(program, pending)
+  inflight.set(key, pending)
   return pending
 }
 
-async function runEnsure(program: InstallableCli): Promise<EnsureCliResult> {
+async function runEnsure(scope: ServerScope, program: InstallableCli): Promise<EnsureCliResult> {
   let showed = false
   const timer = setTimeout(() => {
     showed = true
     useCliInstallStore.getState().setInstalling(program)
   }, CLI_INSTALL_NOTICE_MS)
   try {
-    const result = await daemonCliPost<EnsureCliResult>(primaryScope(), 'agents/ensure-cli', { program })
+    const result = await daemonCliPost<EnsureCliResult>(scope, 'agents/ensure-cli', { program })
     if (result?.installed !== true && result?.installed !== false) {
       throw new Error('ensure-cli returned an unexpected body')
     }

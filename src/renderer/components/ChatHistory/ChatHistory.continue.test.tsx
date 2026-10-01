@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { continueHarnessKeys } from './ContinueNewChatDialog'
@@ -194,7 +195,7 @@ describe('Continue in a new chat', () => {
       timestamp: Date.now(),
       messageCount: 1,
     })
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await screen.findByText('Old archived chat')
     expect(screen.queryByText('Api Agent')).toBeNull()
@@ -230,7 +231,7 @@ describe('Continue in a new chat', () => {
 
   it('opening the dialog does not spawn, and Esc, Cancel, and scrim do not either', async () => {
     h.sessions.push(session())
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     const tabsBefore = useTabsStore.getState().tabs.length
 
@@ -297,7 +298,7 @@ describe('Continue in a new chat', () => {
     const sourceTabId = sourceTab!.id
     expect(sourcePane).toBeTruthy()
 
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))
@@ -365,7 +366,7 @@ describe('Continue in a new chat', () => {
       target_session_id: 'pty-live-1',
       attempts: 1,
     }
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))
@@ -397,7 +398,7 @@ describe('Continue in a new chat', () => {
       hint: null,
     }
     useTabsStore.setState({ tabs: [], activeTabId: null, extraGroups: [], splitCount: 1, activeGroupIndex: 0 })
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))
@@ -420,7 +421,7 @@ describe('Continue in a new chat', () => {
   it('does not offer Copy text when continue-seed fails before returning text', async () => {
     h.sessions.push(session())
     h.seedThrows = new Error('no turns')
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))
@@ -435,7 +436,7 @@ describe('Continue in a new chat', () => {
 
   it('opens a themed harness menu and updates the trigger when another harness is chosen', async () => {
     h.sessions.push(session())
-    render(<ChatHistory projectPath={PROJECT} />)
+    renderInPrimaryRoom(<ChatHistory projectPath={PROJECT} />)
     await screen.findByText('Finish the editor refactor')
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))

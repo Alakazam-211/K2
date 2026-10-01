@@ -2,8 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { onChatHistoryChanged } from '@/stores/session-events'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore, openApiHostSessionTab } from '@/stores/tabs'
+import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import {
   mapMsgResponseToStatus,
@@ -33,7 +32,7 @@ import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { clientToCssPx } from '@/stores/context-menu'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -102,20 +101,20 @@ function getPresetArgsForProvider(provider: string): string[] {
 /** Same deadline TerminalPane uses for a spawn (`BOOT_DEADLINE_MS`). */
 const PTY_WAIT_MS = 10_000
 
-function readPinnedPty(paneGroupId: string): string | undefined {
-  const id = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())[paneGroupId]
+function readPinnedPty(scope: ServerScope, paneGroupId: string): string | undefined {
+  const id = sessionsOf(usePinnedSizeStore.getState().sessions, scope)[paneGroupId]
   return id && id.length > 0 ? id : undefined
 }
 
 /** PTY id is the pinned-size map entry for the pane group `addTabToGroup` returns. */
-function waitForPinnedPty(paneGroupId: string): Promise<string> {
-  const existing = readPinnedPty(paneGroupId)
+function waitForPinnedPty(scope: ServerScope, paneGroupId: string): Promise<string> {
+  const existing = readPinnedPty(scope, paneGroupId)
   if (existing) return Promise.resolve(existing)
   return new Promise((resolve, reject) => {
     let settled = false
     let timer: ReturnType<typeof setTimeout>
     const unsub = usePinnedSizeStore.subscribe(() => {
-      const id = readPinnedPty(paneGroupId)
+      const id = readPinnedPty(scope, paneGroupId)
       if (!id || settled) return
       settled = true
       clearTimeout(timer)
@@ -126,7 +125,7 @@ function waitForPinnedPty(paneGroupId: string): Promise<string> {
       if (settled) return
       settled = true
       unsub()
-      const late = readPinnedPty(paneGroupId)
+      const late = readPinnedPty(scope, paneGroupId)
       if (late) resolve(late)
       else reject(new Error('The new tab has no live terminal session.'))
     }, PTY_WAIT_MS)
@@ -277,6 +276,9 @@ interface ChatHistoryProps {
 }
 
 export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistoryProps = {}): React.JSX.Element {
+  // Home M3 — chat history reads, resume and continue go to the room's
+  // server and open tabs in the room's tabs store.
+  const room = useRoom()
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -305,9 +307,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const selectedRowRef = useRef<HTMLButtonElement>(null)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const projects = useProjectsStore((s) => s.projects)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
-  const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
+  // MS3 — the host path resolves in THIS room's own project list.
+  const projects = useRoomProjects((p) => p)
+  const activeProjectId = useRoomTabs((s) => s.activeProjectId)
+  const activeWorkspaceId = useRoomTabs((s) => s.activeWorkspaceId)
 
   // Resolve the HOST workspace this panel is mounted inside — bound to the
   // `projectPath` prop, NOT the global active pointers. This is the #7 fix:
@@ -342,7 +345,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       return
     }
     let cancelled = false
-    void daemonCliGet<{ resumeSession?: string; resumedExisting?: boolean }>(primaryScope(),
+    void daemonCliGet<{ resumeSession?: string; resumedExisting?: boolean }>(room.scope,
       'workspace/resume-chat-args',
       { project: projectPath },
     )
@@ -380,13 +383,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     setError(null)
 
     try {
-      const result = await daemonCliGet<ChatSession[]>(primaryScope(), 'chat/list', { project_path: projectPath })
+      const result = await daemonCliGet<ChatSession[]>(room.scope, 'chat/list', { project_path: projectPath })
       setSessions(result)
       // N5 — first hydrate (not the 30s poll): restamp extras from custom_name
       // once conversationId is already on the restored layout.
       if (showLoading && Array.isArray(result)) {
-        const tabsStore = useTabsStore.getState()
-        restampListedChatTabs(primaryScope(), 
+        const tabsStore = room.tabs.getState()
+        restampListedChatTabs(room.scope, 
           collectStoreTabs(tabsStore),
           result,
           tabsStore.setTabTitle,
@@ -404,13 +407,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     // API-triggered sandbox sessions for this workspace. Empty on hosts with no
     // sandbox history — the section just doesn't render.
     try {
-      const sb = await daemonCliGet<SandboxChat[]>(primaryScope(), 'sandbox/list', { project_path: projectPath })
+      const sb = await daemonCliGet<SandboxChat[]>(room.scope, 'sandbox/list', { project_path: projectPath })
       setSandboxSessions(Array.isArray(sb) ? sb : [])
     } catch {
       setSandboxSessions([])
     }
     try {
-      const api = await daemonCliGet<ApiChat[]>(primaryScope(), 'host-sessions/list', { project: projectPath })
+      const api = await daemonCliGet<ApiChat[]>(room.scope, 'host-sessions/list', { project: projectPath })
       setApiSessions(Array.isArray(api) ? api : [])
     } catch {
       setApiSessions([])
@@ -422,7 +425,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // surfaces as its orange tab via the app-level adoption.
   const handleApiClick = useCallback((session: ApiChat) => {
     if (!projectPath) return
-    openApiHostSessionTab({
+    room.tabs.room.openApiHostSessionTab({
       kind: 'session_added',
       workspace_path: projectPath,
       pane_group_id: null,
@@ -440,7 +443,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     if (!projectPath || reopening) return
     setReopening(session.sessionId)
     try {
-      await daemonCliPost(primaryScope(), 'sandbox/reopen', {
+      await daemonCliPost(room.scope, 'sandbox/reopen', {
         project_path: projectPath,
         session_id: session.sessionId,
       })
@@ -454,9 +457,9 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // Fetch custom names and pinned state
   const fetchCustomNames = useCallback(async () => {
     try {
-      const names = await daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names')
+      const names = await daemonCliGet<Record<string, string>>(room.scope, 'chat/custom-names')
       setCustomNames(names)
-      rememberChatCustomNames(primaryScope(), names)
+      rememberChatCustomNames(room.scope, names)
     } catch {
       // ignore
     }
@@ -467,7 +470,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // that's already in THIS host's list, so cross-project pins never
       // surface here. If chat/list ever stops being project-scoped, this
       // would need scoping too. (Issue #7 secondary note — left as-is.)
-      const pinned = await daemonCliGet<string[]>(primaryScope(), 'chat/pinned')
+      const pinned = await daemonCliGet<string[]>(room.scope, 'chat/pinned')
       setPinnedKeys(new Set(pinned))
     } catch {
       // ignore
@@ -485,13 +488,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // for the 30s poll (which was the only path for REMOTE clients — the
   // legacy /events bus is loopback-only and never reached them).
   useEffect(() => {
-    return onChatHistoryChanged(primaryScope(), () => {
+    return onChatHistoryChanged(room.scope, () => {
       fetchSessions(false)
       fetchCustomNames()
       if (!projectPath) return
-      void daemonCliGet<ChatSession[]>(primaryScope(), 'chat/list', { project_path: projectPath })
+      void daemonCliGet<ChatSession[]>(room.scope, 'chat/list', { project_path: projectPath })
         .then((rows) => {
-          const tabsStore = useTabsStore.getState()
+          const tabsStore = room.tabs.getState()
           const tabs = collectStoreTabs(tabsStore)
           for (const s of Array.isArray(rows) ? rows : []) {
             const key = `${s.provider || 'claude'}:${s.sessionId}`
@@ -594,7 +597,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const handleAgenticSearch = useCallback(async () => {
     if (!projectPath || !searchQuery.trim()) return
 
-    const paths = await daemonCliGet<ChatStoragePaths>(primaryScope(), 'chat/storage-paths', { project_path: projectPath })
+    const paths = await daemonCliGet<ChatStoragePaths>(room.scope, 'chat/storage-paths', { project_path: projectPath })
     // Resolve the default agent through the one seam (id-first,
     // legacy-token tolerant, first-enabled fallback).
     const resolved = resolveAgentCommand(
@@ -626,7 +629,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       'Read the relevant files and show which conversations match, with titles, dates, and relevant excerpts.',
     ].join('\n')
 
-    const tabsStore = useTabsStore.getState()
+    const tabsStore = room.tabs.getState()
     const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
 
     // Claude uses -p for print mode; other agents get the prompt as a positional arg
@@ -647,7 +650,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
   const handleArchive = useCallback(async (session: ChatSession) => {
     try {
-      await daemonCliPost(primaryScope(), 'chat/archive', {
+      await daemonCliPost(room.scope, 'chat/archive', {
         project_path: session.project || projectPath,
         provider: session.provider,
         session_id: session.sessionId,
@@ -661,7 +664,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
   const handleRestore = useCallback(async (session: ChatSession) => {
     try {
-      await daemonCliPost(primaryScope(), 'chat/restore', {
+      await daemonCliPost(room.scope, 'chat/restore', {
         project_path: session.project || projectPath,
         provider: session.provider,
         session_id: session.sessionId,
@@ -677,7 +680,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     const key = `${session.provider}:${session.sessionId}`
     const isPinned = pinnedKeys.has(key)
     try {
-      await daemonCliPost(primaryScope(), 'chat/toggle-pin', {
+      await daemonCliPost(room.scope, 'chat/toggle-pin', {
         provider: session.provider,
         session_id: session.sessionId,
         pinned: !isPinned,
@@ -737,7 +740,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // Daemon resolves live path or Claude user-archive path on the host.
       const projectForResolve = session.project || projectPath || ''
       try {
-        const res = await daemonCliGet<{ path: string | null; project: string | null }>(primaryScope(),
+        const res = await daemonCliGet<{ path: string | null; project: string | null }>(room.scope,
           'chat/session-path',
           {
             provider: session.provider,
@@ -832,7 +835,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     const config = PROVIDER_CONFIG[seed.targetProvider]
     if (!config) throw new Error(`Unknown harness: ${seed.targetProvider}`)
     const args = getPresetArgsForProvider(seed.targetProvider)
-    const tabsStore = useTabsStore.getState()
+    const tabsStore = room.tabs.getState()
     const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
     const sourceLabel = PROVIDER_CONFIG[session.provider]?.label ?? session.provider
     const display = chatDisplayName({
@@ -845,9 +848,9 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       args,
     })
     if (!stillOpen()) return
-    const ptyId = await waitForPinnedPty(paneGroupId)
+    const ptyId = await waitForPinnedPty(room.scope, paneGroupId)
     if (!stillOpen()) return
-    const msg = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
+    const msg = await daemonCliPost<MsgResponse>(room.scope, 'terminal/send-message', {
       session_id: ptyId,
       text: seed.text,
     })
@@ -868,7 +871,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       return
     }
     try {
-      await daemonCliPost(primaryScope(), 'chat/rename', {
+      await daemonCliPost(room.scope, 'chat/rename', {
         provider: renamingSession.provider,
         session_id: renamingSession.sessionId,
         custom_name: renameValue.trim(),
@@ -881,7 +884,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           ? { ...s, customName: nextName }
           : s
       )))
-      const tabsStore = useTabsStore.getState()
+      const tabsStore = room.tabs.getState()
       restampSessionTabs(
         collectStoreTabs(tabsStore),
         renamingSession.sessionId,
@@ -906,7 +909,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       const config = PROVIDER_CONFIG[session.provider]
       if (!config) return
 
-      const tabsStore = useTabsStore.getState()
+      const tabsStore = room.tabs.getState()
       const key = `${session.provider}:${session.sessionId}`
       const displayTitle = chatDisplayName({
         customName: session.customName ?? customNames[key],
@@ -992,7 +995,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         locked: true,
         conversationId: session.sessionId,
       })
-      const st = useTabsStore.getState()
+      const st = room.tabs.getState()
       restampSessionTabs(
         collectStoreTabs(st),
         session.sessionId,

@@ -15,7 +15,7 @@ import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT } from './sessionViewTab'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
-import { primaryScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -51,6 +51,9 @@ export function AgentSessionChrome({
   onRefresh,
   children,
 }: AgentSessionChromeProps): JSX.Element {
+  // Home M3 — refresh respawns on the room's server; a failed refresh drops
+  // the tab from the room's strip.
+  const room = useRoom()
   const sessionKey = conversationId || addr || agentName
   const {
     viewTab,
@@ -98,7 +101,7 @@ export function AgentSessionChrome({
         // Server kills and respawns the same provider session. The
         // nonce bump remounts so TerminalPane attaches to that PTY;
         // it is not a close-then-spawn.
-        await daemonCliPost(primaryScope(), 'sessions/v2/refresh', {
+        await daemonCliPost(room.scope, 'sessions/v2/refresh', {
           agent_name: agentName,
           ...(cwd ? { cwd } : {}),
         })
@@ -113,14 +116,13 @@ export function AgentSessionChrome({
       if (refreshPaneGroupId) {
         const verdict = settleSidecarRefresh(refreshPaneGroupId, { ok: false, message })
         if (verdict === 'drop') {
-          const { dropTabAfterFailedSidecarRefresh } = await import('@/stores/tabs')
-          dropTabAfterFailedSidecarRefresh(refreshPaneGroupId)
+          room.tabs.room.dropTabAfterFailedSidecarRefresh(refreshPaneGroupId)
         }
       }
     } finally {
       setRefreshing(false)
     }
-  }, [refreshing, onRefresh, agentName, cwd])
+  }, [room, refreshing, onRefresh, agentName, cwd])
 
   return (
     <SessionViewChromeContext.Provider
@@ -309,6 +311,7 @@ export function useSidecarOverlayAddr(
   paneGroupId: string,
   attachAgentName?: string,
 ): { title: string; addr: string } {
+  const room = useRoom()
   const [state, setState] = useState({ title: '', addr: '' })
 
   useEffect(() => {
@@ -325,7 +328,7 @@ export function useSidecarOverlayAddr(
     const lookup = async (): Promise<void> => {
       let found = ''
       try {
-        const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
+        const rows = await daemonCliGet<DaemonHandleRow[]>(room.scope, 'sessions/list-for-workspace', {
           path: projectPath,
         })
         if (cancelled) return
@@ -352,7 +355,7 @@ export function useSidecarOverlayAddr(
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [projectPath, paneGroupId, attachAgentName])
+  }, [room, projectPath, paneGroupId, attachAgentName])
 
   return state
 }

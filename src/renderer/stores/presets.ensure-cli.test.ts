@@ -55,7 +55,7 @@ describe('launchPreset ensure-cli', () => {
       presets: [preset({ id: 'g', label: 'Grok', command: 'grok --always-approve' })],
     })
     vi.spyOn(daemonCli, 'daemonCliPost').mockRejectedValue(new Error('grok installed but not on PATH'))
-    await usePresetsStore.getState().launchPreset('g', '/tmp/proj', 'tab')
+    await usePresetsStore.getState().launchPreset(useTabsStore, 'g', '/tmp/proj', 'tab')
     expect(daemonCli.daemonCliPost).toHaveBeenCalledWith(primaryScope(), 'agents/ensure-cli', { program: 'grok' })
     expect(addTabToGroup).not.toHaveBeenCalled()
     expect(useTabsStore.getState().tabs).toHaveLength(0)
@@ -69,7 +69,7 @@ describe('launchPreset ensure-cli', () => {
     usePresetsStore.setState({
       presets: [preset({ id: 'p', label: 'Claude', command: '/usr/bin/claude --yolo' })],
     })
-    await usePresetsStore.getState().launchPreset('p', '/tmp/proj', 'tab')
+    await usePresetsStore.getState().launchPreset(useTabsStore, 'p', '/tmp/proj', 'tab')
     expect(post).not.toHaveBeenCalled()
     expect(useTabsStore.getState().tabs).toHaveLength(1)
     expect(useTabsStore.getState().tabs[0]?.title).toBe('Claude')

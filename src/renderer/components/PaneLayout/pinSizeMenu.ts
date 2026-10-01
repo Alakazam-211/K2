@@ -20,7 +20,7 @@
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { agentChatId } from '@/lib/terminal-id'
 import { daemonCliPost } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -209,24 +209,25 @@ export function pinFormFieldEdited(
  *  the pane's `pin_changed` frame (which still converges the pane
  *  itself). Throws on daemon rejection — callers render the error. */
 export async function applyPinSize(
+  scope: ServerScope,
   sessionId: string,
   dims: { cols: number; rows: number } | null,
 ): Promise<void> {
   if (dims === null) {
-    await daemonCliPost<PinSizeResponse>(primaryScope(), 'terminal/pin-size', {
+    await daemonCliPost<PinSizeResponse>(scope, 'terminal/pin-size', {
       session: sessionId,
       clear: true,
     })
-    usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, null)
+    usePinnedSizeStore.getState().setPin(scope, sessionId, null)
     return
   }
-  const res = await daemonCliPost<PinSizeResponse>(primaryScope(), 'terminal/pin-size', {
+  const res = await daemonCliPost<PinSizeResponse>(scope, 'terminal/pin-size', {
     session: sessionId,
     cols: dims.cols,
     rows: dims.rows,
   })
   if (res.pinned) {
-    usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, {
+    usePinnedSizeStore.getState().setPin(scope, sessionId, {
       cols: res.pinned.cols,
       rows: res.pinned.rows,
       setBy: res.pinned.setBy ?? null,

@@ -1,3 +1,4 @@
+import { registerPrimaryRoomProjects } from './room'
 import { create } from 'zustand'
 import { emit } from '@tauri-apps/api/event'
 // Plan B — projects/workspaces are host-aware daemon data: route them
@@ -962,6 +963,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }
   }
 }))
+
+// Home M3 — the window's projects store IS the primary room's project list
+// (MS3: a path resolves only inside its room's own list).
+registerPrimaryRoomProjects(useProjectsStore)
 
 // Initialize on import
 useProjectsStore.getState().fetchProjects()

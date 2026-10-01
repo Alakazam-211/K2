@@ -4,7 +4,8 @@
 import { useMemo } from 'react'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
-import { useProjectsStore } from '@/stores/projects'
+import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
+import { useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import {
   resolveAgentCommand,
   readProjectDefaultAgent,
@@ -43,20 +44,50 @@ export function useResolvedAgentCommand(
     if (scope === 'global') {
       return resolveAgentCommand(presets, defaultAgent, undefined)
     }
-
-    const project =
-      (workspaceId
-        ? projects.find((p) => p.workspaces.some((w) => w.id === workspaceId))
-        : undefined) ??
-      (projectPath
-        ? projects.find(
-            (p) =>
-              p.path === projectPath ||
-              p.workspaces.some((w) => w.worktreePath === projectPath),
-          )
-        : undefined) ??
-      projects.find((p) => p.id === activeProjectId)
-
+    const project = workspaceProject(projects, activeProjectId, workspaceId, projectPath)
     return resolveAgentCommand(presets, defaultAgent, readProjectDefaultAgent(project))
   }, [presets, defaultAgent, projects, activeProjectId, workspaceId, projectPath, scope])
+}
+
+/** The project whose `defaultAgent` scopes the resolution, looked up in ONE
+ *  project list (a room's own, MS3). */
+function workspaceProject(
+  projects: ProjectWithWorkspaces[],
+  activeProjectId: string | null,
+  workspaceId?: string,
+  projectPath?: string,
+): ProjectWithWorkspaces | undefined {
+  return (
+    (workspaceId
+      ? projects.find((p) => p.workspaces.some((w) => w.id === workspaceId))
+      : undefined) ??
+    (projectPath
+      ? projects.find(
+          (p) =>
+            p.path === projectPath ||
+            p.workspaces.some((w) => w.worktreePath === projectPath),
+        )
+      : undefined) ??
+    projects.find((p) => p.id === activeProjectId)
+  )
+}
+
+/**
+ * Home M3 — the same resolution for room code: the workspace's project is
+ * looked up in THIS room's own project list (MS3), and "the active project"
+ * is the one the room shows. Throws outside a room (MS2).
+ */
+export function useRoomResolvedAgentCommand(
+  workspaceId?: string,
+  opts?: { projectPath?: string },
+): ResolvedAgentCommand<AgentPreset> | null {
+  const presets = usePresetsStore((s) => s.presets)
+  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
+  const projects = useRoomProjects((p) => p)
+  const activeProjectId = useRoomTabs((s) => s.activeProjectId)
+  const projectPath = opts?.projectPath
+  return useMemo(() => {
+    const project = workspaceProject(projects, activeProjectId, workspaceId, projectPath)
+    return resolveAgentCommand(presets, defaultAgent, readProjectDefaultAgent(project))
+  }, [presets, defaultAgent, projects, activeProjectId, workspaceId, projectPath])
 }

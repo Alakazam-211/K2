@@ -1,3 +1,4 @@
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
@@ -632,12 +633,14 @@ export function ContextStackEditor({
           )}
           {viewerAbsPath && !selectedMeta?.isTooling && (
             <div className="absolute inset-0">
-              <FileViewerPane
-                key={viewerAbsPath}
-                filePath={viewerAbsPath}
-                paneId="settings-context-viewer"
-                tabId="settings-context-viewer"
-              />
+              <PrimaryRoom>
+                <FileViewerPane
+                  key={viewerAbsPath}
+                  filePath={viewerAbsPath}
+                  paneId="settings-context-viewer"
+                  tabId="settings-context-viewer"
+                />
+              </PrimaryRoom>
             </div>
           )}
         </div>

@@ -14,12 +14,9 @@ vi.mock('@/stores/settings', () => ({
   },
 }))
 
+// The project list of the room the pane is in (MS21/MS68) — passed in, never
+// read from a global store.
 let projects: { id: string; completionSoundEnabled?: number }[] = []
-vi.mock('@/stores/projects', () => ({
-  useProjectsStore: {
-    getState: () => ({ projects }),
-  },
-}))
 
 import { playCompletionSound, __resetCompletionSoundThrottleForTests } from './completion-sound'
 
@@ -73,7 +70,7 @@ describe('F4 — playCompletionSound', () => {
   })
 
   it('plays a two-note chime when enabled', () => {
-    playCompletionSound()
+    playCompletionSound(null, projects)
 
     expect(FakeAudioContext.instances).toHaveLength(1)
     expect(FakeAudioContext.oscillatorsStarted).toBe(2)
@@ -82,7 +79,7 @@ describe('F4 — playCompletionSound', () => {
   it('is silent when the setting is off — never even touches audio', () => {
     completionSoundEnabled = false
 
-    playCompletionSound()
+    playCompletionSound(null, projects)
 
     expect(FakeAudioContext.instances).toHaveLength(0)
     expect(FakeAudioContext.oscillatorsStarted).toBe(0)
@@ -91,7 +88,7 @@ describe('F4 — playCompletionSound', () => {
   it('is silent when global is on and the workspace is muted', () => {
     projects = [{ id: 'ws-a', completionSoundEnabled: 0 }]
 
-    playCompletionSound('ws-a')
+    playCompletionSound('ws-a', projects)
 
     expect(FakeAudioContext.instances).toHaveLength(0)
     expect(FakeAudioContext.oscillatorsStarted).toBe(0)
@@ -100,7 +97,7 @@ describe('F4 — playCompletionSound', () => {
   it('plays when both the global toggle and the workspace flag are on', () => {
     projects = [{ id: 'ws-a', completionSoundEnabled: 1 }]
 
-    playCompletionSound('ws-a')
+    playCompletionSound('ws-a', projects)
 
     expect(FakeAudioContext.instances).toHaveLength(1)
     expect(FakeAudioContext.oscillatorsStarted).toBe(2)
@@ -110,7 +107,7 @@ describe('F4 — playCompletionSound', () => {
     completionSoundEnabled = false
     projects = [{ id: 'ws-a', completionSoundEnabled: 1 }]
 
-    playCompletionSound('ws-a')
+    playCompletionSound('ws-a', projects)
 
     expect(FakeAudioContext.instances).toHaveLength(0)
     expect(FakeAudioContext.oscillatorsStarted).toBe(0)
@@ -119,8 +116,20 @@ describe('F4 — playCompletionSound', () => {
   it('treats a missing workspace field as ON', () => {
     projects = [{ id: 'ws-a' }]
 
-    playCompletionSound('ws-a')
+    playCompletionSound('ws-a', projects)
 
+    expect(FakeAudioContext.oscillatorsStarted).toBe(2)
+  })
+
+  it("reads the mute from the room's own list: the same id muted on another server does not silence it", () => {
+    const serverA = [{ id: 'ws-a', completionSoundEnabled: 0 }]
+    const serverB = [{ id: 'ws-a', completionSoundEnabled: 1 }]
+
+    playCompletionSound('ws-a', serverB)
+    expect(FakeAudioContext.oscillatorsStarted).toBe(2)
+
+    vi.setSystemTime(1_010_000)
+    playCompletionSound('ws-a', serverA)
     expect(FakeAudioContext.oscillatorsStarted).toBe(2)
   })
 
@@ -130,22 +139,22 @@ describe('F4 — playCompletionSound', () => {
       { id: 'loud', completionSoundEnabled: 1 },
     ]
 
-    playCompletionSound('muted')
-    playCompletionSound('loud')
+    playCompletionSound('muted', projects)
+    playCompletionSound('loud', projects)
 
     expect(FakeAudioContext.oscillatorsStarted).toBe(2)
   })
 
   it('throttles a chime storm — several completions inside 3s chime once', () => {
-    playCompletionSound()
-    playCompletionSound()
+    playCompletionSound(null, projects)
+    playCompletionSound(null, projects)
     vi.setSystemTime(1_000_000 + 2_000)
-    playCompletionSound()
+    playCompletionSound(null, projects)
 
     expect(FakeAudioContext.oscillatorsStarted).toBe(2) // one chime = two notes
 
     vi.setSystemTime(1_000_000 + 3_500)
-    playCompletionSound()
+    playCompletionSound(null, projects)
 
     expect(FakeAudioContext.oscillatorsStarted).toBe(4)
   })

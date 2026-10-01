@@ -53,6 +53,7 @@
 // no close, no presets, member clicks focus-only. The daemon's
 // owner-or-admin gate on save-layout backstops all of it.
 
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -357,13 +358,15 @@ function DashboardTerminalPane({
   // duplicate. Parent batched lookups so N live panes mount in one
   // commit → concurrent attach (not one-by-one).
   return (
-    <TerminalPane
-      terminalId={`proj-dash:${dashboardId}:${workspaceId}`}
-      cwd={projectPath}
-      attachAgentName={workspaceId}
-      sessionId={phase.sessionId}
-      syncSizeOnShow
-    />
+    <PrimaryRoom>
+      <TerminalPane
+        terminalId={`proj-dash:${dashboardId}:${workspaceId}`}
+        cwd={projectPath}
+        attachAgentName={workspaceId}
+        sessionId={phase.sessionId}
+        syncSizeOnShow
+      />
+    </PrimaryRoom>
   )
 }
 
@@ -417,7 +420,9 @@ function HtmlDocPane({
     const id = `dash-fv:${workspaceId}:${filePath}`
     return (
       <div className="h-full min-h-0 overflow-hidden">
-        <FileViewerPane filePath={filePath} paneId={id} tabId={id} />
+        <PrimaryRoom>
+          <FileViewerPane filePath={filePath} paneId={id} tabId={id} />
+        </PrimaryRoom>
       </div>
     )
   }

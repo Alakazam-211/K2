@@ -1,3 +1,4 @@
+import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React from 'react'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
@@ -1626,14 +1627,16 @@ function ProjectDetail({
             <div className="flex-1 min-h-0 flex flex-row border border-[var(--color-border)]">
               <div className="flex-1 min-w-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 [scrollbar-gutter:stable]">
-                  <HeartbeatsPanel
-                    key={`hb-${hbRefreshNonce}`}
-                    projectPath={project.path}
-                    agentMode={project.agentMode || 'custom'}
-                    agentName={primaryAgentName
-                      || project.name.toLowerCase().replace(/\s+/g, '-')}
-                    onConfigureWakeup={(row) => setWakeupEditingHb(row)}
-                  />
+                  <PrimaryRoom>
+                    <HeartbeatsPanel
+                      key={`hb-${hbRefreshNonce}`}
+                      projectPath={project.path}
+                      agentMode={project.agentMode || 'custom'}
+                      agentName={primaryAgentName
+                        || project.name.toLowerCase().replace(/\s+/g, '-')}
+                      onConfigureWakeup={(row) => setWakeupEditingHb(row)}
+                    />
+                  </PrimaryRoom>
                 </div>
                 <div className="flex-shrink-0 border-t border-[var(--color-border)] px-3 py-2">
                   <ShowHeartbeatSessionsToggle projectPath={project.path} />
@@ -1688,7 +1691,9 @@ function ProjectDetail({
         {settingsTab === 'api' && (
           <div className="space-y-6">
             <SettingsGroup title="Sessions">
-              <HideApiSessionsToggle project={project} />
+              <PrimaryRoom>
+                <HideApiSessionsToggle project={project} />
+              </PrimaryRoom>
             </SettingsGroup>
             <WorkspaceHostSessionCapPanel projectPath={project.path} />
             <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />

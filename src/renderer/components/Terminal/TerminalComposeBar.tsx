@@ -21,6 +21,7 @@
 // button, no status lane, no collapse control. A successful send clears the
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
+import { useRoomProjects } from '@/components/Room/RoomContext'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -140,8 +141,9 @@ export function TerminalComposeBar({
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
   // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
-  const agentName = useProjectsStore((s) =>
-    composeAgentNameFromProjects(s.projects, workspacePath),
+  // MS3 — the pane's workspace path resolves in its room's own list.
+  const agentName = useRoomProjects((projects) =>
+    composeAgentNameFromProjects(projects, workspacePath),
   )
   const messagePlaceholder = composeMessagePlaceholder(agentName)
   const sessionChrome = useSessionViewChrome()

@@ -211,7 +211,7 @@ describe('applyPinSize', () => {
       persisted: true,
     })
 
-    await applyPinSize('sess-1', { cols: 120, rows: 36 })
+    await applyPinSize(primaryScope(), 'sess-1', { cols: 120, rows: 36 })
 
     expect(daemonCliPostMock).toHaveBeenCalledTimes(1)
     expect(daemonCliPostMock).toHaveBeenCalledWith(primaryScope(), 'terminal/pin-size', {
@@ -230,7 +230,7 @@ describe('applyPinSize', () => {
     usePinnedSizeStore.getState().setPin(primaryScope(), 'sess-1', { cols: 80, rows: 24, setBy: null })
     daemonCliPostMock.mockResolvedValue({ success: true, pinned: null, persisted: true })
 
-    await applyPinSize('sess-1', null)
+    await applyPinSize(primaryScope(), 'sess-1', null)
 
     expect(daemonCliPostMock).toHaveBeenCalledTimes(1)
     expect(daemonCliPostMock).toHaveBeenCalledWith(primaryScope(), 'terminal/pin-size', {
@@ -244,7 +244,7 @@ describe('applyPinSize', () => {
     usePinnedSizeStore.getState().setPin(primaryScope(), 'sess-1', { cols: 80, rows: 24, setBy: null })
     daemonCliPostMock.mockRejectedValue(new Error('cols out of range'))
 
-    await expect(applyPinSize('sess-1', { cols: 9999, rows: 24 })).rejects.toThrow(
+    await expect(applyPinSize(primaryScope(), 'sess-1', { cols: 9999, rows: 24 })).rejects.toThrow(
       'cols out of range',
     )
     // The pre-existing pin is untouched — no optimistic write happened.

@@ -5,7 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { useTabsStore } from '@/stores/tabs'
+import { useRoom } from '@/components/Room/RoomContext'
+import { useStore } from 'zustand'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -127,6 +128,8 @@ export function BrowserPane({
   navSeq,
   standalone = false,
 }: BrowserPaneProps): React.JSX.Element {
+  // Home M3 — URL / page-meta stamps go to this pane's room's tabs store.
+  const room = useRoom()
   const tabVisible = useIsTabVisible()
   // Settings is a fixed overlay while the workspace stays mounted (display:none
   // only). Projects / Feedback / Wiki are full-page overlays on top of agents.
@@ -145,7 +148,7 @@ export function BrowserPane({
     page: appPage,
     windowFocused,
   }) && !menuOpen
-  const setBrowserItemState = useTabsStore((s) => s.setBrowserItemState)
+  const setBrowserItemState = useStore(room.tabs, (s) => s.setBrowserItemState)
 
   // Parent window for all browser_* invokes (main / window-{uuid}).
   const parentWindow = useMemo(() => currentParentWindow(), [])
@@ -401,7 +404,7 @@ export function BrowserPane({
         if (typeof payload.title === 'string') meta.title = payload.title
         if (typeof payload.icon === 'string') meta.icon = payload.icon
         if (meta.title === undefined && meta.icon === undefined) return
-        useTabsStore.getState().applyBrowserPageMeta(tabId, paneGroupId, itemId, meta)
+        room.tabs.getState().applyBrowserPageMeta(tabId, paneGroupId, itemId, meta)
       },
     ).then((fn) => {
       if (cancelled) {

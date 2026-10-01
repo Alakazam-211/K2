@@ -530,6 +530,69 @@ pub struct AppSettings {
     /// wakes the laptop to fire agent heartbeats.
     #[serde(default)]
     pub wake_scheduler: WakeSchedulerSettings,
+    /// Heartbeat S6 — the top-bar Keep awake control. Daemon-owned so it
+    /// holds with no client attached. Lid closed on battery reuses
+    /// `wake_scheduler.wake_on_battery` ("Also on battery", D12).
+    #[serde(default)]
+    pub keep_awake: KeepAwakeSettings,
+}
+
+/// Heartbeat S6 — Keep awake: Off / While agents are working / Always.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeepAwakeMode {
+    Off,
+    /// Hold while any session is `working`, then a short grace.
+    Working,
+    Always,
+}
+
+impl KeepAwakeMode {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            KeepAwakeMode::Off => "off",
+            KeepAwakeMode::Working => "working",
+            KeepAwakeMode::Always => "always",
+        }
+    }
+
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(KeepAwakeMode::Off),
+            "working" => Some(KeepAwakeMode::Working),
+            "always" => Some(KeepAwakeMode::Always),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepAwakeSettings {
+    /// `off` | `working` | `always`. [`update`] refuses anything else.
+    #[serde(default = "default_keep_awake_mode")]
+    pub mode: String,
+    /// macOS: the one admin dialog for the lid-closed part was declined.
+    /// Changing the mode then does not ask again; only an explicit
+    /// "Allow lid closed" does.
+    #[serde(default)]
+    pub lid_dialog_declined: bool,
+}
+
+impl KeepAwakeSettings {
+    /// The parsed mode. An unknown string (hand-edited file) reads as Off.
+    pub fn mode(&self) -> KeepAwakeMode {
+        KeepAwakeMode::from_wire(&self.mode).unwrap_or(KeepAwakeMode::Off)
+    }
+}
+
+fn default_keep_awake_mode() -> String {
+    KeepAwakeMode::Off.as_wire().to_string()
+}
+
+impl Default for KeepAwakeSettings {
+    fn default() -> Self {
+        Self { mode: default_keep_awake_mode(), lid_dialog_declined: false }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -807,6 +870,7 @@ impl Default for AppSettings {
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
+            keep_awake: KeepAwakeSettings::default(),
         }
     }
 }
@@ -1001,6 +1065,12 @@ pub fn update(partial: serde_json::Value) -> Result<AppSettings, String> {
         return Err(format!(
             "connectLoginIngress must be one of edge|any|off (got {:?})",
             merged.connect_login_ingress
+        ));
+    }
+    if KeepAwakeMode::from_wire(&merged.keep_awake.mode).is_none() {
+        return Err(format!(
+            "keepAwake.mode must be one of off|working|always (got {:?})",
+            merged.keep_awake.mode
         ));
     }
 
@@ -1495,6 +1565,41 @@ mod tests {
         let after = reset().expect("reset");
         assert!(!after.airgap, "reset must return airgap to OFF");
         assert!(!after.listen_lan, "reset must return listenLan to OFF");
+    }
+
+    /// Heartbeat S6 — Keep awake defaults Off, takes the three modes
+    /// through the generic update, refuses anything else loudly, and a
+    /// declined lid dialog is remembered.
+    #[test]
+    fn keep_awake_modes_round_trip_and_bad_mode_is_refused() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert_eq!(load().keep_awake.mode(), KeepAwakeMode::Off);
+        assert_eq!(AppSettings::default().keep_awake.mode, "off");
+        for (wire, mode) in [
+            ("working", KeepAwakeMode::Working),
+            ("always", KeepAwakeMode::Always),
+            ("off", KeepAwakeMode::Off),
+        ] {
+            let merged = update(serde_json::json!({ "keepAwake": { "mode": wire } })).expect("update");
+            assert_eq!(merged.keep_awake.mode(), mode);
+            assert_eq!(load().keep_awake.mode(), mode, "{wire} must persist");
+            assert_eq!(mode.as_wire(), wire);
+        }
+
+        let err = update(serde_json::json!({ "keepAwake": { "mode": "sometimes" } }))
+            .expect_err("an unknown mode must be refused");
+        assert!(err.contains("off|working|always"), "{err}");
+        assert_eq!(load().keep_awake.mode(), KeepAwakeMode::Off, "a refused write changes nothing");
+
+        let merged = update(serde_json::json!({ "keepAwake": { "lidDialogDeclined": true } })).expect("update");
+        assert!(merged.keep_awake.lid_dialog_declined);
+        assert_eq!(merged.keep_awake.mode(), KeepAwakeMode::Off, "a partial update keeps the mode");
+
+        // A hand-edited unknown mode reads as Off, never as a hold.
+        let odd = KeepAwakeSettings { mode: "maybe".into(), lid_dialog_declined: false };
+        assert_eq!(odd.mode(), KeepAwakeMode::Off);
     }
 
     /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF

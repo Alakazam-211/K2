@@ -85,9 +85,10 @@ export function createHostSessionSync(deps: HostSessionSyncDeps): HostSessionSyn
       deps.pool.noteSignedOut(event.hostKey)
       return
     }
+    // Not remembered: this window does not pick the login up (MS28). The
+    // row keeps saying Sign in and this window makes no login POST.
+    if (!saved.remember) return
     const token = await deps.resolveToken(saved.id)
-    // Not remembered: nothing to pick up. The row keeps saying Sign in and
-    // this window makes no login POST.
     if (!token) return
     const now = savedHostForKey(deps.hosts(), event.hostKey)
     if (!now) return

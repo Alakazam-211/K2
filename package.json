@@ -23,6 +23,7 @@
     "styles:lint": "node scripts/check-style-lint.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:multiserver": "vitest run --config vitest.multiserver.config.ts",
     "parity:capture": "playwright test --config tests/parity/playwright.config.ts",
     "parity:diff": "node tests/parity/diff.mjs",
     "tauri": "tauri"

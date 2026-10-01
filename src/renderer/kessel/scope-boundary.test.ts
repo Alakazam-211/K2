@@ -32,7 +32,7 @@ function walk(dir: string, out: string[]): string[] {
 
 const SOURCE_FILES = walk(RENDERER, [])
   .map((f) => relative(RENDERER, f).split(sep).join('/'))
-  .filter((f) => !/\.test\.tsx?$/.test(f) && !f.startsWith('test-utils/'))
+  .filter((f) => !/\.(ms)?test\.tsx?$/.test(f) && !f.startsWith('test-utils/'))
   .sort()
 
 /** Source with block and line comments removed (crude but enough here:

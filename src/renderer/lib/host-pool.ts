@@ -114,7 +114,7 @@ export interface HostPoolDeps {
 }
 
 /** Copy for a row or room in each sign-in state (MS27, MS45). */
-export function authNoteFor(block: LoginBlock | null, serverLabel: string): string | null {
+export function authNoteFor(block: LoginBlock | null, serverLabel: string, now: number): string | null {
   if (!block) return null
   switch (block.reason) {
     case 'kicked':
@@ -125,7 +125,8 @@ export function authNoteFor(block: LoginBlock | null, serverLabel: string): stri
       return `Signed out of ${serverLabel}.`
     case 'throttled': {
       if (block.until === null) return 'Too many sign-ins from this network. Try again in a few minutes.'
-      return null
+      const min = Math.max(1, Math.ceil((block.until - now) / 60_000))
+      return `Too many sign-ins from this network. Try again in ${min} min.`
     }
   }
 }
@@ -267,12 +268,12 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
   const signedOutState = (hostKey: string): Partial<HostEntry> => {
     const block = deps.coord.block(hostKey)
     if (block?.reason === 'kicked') {
-      return { auth: 'kicked', authNote: authNoteFor(block, labelOf(hostKey)), presence: null }
+      return { auth: 'kicked', authNote: authNoteFor(block, labelOf(hostKey), deps.now()), presence: null }
     }
     if (!block && deps.coord.leaseHeldElsewhere(hostKey)) {
       return { auth: 'signing-in', authNote: null, presence: null }
     }
-    return { auth: 'signin-required', authNote: authNoteFor(block, labelOf(hostKey)), presence: null }
+    return { auth: 'signin-required', authNote: authNoteFor(block, labelOf(hostKey), deps.now()), presence: null }
   }
 
   /** MS71: was this login removed from the server by its owner? A 4001

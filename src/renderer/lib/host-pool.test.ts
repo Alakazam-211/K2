@@ -351,6 +351,8 @@ describe('automatic login (MS28, MS31, MS36)', () => {
     now += 60_000
     await w.pool.check('b.k2.dev')
     expect(B().loginPosts).toBe(1)
+    // Still held: the row keeps saying how long.
+    expect(entryOf(w, 'b.k2.dev').authNote).toBe('Too many sign-ins from this network. Try again in 1 min.')
     now += 6 * 60_000 // past Retry-After and the per-server budget
     await w.pool.check('b.k2.dev')
     expect(B().loginPosts).toBe(2)
@@ -457,16 +459,16 @@ describe('cross-window login broadcast (MS28, MS62)', () => {
   it('a server without “remember” has no keychain token: the others keep Sign in and post nothing', async () => {
     const w1 = makeWindow('w1', [hostFor(B_BASE, { token: '', remember: false })])
     const w2 = makeWindow('w2', [hostFor(B_BASE, { token: '', remember: false })])
-    // Window 1 signs in by click (no remembered password).
-    const res = await (async () => {
-      const d = B()
-      d.minted += 1
-      const token = `tok-${d.minted}`
-      d.tokens.add(token)
-      w1.hosts = w1.hosts.map((h) => ({ ...h, token }))
-      w1.sync.loginLanded({ host: w1.hosts[0]!, token, mustChangePassword: false })
-      return token
-    })()
+    // Window 1 signs in by click (no remembered password). loginToHost
+    // writes the keychain even without "remember"; the other windows still
+    // must not pick it up (MS28).
+    const d = B()
+    d.minted += 1
+    const res = `tok-${d.minted}`
+    d.tokens.add(res)
+    keychain.set('id-b.k2.dev', res)
+    w1.hosts = w1.hosts.map((h) => ({ ...h, token: res }))
+    w1.sync.loginLanded({ host: w1.hosts[0]!, token: res, mustChangePassword: false })
     await new Promise((r) => setTimeout(r, 0))
     expect(res).toBe('tok-1')
     expect(w2.hosts[0]!.token).toBe('')

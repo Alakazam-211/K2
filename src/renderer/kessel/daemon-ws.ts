@@ -81,6 +81,12 @@ export function invalidateDaemonWs(): void {
  * Rejects with a message when the local daemon isn't reachable — the
  * reject invalidates the local cache so recovery is just a retry. */
 export function getDaemonWs(): Promise<DaemonWsAvailable> {
+  return resolveWindowHostCreds()
+}
+
+/** The window's active-host creds. `primaryScope().creds()`
+ *  (kessel/server-scope.ts) resolves through this. */
+export function resolveWindowHostCreds(): Promise<DaemonWsAvailable> {
   // Hosted web: never call Tauri `daemon_ws_url`. Force same-origin
   // remote creds if the store somehow still says 'local'.
   if (isWebClient()) {

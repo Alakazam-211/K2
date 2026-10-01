@@ -28,8 +28,8 @@ vi.mock('./handle-remote-drop', async () => {
 })
 
 import { routeBrowserFileDrop } from './external-drop-router'
-
 import { primaryScope } from '@/kessel/server-scope'
+
 const SEL_KEY: Record<string, string> = {
   [COMPOSE_BAR_SELECTOR]: 'composeBar',
   [COMPOSE_DROP_SURFACE_SELECTOR]: 'composeDropSurface',

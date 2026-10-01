@@ -61,20 +61,27 @@ const ev = vi.hoisted(() => {
     tabSubs: [] as Array<{ path: string; handlers: Record<string, Fn> }>,
   }
 })
-vi.mock('@/stores/session-events', () => ({
-  subscribeToWorkspaceSessionEvents: vi.fn((path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
-    const entry = { path, handlers }
-    ev.sessionSubs.push(entry)
-    return () => void (ev.sessionSubs = ev.sessionSubs.filter((e) => e !== entry))
-  }),
-  subscribeToWorkspaceTabEvents: vi.fn((path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
-    const entry = { path, handlers }
-    ev.tabSubs.push(entry)
-    return () => void (ev.tabSubs = ev.tabSubs.filter((e) => e !== entry))
-  }),
-  onSessionAddedApp: vi.fn(() => () => undefined),
-  onSessionRemovedApp: vi.fn(() => () => undefined),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    subscribeToWorkspaceSessionEvents: vi.fn((scope: unknown, path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
+      expectPrimaryScope(scope)
+      const entry = { path, handlers }
+      ev.sessionSubs.push(entry)
+      return () => void (ev.sessionSubs = ev.sessionSubs.filter((e) => e !== entry))
+    }),
+    subscribeToWorkspaceTabEvents: vi.fn((scope: unknown, path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
+      expectPrimaryScope(scope)
+      const entry = { path, handlers }
+      ev.tabSubs.push(entry)
+      return () => void (ev.tabSubs = ev.tabSubs.filter((e) => e !== entry))
+    }),
+    onSessionAddedApp: vi.fn(() => () => undefined),
+    onSessionRemovedApp: vi.fn(() => () => undefined),
+  }
+})
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ port: 0, token: 't', secure: false, host: '127.0.0.1' })),
   daemonHttpBase: vi.fn(() => 'http://127.0.0.1:0'),

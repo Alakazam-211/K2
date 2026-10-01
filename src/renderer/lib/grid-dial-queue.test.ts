@@ -9,6 +9,7 @@ import {
   setGridDialMaxForTests,
 } from './grid-dial-queue'
 
+import { primaryScope } from '@/kessel/server-scope'
 class FakeWebSocket {
   static pending: FakeWebSocket[] = []
   static throwOnConstruct = false
@@ -49,27 +50,27 @@ describe('grid-dial-queue', () => {
 
   it('does not back off after one or two failures', () => {
     const t0 = 1_000_000
-    noteGridDialFailure(t0)
-    noteGridDialFailure(t0 + 100)
-    expect(gridDialBackoffRemainingMs(t0 + 200)).toBe(0)
+    noteGridDialFailure(primaryScope(), t0)
+    noteGridDialFailure(primaryScope(), t0 + 100)
+    expect(gridDialBackoffRemainingMs(primaryScope(), t0 + 200)).toBe(0)
   })
 
   it('backs off all panes after a burst of failed dials', () => {
     const t0 = 2_000_000
-    noteGridDialFailure(t0)
-    noteGridDialFailure(t0 + 50)
-    noteGridDialFailure(t0 + 100)
-    const remain = gridDialBackoffRemainingMs(t0 + 200)
+    noteGridDialFailure(primaryScope(), t0)
+    noteGridDialFailure(primaryScope(), t0 + 50)
+    noteGridDialFailure(primaryScope(), t0 + 100)
+    const remain = gridDialBackoffRemainingMs(primaryScope(), t0 + 200)
     expect(remain).toBeGreaterThan(5_000)
     expect(remain).toBeLessThanOrEqual(BACKOFF_MS)
   })
 
   it('does not count failures outside the burst window', () => {
     const t0 = 3_000_000
-    noteGridDialFailure(t0)
-    noteGridDialFailure(t0 + 50)
-    noteGridDialFailure(t0 + 3_100)
-    expect(gridDialBackoffRemainingMs(t0 + 3_200)).toBe(0)
+    noteGridDialFailure(primaryScope(), t0)
+    noteGridDialFailure(primaryScope(), t0 + 50)
+    noteGridDialFailure(primaryScope(), t0 + 3_100)
+    expect(gridDialBackoffRemainingMs(primaryScope(), t0 + 3_200)).toBe(0)
   })
 
   it('constructs at most one WebSocket until a handshake settles', async () => {
@@ -77,9 +78,9 @@ describe('grid-dial-queue', () => {
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
-      const p1 = openQueuedGridWebSocket('wss://a/grid')
-      const p2 = openQueuedGridWebSocket('wss://b/grid')
-      const p3 = openQueuedGridWebSocket('wss://c/grid')
+      const p1 = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')
+      const p2 = openQueuedGridWebSocket(primaryScope(), 'wss://b/grid')
+      const p3 = openQueuedGridWebSocket(primaryScope(), 'wss://c/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
 
@@ -105,9 +106,9 @@ describe('grid-dial-queue', () => {
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
-      const p1 = openQueuedGridWebSocket('wss://a/grid')
-      const p2 = openQueuedGridWebSocket('wss://b/grid')
-      const p3 = openQueuedGridWebSocket('wss://c/grid')
+      const p1 = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')
+      const p2 = openQueuedGridWebSocket(primaryScope(), 'wss://b/grid')
+      const p3 = openQueuedGridWebSocket(primaryScope(), 'wss://c/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(2)
       FakeWebSocket.pending[0]!.open()
@@ -131,24 +132,24 @@ describe('grid-dial-queue', () => {
       const now = 4_000_000
       vi.setSystemTime(now)
 
-      const first = openQueuedGridWebSocket('wss://a/grid')
+      const first = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
       FakeWebSocket.pending[0]!.fail()
       await expect(first).rejects.toThrow('grid-dial-failed')
 
-      const second = openQueuedGridWebSocket('wss://b/grid')
+      const second = openQueuedGridWebSocket(primaryScope(), 'wss://b/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(2)
       FakeWebSocket.pending[1]!.fail()
       await expect(second).rejects.toThrow('grid-dial-failed')
 
-      const third = openQueuedGridWebSocket('wss://c/grid')
+      const third = openQueuedGridWebSocket(primaryScope(), 'wss://c/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(3)
       FakeWebSocket.pending[2]!.fail()
       await expect(third).rejects.toThrow('grid-dial-failed')
-      expect(gridDialBackoffRemainingMs(now)).toBe(BACKOFF_MS)
+      expect(gridDialBackoffRemainingMs(primaryScope(), now)).toBe(BACKOFF_MS)
     } finally {
       globalThis.WebSocket = prev
       vi.useRealTimers()
@@ -163,16 +164,16 @@ describe('grid-dial-queue', () => {
     try {
       const now = 5_000_000
       vi.setSystemTime(now)
-      await expect(openQueuedGridWebSocket('wss://a/grid')).rejects.toThrow(
+      await expect(openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')).rejects.toThrow(
         'grid-dial-failed',
       )
-      await expect(openQueuedGridWebSocket('wss://b/grid')).rejects.toThrow(
+      await expect(openQueuedGridWebSocket(primaryScope(), 'wss://b/grid')).rejects.toThrow(
         'grid-dial-failed',
       )
-      await expect(openQueuedGridWebSocket('wss://c/grid')).rejects.toThrow(
+      await expect(openQueuedGridWebSocket(primaryScope(), 'wss://c/grid')).rejects.toThrow(
         'grid-dial-failed',
       )
-      expect(gridDialBackoffRemainingMs(now)).toBe(BACKOFF_MS)
+      expect(gridDialBackoffRemainingMs(primaryScope(), now)).toBe(BACKOFF_MS)
       expect(FakeWebSocket.pending).toHaveLength(0)
     } finally {
       globalThis.WebSocket = prev
@@ -186,11 +187,11 @@ describe('grid-dial-queue', () => {
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
-      const hung = openQueuedGridWebSocket('wss://a/grid')
+      const hung = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
 
-      const waiter = openQueuedGridWebSocket('wss://b/grid')
+      const waiter = openQueuedGridWebSocket(primaryScope(), 'wss://b/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
 
@@ -218,14 +219,14 @@ describe('grid-dial-queue', () => {
       const now = 6_000_000
       vi.setSystemTime(now)
       for (let i = 0; i < 3; i++) {
-        const p = openQueuedGridWebSocket(`wss://${i}/grid`)
+        const p = openQueuedGridWebSocket(primaryScope(), `wss://${i}/grid`)
         await Promise.resolve()
         FakeWebSocket.pending[i]!.fail()
         await expect(p).rejects.toThrow('grid-dial-failed')
       }
-      expect(gridDialBackoffRemainingMs(now)).toBe(BACKOFF_MS)
+      expect(gridDialBackoffRemainingMs(primaryScope(), now)).toBe(BACKOFF_MS)
 
-      const blocked = openQueuedGridWebSocket('wss://blocked/grid')
+      const blocked = openQueuedGridWebSocket(primaryScope(), 'wss://blocked/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(3)
 
@@ -245,10 +246,10 @@ describe('grid-dial-queue', () => {
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
       await expect(
-        openQueuedGridWebSocket('wss://a/grid', { isCancelled: () => true }),
+        openQueuedGridWebSocket(primaryScope(), 'wss://a/grid', { isCancelled: () => true }),
       ).rejects.toThrow('grid-dial-aborted')
       expect(FakeWebSocket.pending).toHaveLength(0)
-      expect(gridDialBackoffRemainingMs()).toBe(0)
+      expect(gridDialBackoffRemainingMs(primaryScope())).toBe(0)
     } finally {
       globalThis.WebSocket = prev
     }
@@ -259,19 +260,19 @@ describe('grid-dial-queue', () => {
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
-      const held = openQueuedGridWebSocket('wss://a/grid')
+      const held = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid')
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
 
       const ac = new AbortController()
-      const queued = openQueuedGridWebSocket('wss://b/grid', { signal: ac.signal })
+      const queued = openQueuedGridWebSocket(primaryScope(), 'wss://b/grid', { signal: ac.signal })
       await Promise.resolve()
       expect(FakeWebSocket.pending).toHaveLength(1)
 
       ac.abort()
       await expect(queued).rejects.toThrow('grid-dial-aborted')
       expect(FakeWebSocket.pending).toHaveLength(1)
-      expect(gridDialBackoffRemainingMs()).toBe(0)
+      expect(gridDialBackoffRemainingMs(primaryScope())).toBe(0)
 
       FakeWebSocket.pending[0]!.open()
       await expect(held).resolves.toBe(FakeWebSocket.pending[0])
@@ -285,7 +286,7 @@ describe('grid-dial-queue', () => {
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
       const order: string[] = []
-      const p = openQueuedGridWebSocket('wss://a/grid', {
+      const p = openQueuedGridWebSocket(primaryScope(), 'wss://a/grid', {
         beforeDial: () => {
           order.push('before')
           expect(FakeWebSocket.pending).toHaveLength(0)

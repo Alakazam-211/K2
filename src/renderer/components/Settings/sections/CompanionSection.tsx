@@ -67,8 +67,8 @@ export function CompanionSection(): React.JSX.Element {
     void refresh()
 
     if (serverSupports('daemon-broadcasts')) {
-      const offHello = onAppHello(() => void refresh())
-      const offTunnel = onTunnelStatusChanged((e) => {
+      const offHello = onAppHello(primaryScope(), () => void refresh())
+      const offTunnel = onTunnelStatusChanged(primaryScope(), (e) => {
         if (cancelled) return
         setStatus((prev) => ({
           running: e.running,

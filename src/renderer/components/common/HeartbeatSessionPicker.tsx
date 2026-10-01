@@ -61,7 +61,7 @@ export function HeartbeatSessionPicker({
   const [sessions, setSessions] = useState<HeartbeatSessionCandidate[] | null>(null)
   const [historyEpoch, setHistoryEpoch] = useState(0)
 
-  useEffect(() => onChatHistoryChanged(() => {
+  useEffect(() => onChatHistoryChanged(primaryScope(), () => {
     setHistoryEpoch((n) => n + 1)
   }), [])
   // 0.40.48 host-aware fix: pinned-session ids now come from the ACTIVE

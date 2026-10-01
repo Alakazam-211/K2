@@ -109,15 +109,15 @@ export function useTunnelUrls(): TunnelUrlsState {
     refreshAll()
 
     if (serverSupports('daemon-broadcasts')) {
-      const offHello = onAppHello(refreshAll)
-      const offTunnel = onTunnelStatusChanged(() => {
+      const offHello = onAppHello(primaryScope(), refreshAll)
+      const offTunnel = onTunnelStatusChanged(primaryScope(), () => {
         // The event only carries running + publicUrl; consumers also
         // render local_port / server_addr / subdomain, so re-snapshot the
         // full status (one cheap GET on a rare transition). A start/stop
         // can also change the map's relevance — refresh it too.
         refreshAll()
       })
-      const offSubs = onTunnelSubdomainsChanged((e) => {
+      const offSubs = onTunnelSubdomainsChanged(primaryScope(), (e) => {
         // Whole-map replace (the ActiveChanged convention) — no GET
         // needed. Normalize: older daemons broadcast bare-string targets.
         if (!cancelled) setSubs({ primary: e.primary, targets: normalizeTargets(e.targets) })

@@ -24,6 +24,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { fetchWaitingCount } from '@/components/Feedback/feedback-api'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface FeedbackState {
   /** Whether the full-page Feedback view is shown. Mirrors
@@ -111,7 +112,7 @@ export function initFeedbackEvents(notify: boolean): void {
   // four Tauri listen('feedback:*') calls (loopback-only bus; see the
   // module header). Never torn down (module-lifetime), exactly like the
   // old listeners.
-  onFeedbackChanged((reason) => {
+  onFeedbackChanged(primaryScope(), (reason) => {
     // Every reason bumps revision — the open page/thread refetches on it.
     useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
     // A stored comment (`/cli/feedback/comment` — agent or human — and

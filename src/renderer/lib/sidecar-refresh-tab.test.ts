@@ -179,23 +179,29 @@ const strip = vi.hoisted(() => {
   return { sessionSubs, layouts, daemonCliPost, daemonCliGet }
 })
 
-vi.mock('@/stores/session-events', () => ({
-  subscribeToWorkspaceSessionEvents: vi.fn(
-    (path: string, handlers: Record<string, (...args: unknown[]) => void>) => {
-      const entry = { path, handlers }
-      strip.sessionSubs.push(entry)
-      return () => {
-        strip.sessionSubs = strip.sessionSubs.filter((e) => e !== entry)
-      }
-    },
-  ),
-  subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
-  onSessionAddedApp: vi.fn(() => () => undefined),
-  onSessionRemovedApp: vi.fn(() => () => undefined),
-  onAppHello: vi.fn(() => () => undefined),
-  onOpenUrl: vi.fn(() => () => undefined),
-  onceRecovered: vi.fn(() => () => undefined),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    subscribeToWorkspaceSessionEvents: vi.fn(
+      (scope: unknown, path: string, handlers: Record<string, (...args: unknown[]) => void>) => {
+      expectPrimaryScope(scope)
+        const entry = { path, handlers }
+        strip.sessionSubs.push(entry)
+        return () => {
+          strip.sessionSubs = strip.sessionSubs.filter((e) => e !== entry)
+        }
+      },
+    ),
+    subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
+    onSessionAddedApp: vi.fn(() => () => undefined),
+    onSessionRemovedApp: vi.fn(() => () => undefined),
+    onAppHello: vi.fn(() => () => undefined),
+    onOpenUrl: vi.fn(() => () => undefined),
+    onceRecovered: vi.fn(() => () => undefined),
+  }
+})
 
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')

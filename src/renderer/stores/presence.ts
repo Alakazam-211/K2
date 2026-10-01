@@ -163,14 +163,14 @@ export function usersForWorkspace(roster: RosterUser[], path: string): RosterUse
 // that survive the app-level WS teardown/reopen on a host switch, so this
 // never needs re-wiring.
 
-onPresenceChanged((e) => {
+onPresenceChanged(primaryScope(), (e) => {
   usePresenceStore.getState().applyRoster(Array.isArray(e.roster) ? e.roster : [])
 })
 
 // Snapshot on every app-level (re)connect — the same reconcile point
 // `refreshActiveSnapshot` uses (deltas may have been missed in the gap).
 // This is ALSO the support re-probe against the (possibly new) host.
-onAppHello(() => {
+onAppHello(primaryScope(), () => {
   void usePresenceStore.getState().refreshRoster()
 })
 

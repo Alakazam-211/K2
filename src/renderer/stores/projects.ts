@@ -1004,7 +1004,7 @@ onDaemonConnected(() => {
 // Debounced + self-echo suppressed: optimistic color/reorder already
 // painted the actor; a trailing ProjectsChanged broadcast must not
 // immediately re-trigger the full N+1 list fan-out over the tunnel.
-onProjectsChanged(() => {
+onProjectsChanged(primaryScope(), () => {
   scheduleProjectsRefreshFromSync()
 })
 

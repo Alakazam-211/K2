@@ -489,7 +489,7 @@ function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | 
     }
     setDocs(null)
     load()
-    const off = onWorkspaceResourcesChanged(() => load())
+    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
     return () => {
       cancelled = true
       off()
@@ -1012,7 +1012,7 @@ export function ProjectNavRail({
         })
     }
     load()
-    const off = onWorkspaceResourcesChanged(() => load())
+    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
     return () => {
       cancelled = true
       off()

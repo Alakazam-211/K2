@@ -247,7 +247,7 @@ function ChatHeader({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyEpoch, setHistoryEpoch] = useState(0)
 
-  useEffect(() => onChatHistoryChanged(() => {
+  useEffect(() => onChatHistoryChanged(primaryScope(), () => {
     setHistoryEpoch((n) => n + 1)
   }), [])
 
@@ -809,7 +809,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   //   SessionRemoved(agent_name === projectId) → show idle. NO auto-respawn
   //     (PRD §4: the daemon never auto-spawns a pinned chat).
   useEffect(() => {
-    const unsubscribe = subscribeToWorkspaceSessionEvents(projectPath, {
+    const unsubscribe = subscribeToWorkspaceSessionEvents(primaryScope(), projectPath, {
       onAdded: (event) => {
         if (event.agent_name !== projectId) return
         // #689 — remount-guard. Only re-attach on a GENUINE session change.

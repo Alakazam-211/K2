@@ -24,7 +24,6 @@
 import { getDaemonWs, invalidateDaemonWs, daemonWsBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useActiveStore } from '@/stores/active'
-import { serverSupports } from '@/lib/server-capabilities'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { jittered } from '@/lib/backoff'
 import { logRemotePath } from '@/lib/remote-path-log'
@@ -32,7 +31,7 @@ import {
   noteRemoteEventsClosed,
   noteRemoteEventsOpened,
 } from '@/lib/remote-ws-drop'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -425,10 +424,23 @@ const MAX_BACKOFF_MS = 5_000
 // daemon is genuinely ready for the WS upgrade). Local host: never blocked
 // — `recovery` is meaningless while activeHost === 'local'.
 
-/** Is the active host a remote that ConnectionGate says is recovering? */
-function remoteRecoveryBlocked(): boolean {
+/** Is `scope` the window's active host, and a remote that ConnectionGate
+ *  says is recovering? A pinned scope for another server is never held by
+ *  the window's recovery (its own recovery state is M2's pool). */
+function remoteRecoveryBlocked(scope: ServerScope): boolean {
+  if (!scope.isWindowHost()) return false
   const s = useConnectHostStore.getState()
   return s.activeHost !== 'local' && s.recovery.kind !== 'connected'
+}
+
+/** The window-level WS-drop debounce (remote-ws-drop) is about the
+ *  window's connection; only sockets on the window's host feed it. */
+function noteClosed(scope: ServerScope): void {
+  if (scope.isWindowHost()) noteRemoteEventsClosed()
+}
+
+function noteOpened(scope: ServerScope): void {
+  if (scope.isWindowHost()) noteRemoteEventsOpened()
 }
 
 /**
@@ -443,7 +455,7 @@ function remoteRecoveryBlocked(): boolean {
  * on the same signal, so a split/reorder saved during a recovery window
  * flushes the moment the host is back instead of being silently dropped.
  */
-export function onceRecovered(onRecovered: () => void): () => void {
+export function onceRecovered(scope: ServerScope, onRecovered: () => void): () => void {
   let done = false
   const fire = (): void => {
     if (done) return
@@ -452,7 +464,7 @@ export function onceRecovered(onRecovered: () => void): () => void {
     onRecovered()
   }
   const check = (s: ReturnType<typeof useConnectHostStore.getState>): void => {
-    if (s.activeHost === 'local' || s.recovery.kind === 'connected') fire()
+    if (!scope.isWindowHost() || s.activeHost === 'local' || s.recovery.kind === 'connected') fire()
   }
   const unsub = useConnectHostStore.subscribe(check)
   check(useConnectHostStore.getState())
@@ -473,6 +485,7 @@ export function onceRecovered(onRecovered: () => void): () => void {
  *  `onmessage`/`onopen` handlers — keep them cheap, or marshal off to
  *  a setTimeout if they trigger heavy state churn. */
 export function subscribeToWorkspaceSessionEvents(
+  scope: ServerScope,
   projectPath: string,
   handlers: SessionEventHandlers,
 ): UnsubscribeFn {
@@ -500,8 +513,8 @@ export function subscribeToWorkspaceSessionEvents(
     // 0.40.48: a recovering remote can't accept the upgrade — park on the
     // recovery state instead of burning timed attempts, and reconnect
     // immediately (fresh backoff) the moment the gate says 'connected'.
-    if (remoteRecoveryBlocked()) {
-      recoveryWait = onceRecovered(() => {
+    if (remoteRecoveryBlocked(scope)) {
+      recoveryWait = onceRecovered(scope, () => {
         recoveryWait = null
         if (stopped) return
         backoffMs = INITIAL_BACKOFF_MS
@@ -540,7 +553,7 @@ export function subscribeToWorkspaceSessionEvents(
     if (stopped) return
     // R1: non-deliberate drop (not stop/unsub) — arm module-level debounce
     // across all three event factories. Deliberate stop returns above.
-    noteRemoteEventsClosed()
+    noteClosed(scope)
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -551,7 +564,7 @@ export function subscribeToWorkspaceSessionEvents(
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs(primaryScope())
+      creds = await getDaemonWs(scope)
     } catch (err) {
       // Daemon not reachable yet — invalidate the cached creds so the
       // retry pulls fresh values off disk, then schedule a backoff
@@ -559,7 +572,7 @@ export function subscribeToWorkspaceSessionEvents(
       invalidateDaemonWs()
       console.warn('[session-events] daemon credentials unavailable, retrying:', err)
       // Hard open failure — same surface as a mid-flight drop for R1.
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -593,7 +606,7 @@ export function subscribeToWorkspaceSessionEvents(
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[session-events] WS construction failed:', err)
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -605,7 +618,7 @@ export function subscribeToWorkspaceSessionEvents(
       backoffMs = INITIAL_BACKOFF_MS
       // R1/D4b: cancel WS-drop debounce; soft-resync grids if recovery
       // stayed connected through the blip.
-      noteRemoteEventsOpened()
+      noteOpened(scope)
     }
 
     ws.onmessage = (ev) => {
@@ -749,12 +762,15 @@ export function subscribeToWorkspaceSessionEvents(
 // on its next reconnect snapshot.
 
 /** Fetch the canonical Active snapshot and write it into useActiveStore.
- *  Host-aware (reads the active host via daemonCliGet). No-op when the
- *  active host doesn't advertise `canonical-active` (route absent). */
-export async function refreshActiveSnapshot(): Promise<void> {
-  if (!serverSupports('canonical-active')) return
+ *  `useActiveStore` mirrors the WINDOW's server, so only the primary scope
+ *  writes it; for any other scope this is a no-op until M3 gives rooms
+ *  their own Active store. No-op when the server doesn't advertise
+ *  `canonical-active` (route absent). */
+export async function refreshActiveSnapshot(scope: ServerScope): Promise<void> {
+  if (!scope.isPrimary) return
+  if (!scope.serverSupports('canonical-active')) return
   try {
-    const snap = await daemonCliGet<{ projectIds: string[]; activeWindowHours: number }>(primaryScope(),
+    const snap = await daemonCliGet<{ projectIds: string[]; activeWindowHours: number }>(scope,
       'projects/active',
     )
     useActiveStore.getState().setFromSnapshot({
@@ -831,89 +847,157 @@ type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 
-const _llmStatusHandlers = new Set<LlmStatusHandler>()
-const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
-const _agentStatusHandlers = new Set<AgentStatusHandler>()
-const _tunnelStatusHandlers = new Set<TunnelStatusHandler>()
-const _tunnelSubdomainsHandlers = new Set<TunnelSubdomainsHandler>()
-const _publishServicesHandlers = new Set<PublishServicesHandler>()
-const _workspaceResourcesHandlers = new Set<WorkspaceResourcesHandler>()
-const _appHelloHandlers = new Set<AppHelloHandler>()
-const _appSessionAddedHandlers = new Set<SessionAddedHandler>()
-const _appSessionRemovedHandlers = new Set<SessionRemovedHandler>()
-const _presenceChangedHandlers = new Set<PresenceChangedHandler>()
-const _openUrlHandlers = new Set<OpenUrlHandler>()
-const _projectGroupsChangedHandlers = new Set<ProjectGroupsChangedHandler>()
-const _feedbackChangedHandlers = new Set<FeedbackChangedHandler>()
-const _chatHistoryChangedHandlers = new Set<ChatHistoryChangedHandler>()
-const _tokenUsageChangedHandlers = new Set<TokenUsageChangedHandler>()
-const _fsChangedHandlers = new Set<FsChangedHandler>()
+type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
+
+// ── Per-server app event buses (Home M1) ──────────────────────────────────
+//
+// Each server has its own bus: the handler sets below live in an `AppBus`
+// object, kept in a registry keyed by the scope's `id`. The primary scope's
+// bus (`primary`) is the one every existing subscriber (FileTree,
+// ChatHistory, AgentChatPane, the stores) attaches to; like the old
+// module-level sets it survives a server switch, because its socket is torn
+// down and re-opened against the new host by `subscribeToActiveState`.
+//
+// A bus for another server (`openAppBus(scopeForHost(b))`) is created on first
+// use with NO socket: registering a handler never dials. Its socket opens
+// only when something calls `subscribeToActiveState(thatScope)` — M4's room
+// does that; M1 never does.
+
+interface AppBusHandlers {
+  llmStatus: Set<LlmStatusHandler>
+  projectsChanged: Set<ProjectsChangedHandler>
+  sessionActivity: Set<SessionActivityHandler>
+  agentStatus: Set<AgentStatusHandler>
+  tunnelStatus: Set<TunnelStatusHandler>
+  tunnelSubdomains: Set<TunnelSubdomainsHandler>
+  publishServices: Set<PublishServicesHandler>
+  workspaceResources: Set<WorkspaceResourcesHandler>
+  appHello: Set<AppHelloHandler>
+  sessionAdded: Set<SessionAddedHandler>
+  sessionRemoved: Set<SessionRemovedHandler>
+  presenceChanged: Set<PresenceChangedHandler>
+  openUrl: Set<OpenUrlHandler>
+  projectGroupsChanged: Set<ProjectGroupsChangedHandler>
+  feedbackChanged: Set<FeedbackChangedHandler>
+  chatHistoryChanged: Set<ChatHistoryChangedHandler>
+  tokenUsageChanged: Set<TokenUsageChangedHandler>
+  fsChanged: Set<FsChangedHandler>
+}
+
+interface BusState {
+  readonly scopeId: string
+  openSockets: number
+  readonly handlers: AppBusHandlers
+}
+
+function createBusState(scopeId: string): BusState {
+  return {
+    scopeId,
+    openSockets: 0,
+    handlers: {
+      llmStatus: new Set(),
+      projectsChanged: new Set(),
+      sessionActivity: new Set(),
+      agentStatus: new Set(),
+      tunnelStatus: new Set(),
+      tunnelSubdomains: new Set(),
+      publishServices: new Set(),
+      workspaceResources: new Set(),
+      appHello: new Set(),
+      sessionAdded: new Set(),
+      sessionRemoved: new Set(),
+      presenceChanged: new Set(),
+      openUrl: new Set(),
+      projectGroupsChanged: new Set(),
+      feedbackChanged: new Set(),
+      chatHistoryChanged: new Set(),
+      tokenUsageChanged: new Set(),
+      fsChanged: new Set(),
+    },
+  }
+}
+
+const _buses = new Map<string, BusState>()
+
+function busFor(scope: ServerScope): BusState {
+  let bus = _buses.get(scope.id)
+  if (!bus) {
+    bus = createBusState(scope.id)
+    _buses.set(scope.id, bus)
+  }
+  return bus
+}
+
+function addHandler<T>(set: Set<T>, fn: T): UnsubscribeFn {
+  set.add(fn)
+  return () => void set.delete(fn)
+}
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
  *  Returns an unsubscribe fn. */
-export function onProjectsChanged(fn: ProjectsChangedHandler): UnsubscribeFn {
-  _projectsChangedHandlers.add(fn)
-  return () => void _projectsChangedHandlers.delete(fn)
+export function onProjectsChanged(scope: ServerScope, fn: ProjectsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.projectsChanged, fn)
 }
 
 /** Subscribe to APP-LEVEL `llm_status_changed`. Returns an unsubscribe fn. */
-export function onLlmStatusChanged(fn: LlmStatusHandler): UnsubscribeFn {
-  _llmStatusHandlers.add(fn)
-  return () => void _llmStatusHandlers.delete(fn)
+export function onLlmStatusChanged(scope: ServerScope, fn: LlmStatusHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.llmStatus, fn)
 }
-
-type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
-const _sessionActivityHandlers = new Set<SessionActivityHandler>()
 
 /** Subscribe to APP-LEVEL `session_activity_changed` (0.40.39 daemon-side
  *  activity). Returns an unsubscribe fn. */
-export function onSessionActivityChanged(fn: SessionActivityHandler): UnsubscribeFn {
-  _sessionActivityHandlers.add(fn)
-  return () => void _sessionActivityHandlers.delete(fn)
+export function onSessionActivityChanged(
+  scope: ServerScope,
+  fn: SessionActivityHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.sessionActivity, fn)
 }
 
 /** Subscribe to APP-LEVEL `agent_status_changed`. Returns an unsubscribe fn. */
-export function onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn {
-  _agentStatusHandlers.add(fn)
-  return () => void _agentStatusHandlers.delete(fn)
+export function onAgentStatusChanged(scope: ServerScope, fn: AgentStatusHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.agentStatus, fn)
 }
 
 /** Subscribe to APP-LEVEL `tunnel_status_changed`. Returns an unsubscribe fn. */
-export function onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn {
-  _tunnelStatusHandlers.add(fn)
-  return () => void _tunnelStatusHandlers.delete(fn)
+export function onTunnelStatusChanged(scope: ServerScope, fn: TunnelStatusHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.tunnelStatus, fn)
 }
 
 /** Subscribe to APP-LEVEL `tunnel_subdomains_changed` (URLs & Ports
  *  drawer — the tunnel's nested-subdomain routing map). The event carries
  *  the whole map; replace, don't patch. Returns an unsubscribe fn. */
-export function onTunnelSubdomainsChanged(fn: TunnelSubdomainsHandler): UnsubscribeFn {
-  _tunnelSubdomainsHandlers.add(fn)
-  return () => void _tunnelSubdomainsHandlers.delete(fn)
+export function onTunnelSubdomainsChanged(
+  scope: ServerScope,
+  fn: TunnelSubdomainsHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.tunnelSubdomains, fn)
 }
 
 /** Subscribe to APP-LEVEL `publish_services_changed` (Published drawer —
  *  daemon-owned hosted services for a workspace). Carries `projectId`;
  *  consumers refetch `GET /cli/publish/list` when it matches. Returns an
  *  unsubscribe fn. */
-export function onPublishServicesChanged(fn: PublishServicesHandler): UnsubscribeFn {
-  _publishServicesHandlers.add(fn)
-  return () => void _publishServicesHandlers.delete(fn)
+export function onPublishServicesChanged(
+  scope: ServerScope,
+  fn: PublishServicesHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.publishServices, fn)
 }
 
 /** Subscribe to APP-LEVEL `workspace_resources_changed` (Files drawer +
  *  Projects Resources). Carries `workspaceId` (`projects.id`); consumers
  *  refetch this list when it matches. Returns an unsubscribe fn. */
-export function onWorkspaceResourcesChanged(fn: WorkspaceResourcesHandler): UnsubscribeFn {
-  _workspaceResourcesHandlers.add(fn)
-  return () => void _workspaceResourcesHandlers.delete(fn)
+export function onWorkspaceResourcesChanged(
+  scope: ServerScope,
+  fn: WorkspaceResourcesHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.workspaceResources, fn)
 }
 
 /** Fires on every app-level WS (re)connect — use it to re-snapshot truth
  *  that may have drifted while the socket was down. Returns an unsub fn. */
-export function onAppHello(fn: AppHelloHandler): UnsubscribeFn {
-  _appHelloHandlers.add(fn)
-  return () => void _appHelloHandlers.delete(fn)
+export function onAppHello(scope: ServerScope, fn: AppHelloHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.appHello, fn)
 }
 
 /** #688 — subscribe to APP-LEVEL `session_added` (EVERY workspace, not just
@@ -921,139 +1005,211 @@ export function onAppHello(fn: AppHelloHandler): UnsubscribeFn {
  *  session's cwd to `liveSessionCwds` the instant a PTY is registered (e.g.
  *  a pinned chat opened after startup), without the retired 2.5s poll.
  *  Returns an unsubscribe fn. */
-export function onSessionAddedApp(fn: SessionAddedHandler): UnsubscribeFn {
-  _appSessionAddedHandlers.add(fn)
-  return () => void _appSessionAddedHandlers.delete(fn)
+export function onSessionAddedApp(scope: ServerScope, fn: SessionAddedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.sessionAdded, fn)
 }
 
 /** #688 — subscribe to APP-LEVEL `session_removed` (EVERY workspace).
  *  Returns an unsubscribe fn. */
-export function onSessionRemovedApp(fn: SessionRemovedHandler): UnsubscribeFn {
-  _appSessionRemovedHandlers.add(fn)
-  return () => void _appSessionRemovedHandlers.delete(fn)
+export function onSessionRemovedApp(scope: ServerScope, fn: SessionRemovedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.sessionRemoved, fn)
 }
 
 /** Presence S2 — subscribe to APP-LEVEL `presence_changed` (the whole-set
  *  roster broadcast). Returns an unsubscribe fn. */
-export function onPresenceChanged(fn: PresenceChangedHandler): UnsubscribeFn {
-  _presenceChangedHandlers.add(fn)
-  return () => void _presenceChangedHandlers.delete(fn)
+export function onPresenceChanged(scope: ServerScope, fn: PresenceChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.presenceChanged, fn)
 }
 
 /** Browser-pane arc (0.40.34) — subscribe to APP-LEVEL `open_url` (the
  *  daemon asks the renderer to surface a URL in K2's embedded browser
  *  tab). The callback receives `(url, source)`. Returns an unsubscribe
- *  fn. Module-level registry — survives the app-level WS teardown/reopen
- *  on a host switch, so one registration covers the app lifetime. */
-export function onOpenUrl(fn: OpenUrlHandler): UnsubscribeFn {
-  _openUrlHandlers.add(fn)
-  return () => void _openUrlHandlers.delete(fn)
+ *  fn. The primary bus survives the app-level WS teardown/reopen on a host
+ *  switch, so one registration covers the app lifetime. */
+export function onOpenUrl(scope: ServerScope, fn: OpenUrlHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.openUrl, fn)
 }
 
 /** Remote live-update fix — subscribe to APP-LEVEL `project_groups_changed`
  *  (the project-group set changed: structure / members / PoC / layout /
  *  chat message). The callback receives the unwrapped `reason` (the legacy
  *  hook name minus its `project-group:` prefix). Returns an unsubscribe
- *  fn. Module-level registry — survives the app-level WS teardown/reopen
- *  on a host switch, so one registration covers the app lifetime. */
-export function onProjectGroupsChanged(fn: ProjectGroupsChangedHandler): UnsubscribeFn {
-  _projectGroupsChangedHandlers.add(fn)
-  return () => void _projectGroupsChangedHandlers.delete(fn)
+ *  fn. The primary bus survives the app-level WS teardown/reopen on a host
+ *  switch, so one registration covers the app lifetime. */
+export function onProjectGroupsChanged(
+  scope: ServerScope,
+  fn: ProjectGroupsChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.projectGroupsChanged, fn)
 }
 
 /** Remote live-update fix — subscribe to APP-LEVEL `feedback_changed`
  *  (a feedback item was created / answered / status-changed / commented).
  *  The callback receives the unwrapped `reason` (the legacy hook name
- *  minus its `feedback:` prefix). Returns an unsubscribe fn. Module-level
- *  registry — survives host-switch WS teardown/reopen. */
-export function onFeedbackChanged(fn: FeedbackChangedHandler): UnsubscribeFn {
-  _feedbackChangedHandlers.add(fn)
-  return () => void _feedbackChangedHandlers.delete(fn)
+ *  minus its `feedback:` prefix). Returns an unsubscribe fn. The primary
+ *  bus survives host-switch WS teardown/reopen. */
+export function onFeedbackChanged(scope: ServerScope, fn: FeedbackChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.feedbackChanged, fn)
 }
 
 /** 0.40.38 remote live-update — subscribe to APP-LEVEL
  *  `chat_history_changed` (chat session renamed / pinned / refreshed on
- *  the host). Refetch signal; module-level registry survives host-switch
- *  WS teardown/reopen. */
-export function onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn {
-  _chatHistoryChangedHandlers.add(fn)
-  return () => void _chatHistoryChangedHandlers.delete(fn)
+ *  the host). Refetch signal; the primary bus survives host-switch WS
+ *  teardown/reopen. */
+export function onChatHistoryChanged(
+  scope: ServerScope,
+  fn: ChatHistoryChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.chatHistoryChanged, fn)
 }
 
 /** 0.40.150 — subscribe to APP-LEVEL `token_usage_changed` (the ledger
- *  scanner wrote new turns). Payload-free refetch signal; module-level
- *  registry survives host-switch WS teardown/reopen. Returns an unsub fn. */
-export function onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn {
-  _tokenUsageChangedHandlers.add(fn)
-  return () => void _tokenUsageChangedHandlers.delete(fn)
+ *  scanner wrote new turns). Payload-free refetch signal; the primary bus
+ *  survives host-switch WS teardown/reopen. Returns an unsub fn. */
+export function onTokenUsageChanged(
+  scope: ServerScope,
+  fn: TokenUsageChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.tokenUsageChanged, fn)
 }
 
 /** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
  *  `fs_changed` (paths under a workspace mutated on the host by agents,
- *  other clients, or `/cli/fs/*`). Module-level registry survives
- *  host-switch WS teardown/reopen. FileTree filters `paths` /
- *  `workspacePath` against its own `rootPath`. */
-export function onFsChanged(fn: FsChangedHandler): UnsubscribeFn {
-  _fsChangedHandlers.add(fn)
-  return () => void _fsChangedHandlers.delete(fn)
+ *  other clients, or `/cli/fs/*`). The primary bus survives host-switch
+ *  WS teardown/reopen. FileTree filters `paths` / `workspacePath` against
+ *  its own `rootPath`. */
+export function onFsChanged(scope: ServerScope, fn: FsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.fsChanged, fn)
 }
 
-function dispatchAppEvent(msg: SessionEventMessage): void {
+function dispatchAppEvent(bus: BusState, msg: SessionEventMessage): void {
+  const h = bus.handlers
   switch (msg.kind) {
     case 'llm_status_changed':
-      for (const h of _llmStatusHandlers) h(msg)
+      for (const fn of h.llmStatus) fn(msg)
       break
     case 'projects_changed':
-      for (const h of _projectsChangedHandlers) h(msg)
+      for (const fn of h.projectsChanged) fn(msg)
       break
     case 'session_activity_changed':
-      for (const h of _sessionActivityHandlers) h(msg)
+      for (const fn of h.sessionActivity) fn(msg)
       break
     case 'agent_status_changed':
-      for (const h of _agentStatusHandlers) h(msg)
+      for (const fn of h.agentStatus) fn(msg)
       break
     case 'tunnel_status_changed':
-      for (const h of _tunnelStatusHandlers) h(msg)
+      for (const fn of h.tunnelStatus) fn(msg)
       break
     case 'tunnel_subdomains_changed':
-      for (const h of _tunnelSubdomainsHandlers) h(msg)
+      for (const fn of h.tunnelSubdomains) fn(msg)
       break
     case 'publish_services_changed':
-      for (const h of _publishServicesHandlers) h(msg)
+      for (const fn of h.publishServices) fn(msg)
       break
     case 'workspace_resources_changed':
-      for (const h of _workspaceResourcesHandlers) h(msg)
+      for (const fn of h.workspaceResources) fn(msg)
       break
     case 'session_added':
-      for (const h of _appSessionAddedHandlers) h(msg)
+      for (const fn of h.sessionAdded) fn(msg)
       break
     case 'session_removed':
-      for (const h of _appSessionRemovedHandlers) h(msg)
+      for (const fn of h.sessionRemoved) fn(msg)
       break
     case 'presence_changed':
-      for (const h of _presenceChangedHandlers) h(msg)
+      for (const fn of h.presenceChanged) fn(msg)
       break
     case 'open_url':
-      for (const h of _openUrlHandlers) h(msg.url, msg.source)
+      for (const fn of h.openUrl) fn(msg.url, msg.source)
       break
     case 'project_groups_changed':
-      for (const h of _projectGroupsChangedHandlers) h(msg.reason)
+      for (const fn of h.projectGroupsChanged) fn(msg.reason)
       break
     case 'feedback_changed':
-      for (const h of _feedbackChangedHandlers) h(msg.reason)
+      for (const fn of h.feedbackChanged) fn(msg.reason)
       break
     case 'chat_history_changed':
-      for (const h of _chatHistoryChangedHandlers) h()
+      for (const fn of h.chatHistoryChanged) fn()
       break
     case 'token_usage_changed':
-      for (const h of _tokenUsageChangedHandlers) h()
+      for (const fn of h.tokenUsageChanged) fn()
       break
     case 'fs_changed':
-      for (const h of _fsChangedHandlers) h(msg)
+      for (const fn of h.fsChanged) fn(msg)
       break
     default:
       break
   }
+}
+
+/** One server's app-level event bus (MS16): the 18 `on*` subscriptions,
+ *  bound to that server. Getting it opens nothing; the socket that feeds it
+ *  is `subscribeToActiveState(scope)`. */
+export interface AppBus {
+  /** The owning scope's registry id (`primary` or `host:<hostKey>`). */
+  readonly scopeId: string
+  /** Live `subscribeToActiveState` sockets feeding this bus. */
+  readonly openSockets: number
+  /** Registered handler count, for tests and leak checks. */
+  handlerCount(): number
+  onProjectsChanged(fn: ProjectsChangedHandler): UnsubscribeFn
+  onLlmStatusChanged(fn: LlmStatusHandler): UnsubscribeFn
+  onSessionActivityChanged(fn: SessionActivityHandler): UnsubscribeFn
+  onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn
+  onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn
+  onTunnelSubdomainsChanged(fn: TunnelSubdomainsHandler): UnsubscribeFn
+  onPublishServicesChanged(fn: PublishServicesHandler): UnsubscribeFn
+  onWorkspaceResourcesChanged(fn: WorkspaceResourcesHandler): UnsubscribeFn
+  onAppHello(fn: AppHelloHandler): UnsubscribeFn
+  onSessionAddedApp(fn: SessionAddedHandler): UnsubscribeFn
+  onSessionRemovedApp(fn: SessionRemovedHandler): UnsubscribeFn
+  onPresenceChanged(fn: PresenceChangedHandler): UnsubscribeFn
+  onOpenUrl(fn: OpenUrlHandler): UnsubscribeFn
+  onProjectGroupsChanged(fn: ProjectGroupsChangedHandler): UnsubscribeFn
+  onFeedbackChanged(fn: FeedbackChangedHandler): UnsubscribeFn
+  onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn
+  onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
+  onFsChanged(fn: FsChangedHandler): UnsubscribeFn
+}
+
+const _facades = new Map<string, AppBus>()
+
+/** The app-level event bus for `scope`'s server. Creating it opens no
+ *  socket. The same object comes back for the same scope id. */
+export function openAppBus(scope: ServerScope): AppBus {
+  let facade = _facades.get(scope.id)
+  if (facade) return facade
+  const state = busFor(scope)
+  facade = {
+    scopeId: state.scopeId,
+    get openSockets(): number {
+      return state.openSockets
+    },
+    handlerCount(): number {
+      let n = 0
+      for (const set of Object.values(state.handlers) as Array<Set<unknown>>) n += set.size
+      return n
+    },
+    onProjectsChanged: (fn) => onProjectsChanged(scope, fn),
+    onLlmStatusChanged: (fn) => onLlmStatusChanged(scope, fn),
+    onSessionActivityChanged: (fn) => onSessionActivityChanged(scope, fn),
+    onAgentStatusChanged: (fn) => onAgentStatusChanged(scope, fn),
+    onTunnelStatusChanged: (fn) => onTunnelStatusChanged(scope, fn),
+    onTunnelSubdomainsChanged: (fn) => onTunnelSubdomainsChanged(scope, fn),
+    onPublishServicesChanged: (fn) => onPublishServicesChanged(scope, fn),
+    onWorkspaceResourcesChanged: (fn) => onWorkspaceResourcesChanged(scope, fn),
+    onAppHello: (fn) => onAppHello(scope, fn),
+    onSessionAddedApp: (fn) => onSessionAddedApp(scope, fn),
+    onSessionRemovedApp: (fn) => onSessionRemovedApp(scope, fn),
+    onPresenceChanged: (fn) => onPresenceChanged(scope, fn),
+    onOpenUrl: (fn) => onOpenUrl(scope, fn),
+    onProjectGroupsChanged: (fn) => onProjectGroupsChanged(scope, fn),
+    onFeedbackChanged: (fn) => onFeedbackChanged(scope, fn),
+    onChatHistoryChanged: (fn) => onChatHistoryChanged(scope, fn),
+    onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
+    onFsChanged: (fn) => onFsChanged(scope, fn),
+  }
+  _facades.set(scope.id, facade)
+  return facade
 }
 
 /**
@@ -1068,7 +1224,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
  * `CompanionSection.tsx`) can drop their polling loops. On (re)connect the
  * `Hello` frame also fans out to `onAppHello` so those consumers re-snapshot.
  */
-export function subscribeToActiveState(): UnsubscribeFn {
+export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
+  const bus = busFor(scope)
+  bus.openSockets += 1
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   // 0.40.48: cancel fn for a pending recovery-hold (see onceRecovered).
@@ -1093,8 +1251,8 @@ export function subscribeToActiveState(): UnsubscribeFn {
     // 0.40.48: a recovering remote can't accept the upgrade — park on the
     // recovery state instead of burning timed attempts, and reconnect
     // immediately (fresh backoff) the moment the gate says 'connected'.
-    if (remoteRecoveryBlocked()) {
-      recoveryWait = onceRecovered(() => {
+    if (remoteRecoveryBlocked(scope)) {
+      recoveryWait = onceRecovered(scope, () => {
         recoveryWait = null
         if (stopped) return
         backoffMs = INITIAL_BACKOFF_MS
@@ -1115,7 +1273,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
   const triggerReconnect = (): void => {
     if (stopped) return
     // R1: non-deliberate drop — shared debounce across event factories.
-    noteRemoteEventsClosed()
+    noteClosed(scope)
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -1126,11 +1284,11 @@ export function subscribeToActiveState(): UnsubscribeFn {
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs(primaryScope())
+      creds = await getDaemonWs(scope)
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[active-state] daemon credentials unavailable, retrying:', err)
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -1159,7 +1317,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[active-state] WS construction failed:', err)
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -1167,7 +1325,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
 
     ws.onopen = () => {
       backoffMs = INITIAL_BACKOFF_MS
-      noteRemoteEventsOpened()
+      noteOpened(scope)
     }
 
     ws.onmessage = (ev) => {
@@ -1183,13 +1341,16 @@ export function subscribeToActiveState(): UnsubscribeFn {
       if (msg.kind === 'hello') {
         // (Re)connected — pull a fresh snapshot to correct any drift
         // (deltas may have been missed during a drop window).
-        void refreshActiveSnapshot()
+        void refreshActiveSnapshot(scope)
         // Fan out to Wave B app-level consumers so they re-snapshot their
         // own truth (llm/agent/tunnel) after the same drop window.
-        for (const h of _appHelloHandlers) h()
+        for (const h of bus.handlers.appHello) h()
         return
       }
       if (msg.kind === 'active_changed') {
+        // useActiveStore mirrors the window's server only (see
+        // refreshActiveSnapshot).
+        if (!scope.isPrimary) return
         useActiveStore.getState().applyActiveChanged({
           activeProjectIds: Array.isArray(msg.activeProjectIds) ? msg.activeProjectIds : [],
           activeWindowHours:
@@ -1223,7 +1384,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
         // Files-drawer multi-writer live refresh — APP-LEVEL with paths.
         msg.kind === 'fs_changed'
       ) {
-        dispatchAppEvent(msg)
+        dispatchAppEvent(bus, msg)
         return
       }
       // #688 — session_added / session_removed ALSO ride this app-level
@@ -1233,7 +1394,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
       // registries. The per-workspace subscriber still owns its own tab
       // adoption — this is a SEPARATE, additive consumer.
       if (msg.kind === 'session_added' || msg.kind === 'session_removed') {
-        dispatchAppEvent(msg)
+        dispatchAppEvent(bus, msg)
         return
       }
       // session_renamed / review_* / tab_* / heartbeat_* — owned by the
@@ -1263,6 +1424,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
   void openSocket()
 
   return () => {
+    if (!stopped) bus.openSockets -= 1
     stopped = true
     clearReconnect()
     if (socket) {
@@ -1310,6 +1472,7 @@ export interface WorkspaceTabHandlers {
 /** Subscribe to WORKSPACE-SCOPED tab/heartbeat events for one workspace
  *  path. Returns an unsubscribe fn that tears down the WS + reconnect loop. */
 export function subscribeToWorkspaceTabEvents(
+  scope: ServerScope,
   workspacePath: string,
   handlers: WorkspaceTabHandlers,
 ): UnsubscribeFn {
@@ -1337,8 +1500,8 @@ export function subscribeToWorkspaceTabEvents(
     // 0.40.48: a recovering remote can't accept the upgrade — park on the
     // recovery state instead of burning timed attempts, and reconnect
     // immediately (fresh backoff) the moment the gate says 'connected'.
-    if (remoteRecoveryBlocked()) {
-      recoveryWait = onceRecovered(() => {
+    if (remoteRecoveryBlocked(scope)) {
+      recoveryWait = onceRecovered(scope, () => {
         recoveryWait = null
         if (stopped) return
         backoffMs = INITIAL_BACKOFF_MS
@@ -1359,7 +1522,7 @@ export function subscribeToWorkspaceTabEvents(
   const triggerReconnect = (): void => {
     if (stopped) return
     // R1: non-deliberate drop — shared debounce across event factories.
-    noteRemoteEventsClosed()
+    noteClosed(scope)
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -1370,11 +1533,11 @@ export function subscribeToWorkspaceTabEvents(
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs(primaryScope())
+      creds = await getDaemonWs(scope)
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[tab-events] daemon credentials unavailable, retrying:', err)
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -1402,7 +1565,7 @@ export function subscribeToWorkspaceTabEvents(
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[tab-events] WS construction failed:', err)
-      noteRemoteEventsClosed()
+      noteClosed(scope)
       scheduleReconnect()
       return
     }
@@ -1410,7 +1573,7 @@ export function subscribeToWorkspaceTabEvents(
 
     ws.onopen = () => {
       backoffMs = INITIAL_BACKOFF_MS
-      noteRemoteEventsOpened()
+      noteOpened(scope)
     }
 
     ws.onmessage = (ev) => {

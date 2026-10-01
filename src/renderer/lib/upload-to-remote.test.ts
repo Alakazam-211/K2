@@ -37,8 +37,8 @@ import {
   SINGLE_SHOT_MAX_BYTES,
   __clearUploadToRemoteFlightsForTests,
 } from './upload-to-remote'
-
 import { primaryScope } from '@/kessel/server-scope'
+
 import { expectPrimaryScope } from '@/test-utils/scope'
 beforeEach(() => {
   __clearUploadToRemoteFlightsForTests()

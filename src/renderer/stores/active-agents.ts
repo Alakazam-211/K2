@@ -1396,7 +1396,7 @@ export function startAgentPolling(): void {
     // `pollOnce` above still seeds `liveSessionCwds`; on every WS (re)connect
     // we re-`pollOnce` (via onAppHello) to backfill any missed transitions +
     // refresh the live-session set.
-    agentStatusUnsub = onAgentStatusChanged((e) => {
+    agentStatusUnsub = onAgentStatusChanged(primaryScope(), (e) => {
       useActiveAgentsStore.getState().handleLifecycleEvent(
         e.paneId,
         e.tabId,
@@ -1404,7 +1404,7 @@ export function startAgentPolling(): void {
         e.workspacePath,
       )
     })
-    agentHelloUnsub = onAppHello(() => {
+    agentHelloUnsub = onAppHello(primaryScope(), () => {
       useActiveAgentsStore.getState().pollOnce()
     })
     // #688 — keep the Active-bar live-session dot fresh push-style. The
@@ -1415,10 +1415,10 @@ export function startAgentPolling(): void {
     // active one) to the daemon's SessionAdded/SessionRemoved lifecycle and
     // light / ungrey the cwd directly. `pollOnce` (startup + reconnect via
     // onAppHello above) remains the snapshot baseline.
-    sessionAddedUnsub = onSessionAddedApp((e) => {
+    sessionAddedUnsub = onSessionAddedApp(primaryScope(), (e) => {
       trackSessionAdded(e.agent_name, e.workspace_path)
     })
-    sessionRemovedUnsub = onSessionRemovedApp((e) => {
+    sessionRemovedUnsub = onSessionRemovedApp(primaryScope(), (e) => {
       trackSessionRemoved(e.agent_name, e.workspace_path)
     })
     // 0.40.39 — daemon-side activity (session_activity.rs). Visibility-
@@ -1427,7 +1427,7 @@ export function startAgentPolling(): void {
     // old/remote daemon simply never populates daemonPaneStatuses and the
     // merge rule falls back to the client feed.
     if (serverSupports('session-activity')) {
-      sessionActivityUnsub = onSessionActivityChanged((e) => {
+      sessionActivityUnsub = onSessionActivityChanged(primaryScope(), (e) => {
         useActiveAgentsStore.getState().applyDaemonActivity(e)
       })
     }

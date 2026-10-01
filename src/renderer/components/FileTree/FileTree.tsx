@@ -848,7 +848,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   }, [loadWorkspaceResources])
 
   useEffect(() => {
-    return onWorkspaceResourcesChanged((e) => {
+    return onWorkspaceResourcesChanged(primaryScope(), (e) => {
       if (!activeProjectId || e.workspaceId === activeProjectId) {
         void loadWorkspaceResources()
       }
@@ -1100,7 +1100,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     if (!rootPath || rootPath === '~' || !rootPath.startsWith('/')) {
       return
     }
-    return onFsChanged((e) => {
+    return onFsChanged(primaryScope(), (e) => {
       // Only paths under THIS tree's root. workspacePath is advisory
       // (may be a parent project when the tree is a worktree); filter
       // strictly on absolute paths so sibling workspaces never thrash.

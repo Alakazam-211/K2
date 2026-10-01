@@ -31,16 +31,22 @@ vi.mock('@/hooks/useTunnelUrls', () => ({
 
 let publishChanged: ((e: { kind: string; projectId: string }) => void) | null = null
 
-vi.mock('@/stores/session-events', () => ({
-  onAppHello: () => () => {},
-  onTunnelSubdomainsChanged: () => () => {},
-  onPublishServicesChanged: (cb: (e: { kind: string; projectId: string }) => void) => {
-    publishChanged = cb
-    return () => {
-      publishChanged = null
-    }
-  },
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    onAppHello: () => () => {},
+    onTunnelSubdomainsChanged: () => () => {},
+    onPublishServicesChanged: (scope: unknown, cb: (e: { kind: string; projectId: string }) => void) => {
+      expectPrimaryScope(scope)
+      publishChanged = cb
+      return () => {
+        publishChanged = null
+      }
+    },
+  }
+})
 
 const hostState: { activeHost: 'local' | { label: string; hostname: string } } = {
   activeHost: 'local',

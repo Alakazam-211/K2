@@ -86,6 +86,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
 }
 
 const PRIMARY_SCOPE_CALLERS: readonly string[] = [
+  'App.tsx',
   'components/AIFileEditor/AIFileEditor.tsx',
   'components/AgentPane/AgentChatPane.tsx',
   'components/AgentPane/AgentInboxPane.tsx',
@@ -190,15 +191,16 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'lib/start-clone-to.ts',
   'lib/workspace-agent.ts',
   'stores/active-agents.ts',
+  'stores/assistant.ts',
   'stores/claude-auth.ts',
   'stores/custom-themes.ts',
+  'stores/feedback.ts',
   'stores/focus-groups.ts',
   'stores/heartbeat-sessions.ts',
   'stores/presence.ts',
   'stores/presets.ts',
   'stores/project-groups.ts',
   'stores/projects.ts',
-  'stores/session-events.ts',
   'stores/subscription-usage.ts',
   'stores/tabs.ts',
   'stores/timer.ts',

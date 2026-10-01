@@ -1825,7 +1825,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         gridProtoK1Ref.current = true
         let candidate: WebSocket
         try {
-          candidate = await openQueuedGridWebSocket(
+          candidate = await openQueuedGridWebSocket(primaryScope(),
             `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
             {
               isCancelled: () => isStale() || dialAbort.signal.aborted,
@@ -1871,7 +1871,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             })
             return
           }
-          const extra = gridDialBackoffRemainingMs()
+          const extra = gridDialBackoffRemainingMs(primaryScope())
           const delayMs = Math.max(
             extra,
             Math.min(250 * 2 ** Math.min(wsAttempt - 1, 3), 2000),

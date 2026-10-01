@@ -29,12 +29,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const ev = vi.hoisted(() => ({
   handlers: [] as Array<(reason: string) => void>,
 }))
-vi.mock('@/stores/session-events', () => ({
-  onFeedbackChanged: vi.fn((fn: (reason: string) => void) => {
-    ev.handlers.push(fn)
-    return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
-  }),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    onFeedbackChanged: vi.fn((scope: unknown, fn: (reason: string) => void) => {
+      expectPrimaryScope(scope)
+      ev.handlers.push(fn)
+      return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
+    }),
+  }
+})
 
 // Desktop-notification plugin: permission always granted so a notify
 // path that runs WILL reach sendNotification.

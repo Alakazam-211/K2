@@ -42,8 +42,8 @@ import {
 import { useConnectHostStore } from '@/stores/connect-host'
 import { COMPOSE_BAR_SELECTOR, COMPOSE_DROP_SURFACE_SELECTOR } from './compose-surface-drop'
 import { BRACKETED_PASTE_START, BRACKETED_PASTE_END } from './file-drag'
-
 import { primaryScope } from '@/kessel/server-scope'
+
 describe('parentDir', () => {
   it('returns the parent of a nested path', () => {
     expect(parentDir('/ws/docs/a.txt')).toBe('/ws/docs')

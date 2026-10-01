@@ -43,16 +43,23 @@ const ev = vi.hoisted(() => {
     appHello: [] as Fn[],
   }
 })
-vi.mock('@/stores/session-events', () => ({
-  onPresenceChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.presence.push(fn)
-    return () => void (ev.presence = ev.presence.filter((f) => f !== fn))
-  }),
-  onAppHello: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.appHello.push(fn)
-    return () => void (ev.appHello = ev.appHello.filter((f) => f !== fn))
-  }),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    onPresenceChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.presence.push(fn)
+      return () => void (ev.presence = ev.presence.filter((f) => f !== fn))
+    }),
+    onAppHello: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.appHello.push(fn)
+      return () => void (ev.appHello = ev.appHello.filter((f) => f !== fn))
+    }),
+  }
+})
 
 // Import the module under test (registers the module-scope wiring) + the
 // REAL connect-host store for the host-switch seam.

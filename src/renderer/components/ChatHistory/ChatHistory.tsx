@@ -485,7 +485,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // for the 30s poll (which was the only path for REMOTE clients — the
   // legacy /events bus is loopback-only and never reached them).
   useEffect(() => {
-    return onChatHistoryChanged(() => {
+    return onChatHistoryChanged(primaryScope(), () => {
       fetchSessions(false)
       fetchCustomNames()
       if (!projectPath) return

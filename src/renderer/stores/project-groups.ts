@@ -371,7 +371,7 @@ onActiveHostChange(() => {
 // landed or were wiped — do not fan out another N-show on every hello
 // once chips are painted.
 onDaemonConnected(refetchGroupsIfNeeded)
-onAppHello(refetchGroupsIfNeeded)
+onAppHello(primaryScope(), refetchGroupsIfNeeded)
 
 /** Bump `revision` immediately (open views refetch on it) and schedule
  *  the list refetch on a trailing 300ms window — each new event resets
@@ -404,7 +404,7 @@ export function initProjectGroupEvents(): void {
   // before the page is ever opened — one list fetch + the unread probe.
   void useProjectGroupsStore.getState().fetchGroups()
 
-  onProjectGroupsChanged((reason) => {
+  onProjectGroupsChanged(primaryScope(), (reason) => {
     switch (reason) {
       // Structural — coalesced nav refetch + revision. groups-changed
       // also covers set-icon/set-color (§6.7.7) — drop the cached icons

@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { llmStatus } from '@/lib/llmDaemonClient'
 import { serverSupports } from '@/lib/server-capabilities'
 import { onLlmStatusChanged, onAppHello } from '@/stores/session-events'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Phase 2 Unit 2 — `invoke('assistant_*')` calls retired. The daemon
 // now owns the LLM lifecycle; the store polls `/cli/llm/status`
@@ -184,8 +185,8 @@ if (serverSupports('daemon-broadcasts')) {
   // Push path: one snapshot now, re-snapshot on every WS (re)connect, and
   // converge on each broadcast.
   setTimeout(snapshotModelStatus, 1000)
-  onAppHello(() => snapshotModelStatus())
-  onLlmStatusChanged((e) => {
+  onAppHello(primaryScope(), () => snapshotModelStatus())
+  onLlmStatusChanged(primaryScope(), (e) => {
     const store = useAssistantStore.getState()
     if (e.loaded) {
       store.setDownloading(false)

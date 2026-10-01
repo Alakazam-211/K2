@@ -596,7 +596,7 @@ function ProjectSettingsDetail({
         })
     }
     load()
-    const off = onWorkspaceResourcesChanged(() => load())
+    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
     return () => {
       cancelled = true
       off()

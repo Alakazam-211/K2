@@ -1921,7 +1921,7 @@ function rearmLayoutSave(err: unknown): void {
   if (err instanceof RecoveringError) {
     // The gate dropped the save before sending — the host is recovering.
     // Flush as soon as it's genuinely back (push-style, nothing polls).
-    layoutSaveRecoveryWait = onceRecovered(() => {
+    layoutSaveRecoveryWait = onceRecovered(primaryScope(), () => {
       layoutSaveRecoveryWait = null
       useTabsStore.getState().persistActiveWorkspace()
     })
@@ -5821,7 +5821,7 @@ function subscribeForActiveWorkspace(
   // the canonical tab titles so a rename missed during a drop is backfilled.
   if (serverSupports('daemon-broadcasts')) {
     void applyTabTitlesSnapshot(projectId)
-    activeTabEventsUnsub = subscribeToWorkspaceTabEvents(cwd, {
+    activeTabEventsUnsub = subscribeToWorkspaceTabEvents(primaryScope(), cwd, {
       onTabTitleChanged: (event: TabTitleChangedEvent) => {
         // Match on project_id (the event's `project` is the project PATH
         // echoed, but the title store is keyed by tab id which is globally
@@ -5877,7 +5877,7 @@ function subscribeForActiveWorkspace(
     })
   }
 
-  activeSessionEventsUnsub = subscribeToWorkspaceSessionEvents(cwd, {
+  activeSessionEventsUnsub = subscribeToWorkspaceSessionEvents(primaryScope(), cwd, {
     onAdded: (event: SessionAddedEvent) => {
       // Only adopt `tab-<paneGroupId>` sessions — pinned chat and
       // heartbeats live under their own canonical agent_names with
@@ -6577,21 +6577,21 @@ export async function hydrateApiSandboxSessions(): Promise<number> {
  *  Also hydrates on every app-level `hello` (connect / reconnect / host
  *  switch) so late joiners get tabs for api- sessions already running. */
 export function initApiSandboxTabAdoption(): UnsubscribeFn {
-  const offAdded = onSessionAddedApp((event) => {
+  const offAdded = onSessionAddedApp(primaryScope(), (event) => {
     try {
       adoptApiSandboxSession(event)
     } catch (err) {
       console.warn('[tabs] api-session adoption failed:', err)
     }
   })
-  const offRemoved = onSessionRemovedApp((event) => {
+  const offRemoved = onSessionRemovedApp(primaryScope(), (event) => {
     try {
       dropApiSpawnedSession(event)
     } catch (err) {
       console.warn('[tabs] api-session drop failed:', err)
     }
   })
-  const offHello = onAppHello(() => {
+  const offHello = onAppHello(primaryScope(), () => {
     void hydrateApiSandboxSessions()
   })
   // Immediate pass in case hello already fired before we registered.
@@ -6619,7 +6619,7 @@ export function initOpenUrlBrowserTabs(): UnsubscribeFn {
   if (!webFeatures.browserPane) {
     return () => {}
   }
-  return onOpenUrl((url) => {
+  return onOpenUrl(primaryScope(), (url) => {
     const trimmed = typeof url === 'string' ? url.trim() : ''
     if (!trimmed) return
     try {

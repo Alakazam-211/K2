@@ -82,22 +82,30 @@ const ev = vi.hoisted(() => {
   type Fn = (...a: unknown[]) => void
   return { added: [] as Fn[], removed: [] as Fn[], hello: [] as Fn[] }
 })
-vi.mock('./session-events', () => ({
-  subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
-  subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
-  onSessionAddedApp: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.added.push(fn)
-    return () => void (ev.added = ev.added.filter((f) => f !== fn))
-  }),
-  onSessionRemovedApp: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.removed.push(fn)
-    return () => void (ev.removed = ev.removed.filter((f) => f !== fn))
-  }),
-  onAppHello: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.hello.push(fn)
-    return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
-  }),
-}))
+vi.mock('./session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
+    subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
+    onSessionAddedApp: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.added.push(fn)
+      return () => void (ev.added = ev.added.filter((f) => f !== fn))
+    }),
+    onSessionRemovedApp: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.removed.push(fn)
+      return () => void (ev.removed = ev.removed.filter((f) => f !== fn))
+    }),
+    onAppHello: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.hello.push(fn)
+      return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
+    }),
+  }
+})
 
 import {
   useTabsStore,

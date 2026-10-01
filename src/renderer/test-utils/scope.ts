@@ -8,7 +8,7 @@
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 /** Throw unless `scope` is the window's primary scope. */
-export function expectPrimaryScope(scope: unknown): asserts scope is ServerScope {
+export function expectPrimaryScope(scope: unknown): void {
   if (scope !== primaryScope()) {
     const label =
       scope && typeof scope === 'object' && 'id' in scope

@@ -108,13 +108,19 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
-vi.mock('@/stores/session-events', () => ({
-  subscribeToWorkspaceSessionEvents: (_path: string, handlers: unknown) => {
-    h.sessionHandlers.current = handlers as never
-    return h.unsubscribe
-  },
-  onChatHistoryChanged: () => () => {},
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    subscribeToWorkspaceSessionEvents: (scope: unknown, _path: string, handlers: unknown) => {
+      expectPrimaryScope(scope)
+      h.sessionHandlers.current = handlers as never
+      return h.unsubscribe
+    },
+    onChatHistoryChanged: () => () => {},
+  }
+})
 
 vi.mock('@/kessel-term/TerminalPane', () => ({
   TerminalPane: (props: Record<string, unknown>) => {

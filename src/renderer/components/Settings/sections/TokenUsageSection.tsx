@@ -373,7 +373,7 @@ function UsageLog({
 
   // Live refetch of the newest page; prepend only rows above the head.
   useEffect(() => {
-    return onTokenUsageChanged(() => {
+    return onTokenUsageChanged(primaryScope(), () => {
       void (async () => {
         try {
           const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE })

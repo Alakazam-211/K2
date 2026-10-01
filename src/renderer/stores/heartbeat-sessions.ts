@@ -401,7 +401,7 @@ export function subscribeHeartbeatLive(projectPath: string | null): void {
   }
   hbSubscribedPath = projectPath
   if (!projectPath) return
-  hbEventsUnsub = subscribeToWorkspaceTabEvents(projectPath, {
+  hbEventsUnsub = subscribeToWorkspaceTabEvents(primaryScope(), projectPath, {
     onHeartbeatStateChanged: (e: HeartbeatStateChangedEvent) => {
       // `project` is the project id. The event has no session id;
       // this only flips the live dot (settings refetches the list).

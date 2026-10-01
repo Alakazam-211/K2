@@ -53,50 +53,64 @@ const ev = vi.hoisted(() => {
   }
   return { reg }
 })
-vi.mock('@/stores/session-events', () => ({
-  onLlmStatusChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.llm.push(fn)
-    return () => void (ev.reg.llm = ev.reg.llm.filter((f) => f !== fn))
-  }),
-  onProjectsChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.projects.push(fn)
-    return () => void (ev.reg.projects = ev.reg.projects.filter((f) => f !== fn))
-  }),
-  onAgentStatusChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.agent.push(fn)
-    return () => void (ev.reg.agent = ev.reg.agent.filter((f) => f !== fn))
-  }),
-  onTunnelStatusChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.tunnel.push(fn)
-    return () => void (ev.reg.tunnel = ev.reg.tunnel.filter((f) => f !== fn))
-  }),
-  onAppHello: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.appHello.push(fn)
-    return () => void (ev.reg.appHello = ev.reg.appHello.filter((f) => f !== fn))
-  }),
-  onSessionAddedApp: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.sessionAdded.push(fn)
-    return () => void (ev.reg.sessionAdded = ev.reg.sessionAdded.filter((f) => f !== fn))
-  }),
-  onSessionRemovedApp: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.sessionRemoved.push(fn)
-    return () => void (ev.reg.sessionRemoved = ev.reg.sessionRemoved.filter((f) => f !== fn))
-  }),
-  onSessionActivityChanged: vi.fn((fn: (...a: unknown[]) => void) => {
-    ev.reg.sessionActivity.push(fn)
-    return () => void (ev.reg.sessionActivity = ev.reg.sessionActivity.filter((f) => f !== fn))
-  }),
-  subscribeToWorkspaceTabEvents: vi.fn(
-    (path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
-      const entry = { path, handlers }
-      ev.reg.tabSubs.push(entry)
-      return () => void (ev.reg.tabSubs = ev.reg.tabSubs.filter((e) => e !== entry))
-    },
-  ),
-  // tabs.ts's active-workspace subscription also opens the session-events
-  // WS; inert here (orthogonal to the tab-title/order wiring under test).
-  subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    onLlmStatusChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.llm.push(fn)
+      return () => void (ev.reg.llm = ev.reg.llm.filter((f) => f !== fn))
+    }),
+    onProjectsChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.projects.push(fn)
+      return () => void (ev.reg.projects = ev.reg.projects.filter((f) => f !== fn))
+    }),
+    onAgentStatusChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.agent.push(fn)
+      return () => void (ev.reg.agent = ev.reg.agent.filter((f) => f !== fn))
+    }),
+    onTunnelStatusChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.tunnel.push(fn)
+      return () => void (ev.reg.tunnel = ev.reg.tunnel.filter((f) => f !== fn))
+    }),
+    onAppHello: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.appHello.push(fn)
+      return () => void (ev.reg.appHello = ev.reg.appHello.filter((f) => f !== fn))
+    }),
+    onSessionAddedApp: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.sessionAdded.push(fn)
+      return () => void (ev.reg.sessionAdded = ev.reg.sessionAdded.filter((f) => f !== fn))
+    }),
+    onSessionRemovedApp: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.sessionRemoved.push(fn)
+      return () => void (ev.reg.sessionRemoved = ev.reg.sessionRemoved.filter((f) => f !== fn))
+    }),
+    onSessionActivityChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.sessionActivity.push(fn)
+      return () => void (ev.reg.sessionActivity = ev.reg.sessionActivity.filter((f) => f !== fn))
+    }),
+    subscribeToWorkspaceTabEvents: vi.fn(
+      (scope: unknown, path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
+      expectPrimaryScope(scope)
+        const entry = { path, handlers }
+        ev.reg.tabSubs.push(entry)
+        return () => void (ev.reg.tabSubs = ev.reg.tabSubs.filter((e) => e !== entry))
+      },
+    ),
+    // tabs.ts's active-workspace subscription also opens the session-events
+    // WS; inert here (orthogonal to the tab-title/order wiring under test).
+    subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
+  }
+})
 
 // Daemon transport boundary — keep every fire-and-forget fetch inert so a
 // store's module-load / startup side effects (settings fetch, agents/running

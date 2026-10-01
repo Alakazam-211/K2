@@ -127,10 +127,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       }
     }
     void refresh()
-    const offHello = onAppHello(() => {
+    const offHello = onAppHello(primaryScope(), () => {
       void refresh()
     })
-    const offChanged = onPublishServicesChanged((e) => {
+    const offChanged = onPublishServicesChanged(primaryScope(), (e) => {
       if (e.projectId && e.projectId !== projectId) return
       void refresh()
     })
@@ -172,10 +172,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       }
     }
     void refresh()
-    const offHello = onAppHello(() => {
+    const offHello = onAppHello(primaryScope(), () => {
       void refresh()
     })
-    const offSubs = onTunnelSubdomainsChanged(() => {
+    const offSubs = onTunnelSubdomainsChanged(primaryScope(), () => {
       void refresh()
     })
     return () => {

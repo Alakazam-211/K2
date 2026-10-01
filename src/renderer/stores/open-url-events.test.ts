@@ -94,9 +94,10 @@ vi.stubGlobal('WebSocket', FakeWebSocket)
 import { subscribeToActiveState, onOpenUrl, type UnsubscribeFn } from './session-events'
 import { useTabsStore, initOpenUrlBrowserTabs, type BrowserItemData } from './tabs'
 
+import { primaryScope } from '@/kessel/server-scope'
 /** Open the app-level subscription and wait for the fake socket. */
 async function openAppSocket(): Promise<{ ws: FakeWebSocket; unsub: UnsubscribeFn }> {
-  const unsub = subscribeToActiveState()
+  const unsub = subscribeToActiveState(primaryScope())
   await vi.waitFor(() => {
     expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
   })
@@ -142,7 +143,7 @@ describe('onOpenUrl (app-level open_url dispatch)', () => {
     cleanups.push(unsub)
 
     const calls: Array<[string, string]> = []
-    cleanups.push(onOpenUrl((url, source) => calls.push([url, source])))
+    cleanups.push(onOpenUrl(primaryScope(), (url, source) => calls.push([url, source])))
 
     pushFrame(ws, { kind: 'open_url', url: 'https://example.com/docs', source: 'shim' })
     expect(calls).toEqual([['https://example.com/docs', 'shim']])
@@ -159,7 +160,7 @@ describe('onOpenUrl (app-level open_url dispatch)', () => {
     cleanups.push(unsub)
 
     const calls: string[] = []
-    const off = onOpenUrl((url) => calls.push(url))
+    const off = onOpenUrl(primaryScope(), (url) => calls.push(url))
 
     pushFrame(ws, { kind: 'open_url', url: 'https://one.example', source: 'shim' })
     expect(calls).toEqual(['https://one.example'])

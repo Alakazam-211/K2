@@ -47,8 +47,9 @@ import {
   type UnsubscribeFn,
 } from './session-events'
 
+import { primaryScope } from '@/kessel/server-scope'
 async function openAppSocket(): Promise<{ ws: FakeWebSocket; unsub: UnsubscribeFn }> {
-  const unsub = subscribeToActiveState()
+  const unsub = subscribeToActiveState(primaryScope())
   await vi.waitFor(() => {
     expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
   })
@@ -77,7 +78,7 @@ describe('onPublishServicesChanged (app-level publish_services_changed dispatch)
     cleanups.push(unsub)
 
     const seen: string[] = []
-    cleanups.push(onPublishServicesChanged((e) => seen.push(e.projectId)))
+    cleanups.push(onPublishServicesChanged(primaryScope(), (e) => seen.push(e.projectId)))
 
     pushFrame(ws, { kind: 'publish_services_changed', projectId: 'proj-1' })
     pushFrame(ws, { kind: 'publish_services_changed', projectId: 'proj-2' })
@@ -89,7 +90,7 @@ describe('onPublishServicesChanged (app-level publish_services_changed dispatch)
     cleanups.push(unsub)
 
     const seen: string[] = []
-    const off = onPublishServicesChanged((e) => seen.push(e.projectId))
+    const off = onPublishServicesChanged(primaryScope(), (e) => seen.push(e.projectId))
 
     pushFrame(ws, { kind: 'publish_services_changed', projectId: 'proj-1' })
     expect(seen).toEqual(['proj-1'])
@@ -104,7 +105,7 @@ describe('onPublishServicesChanged (app-level publish_services_changed dispatch)
     cleanups.push(unsub)
 
     const seen: string[] = []
-    cleanups.push(onPublishServicesChanged((e) => seen.push(e.projectId)))
+    cleanups.push(onPublishServicesChanged(primaryScope(), (e) => seen.push(e.projectId)))
 
     pushFrame(ws, { kind: 'tunnel_subdomains_changed', primary: 'rosson', targets: {} })
     expect(seen).toEqual([])

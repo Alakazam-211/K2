@@ -48,8 +48,9 @@ import {
   type UnsubscribeFn,
 } from './session-events'
 
+import { primaryScope } from '@/kessel/server-scope'
 async function openAppSocket(): Promise<{ ws: FakeWebSocket; unsub: UnsubscribeFn }> {
-  const unsub = subscribeToActiveState()
+  const unsub = subscribeToActiveState(primaryScope())
   await vi.waitFor(() => {
     expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
   })
@@ -78,7 +79,7 @@ describe('onWorkspaceResourcesChanged (app-level workspace_resources_changed dis
     cleanups.push(unsub)
 
     const seen: string[] = []
-    cleanups.push(onWorkspaceResourcesChanged((e) => seen.push(e.workspaceId)))
+    cleanups.push(onWorkspaceResourcesChanged(primaryScope(), (e) => seen.push(e.workspaceId)))
 
     pushFrame(ws, { kind: 'workspace_resources_changed', workspaceId: 'proj-1' })
     pushFrame(ws, { kind: 'workspace_resources_changed', workspaceId: 'proj-2' })
@@ -90,7 +91,7 @@ describe('onWorkspaceResourcesChanged (app-level workspace_resources_changed dis
     cleanups.push(unsub)
 
     const seen: string[] = []
-    const off = onWorkspaceResourcesChanged((e) => seen.push(e.workspaceId))
+    const off = onWorkspaceResourcesChanged(primaryScope(), (e) => seen.push(e.workspaceId))
 
     pushFrame(ws, { kind: 'workspace_resources_changed', workspaceId: 'proj-1' })
     expect(seen).toEqual(['proj-1'])
@@ -105,7 +106,7 @@ describe('onWorkspaceResourcesChanged (app-level workspace_resources_changed dis
     cleanups.push(unsub)
 
     const seen: string[] = []
-    cleanups.push(onWorkspaceResourcesChanged((e) => seen.push(e.workspaceId)))
+    cleanups.push(onWorkspaceResourcesChanged(primaryScope(), (e) => seen.push(e.workspaceId)))
 
     pushFrame(ws, { kind: 'publish_services_changed', projectId: 'proj-1' })
     expect(seen).toEqual([])

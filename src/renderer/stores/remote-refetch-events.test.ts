@@ -62,9 +62,10 @@ import {
   type UnsubscribeFn,
 } from './session-events'
 
+import { primaryScope } from '@/kessel/server-scope'
 /** Open the app-level subscription and wait for the fake socket. */
 async function openAppSocket(): Promise<{ ws: FakeWebSocket; unsub: UnsubscribeFn }> {
-  const unsub = subscribeToActiveState()
+  const unsub = subscribeToActiveState(primaryScope())
   await vi.waitFor(() => {
     expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
   })
@@ -93,7 +94,7 @@ describe('onProjectGroupsChanged (app-level project_groups_changed dispatch)', (
     cleanups.push(unsub)
 
     const reasons: string[] = []
-    cleanups.push(onProjectGroupsChanged((reason) => reasons.push(reason)))
+    cleanups.push(onProjectGroupsChanged(primaryScope(), (reason) => reasons.push(reason)))
 
     pushFrame(ws, { kind: 'project_groups_changed', reason: 'members-changed' })
     pushFrame(ws, { kind: 'project_groups_changed', reason: 'message-created' })
@@ -105,7 +106,7 @@ describe('onProjectGroupsChanged (app-level project_groups_changed dispatch)', (
     cleanups.push(unsub)
 
     const reasons: string[] = []
-    const off = onProjectGroupsChanged((reason) => reasons.push(reason))
+    const off = onProjectGroupsChanged(primaryScope(), (reason) => reasons.push(reason))
 
     pushFrame(ws, { kind: 'project_groups_changed', reason: 'poc-changed' })
     expect(reasons).toEqual(['poc-changed'])
@@ -122,7 +123,7 @@ describe('onFeedbackChanged (app-level feedback_changed dispatch)', () => {
     cleanups.push(unsub)
 
     const reasons: string[] = []
-    cleanups.push(onFeedbackChanged((reason) => reasons.push(reason)))
+    cleanups.push(onFeedbackChanged(primaryScope(), (reason) => reasons.push(reason)))
 
     pushFrame(ws, { kind: 'feedback_changed', reason: 'created' })
     pushFrame(ws, { kind: 'feedback_changed', reason: 'commented' })
@@ -134,7 +135,7 @@ describe('onFeedbackChanged (app-level feedback_changed dispatch)', () => {
     cleanups.push(unsub)
 
     const reasons: string[] = []
-    const off = onFeedbackChanged((reason) => reasons.push(reason))
+    const off = onFeedbackChanged(primaryScope(), (reason) => reasons.push(reason))
 
     pushFrame(ws, { kind: 'feedback_changed', reason: 'answered' })
     expect(reasons).toEqual(['answered'])
@@ -152,8 +153,8 @@ describe('registry isolation', () => {
 
     const groups: string[] = []
     const feedback: string[] = []
-    cleanups.push(onProjectGroupsChanged((r) => groups.push(r)))
-    cleanups.push(onFeedbackChanged((r) => feedback.push(r)))
+    cleanups.push(onProjectGroupsChanged(primaryScope(), (r) => groups.push(r)))
+    cleanups.push(onFeedbackChanged(primaryScope(), (r) => feedback.push(r)))
 
     pushFrame(ws, { kind: 'project_groups_changed', reason: 'layout-changed' })
     pushFrame(ws, { kind: 'feedback_changed', reason: 'created' })

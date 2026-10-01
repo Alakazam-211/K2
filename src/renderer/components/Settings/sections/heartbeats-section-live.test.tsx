@@ -62,19 +62,25 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: vi.fn(() => 'ws://127.0.0.1:9999'),
   invalidateDaemonWs: vi.fn(),
 }))
-vi.mock('@/stores/session-events', () => ({
-  subscribeToWorkspaceTabEvents: (path: string, handlers: Record<string, (event?: unknown) => void>) => {
-    tabSubs.calls.push({ path, handlers })
-    return () => undefined
-  },
-  subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
-  onSessionAddedApp: vi.fn(() => () => undefined),
-  onSessionRemovedApp: vi.fn(() => () => undefined),
-  onAppHello: vi.fn(() => () => undefined),
-  onOpenUrl: vi.fn(() => () => undefined),
-  onChatHistoryChanged: vi.fn(() => () => undefined),
-  onceRecovered: vi.fn(),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    subscribeToWorkspaceTabEvents: (scope: unknown, path: string, handlers: Record<string, (event?: unknown) => void>) => {
+      expectPrimaryScope(scope)
+      tabSubs.calls.push({ path, handlers })
+      return () => undefined
+    },
+    subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
+    onSessionAddedApp: vi.fn(() => () => undefined),
+    onSessionRemovedApp: vi.fn(() => () => undefined),
+    onAppHello: vi.fn(() => () => undefined),
+    onOpenUrl: vi.fn(() => () => undefined),
+    onChatHistoryChanged: vi.fn(() => () => undefined),
+    onceRecovered: vi.fn(),
+  }
+})
 vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: {
     getState: () => ({ activeHost: 'local', recovery: { kind: 'connected' } }),

@@ -16,8 +16,8 @@ import {
   remoteDropFlightKey,
   __clearRemoteDropFlightsForTests,
 } from './handle-remote-drop'
-
 import { primaryScope } from '@/kessel/server-scope'
+
 // Mock the upload substrate (the IO half) + the toast store. The router
 // imports `uploadToRemote` from upload-to-remote and the toast store; we
 // replace both so the test stays in-memory.

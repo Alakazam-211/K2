@@ -36,16 +36,23 @@ const ev = vi.hoisted(() => ({
   handlers: [] as Array<(reason: string) => void>,
   hello: [] as Array<() => void>,
 }))
-vi.mock('@/stores/session-events', () => ({
-  onProjectGroupsChanged: vi.fn((fn: (reason: string) => void) => {
-    ev.handlers.push(fn)
-    return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
-  }),
-  onAppHello: vi.fn((fn: () => void) => {
-    ev.hello.push(fn)
-    return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
-  }),
-}))
+vi.mock('@/stores/session-events', async () => {
+  // Home M1: every subscription takes the server scope first; these
+  // mocks fail loudly unless it is the primary scope.
+  const { expectPrimaryScope } = await import('@/test-utils/scope')
+  return {
+    onProjectGroupsChanged: vi.fn((scope: unknown, fn: (reason: string) => void) => {
+      expectPrimaryScope(scope)
+      ev.handlers.push(fn)
+      return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
+    }),
+    onAppHello: vi.fn((scope: unknown, fn: () => void) => {
+      expectPrimaryScope(scope)
+      ev.hello.push(fn)
+      return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
+    }),
+  }
+})
 
 const reconnect = vi.hoisted(() => ({
   connected: [] as Array<() => void>,

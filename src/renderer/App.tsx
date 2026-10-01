@@ -77,6 +77,7 @@ import { KesselConfigProvider } from './kessel/config-context'
 import { useStyleStore } from './stores/style'
 import { toKesselColors } from './lib/style-resolve'
 import { getPalette } from './styles.generated'
+import { primaryScope } from '@/kessel/server-scope'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
@@ -358,8 +359,8 @@ function AppRoot(): React.JSX.Element {
   // the snapshot route 404s and no deltas arrive — the Active bar then
   // uses its local-derivation fallback. See daemon-canonical-active.md.)
   useEffect(() => {
-    let unsub = subscribeToActiveState()
-    void refreshActiveSnapshot()
+    let unsub = subscribeToActiveState(primaryScope())
+    void refreshActiveSnapshot(primaryScope())
     // P3c (D2) — generic API-spawned-sandbox tab adoption rides the SAME
     // app-level session-events socket (via the module-level `onSessionAddedApp`
     // registry, which survives host switches), so a single registration here
@@ -381,8 +382,8 @@ function AppRoot(): React.JSX.Element {
       // `activeHost` has flipped, so the host-aware daemon layer targets
       // the new host.
       unsub()
-      unsub = subscribeToActiveState()
-      void refreshActiveSnapshot()
+      unsub = subscribeToActiveState(primaryScope())
+      void refreshActiveSnapshot(primaryScope())
     })
     return () => {
       offHostChange()

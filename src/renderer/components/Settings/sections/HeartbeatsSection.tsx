@@ -902,7 +902,7 @@ export function HeartbeatsPanel({
   useEffect(() => {
     void refresh()
     if (!serverSupports('daemon-broadcasts')) return
-    return subscribeToWorkspaceTabEvents(project.path, {
+    return subscribeToWorkspaceTabEvents(primaryScope(), project.path, {
       onHeartbeatRosterChanged: () => void refresh(),
       onHeartbeatStateChanged: () => void refresh(),
     })

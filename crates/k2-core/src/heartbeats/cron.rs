@@ -17,14 +17,18 @@
 //! project-level Lane A only). Semantics:
 //!
 //! - **Due iff an occurrence after the reference point is ≤ now.**
-//!   Reference = `last_fired`, or `created_at` for a never-fired row
-//!   (a new heartbeat waits for its first scheduled slot — no
-//!   fire-on-create).
-//! - **Misses ALWAYS catch up** (owner decision, 2026-07): however old
-//!   the miss, the next tick fires ONE coalesced catch-up for the most
-//!   recent missed occurrence, then the schedule resumes normally.
-//!   There is no grace-window cutoff and no skip-to-next. Fires more
-//!   than [`ON_TIME_GRACE_SECS`] late are reported as `DueCatchUp`
+//!   Reference = the later of `last_fired` and `schedule_anchor_at`, or
+//!   `created_at` when neither is set (a new heartbeat waits for its
+//!   first scheduled slot — no fire-on-create). Heartbeat S2 (D4):
+//!   enable, schedule edit and unarchive stamp `schedule_anchor_at`, so
+//!   none of them fires a catch-up for slots missed while it was off.
+//! - **Misses catch up once, within 12 hours** (Rosson D7, 2026-10-01,
+//!   replacing the 2026-07 "always catch up" rule): after sleep or a
+//!   daemon restart, the most recent missed occurrence fires ONE
+//!   coalesced catch-up when it is at most [`MISSED_RUN_GRACE_SECS`]
+//!   late. Older than that it is `SkippedMissed`: the tick audits a
+//!   `skipped_missed` row and re-anchors the schedule at now. Fires
+//!   more than [`ON_TIME_GRACE_SECS`] late are reported as `DueCatchUp`
 //!   (audited `fired_catchup` with the originally-scheduled time) so
 //!   the trail distinguishes on-time from recovered fires.
 //! - **Firing windows**: an optional per-heartbeat `start`/`end`
@@ -55,6 +59,11 @@ use std::str::FromStr;
 /// gap — a laptop that slept through a 9 AM fire and woke at 9:20
 /// correctly reports a catch-up.
 pub const ON_TIME_GRACE_SECS: i64 = 15 * 60;
+
+/// Rosson D7 (2026-10-01): a missed occurrence still fires one catch-up
+/// when it is at most this late. Older misses are skipped and audited
+/// `skipped_missed`. 12 hours.
+pub const MISSED_RUN_GRACE_SECS: i64 = 12 * 60 * 60;
 
 /// Iteration cap for the backward occurrence walk (latest in-window
 /// occurrence). Generous — a window has to appear within this many
@@ -87,6 +96,13 @@ pub enum DueStatus {
     /// miss. Re-evaluates every tick; fires once the window opens.
     HoldWindow {
         scheduled_for: DateTime<Local>,
+    },
+    /// The most recent missed occurrence is more than
+    /// [`MISSED_RUN_GRACE_SECS`] old (D7). Don't fire; the tick audits a
+    /// `skipped_missed` row and re-anchors the schedule at now so the
+    /// next slot is computed from here.
+    SkippedMissed {
+        missed_at: DateTime<Local>,
     },
     /// Nothing due. `next` is the next in-window occurrence when it
     /// could be computed (display/diagnostics only).
@@ -177,23 +193,7 @@ pub fn evaluate_with_now(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus
         Err(reason) => return DueStatus::Invalid { reason },
     };
 
-    // Reference point occurrences are computed AFTER. `last_fired`
-    // when the row has fired; `created_at` otherwise — a freshly
-    // created daily-09:00 heartbeat added at 15:00 waits for
-    // tomorrow's 09:00 instead of firing immediately (first-fire
-    // semantics, owner decision). An unparseable last_fired falls
-    // back to created_at rather than wedging the row.
-    let reference = hb
-        .last_fired
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Local))
-        .unwrap_or_else(|| {
-            Local
-                .timestamp_opt(hb.created_at, 0)
-                .single()
-                .unwrap_or_else(Local::now)
-        });
+    let reference = schedule_reference(hb);
 
     // daily/weekly/monthly/yearly funnel through cron; hourly is a
     // pure interval after the reference point.
@@ -205,6 +205,29 @@ pub fn evaluate_with_now(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus
         other => DueStatus::Invalid {
             reason: format!("unknown frequency '{other}'"),
         },
+    }
+}
+
+/// The point occurrences are computed AFTER: the later of `last_fired`
+/// and `schedule_anchor_at` (S2, D4), else `created_at` — a freshly
+/// created daily-09:00 heartbeat added at 15:00 waits for tomorrow's
+/// 09:00 instead of firing immediately (first-fire semantics, owner
+/// decision). Unparseable stamps are ignored rather than wedging the
+/// row.
+pub fn schedule_reference(hb: &AgentHeartbeat) -> DateTime<Local> {
+    let parse = |s: Option<&str>| {
+        s.and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Local))
+    };
+    let fired = parse(hb.last_fired.as_deref());
+    let anchor = parse(hb.schedule_anchor_at.as_deref());
+    match (fired, anchor) {
+        (Some(f), Some(a)) => f.max(a),
+        (Some(t), None) | (None, Some(t)) => t,
+        (None, None) => Local
+            .timestamp_opt(hb.created_at, 0)
+            .single()
+            .unwrap_or_else(Local::now),
     }
 }
 
@@ -362,8 +385,11 @@ fn evaluate_cron(
     }
 }
 
-/// A due occurrence exists — decide between fire-now (on time /
-/// catch-up) and hold-for-window.
+/// A due occurrence exists — decide between skip (too old, D7),
+/// fire-now (on time / catch-up) and hold-for-window.
+///
+/// The 12-hour check comes first: a held occurrence that ages past the
+/// catch-up window is skipped, not fired when the window next opens.
 ///
 /// Catch-up when the fire is more than [`ON_TIME_GRACE_SECS`] behind
 /// its occurrence, OR when more than one in-window occurrence is
@@ -376,6 +402,9 @@ fn classify(
     window: Option<FiringWindow>,
     multiple_pending: bool,
 ) -> DueStatus {
+    if (now - occurrence).num_seconds() > MISSED_RUN_GRACE_SECS {
+        return DueStatus::SkippedMissed { missed_at: occurrence };
+    }
     if let Some(w) = window {
         if !w.contains(now) {
             return DueStatus::HoldWindow { scheduled_for: occurrence };
@@ -639,6 +668,7 @@ mod tests {
             session_provider: None,
             wait_reason: None,
             wait_detail: None,
+            schedule_anchor_at: None,
         }
     }
 
@@ -677,16 +707,16 @@ mod tests {
     #[test]
     fn daily_miss_across_day_boundary_catches_up() {
         // THE money case: daily 23:50, last fired 3 days ago, machine
-        // dead through two occurrences, tick at 17:07 (before today's
-        // 23:50). Legacy gate dropped this at scheduler.rs:117; the
-        // single-authority evaluator fires a catch-up for the MOST
-        // RECENT missed occurrence (yesterday 23:50).
+        // dead through two occurrences, tick at 08:07 (before today's
+        // 23:50, 8h17m after yesterday's). Legacy gate dropped this at
+        // scheduler.rs:117; the single-authority evaluator fires a
+        // catch-up for the MOST RECENT missed occurrence (yesterday 23:50).
         let hb = mk_heartbeat(
             "daily",
             r#"{"time":"23:50"}"#,
             Some(&mk_now(2026, 6, 29, 23, 50).to_rfc3339()),
         );
-        let now = mk_now(2026, 7, 2, 17, 7);
+        let now = mk_now(2026, 7, 2, 8, 7);
         assert_eq!(
             evaluate_with_now(&hb, now),
             DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 1, 23, 50) },
@@ -696,15 +726,16 @@ mod tests {
 
     #[test]
     fn weekly_missed_weekday_catches_up_next_day() {
-        // Weekly Wed 09:00, last fired 8 days ago → yesterday (Wed
-        // 2026-07-01) missed; tick Thursday. Legacy gate dropped this
-        // at scheduler.rs:150 ("tue ∉ [wed]") until NEXT Wednesday.
+        // Weekly Wed 09:00, last fired 8 days ago → Wed 2026-07-01 09:00
+        // missed; tick at 20:00 that evening (11h late, inside the 12h
+        // catch-up window). Legacy gate dropped this at
+        // scheduler.rs:150 until NEXT Wednesday.
         let hb = mk_heartbeat(
             "weekly",
             r#"{"time":"09:00","days":["wed"]}"#,
             Some(&mk_now(2026, 6, 24, 9, 0).to_rfc3339()),
         );
-        let now = mk_now(2026, 7, 2, 17, 0); // Thursday
+        let now = mk_now(2026, 7, 1, 20, 0); // Wednesday evening
         assert_eq!(
             evaluate_with_now(&hb, now),
             DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 1, 9, 0) },
@@ -713,13 +744,13 @@ mod tests {
 
     #[test]
     fn monthly_missed_dom_catches_up() {
-        // Monthly 15th 09:00, dead on the 15th, tick on the 17th.
+        // Monthly 15th 09:00, dead at 09:00 on the 15th, tick at 18:00.
         let hb = mk_heartbeat(
             "monthly",
             r#"{"time":"09:00","days_of_month":[15]}"#,
             Some(&mk_now(2026, 5, 15, 9, 0).to_rfc3339()),
         );
-        let now = mk_now(2026, 6, 17, 12, 0);
+        let now = mk_now(2026, 6, 15, 18, 0);
         assert_eq!(
             evaluate_with_now(&hb, now),
             DueStatus::DueCatchUp { missed_at: mk_now(2026, 6, 15, 9, 0) },
@@ -749,10 +780,10 @@ mod tests {
     }
 
     #[test]
-    fn old_misses_always_catch_up_no_grace_cutoff() {
-        // Owner decision 1: no matter how old the miss, it fires once.
-        // Weekly Monday report missed for six weeks → one catch-up for
-        // the most recent Monday.
+    fn misses_older_than_12h_are_skipped_not_fired() {
+        // D7 (2026-10-01): a weekly Monday report whose latest missed
+        // Monday is 3 days old does NOT fire a surprise catch-up on
+        // Thursday. It is skipped (audited) and the schedule moves on.
         let hb = mk_heartbeat(
             "weekly",
             r#"{"time":"09:00","days":["mon"]}"#,
@@ -761,9 +792,70 @@ mod tests {
         let now = mk_now(2026, 7, 2, 12, 0); // Thursday, ~6.5 weeks later
         assert_eq!(
             evaluate_with_now(&hb, now),
-            DueStatus::DueCatchUp { missed_at: mk_now(2026, 6, 29, 9, 0) },
-            "misses must ALWAYS catch up — one coalesced fire for the latest occurrence",
+            DueStatus::SkippedMissed { missed_at: mk_now(2026, 6, 29, 9, 0) },
+            "a miss more than 12h old must be skipped, not fired",
         );
+    }
+
+    #[test]
+    fn miss_at_the_12h_edge_fires_and_one_minute_later_skips() {
+        // Daily 09:00 missed. 21:00 is exactly 12h late → still one
+        // catch-up. 21:01 is past the window → skipped.
+        let hb = mk_heartbeat(
+            "daily",
+            r#"{"time":"09:00"}"#,
+            Some(&mk_now(2026, 7, 1, 9, 0).to_rfc3339()),
+        );
+        assert_eq!(
+            evaluate_with_now(&hb, mk_now(2026, 7, 2, 21, 0)),
+            DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 2, 9, 0) },
+        );
+        assert_eq!(
+            evaluate_with_now(&hb, mk_now(2026, 7, 2, 21, 1)),
+            DueStatus::SkippedMissed { missed_at: mk_now(2026, 7, 2, 9, 0) },
+        );
+    }
+
+    #[test]
+    fn enable_or_edit_anchor_waits_for_the_next_slot() {
+        // D4: a daily 09:00 row last fired a week ago, re-enabled (or
+        // edited) at 10:00 today. Without the anchor, today's 09:00
+        // would be a 1h-late catch-up. With it, the next fire is
+        // tomorrow 09:00.
+        let mut hb = mk_heartbeat(
+            "daily",
+            r#"{"time":"09:00"}"#,
+            Some(&mk_now(2026, 6, 25, 9, 0).to_rfc3339()),
+        );
+        let anchored_at = mk_now(2026, 7, 2, 10, 0);
+        hb.schedule_anchor_at = Some(anchored_at.to_rfc3339());
+        assert_eq!(
+            evaluate_with_now(&hb, mk_now(2026, 7, 2, 10, 1)),
+            DueStatus::NotYet { next: Some(mk_now(2026, 7, 3, 9, 0)) },
+            "an anchor after the missed slot must suppress the catch-up",
+        );
+        assert_eq!(
+            evaluate_with_now(&hb, mk_now(2026, 7, 3, 9, 1)),
+            DueStatus::Due { scheduled_for: mk_now(2026, 7, 3, 9, 0) },
+            "the next real slot still fires",
+        );
+        // An anchor OLDER than last_fired changes nothing.
+        hb.schedule_anchor_at = Some(mk_now(2026, 6, 1, 0, 0).to_rfc3339());
+        assert_eq!(schedule_reference(&hb), mk_now(2026, 6, 25, 9, 0));
+    }
+
+    #[test]
+    fn hourly_interval_after_long_sleep_still_catches_up() {
+        // An every-minute heartbeat after a 3h sleep: its latest missed
+        // occurrence is under a minute old, so it fires one catch-up
+        // (multiple slots pending), never a skip.
+        let hb = mk_heartbeat(
+            "hourly",
+            r#"{"every_seconds":60}"#,
+            Some(&mk_now(2026, 7, 2, 6, 0).to_rfc3339()),
+        );
+        let s = evaluate_with_now(&hb, mk_now(2026, 7, 2, 9, 0));
+        assert!(matches!(s, DueStatus::DueCatchUp { .. }), "got {s:?}");
     }
 
     // ── On-time vs catch-up boundary ──────────────────────────────────
@@ -823,10 +915,10 @@ mod tests {
     #[test]
     fn never_fired_missed_first_slot_catches_up() {
         // Created before the slot, machine dead through it → the first
-        // occurrence itself catches up.
+        // occurrence itself catches up (6h late, inside the 12h window).
         let mut hb = mk_heartbeat("daily", r#"{"time":"09:00"}"#, None);
         hb.created_at = mk_now(2026, 7, 1, 8, 0).timestamp();
-        let now = mk_now(2026, 7, 2, 7, 0);
+        let now = mk_now(2026, 7, 1, 15, 0);
         assert_eq!(
             evaluate_with_now(&hb, now),
             DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 1, 9, 0) },
@@ -888,8 +980,7 @@ mod tests {
     #[test]
     fn catchup_landing_outside_window_holds_until_open() {
         // Daily 10:00 with window 09:00–17:00. Missed yesterday's
-        // 10:00; machine wakes at 20:00 (window closed) → HOLD. At
-        // 09:01 next day the window is open → catch-up fires.
+        // 10:00; machine wakes at 20:00 (window closed) → HOLD.
         let hb = mk_heartbeat(
             "daily",
             r#"{"time":"10:00","start":"09:00","end":"17:00"}"#,
@@ -900,12 +991,22 @@ mod tests {
             held,
             DueStatus::HoldWindow { scheduled_for: mk_now(2026, 7, 1, 10, 0) },
         );
-        // Window opens next morning BEFORE the day's own 10:00 slot:
-        // the held catch-up fires for yesterday's occurrence.
-        let fired = evaluate_with_now(&hb, mk_now(2026, 7, 2, 9, 1));
+        // D7: by 09:01 next morning the held occurrence is 23h old —
+        // past the 12h catch-up window — so it is skipped, not fired.
+        let next_morning = evaluate_with_now(&hb, mk_now(2026, 7, 2, 9, 1));
         assert_eq!(
-            fired,
-            DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 1, 10, 0) },
+            next_morning,
+            DueStatus::SkippedMissed { missed_at: mk_now(2026, 7, 1, 10, 0) },
+        );
+        // Inside the 12h window with the window open again → fires.
+        let overnight = mk_heartbeat(
+            "daily",
+            r#"{"time":"23:00","start":"22:00","end":"02:00"}"#,
+            Some(&mk_now(2026, 6, 30, 23, 0).to_rfc3339()),
+        );
+        assert_eq!(
+            evaluate_with_now(&overnight, mk_now(2026, 7, 1, 23, 10)),
+            DueStatus::Due { scheduled_for: mk_now(2026, 7, 1, 23, 0) },
         );
     }
 
@@ -1065,8 +1166,9 @@ mod tests {
             r#"{"time":"09:00","months":["jul"],"days_of_month":[1]}"#,
             Some(&mk_now(2025, 7, 1, 9, 0).to_rfc3339()),
         );
+        // 3h after the July 1 slot: inside the 12h catch-up window (D7).
         assert_eq!(
-            evaluate_with_now(&hb, mk_now(2026, 7, 2, 12, 0)),
+            evaluate_with_now(&hb, mk_now(2026, 7, 1, 12, 0)),
             DueStatus::DueCatchUp { missed_at: mk_now(2026, 7, 1, 9, 0) },
         );
     }

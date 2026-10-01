@@ -140,6 +140,7 @@ async fn hung_spawn_lease_is_released_by_watchdog_without_restart() {
         wakeup_path_abs: project.join("WAKEUP.md").to_string_lossy().into_owned(),
         wakeup_path_rel: "WAKEUP.md".to_string(),
         catchup_of: None,
+        evaluated_last_fired: None,
     }];
 
     // Launcher that does exactly what smart_launch does first —

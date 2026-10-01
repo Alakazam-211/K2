@@ -37,6 +37,9 @@ pub mod wait;
 pub use wait::{
     annotate_wait_state, boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY,
 };
+// Heartbeat S2: missed-run (D7) and next-slot (D4) tests.
+#[cfg(test)]
+mod missed_run_tests;
 
 /// Create a new heartbeat row + scaffold its `WAKEUP.md` file.
 ///
@@ -736,6 +739,12 @@ pub struct HeartbeatFireCandidate {
     /// this timestamp in the reason) instead of `fired` so the audit
     /// trail distinguishes recovered misses from on-time fires.
     pub catchup_of: Option<String>,
+    /// HB14 — the `last_fired` value the evaluator saw when it decided
+    /// this row was due (`None` = never fired). The launcher takes the
+    /// lease only if `last_fired` still equals it, so a second ticker
+    /// that evaluated the same slot cannot fire it again.
+    #[serde(skip)]
+    pub evaluated_last_fired: Option<String>,
 }
 
 /// Iterate enabled `workspace_heartbeats` rows for a project and return the
@@ -801,6 +810,14 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
             cron::DueStatus::NotYet { .. } | cron::DueStatus::HoldWindow { .. } => {
                 // Not due / holding for the firing window: quiet.
                 clear_schedule_error_if_set(&conn, &project_id, &hb);
+                continue;
+            }
+            cron::DueStatus::SkippedMissed { missed_at } => {
+                // D7: the latest missed slot is more than 12h old. One
+                // audit row, then count the schedule from now so the
+                // next tick sees the next real slot.
+                clear_schedule_error_if_set(&conn, &project_id, &hb);
+                skip_missed_slot(&conn, &project_id, &agent_name, &hb, missed_at);
                 continue;
             }
             cron::DueStatus::Invalid { reason } => {
@@ -923,9 +940,46 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
             wakeup_path_abs: wakeup_abs.to_string_lossy().to_string(),
             wakeup_path_rel: hb.wakeup_path,
             catchup_of,
+            evaluated_last_fired: hb.last_fired,
         });
     }
     candidates
+}
+
+/// D7 — record one `skipped_missed` audit row for a slot missed by more
+/// than [`cron::MISSED_RUN_GRACE_SECS`] and re-anchor the schedule at
+/// now. Quiet on DB errors (logged): the next tick re-evaluates.
+fn skip_missed_slot(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    agent_name: &str,
+    hb: &AgentHeartbeat,
+    missed_at: chrono::DateTime<chrono::Local>,
+) {
+    let hours = cron::MISSED_RUN_GRACE_SECS / 3600;
+    let reason = format!(
+        "missed the slot scheduled {} by more than {hours}h (asleep or K2 not running); \
+         skipped, next run is the next scheduled slot",
+        missed_at.to_rfc3339()
+    );
+    if let Err(e) = HeartbeatFire::insert_with_schedule(
+        conn,
+        project_id,
+        Some(agent_name),
+        Some(&hb.name),
+        &hb.frequency,
+        "skipped_missed",
+        Some(&reason),
+        None,
+        None,
+        None,
+    ) {
+        log_debug!("[heartbeat-tick] {} skipped_missed audit: {e}", hb.name);
+    }
+    if let Err(e) = AgentHeartbeat::reset_schedule_anchor(conn, project_id, &hb.name) {
+        log_debug!("[heartbeat-tick] {} re-anchor after skip: {e}", hb.name);
+    }
+    log_debug!("[heartbeat-tick] {} {reason}", hb.name);
 }
 
 /// Clear a stale `schedule_error` once the row evaluates cleanly again

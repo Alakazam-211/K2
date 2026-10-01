@@ -1941,6 +1941,13 @@ pub struct AgentHeartbeat {
     /// text, or what to do about an empty WAKEUP.md).
     #[serde(default)]
     pub wait_detail: Option<String>,
+    /// 0123 (heartbeat S2, D4 + D7) — RFC3339 point the schedule counts
+    /// from when the row has not fired since. Stamped "now" on enable
+    /// (off → on), schedule edit, unarchive, and when a missed slot older
+    /// than 12 h is skipped. The due check uses the later of `last_fired`
+    /// and this, so none of those actions fires a surprise catch-up.
+    /// NULL = `last_fired`, else `created_at`.
+    pub schedule_anchor_at: Option<String>,
 }
 
 impl AgentHeartbeat {
@@ -1996,7 +2003,7 @@ impl AgentHeartbeat {
 
     /// Column list for SELECTs. Centralised so adding a new column means
     /// updating one constant + `from_row`, not five query strings.
-    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider";
+    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider, schedule_anchor_at";
 
     pub fn get_by_name(conn: &Connection, project_id: &str, name: &str) -> Result<Option<AgentHeartbeat>> {
         let sql = format!(
@@ -2048,9 +2055,9 @@ impl AgentHeartbeat {
             let hb = Self::from_row(row)?;
             // Two extra columns appended in the SELECT above. Their
             // indices follow the AgentHeartbeat fields (which Self::COLS
-            // produced) — 22 fields + project_name (22) + project_path (23).
-            let project_name: String = row.get(22)?;
-            let project_path: String = row.get(23)?;
+            // produced) — 23 fields + project_name (23) + project_path (24).
+            let project_name: String = row.get(23)?;
+            let project_path: String = row.get(24)?;
             Ok((hb, project_name, project_path))
         })?;
         rows.collect()
@@ -2103,12 +2110,31 @@ impl AgentHeartbeat {
         // it clears the failure-backoff state: re-enabling a row that was
         // auto-disabled after repeated failures gives it a clean slate
         // (counter, retry window, and the disabled_reason badge all reset).
+        //
+        // Heartbeat S2 (D4): turning a row ON re-anchors its schedule at
+        // now, so it waits for its next slot instead of firing a
+        // catch-up for slots missed while it was off. Re-saving an
+        // already-enabled row keeps its anchor.
         conn.execute(
             "UPDATE workspace_heartbeats \
-             SET enabled = ?1, disabled_reason = NULL, \
+             SET schedule_anchor_at = CASE WHEN enabled = 0 AND ?1 = 1 \
+                     THEN ?4 ELSE schedule_anchor_at END, \
+                 enabled = ?1, disabled_reason = NULL, \
                  consecutive_failures = 0, next_retry_at = NULL \
              WHERE project_id = ?2 AND name = ?3",
-            params![enabled as i64, project_id, name],
+            params![enabled as i64, project_id, name, chrono::Utc::now().to_rfc3339()],
+        )
+    }
+
+    /// Heartbeat S2 (D4, D7): count this row's schedule from now. Used
+    /// when a missed slot older than the catch-up window is skipped, and
+    /// by any write that must not trigger a catch-up fire (for example
+    /// instructions added to an empty WAKEUP.md).
+    pub fn reset_schedule_anchor(conn: &Connection, project_id: &str, name: &str) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats SET schedule_anchor_at = ?1 \
+             WHERE project_id = ?2 AND name = ?3",
+            params![chrono::Utc::now().to_rfc3339(), project_id, name],
         )
     }
 
@@ -2181,11 +2207,14 @@ impl AgentHeartbeat {
         // 0062 — editing the schedule clears any recorded schedule_error;
         // the next tick re-evaluates the new spec and re-flags if it's
         // still unparseable.
+        // Heartbeat S2 (D4): an edited schedule counts from now — the
+        // first fire is the new schedule's next slot, never a catch-up.
         conn.execute(
             "UPDATE workspace_heartbeats \
-             SET frequency = ?1, spec_json = ?2, schedule_error = NULL \
+             SET frequency = ?1, spec_json = ?2, schedule_error = NULL, \
+                 schedule_anchor_at = ?5 \
              WHERE project_id = ?3 AND name = ?4",
-            params![frequency, spec_json, project_id, name],
+            params![frequency, spec_json, project_id, name, chrono::Utc::now().to_rfc3339()],
         )
     }
 
@@ -2375,10 +2404,11 @@ impl AgentHeartbeat {
     /// Restore a soft-archived heartbeat. Reserved for a future "Restore
     /// from Archive" UI affordance — no caller in 0.36.0.
     pub fn unarchive(conn: &Connection, project_id: &str, name: &str) -> Result<usize> {
+        // Heartbeat S2 (D4): a restored row waits for its next slot.
         conn.execute(
-            "UPDATE workspace_heartbeats SET archived_at = NULL \
+            "UPDATE workspace_heartbeats SET archived_at = NULL, schedule_anchor_at = ?3 \
              WHERE project_id = ?1 AND name = ?2",
-            params![project_id, name],
+            params![project_id, name, chrono::Utc::now().to_rfc3339()],
         )
     }
 
@@ -2568,6 +2598,7 @@ impl AgentHeartbeat {
             session_provider: row.get(21)?,
             wait_reason: None,
             wait_detail: None,
+            schedule_anchor_at: row.get(22)?,
         })
     }
 

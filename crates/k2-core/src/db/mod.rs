@@ -1004,6 +1004,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0122_sql_grant_relations",
             include_str!("../../drizzle_sql/0122_sql_grant_relations.sql"),
         ),
+        // 0123 — heartbeat S2: schedule_anchor_at, the point a schedule
+        // counts from after enable / edit / unarchive / a skipped miss
+        // (D4, D7). No surprise catch-up fires.
+        (
+            "0123_heartbeat_schedule_anchor",
+            include_str!("../../drizzle_sql/0123_heartbeat_schedule_anchor.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1607,7 +1614,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0122_sql_grant_relations",
+            last_name, "0123_heartbeat_schedule_anchor",
             "unexpected last migration name: {last_name}"
         );
     }

@@ -770,7 +770,9 @@ fn attach_only_session(req: &SpawnRequest) -> HandlerResult {
 fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     let __t_total = std::time::Instant::now();
 
-    if req.attach_only {
+    // `attach_only_supported` is false only under the debug-build harness
+    // hook that simulates a released daemon (which ignores the field).
+    if req.attach_only && crate::boot_status::attach_only_supported() {
         return attach_only_session(&req);
     }
 

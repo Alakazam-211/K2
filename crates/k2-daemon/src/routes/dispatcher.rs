@@ -803,6 +803,11 @@ async fn handle_one_request(
                 // fingerprintable state beyond "the process restarted",
                 // which /boot-status already implies via `phase`.
                 "instanceId": crate::boot_status::instance_id(),
+                // Home M5: features the version string cannot tell apart
+                // (main and the last release share it). Additive like
+                // `scopedHooks`; an older daemon omits it and clients read
+                // every key as unsupported. See `boot_status::features`.
+                "features": crate::boot_status::features(),
                 // 0.39.35: update SHAPE selector. "bundled-app" hosts update
                 // via the co-located Tauri app (Shape A); "standalone" hosts
                 // via the in-daemon binary swap (Shape B). The renderer reads

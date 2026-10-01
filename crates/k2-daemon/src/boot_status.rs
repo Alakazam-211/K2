@@ -170,9 +170,43 @@ pub fn classify_install_kind(exe: Option<&std::path::Path>) -> &'static str {
     "standalone"
 }
 
+/// Home M4/M5: `sessions/v2/spawn` honours `attach_only` (a live session
+/// is returned as-is; anything else is `404 session_not_live`). Released
+/// daemons up to 0.41.6 ignore unknown body fields and would SPAWN, and the
+/// version string cannot tell this build from 0.41.6, so clients read this
+/// key from `/boot-status` `features` instead of the version.
+pub const FEATURE_SPAWN_ATTACH_ONLY: &str = "spawn-attach-only";
+
+/// Test hook (debug builds only): `K2_TEST_SIMULATE_NO_ATTACH_ONLY=1` makes
+/// this daemon behave like a released one up to 0.41.6 for the two-daemon
+/// harness: it does not report [`FEATURE_SPAWN_ATTACH_ONLY`] and
+/// `sessions/v2/spawn` ignores `attach_only`. A release build ignores it.
+pub fn attach_only_supported() -> bool {
+    !(cfg!(debug_assertions)
+        && std::env::var("K2_TEST_SIMULATE_NO_ATTACH_ONLY").as_deref() == Ok("1"))
+}
+
+/// Client-visible features this daemon has that its version string cannot
+/// tell apart (`/boot-status` `features`). A client treats a key that is
+/// absent — or a daemon with no `features` at all — as unsupported.
+pub fn features() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if attach_only_supported() {
+        out.push(FEATURE_SPAWN_ATTACH_ONLY);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn features_report_spawn_attach_only() {
+        // The harness hook is never set in unit tests.
+        assert!(attach_only_supported());
+        assert_eq!(features(), vec!["spawn-attach-only"]);
+    }
 
     // These mutate process-global state, so they live in ONE test to
     // run serially and not race the shared AtomicU8 / RwLock across

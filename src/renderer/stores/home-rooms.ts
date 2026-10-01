@@ -4,7 +4,14 @@
 // With "Remote rooms (preview)" on, a Home row on another server opens THAT
 // server's room in Home's main area. The window's server does not change.
 // The room is the same components the Agents page mounts (R8/R9), bound to
-// a pinned room (`createPinnedRoom`) on the row's server, view-only in M4.
+// a pinned room (`createPinnedRoom`) on the row's server.
+//
+// Home M5: the room is USABLE (typing, tabs, closes, splits, files, chat
+// history, heartbeats — all on its server, through the room allowlist) when
+// its server has the layout revision check (`with_revision`, the P0 daemon
+// half): the room then saves B's layout with `baseRevision` and merges on a
+// 409. An older server keeps M4's view-only room, with a note saying why
+// (MS43, plan decision 7). The probe reads B's layout once per build.
 //
 // This store owns, per window:
 //   - the pinned rooms Home has opened, keyed by Home row address;
@@ -34,6 +41,8 @@ import type { HomeRow } from '@/stores/homes'
 import { onActiveHostChange } from '@/stores/connect-host'
 import type { KeepAliveResult } from '@/lib/host-pool'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { daemonCliGet } from '@/lib/daemon-cli'
+import { onProjectsChanged } from '@/stores/session-events'
 
 export type HomeRoomPhase =
   /** Reading that server's project list. */
@@ -45,6 +54,14 @@ export type HomeRoomPhase =
   /** The list could not be read (the failure gate shows why). */
   | 'error'
 
+/** Home M5: what the user can do in an open room. */
+export type HomeRoomAccess =
+  /** Type, open / close / split tabs, write files … on that server. */
+  | 'use'
+  /** That server has no layout revision check (an older K2): view only
+   *  until it updates (MS43). */
+  | 'view-older-server'
+
 export interface HomeRoomEntry {
   /** The Home row address (`handle::host`). */
   address: string
@@ -53,6 +70,8 @@ export interface HomeRoomEntry {
   phase: HomeRoomPhase
   error: string | null
   room: PinnedRoom | null
+  /** Home M5: null until the room is open. */
+  access: HomeRoomAccess | null
   /** Bumped on every (re)build, so React remounts a rebuilt room. */
   generation: number
 }
@@ -68,8 +87,18 @@ export interface HomeRoomsDeps {
   /** Build the pinned room (tests pass a fake). */
   createRoom(input: PinnedRoomInput): PinnedRoom
   listProjects(scope: ServerScope): Promise<ProjectWithWorkspaces[]>
+  /** Make sure the pool knows that server's version before the room is
+   *  built: the room's feature gates (`scope.serverSupports`, e.g. B's
+   *  tab-order broadcasts) are decided when its socket opens. */
+  knowServer(hostKey: string): Promise<void>
   keepAlive(hostKey: string, projectId: string): Promise<KeepAliveResult>
   scopeFor(hostKey: string): ServerScope
+  /** Home M5 (MS43): does that server answer the layout read with its
+   *  revision (`with_revision`)? Only then may the room save B's layout. */
+  layoutRevisionSupported(scope: ServerScope, projectId: string, workspaceId: string): Promise<boolean>
+  /** Home M5: that server's `projects_changed` (a worktree created or closed
+   *  in the room), so the room's project list follows its server. */
+  onProjectsChanged(scope: ServerScope, fn: () => void): () => void
   now(): number
   setInterval(fn: () => void, ms: number): unknown
   clearInterval(handle: unknown): void
@@ -100,6 +129,7 @@ export interface HomeRooms {
 export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
   const store = create<HomeRoomsState>(() => ({ entries: {}, shown: null }))
   const keepAlives = new Map<string, RoomKeepAlive>()
+  const projectSubs = new Map<string, () => void>()
   const rows = new Map<string, HomeRow>()
   let generation = 0
   /** Is Home on screen? A shown room is only visible (hot, focused) then. */
@@ -127,6 +157,8 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     const ka = keepAlives.get(address)
     keepAlives.delete(address)
     ka?.dispose()
+    projectSubs.get(address)?.()
+    projectSubs.delete(address)
     store.setState((s) => {
       const entries = { ...s.entries }
       delete entries[address]
@@ -157,6 +189,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     const scope = deps.scopeFor(entry.hostKey)
     let projects: ProjectWithWorkspaces[]
     try {
+      await deps.knowServer(entry.hostKey)
       projects = await deps.listProjects(scope)
     } catch (err) {
       if (!store.getState().entries[address]) return entry
@@ -167,7 +200,27 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     const ws = project ? primaryWorkspaceOf(project) : null
     if (!project || !ws) return patch(address, { phase: 'not-found', error: null })
 
+    let usable: boolean
+    try {
+      usable = await deps.layoutRevisionSupported(scope, project.id, ws.id)
+    } catch (err) {
+      if (!store.getState().entries[address]) return entry
+      return patch(address, { phase: 'error', error: err instanceof Error ? err.message : String(err) })
+    }
+    if (!store.getState().entries[address]) return entry
+    const access: HomeRoomAccess = usable ? 'use' : 'view-older-server'
+
     const projectsStore = createStore<{ projects: ProjectWithWorkspaces[] }>(() => ({ projects }))
+    projectSubs.get(address)?.()
+    projectSubs.set(
+      address,
+      deps.onProjectsChanged(scope, () => {
+        deps.listProjects(scope).then(
+          (next) => projectsStore.setState({ projects: next }),
+          (err) => console.warn(`[home-rooms] ${entry.hostKey} projects refresh failed:`, err),
+        )
+      }),
+    )
     const room = deps.createRoom({
       scope,
       workspace: { projectId: project.id, workspaceId: ws.id, path: ws.worktreePath ?? project.path },
@@ -176,7 +229,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
       activateProject: (pid) => {
         void deps.keepAlive(entry.hostKey, pid)
       },
-      readOnly: true,
+      readOnly: access !== 'use',
     })
     const ka = createRoomKeepAlive({
       hostKey: entry.hostKey,
@@ -188,7 +241,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     })
     keepAlives.set(address, ka)
     generation += 1
-    const opened = patch(address, { phase: 'open', error: null, room, generation })
+    const opened = patch(address, { phase: 'open', error: null, room, access, generation })
     // Register with the tier manager either way; a room the user already
     // moved away from starts its off-screen clock right away.
     deps.tiers.show(room.key)
@@ -197,7 +250,8 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     await room.tabs.room.open()
     // The room's pinned Chat and Inbox tabs, as the window's own room gets
     // them after a workspace restore (R3). Agent names come from the room's
-    // server (`agents/list`); nothing is saved (view-only).
+    // server (`agents/list`). A usable room saves them like B's own window
+    // does (with the revision check); a view-only room saves nothing.
     room.tabs.room.ensurePinnedAgentTabForMode(project.agentMode ?? 'off', project.path)
     void ka.opened()
     return opened
@@ -229,6 +283,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
             phase: 'resolving',
             error: null,
             room: null,
+            access: null,
             generation: existing?.generation ?? 0,
           },
         },
@@ -271,13 +326,39 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
   }
 }
 
+/** MS43: B answers `workspace-layouts/load?with_revision=1` with
+ *  `{layoutJson, revision}` (P0 daemon half, `2a12ec7b`); an older daemon
+ *  ignores the flag and answers with the bare layout string (or null). */
+export async function layoutRevisionSupported(
+  scope: ServerScope,
+  projectId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const res = await daemonCliGet<unknown>(scope, 'workspace-layouts/load', {
+    project_id: projectId,
+    workspace_id: workspaceId,
+    with_revision: '1',
+  })
+  return (
+    res !== null &&
+    typeof res === 'object' &&
+    typeof (res as { revision?: unknown }).revision === 'number'
+  )
+}
+
 /** This window's Home rooms. */
 export const homeRooms: HomeRooms = createHomeRooms({
   tiers: roomTiers,
   createRoom: createPinnedRoom,
   listProjects: fetchServerProjects,
+  knowServer: async (hostKey) => {
+    if (hostPool.entry(hostKey)?.boot?.version) return
+    await hostPool.check(hostKey)
+  },
   keepAlive: (hostKey, projectId) => hostPool.keepRoomAlive(hostKey, projectId),
   scopeFor: (hostKey) => scopeForHost(hostKey),
+  layoutRevisionSupported,
+  onProjectsChanged: (scope, fn) => onProjectsChanged(scope, () => fn()),
   now: () => Date.now(),
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),

@@ -27,7 +27,8 @@ import type { PaneStatus } from '@/stores/active-agents'
 import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
 import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
-import { viewOnlyScope } from '@/kessel/server-scope'
+import { remoteRoomScope, viewOnlyScope } from '@/kessel/server-scope'
+import { onSessionActivityChanged, type SessionActivityChangedEvent } from '@/stores/session-events'
 
 /** Where a terminal pane reports what its agent is doing (MS68). The pane
  *  never reaches for a global store: the primary room's sink is the window's
@@ -88,6 +89,16 @@ export interface Room {
   roomId(): string | null
   /** The workspace cwd window-level actions open new tabs in. */
   cwd(): string
+}
+
+/** Home M5: the S5 mode (`set_mode`) a terminal pane's socket sends in its
+ *  room. The primary room keeps the window's eye/pencil mode (null). A
+ *  pinned room's comes from the room: view-only → viewer; usable → claimer,
+ *  since every login role left on its server (Owner, Admin, Member) may type
+ *  — the Viewer role is gone (RV5) and the daemon's claim gate decides. */
+export function paneRoomMode(room: Pick<Room, 'isPrimary' | 'readOnly'>): 'viewer' | 'claimer' | null {
+  if (room.isPrimary) return null
+  return room.readOnly ? 'viewer' : 'claimer'
 }
 
 // ── Lookups inside one room (MS3) ────────────────────────────────────────
@@ -254,7 +265,21 @@ export interface RoomActivityState extends RoomActivityView {
   aliases: Map<string, string>
 }
 
-export type RoomActivityStore = StoreApi<RoomActivityState> & RoomActivitySink
+export type RoomActivityStore = StoreApi<RoomActivityState> &
+  RoomActivitySink & {
+    /** Home M5 tab dots: the room's server's own word on a session
+     *  (`session_activity_changed`, visibility-independent). */
+    applyDaemonActivity(e: Pick<SessionActivityChangedEvent, 'agentName' | 'paneGroupId' | 'status'>): void
+  }
+
+/** `/w/app` is under `/w`; `/w-other` is not (the daemon's own rule,
+ *  `activity_events_ws.rs` boundary). */
+export function pathUnderRoot(path: string, root: string): boolean {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const a = norm(path)
+  const r = norm(root)
+  return r.length > 0 && (a === r || a.startsWith(`${r}/`))
+}
 
 /** Build a pinned room's activity slice. A working → idle transition marks
  *  the pane unseen-done and chimes with THIS room's project record (MS21):
@@ -309,7 +334,25 @@ export function createRoomActivity(
     // A pinned room holds one workspace: every pane is that project's.
     bindPaneProject: () => {},
   }
-  return Object.assign(store, sink)
+  const applyDaemonActivity: RoomActivityStore['applyDaemonActivity'] = (e) => {
+    const st = store.getState()
+    const paneId = e.paneGroupId ?? st.aliases.get(e.agentName) ?? e.agentName
+    const prev = st.daemonPaneStatuses.get(paneId)
+    if (prev === e.status) return
+    const next = new Map(st.daemonPaneStatuses)
+    next.set(paneId, e.status)
+    store.setState({ daemonPaneStatuses: next })
+    // A finished session whose pane is not reporting here (another tab, a
+    // hidden pane): mark it unseen-done and chime with THIS room's project.
+    // A mounted pane's own title feed already did both (no double chime).
+    if (e.status !== 'idle' || (prev !== 'working' && prev !== 'permission')) return
+    if (st.paneStatuses.has(paneId)) return
+    const unseen = new Map(store.getState().unseenDone)
+    unseen.set(paneId, Date.now())
+    store.setState({ unseenDone: unseen })
+    playCompletionSound(projectId, projects.getState().projects)
+  }
+  return Object.assign(store, sink, { applyDaemonActivity })
 }
 
 export interface PinnedRoomInput {
@@ -352,8 +395,11 @@ function pathIndex(projects: RoomProjectsStore): () => ProjectPathEntry[] {
 export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
   const { workspace, projects } = input
   const readOnly = input.readOnly === true
-  const scope = readOnly ? viewOnlyScope(input.scope) : input.scope
-  if (scope.isPrimary) throw new Error('createPinnedRoom: a pinned room needs a pinned scope (scopeForHost)')
+  if (input.scope.isPrimary) throw new Error('createPinnedRoom: a pinned room needs a pinned scope (scopeForHost)')
+  // Home M5: a usable room writes to its server through the room allowlist
+  // (`remoteRoomScope`, `kessel/room-writes.ts`); a view-only room sends
+  // only the keep-alive (`viewOnlyScope`).
+  const scope = readOnly ? viewOnlyScope(input.scope) : remoteRoomScope(input.scope)
   const localCommands = scope.hostKey === LOCAL_HOME_HOST
   const heartbeats = createHeartbeatSessionsStore({ scope, localCommands })
   const serverView = acquireServerView(scope)
@@ -372,6 +418,12 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     },
   })
   const activity = createRoomActivity(projects, workspace.projectId)
+  // Home M5 tab dots: the server's own activity for this workspace's
+  // sessions. It rides the room's workspace socket (the app-bus carrier).
+  const activityUnsub = onSessionActivityChanged(scope, (e) => {
+    if (!pathUnderRoot(e.workspacePath, workspace.path)) return
+    activity.applyDaemonActivity(e)
+  })
   let disposed: Promise<void> | null = null
   return {
     key: scopedKey(scope, `${workspace.projectId}:${workspace.workspaceId}`),
@@ -389,6 +441,7 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     dispose: () => {
       if (!disposed) {
         disposed = (async () => {
+          activityUnsub()
           heartbeats.unsubscribeLive()
           try {
             await tabs.room.dispose()

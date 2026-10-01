@@ -4,7 +4,9 @@
 // Each open remote room mounts the SAME room components the Agents page
 // mounts (the tab strip, panes, pinned Chat, Inbox, Thread, Browser, file
 // tabs, terminals), under its own `RoomProvider`, wrapped in the failure
-// gate for its server. Hot rooms stay mounted (shown or hidden); warm and
+// gate for its server. Home M5: a room on a server with the layout revision
+// check is usable; an older server's room stays view only, with a note.
+// Hot rooms stay mounted (shown or hidden); warm and
 // cold rooms are not rendered (their grids close; `stores/home-rooms.ts`
 // keeps or drops the tabs store). The window's server never changes.
 
@@ -17,14 +19,42 @@ import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAv
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { useRoomTier } from '@/lib/room-tiers'
 import { usersForWorkspace } from '@/stores/presence'
-import { homeRooms, useHomeRoomsStore, type HomeRoomEntry } from '@/stores/home-rooms'
+import { homeRooms, useHomeRoomsStore, type HomeRoomAccess, type HomeRoomEntry } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
 import { RoomFailureGate, useRoomFailure } from './RoomFailure'
 import type { PinnedRoom } from '@/stores/room'
 
-/** The "View only (preview)" chip, the room's server, and that server's
- *  people on this agent (R7: the room shows B's who's-here). */
-export function ViewOnlyBar({ room, label }: { room: PinnedRoom; label: string }): React.JSX.Element {
+/** What the room bar's chip says (Home M5). */
+export function roomAccessCopy(
+  access: HomeRoomAccess | null,
+  serverLabel: string,
+): { chip: string; title: string } {
+  if (access === 'use') {
+    return {
+      chip: 'Remote room (preview)',
+      title: `Everything you do here happens on ${serverLabel}: typing, tabs, files and chats.`,
+    }
+  }
+  if (access === 'view-older-server') {
+    return {
+      chip: 'View only',
+      title: `${serverLabel} runs an older K2 that can’t save this room’s tabs safely. Update ${serverLabel} to type and change tabs here.`,
+    }
+  }
+  return { chip: 'View only', title: 'Nothing is sent to that server from this room.' }
+}
+
+/** The room's chip (usable, or view only and why), the room's server, and
+ *  that server's people on this agent (R7: the room shows B's who's-here). */
+export function RoomBar({
+  room,
+  label,
+  access,
+}: {
+  room: PinnedRoom
+  label: string
+  access: HomeRoomAccess | null
+}): React.JSX.Element {
   const roster = useStore(room.presence, (s) => s.roster)
   const supported = useStore(room.presence, (s) => s.supported)
   const path = room.cwd()
@@ -32,21 +62,28 @@ export function ViewOnlyBar({ room, label }: { room: PinnedRoom; label: string }
     () => (supported ? usersForWorkspace(roster, path).map((u) => ({ user: u.user, role: u.role })) : []),
     [roster, supported, path],
   )
+  const copy = roomAccessCopy(access, room.scope.label)
   return (
     <div
       className="flex h-6 flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 text-[10px] text-[var(--color-text-muted)]"
-      data-view-only-bar=""
+      data-room-bar=""
+      data-room-access={access ?? ''}
     >
       <span
         className="flex-shrink-0 border border-[var(--color-border)] px-1.5 py-px text-[var(--color-text-secondary)]"
-        data-view-only-chip=""
-        title="Remote rooms are view only in this preview: no typing, nothing is saved to that server."
+        data-room-chip=""
+        title={copy.title}
       >
-        View only (preview)
+        {copy.chip}
       </span>
       <span className="truncate" data-room-server="">
         {label} on {room.scope.label}
       </span>
+      {access === 'view-older-server' && (
+        <span className="truncate" data-room-note="">
+          {copy.title}
+        </span>
+      )}
       <span className="ml-auto flex items-center" data-room-people={people.map((p) => p.user).join(',')}>
         <PresenceAvatarCluster users={people} />
       </span>
@@ -72,7 +109,7 @@ function PinnedRoomShell({ entry, shown }: { entry: HomeRoomEntry; shown: boolea
       <RoomProvider room={room} shown={shown}>
         <RoomFailureGate hostKey={room.scope.hostKey}>
           <div className="flex h-full min-h-0 w-full flex-col">
-            <ViewOnlyBar room={room} label={entry.label} />
+            <RoomBar room={room} label={entry.label} access={entry.access} />
             <div className="min-h-0 flex-1">
               {/* `shown` already means "Home is the page and this is the
                   room on screen"; the window's own PageLive is about the

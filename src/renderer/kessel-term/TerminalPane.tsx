@@ -69,6 +69,8 @@ import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
+import { scopeMayWrite } from '@/kessel/server-scope'
+import { paneRoomMode } from '@/stores/room'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -564,9 +566,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // tabs store, and its activity (working / idle / bell / permission) to
   // the room's sink (MS68). No provider ⇒ throw (MS2).
   const room = useRoom()
-  // Home M4: a view-only (preview) room never types, resizes, claims or
-  // spawns on its server. Attach-only; viewer mode on every socket.
+  // Home M4: a view-only room never types, resizes, claims or spawns on its
+  // server. Attach-only; viewer mode on every socket.
   const readOnlyRoom = room.readOnly
+  // Home M5: the window's eye/pencil mode (S5) is about the WINDOW's server.
+  // A pinned room's terminals follow the ROOM: view-only → viewer; usable →
+  // claimer, because every login role left on its server (Owner, Admin,
+  // Member) may type there — the Viewer role is gone (RV5) and the daemon's
+  // claim gate (`connection_claimer_capable`) still decides. Null = the
+  // primary room, which keeps the window's mode.
+  const roomMode = paneRoomMode(room)
+  const viewerModeActive = (): boolean =>
+    roomMode === null ? isViewerModeActive() : roomMode === 'viewer'
+  const noteViewerBlocked = (): boolean =>
+    roomMode === null ? noteViewerInteractionBlocked() : roomMode === 'viewer'
   const config = useKesselConfig()
   const {
     terminalId,
@@ -1474,6 +1487,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       lastResizeRef.current = { cols: fit.cols, rows: fit.rows }
       lastSentResizeRef.current = { cols: fit.cols, rows: fit.rows }
 
+      // Home M5: the raw spawn is a write on the room's server, so it is held
+      // to the same room allowlist as the request layer. A view-only room
+      // only ever attaches (`attach_only` below).
+      if (!readOnlyRoom && !scopeMayWrite(room.scope, 'sessions/v2/spawn')) {
+        if (!cancelled) setPhase({ kind: 'error', message: `Starting a session is not allowed from this room on ${room.scope.label}.` })
+        return
+      }
       const spawnBody = {
         agent_name: agentName,
         cwd,
@@ -1987,8 +2007,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // unresolved relies on the daemon defaults.
       try {
         const wm = useWindowModeStore.getState()
-        if (readOnlyRoom) {
-          ws.send(JSON.stringify({ action: 'set_mode', mode: 'viewer' }))
+        if (roomMode !== null) {
+          ws.send(JSON.stringify({ action: 'set_mode', mode: roomMode }))
         } else if (wm.resolved) {
           ws.send(JSON.stringify({ action: 'set_mode', mode: wm.mode }))
         }
@@ -3150,7 +3170,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const sendInput = useCallback((text: string) => {
     // S5 — viewer mode sends nothing (advisory; the daemon gate is
     // authoritative and also covers clients that skip this check).
-    if (noteViewerInteractionBlocked()) return
+    if (noteViewerBlocked()) return
     // Home M4: a view-only room never types on its server.
     if (readOnlyRoom) {
       setReadOnlyHint(true)
@@ -3316,7 +3336,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (pinnedSizeRef.current) return
       // S5 — viewer mode emits no resize (recorded above so a later
       // flip to claimer claims with current dims; daemon-authoritative).
-      if (isViewerModeActive()) return
+      if (viewerModeActive()) return
       // Only the visible pane in the focused window emits (pinned-chat
       // retention: a background pane parked in the retainer's hidden
       // host sends NOTHING — after its own release the session is
@@ -3463,7 +3483,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           visible: tabVisibleRef.current,
           paneFocused: paneFocusedRef.current,
           windowFocused,
-        }) && !isViewerModeActive()
+        }) && !viewerModeActive()
       if (desired) {
         const sessionId = sessionIdRef.current
         // 'restore' is sendable only when THIS client's own recorded
@@ -3603,8 +3623,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const sendMode = (): void => {
       const s = useWindowModeStore.getState()
       const ws = wsRef.current
-      if (readOnlyRoom) {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'set_mode', mode: 'viewer' }))
+      if (roomMode !== null) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'set_mode', mode: roomMode }))
         return
       }
       if (!s.resolved) return
@@ -4558,7 +4578,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     mouseDownInPaneRef.current = true
     // Scrollbar mousedown stopPropagates; a click on the grid while
     // the eyeball is on is a pencil-required interaction.
-    noteViewerInteractionBlocked()
+    noteViewerBlocked()
   }, [hoveredLink])
 
   // 0.37.11 — global mouseup safety net. Catches the case where the

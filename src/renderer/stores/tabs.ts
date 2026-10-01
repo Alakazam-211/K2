@@ -2465,6 +2465,13 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     const canonical = canonicalLayoutJson(layout)
     if (!job.force && ackedLayouts.get(key)?.canonical === canonical) return
     const base = layoutRevisions.get(key)
+    // Home M5 (MS43, MS52 k): a pinned room writes its server's layout ONLY
+    // with the revision check. No known base revision means the server never
+    // answered `with_revision` (an older B): never a blind overwrite of B.
+    if (!isPrimary && base === undefined) {
+      console.warn(`[tabs] ${job.label}: ${scope.hostKey} gave no layout revision; not saving ${key}`)
+      return
+    }
     let res: { success?: boolean; revision?: number } | undefined
     try {
       res = await daemonCliPost<{ success?: boolean; revision?: number }>(scope, 'workspace-layouts/save', {

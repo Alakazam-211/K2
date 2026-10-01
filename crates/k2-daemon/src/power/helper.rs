@@ -25,8 +25,10 @@
 //! - `wake-clear` — cancels our wake events.
 //! - `awake-hold --pid <pid> --max <secs>` — S6: `pmset -a disablesleep 1`
 //!   plus a detached root watcher that sets it back to 0 when `pid`
-//!   exits or `max` (≤ 4 h) passes. Built now so S6 reuses this helper;
-//!   S2 does not call it.
+//!   exits or `max` (≤ 4 h) passes. The daemon renews (calls it again)
+//!   every minute with a 3-minute `max`; each call starts a new
+//!   generation and the older watcher steps aside. A daemon that dies or
+//!   stops renewing gets sleep back within `max` ([`watch_loop`]).
 //! - `awake-release` — S6: `pmset -a disablesleep 0` now.
 //! - `awake-watch --pid <pid> --max <secs> --gen <n>` — the watcher the
 //!   hold forks. Internal.
@@ -142,7 +144,7 @@ pub fn install_script(user: &str, src: &str) -> Result<String, String> {
 pub fn install_applescript(script: &str) -> String {
     let escaped = script.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        "do shell script \"{escaped}\" with prompt \"K2 needs to install a small helper so it can wake this Mac for heartbeats.\" with administrator privileges"
+        "do shell script \"{escaped}\" with prompt \"K2 needs to install a small helper so it can wake this Mac for heartbeats and keep it awake with the lid closed.\" with administrator privileges"
     )
 }
 
@@ -197,6 +199,60 @@ pub fn execute(cmd: HelperCommand) -> Result<(), String> {
         HelperCommand::AwakeHold { pid, max_secs } => mac::awake_hold(pid, max_secs),
         HelperCommand::AwakeRelease => mac::awake_release(),
         HelperCommand::AwakeWatch { pid, max_secs, gen } => mac::awake_watch(pid, max_secs, gen),
+    }
+}
+
+/// What the lid-hold watcher reads and does. The real one (macOS) reads
+/// the root-owned generation file, checks the daemon pid, sleeps, and
+/// runs `pmset -a disablesleep 0`; tests drive a mock with a fake clock.
+pub trait WatchEnv {
+    /// The current hold generation; `None` = released.
+    fn current_gen(&self) -> Option<u64>;
+    fn pid_alive(&self, pid: u32) -> bool;
+    /// Seconds since the watcher started.
+    fn elapsed_secs(&self) -> u64;
+    fn sleep_secs(&mut self, secs: u64);
+    /// Put sleep back (`disablesleep 0`) and clear the hold.
+    fn restore_sleep(&mut self) -> Result<(), String>;
+}
+
+/// How often the watcher looks.
+pub const WATCH_POLL_SECS: u64 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchOutcome {
+    /// Released, or a renewal started a newer generation: nothing to do.
+    SteppedAside,
+    /// The daemon died: sleep restored.
+    RestoredDaemonGone,
+    /// No renewal before `max`: sleep restored.
+    RestoredNoRenewal,
+}
+
+/// The watchdog. Restores sleep when the daemon pid exits or `max_secs`
+/// pass without a renewal; steps aside when its generation is replaced
+/// (renewed) or released.
+pub fn watch_loop(env: &mut dyn WatchEnv, pid: u32, max_secs: u64, gen: u64) -> Result<WatchOutcome, String> {
+    loop {
+        if env.current_gen() != Some(gen) {
+            return Ok(WatchOutcome::SteppedAside);
+        }
+        let outcome = if !env.pid_alive(pid) {
+            Some(WatchOutcome::RestoredDaemonGone)
+        } else if env.elapsed_secs() >= max_secs {
+            Some(WatchOutcome::RestoredNoRenewal)
+        } else {
+            None
+        };
+        if let Some(o) = outcome {
+            // Re-check: a renewal may have landed while we looked.
+            if env.current_gen() != Some(gen) {
+                return Ok(WatchOutcome::SteppedAside);
+            }
+            env.restore_sleep()?;
+            return Ok(o);
+        }
+        env.sleep_secs(WATCH_POLL_SECS);
     }
 }
 
@@ -404,24 +460,33 @@ mod mac {
         pmset_disablesleep(false)
     }
 
+    struct RealWatch {
+        started: std::time::Instant,
+    }
+
+    impl WatchEnv for RealWatch {
+        fn current_gen(&self) -> Option<u64> {
+            read_gen()
+        }
+        fn pid_alive(&self, pid: u32) -> bool {
+            pid_alive(pid)
+        }
+        fn elapsed_secs(&self) -> u64 {
+            self.started.elapsed().as_secs()
+        }
+        fn sleep_secs(&mut self, secs: u64) {
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+        }
+        fn restore_sleep(&mut self) -> Result<(), String> {
+            let _ = std::fs::remove_file(HOLD_STATE_PATH);
+            pmset_disablesleep(false)
+        }
+    }
+
     /// The watcher: restore sleep when `pid` exits or `max` passes,
     /// unless a newer hold (another generation) took over.
     pub(super) fn awake_watch(pid: u32, max_secs: u64, gen: u64) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(max_secs);
-        loop {
-            if read_gen() != Some(gen) {
-                return Ok(()); // released, or a newer hold owns it now
-            }
-            if !pid_alive(pid) || std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-        }
-        if read_gen() == Some(gen) {
-            let _ = std::fs::remove_file(HOLD_STATE_PATH);
-            pmset_disablesleep(false)?;
-        }
-        Ok(())
+        watch_loop(&mut RealWatch { started: std::time::Instant::now() }, pid, max_secs, gen).map(|_| ())
     }
 }
 
@@ -452,6 +517,122 @@ mod tests {
             let e = parse_argv(&bad).expect_err(&format!("{bad:?} must be refused"));
             assert!(e.starts_with("power helper:"), "{e}");
         }
+    }
+
+    /// A mock helper state: the generation file, the daemon pid and a
+    /// fake clock. `renew_at` = seconds at which the daemon renews.
+    struct MockWatch {
+        now: u64,
+        gen: Option<u64>,
+        daemon_dies_at: Option<u64>,
+        renew_at: Vec<u64>,
+        restored_at: Vec<u64>,
+    }
+
+    impl WatchEnv for MockWatch {
+        fn current_gen(&self) -> Option<u64> {
+            self.gen
+        }
+        fn pid_alive(&self, _pid: u32) -> bool {
+            !matches!(self.daemon_dies_at, Some(t) if self.now >= t)
+        }
+        fn elapsed_secs(&self) -> u64 {
+            self.now
+        }
+        fn sleep_secs(&mut self, secs: u64) {
+            let before = self.now;
+            self.now += secs;
+            if self.renew_at.iter().any(|&t| t > before && t <= self.now) {
+                self.gen = self.gen.map(|g| g + 1);
+            }
+        }
+        fn restore_sleep(&mut self) -> Result<(), String> {
+            self.restored_at.push(self.now);
+            self.gen = None;
+            Ok(())
+        }
+    }
+
+    fn mock(renew_at: Vec<u64>, daemon_dies_at: Option<u64>) -> MockWatch {
+        MockWatch { now: 0, gen: Some(1), daemon_dies_at, renew_at, restored_at: Vec::new() }
+    }
+
+    /// S6 — renewals stop (daemon hung): the watcher restores sleep
+    /// once, at the deadline, not before.
+    #[test]
+    fn watchdog_restores_sleep_when_renewals_stop() {
+        let mut env = mock(vec![], None);
+        let out = watch_loop(&mut env, 4242, 180, 1).expect("watch");
+        assert_eq!(out, WatchOutcome::RestoredNoRenewal);
+        assert_eq!(env.restored_at.len(), 1, "restored exactly once");
+        let at = env.restored_at[0];
+        assert!((180..180 + WATCH_POLL_SECS).contains(&at), "restored at {at}s for a 180s max");
+    }
+
+    /// The daemon dies: restored on the next look, long before `max`.
+    #[test]
+    fn watchdog_restores_sleep_when_the_daemon_dies() {
+        let mut env = mock(vec![], Some(22));
+        let out = watch_loop(&mut env, 4242, 180, 1).expect("watch");
+        assert_eq!(out, WatchOutcome::RestoredDaemonGone);
+        assert_eq!(env.restored_at, vec![25]);
+    }
+
+    /// A renewal starts a newer generation: this watcher steps aside and
+    /// never touches sleep (the new watcher owns the deadline).
+    #[test]
+    fn watchdog_steps_aside_on_renewal() {
+        let mut env = mock(vec![60], None);
+        let out = watch_loop(&mut env, 4242, 180, 1).expect("watch");
+        assert_eq!(out, WatchOutcome::SteppedAside);
+        assert!(env.restored_at.is_empty(), "a renewed hold must not be cut");
+        assert_eq!(env.gen, Some(2));
+    }
+
+    /// One watcher's view of the shared mock: it measures from its own
+    /// start, like the real one.
+    struct FromStart<'a>(&'a mut MockWatch, u64);
+
+    impl WatchEnv for FromStart<'_> {
+        fn current_gen(&self) -> Option<u64> {
+            self.0.current_gen()
+        }
+        fn pid_alive(&self, pid: u32) -> bool {
+            self.0.pid_alive(pid)
+        }
+        fn elapsed_secs(&self) -> u64 {
+            self.0.now - self.1
+        }
+        fn sleep_secs(&mut self, secs: u64) {
+            self.0.sleep_secs(secs)
+        }
+        fn restore_sleep(&mut self) -> Result<(), String> {
+            self.0.restore_sleep()
+        }
+    }
+
+    /// The whole chain: the daemon renews at 60, 120 and 180 s, then
+    /// stops. Each watcher hands over to the next; the last one restores
+    /// sleep one `max` after the last renewal, exactly once.
+    #[test]
+    fn watchdog_chain_restores_after_the_last_renewal() {
+        let renewals = vec![60, 120, 180];
+        let mut env = mock(renewals.clone(), None);
+        let (mut gen, mut start) = (1u64, 0u64);
+        let mut handovers = 0;
+        loop {
+            match watch_loop(&mut FromStart(&mut env, start), 4242, 180, gen).expect("watch") {
+                WatchOutcome::SteppedAside => {
+                    start = renewals[handovers];
+                    handovers += 1;
+                    gen += 1;
+                }
+                WatchOutcome::RestoredNoRenewal => break,
+                WatchOutcome::RestoredDaemonGone => panic!("the daemon never died in this run"),
+            }
+        }
+        assert_eq!(handovers, 3);
+        assert_eq!(env.restored_at, vec![360], "last renewal 180 s + max 180 s");
     }
 
     #[test]

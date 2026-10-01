@@ -440,6 +440,59 @@ fn next_in_window(
     None
 }
 
+/// Heartbeat S2 (W3) — when this row will next fire on its own, for
+/// planning the daemon's single OS wake event. Computed in memory from
+/// the evaluator (S3 will store it). Window-aware and backoff-aware.
+/// `Some(now)` = due right now. `None` = it will not fire on its own
+/// (invalid spec, or no slot can be found).
+pub fn next_fire_estimate(hb: &AgentHeartbeat, now: DateTime<Local>) -> Option<DateTime<Local>> {
+    let at = match evaluate_with_now(hb, now) {
+        DueStatus::Due { .. } | DueStatus::DueCatchUp { .. } => Some(now),
+        DueStatus::NotYet { next } => next,
+        DueStatus::HoldWindow { .. } => {
+            let spec: Value = serde_json::from_str(&hb.spec_json).ok()?;
+            let window = FiringWindow::parse(&spec).ok()??;
+            Some(window_opens_after(window, now))
+        }
+        // The tick re-anchors a skipped slot at now; plan from there.
+        DueStatus::SkippedMissed { .. } => {
+            let mut anchored = hb.clone();
+            anchored.schedule_anchor_at = Some(now.to_rfc3339());
+            match evaluate_with_now(&anchored, now) {
+                DueStatus::NotYet { next } => next,
+                _ => None,
+            }
+        }
+        DueStatus::Invalid { .. } => None,
+    }?;
+    let retry = hb
+        .next_retry_at
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| t.with_timezone(&Local));
+    Some(match retry {
+        Some(r) if r > at => r,
+        _ => at,
+    })
+}
+
+/// The next time at or after `now` the window opens (its `start`).
+fn window_opens_after(window: FiringWindow, now: DateTime<Local>) -> DateTime<Local> {
+    let (h, m) = (window.start_mins / 60, window.start_mins % 60);
+    let at_day = |d: chrono::NaiveDate| {
+        d.and_hms_opt(h, m, 0)
+            .and_then(|ndt| Local.from_local_datetime(&ndt).earliest())
+    };
+    let today = now.date_naive();
+    match at_day(today) {
+        Some(t) if t > now => t,
+        _ => today
+            .succ_opt()
+            .and_then(at_day)
+            .unwrap_or(now + Duration::days(1)),
+    }
+}
+
 /// Compute when this heartbeat is *next* due after a reference time
 /// (typically `last_fired`). Kept for the audit/status surfaces that
 /// show "next at HH:MM"; window-blind by design (it reports the raw
@@ -1182,5 +1235,33 @@ mod tests {
         let next = next_fire_time_after(&hb, yesterday_9am)
             .expect("daily schedule should parse via croner");
         assert_eq!(next, mk_now(2026, 5, 19, 9, 0));
+    }
+
+    // ── next_fire_estimate (S2 wake planning) ─────────────────────────
+
+    #[test]
+    fn next_fire_estimate_covers_each_state() {
+        // Not yet due → the next slot.
+        let hb = mk_heartbeat("daily", r#"{"time":"09:00"}"#, Some(&mk_now(2026, 7, 2, 9, 0).to_rfc3339()));
+        assert_eq!(next_fire_estimate(&hb, mk_now(2026, 7, 2, 12, 0)), Some(mk_now(2026, 7, 3, 9, 0)));
+        // Due now → now.
+        assert_eq!(next_fire_estimate(&hb, mk_now(2026, 7, 3, 9, 1)), Some(mk_now(2026, 7, 3, 9, 1)));
+        // Held for a closed window → when the window opens.
+        let held = mk_heartbeat(
+            "daily",
+            r#"{"time":"10:00","start":"09:00","end":"17:00"}"#,
+            Some(&mk_now(2026, 6, 30, 10, 0).to_rfc3339()),
+        );
+        assert_eq!(next_fire_estimate(&held, mk_now(2026, 7, 1, 20, 0)), Some(mk_now(2026, 7, 2, 9, 0)));
+        // Skipped (too old) → the next slot after now.
+        let old = mk_heartbeat("daily", r#"{"time":"09:00"}"#, Some(&mk_now(2026, 6, 1, 9, 0).to_rfc3339()));
+        assert_eq!(next_fire_estimate(&old, mk_now(2026, 7, 2, 12, 0)), Some(mk_now(2026, 7, 3, 9, 0)));
+        // Backoff later than the slot wins.
+        let mut backoff = hb.clone();
+        backoff.next_retry_at = Some(mk_now(2026, 7, 3, 9, 8).to_rfc3339());
+        assert_eq!(next_fire_estimate(&backoff, mk_now(2026, 7, 2, 12, 0)), Some(mk_now(2026, 7, 3, 9, 8)));
+        // Invalid → never.
+        let bad = mk_heartbeat("list", "{}", None);
+        assert_eq!(next_fire_estimate(&bad, mk_now(2026, 7, 2, 12, 0)), None);
     }
 }

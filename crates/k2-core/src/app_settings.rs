@@ -539,10 +539,35 @@ pub struct WakeSchedulerSettings {
     pub mode: String,
     #[serde(default = "default_wake_interval")]
     pub interval_minutes: u32,
-    /// `WakeSystem: true` in the plist — lets launchd wake the laptop
-    /// from sleep to fire the heartbeat.
+    /// Legacy (pre heartbeat S2) "WakeSystem" checkbox. `WakeSystem` was
+    /// never a launchd key and woke nothing. Read only to seed
+    /// [`Self::wake_for_heartbeats`] for settings saved before S2.
     #[serde(default)]
     pub wake_system: bool,
+    /// Heartbeat S2 (D8): the one switch, "Wake this computer for
+    /// heartbeats". `None` = never set since S2; then the old
+    /// `mode == "heartbeat" && wake_system` pair decides. Heartbeats fire
+    /// whenever the computer is awake either way (D2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_for_heartbeats: Option<bool>,
+    /// Heartbeat S2 (D12): also wake while on battery, down to
+    /// [`WAKE_BATTERY_FLOOR_PERCENT`]. Off = AC power only.
+    #[serde(default)]
+    pub wake_on_battery: bool,
+}
+
+/// D12 — no scheduled wake on battery below this charge, even with
+/// `wake_on_battery` on.
+pub const WAKE_BATTERY_FLOOR_PERCENT: u8 = 20;
+
+impl WakeSchedulerSettings {
+    /// D8 — is "Wake this computer for heartbeats" on?
+    pub fn wake_wanted(&self) -> bool {
+        match self.wake_for_heartbeats {
+            Some(on) => on,
+            None => self.mode == "heartbeat" && self.wake_system,
+        }
+    }
 }
 
 fn default_wake_mode() -> String {
@@ -558,6 +583,8 @@ impl Default for WakeSchedulerSettings {
             mode: default_wake_mode(),
             interval_minutes: default_wake_interval(),
             wake_system: false,
+            wake_for_heartbeats: None,
+            wake_on_battery: false,
         }
     }
 }

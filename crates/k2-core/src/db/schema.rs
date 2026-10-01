@@ -1843,6 +1843,30 @@ impl WorkspaceSession {
 // spawns using the row's wakeup_path. See
 // .k2so/prds/multi-schedule-heartbeat.md for full design.
 
+/// HB14 — what [`AgentHeartbeat::try_acquire_heartbeat_checked`] checks
+/// besides the in-flight lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseCheck<'a> {
+    /// Manual Launch: no due re-check.
+    Manual,
+    /// Scheduler-origin launch: `last_fired` must still equal this value
+    /// (`None` = the row has never fired).
+    Scheduled(Option<&'a str>),
+}
+
+/// Result of a lease claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseOutcome {
+    Acquired,
+    /// Another fire holds the lease (`concurrency_policy = forbid`).
+    InFlight,
+    /// HB14: `last_fired` moved since the evaluator read it — this slot
+    /// already fired.
+    AlreadyFired,
+    /// No such row.
+    Missing,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHeartbeat {
@@ -2102,6 +2126,19 @@ impl AgentHeartbeat {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![project_id], Self::from_row)?;
+        rows.collect()
+    }
+
+    /// Heartbeat S2 (W3): every enabled, non-archived row on this daemon,
+    /// across projects — the input to the single OS wake plan.
+    pub fn list_all_enabled(conn: &Connection) -> Result<Vec<AgentHeartbeat>> {
+        let sql = format!(
+            "SELECT {} FROM workspace_heartbeats \
+             WHERE enabled = 1 AND archived_at IS NULL ORDER BY project_id, name",
+            Self::COLS,
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], Self::from_row)?;
         rows.collect()
     }
 
@@ -2446,29 +2483,61 @@ impl AgentHeartbeat {
         project_id: &str,
         name: &str,
     ) -> Result<bool> {
+        Ok(Self::try_acquire_heartbeat_checked(conn, project_id, name, LeaseCheck::Manual)?
+            == LeaseOutcome::Acquired)
+    }
+
+    /// HB14 — the lease claim with an optional due re-check. A
+    /// scheduler-origin launch passes `LeaseCheck::Scheduled(x)` where
+    /// `x` is the `last_fired` the evaluator read (`None` = never
+    /// fired). Inside the same `BEGIN IMMEDIATE`, the claim fails with
+    /// [`LeaseOutcome::AlreadyFired`] when `last_fired` has moved since,
+    /// so a daemon tick and a leftover OS tick that both judged the same
+    /// slot due can never both fire it (HB3) — even when the second
+    /// acquires after the first released. Manual Launch passes
+    /// `LeaseCheck::Manual` and is unchanged.
+    pub fn try_acquire_heartbeat_checked(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        check: LeaseCheck<'_>,
+    ) -> Result<LeaseOutcome> {
         conn.execute_batch("BEGIN IMMEDIATE;")?;
 
-        let row: Option<(String, Option<String>)> = conn
+        let row: Option<(String, Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT concurrency_policy, in_flight_started_at \
+                "SELECT concurrency_policy, in_flight_started_at, last_fired \
                  FROM workspace_heartbeats \
                  WHERE project_id = ?1 AND name = ?2",
                 params![project_id, name],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .ok();
 
-        let (policy, in_flight) = match row {
+        let (policy, in_flight, last_fired) = match row {
             Some(r) => r,
             None => {
                 conn.execute_batch("ROLLBACK;")?;
-                return Ok(false);
+                return Ok(LeaseOutcome::Missing);
             }
         };
 
+        if let LeaseCheck::Scheduled(expected) = check {
+            if last_fired.as_deref() != expected {
+                conn.execute_batch("ROLLBACK;")?;
+                return Ok(LeaseOutcome::AlreadyFired);
+            }
+        }
+
         if policy == "forbid" && in_flight.is_some() {
             conn.execute_batch("ROLLBACK;")?;
-            return Ok(false);
+            return Ok(LeaseOutcome::InFlight);
         }
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -2481,7 +2550,7 @@ impl AgentHeartbeat {
         match result {
             Ok(_) => {
                 conn.execute_batch("COMMIT;")?;
-                Ok(true)
+                Ok(LeaseOutcome::Acquired)
             }
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK;");

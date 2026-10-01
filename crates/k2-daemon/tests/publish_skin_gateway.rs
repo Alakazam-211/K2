@@ -2022,6 +2022,11 @@ async fn publish_run_skin_gateway_tickets_per_room() {
         assert_eq!(waiting.status, 404, "waiting-count; {}", waiting.body);
         assert!(waiting.body.contains("not found"), "{}", waiting.body);
 
+        // The host-wide Tickets list is never an app door.
+        let list_all = http_ex(gport, "GET", "/cli/feedback/list-all?all=1", None, &cookie);
+        assert_eq!(list_all.status, 404, "list-all; {}", list_all.body);
+        assert!(list_all.body.contains("not found"), "{}", list_all.body);
+
         let assign_gw = http_ex(
             gport,
             "POST",

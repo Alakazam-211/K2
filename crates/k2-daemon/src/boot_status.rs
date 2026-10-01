@@ -186,6 +186,12 @@ pub fn attach_only_supported() -> bool {
         && std::env::var("K2_TEST_SIMULATE_NO_ATTACH_ONLY").as_deref() == Ok("1"))
 }
 
+/// `GET /cli/feedback/list-all` exists and `waiting-count` counts only
+/// tickets on a registered workspace (prd-tickets-badge-orphans TB14).
+/// A client reads this key, not the version: main and the last release
+/// share a version string until the next cut.
+pub const FEATURE_TICKETS_LIST_ALL: &str = "tickets-list-all";
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -194,6 +200,7 @@ pub fn features() -> Vec<&'static str> {
     if attach_only_supported() {
         out.push(FEATURE_SPAWN_ATTACH_ONLY);
     }
+    out.push(FEATURE_TICKETS_LIST_ALL);
     out
 }
 
@@ -202,10 +209,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn features_report_spawn_attach_only() {
+    fn features_report_spawn_attach_only_and_tickets_list_all() {
         // The harness hook is never set in unit tests.
         assert!(attach_only_supported());
-        assert_eq!(features(), vec!["spawn-attach-only"]);
+        assert_eq!(features(), vec!["spawn-attach-only", "tickets-list-all"]);
     }
 
     // These mutate process-global state, so they live in ONE test to

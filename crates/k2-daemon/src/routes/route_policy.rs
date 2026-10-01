@@ -268,6 +268,7 @@ pub const ROUTES: &[Route] = &[
     both("/cli/feedback/comment", Member),
     both("/cli/feedback/create", Member),
     get("/cli/feedback/list", Member),
+    get("/cli/feedback/list-all", Member),
     both("/cli/feedback/resolve", Member),
     get("/cli/feedback/show", Member),
     get("/cli/feedback/waiting-count", Member),

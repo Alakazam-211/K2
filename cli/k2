@@ -13395,7 +13395,7 @@ cmd_schema() {
       "description": "List this workspace's feedback items, newest first. Default shows open items (waiting + answered + needs_discussion).",
       "args": [],
       "flags": [
-        {"name": "--all", "arg": null, "description": "Include resolved and dismissed items."},
+        {"name": "--all", "arg": null, "description": "Every status in this workspace (adds planned, resolved and dismissed); not other workspaces."},
         {"name": "--status", "arg": "status", "description": "Filter to one status: waiting | needs_discussion | answered | planned | resolved | dismissed."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -16147,7 +16147,7 @@ TICKETS
     POST     /cli/feedback/resolve  {"id":"<id>"}
   project= is handle or uuid only — never a folder basename or absolute path.
   Doors are has_cap_in_room: tickets on Documents does not grant tickets on Sales.
-  waiting-count, assign, and unknown /cli/feedback/foo stay 404.
+  waiting-count, list-all, assign, and unknown /cli/feedback/foo stay 404.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
 
 WIKI

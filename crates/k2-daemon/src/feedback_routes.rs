@@ -55,6 +55,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     let resp = match path {
         // ── Reads ───────────────────────────────────────────────────
         // GET /cli/feedback/waiting-count — host-wide Tickets badge.
+        // Counts only waiting tickets on a registered workspace (not an
+        // audit sentinel): the "Waiting on you" rows the page can show.
         "/cli/feedback/waiting-count" => match feedback::count_waiting() {
             Ok(count) => {
                 CliResponse::ok_json(serde_json::json!({ "ok": true, "count": count }).to_string())
@@ -63,8 +65,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         },
 
         // GET /cli/feedback/list?project=<path>[&all=1][&status=<s>]
-        // Default shows open items (waiting + answered + needs_discussion), newest first.
+        // ONE workspace. `all=1` = every STATUS in that workspace, never
+        // every workspace: `project` is required, and `all=1` without it
+        // is a 400 that points to `list-all`. Default shows open items
+        // (waiting + answered + needs_discussion), newest first.
         "/cli/feedback/list" => handle_list(params),
+
+        // GET /cli/feedback/list-all[?all=1][&status=<s>] — every ticket
+        // on the host, including ones whose workspace was removed
+        // (`linked: false`, `projectName`/`projectPath` null). Same status
+        // rules as `list`. Not an agent verb; apps get 404.
+        "/cli/feedback/list-all" => handle_list_all(params),
 
         // GET /cli/feedback/show?id=<id-or-prefix>
         // One item + its full thread. `id` accepts a short unique
@@ -192,6 +203,10 @@ fn resolve_project_id(path: &str) -> Option<String> {
     k2_core::workspace::agent_identity::resolve_project_id(&conn, path)
 }
 
+/// Hint for `list?all=1` with no `project` (Appa A2): say where the
+/// host-wide read is instead of a bare "missing project".
+pub const LIST_ALL_NEEDS_PROJECT: &str = "all=1 requires project=; use /cli/feedback/list-all";
+
 fn handle_list(params: &HashMap<String, String>) -> CliResponse {
     match need_project(params) {
         Ok(p) => {
@@ -200,7 +215,25 @@ fn handle_list(params: &HashMap<String, String>) -> CliResponse {
             };
             list_items(&project_id, params)
         }
+        Err(_) if crate::cli::bool_param(params, "all") => usage_error(LIST_ALL_NEEDS_PROJECT),
         Err(r) => r,
+    }
+}
+
+fn list_filter(params: &HashMap<String, String>) -> ListFilter {
+    match opt_param(params, "status") {
+        Some(s) => ListFilter::Status(s),
+        None if crate::cli::bool_param(params, "all") => ListFilter::All,
+        None => ListFilter::Open,
+    }
+}
+
+fn handle_list_all(params: &HashMap<String, String>) -> CliResponse {
+    match feedback::list_host(&list_filter(params)) {
+        Ok(items) => {
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items }).to_string())
+        }
+        Err(e) => usage_error(e),
     }
 }
 
@@ -220,12 +253,7 @@ fn handle_show(params: &HashMap<String, String>) -> CliResponse {
 }
 
 fn list_items(project_id: &str, params: &HashMap<String, String>) -> CliResponse {
-    let filter = match opt_param(params, "status") {
-        Some(s) => ListFilter::Status(s),
-        None if crate::cli::bool_param(params, "all") => ListFilter::All,
-        None => ListFilter::Open,
-    };
-    match feedback::list_for_project(project_id, &filter) {
+    match feedback::list_for_project(project_id, &list_filter(params)) {
         Ok(items) => {
             CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items }).to_string())
         }
@@ -1991,6 +2019,111 @@ mod tests {
         )
         .expect("claimed");
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+    }
+
+    fn list_all_items(extra: &[(&str, &str)]) -> Vec<serde_json::Value> {
+        let params: HashMap<String, String> =
+            extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let resp = dispatch("/cli/feedback/list-all", &params).expect("list-all claimed");
+        assert_eq!(resp.status, "200 OK", "list-all failed: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid list-all JSON");
+        assert_eq!(v["ok"], serde_json::json!(true), "{}", resp.body);
+        v["items"].as_array().expect("items array").clone()
+    }
+
+    /// prd-tickets-badge-orphans T3 (shared DB → membership by id, never a
+    /// row count): a ticket whose workspace was removed shows up in
+    /// `list-all` unlinked, Dismiss by id works on it, and then the
+    /// default `list-all` no longer returns it.
+    #[test]
+    fn feedback_list_all_returns_unlinked_tickets_and_dismiss_clears_them() {
+        let (name, path) = unique("list-all");
+        let project_id = insert_project(&name, &path);
+        let created = create_via_route(&path, "Deploy?", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+
+        // While the workspace is registered, the row is linked.
+        let row = list_all_items(&[])
+            .into_iter()
+            .find(|r| r["id"] == id.as_str())
+            .expect("list-all contains the linked ticket");
+        assert_eq!(row["linked"], serde_json::json!(true), "{row}");
+        assert_eq!(row["projectName"], serde_json::json!(name), "{row}");
+        assert_eq!(row["projectPath"], serde_json::json!(path), "{row}");
+
+        // Remove the workspace's project row: the ticket is now unlinked.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "DELETE FROM projects WHERE id = ?1",
+                rusqlite::params![project_id],
+            )
+            .expect("delete project row");
+        }
+        let row = list_all_items(&[])
+            .into_iter()
+            .find(|r| r["id"] == id.as_str())
+            .expect("list-all contains the unlinked ticket");
+        assert_eq!(row["linked"], serde_json::json!(false), "{row}");
+        assert_eq!(row["projectName"], serde_json::Value::Null, "{row}");
+        assert_eq!(row["projectPath"], serde_json::Value::Null, "{row}");
+        assert_eq!(row["title"], serde_json::json!("Deploy?"), "{row}");
+        assert_eq!(row["agentName"], created["agentName"], "{row}");
+        assert_eq!(row["createdAt"], created["createdAt"], "{row}");
+        assert_eq!(row["status"], serde_json::json!("waiting"), "{row}");
+
+        // Dismiss by id (the Unlinked card's action).
+        let body = serde_json::json!({ "id": id, "status": "dismissed" }).to_string();
+        let resp = dispatch_post("/cli/feedback/resolve", body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "dismiss failed: {}", resp.body);
+
+        assert!(
+            !list_all_items(&[]).iter().any(|r| r["id"] == id.as_str()),
+            "default list-all (open) must no longer contain the dismissed ticket"
+        );
+        let closed = list_all_items(&[("all", "1")])
+            .into_iter()
+            .find(|r| r["id"] == id.as_str())
+            .expect("list-all all=1 still contains the dismissed ticket");
+        assert_eq!(closed["status"], serde_json::json!("dismissed"), "{closed}");
+
+        // Status filter rules are the same as `list`.
+        let resp = dispatch(
+            "/cli/feedback/list-all",
+            &HashMap::from([("status".to_string(), "bogus".to_string())]),
+        )
+        .expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+    }
+
+    /// Appa A2: `list?all=1` without `project` is a 400 that names
+    /// `list-all`, never a quiet host-wide or empty answer.
+    #[test]
+    fn feedback_list_all_flag_without_project_is_400_pointing_to_list_all() {
+        let resp = dispatch(
+            "/cli/feedback/list",
+            &HashMap::from([("all".to_string(), "1".to_string())]),
+        )
+        .expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["ok"], serde_json::json!(false), "{}", resp.body);
+        assert_eq!(v["error"]["code"], serde_json::json!("usage"), "{}", resp.body);
+        assert_eq!(
+            v["error"]["hint"],
+            serde_json::json!("all=1 requires project=; use /cli/feedback/list-all"),
+            "{}",
+            resp.body
+        );
+        // Without all=1 the missing-project error is unchanged.
+        let resp = dispatch("/cli/feedback/list", &HashMap::new()).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(
+            resp.body.contains("Missing project (or project_path) parameter"),
+            "{}",
+            resp.body
+        );
     }
 
     /// Companion C4: CREATE pushes (content-free); comments also push

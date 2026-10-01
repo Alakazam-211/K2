@@ -1203,6 +1203,7 @@ mod tests {
         assert!(allowlisted_http("POST", "/cli/feedback/answer"));
         assert!(allowlisted_http("POST", "/cli/feedback/resolve"));
         assert!(!allowlisted_http("GET", "/cli/feedback/waiting-count"));
+        assert!(!allowlisted_http("GET", "/cli/feedback/list-all"));
         assert!(!allowlisted_http("POST", "/cli/feedback/assign"));
         assert!(!allowlisted_http("GET", "/cli/feedback/foo"));
         assert!(!allowlisted_http("POST", "/cli/feedback/foo"));

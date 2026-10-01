@@ -477,6 +477,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/db/server/",
         "/cli/db/doctor",
         "/cli/db/bind",
+        // Host-wide Tickets list (every workspace, incl. removed ones) is
+        // a human surface. No `/cli/feedback/` is on the allowlist; this
+        // is the belt.
+        "/cli/feedback/list-all",
         // DNS K1: zone lifecycle is owner/dashboard-only. Agent DNS verbs
         // (access/zones list/records CRUD/verify) ride ALLOW_PREFIXES
         // `/cli/dns/` below; these exact owner surfaces stay denied.
@@ -1266,6 +1270,11 @@ mod tests {
             !is_agent_verb("/cli/certs/upload"),
             "PEM upload is owner-only"
         );
+        // Tickets badge orphans: the host-wide Tickets list is not an agent
+        // verb (and no other /cli/feedback/ route is either).
+        assert!(!is_agent_verb("/cli/feedback/list-all"));
+        assert!(!is_agent_verb("/cli/feedback/list"));
+        assert!(!is_agent_verb("/cli/feedback/waiting-count"));
         // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
         assert!(is_agent_verb("/cli/connections"));
         assert!(

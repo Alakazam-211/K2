@@ -16,6 +16,7 @@ import { focusedRoom } from '@/stores/window-room'
 import { useToastStore } from '@/stores/toast'
 import type { WorkspaceOp } from '@/stores/tabs'
 import type { Room } from '@/stores/room'
+import { assistantActionRefusal, assistantMayActOnServer } from '@/lib/assistant-room-rule'
 
 const EVENTS: ReadonlyArray<[string, WorkspaceOp['kind']]> = [
   ['workspace:split-pane', 'split-pane'],
@@ -29,7 +30,12 @@ const EVENTS: ReadonlyArray<[string, WorkspaceOp['kind']]> = [
 
 /** May the assistant act on `room`? Only a room on the window's server. */
 export function assistantMayActOn(room: Room): boolean {
-  return room.scope.hostKey === primaryScope().hostKey
+  return assistantMayActOnServer(room.scope, primaryScope())
+}
+
+/** Why the assistant will not act on `room` (Q4), or null when it may. */
+export function assistantRefusalFor(room: Room): string | null {
+  return assistantActionRefusal(room.scope, primaryScope())
 }
 
 /** Deliver one op: to the focused room only; nothing when no room is focused;
@@ -37,10 +43,9 @@ export function assistantMayActOn(room: Room): boolean {
 export function routeWorkspaceOp(op: WorkspaceOp): void {
   const room = focusedRoom()
   if (!room) return
-  if (!assistantMayActOn(room)) {
-    useToastStore
-      .getState()
-      .addToast(`The assistant can arrange rooms on ${primaryScope().label} only.`, 'warning')
+  const refusal = assistantRefusalFor(room)
+  if (refusal) {
+    useToastStore.getState().addToast(refusal, 'warning')
     return
   }
   room.tabs.room.applyWorkspaceOp(op)

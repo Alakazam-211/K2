@@ -14,7 +14,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { usePageViewStore } from '../../stores/page-view'
 import { focusedRoom } from '../../stores/window-room'
 import { roomActiveProject } from '../../stores/room'
-import { assistantMayActOn } from '../../lib/workspace-ops-router'
+import { assistantRefusalFor } from '../../lib/workspace-ops-router'
 import { useProjectsStore } from '../../stores/projects'
 import { usePanelsStore } from '../../stores/panels'
 import { useMergeDialogStore } from '../MergeDialog/MergeDialog'
@@ -254,9 +254,8 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
   // other server it refuses and says why.
   const room = focusedRoom()
   if (!room) return 'No workspace is open'
-  if (!assistantMayActOn(room)) {
-    return `The assistant can arrange rooms on ${primaryScope().label} only.`
-  }
+  const refusal = assistantRefusalFor(room)
+  if (refusal) return refusal
   const tabs = room.tabs
   const tabsStore = tabs.getState()
 

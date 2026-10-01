@@ -54,17 +54,39 @@ struct AddReq {
     /// defaults false so every existing caller is unchanged.
     #[serde(default, rename = "mustChangePassword")]
     must_change_password: bool,
+    /// Optional, and only ever `"member"`: users/add always creates a
+    /// Member (owner/admin go through `/cli/users/set-role`, which is
+    /// Owner-only). It exists so a caller asking for the retired
+    /// `"viewer"` gets a 400 instead of a silently-created Member
+    /// (prd-remove-viewer-role-v1.md RV4). Before, the field was ignored.
+    #[serde(default)]
+    role: Option<String>,
 }
 
-/// `POST /cli/users/add` `{username,password[,mustChangePassword]}` →
-/// `{"success":true}`. When `mustChangePassword` is true the new
+/// `POST /cli/users/add` `{username,password[,mustChangePassword][,role]}`
+/// → `{"success":true}`. When `mustChangePassword` is true the new
 /// account is flagged: its sessions are restricted to whoami /
 /// change-password / logout until the password is rotated (K2 Cloud S1).
+/// `role`, when present, must be `"member"`: `"viewer"` is a 400 with
+/// [`connect_users::VIEWER_ROLE_REMOVED`]; `"owner"`/`"admin"` are a 400
+/// pointing at `/cli/users/set-role`. Nothing is created on a 400.
 pub fn handle_add(body: &[u8]) -> CliResponse {
     let req: AddReq = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
+    if let Some(raw) = req.role.as_deref() {
+        match connect_users::Role::parse_wire(raw) {
+            Ok(connect_users::Role::Member) => {}
+            Ok(other) => {
+                return CliResponse::bad_request(format!(
+                    "users/add creates a member; set the {} role with /cli/users/set-role",
+                    other.as_wire()
+                ))
+            }
+            Err(e) => return CliResponse::bad_request(e),
+        }
+    }
     match connect_users::add_user(&req.username, &req.password) {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),

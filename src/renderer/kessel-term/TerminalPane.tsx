@@ -26,7 +26,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet } from '@/lib/daemon-cli'
 
 import { useKesselConfig } from '../kessel/config-context'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
@@ -70,6 +70,7 @@ import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
 import { scopeMayWrite } from '@/kessel/server-scope'
+import { openTerminalUrl } from '@/lib/terminal-link-open'
 import { paneRoomMode } from '@/stores/room'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useWindowFocusStore } from '@/stores/window-focus'
@@ -4619,9 +4620,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       e.stopPropagation()
 
       if (clicked.type === 'url') {
-        daemonCliPost(room.scope, 'fs/open-external', { target: clicked.target }).catch((err) =>
-          console.warn('[kessel-term/link]', err),
-        )
+        openTerminalUrl(room, clicked.target)
       } else if (clicked.type === 'file' && clicked.filePath) {
         const tabsStore = room.tabs.getState()
         const openInSplit =

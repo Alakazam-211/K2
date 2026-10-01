@@ -200,8 +200,10 @@ export default function WorkspacePanel(): React.JSX.Element {
           </div>
         )}
 
-        {/* Workspace knowledge base / brain map (prd-workspace-kb). */}
-        <div
+        {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
+            page reads the window's server, so a room on another server
+            does not offer it (MS3: B's path means nothing on A). */}
+        {room.isPrimary && <div
           className="mt-2.5 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
           onClick={() => usePageViewStore.getState().openWiki(activeProject.path)}
           title="Open the workspace knowledge base graph"
@@ -215,7 +217,7 @@ export default function WorkspacePanel(): React.JSX.Element {
             </svg>
             <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
           </div>
-        </div>
+        </div>}
       </div>
 
       {showWorktreeDialog && (
@@ -224,6 +226,7 @@ export default function WorkspacePanel(): React.JSX.Element {
           projectPath={activeProject.path}
           open={true}
           onClose={() => setShowWorktreeDialog(false)}
+          room={room}
         />
       )}
 
@@ -385,13 +388,16 @@ function WorktreeRow({
     } else if (clickedId === 'close') {
       // Remove from DB, keep files on disk
       await daemonCliPost(room.scope, 'workspaces/delete', { id: workspaceId })
-      // Optimistic removal from store
-      const state = useProjectsStore.getState()
-      const updated = state.projects.map((p) => {
-        if (p.id !== projectId) return p
-        return { ...p, workspaces: p.workspaces.filter((ws) => ws.id !== workspaceId) }
-      })
-      useProjectsStore.setState({ projects: updated })
+      // Optimistic removal from the window's store — only for the window's
+      // own room (a room on another server hears its projects_changed).
+      if (room.isPrimary) {
+        const state = useProjectsStore.getState()
+        const updated = state.projects.map((p) => {
+          if (p.id !== projectId) return p
+          return { ...p, workspaces: p.workspaces.filter((ws) => ws.id !== workspaceId) }
+        })
+        useProjectsStore.setState({ projects: updated })
+      }
     } else if (clickedId === 'recycle') {
       // Remove git worktree from disk + remove from DB
       try {
@@ -408,15 +414,18 @@ function WorktreeRow({
         // If git remove fails, just delete the record
         await daemonCliPost(room.scope, 'workspaces/delete', { id: workspaceId })
       }
-      // Optimistic removal from store
-      const state = useProjectsStore.getState()
-      const updated = state.projects.map((p) => {
-        if (p.id !== projectId) return p
-        return { ...p, workspaces: p.workspaces.filter((ws) => ws.id !== workspaceId) }
-      })
-      useProjectsStore.setState({ projects: updated })
+      // Optimistic removal from the window's store — only for the window's
+      // own room (a room on another server hears its projects_changed).
+      if (room.isPrimary) {
+        const state = useProjectsStore.getState()
+        const updated = state.projects.map((p) => {
+          if (p.id !== projectId) return p
+          return { ...p, workspaces: p.workspaces.filter((ws) => ws.id !== workspaceId) }
+        })
+        useProjectsStore.setState({ projects: updated })
+      }
     }
-  }, [workspaceId, projectId, projectPath, worktreePath, openAgentPane, tabTitle])
+  }, [workspaceId, projectId, projectPath, worktreePath, openAgentPane, tabTitle, room])
 
   return (
     <div

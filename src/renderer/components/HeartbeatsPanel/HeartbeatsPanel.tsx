@@ -169,14 +169,17 @@ export function HeartbeatsPanel(): React.JSX.Element {
             </span>
           )}
         </span>
-        <SectionManageCog
+        {/* Workspace settings open about the WINDOW's server: not from a
+            Home room on another server (plan decision 6: that server's
+            own window manages them). */}
+        {room.isPrimary && <SectionManageCog
           title="Manage heartbeats"
           onClick={() => {
             // Workspace settings → Heartbeats tab (`schedule`), not the
             // default Agent tab and not the global Heartbeats section.
             useSettingsStore.getState().openSettings('projects', project.id, 'schedule')
           }}
-        />
+        />}
       </button>
 
       {sectionOpen && (

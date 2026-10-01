@@ -398,6 +398,31 @@ export function TerminalComposeBar({
   )
 
   const handleAttachClick = useCallback(() => {
+    // Home M5: in a Home room on another server, "+" picks files on THIS
+    // computer and uploads them to the room's server (its `.k2/downloads`),
+    // then pastes that server's paths — the same as a file dropped on the
+    // composer there (MS19). It never browses the window's server.
+    if (!room.isPrimary && scope.isRemote) {
+      void pickLocalComposeFiles()
+        .then(async (paths) => {
+          if (!paths || paths.length === 0) return
+          const payload = await executeRemoteDrop(
+            scope,
+            paths,
+            { kind: 'terminal' },
+            { workspacePath: workspacePath || undefined },
+            buildComposeDropPayload,
+          )
+          if (payload) insertPathsText(payload)
+        })
+        .catch((err) => {
+          useToastStore.getState().addToast(
+            `Couldn't attach: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          )
+        })
+      return
+    }
     const plan = composeAttachPlan()
     if (plan.kind === 'native') {
       void pickLocalComposeFiles()
@@ -419,7 +444,7 @@ export function TerminalComposeBar({
     void pickRemoteComposeFile().then((path) => {
       if (path) insertPathsText(buildComposeDropPayload([path]))
     })
-  }, [insertPathsText])
+  }, [insertPathsText, room, scope, workspacePath])
 
   const handleLocalFiles = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

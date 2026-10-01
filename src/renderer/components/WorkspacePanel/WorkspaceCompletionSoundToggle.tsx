@@ -25,7 +25,9 @@ async function writeWorkspaceCompletionSound(
       ),
     }))
   }
-  void emit('sync:projects').catch(() => {})
+  // `sync:projects` is this computer's local broadcast (MS67): not about a
+  // room on another server.
+  if (scope.isPrimary || !scope.isRemote) void emit('sync:projects').catch(() => {})
 }
 
 /** Settings → workspace Agent tab: per-workspace completion chime. */

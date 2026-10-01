@@ -5,9 +5,12 @@ export type ClipboardMode = 'copy' | 'cut'
 interface FileClipboardState {
   paths: string[]
   mode: ClipboardMode | null
+  /** Home M5: the server those paths live on (null: not recorded). A paste
+   *  into a room on another server is refused (MS4). */
+  hostKey: string | null
 
-  copy: (paths: string[]) => void
-  cut: (paths: string[]) => void
+  copy: (paths: string[], hostKey?: string) => void
+  cut: (paths: string[], hostKey?: string) => void
   clear: () => void
   hasPaths: () => boolean
 }
@@ -45,19 +48,20 @@ function mirrorToOSClipboard(paths: string[]): void {
 export const useFileClipboardStore = create<FileClipboardState>((set, get) => ({
   paths: [],
   mode: null,
+  hostKey: null,
 
-  copy: (paths: string[]) => {
-    set({ paths, mode: 'copy' })
+  copy: (paths: string[], hostKey?: string) => {
+    set({ paths, mode: 'copy', hostKey: hostKey ?? null })
     mirrorToOSClipboard(paths)
   },
 
-  cut: (paths: string[]) => {
-    set({ paths, mode: 'cut' })
+  cut: (paths: string[], hostKey?: string) => {
+    set({ paths, mode: 'cut', hostKey: hostKey ?? null })
     mirrorToOSClipboard(paths)
   },
 
   clear: () => {
-    set({ paths: [], mode: null })
+    set({ paths: [], mode: null, hostKey: null })
   },
 
   hasPaths: () => {

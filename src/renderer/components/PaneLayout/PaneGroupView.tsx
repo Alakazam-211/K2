@@ -5,6 +5,7 @@ import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
 import { AgentPane } from '@/components/AgentPane/AgentPane'
 import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
+import { workingAgentInPane } from '@/lib/room-close-guard'
 import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData } from '@/stores/tabs'
 import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
@@ -120,7 +121,9 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
       const item = paneGroup?.items.find(i => i.id === itemId)
       if (item?.type === 'terminal') {
         const data = item.data as TerminalItemData
-        const agent = useActiveAgentsStore.getState().agents.get(data.terminalId)
+        // Home M5: the ROOM's activity (a Home room on another server is
+        // not in the window's active-agents store).
+        const agent = workingAgentInPane(room, { id: tabId, title: tabTitle ?? '' }, data)
         if (agent) {
           setPendingPaneClose({ itemId, agents: [agent] })
           return
@@ -128,7 +131,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
       }
       closeItem?.(tabId, paneGroupId, itemId)
     },
-    [tabId, paneGroupId, closeItem, paneGroup]
+    [tabId, paneGroupId, closeItem, paneGroup, room, tabTitle]
   )
 
   const handleClosePane = useCallback(() => {

@@ -129,12 +129,13 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
             </span>
           )}
         </span>
-        <SectionManageCog
+        {/* Workspace settings are the window's server's (plan decision 6). */}
+        {room.isPrimary && <SectionManageCog
           title="Manage connections"
           onClick={() => {
             useSettingsStore.getState().openSettings('projects', projectId, 'connections')
           }}
-        />
+        />}
       </button>
 
       {open && (

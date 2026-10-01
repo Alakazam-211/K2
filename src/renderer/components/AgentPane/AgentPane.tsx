@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { terminalExists } from '@/lib/terminal-daemon'
+import { claimAgentLock } from '@/lib/workspace-agent'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useProjectsStore } from '@/stores/projects'
 import { addNavWorktree } from '@/components/Sidebar/Sidebar'
@@ -281,7 +282,10 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
 
         <div className="flex-1" />
 
-        {projectId && (
+        {/* Opens the worktree as the WINDOW's workspace (the window's
+            projects store and server): only from the window's own room.
+            A Home room on another server keeps its one workspace. */}
+        {projectId && room.isPrimary && (
           <button
             onClick={() => {
               const currentTabId = room.tabs.getState().activeTabId
@@ -483,7 +487,7 @@ function WorktreeChatTerminal({
         }>('k2so_agents_build_launch', { projectPath, agentName })
         if (!cancelled && result) {
           setLaunchConfig({ command: result.command, args: result.args, cwd: result.cwd })
-          daemonCliGet(room.scope, 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+          claimAgentLock(room.scope, { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
           setReady(true)
           return
         }
@@ -492,7 +496,7 @@ function WorktreeChatTerminal({
       }
       if (!cancelled) {
         setLaunchConfig({ command: 'claude', args: ['--dangerously-skip-permissions'], cwd })
-        daemonCliGet(room.scope, 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+        claimAgentLock(room.scope, { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
         setReady(true)
       }
     }

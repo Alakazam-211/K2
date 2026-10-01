@@ -12,7 +12,7 @@ import { isRemoteScope, mayRunLocalActions, roomMayRun } from '@/lib/local-only-
 import { useToastStore } from '@/stores/toast'
 import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
-import { useFileUndoStore } from '@/stores/file-undo'
+import { fileUndoFor } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
@@ -1247,7 +1247,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             if (paths.every(p => parentDir(p) === dirPath)) return false
 
             const toast = useToastStore.getState()
-            const undo = useFileUndoStore.getState()
+            const undo = fileUndoFor(room.scope.hostKey)
             const isCopy = optionKeyRef.current
 
             const doMove = async (): Promise<void> => {
@@ -1361,7 +1361,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // ── Rename ──────────────────────────────────────────────────────────
   const handleRenameConfirm = useCallback(async (oldPath: string, newName: string) => {
     const toast = useToastStore.getState()
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
     try {
       const r = await daemonCliPost<{ path: string }>(room.scope, 'fs/rename', { old_path: oldPath, new_name: newName })
       const newPath = r.path
@@ -1381,7 +1381,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // ── New file / folder ─────────────────────────────────────────────
   const handleNewEntryConfirm = useCallback(async (parentPath: string, name: string, isDirectory: boolean) => {
     const toast = useToastStore.getState()
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
     const fullPath = `${parentPath}/${name}`
     try {
       await daemonCliPost(room.scope, 'fs/create', { path: fullPath, is_directory: isDirectory })
@@ -1405,7 +1405,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const handleDelete = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return
     const toast = useToastStore.getState()
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
     const confirm = useConfirmDialogStore.getState().confirm
 
     const names = paths.map(p => p.split('/').pop() || p)
@@ -1438,9 +1438,15 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const handlePaste = useCallback(async (targetDir: string) => {
     const clipboard = useFileClipboardStore.getState()
     const toast = useToastStore.getState()
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
 
     if (!clipboard.hasPaths()) return
+    // Home M5 (MS4): files copied in a room on one server are never pasted
+    // into a room on another.
+    if (clipboard.hostKey !== null && clipboard.hostKey !== room.scope.hostKey) {
+      toast.addToast(`Those files are on another server. They can't be pasted into ${room.scope.label}.`, 'info')
+      return
+    }
 
     try {
       if (clipboard.mode === 'copy') {
@@ -1473,7 +1479,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // ── Duplicate ─────────────────────────────────────────────────────
   const handleDuplicate = useCallback(async (paths: string[]) => {
     const toast = useToastStore.getState()
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
     const created: string[] = []
 
     for (const p of paths) {
@@ -1496,7 +1502,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
   // ── Undo ──────────────────────────────────────────────────────────
   const handleUndo = useCallback(async () => {
-    const undo = useFileUndoStore.getState()
+    const undo = fileUndoFor(room.scope.hostKey)
     const toast = useToastStore.getState()
     const op = undo.pop()
     if (!op) return
@@ -1557,13 +1563,13 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       if (e.metaKey && e.key === 'c') {
         if (paths.length > 0) {
           e.preventDefault()
-          useFileClipboardStore.getState().copy(paths)
+          useFileClipboardStore.getState().copy(paths, room.scope.hostKey)
           useToastStore.getState().addToast(`Copied ${paths.length} item(s)`, 'success')
         }
       } else if (e.metaKey && e.key === 'x') {
         if (paths.length > 0) {
           e.preventDefault()
-          useFileClipboardStore.getState().cut(paths)
+          useFileClipboardStore.getState().cut(paths, room.scope.hostKey)
           useToastStore.getState().addToast(`Cut ${paths.length} item(s)`, 'success')
         }
       } else if (e.metaKey && e.key === 'v') {

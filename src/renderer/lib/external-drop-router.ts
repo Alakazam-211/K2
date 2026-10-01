@@ -48,6 +48,7 @@ import {
 import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { roomForElement } from '@/stores/window-room'
 
 // ── Public event names ────────────────────────────────────────────────
 
@@ -394,16 +395,40 @@ export function notifyFileTreeRefresh(
 // ── Route + execute (one upload site) ─────────────────────────────────
 
 /**
+ * MS19 (Home M5): the room under the pointer decides which server a drop
+ * from the OS goes to. A drop on a Home room for another server uploads to
+ * THAT server (its `.k2/downloads`, or the folder under the pointer) and
+ * pastes its path there; it never copies on the window's server. A
+ * view-only room takes no drop. Anywhere else: the window's server.
+ */
+export function dropDestination(
+  windowScope: ServerScope,
+  position: { x: number; y: number },
+  doc: Document = document,
+): { scope: ServerScope } | { refused: string } {
+  const room = roomForElement(doc.elementFromPoint(position.x, position.y))
+  if (!room || room.isPrimary) return { scope: windowScope }
+  if (room.readOnly) return { refused: `View only: nothing is dropped into this room on ${room.scope.label}.` }
+  return { scope: room.scope }
+}
+
+/**
  * Handle a single external drop end-to-end. Safe to call from the router
  * listener; never re-enters another tauri://drag-drop handler.
  */
 export async function routeExternalDrop(
-  scope: ServerScope,
+  windowScope: ServerScope,
   paths: string[],
   position: { x: number; y: number },
   doc: Document = document,
 ): Promise<void> {
   if (!paths || paths.length === 0) return
+  const dest = dropDestination(windowScope, position, doc)
+  if ('refused' in dest) {
+    useToastStore.getState().addToast(dest.refused, 'info')
+    return
+  }
+  const scope = dest.scope
 
   const target = hitTestExternalDrop(position, doc, {
     composeSurfaceImages: pathsAreComposeSurfaceImages(paths),
@@ -494,12 +519,18 @@ export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
  * daemon — there are no local filesystem paths in the browser.
  */
 export async function routeBrowserFileDrop(
-  scope: ServerScope,
+  windowScope: ServerScope,
   files: File[],
   position: { x: number; y: number },
   doc: Document = document,
 ): Promise<void> {
   if (!files || files.length === 0) return
+  const dest = dropDestination(windowScope, position, doc)
+  if ('refused' in dest) {
+    useToastStore.getState().addToast(dest.refused, 'info')
+    return
+  }
+  const scope = dest.scope
 
   const target = hitTestExternalDrop(position, doc, {
     composeSurfaceImages: filesAreComposeSurfaceImages(files),

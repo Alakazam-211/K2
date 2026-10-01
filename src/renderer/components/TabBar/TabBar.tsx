@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import type { BrowserItemData, TerminalItemData } from '@/stores/tabs'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
+import { workingAgentsInTab } from '@/lib/room-close-guard'
 import { roomActiveProject, roomProjectForCwd, type Room } from '@/stores/room'
 import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
@@ -543,14 +544,16 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const handleCloseTab = useCallback(
     (e: React.MouseEvent, tabId: string) => {
       e.stopPropagation()
-      const agents = useActiveAgentsStore.getState().getAgentsInTab(tabId)
+      // Home M5: the ROOM's working agents (a Home room on another server
+      // is not in the window's active-agents store).
+      const agents = workingAgentsInTab(room, tabId, groupIndex)
       if (agents.length > 0) {
         setPendingClose({ tabId, agents })
       } else {
         removeTabFromGroup(groupIndex, tabId)
       }
     },
-    [removeTabFromGroup, groupIndex]
+    [removeTabFromGroup, groupIndex, room]
   )
 
   const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tabId: string, pinSessionId: string | null) => {
@@ -631,7 +634,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       // swap and commit/cancel wiring live in the tab render branch.
       setEditingTabId(tabId)
     } else if (clickedId === 'close') {
-      const agents = useActiveAgentsStore.getState().getAgentsInTab(tabId)
+      const agents = workingAgentsInTab(room, tabId, groupIndex)
       if (agents.length > 0) {
         setPendingClose({ tabId, agents })
       } else {

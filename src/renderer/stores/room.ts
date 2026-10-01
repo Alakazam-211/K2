@@ -396,10 +396,16 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
   const { workspace, projects } = input
   const readOnly = input.readOnly === true
   if (input.scope.isPrimary) throw new Error('createPinnedRoom: a pinned room needs a pinned scope (scopeForHost)')
-  // Home M5: a usable room writes to its server through the room allowlist
-  // (`remoteRoomScope`, `kessel/room-writes.ts`); a view-only room sends
-  // only the keep-alive (`viewOnlyScope`).
-  const scope = readOnly ? viewOnlyScope(input.scope) : remoteRoomScope(input.scope)
+  // Home M5: a usable room on another server writes to it through the room
+  // allowlist (`remoteRoomScope`, `kessel/room-writes.ts`); a view-only room
+  // sends only the keep-alive (`viewOnlyScope`). A room on THIS computer
+  // (the window is on another server) is this computer's own workspace: its
+  // scope stays as it is, with this computer's commands (MS57).
+  const scope = readOnly
+    ? viewOnlyScope(input.scope)
+    : input.scope.isRemote
+      ? remoteRoomScope(input.scope)
+      : input.scope
   const localCommands = scope.hostKey === LOCAL_HOME_HOST
   const heartbeats = createHeartbeatSessionsStore({ scope, localCommands })
   const serverView = acquireServerView(scope)

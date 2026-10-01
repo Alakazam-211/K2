@@ -115,7 +115,7 @@ import { nix } from '@replit/codemirror-lang-nix'
 import { solidity } from '@replit/codemirror-lang-solidity'
 import { elixir } from 'codemirror-lang-elixir'
 import { svelte } from '@replit/codemirror-lang-svelte'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 // ── Language detection ──────────────────────────────────────────────
 
@@ -738,6 +738,10 @@ interface ThemeOverride {
 interface CodeEditorProps {
   code: string
   filePath: string
+  /** The server the file lives on (its git gutter reads that server). A
+   *  file tab passes its room's scope; editors outside a room (Settings)
+   *  read the window's server. */
+  scope?: ServerScope
   onSave: (content: string) => void
   onChange: (content: string) => void
   onCursorChange?: (line: number, col: number, selections: number) => void
@@ -1176,7 +1180,7 @@ const stickyScrollPlugin = ViewPlugin.fromClass(
   }
 )
 
-export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState, localFormat = true }: CodeEditorProps): React.JSX.Element {
+export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState, localFormat = true }: CodeEditorProps): React.JSX.Element {
   const localFormatRef = useRef(localFormat)
   localFormatRef.current = localFormat
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1465,7 +1469,7 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
 
     const fetchDiff = async () => {
       try {
-        const hunks = await daemonCliGet<DiffHunk[]>(primaryScope(), 'git/diff-file', { path: dirPath, file_path: filePath })
+        const hunks = await daemonCliGet<DiffHunk[]>(scope ?? primaryScope(), 'git/diff-file', { path: dirPath, file_path: filePath })
         const lineChanges = hunksToLineMap(hunks)
         const es = useSettingsStore.getState().editor
         const ext = buildGitGutterExtension(lineChanges, es.scrollbarAnnotations ?? true, es.diffStyle ?? 'gutter')
@@ -1483,7 +1487,7 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
     fetchDiff()
     const interval = setInterval(fetchDiff, 15000)
     return () => clearInterval(interval)
-  }, [filePath, demoLineChanges, editorSettings.diffStyle, editorSettings.scrollbarAnnotations])
+  }, [filePath, scope, demoLineChanges, editorSettings.diffStyle, editorSettings.scrollbarAnnotations])
 
   return (
     <div

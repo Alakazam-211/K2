@@ -18,7 +18,7 @@ import {
   type ContinueNewChatSource,
   type ContinueSpawnRequest,
 } from '@/components/ChatHistory/ContinueNewChatDialog'
-import { agentDisplayName, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
+import { agentDisplayName, claimAgentLock, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useStore } from 'zustand'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
@@ -1487,7 +1487,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             cwd: projectPath,
           })
         }
-        daemonCliGet(room.scope, 'agents/lock', {
+        claimAgentLock(room.scope, {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,
@@ -1542,7 +1542,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             args: result.args,
             cwd: result.cwd,
           })
-          daemonCliGet(room.scope, 'agents/lock', {
+          claimAgentLock(room.scope, {
             project: projectPath,
             agent: agentName,
             terminal_id: myTerminalId,
@@ -1566,7 +1566,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           args: ['--dangerously-skip-permissions'],
           cwd: projectPath,
         })
-        daemonCliGet(room.scope, 'agents/lock', {
+        claimAgentLock(room.scope, {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,

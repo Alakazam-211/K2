@@ -882,6 +882,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
               <CodeEditor
                 code={editedContent ?? content}
                 filePath={filePath}
+                scope={room.scope}
                 localFormat={room.localCommands}
                 onSave={saveFile}
                 onChange={(newContent) => setEditedContent(newContent)}

@@ -8,9 +8,15 @@
 // control, its tab layout, closes, its chat history, its files, its pinned
 // chat, its heartbeats, its worktrees. It is deliberately not a blanket open:
 // projects/delete, presets, settings, people, mail, publish, API keys,
-// Finder or a browser on the daemon's machine (`fs/open-finder`,
-// `fs/open-external`) and every other route stay refused from a room. Those
-// are server management: "Open B's server" (switch) does them.
+// sandbox/open (owner token only), Finder or a browser on the daemon's
+// machine (`fs/open-finder`, `fs/open-external` — a link clicked in a room
+// opens on this computer, `lib/terminal-link-open.ts`) and every other route
+// stay refused from a room. Those are server management: "Open B's server"
+// (switch) does them (plan decision 6).
+//
+// A GET-shaped verb (an older route that writes on GET) is listed too; its
+// call site checks `assertScopeMayWrite` / `scopeMayWrite` itself, since the
+// request layer only checks POSTs.
 //
 // This computer's Tauri commands are a separate gate (`lib/local-only-
 // actions.ts`, MS57/MS67): a remote room runs none of them.
@@ -31,6 +37,17 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'terminal/send-message': 'compose, Chat about and chat-history sends type into a session on B',
   'workspace/ensure-pinned-chat': 'the pinned Chat starts B’s canonical chat session',
   'session/set-surfaced': 'closing a heartbeat tab minimizes it on B instead of killing it',
+  'agents/ensure-cli': 'an agent launch (+ menu, Ctrl+1–9) makes sure that CLI is ready on B',
+  'workspace/set-chat-session': 'picking a chat for the pinned Chat on B (GET-shaped verb)',
+  'agents/lock': 'the pinned Chat / worktree chat claims its agent lock on B (GET-shaped verb)',
+  // Legacy (Alacritty) terminal panes, daemon-owned on B.
+  'terminal/create': 'a legacy terminal pane starts on B',
+  'terminal/kill': 'a legacy terminal pane closes on B',
+  'terminal/kill-foreground': 'Ctrl+C on a legacy pane’s foreground job on B',
+  'terminal/resize': 'a legacy pane resizes its PTY on B',
+  'terminal/set-focus': 'a legacy pane reports focus to B',
+  'terminal/scroll': 'a legacy pane scrolls on B',
+  'terminal/lifecycle-write': 'a legacy pane writes its lifecycle marker on B',
 
   // The tab layout (MS42: baseRevision, 409 then merge).
   'workspace-layouts/save': 'the room saves B’s tab layout with the revision check',
@@ -42,6 +59,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'chat/restore': 'restore an archived chat on B',
   'chat/toggle-pin': 'pin a chat on B',
   'chat/continue-seed': 'continue a chat in a new session on B',
+  'sandbox/reopen': 'reopen a sandboxed chat from B’s chat history',
 
   // Files in B's workspace (drag and drop within B; never across servers).
   'fs/create': 'new file or folder in B’s workspace',
@@ -57,18 +75,29 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'fs/compress-cancel': 'cancel a compress on B',
   'fs/extract': 'extract in B’s workspace',
   'fs/extract-cancel': 'cancel an extract on B',
+  'fs/search-tree': 'file search in B’s workspace (a read sent as POST)',
+  'workspace/resources/add': 'add a Workspace Resource in B’s Files drawer',
+  'workspace/resources/remove': 'remove a Workspace Resource in B’s Files drawer',
+
+  // Changes panel on B's checkout.
+  'git/stage': 'stage a file in B’s checkout',
+  'git/unstage': 'unstage a file in B’s checkout',
+  'git/stage-all': 'stage everything in B’s checkout',
+  'git/commit': 'commit in B’s checkout',
 
   // Heartbeats (row launch and toggle; the scheduler is B's).
   'heartbeat/launch': 'Launch on a heartbeat row fires it on B (GET-shaped verb)',
   'heartbeat/enable': 'the heartbeat row toggle on B (GET-shaped verb)',
 
   // The Workspace panel.
-  'workspace/set': 'the drawer’s completion bell on B',
+  'workspace/set': 'the drawer’s completion bell and Hide API sessions toggle on B',
   'git/create-worktree': 'New worktree in B’s workspace',
   'workspaces/delete': 'Close Worktree on B',
   'git/remove-worktree': 'Recycle Worktree on B',
 
   // Thread overlay.
+  'thread/post': 'post a Thread message to the agent on B',
+  'thread/answer': 'answer a Thread ask on B',
   'thread/void': 'void a Thread message on B',
 })
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import {
   terminalCreate,
   terminalExists,
@@ -18,6 +18,7 @@ import { detectWorkingSignal } from '@/lib/agent-signals'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
 import { useRoom } from '@/components/Room/RoomContext'
+import { openTerminalUrl } from '@/lib/terminal-link-open'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById, stripOscIdleGlyphs } from '@/lib/chat-session-tab'
 import { useToastStore } from '@/stores/toast'
 import {
@@ -904,7 +905,7 @@ export function AlacrittyTerminalView({
     e.stopPropagation()
 
     if (clicked.type === 'url') {
-      daemonCliPost(room.scope, 'fs/open-external', { target: clicked.target }).catch((e: unknown) => console.warn('[terminal-link]', e))
+      openTerminalUrl(room, clicked.target)
     } else if (clicked.type === 'file' && clicked.filePath) {
       const tabsStore = room.tabs.getState()
       const openInSplit = useTerminalSettingsStore.getState().openLinksInSplitPane

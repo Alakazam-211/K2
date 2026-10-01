@@ -149,6 +149,10 @@ export function useTerminalShortcuts(room: Room, cwd: string): void {
         case 'o': {
           if (e.shiftKey || e.altKey) return
           e.preventDefault()
+          // Open workspace adds a folder to the WINDOW's server (its picker,
+          // its projects store). A Home room on another server holds one
+          // workspace and never adds one to the window's server for it.
+          if (!room.isPrimary) return
           pickWorkspaceFolder().then((folderPath) => {
             if (folderPath) {
               useProjectsStore.getState().addProject(folderPath)

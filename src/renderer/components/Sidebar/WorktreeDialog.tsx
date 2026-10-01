@@ -12,6 +12,7 @@ import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { primaryScope } from '@/kessel/server-scope'
+import type { Room } from '@/stores/room'
 
 /** Sanitize a string into a valid git branch name */
 function sanitizeBranchName(input: string): string {
@@ -31,6 +32,10 @@ interface WorktreeDialogProps {
   projectPath: string
   open: boolean
   onClose: () => void
+  /** Home M5: the room the dialog was opened from (the Workspace panel). A
+   *  room on another server creates the worktree THERE and opens its chat
+   *  in that room. Absent: the window's own room (the sidebar). */
+  room?: Room
 }
 
 interface BranchList {
@@ -43,8 +48,11 @@ export default function WorktreeDialog({
   projectId,
   projectPath,
   open,
-  onClose
+  onClose,
+  room,
 }: WorktreeDialogProps): React.JSX.Element | null {
+  const scope = room ? room.scope : primaryScope()
+  const tabs = room ? room.tabs : useTabsStore
   const [name, setName] = useState('')
   const [mode, setMode] = useState<'new' | 'existing'>('new')
   const [branches, setBranches] = useState<string[]>([])
@@ -53,7 +61,7 @@ export default function WorktreeDialog({
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const openAgentPane = useTabsStore((s) => s.openAgentPane)
+  const openAgentPane = tabs((s) => s.openAgentPane)
 
   // Reset state and auto-focus when dialog opens
   useEffect(() => {
@@ -67,12 +75,12 @@ export default function WorktreeDialog({
     requestAnimationFrame(() => inputRef.current?.focus())
 
     // Fetch available branches
-    daemonCliGet<BranchList>(primaryScope(), 'git/branches', { path: projectPath })
+    daemonCliGet<BranchList>(scope, 'git/branches', { path: projectPath })
       .then((result) => {
         setBranches(result.local.filter((b) => b !== result.current))
       })
       .catch(() => setBranches([]))
-  }, [open, projectPath])
+  }, [open, projectPath, scope])
 
   // Close on Escape
   useEffect(() => {
@@ -96,7 +104,7 @@ export default function WorktreeDialog({
     setError(null)
 
     try {
-      const result = await daemonCliPost<{ workspaceId: string; path: string; branch: string }>(primaryScope(),
+      const result = await daemonCliPost<{ workspaceId: string; path: string; branch: string }>(scope,
         'git/create-worktree',
         {
           projectPath,
@@ -106,7 +114,10 @@ export default function WorktreeDialog({
         }
       )
 
-      // Optimistic local update — never call fetchProjects() in render-adjacent code
+      // Optimistic local update — never call fetchProjects() in render-adjacent code.
+      // The window's projects store mirrors only the window's server; a room
+      // on another server hears its server's projects_changed instead.
+      if (scope.isPrimary) {
       const state = useProjectsStore.getState()
       const updated = state.projects.map((p) => {
         if (p.id !== projectId) return p
@@ -127,6 +138,7 @@ export default function WorktreeDialog({
         }
       })
       useProjectsStore.setState({ projects: updated })
+      }
       // Open the worktree detail pane (Task/Chat/Review) without switching workspaces
       openAgentPane(`__wt:${result.workspaceId}`, result.path, result.branch)
       onClose()
@@ -136,7 +148,7 @@ export default function WorktreeDialog({
     } finally {
       setCreating(false)
     }
-  }, [sanitizedName, selectedBranch, mode, projectPath, projectId, openAgentPane, onClose])
+  }, [sanitizedName, selectedBranch, mode, projectPath, projectId, openAgentPane, onClose, scope])
 
   if (!open) return null
 

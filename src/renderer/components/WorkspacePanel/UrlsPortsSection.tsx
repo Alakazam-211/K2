@@ -36,7 +36,7 @@ import {
   type PublishedService,
   type PublishLeftover,
 } from './urls-ports'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { primaryScope, scopeMayWrite, scopedKey } from '@/kessel/server-scope'
 
 const DETAILS_BTN =
   'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
@@ -345,7 +345,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                       <span className="text-[11px] text-[var(--color-text-primary)] truncate flex-1">
                         {svc.name}
                       </span>
-                      {supportsPublish && (
+                      {/* Home M5: publishing is server management, not on the
+                          room write allowlist; a Home room on another server
+                          shows its services without Start / Stop. */}
+                      {supportsPublish && scopeMayWrite(scope, stoppable ? 'publish/stop' : 'publish/start') && (
                         <button
                           type="button"
                           disabled={busy}

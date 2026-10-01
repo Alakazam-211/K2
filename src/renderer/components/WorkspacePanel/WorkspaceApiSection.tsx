@@ -9,7 +9,7 @@ import {
   workspaceGrantSlug,
   type ApiKeyRow,
 } from '@/components/Settings/sections/api-keys-api'
-import { scopedKey } from '@/kessel/server-scope'
+import { scopeMayWrite, scopedKey } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 
 type ListResponse = { keys?: ApiKeyRow[] }
@@ -113,12 +113,13 @@ export function WorkspaceApiSection({
             </span>
           )}
         </span>
-        <SectionManageCog
+        {/* Workspace settings are the window's server's (plan decision 6). */}
+        {room.isPrimary && <SectionManageCog
           title="Manage API keys"
           onClick={() => {
             useSettingsStore.getState().openSettings('projects', project.id, 'api')
           }}
-        />
+        />}
       </button>
 
       {open && (
@@ -148,7 +149,9 @@ export function WorkspaceApiSection({
                   <span className="text-[11px] text-[var(--color-text-primary)] truncate flex-1">
                     {k.label || '(no label)'}
                   </span>
-                  {state === 'active' && (
+                  {/* Home M5: API keys are the server owner's (not on the room
+                      write allowlist): listed, not switched, from a Home room. */}
+                  {state === 'active' && scopeMayWrite(room.scope, 'api-keys/disable') && (
                     <button
                       type="button"
                       disabled={busy}
@@ -158,7 +161,7 @@ export function WorkspaceApiSection({
                       off
                     </button>
                   )}
-                  {state === 'disabled' && (
+                  {state === 'disabled' && scopeMayWrite(room.scope, 'api-keys/enable') && (
                     <button
                       type="button"
                       disabled={busy}

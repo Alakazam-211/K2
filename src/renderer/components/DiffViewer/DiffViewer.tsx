@@ -30,8 +30,11 @@ interface DiffViewerProps {
 // ── Component ────────────────────────────────────────────────────────────
 
 export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.Element {
-  // Home M4: the room's server.
-  const scope = useRoom().scope
+  // Home M4: the room's server. Home M5: and the room's checkout — a Home
+  // room on another server holds one workspace (`room.cwd()`); the window's
+  // projects store only knows the window's server.
+  const room = useRoom()
+  const scope = room.scope
   const [hunks, setHunks] = useState<DiffHunk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -42,7 +45,7 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
 
   const activeProject = projects.find((p) => p.id === activeProjectId)
   const activeWorkspace = activeProject?.workspaces.find((w) => w.id === activeWorkspaceId)
-  const repoPath = activeWorkspace?.worktreePath ?? activeProject?.path
+  const repoPath = room.isPrimary ? activeWorkspace?.worktreePath ?? activeProject?.path : room.cwd()
 
   useEffect(() => {
     if (!repoPath || !filePath) return

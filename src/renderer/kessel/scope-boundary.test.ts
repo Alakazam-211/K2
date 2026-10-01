@@ -161,6 +161,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/feedback.ts',
   'stores/focus-groups.ts',
   'stores/heartbeat-sessions.ts',
+  // Heartbeat S6: Keep awake is the window server's machine, like Settings.
+  'stores/keep-awake.ts',
   'stores/presence.ts',
   'stores/presets.ts',
   'stores/project-groups.ts',

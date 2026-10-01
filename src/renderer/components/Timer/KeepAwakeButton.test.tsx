@@ -1,0 +1,238 @@
+// @vitest-environment jsdom
+
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetKeepAwakeForTests } from '@/stores/keep-awake'
+import { keepAwakeTone, type KeepAwakeStatus } from '@/lib/keep-awake'
+
+const h = vi.hoisted(() => ({
+  remote: false,
+  daemonCliGet: vi.fn(),
+  daemonCliPost: vi.fn(),
+}))
+
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...a: unknown[]) => h.daemonCliGet(...a)),
+    daemonCliPost: primaryOnly((...a: unknown[]) => h.daemonCliPost(...a)),
+  }
+})
+
+vi.mock('@/stores/connect-host', () => ({
+  useConnectHostStore: (sel: (s: { activeHost: 'local' | { id: string } }) => unknown) =>
+    sel({ activeHost: h.remote ? { id: 'remote-box' } : 'local' }),
+}))
+
+import KeepAwakeButton from './KeepAwakeButton'
+
+function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
+  return {
+    mode: 'always',
+    state: 'lid_closed_ok',
+    label: 'Awake, lid closed OK (on power)',
+    detail: 'Stays awake with the lid closed while on power.',
+    held: true,
+    lidHeld: true,
+    workingSessions: 0,
+    powerSource: { onAc: true, batteryPercent: 90 },
+    batteryFloorPercent: 20,
+    alsoOnBattery: false,
+    canApproveLid: false,
+    lidDialogDeclined: false,
+    platform: 'macos',
+    ...over,
+  }
+}
+
+/** One fixture per daemon state, with the daemon's own words. */
+const STATES: { name: string; s: KeepAwakeStatus; tone: string }[] = [
+  {
+    name: 'off',
+    s: status({ mode: 'off', state: 'off', label: 'Keep awake: off', detail: 'This computer sleeps as usual.', held: false, lidHeld: false }),
+    tone: 'off',
+  },
+  {
+    name: 'waiting',
+    s: status({
+      mode: 'working',
+      state: 'waiting',
+      label: 'Keep awake: waiting for agents',
+      detail: 'Not holding. It holds while any agent is working, and for 1 minute after.',
+      held: false,
+      lidHeld: false,
+    }),
+    tone: 'armed',
+  },
+  { name: 'lid closed on power', s: status({}), tone: 'held' },
+  {
+    name: 'lid closed on battery',
+    s: status({
+      label: 'Awake, lid closed OK (on battery)',
+      detail: 'Stays awake with the lid closed until the battery reaches 20%. Closed in a bag, a laptop can get hot.',
+      powerSource: { onAc: false, batteryPercent: 64 },
+      alsoOnBattery: true,
+    }),
+    tone: 'held',
+  },
+  {
+    name: 'lid open only (declined)',
+    s: status({
+      state: 'lid_open_only',
+      label: 'Awake (lid open only)',
+      detail: 'Lid closed will still sleep: it needs a one-time admin approval to install a small helper',
+      lidHeld: false,
+      canApproveLid: true,
+      lidDialogDeclined: true,
+    }),
+    tone: 'held',
+  },
+  {
+    name: 'paused',
+    s: status({
+      state: 'paused',
+      label: 'Paused: battery below 20%',
+      detail: 'On battery below 20%, K2 lets this computer sleep.',
+      held: false,
+      lidHeld: false,
+      powerSource: { onAc: false, batteryPercent: 12 },
+    }),
+    tone: 'warn',
+  },
+  {
+    name: 'limited (Linux, no session)',
+    s: status({
+      state: 'limited',
+      label: 'Keep awake: limited (no session)',
+      detail: 'No login session on this machine, so the system refused the sleep lock.',
+      held: false,
+      lidHeld: false,
+      platform: 'linux',
+    }),
+    tone: 'warn',
+  },
+  {
+    name: 'Windows lid action',
+    s: status({
+      state: 'lid_open_only',
+      label: 'Awake (lid open only)',
+      detail:
+        "Lid closed will still sleep: the power plan's lid action is Sleep. Control Panel → Hardware and Sound → Power Options → Choose what closing the lid does → When I close the lid → set \"Plugged in\" (and \"On battery\" if you want) to Do nothing → Save changes.",
+      lidHeld: false,
+      platform: 'windows',
+    }),
+    tone: 'held',
+  },
+  {
+    name: 'error',
+    s: status({
+      state: 'error',
+      label: 'Keep awake: not held',
+      detail: 'The system refused: IOPMAssertionCreateWithName returned 0xe00002c1',
+      held: false,
+      lidHeld: false,
+    }),
+    tone: 'warn',
+  },
+]
+
+beforeEach(() => {
+  cleanup()
+  h.remote = false
+  h.daemonCliGet.mockReset()
+  h.daemonCliPost.mockReset()
+  resetKeepAwakeForTests()
+})
+
+async function renderWith(s: KeepAwakeStatus): Promise<HTMLElement> {
+  h.daemonCliGet.mockResolvedValue({ keepAwake: s })
+  render(<KeepAwakeButton />)
+  const button = await screen.findByTestId('keep-awake')
+  return button
+}
+
+describe('KeepAwakeButton', () => {
+  it('asks the window server for power/status', async () => {
+    await renderWith(STATES[0].s)
+    expect(h.daemonCliGet).toHaveBeenCalledWith('power/status')
+  })
+
+  for (const { name, s, tone } of STATES) {
+    it(`renders the daemon's honest state: ${name}`, async () => {
+      const button = await renderWith(s)
+      expect(button.getAttribute('aria-label')).toBe(`Keep awake: ${s.label}`)
+      expect(button.getAttribute('data-state')).toBe(s.state)
+      expect(button.getAttribute('data-tone')).toBe(tone)
+      expect(keepAwakeTone(s)).toBe(tone)
+
+      fireEvent.click(button)
+      const menu = await screen.findByTestId('keep-awake-menu')
+      expect(screen.getByTestId('keep-awake-label').textContent).toBe(s.label)
+      expect(screen.getByTestId('keep-awake-detail').textContent).toBe(s.detail)
+      const checked = Array.from(menu.querySelectorAll('[role="menuitemradio"][aria-checked="true"]'))
+      expect(checked.map((el) => el.getAttribute('data-testid'))).toEqual([`keep-awake-mode-${s.mode}`])
+      expect(screen.queryByTestId('keep-awake-approve') !== null).toBe(s.canApproveLid)
+      expect(screen.queryByTestId('keep-awake-battery') !== null).toBe(s.platform === 'macos')
+    })
+  }
+
+  it('renders nothing until the server answers (an older server)', async () => {
+    h.daemonCliGet.mockRejectedValue(new Error('404 Not Found'))
+    const { container } = render(<KeepAwakeButton />)
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledTimes(1))
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('sends the chosen mode and shows the daemon answer', async () => {
+    const button = await renderWith(STATES[0].s)
+    const after = status({
+      state: 'lid_open_only',
+      label: 'Awake (lid open only)',
+      detail: 'Lid closed will still sleep: it needs a one-time admin approval to install a small helper',
+      lidHeld: false,
+      canApproveLid: true,
+      message: 'Keep awake holds with the lid open only; lid closed will still sleep. The admin dialog was declined.',
+    })
+    h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: after })
+    fireEvent.click(button)
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('keep-awake-mode-always'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { mode: 'always' })
+    await waitFor(() => expect(screen.getByTestId('keep-awake-label').textContent).toBe('Awake (lid open only)'))
+    expect(screen.getByTestId('keep-awake-message').textContent).toBe(after.message)
+    expect(screen.getByTestId('keep-awake').getAttribute('aria-label')).toBe('Keep awake: Awake (lid open only)')
+  })
+
+  it('Allow lid closed asks the daemon to show the dialog again', async () => {
+    const button = await renderWith(STATES[4].s)
+    h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: STATES[2].s })
+    fireEvent.click(button)
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('keep-awake-approve'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { approveLid: true })
+    await waitFor(() =>
+      expect(screen.getByTestId('keep-awake-label').textContent).toBe('Awake, lid closed OK (on power)'),
+    )
+  })
+
+  it('Also on battery goes to the daemon (shared with wake)', async () => {
+    const button = await renderWith(STATES[2].s)
+    h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: { ...STATES[2].s, alsoOnBattery: true } })
+    fireEvent.click(button)
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('keep-awake-battery'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { onBattery: true })
+  })
+
+  it('says a remote host is the one kept awake', async () => {
+    h.remote = true
+    const button = await renderWith(STATES[2].s)
+    fireEvent.click(button)
+    expect((await screen.findByTestId('keep-awake-menu')).textContent).toContain(
+      'This keeps the host awake, not this laptop.',
+    )
+  })
+})

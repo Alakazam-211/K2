@@ -1,6 +1,7 @@
 import { Children, type ReactNode } from 'react'
 import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
+import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
@@ -16,7 +17,8 @@ function Pipe(): React.JSX.Element {
 
 /**
  * Right-cluster body shared with TopBar: presence, usage, pipe, timer,
- * cheat sheet, pipe, mode, then a pipe only when that page has its own toggles.
+ * keep awake, cheat sheet, pipe, mode, then a pipe only when that page has
+ * its own toggles.
  * No Agents run button — pass it as `leading` from TopBar only.
  */
 export default function TopBarUtilities({
@@ -34,6 +36,7 @@ export default function TopBarUtilities({
       <UsageButton />
       <Pipe />
       <TimerButton />
+      <KeepAwakeButton />
       <K2NounsCheatSheet />
       <Pipe />
       <ModeToggle />

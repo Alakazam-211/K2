@@ -16,7 +16,9 @@ import {
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
-import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
+import { spanLabel } from '@/lib/heartbeat-wait'
+import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
+import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -151,6 +153,10 @@ interface SystemHeartbeatRow {
   // S5 — daemon-decided wait reason (older daemons omit both).
   waitReason?: string | null
   waitDetail?: string | null
+  // Heartbeat S3/S4 (HB24): the daemon's next fire and when the reason
+  // last changed. Rendered through the shared formatter (HB31).
+  nextFireAt?: string | null
+  waitSince?: string | null
 }
 
 /** Payload of `/cli/heartbeat/scheduler-status`. Heartbeat S2: the
@@ -175,21 +181,22 @@ interface SchedulerStatus {
  *  Older servers fall back to the combined tick stamp. */
 function tickerDownMessage(status: SchedulerStatus | null): string | null {
   if (!status || status.enabledCount === 0) return null
-  const since = (iso: string | null | undefined): string =>
-    iso ? `since ${new Date(iso).toLocaleString()}` : '— no check has ever been recorded'
+  // Same span words as the rows' "scheduler not ticking (8h)" (HB31).
+  const since = (iso: string | null | undefined): string => {
+    const t = iso ? Date.parse(iso) : NaN
+    return Number.isNaN(t)
+      ? '— no check has ever been recorded'
+      : `for ${spanLabel(Date.now() - t)} (since ${new Date(t).toLocaleString()})`
+  }
   if (status.ticker) {
     const stale = status.ticker.staleSecs == null || status.ticker.staleSecs > 180
     if (!stale) return null
-    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt)}. The K2 daemon checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
+    // HB9: the daemon's own tick stamp (`lastDaemonTickAt`).
+    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. The K2 daemon checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
   }
   const stale = status.staleSecs == null || status.staleSecs > 180
   if (!stale) return null
   return `Heartbeat ticks are not arriving ${since(status.lastTickAt)}. Update K2 on this server: newer versions check heartbeats on their own every minute.`
-}
-
-/** Same badge HeartbeatsSection shows: the shared wait formatter. */
-function systemRowErrorBadge(row: SystemHeartbeatRow): string | null {
-  return describeHeartbeatWait(row)
 }
 
 /** Compact one-liner for the heartbeat list row — "Every day at 9 AM",
@@ -285,8 +292,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
   // the backend ORDER BY uses default collation (case-sensitive ASCII)
   // so uppercase-prefixed workspaces clump above lowercase-prefixed
   // ones. Override here for natural alphabetical reading.
-  const refreshHeartbeats = useCallback(async () => {
-    setHeartbeatsLoading(true)
+  const refreshHeartbeats = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setHeartbeatsLoading(true)
     try {
       // 0.40.48 host-aware: connected to a REMOTE host, the cross-project
       // roster comes from ITS new /cli/heartbeat/list-all route — this
@@ -333,6 +340,13 @@ export function WakeSchedulerSection(): React.JSX.Element {
   useEffect(() => {
     void refreshHeartbeats()
   }, [refreshHeartbeats])
+
+  // Heartbeat S4: rows carry the daemon's `nextFireAt` / `waitReason` on
+  // a server with `heartbeat-next-fire`. The roster stays mount-only (no
+  // event subscription); one quiet refetch when a row's fire time + 120 s
+  // passes (HB29), so a fired or overdue row never sits stale.
+  const nextFire = primaryScope().serverSupports('heartbeat-next-fire')
+  useHeartbeatDueRefetch(heartbeats, () => void refreshHeartbeats({ quiet: true }), nextFire)
 
   // 0.38.3 — fires audit log. Polled every 5s so newly-firing
   // heartbeats appear without page reload. Limit 100 keeps the list
@@ -678,14 +692,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">
                   {describeHeartbeatSpec(row.specJson, row.frequency)}
                 </div>
-                {systemRowErrorBadge(row) && (
-                  <div
-                    className="text-[10px] text-[var(--color-bad,#ef6f6f)] mt-0.5 truncate"
-                    title={row.scheduleError ?? undefined}
-                  >
-                    {systemRowErrorBadge(row)}
-                  </div>
-                )}
+                {/* Heartbeat S4 (HB31): the drawer's formatter —
+                    next fire or the daemon's wait reason. */}
+                <HeartbeatStatusLine
+                  row={row}
+                  nextFire={nextFire}
+                  nextPrefix="Next: "
+                  className="text-[10px] mt-0.5 truncate"
+                />
               </div>
               {/* Delivery drop-down (replaces the pinned-chat checkbox)
                   — pinned chat / own session / a trained saved session

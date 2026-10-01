@@ -101,7 +101,8 @@ vi.mock('@/hooks/useResolvedAgentCommand', () => ({
   useResolvedAgentCommand: () => ({ command: 'claude', args: [] }),
 }))
 
-import { HeartbeatsPanel, heartbeatErrorBadge, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
+import { HeartbeatsPanel, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
+import { heartbeatStatusText } from '@/lib/heartbeat-wait'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../../../../')
 
@@ -217,7 +218,7 @@ describe('S5: schedule form rules', () => {
   })
 })
 
-describe('S5: the Settings badge shows the daemon wait reason', () => {
+describe('S4: Settings rows use the drawer formatter (HB31)', () => {
   const base: HeartbeatRow = {
     id: 'id',
     projectId: 'p',
@@ -235,18 +236,40 @@ describe('S5: the Settings badge shows the daemon wait reason', () => {
     disabledReason: null,
     scheduleError: null,
   }
+  const now = Date.parse('2026-10-07T20:00:00Z')
 
-  it('names an empty WAKEUP.md and an invalid schedule', () => {
-    expect(heartbeatErrorBadge({ ...base, waitReason: 'wakeup_empty' })).toBe('waiting: WAKEUP.md is empty')
+  it('a Settings row names an empty WAKEUP.md, an invalid schedule and the next fire', () => {
+    const row: HeartbeatRow = { ...base, frequency: 'list' }
+    expect(heartbeatStatusText(row, { now, nextFire: false })).toBeNull()
+    expect(heartbeatStatusText({ ...base, waitReason: 'wakeup_empty' }, { now, nextFire: true })).toBe(
+      'waiting: WAKEUP.md is empty',
+    )
     expect(
-      heartbeatErrorBadge({
-        ...base,
-        frequency: 'list',
-        scheduleError: "unknown frequency 'list'",
-        waitReason: 'schedule_error',
-        waitDetail: "unknown frequency 'list'",
-      }),
+      heartbeatStatusText(
+        {
+          ...base,
+          scheduleError: "unknown frequency 'list'",
+          waitReason: 'schedule_error',
+          waitDetail: "unknown frequency 'list'",
+        },
+        { now, nextFire: true },
+      ),
     ).toBe("invalid schedule: unknown frequency 'list'")
-    expect(heartbeatErrorBadge(base)).toBeNull()
+    expect(
+      heartbeatStatusText(
+        { ...base, waitReason: 'scheduled', nextFireAt: '2026-10-07T20:12:04Z' },
+        { now, nextFire: true },
+      ),
+    ).toBe('in 12m 04s')
+    expect(heartbeatStatusText(base, { now, nextFire: false })).toBeNull()
+  })
+
+  it('Settings → Heartbeats and the Wake Scheduler list render the shared line', () => {
+    for (const f of ['HeartbeatsSection.tsx', 'WakeSchedulerSection.tsx']) {
+      const src = readFileSync(join(root, 'src/renderer/components/Settings/sections', f), 'utf8')
+      expect(src, f).toContain('<HeartbeatStatusLine')
+      expect(src, f).toContain("serverSupports('heartbeat-next-fire')")
+      expect(src, f).not.toContain('describeHeartbeatWait')
+    }
   })
 })

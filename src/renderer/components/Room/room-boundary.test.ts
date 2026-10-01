@@ -69,6 +69,7 @@ const ROOM_FILES = [
   'components/FileTree/FileTree.tsx',
   'components/FileViewerPane/FileViewerPane.tsx',
   'components/HeartbeatsPanel/HeartbeatEntry.tsx',
+  'components/HeartbeatsPanel/HeartbeatsPanel.tsx',
   'components/PaneLayout/PaneGroupView.tsx',
   'components/PaneLayout/PaneLayout.tsx',
   'components/PaneLayout/PaneTabBar.tsx',
@@ -105,6 +106,27 @@ describe('Home M3 room boundary', () => {
       if (!/\buseRoom(Tabs|Projects|Supports)?\(|\bisFocusedRoom\(room\)/.test(src)) {
         offenders.push(`${f}: never reads its room`)
       }
+    }
+    expect(offenders).toEqual([])
+  })
+})
+
+// Heartbeat S4 (prd-heartbeat-firing-v1 HB28, T-S4c): the drawer reads its
+// rows and feature checks through the room's scope. Every file in the
+// folder: no `primaryScope()` and no bare (window-global) `serverSupports(`
+// — only `room.scope.serverSupports(…)` / `useRoomSupports(…)`.
+describe('Heartbeat S4: the drawer folder stays room-scoped', () => {
+  it('components/HeartbeatsPanel/ has no primaryScope() and no bare serverSupports(', () => {
+    const folder = SOURCE_FILES.filter((f) => f.startsWith('components/HeartbeatsPanel/'))
+    expect(folder).toEqual([
+      'components/HeartbeatsPanel/HeartbeatEntry.tsx',
+      'components/HeartbeatsPanel/HeartbeatsPanel.tsx',
+    ])
+    const offenders: string[] = []
+    for (const f of folder) {
+      const src = read(f)
+      if (/\bprimaryScope\(\)/.test(src)) offenders.push(`${f}: primaryScope()`)
+      if (/(^|[^.\w])serverSupports\(/m.test(src)) offenders.push(`${f}: bare serverSupports(`)
     }
     expect(offenders).toEqual([])
   })

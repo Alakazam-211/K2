@@ -53,6 +53,8 @@ vi.mock('@/lib/terminal-daemon', () => ({
 }))
 vi.mock('@/lib/server-capabilities', () => ({
   serverSupports: vi.fn(() => false),
+  // Heartbeat S4: the drawer row asks its room (`useRoomSupports`).
+  useServerSupports: vi.fn(() => false),
 }))
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ port: 9999, token: 'tok', host: '127.0.0.1' })),

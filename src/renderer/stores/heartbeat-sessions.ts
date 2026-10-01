@@ -11,6 +11,7 @@ import {
   type UnsubscribeFn,
 } from '@/stores/session-events'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { nextDueRefetchDelay } from '@/lib/heartbeat-wait'
 
 /**
  * Heartbeat sessions store — drives the sidebar Heartbeats panel.
@@ -58,6 +59,13 @@ export interface HeartbeatRow {
   waitDetail?: string | null
   disabledReason?: string | null
   scheduleError?: string | null
+  /** Heartbeat S3/S4 (HB24) — UTC RFC3339 of the next fire the daemon
+   *  expects (a past value = due or overdue), and when `waitReason` last
+   *  changed (`no_ticks`: the last scheduler tick). Servers without
+   *  `heartbeat-next-fire` omit them. The drawer renders them; it never
+   *  computes a schedule (HB1). */
+  nextFireAt?: string | null
+  waitSince?: string | null
 }
 
 export interface HeartbeatEntry {
@@ -247,6 +255,35 @@ export type HeartbeatSessionsStore = UseBoundStore<StoreApi<HeartbeatSessionsSta
 export function createHeartbeatSessionsStore(binding: HeartbeatSessionsBinding): HeartbeatSessionsStore {
   const { scope } = binding
   let rosterRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  // Heartbeat S4 (HB29): one-shot refetch when the earliest row's
+  // `nextFireAt + 120 s` passes, so a row that went overdue (or whose
+  // server stopped ticking — `no_ticks` is read-time, no event) picks up
+  // the daemon's reason. Not a poll: a deadline already behind us never
+  // re-arms. Per room (this closure), never module state.
+  let dueRefetchTimer: ReturnType<typeof setTimeout> | null = null
+  const disarmDueRefetch = (): void => {
+    if (dueRefetchTimer !== null) clearTimeout(dueRefetchTimer)
+    dueRefetchTimer = null
+  }
+  const armDueRefetch = (): void => {
+    disarmDueRefetch()
+    if (!scope.serverSupports('heartbeat-next-fire')) return
+    const { active, loadedFor } = store.getState()
+    if (!loadedFor) return
+    const delay = nextDueRefetchDelay(active.map((e) => e.row), Date.now())
+    if (delay === null) return
+    const fire = (): void => {
+      dueRefetchTimer = null
+      const state = store.getState()
+      if (!state.loadedFor) return
+      if (state.loading) {
+        dueRefetchTimer = setTimeout(fire, ROSTER_REFRESH_DEBOUNCE_MS)
+        return
+      }
+      void state.refresh(state.loadedFor)
+    }
+    dueRefetchTimer = setTimeout(fire, delay)
+  }
   const store = create<HeartbeatSessionsState>((set, get) => ({
   active: [],
   archived: [],
@@ -306,6 +343,7 @@ export function createHeartbeatSessionsStore(binding: HeartbeatSessionsBinding):
       }))
 
       set({ active, archived, loadedFor: projectPath, loading: false })
+      armDueRefetch()
     } catch (err) {
       // A recovering remote host is not an error state for THIS panel —
       // cliFetch failed fast by design (0.40.48 storm killer). Keep
@@ -338,6 +376,7 @@ export function createHeartbeatSessionsStore(binding: HeartbeatSessionsBinding):
   },
 
   clear: () => {
+    disarmDueRefetch()
     set({ active: [], archived: [], loadedFor: null, lastError: null })
   },
 

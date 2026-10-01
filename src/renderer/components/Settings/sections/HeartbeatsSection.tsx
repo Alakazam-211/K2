@@ -25,7 +25,8 @@ import {
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
-import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
+import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
+import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -66,12 +67,11 @@ export interface HeartbeatRow {
   // (`wakeup_empty`, `schedule_error`). Older daemons omit both.
   waitReason?: string | null
   waitDetail?: string | null
-}
-
-/** Status badge under the heartbeat name: the daemon's wait or
- *  disabled reason, through the shared formatter. */
-export function heartbeatErrorBadge(row: HeartbeatRow): string | null {
-  return describeHeartbeatWait(row)
+  // Heartbeat S3/S4 (HB24): the daemon's next fire (UTC RFC3339) and
+  // when the wait reason last changed. Rendered by `HeartbeatStatusLine`
+  // through the shared formatter (HB31); never computed here.
+  nextFireAt?: string | null
+  waitSince?: string | null
 }
 
 /** Frequencies the daemon accepts (HB34). Anything else is refused. */
@@ -981,6 +981,12 @@ export function HeartbeatsPanel({
     })
   }, [refresh, project.path])
 
+  // Heartbeat S4: the window's server sends `nextFireAt` / `waitReason`
+  // (Settings stays window-server only). One-shot refetch when a row's
+  // fire time + 120 s passes (HB29).
+  const nextFire = primaryScope().serverSupports('heartbeat-next-fire')
+  useHeartbeatDueRefetch(rows, () => void refresh(), nextFire)
+
   const handleAdd = async (name: string, spec: ScheduleSpec, instructions: string): Promise<void> => {
     if (!project) return
     // D6: Add requires instructions; the editor already refuses blank.
@@ -1194,14 +1200,15 @@ export function HeartbeatsPanel({
                       WAKEUP.md / unparseable schedule) instead of a
                       silently-flipped toggle. Re-enabling clears the
                       failure state. */}
-                  {heartbeatErrorBadge(r) && (
-                    <span
-                      className="text-[9px] text-[var(--color-status-error-soft)] truncate"
-                      title={r.scheduleError ?? undefined}
-                    >
-                      {heartbeatErrorBadge(r)}
-                    </span>
-                  )}
+                  {/* Heartbeat S4 (HB27/HB31): next fire or the daemon's
+                      wait / disabled reason, through the one formatter
+                      the drawer uses. */}
+                  <HeartbeatStatusLine
+                    row={r}
+                    nextFire={nextFire}
+                    nextPrefix="Next: "
+                    className="text-[9px] truncate"
+                  />
                   {/* Delivery drop-down (replaces the 0.37.8 checkbox) —
                       pinned chat / own session / a trained saved
                       session — plus an open-target button that jumps to

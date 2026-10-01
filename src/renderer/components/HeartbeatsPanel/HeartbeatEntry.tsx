@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
 import { openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
-import { useRoom } from '@/components/Room/RoomContext'
+import { useRoom, useRoomSupports } from '@/components/Room/RoomContext'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
-import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
+import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { scopeMayWrite } from '@/kessel/server-scope'
 import {
   type HeartbeatEntry,
@@ -17,7 +17,7 @@ import { useToastStore } from '@/stores/toast'
  *
  * Layout:
  *   [indicator]  <name>   <Daily 9 AM>
- *   Next run: …
+ *   Next run: in 12m 04s   (or the daemon's wait reason)
  *   [toggle]                          [Launch]
  *
  * Click semantics:
@@ -39,17 +39,10 @@ export function HeartbeatEntryRow({
   const room = useRoom()
   const [busy, setBusy] = useState(false)
 
-  // 1Hz re-render so the "Next run: in Xs" countdown ticks smoothly.
-  // describeNextRun reads `new Date()` on every render and the
-  // computation is cheap (one JSON.parse + arithmetic), so doing this
-  // once a second per row is well within the per-frame budget. The
-  // useState bump is intentionally discarded — we only need the
-  // re-render side effect.
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000)
-    return () => clearInterval(id)
-  }, [])
+  // Heartbeat S4 (HB28): the room's server decides whether rows carry the
+  // daemon's `nextFireAt` / `waitReason` (its scope's version, never the
+  // window's). An older server shows the schedule text only (HB30).
+  const nextFire = useRoomSupports('heartbeat-next-fire')
 
   const handleClick = (): void => {
     if (!projectPath) {
@@ -121,13 +114,6 @@ export function HeartbeatEntryRow({
     }
   }
 
-  // S5: the daemon's wait reason (empty WAKEUP.md, invalid schedule,
-  // disabled-why) replaces the guessed countdown. S4 replaces the rest.
-  const waitText = entry.state !== 'archived' ? describeHeartbeatWait(entry.row) : null
-  const nextRun = !waitText && entry.row.enabled && entry.state !== 'archived'
-    ? describeNextRun(entry.row.frequency, entry.row.specJson, entry.row.lastFired)
-    : null
-
   return (
     <div
       role="button"
@@ -162,18 +148,14 @@ export function HeartbeatEntryRow({
           {describeSpec(entry.row.frequency, entry.row.specJson)}
         </span>
       </div>
-      {waitText && (
-        <div
-          className="text-[9px] text-[var(--color-status-error-soft)] truncate pt-0.5"
-          title={entry.row.waitDetail ?? waitText}
-        >
-          {waitText}
-        </div>
-      )}
-      {nextRun && (
-        <div className="text-[9px] text-[var(--color-text-muted)] truncate pt-0.5">
-          Next run: {nextRun}
-        </div>
+      {/* Heartbeat S4 (HB26/HB27): the daemon's next fire or the reason it
+          is waiting, through the shared formatter. No schedule math. */}
+      {!archived && (
+        <HeartbeatStatusLine
+          row={entry.row}
+          nextFire={nextFire}
+          className="text-[9px] truncate pt-0.5"
+        />
       )}
       {!archived && (
         <div className="flex items-center justify-between gap-2 pt-1">
@@ -309,147 +291,6 @@ function stripFrontmatter(content: string): string {
   const end = content.slice(3).indexOf('---')
   if (end < 0) return content.trim()
   return content.slice(3 + end + 3).trim()
-}
-
-/**
- * Compute and format the next scheduled fire time for a heartbeat.
- *
- * Mirrors the daemon's schedule resolution in `crates/k2so-core/src/scheduler.rs`
- * — keeping the two in lockstep matters because the user expects the
- * "Next run" hint to match what cron actually does. We accept the same
- * frequency-mode aliasing the daemon does (daily/weekly/monthly/yearly
- * → scheduled).
- *
- * Returns a compact human label like:
- *   - "in 1m 47s"           (hourly, sub-minute precision near 0)
- *   - "Today 9 AM"          (scheduled, today still in window)
- *   - "Tomorrow 9 AM"       (scheduled, today already fired or past)
- *   - "Mon 9 AM"            (weekly, in the next 7 days)
- *   - "Apr 27 9 AM"         (further out)
- */
-function describeNextRun(
-  frequency: string,
-  specJson: string,
-  lastFired: string | null,
-): string | null {
-  let v: {
-    frequency?: string
-    time?: string
-    days?: string[]
-    days_of_month?: number[]
-    months?: string[]
-    every_seconds?: number
-    start?: string
-    end?: string
-  } = {}
-  try {
-    v = JSON.parse(specJson)
-  } catch {
-    return null
-  }
-  const mode = v.frequency ?? frequency
-  const now = new Date()
-
-  // Hourly with every_seconds — relative time until next fire.
-  if (mode === 'hourly') {
-    const everySecs = v.every_seconds ?? 3600
-    const last = lastFired ? new Date(lastFired) : null
-    const nextAt = last
-      ? new Date(last.getTime() + everySecs * 1000)
-      : now
-    const deltaSec = Math.max(0, Math.round((nextAt.getTime() - now.getTime()) / 1000))
-    if (deltaSec === 0) return 'now'
-    if (deltaSec < 60) return `in ${deltaSec}s`
-    const m = Math.floor(deltaSec / 60)
-    const s = deltaSec % 60
-    return s === 0 ? `in ${m}m` : `in ${m}m ${s}s`
-  }
-
-  // scheduled / daily / weekly / monthly / yearly — find next occurrence.
-  const time = v.time ?? '09:00'
-  const [hStr, mStr] = time.split(':')
-  const hour = parseInt(hStr, 10)
-  const minute = parseInt(mStr ?? '0', 10)
-  if (isNaN(hour) || isNaN(minute)) return null
-
-  const lastDate = lastFired ? new Date(lastFired) : null
-  const firedToday = lastDate
-    ? isSameLocalDay(lastDate, now)
-    : false
-
-  // Build a candidate "today at HH:MM" and see if it's still in the future.
-  const todayAtTime = new Date(now)
-  todayAtTime.setHours(hour, minute, 0, 0)
-
-  // Look up to 366 days ahead for a matching day.
-  for (let offset = 0; offset < 366; offset++) {
-    const candidate = new Date(todayAtTime)
-    candidate.setDate(todayAtTime.getDate() + offset)
-
-    // If today, skip if we've already fired today or the time has passed.
-    if (offset === 0) {
-      if (firedToday) continue
-      if (candidate.getTime() <= now.getTime()) continue
-    }
-
-    if (!matchesScheduleDay(mode, candidate, v)) continue
-
-    return formatNextLabel(candidate, now)
-  }
-
-  return null
-}
-
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
-}
-
-function matchesScheduleDay(
-  mode: string,
-  candidate: Date,
-  spec: { days?: string[]; days_of_month?: number[]; months?: string[] },
-): boolean {
-  const dowShort = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][candidate.getDay()]
-  const monthShort = [
-    'jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec',
-  ][candidate.getMonth()]
-
-  if (mode === 'daily' || mode === 'scheduled') return true
-  if (mode === 'weekly') {
-    const days = spec.days ?? []
-    return days.length === 0 || days.includes(dowShort)
-  }
-  if (mode === 'monthly') {
-    const dom = spec.days_of_month ?? []
-    return dom.length === 0 || dom.includes(candidate.getDate())
-  }
-  if (mode === 'yearly') {
-    const months = spec.months ?? []
-    return months.length === 0 || months.includes(monthShort)
-  }
-  return false
-}
-
-/** Format the next-run label relative to `now`.
- *  Today/Tomorrow/<weekday> within 7 days, absolute date otherwise. */
-function formatNextLabel(when: Date, now: Date): string {
-  const time = fmt12h(`${when.getHours().toString().padStart(2, '0')}:${when.getMinutes().toString().padStart(2, '0')}`)
-  if (isSameLocalDay(when, now)) return `Today ${time}`
-  const tomorrow = new Date(now)
-  tomorrow.setDate(now.getDate() + 1)
-  if (isSameLocalDay(when, tomorrow)) return `Tomorrow ${time}`
-  // Within a week → weekday name. Beyond → MMM DD.
-  const daysAhead = Math.round((when.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
-  if (daysAhead < 7) {
-    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][when.getDay()]
-    return `${dow} ${time}`
-  }
-  const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][when.getMonth()]
-  return `${month} ${when.getDate()} ${time}`
 }
 
 /** Convert "HH:MM" → "h AM/PM" (minute elided when 00 to keep the

@@ -91,6 +91,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          # Self-hosted k2-linux shares k2-ci's ~/.cargo with the release gate.
+          # rust-cache's bin cleanup deleted ~/.cargo/bin/rustup after a job
+          # (0.41.6 daemon-binaries ended 05:46Z, the moment rustup vanished),
+          # which broke the next release gate with `cargo: command not found`.
+          cache-bin: false
 
       # Native x86_64 build deps + (for aarch64) the gnu cross toolchain that
       # provides the aarch64-linux-gnu-gcc linker cargo needs. cmake/clang

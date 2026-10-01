@@ -33,7 +33,6 @@ interface Row {
 
 interface ProbeWindow extends Window {
   __TAURI_INTERNALS__?: { metadata?: unknown }
-  __TAURI_EVENT_PLUGIN_INTERNALS__?: unknown
   isTauri?: boolean
   ipc?: unknown
   webkit?: { messageHandlers?: Record<string, unknown> }

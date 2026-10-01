@@ -41,6 +41,8 @@ import { isWebClient } from '@/lib/is-web'
 import { devRoomFrameHost } from '@/dev/room-frame-shim'
 import { LOGIN_404_K2DEV_MESSAGE, k2DevApexLabel, loginUrlFor } from '@/lib/login-url'
 import { emitSoftResync, shouldEmitSoftResync } from '@/lib/soft-resync'
+import { homeHostKey } from '@/lib/host-key'
+import { fireLoginLanded, fireSavedHostRekey, type LoginLanded } from '@/lib/connect-host-hooks'
 import {
   CONNECT_HOSTS_STORAGE_KEY,
   clearConnectHostsStorage,
@@ -174,6 +176,27 @@ export function activeHostKey(active: ActiveHost): string {
   return active === 'local' ? 'local' : `${active.id}:${active.hostname}:${active.port}`
 }
 
+// ── Home M2 hooks (MS28, MS61, MS62) ─────────────────────────────────────
+// connect-host imports nothing app-side, so the connection pool, the Home
+// store and the host-scoped storage re-key subscribe through these
+// registries instead of being imported here.
+
+/** MS61: the saved entry (other than `exceptId`) that already uses this
+ *  host key, or null. Two saved entries for one server are refused. */
+export function duplicateSavedHost(
+  hosts: ConnectHost[],
+  candidate: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>,
+  exceptId: string | null,
+): ConnectHost | null {
+  const key = homeHostKey(candidate)
+  return hosts.find((h) => h.id !== exceptId && homeHostKey(h) === key) ?? null
+}
+
+/** The refusal copy for a duplicate saved server. */
+export function duplicateSavedHostMessage(dup: Pick<ConnectHost, 'label' | 'hostname'>): string {
+  return `Already saved as ${dup.label || dup.hostname}.`
+}
+
 /** Whether the active host carries a usable session: 'local' always does
  *  (per-boot daemon token, resolved by daemon-ws); a remote does IFF it
  *  holds a non-empty session token. `expireSession` flips an active
@@ -298,8 +321,15 @@ export interface ConnectHostState {
    *  host-aware `daemonCli*` calls that read `activeHost` from this store
    *  at call time, so there is no Rust-side override to await. */
   selectHost: (hostOrLocal: ActiveHost) => void
-  /** Add (or replace by id) a host in the address book. */
-  addHost: (host: ConnectHost) => void
+  /** Add (or replace by id) a host in the address book. Returns false and
+   *  changes nothing when another saved entry already uses the same host
+   *  key (MS61). An edit that changes the host key re-keys Home rows,
+   *  host-prefixed keys and pool entries; an edit of the active entry
+   *  refreshes `activeHost`. */
+  addHost: (host: ConnectHost) => boolean
+  /** MS62: another window rewrote the saved list (`storage` event). Merge
+   *  it in, keeping this window's in-memory tokens. Never writes back. */
+  applyExternalHosts: (raw: string | null) => void
   /** Remove a host by id. If it's the active host, fall back to 'local'.
    *  Also forgets any keychain token for that host. */
   removeHost: (id: string) => void
@@ -391,19 +421,25 @@ function loadHosts(): ConnectHost[] {
   const storage = getStorage()
   if (!storage) return []
   const raw = readConnectHostsStorage(storage)
-  if (!raw) return []
+  return parsePersistedHosts(raw) ?? []
+}
+
+/** Parse the token-less host list JSON. Null when it is not a list. */
+function parsePersistedHosts(raw: string | null): ConnectHost[] | null {
+  if (!raw) return null
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((h): h is PersistedHost => isPersistedHost(h))
-      // `secure` may be absent in entries persisted before step #4 —
-      // default to false (plain http/ws) so old saved hosts keep their
-      // prior behaviour. Token is never persisted; starts empty.
-      .map((h) => ({ ...h, secure: h.secure ?? false, token: '' }))
+    parsed = JSON.parse(raw) as unknown
   } catch {
-    return []
+    return null
   }
+  if (!Array.isArray(parsed)) return null
+  return parsed
+    .filter((h): h is PersistedHost => isPersistedHost(h))
+    // `secure` may be absent in entries persisted before step #4 —
+    // default to false (plain http/ws) so old saved hosts keep their
+    // prior behaviour. Token is never persisted; starts empty.
+    .map((h) => ({ ...h, secure: h.secure ?? false, token: '' }))
 }
 
 function isPersistedHost(h: unknown): h is PersistedHost {
@@ -634,7 +670,31 @@ export function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secur
  *                      (other non-2xx, malformed body, missing username). */
 export type LoginResult =
   | { ok: true; token: string; mustChangePassword: boolean }
-  | { ok: false; kind: 'auth' | 'not-found' | 'unreachable' | 'server'; reason: string }
+  | {
+      ok: false
+      kind: 'auth' | 'not-found' | 'unreachable' | 'server' | 'throttled'
+      reason: string
+      /** 'throttled' only: the server's `Retry-After`, in seconds, when sent. */
+      retryAfterSec?: number | null
+    }
+
+/** MS31: the copy for a 429 from a login (the daemon's 5-per-IP limit or
+ *  the `*.app.k2.dev` edge's). */
+export function throttledLoginMessage(retryAfterSec: number | null): string {
+  if (retryAfterSec === null) return 'Too many sign-ins from this network. Try again in a few minutes.'
+  const min = Math.max(1, Math.ceil(retryAfterSec / 60))
+  return `Too many sign-ins from this network. Try again in ${min} min.`
+}
+
+/** `Retry-After` as seconds (delta-seconds or an HTTP date), or null. */
+export function parseRetryAfter(value: string | null, nowMs: number = Date.now()): number | null {
+  if (value === null) return null
+  const t = value.trim()
+  if (/^\d+$/.test(t)) return Number(t)
+  const at = Date.parse(t)
+  if (Number.isNaN(at)) return null
+  return Math.max(0, Math.ceil((at - nowMs) / 1000))
+}
 
 /** Daemon `POST /cli/auth/login` success body. */
 interface LoginResponse {
@@ -725,6 +785,10 @@ export async function loginToHost(
   if (resp.status === 401) {
     return { ok: false, kind: 'auth', reason: 'Invalid username or password.' }
   }
+  if (resp.status === 429) {
+    const retryAfterSec = parseRetryAfter(resp.headers.get('Retry-After'))
+    return { ok: false, kind: 'throttled', reason: throttledLoginMessage(retryAfterSec), retryAfterSec }
+  }
   if (resp.status === 404) {
     // D3: on a hosted `.k2.dev` host a 404 is the daemon's edge-only gate
     // (or an edge that is not signing yet) — never a transient. Elsewhere
@@ -766,6 +830,12 @@ export async function loginToHost(
     store.addHost({ ...existing, token: body.token, lastConnectedAt: Date.now() })
   }
   await rememberToken(host.id, body.token, host.hostname)
+  const landed: LoginLanded = {
+    host: useConnectHostStore.getState().hosts.find((h) => h.id === host.id) ?? { ...host, token: body.token },
+    token: body.token,
+    mustChangePassword,
+  }
+  fireLoginLanded(landed)
   return { ok: true, token: body.token, mustChangePassword }
 }
 
@@ -979,13 +1049,71 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   },
 
   addHost: (host) => {
-    const existing = get().hosts
+    const { hosts: existing, activeHost } = get()
+    const prev = existing.find((h) => h.id === host.id)
+    const newKey = homeHostKey(host)
+    const prevKey = prev ? homeHostKey(prev) : null
+    // MS61: never introduce a second saved entry for one server. An entry
+    // that already shared its key with another one (saved before this
+    // rule) keeps saving: existing duplicates are kept.
+    const dup = duplicateSavedHost(existing, host, host.id)
+    if (dup && prevKey !== newKey) {
+      console.warn(`[connect-host] refused a duplicate saved server: ${newKey} is ${dup.label || dup.hostname}`)
+      return false
+    }
     // Replace-by-id so re-adding/editing an existing entry updates in
     // place rather than duplicating.
     const without = existing.filter((h) => h.id !== host.id)
     const next = [...without, host]
     persistHosts(next)
-    set({ hosts: next })
+    // MS61: an edit of the ACTIVE entry refreshes `activeHost`, so the
+    // request layer and the App key see the new address. A missing token
+    // on the edited copy never drops the live session.
+    const editsActive = activeHost !== 'local' && activeHost.id === host.id
+    if (editsActive) {
+      const token = host.token.length > 0 ? host.token : activeHost.token
+      set({ hosts: next, activeHost: { ...host, token } })
+    } else {
+      set({ hosts: next })
+    }
+    if (prevKey !== null && prevKey !== newKey) fireSavedHostRekey(prevKey, newKey, host)
+    return true
+  },
+
+  applyExternalHosts: (raw) => {
+    // Hosted web seeds its one same-origin host; nothing to sync.
+    if (isWebClient()) return
+    const persisted = parsePersistedHosts(raw)
+    if (persisted === null) return
+    const { hosts: mine, activeHost } = get()
+    const byId = new Map(mine.map((h) => [h.id, h]))
+    const next: ConnectHost[] = persisted.map((p) => ({ ...p, token: byId.get(p.id)?.token ?? '' }))
+    const rekeys: Array<{ oldKey: string; newKey: string; host: ConnectHost }> = []
+    for (const h of next) {
+      const old = byId.get(h.id)
+      if (old && homeHostKey(old) !== homeHostKey(h)) {
+        rekeys.push({ oldKey: homeHostKey(old), newKey: homeHostKey(h), host: h })
+      }
+    }
+    // Keep this window on its server. An edit of the active entry in
+    // another window refreshes it here too (MS61); a removal elsewhere
+    // never yanks this window off it.
+    let nextActive: ActiveHost = activeHost
+    if (activeHost !== 'local') {
+      const edited = next.find((h) => h.id === activeHost.id)
+      if (edited) nextActive = { ...edited, token: activeHost.token }
+    }
+    set({ hosts: next, activeHost: nextActive })
+    for (const r of rekeys) fireSavedHostRekey(r.oldKey, r.newKey, r.host)
+    // A server saved in another window: pick up its remembered token.
+    for (const h of next) {
+      if (byId.has(h.id) || !h.remember) continue
+      void resolveToken(h.id).then((token) => {
+        if (!token) return
+        const still = get().hosts.find((x) => x.id === h.id)
+        if (still && still.token.length === 0) get().setHostToken(h.id, token)
+      })
+    }
   },
 
   removeHost: (id) => {
@@ -1094,3 +1222,28 @@ export function __resetConnectHostStoreForTests(): void {
 
 /** The localStorage key, re-exported for tests / callers. */
 export { CONNECT_HOSTS_STORAGE_KEY }
+
+/** MS62: keep the saved-server list in step with other windows (the same
+ *  `storage` idiom as `stores/homes.ts`). Tokens never ride it; each window
+ *  keeps its own in memory and re-reads the keychain on `k2:host-session`.
+ *  Returns the unsubscribe. */
+export function attachConnectHostsStorageSync(
+  target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
+  storage: Pick<Storage, 'getItem'> | null,
+): () => void {
+  const onStorage = (e: Event): void => {
+    const se = e as Event & { key?: string | null; newValue?: string | null }
+    if (se.key === CONNECT_HOSTS_STORAGE_KEY) {
+      useConnectHostStore.getState().applyExternalHosts(se.newValue ?? null)
+    } else if (se.key === null && storage) {
+      // storage.clear() in another window — re-read what is there now.
+      useConnectHostStore.getState().applyExternalHosts(readConnectHostsStorage(storage))
+    }
+  }
+  target.addEventListener('storage', onStorage)
+  return () => target.removeEventListener('storage', onStorage)
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  attachConnectHostsStorageSync(window, getStorage())
+}

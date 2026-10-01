@@ -181,7 +181,7 @@ describe('connect-host store', () => {
 
   it('removeHost drops the entry and updates localStorage', () => {
     useConnectHostStore.getState().addHost(makeHost({ id: 'a' }))
-    useConnectHostStore.getState().addHost(makeHost({ id: 'b' }))
+    useConnectHostStore.getState().addHost(makeHost({ id: 'b', hostname: '192.168.1.51' }))
     useConnectHostStore.getState().removeHost('a')
     const hosts = useConnectHostStore.getState().hosts
     expect(hosts.map((h) => h.id)).toEqual(['b'])

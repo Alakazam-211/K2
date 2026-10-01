@@ -9,6 +9,8 @@
 // only then treat the host as signed in.
 
 import {
+  duplicateSavedHost,
+  duplicateSavedHostMessage,
   loginToHost as storeLoginToHost,
   useConnectHostStore,
   type ConnectHost,
@@ -27,7 +29,8 @@ export type AddServerLoginOutcome =
   | { kind: 'error'; reason: string }
 
 export interface AddServerLoginDeps {
-  addHost: (host: ConnectHost) => void
+  /** False when another saved entry already uses this host key (MS61). */
+  addHost: (host: ConnectHost) => boolean
   removeHost: (id: string) => void
   loginToHost: (host: ConnectHost, password: string) => Promise<LoginResult>
 }
@@ -49,7 +52,13 @@ export async function verifyHostCredentials(
   isNew: boolean,
   deps: AddServerLoginDeps = storeDeps(),
 ): Promise<AddServerLoginOutcome> {
-  deps.addHost(host)
+  if (!deps.addHost(host)) {
+    const dup = duplicateSavedHost(useConnectHostStore.getState().hosts, host, host.id)
+    return {
+      kind: 'error',
+      reason: dup ? duplicateSavedHostMessage(dup) : 'This server is already saved.',
+    }
+  }
   const result = await deps.loginToHost(host, password)
   if (!result.ok) {
     if (isNew) deps.removeHost(host.id)

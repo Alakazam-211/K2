@@ -25,9 +25,10 @@
 // Home.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
-import { parseHomeAddress } from '@/lib/home-address'
+import { homeAddress, parseHomeAddress } from '@/lib/home-address'
 import { homeHostKey } from '@/lib/host-key'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { onSavedHostRekey } from '@/lib/connect-host-hooks'
 
 export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
@@ -368,6 +369,23 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
   })
 }
 
+/** MS61: rows on `oldKey` move to `newKey` (a saved server's address was
+ *  edited). A row whose new address is already on that Home is dropped.
+ *  Idempotent: the window that saved the edit writes the Homes, and the
+ *  other windows find nothing left to move. */
+export function rekeyHomeRows(
+  store: UseBoundStore<StoreApi<HomesState>>,
+  oldKey: string,
+  newKey: string,
+): void {
+  if (oldKey === newKey) return
+  store.getState().repairRows((row) => {
+    const p = parseHomeAddress(row.address)
+    if (!p || p.host !== oldKey) return null
+    return { ...row, address: homeAddress(p.handle, newKey) }
+  })
+}
+
 /** Keep a store in step with other windows. Returns the unsubscribe. */
 export function attachHomesStorageSync(
   store: UseBoundStore<StoreApi<HomesState>>,
@@ -416,6 +434,8 @@ export const useHomesStore = createHomesStore({
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   attachHomesStorageSync(useHomesStore, window, localKv)
 }
+
+onSavedHostRekey((oldKey, newKey) => rekeyHomeRows(useHomesStore, oldKey, newKey))
 
 /** The selected Home object (always defined). */
 export function selectedHome(s: Pick<HomesState, 'homes' | 'selectedId'>): Home {

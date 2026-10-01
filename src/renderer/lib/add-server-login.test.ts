@@ -37,7 +37,7 @@ function deps(login: LoginResult): AddServerLoginDeps & {
   loginToHost: ReturnType<typeof vi.fn>
 } {
   return {
-    addHost: vi.fn(),
+    addHost: vi.fn(() => true),
     removeHost: vi.fn(),
     loginToHost: vi.fn(async () => login),
   }

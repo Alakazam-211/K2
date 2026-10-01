@@ -21,6 +21,7 @@
 
 import { homeHostKey, LOCAL_HOME_HOST } from '@/lib/host-key'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { onSavedHostRekey } from '@/lib/connect-host-hooks'
 
 export const HOST_SCOPED_KEYS_MARKER = 'k2.hostScopedKeys.v1'
 
@@ -159,3 +160,65 @@ export function ensureHostScopedKeysMigrated(): void {
 export function __resetHostScopedKeysMigrationForTests(): void {
   migrated = false
 }
+
+/** MS61: a saved server's host key changed. Move every `<oldKey>|…` key
+ *  (and every `<oldKey>|…` entry of the selected-tab map) to `<newKey>|…`.
+ *  An entry already written under the new key wins. Idempotent, so every
+ *  window may run it. Returns how many items moved. */
+export function rekeyHostScopedStorage(storage: MigratableStorage, oldKey: string, newKey: string): number {
+  if (oldKey === newKey) return 0
+  const from = `${oldKey}|`
+  const to = `${newKey}|`
+  const keys: string[] = []
+  for (let i = 0; i < storage.length; i++) {
+    const k = storage.key(i)
+    if (k !== null && k.startsWith(from)) keys.push(k)
+  }
+  let moved = 0
+  for (const k of keys) {
+    const value = storage.getItem(k)
+    storage.removeItem(k)
+    if (value === null) continue
+    const target = to + k.slice(from.length)
+    if (storage.getItem(target) === null) storage.setItem(target, value)
+    moved += 1
+  }
+  const selected = storage.getItem(SELECTED_TABS_STORAGE_KEY)
+  if (selected !== null) {
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(selected)
+    } catch {
+      parsed = null
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const map = parsed as Record<string, unknown>
+      let changed = false
+      for (const k of Object.keys(map)) {
+        if (!k.startsWith(from)) continue
+        const target = to + k.slice(from.length)
+        if (!(target in map)) map[target] = map[k]
+        delete map[k]
+        changed = true
+        moved += 1
+      }
+      if (changed) storage.setItem(SELECTED_TABS_STORAGE_KEY, JSON.stringify(map))
+    }
+  }
+  return moved
+}
+
+onSavedHostRekey((oldKey, newKey) => {
+  let storage: Storage | undefined
+  try {
+    storage = typeof localStorage === 'undefined' ? undefined : localStorage
+  } catch {
+    storage = undefined
+  }
+  if (!storage || typeof storage.key !== 'function') return
+  try {
+    rekeyHostScopedStorage(storage, oldKey, newKey)
+  } catch (err) {
+    console.warn('[host-scoped-storage] re-key skipped:', err)
+  }
+})

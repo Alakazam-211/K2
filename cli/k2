@@ -2188,61 +2188,49 @@ cmd_heartbeat_edit() {
         [ -f "$instructions_file" ] || { echo "Error: --instructions-file not found: $instructions_file" >&2; exit 1; }
         instructions="$(cat "$instructions_file")"
     fi
+    # AH32: one daemon call. The daemon writes the instructions on its own
+    # disk (keeping the frontmatter) and records who edited them.
+    local params="name=$(urlencode "$name")"
+    local freq=""
     if [ "$have_spec" = "1" ]; then
         local spec_output
         spec_output=$(hb_parse_spec ${spec_args[@]+"${spec_args[@]}"})
         local spec_json
         spec_json=$(echo "$spec_output" | head -1)
-        local freq
         freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
-        local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
-        cli_send cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    if d.get('success'):
-        print(f'Updated heartbeat: $name ($freq)')
-    else:
-        print(f\"Error: {d.get('error', 'unknown')}\", file=sys.stderr); sys.exit(1)
-except Exception as e:
-    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-"
+        params="${params}&frequency=$freq&spec=$(urlencode "$spec_json")"
     fi
     if [ "$have_instructions" = "1" ]; then
-        # Resolve the WAKEUP.md the same way `heartbeat signal wakeup`
-        # does: the row's workspace-relative wakeupPath joined onto the
-        # workspace base. Written only AFTER a successful schedule edit
-        # (a failed edit above already exited non-zero).
-        local rel_path
-        rel_path=$(cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+        if [ -z "$(printf '%s' "$instructions" | tr -d '[:space:]')" ]; then
+            echo "Error: instructions cannot be blank" >&2
+            exit 1
+        fi
+        params="${params}&instructions=$(urlencode "$instructions")"
+    fi
+    cli_send cli_request "/cli/heartbeat/edit" "$params" | NAME="$name" FREQ="$freq" HAVE_INSTR="$have_instructions" python3 -c "
 import json, os, sys
 try:
-    rows = json.loads(sys.stdin.read())
-    row = next((r for r in rows if r.get('name') == os.environ['NAME']), None)
-    if not row:
-        print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
-        sys.exit(1)
-    print(row.get('wakeupPath') or '')
-except SystemExit:
-    raise
+    d = json.loads(sys.stdin.read())
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-")
-        local lookup_code=$?
-        if [ $lookup_code -ne 0 ]; then exit $lookup_code; fi
-        [ -z "$rel_path" ] && { echo "Heartbeat '$name' has no wakeup path on file." >&2; exit 1; }
-        local base="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
-        local abs_path="$base/$rel_path"
-        mkdir -p "$(dirname "$abs_path")"
-        printf '%s\n' "$instructions" > "$abs_path"
-        echo "Wake instructions written ($(printf '%s' "$instructions" | wc -c | tr -d ' ') bytes): $abs_path"
-    fi
+if not d.get('success'):
+    err = d.get('error', 'unknown')
+    if 'frequency' in str(err) and os.environ['FREQ'] == '':
+        print('Error: this daemon is older than heartbeat edit --instructions without a schedule.', file=sys.stderr)
+        print('       Update the host, or pass the schedule flags too.', file=sys.stderr)
+    else:
+        print(f'Error: {err}', file=sys.stderr)
+    sys.exit(1)
+name = os.environ['NAME']
+if os.environ['FREQ']:
+    print(f'Updated heartbeat: {name} ({os.environ[\"FREQ\"]})')
+if os.environ['HAVE_INSTR'] == '1':
+    print(f'Wake instructions written by the daemon: {name}')
+"
 }
 
-# Print a single heartbeat's full details. Default output is human-readable
-# (key: value per line); --json dumps the raw row for scripting/piping.
-# Implemented client-side off /cli/heartbeat/list to avoid adding a new
-# backend endpoint for a simple filter.
+# Print a single heartbeat's full details plus its WAKEUP.md instructions,
+# from GET /cli/heartbeat/show (AH9). --json dumps the daemon row.
 cmd_heartbeat_show() {
     local name=""
     local as_json=0
@@ -2254,44 +2242,53 @@ cmd_heartbeat_show() {
         esac
     done
     [ -z "$name" ] && { echo "Usage: k2 heartbeat show <name> [--json]" >&2; exit 1; }
-    cli_send cli_request "/cli/heartbeat/list" | NAME="$name" AS_JSON="$as_json" python3 -c "
+    cli_send cli_request "/cli/heartbeat/show" "name=$(urlencode "$name")" | NAME="$name" AS_JSON="$as_json" python3 -c "
 import json, os, sys
 name = os.environ['NAME']
 as_json = os.environ['AS_JSON'] == '1'
 try:
-    rows = json.loads(sys.stdin.read())
-    row = next((r for r in rows if r.get('name') == name), None)
-    if not row:
-        print(f'No heartbeat named \"{name}\" in this workspace.', file=sys.stderr)
-        sys.exit(1)
-    if as_json:
-        print(json.dumps(row, indent=2))
-        sys.exit(0)
-    spec = json.loads(row.get('specJson') or '{}')
-    enabled = 'yes' if row.get('enabled') else 'no'
-    last = row.get('lastFired') or 'never'
-    created = row.get('createdAt') or '?'
-    pinned = 'yes' if row.get('useWorkspaceSession') else 'no'
-    print(f'Name:           {row.get(\"name\")}')
-    print(f'Frequency:      {row.get(\"frequency\")}')
-    print(f'Enabled:        {enabled}')
-    print(f'Pinned chat:    {pinned}')
-    print(f'Last fired:     {last}')
-    # Heartbeat S3 (HB24): daemon-owned next fire + wait reason.
-    print(f'Next fire:      {row.get(\"nextFireAt\") or \"-\"}')
-    waiting = row.get('waitReason') or '-'
-    if row.get('waitDetail'): waiting += f' ({row.get(\"waitDetail\")})'
-    if row.get('waitSince'): waiting += f' since {row.get(\"waitSince\")}'
-    print(f'Waiting:        {waiting}')
-    print(f'Wakeup file:    {row.get(\"wakeupPath\")}')
-    print(f'Created:        {created}')
-    print(f'Spec:')
-    for k, v in spec.items():
-        print(f'  {k}: {v}')
-except SystemExit:
-    raise
+    row = json.loads(sys.stdin.read())
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+if not isinstance(row, dict):
+    print(f'Error: unexpected reply: {row}', file=sys.stderr); sys.exit(1)
+if row.get('error') == 'no_such_heartbeat':
+    print(f'No heartbeat named \"{name}\" in this workspace.', file=sys.stderr)
+    sys.exit(1)
+if row.get('error'):
+    print(f\"Error: {row.get('error')} (an older host has no heartbeat show; update it)\", file=sys.stderr)
+    sys.exit(1)
+if as_json:
+    print(json.dumps(row, indent=2))
+    sys.exit(0)
+spec = json.loads(row.get('specJson') or '{}')
+enabled = 'yes' if row.get('enabled') else 'no'
+last = row.get('lastFired') or 'never'
+created = row.get('createdAt') or '?'
+pinned = 'yes' if row.get('useWorkspaceSession') else 'no'
+print(f'Name:           {row.get(\"name\")}')
+print(f'Frequency:      {row.get(\"frequency\")}')
+print(f'Enabled:        {enabled}')
+print(f'Pinned chat:    {pinned}')
+print(f'Last fired:     {last}')
+# Heartbeat S3 (HB24): daemon-owned next fire + wait reason.
+print(f'Next fire:      {row.get(\"nextFireAt\") or \"-\"}')
+waiting = row.get('waitReason') or '-'
+if row.get('waitDetail'): waiting += f' ({row.get(\"waitDetail\")})'
+if row.get('waitSince'): waiting += f' since {row.get(\"waitSince\")}'
+print(f'Waiting:        {waiting}')
+print(f'Wakeup file:    {row.get(\"wakeupPath\")}')
+print(f'Created:        {created}')
+print(f'Spec:')
+for k, v in spec.items():
+    print(f'  {k}: {v}')
+print('Instructions:')
+body = row.get('instructions') or ''
+if body.strip():
+    for line in body.splitlines():
+        print(f'  {line}')
+else:
+    print('  (empty — the heartbeat waits until instructions are written)')
 "
 }
 
@@ -2397,11 +2394,18 @@ try:
     if not rows:
         print(f'No fire history for heartbeat \"$name\" yet.'); sys.exit(0)
     print(f'Last {len(rows)} fire(s) for heartbeat \"$name\":')
-    print(f'{\"Time\":<22} {\"Decision\":<22} Reason')
-    print('-' * 90)
+    print(f'{\"Time\":<22} {\"Decision\":<22} {\"By\":<22} Reason')
+    print('-' * 110)
+    def who(a):
+        # AH18 actor words (twin of k2_core actor_phrase).
+        if not a: return 'scheduler'
+        if a == 'owner-token': return 'owner'
+        for pre, words in (('user:', 'user'), ('agent:', 'agent'), ('app:', 'app user'), ('app-token:', 'app token')):
+            if a.startswith(pre): return f'{words} {a[len(pre):]}'
+        return a
     for r in rows:
         t = (r.get('firedAt') or '')[:19].replace('T', ' ')
-        print(f'{t:<22} {r.get(\"decision\",\"?\"):<22} {r.get(\"reason\",\"\") or \"\"}')
+        print(f'{t:<22} {r.get(\"decision\",\"?\"):<22} {who(r.get(\"actor\")):<22} {r.get(\"reason\",\"\") or \"\"}')
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 "
@@ -15156,7 +15160,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps skins feedback-loop"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop"
 
 _study_usage() {
     cat <<'EOF'
@@ -15172,7 +15176,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 
 Topics:
   what  source  map  identity  send  human  people  auth  errors
-  context  db  mail  connect-boundary  apps  skins  feedback-loop
+  context  db  mail  connect-boundary  apps  app-heartbeats  skins
+  feedback-loop
 EOF
 }
 
@@ -15192,6 +15197,7 @@ _study_title() {
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
+        app-heartbeats) echo "Heartbeats in an app" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         *) echo "" ;;
@@ -15226,6 +15232,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
+  app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
 
@@ -15249,6 +15256,7 @@ _study_page() {
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
+        app-heartbeats) _study_page_app_heartbeats ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -15959,6 +15967,128 @@ PASSWORD SIGN-IN OVER THE TUNNEL
   Sessions last 7 days; the desktop app re-signs in silently.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_app_heartbeats() {
+    cat <<'EOF'
+k2 study app-heartbeats — heartbeats in an app (client contract)
+
+An app with heartbeats:read / heartbeats:write on a room can see and
+change THAT room's heartbeats. Never another workspace's, never the
+machine's scheduler, wake settings, Keep awake or power routes.
+Grant: `k2 app role room <role> <room> --caps heartbeats:read,heartbeats:write`.
+heartbeats:write does not imply heartbeats:read. files:* and
+activity:read imply neither.
+
+ROUTES (send workspace=<room handle>; never a path)
+  heartbeats:read   GET  /cli/heartbeat/list?workspace=
+                    GET  /cli/heartbeat/show?workspace=&name=
+                    GET  /cli/heartbeat/status?workspace=&name=&limit=   (1-200)
+                    GET  /cli/heartbeat/fires-list?workspace=&limit=     (max 200)
+  heartbeats:write  POST /cli/heartbeat/add      {workspace,name,frequency,spec,instructions}
+                    POST /cli/heartbeat/edit     {workspace,name,frequency?,spec?,instructions?}
+                    POST /cli/heartbeat/enable   {workspace,name,enabled:true|false}
+                    POST /cli/heartbeat/rename   {workspace,from,to}
+                    POST /cli/heartbeat/archive  {workspace,name}   (your "remove")
+                    POST /cli/heartbeat/fire     {workspace,name}
+  heartbeats:read   WS   /cli/activity/events?workspace=
+                         ← {"kind":"heartbeat_changed","workspace":"<handle>"}
+                         ← {"kind":"heartbeat_changed","workspace":"<handle>","name":"…","live":true}
+  Instructions (the WAKEUP.md body) come back from show only with
+  files:read in the room; otherwise show says "instructionsHidden": true.
+  heartbeats:write may also write exactly .k2/heartbeats/<name>/WAKEUP.md
+  through POST /cli/fs/write-file. files:write cannot touch .k2/heartbeats/.
+  Remove is archive: the owner can restore it. Hard delete is owner-only.
+  Support check: list answers gateway 404 = not supported on this server;
+  403 "missing capability heartbeats:read" = supported, not granted.
+
+WHAT THE K2 CORE DOES
+  Scheduling. Firing, into the room's pinned chat. Catch-up: a slot missed
+  while the machine slept fires once on wake if it is under 12 h old;
+  older slots are skipped. Computing nextFireAt and waitReason. The overdue
+  watchdog. Waking and keeping the machine awake. Validation (frequency,
+  interval floor, empty instructions).
+
+WHAT THE APP MUST DO
+  1. Count down from nextFireAt. It is UTC RFC3339. Show the distance from
+     the device clock to that time. Never compute a next fire from the
+     schedule. Never show "now" or "0m 0s".
+  2. Map waitReason to your own words (reference copy below). An unknown
+     reason (a newer server): show "waiting: <reason>" plus waitDetail.
+  3. Refetch on heartbeat_changed. The frame carries no row data.
+     Debounce: one refetch per 500 ms burst (one change can send two).
+  4. Refetch once at nextFireAt + 120 s for each enabled row, if no frame
+     arrived. One timer, not a poll. If that deadline is already past, do
+     not re-arm.
+  5. Send instructions on add. Required. Edit can replace them. You can
+     read them back only with files:read.
+  6. Show "firing…" for up to 120 s after nextFireAt, and while firing is
+     true. After that the daemon will have named the reason.
+  7. Treat silence as "no change", not "idle". No frame means nothing
+     changed. Pinned-chat heartbeats (the default) send no live frames.
+  8. Fire now resets an interval heartbeat: the next slot counts from the
+     fire. A failed fire counts toward the 5-failure auto-disable, the same
+     as the owner's. Fire now is rate limited; honour Retry-After.
+
+LIMITS
+  Fire now: once per heartbeat per app login per 5 minutes, and 12 per
+  room per hour. Other writes: 60 per login per room per 10 minutes.
+  Over a limit: 429 {"error":"rate_limited","retryAfterSecs":N} plus a
+  Retry-After header. App heartbeats fire at most every 5 minutes
+  (hourly every_seconds >= 300). Instructions: required, up to 16 KiB.
+
+ERRORS
+  400 instructions_required | instructions_too_large | interval_too_short |
+      unknown frequency | enabled must be true or false | missing workspace
+  403 skin_room (room not on the pass) | missing capability <cap> |
+      heartbeats_area (files write into .k2/heartbeats)
+  404 no_such_heartbeat (unknown or archived name; never a silent success)
+  409 disabled | in_flight (a fire holds the lease) | backoff (with
+      nextFireAt) | wakeup_empty
+  429 rate_limited
+
+WAIT REASONS (waitReason → meaning → reference copy)
+  scheduled                Fires at nextFireAt.
+                           "in 12m 04s" / "Tomorrow 7:00 AM"
+  in_flight                Firing now (lease held).
+                           "firing…"
+  window_closed            Outside its firing window; nextFireAt is when it opens.
+                           "waiting: window opens 10:00 PM"
+  backoff                  Last fire failed; retry at nextFireAt. waitDetail = "failure 2 of 5".
+                           "retry in 2m (failure 2 of 5)"
+  schedule_error           The schedule can't be parsed; waitDetail says why.
+                           "invalid schedule: <detail>"
+  wakeup_empty             WAKEUP.md has no instructions. Stays enabled.
+                           "waiting: WAKEUP.md is empty"
+  no_agent                 The workspace has no agent to wake.
+                           "waiting: no agent in this workspace"
+  no_project               The workspace folder is gone.
+                           "waiting: workspace folder not found"
+  disabled:user            Turned off by a person or app.
+                           "disabled"
+  disabled:failures        Turned off after 5 failed fires.
+                           "disabled: repeated failures"
+  disabled:wakeup_missing  Turned off: WAKEUP.md was deleted.
+                           "disabled: WAKEUP.md missing"
+  disabled:wakeup_empty    Old auto-disable relabelled (the file was only empty).
+                           "disabled: WAKEUP.md is empty"
+  overdue                  More than 120 s past nextFireAt; waitDetail names the gate.
+                           "overdue 6m: <gate>"
+  no_ticks                 The daemon's scheduler hasn't ticked for 180 s; waitSince = last tick.
+                           "waiting: scheduler not ticking (8h)"
+
+EXAMPLE
+  09:58:30, nextFireAt 10:00:00Z, scheduled → "in 1m 30s". At 10:01 →
+  "firing…". heartbeat_changed at 10:00:40; refetch shows lastFired
+  10:00:38 and nextFireAt 10:15:00 → "in 14m 20s". Had no frame come, the
+  app refetches once at 10:02:00.
+
+HISTORY
+  status / fires-list rows: {firedAt,name,decision,reason,durationMs,actor}.
+  decision "changed" = a write (reason names it: added, disabled, renamed
+  from x, instructions edited). actor: owner-token | user:<name> |
+  agent:<handle> | app:<username> | app-token:<name>; null = the scheduler.
 EOF
 }
 
@@ -20191,10 +20321,12 @@ SCHEDULE (CRUD on heartbeat definitions)
        (UUID form still works: --set <session-id> --provider <p>)
   heartbeat schedule list [--archived] [--json]  (--json: raw array)
   heartbeat schedule remove <n> [--purge]
+       Default archives (restorable). --purge hard-deletes and is
+       owner-only: agents archive instead.
   heartbeat schedule unarchive <n>
   heartbeat schedule edit <n> [<new-spec>] [--instructions "..."]
        spec flags change the schedule; --instructions/--instructions-file
-       rewrite the WAKEUP.md (either or both)
+       have the daemon rewrite the WAKEUP.md (either or both)
   heartbeat schedule rename <old> <new>
   heartbeat schedule enable <n>                  Resume scheduling
   heartbeat schedule disable <n>                 Pause scheduling
@@ -20216,8 +20348,9 @@ DELIVERY (where a fire's wake message lands)
                                  still wants --provider claude|grok|…)
 
 INSPECTION (read-only)
-  heartbeat show <n> [--json]    Single heartbeat details
-  heartbeat status <n> [-n N]    Recent fire history
+  heartbeat show <n> [--json]    Single heartbeat details + instructions
+  heartbeat status <n> [-n N]    Recent history: fires and changes, with
+                                 who did it (owner, user, agent, app)
   heartbeat log [-n N]           Scheduler decisions
 
 EXAMPLES

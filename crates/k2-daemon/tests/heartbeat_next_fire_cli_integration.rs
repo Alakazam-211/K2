@@ -197,6 +197,20 @@ async fn headless_list_route_and_cli_show_next_fire_and_wait_reason() {
     assert_eq!(shown["nextFireAt"], serde_json::json!(expected_next));
     assert_eq!(shown["waitReason"], serde_json::json!(reason));
 
+    // AH32: instructions alone go through the daemon (no client-side file
+    // write); show reads them back (AH9); status names who edited (AH18).
+    let edited = k2_cli(&home, &ws, &["heartbeat", "edit", "drive", "--instructions", "Sweep the drive."]);
+    assert!(edited.contains("Wake instructions written by the daemon: drive"), "edit output:\n{edited}");
+    let show = k2_cli(&home, &ws, &["heartbeat", "show", "drive"]);
+    assert!(show.contains("Instructions:\n  Sweep the drive."), "show output:\n{show}");
+    let status = k2_cli(&home, &ws, &["heartbeat", "status", "drive"]);
+    let line = status
+        .lines()
+        .find(|l| l.contains("instructions edited"))
+        .unwrap_or_else(|| panic!("no instructions-edited row in status:\n{status}"));
+    assert!(line.contains("changed"), "{line}");
+    assert!(line.contains("owner"), "the owner token is named: {line}");
+
     drop(_daemon);
     let _ = std::fs::remove_dir_all(&home);
 }

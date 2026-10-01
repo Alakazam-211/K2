@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps skins feedback-loop"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -61,6 +61,44 @@ assert_eq "study source exit 0" "$source_rc" "0"
 assert_contains "FSL" "$source_out" "FSL"
 assert_contains "Fair Source" "$source_out" "Fair Source"
 assert_contains "not MIT" "$source_out" "not MIT"
+
+echo "== k2 study app-heartbeats (AH23 / T13: every wait reason) =="
+hb_out="$("$K2" study app-heartbeats)"
+WAIT_FIXTURE="$PROJECT_ROOT/crates/k2-core/src/heartbeats/fixtures/wait-reasons.json"
+[ -f "$WAIT_FIXTURE" ] || { echo "FAIL: $WAIT_FIXTURE missing" >&2; exit 1; }
+reasons="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))))' "$WAIT_FIXTURE")"
+[ -n "$reasons" ] || { echo "FAIL: no wait reasons in fixture" >&2; exit 1; }
+reason_count=0
+while IFS= read -r reason; do
+    reason_count=$((reason_count + 1))
+    if printf '%s\n' "$hb_out" | grep -Eq "^  ${reason}[[:space:]]"; then
+        echo "  PASS: wait reason $reason has a row"
+        pass=$((pass + 1))
+    else
+        echo "  FAIL: wait reason $reason missing from k2 study app-heartbeats" >&2
+        fail=$((fail + 1))
+    fi
+done <<< "$reasons"
+assert_eq "fixture lists 14 reasons" "$reason_count" "14"
+assert_contains "list route" "$hb_out" "GET  /cli/heartbeat/list?workspace="
+assert_contains "show route" "$hb_out" "GET  /cli/heartbeat/show?workspace=&name="
+assert_contains "fire route" "$hb_out" "POST /cli/heartbeat/fire"
+assert_contains "archive is remove" "$hb_out" "POST /cli/heartbeat/archive"
+assert_contains "socket frame" "$hb_out" '{"kind":"heartbeat_changed","workspace":"<handle>"}'
+assert_contains "files:read gates body" "$hb_out" "instructionsHidden"
+assert_contains "count down rule" "$hb_out" "Count down from nextFireAt"
+assert_contains "refetch +120s" "$hb_out" "nextFireAt + 120 s"
+assert_contains "fire resets interval" "$hb_out" "Fire now resets an interval heartbeat"
+assert_contains "failed fire counts (AH34)" "$hb_out" "5-failure auto-disable"
+assert_contains "rate limit" "$hb_out" "12 per"
+assert_contains "retry-after" "$hb_out" "Retry-After"
+assert_contains "core does catch-up" "$hb_out" "under 12 h old"
+assert_contains "actor values" "$hb_out" "app-token:<name>"
+assert_absent "never scheduler-status for apps" "$hb_out" "GET  /cli/heartbeat/scheduler-status"
+hb_json="$("$K2" study app-heartbeats --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-heartbeats" and "no_ticks" in d["body"], d["id"]' "$hb_json"
+echo "  PASS: app-heartbeats --json id+body"
+pass=$((pass + 1))
 
 echo "== k2 study skins thread/overlay contract =="
 skins_out="$("$K2" study skins)"

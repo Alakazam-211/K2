@@ -14,6 +14,7 @@
 // render the graceful "not available yet" state instead of an error.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -195,11 +196,11 @@ export function isNotBuilt(err: unknown): boolean {
 // ── API calls (live daemon only — never called in sample mode) ──────────
 
 export async function fetchMailStatus(): Promise<MailStatus> {
-  return daemonCliGet<MailStatus>('mail/status')
+  return daemonCliGet<MailStatus>(primaryScope(), 'mail/status')
 }
 
 export async function fetchPreflight(): Promise<PreflightReport> {
-  const res = await daemonCliGet<{ ok: boolean; report: PreflightReport }>('mail/preflight')
+  const res = await daemonCliGet<{ ok: boolean; report: PreflightReport }>(primaryScope(), 'mail/preflight')
   return res.report
 }
 
@@ -217,46 +218,46 @@ export interface EnableResponse {
 }
 
 export async function enableServer(hostname: string): Promise<EnableResponse> {
-  return daemonCliPost<EnableResponse>('mail/server/enable', { hostname })
+  return daemonCliPost<EnableResponse>(primaryScope(), 'mail/server/enable', { hostname })
 }
 
 export async function disableServer(): Promise<{ ok: boolean; warning?: string }> {
-  return daemonCliPost('mail/server/disable', {})
+  return daemonCliPost(primaryScope(), 'mail/server/disable', {})
 }
 
 export async function uninstallServer(
   purgeData: boolean,
   confirmHostname?: string,
 ): Promise<{ ok: boolean; purged: boolean }> {
-  return daemonCliPost('mail/server/uninstall', { purgeData, confirmHostname })
+  return daemonCliPost(primaryScope(), 'mail/server/uninstall', { purgeData, confirmHostname })
 }
 
 export async function fetchDomains(): Promise<DomainSummary[]> {
-  const res = await daemonCliGet<{ ok: boolean; domains: DomainSummary[] }>('mail/domain/list')
+  const res = await daemonCliGet<{ ok: boolean; domains: DomainSummary[] }>(primaryScope(), 'mail/domain/list')
   return Array.isArray(res?.domains) ? res.domains : []
 }
 
 export async function fetchDomainDetail(domain: string): Promise<DomainDetail> {
-  return daemonCliGet<DomainDetail>('mail/domain/show', { domain })
+  return daemonCliGet<DomainDetail>(primaryScope(), 'mail/domain/show', { domain })
 }
 
 export async function addDomain(domain: string): Promise<DomainDetail> {
-  return daemonCliPost<DomainDetail>('mail/domain/add', { domain })
+  return daemonCliPost<DomainDetail>(primaryScope(), 'mail/domain/add', { domain })
 }
 
 export async function checkDomainNow(domain: string): Promise<DomainDetail> {
-  return daemonCliPost<DomainDetail>('mail/domain/check', { domain })
+  return daemonCliPost<DomainDetail>(primaryScope(), 'mail/domain/check', { domain })
 }
 
 export async function removeDomain(
   domain: string,
   purge: boolean,
 ): Promise<{ ok: boolean; retiredAddresses: number }> {
-  return daemonCliPost('mail/domain/remove', { domain, confirm: true, purge })
+  return daemonCliPost(primaryScope(), 'mail/domain/remove', { domain, confirm: true, purge })
 }
 
 export async function fetchAllAddresses(): Promise<AddressRow[]> {
-  const res = await daemonCliGet<{ ok: boolean; addresses: AddressRow[] }>('mail/address/list', {
+  const res = await daemonCliGet<{ ok: boolean; addresses: AddressRow[] }>(primaryScope(), 'mail/address/list', {
     all: true,
   })
   return Array.isArray(res?.addresses) ? res.addresses : []
@@ -265,7 +266,7 @@ export async function fetchAllAddresses(): Promise<AddressRow[]> {
 /** Retire an address. `project` = the HOLDER workspace (id/name/path —
  *  the daemon resolves); the route enforces workspace ownership. */
 export async function retireAddress(project: string, address: string): Promise<void> {
-  await daemonCliPost('mail/address/delete', { project, address })
+  await daemonCliPost(primaryScope(), 'mail/address/delete', { project, address })
 }
 
 /** Once IMAP/SMTP client block from POST /cli/mail/address/password.
@@ -283,11 +284,11 @@ export interface RotatedMailboxPassword {
 
 /** Rotate IMAP+SMTP (one secret). Shown once; does not persist. */
 export async function rotateAddressPassword(address: string): Promise<RotatedMailboxPassword> {
-  return daemonCliPost('mail/address/password', { address })
+  return daemonCliPost(primaryScope(), 'mail/address/password', { address })
 }
 
 export async function fetchApprovals(): Promise<ApprovalItem[]> {
-  const res = await daemonCliGet<{ ok: boolean; pending: ApprovalItem[] }>('mail/approvals/list')
+  const res = await daemonCliGet<{ ok: boolean; pending: ApprovalItem[] }>(primaryScope(), 'mail/approvals/list')
   return Array.isArray(res?.pending) ? res.pending : []
 }
 
@@ -295,18 +296,18 @@ export async function approveOutbound(
   id: string,
   note?: string,
 ): Promise<{ ok: boolean; status: string }> {
-  return daemonCliPost('mail/approvals/approve', note ? { id, note } : { id })
+  return daemonCliPost(primaryScope(), 'mail/approvals/approve', note ? { id, note } : { id })
 }
 
 export async function denyOutbound(id: string, note: string): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/approvals/deny', { id, note })
+  return daemonCliPost(primaryScope(), 'mail/approvals/deny', { id, note })
 }
 
 /** Per-workspace outbox (the decided history view — there is no
  *  owner-wide history route yet; the Approvals panel offers a
  *  workspace picker over this). */
 export async function fetchOutbox(project: string): Promise<OutboundItem[]> {
-  const res = await daemonCliGet<{ ok: boolean; outbox: OutboundItem[] }>('mail/outbox', {
+  const res = await daemonCliGet<{ ok: boolean; outbox: OutboundItem[] }>(primaryScope(), 'mail/outbox', {
     project,
     limit: 50,
   })
@@ -316,18 +317,18 @@ export async function fetchOutbox(project: string): Promise<OutboundItem[]> {
 /** GET /cli/mail/config — still 501 `not_built` while the S5-config
  *  sub-slice is under construction; callers branch on `isNotBuilt`. */
 export async function fetchMailConfig(): Promise<Record<string, unknown>> {
-  return daemonCliGet('mail/config')
+  return daemonCliGet(primaryScope(), 'mail/config')
 }
 
 /** POST /cli/mail/config/set (send-mode / relay / caps / gating) —
  *  same 501 story as the GET. Body shape per PRD §11 `k2 mail config`. */
 export async function setMailConfig(body: Record<string, unknown>): Promise<void> {
-  await daemonCliPost('mail/config/set', body)
+  await daemonCliPost(primaryScope(), 'mail/config/set', body)
 }
 
 /** GET /cli/mail/doctor — 501 until S6. */
 export async function fetchDoctor(): Promise<Record<string, unknown>> {
-  return daemonCliGet('mail/doctor')
+  return daemonCliGet(primaryScope(), 'mail/doctor')
 }
 
 // ── Unified inbox access (GH #28 — one permission layer, hosted OR
@@ -406,7 +407,7 @@ export interface Inbox {
 /** GET /cli/mail/inboxes — the unified catalog (hosted + linked). Access
  *  is cross-platform; no `supported` gate. */
 export async function fetchInboxes(): Promise<Inbox[]> {
-  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: Inbox[] }>('mail/inboxes')
+  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: Inbox[] }>(primaryScope(), 'mail/inboxes')
   return Array.isArray(res?.inboxes) ? res.inboxes : []
 }
 
@@ -420,7 +421,7 @@ export async function grantInboxAccess(body: {
   project: string
   level: InboxLevel
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/access/grant', body)
+  return daemonCliPost(primaryScope(), 'mail/access/grant', body)
 }
 
 /** POST /cli/mail/access/revoke — the Primary removes a workspace's grant.
@@ -429,7 +430,7 @@ export async function revokeInboxAccess(body: {
   address: string
   project: string
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/access/revoke', body)
+  return daemonCliPost(primaryScope(), 'mail/access/revoke', body)
 }
 
 /** POST /cli/mail/access/set-primary — transfer Primary to another
@@ -439,7 +440,7 @@ export async function setInboxPrimary(body: {
   address: string
   project: string
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/access/set-primary', body)
+  return daemonCliPost(primaryScope(), 'mail/access/set-primary', body)
 }
 
 /** POST /cli/mail/access/set-level — change a workspace's level. Pass the
@@ -450,7 +451,7 @@ export async function setInboxLevel(body: {
   project: string
   level: InboxLevel
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/access/set-level', body)
+  return daemonCliPost(primaryScope(), 'mail/access/set-level', body)
 }
 
 /** POST /cli/mail/access/set-manage — set a workspace's mailbox-management
@@ -464,7 +465,7 @@ export async function setInboxManage(body: {
   canManage: boolean
   canDelete: boolean
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('mail/access/set-manage', body)
+  return daemonCliPost(primaryScope(), 'mail/access/set-manage', body)
 }
 
 // ── Linked-inbox provisioning (Email Link — cross-platform, GH #28) ─────
@@ -503,7 +504,7 @@ export interface LinkInboxBody {
 export async function addLinkedInbox(
   body: LinkInboxBody,
 ): Promise<{ ok: boolean; address: string; workspace?: string; draftsFolder?: string | null; hint?: string }> {
-  return daemonCliPost('mail/link/add', body)
+  return daemonCliPost(primaryScope(), 'mail/link/add', body)
 }
 
 /** POST /cli/mail/link/remove — deletes the linked inbox AND its vault
@@ -511,7 +512,7 @@ export async function addLinkedInbox(
 export async function removeLinkedInbox(
   address: string,
 ): Promise<{ ok: boolean; address: string; removed: boolean }> {
-  return daemonCliPost('mail/link/remove', { address })
+  return daemonCliPost(primaryScope(), 'mail/link/remove', { address })
 }
 
 // ── OAuth-linked inboxes (O4 — Gmail / Microsoft, no app-password) ──────
@@ -563,7 +564,7 @@ export async function linkOauthStart(args: {
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
   redirectUri?: string
 }): Promise<OauthStartResult> {
-  return daemonCliPost('mail/link/oauth/start', args)
+  return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
 }
 
 /** POST /cli/mail/link/oauth/complete — relay a client-captured code (or
@@ -575,7 +576,7 @@ export async function linkOauthComplete(args: {
   state: string
   error?: string
 }): Promise<{ ok: boolean; state: string; linkId: string; address?: string }> {
-  return daemonCliPost('mail/link/oauth/complete', args)
+  return daemonCliPost(primaryScope(), 'mail/link/oauth/complete', args)
 }
 
 /** GET /cli/mail/link/oauth/status?linkId=… — long-poll the consent flow.
@@ -584,7 +585,7 @@ export async function linkOauthComplete(args: {
 export async function linkOauthStatus(
   linkId: string,
 ): Promise<{ state: 'pending' | 'connected' | 'denied' | 'expired' | 'error'; address?: string; hint?: string }> {
-  return daemonCliGet('mail/link/oauth/status', { linkId })
+  return daemonCliGet(primaryScope(), 'mail/link/oauth/status', { linkId })
 }
 
 // ── Bring-your-own OAuth client (BYO-OAuth — per-provider app override) ──
@@ -625,7 +626,7 @@ export type OauthClientProvider = 'gmail' | 'microsoft'
 
 /** GET /cli/mail/oauth-config — the per-provider client override state. */
 export async function fetchOauthConfig(): Promise<OauthConfig> {
-  return daemonCliGet<OauthConfig>('mail/oauth-config')
+  return daemonCliGet<OauthConfig>(primaryScope(), 'mail/oauth-config')
 }
 
 /** POST /cli/mail/oauth-config/set — set a provider's own OAuth app.
@@ -642,13 +643,13 @@ export async function setOauthClient(args: {
   clientId: string
   clientSecret?: string
 }): Promise<void> {
-  await daemonCliPost('mail/oauth-config/set', args)
+  await daemonCliPost(primaryScope(), 'mail/oauth-config/set', args)
 }
 
 /** POST /cli/mail/oauth-config/clear — revert a provider to K2's built-in
  *  default client (deletes the vaulted custom client id + secret). */
 export async function clearOauthClient(provider: OauthClientProvider): Promise<void> {
-  await daemonCliPost('mail/oauth-config/clear', { provider })
+  await daemonCliPost(primaryScope(), 'mail/oauth-config/clear', { provider })
 }
 
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────

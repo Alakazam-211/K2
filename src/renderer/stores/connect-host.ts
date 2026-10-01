@@ -356,6 +356,12 @@ export interface ConnectHostState {
    *  shows its inline Sign-in button. Keeps the remembered password. No-op if
    *  the host already has no token. */
   clearHostToken: (hostId: string) => void
+  /** Home M1 / MS59: drop a host's session token from MEMORY only. The
+   *  keychain token, the `k2` CLI token mirror and the remembered password
+   *  are all kept. Background failures (revive of a host that is not the
+   *  window's active host) use this, so one window can never delete a login
+   *  another window just refreshed. No-op if the host has no token. */
+  dropSessionInMemory: (hostId: string) => void
   /** Dismiss the full-screen sign-in without switching. */
   cancelSignIn: () => void
   /**
@@ -879,6 +885,12 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     const cleared = hosts.map((h) => (h.id === hostId ? { ...h, token: '' } : h))
     void forgetToken(hostId)
     set({ hosts: cleared })
+  },
+
+  dropSessionInMemory: (hostId) => {
+    const { hosts } = get()
+    if (!hosts.some((h) => h.id === hostId && h.token)) return
+    set({ hosts: hosts.map((h) => (h.id === hostId ? { ...h, token: '' } : h)) })
   },
 
   cancelSignIn: () => {

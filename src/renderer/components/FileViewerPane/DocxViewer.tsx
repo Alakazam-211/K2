@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import mammoth from 'mammoth'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface DocxViewerProps {
   filePath: string
@@ -20,7 +21,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
       try {
         // Read the file as base64 via the daemon and decode locally.
-        const r = await daemonCliGet<{ base64: string }>('fs/read-binary', { path: filePath })
+        const r = await daemonCliGet<{ base64: string }>(primaryScope(), 'fs/read-binary', { path: filePath })
 
         if (cancelled) return
 

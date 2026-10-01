@@ -12,6 +12,7 @@ import {
   type HeartbeatStateChangedEvent,
   type UnsubscribeFn,
 } from '@/stores/session-events'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Heartbeat sessions store — drives the sidebar Heartbeats panel.
@@ -249,10 +250,10 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
       // Remote hosts must never land a non-array in the store — panel
       // render does `[...active].sort` and would black-screen the SPA.
       const activeRows = asArray<HeartbeatRow>(
-        await daemonCliGet('heartbeat/list', { project: projectPath }),
+        await daemonCliGet(primaryScope(), 'heartbeat/list', { project: projectPath }),
       )
       const archivedRows = asArray<HeartbeatRow>(
-        await daemonCliGet('heartbeat/list-archived', {
+        await daemonCliGet(primaryScope(), 'heartbeat/list-archived', {
           project: projectPath,
         }),
       )
@@ -265,7 +266,7 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
         }))
       } else {
         const [running, agentName] = await Promise.all([
-          terminalListRunning().catch((): RunningAgentInfo[] => []),
+          terminalListRunning(primaryScope()).catch((): RunningAgentInfo[] => []),
           resolvePrimaryAgent(projectPath),
         ])
         const runningList = asArray<RunningAgentInfo>(running)

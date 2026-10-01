@@ -120,6 +120,7 @@ import {
   type ProjectGroupMemberInfo,
   type ProjectGroupShow,
 } from './projects-api'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Sidebar's drag threshold (handleProjectMouseDown): 3px x / 5px y.
 const DRAG_THRESHOLD_X = 3
@@ -219,7 +220,7 @@ const PHASE_DORMANT: TermPhase = { kind: 'dormant' }
 /** One lookup-by-agent (retry path after batch). */
 async function resolveMemberSession(workspaceId: string): Promise<TermPhase> {
   const map = await resolveAllMemberSessions([workspaceId], async (agent) => {
-    const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
+    const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(primaryScope(),
       'sessions/lookup-by-agent',
       { agent },
     )
@@ -240,7 +241,7 @@ function terminalWorkspaceIdsInLayout(root: LayoutNode | null): string[] {
 const lookupByAgentForDashboard: (
   workspaceId: string,
 ) => Promise<{ sessionAlive: boolean; sessionId: string | null }> = async (agent) => {
-  const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
+  const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(primaryScope(),
     'sessions/lookup-by-agent',
     { agent },
   )
@@ -302,7 +303,7 @@ function DashboardTerminalPane({
       await wakeCanonicalMemberSession(workspaceId, projectPath, {
         activateProject,
         ensurePinnedChat: (project) =>
-          daemonCliPost('workspace/ensure-pinned-chat', { project }),
+          daemonCliPost(primaryScope(), 'workspace/ensure-pinned-chat', { project }),
       })
       setPhase({ kind: 'live' })
     } catch (e) {
@@ -439,7 +440,7 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
       intervalMs: FILE_POLL_INTERVAL,
       immediate: true,
       read: async () => {
-        const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+        const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
         return result.content
       },
       apply: (content) => {
@@ -535,7 +536,7 @@ export default function ProjectDashboard({
   useEffect(() => {
     const saver = createLayoutSaver(
       (layoutJson) =>
-        saveDashboardLayout(show.id, dashboard.id, layoutJson).then((d) => ({
+        saveDashboardLayout(primaryScope(), show.id, dashboard.id, layoutJson).then((d) => ({
           revision: d.revision,
         })),
       {

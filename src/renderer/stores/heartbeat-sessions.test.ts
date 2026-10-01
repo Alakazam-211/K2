@@ -33,10 +33,13 @@ vi.mock('@/stores/connect-host', () => ({
   },
 }))
 const daemonCliGetMock = vi.fn<(route: string, params?: unknown) => Promise<unknown>>()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (route: string, params?: unknown) => daemonCliGetMock(route, params),
-  RecoveringError: class RecoveringError extends Error {},
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((route: string, params?: unknown) => daemonCliGetMock(route, params)),
+    RecoveringError: class RecoveringError extends Error {},
+  }
+})
 
 import { useHeartbeatSessionsStore } from './heartbeat-sessions'
 import { RecoveringError } from '@/lib/daemon-cli'

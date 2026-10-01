@@ -7,6 +7,7 @@
 
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const AUDIT_TAIL_DEFAULT = 200
 export const AUDIT_TAIL_CHOICES = [50, 200, 1000] as const
@@ -87,7 +88,7 @@ export async function fetchUsersAudit(opts: {
   signal?: AbortSignal
 }): Promise<UsersAuditResult> {
   const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     return fetch(
       auditUrl(creds.token, daemonHttpBase(creds), opts.tail),
       withDaemonFetch({ method: 'GET', signal: opts.signal }),
@@ -142,7 +143,7 @@ export async function fetchUsersAudit(opts: {
 export async function fetchWhoamiRole(opts?: { signal?: AbortSignal }): Promise<ViewerRole | null> {
   let res: Response
   try {
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     const search = cliSearchParams(creds.token)
     const q = search.toString()
     res = await fetch(

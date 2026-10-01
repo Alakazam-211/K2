@@ -24,9 +24,10 @@ import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon
 import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import type { AppSettingsResponse } from '@shared/types'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
+import { primaryScope } from '@/kessel/server-scope'
 
 async function daemonUrl(path: string): Promise<string> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   return withCliTokenQuery(`${daemonHttpBase(creds)}${path}`, creds.token)
 }
 

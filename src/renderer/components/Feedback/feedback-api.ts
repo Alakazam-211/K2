@@ -10,6 +10,7 @@
 // (feedback_dev_mode_performance).
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 export type FeedbackKind = 'question' | 'approval' | 'fyi'
 export type FeedbackStatus =
@@ -87,7 +88,7 @@ export async function fetchAllFeedback(
   const results = await Promise.all(
     projects.map(async (p) => {
       try {
-        const res = await daemonCliGet<{ ok: boolean; items: FeedbackItem[] }>(
+        const res = await daemonCliGet<{ ok: boolean; items: FeedbackItem[] }>(primaryScope(),
           'feedback/list',
           { project: p.path, all: 1 },
         )
@@ -117,7 +118,7 @@ export async function fetchWaitingCount(
   projects: FeedbackProjectRef[],
 ): Promise<number> {
   try {
-    const res = await daemonCliGet<{ ok: boolean; count: number }>(
+    const res = await daemonCliGet<{ ok: boolean; count: number }>(primaryScope(),
       'feedback/waiting-count',
     )
     if (typeof res.count === 'number') return res.count
@@ -127,7 +128,7 @@ export async function fetchWaitingCount(
   const counts = await Promise.all(
     projects.map(async (p) => {
       try {
-        const res = await daemonCliGet<{ ok: boolean; items: FeedbackItem[] }>(
+        const res = await daemonCliGet<{ ok: boolean; items: FeedbackItem[] }>(primaryScope(),
           'feedback/list',
           { project: p.path, status: 'waiting' },
         )
@@ -142,7 +143,7 @@ export async function fetchWaitingCount(
 
 /** GET /cli/feedback/show?id=<id> — one item + its full thread. */
 export async function fetchFeedbackShow(id: string): Promise<FeedbackShow> {
-  return daemonCliGet<FeedbackShow>('feedback/show', { id })
+  return daemonCliGet<FeedbackShow>(primaryScope(), 'feedback/show', { id })
 }
 
 /** POST /cli/feedback/comment — it's just a comment thread. The
@@ -168,7 +169,7 @@ export async function commentFeedback(
   id: string,
   body: string,
 ): Promise<FeedbackCommentResult> {
-  return daemonCliPost<FeedbackCommentResult>('feedback/comment', { id, body })
+  return daemonCliPost<FeedbackCommentResult>(primaryScope(), 'feedback/comment', { id, body })
 }
 
 /** Agent-tab wake plan (D6). Never `sandbox/reopen` a pinned conversation id. */
@@ -207,7 +208,7 @@ export async function resolveFeedback(
   id: string,
   status: 'resolved' | 'dismissed' | 'waiting' | 'planned' | 'needs_discussion',
 ): Promise<void> {
-  await daemonCliPost('feedback/resolve', { id, status })
+  await daemonCliPost(primaryScope(), 'feedback/resolve', { id, status })
 }
 
 /** Human-readable status label for chips / badges. */
@@ -222,7 +223,7 @@ export async function assignFeedback(
   id: string,
   usernames: string[],
 ): Promise<{ assignees: string[] }> {
-  return daemonCliPost<{ assignees: string[] }>('feedback/assign', {
+  return daemonCliPost<{ assignees: string[] }>(primaryScope(), 'feedback/assign', {
     id,
     usernames,
   })

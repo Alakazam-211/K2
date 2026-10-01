@@ -5,6 +5,7 @@ import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface K2soAgentInfo {
   name: string
@@ -82,7 +83,7 @@ export default function AgentsPanel(): React.JSX.Element {
     if (!activeProject || !newName.trim() || !newRole.trim()) return
     setCreating(true)
     try {
-      await daemonCliGet('agents/create', {
+      await daemonCliGet(primaryScope(), 'agents/create', {
         project: activeProject.path,
         name: newName.trim().toLowerCase().replace(/\s+/g, '-'),
         role: newRole.trim(),
@@ -131,7 +132,7 @@ export default function AgentsPanel(): React.JSX.Element {
     })
     if (!confirmed) return
     try {
-      await daemonCliGet('agents/delete', { project: activeProject.path, name })
+      await daemonCliGet(primaryScope(), 'agents/delete', { project: activeProject.path, name })
       await fetchAgents()
     } catch (e) {
       console.error('[agents] Delete failed:', e)
@@ -256,7 +257,7 @@ export default function AgentsPanel(): React.JSX.Element {
                     // Regenerate the workspace SKILL.md (also auto-
                     // scaffolds `.k2so/` layout + manager/k2so-agent
                     // dirs on first call).
-                    await daemonCliPost('agents/regenerate-workspace-skill', { project_path: activeProject.path })
+                    await daemonCliPost(primaryScope(), 'agents/regenerate-workspace-skill', { project_path: activeProject.path })
                     await fetchAgents()
                   } catch (e) {
                     console.error('[agents] Setup failed:', e)

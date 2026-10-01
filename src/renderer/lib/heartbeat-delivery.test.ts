@@ -10,9 +10,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }))
 const daemonCliGet = vi.fn()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+  }
+})
 
 import {
   applyDeliveryTarget,

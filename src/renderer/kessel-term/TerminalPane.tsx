@@ -170,6 +170,7 @@ import {
   probeCellMetrics,
 } from './measurePaneFit'
 import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Focus the terminal shadow input only when safe — never steal from the
@@ -1521,7 +1522,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         try {
           if (!creds) {
             perfLog('creds_start', { attempt: String(attempt) })
-            creds = await getDaemonWs()
+            creds = await getDaemonWs(primaryScope())
             perfLog('creds_end', { elapsed_ms: (performance.now() - __t_attempt).toFixed(1) })
           }
           perfLog('spawn_fetch_start', { attempt: String(attempt) })
@@ -1776,7 +1777,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
     let creds: DaemonWsAvailable | null = null
     try {
-      creds = await getDaemonWs()
+      creds = await getDaemonWs(primaryScope())
     } catch {
       // Creds unavailable (daemon mid-restart). The next visibility
       // reconcile / reconnect will retry. Leave phase as-is.
@@ -3692,7 +3693,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (!canQueryLocalFinderPaths) {
         if (text) sendInput(text)
       } else {
-        daemonCliGet<string[]>('fs/clipboard-paths')
+        daemonCliGet<string[]>(primaryScope(), 'fs/clipboard-paths')
           .then((paths) => {
             if (paths && paths.length > 0) {
               sendInput(buildDropPayload(paths))
@@ -4551,7 +4552,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       e.stopPropagation()
 
       if (clicked.type === 'url') {
-        daemonCliPost('fs/open-external', { target: clicked.target }).catch((err) =>
+        daemonCliPost(primaryScope(), 'fs/open-external', { target: clicked.target }).catch((err) =>
           console.warn('[kessel-term/link]', err),
         )
       } else if (clicked.type === 'file' && clicked.filePath) {
@@ -4671,7 +4672,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           // REMOTE host: local paths → upload + inject remote (rare DOM
           // fallback under Tauri; native drag-drop is the usual path).
           if (useConnectHostStore.getState().activeHost !== 'local') {
-            void executeRemoteDrop(
+            void executeRemoteDrop(primaryScope(),
               paths,
               { kind: 'terminal' },
               { workspacePath: cwd },
@@ -4691,7 +4692,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // product path as remote desktop terminal drops.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
-          void executeBrowserFileDrop(
+          void executeBrowserFileDrop(primaryScope(),
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: cwd || undefined },

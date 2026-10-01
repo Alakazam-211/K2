@@ -52,18 +52,24 @@ const daemon = vi.hoisted(() => ({
     isV2: boolean
   }>,
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string, params?: { project_id?: string; workspace_id?: string }) => {
-    if (route === 'workspace-layouts/load') {
-      const key = `${params?.project_id}:${params?.workspace_id}`
-      return daemon.layouts.get(key)?.json ?? null
-    }
-    if (route === 'sessions/list-for-workspace') return daemon.sessions
-    if (route === 'workspace/tab-titles') return []
-    return []
-  }),
-  daemonCliPost: vi.fn(async () => ({ success: true, revision: 1 })),
-}))
+// The test inspects `daemonCliPost` calls; the module export is a
+// `primaryOnly` wrapper that checks the scope and forwards the rest here.
+const daemonCliPost = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true, revision: 1 })))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(async (route: string, params?: { project_id?: string; workspace_id?: string }) => {
+      if (route === 'workspace-layouts/load') {
+        const key = `${params?.project_id}:${params?.workspace_id}`
+        return daemon.layouts.get(key)?.json ?? null
+      }
+      if (route === 'sessions/list-for-workspace') return daemon.sessions
+      if (route === 'workspace/tab-titles') return []
+      return []
+    }),
+    daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPost(...args)),
+  }
+})
 vi.mock('@/lib/terminal-daemon', () => ({
   terminalListRunning: vi.fn(async () => []),
   terminalCreate: vi.fn(async () => undefined),
@@ -102,7 +108,6 @@ vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
   }
 }))
 
-import { daemonCliPost } from '@/lib/daemon-cli'
 import type { Tab, TerminalItemData } from './tabs'
 
 const CWD = '/ws/parent'

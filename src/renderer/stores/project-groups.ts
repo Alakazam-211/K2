@@ -42,6 +42,7 @@ import {
   CHAT_PANEL_DEFAULT_WIDTH,
   clampChatPanelWidth,
 } from '@/components/Projects/project-chat'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Per-client last-seen read cursor (§4.4, resolved Q5) ─────────────────
 // Keyed per host + group so remoting doesn't cross-contaminate cursors.
@@ -199,7 +200,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     // never land after a switch (projects-store idiom).
     const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
     try {
-      const groups = await fetchProjectGroups()
+      const groups = await fetchProjectGroups(primaryScope())
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
       set({ groups })
       const membersByGroupId: Record<string, string[]> = {}
@@ -212,7 +213,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
         await Promise.all(
           groups.map(async (g) => {
             try {
-              const show = await fetchProjectGroupShow(g.id)
+              const show = await fetchProjectGroupShow(primaryScope(), g.id)
               if (!Array.isArray(show.members)) return
               membersByGroupId[g.id] = show.members.map((m) => m.workspaceId)
             } catch {
@@ -227,7 +228,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       const sel = get().selectedGroupId
       if (sel && !groups.some((g) => g.id === sel)) set({ selectedGroupId: null })
       // §4.4 reconciliation — advisory; failures leave the set as-is.
-      const unread = await fetchUnreadGroupIds(groups, getLastSeen)
+      const unread = await fetchUnreadGroupIds(primaryScope(), groups, getLastSeen)
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
       set({ unreadGroupIds: new Set(unread) })
     } catch (err) {

@@ -26,11 +26,14 @@ const h = vi.hoisted(() => {
   return { openFileAsTab, invoke, daemonCliGet, daemonCliPost, activateProject, projects }
 })
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: h.daemonCliGet,
-  daemonCliPost: h.daemonCliPost,
-  isHostSwitchedError: () => false,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(h.daemonCliGet),
+    daemonCliPost: primaryOnly(h.daemonCliPost),
+    isHostSwitchedError: () => false,
+  }
+})
 
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'Sales'),

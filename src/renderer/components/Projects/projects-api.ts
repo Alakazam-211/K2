@@ -9,6 +9,7 @@
 // into a server renders THAT server's projects.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** One group row (`/cli/project-group/list` + the create/pin responses). */
 export interface ProjectGroup {
@@ -91,68 +92,69 @@ export interface PostedProjectGroupMessage {
 
 /** GET /cli/project-group/list — all groups, pinned-first then
  *  sort_order then name (daemon-side ordering; the nav renders as-is). */
-export async function fetchProjectGroups(): Promise<ProjectGroup[]> {
-  const res = await daemonCliGet<{ ok: boolean; groups: ProjectGroup[] }>('project-group/list')
+export async function fetchProjectGroups(scope: ServerScope): Promise<ProjectGroup[]> {
+  const res = await daemonCliGet<{ ok: boolean; groups: ProjectGroup[] }>(scope, 'project-group/list')
   return res.groups ?? []
 }
 
 /** GET /cli/project-group/show?group=<id|name> — one group with enriched
  *  members + its dashboards ('Main' only in V1). */
-export async function fetchProjectGroupShow(group: string): Promise<ProjectGroupShow> {
-  return daemonCliGet<ProjectGroupShow>('project-group/show', { group })
+export async function fetchProjectGroupShow(scope: ServerScope, group: string): Promise<ProjectGroupShow> {
+  return daemonCliGet<ProjectGroupShow>(scope, 'project-group/show', { group })
 }
 
 /** POST /cli/project-group/create — `{name}` → the new group (the daemon
  *  auto-creates its 'Main' dashboard). Throws on `name_taken`. */
-export async function createProjectGroup(name: string): Promise<ProjectGroup> {
-  return daemonCliPost<ProjectGroup>('project-group/create', { name })
+export async function createProjectGroup(scope: ServerScope, name: string): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>(scope, 'project-group/create', { name })
 }
 
 /** POST /cli/project-group/pin — canonical nav Pinned-section flag. */
-export async function pinProjectGroup(group: string, pinned: boolean): Promise<void> {
-  await daemonCliPost('project-group/pin', { group, pinned })
+export async function pinProjectGroup(scope: ServerScope, group: string, pinned: boolean): Promise<void> {
+  await daemonCliPost(scope, 'project-group/pin', { group, pinned })
 }
 
 /** POST /cli/project-group/rename — `{group, name}` → the renamed
  *  group. Throws on `name_taken` (P8 Settings surfaces it inline). */
-export async function renameProjectGroup(group: string, name: string): Promise<ProjectGroup> {
-  return daemonCliPost<ProjectGroup>('project-group/rename', { group, name })
+export async function renameProjectGroup(scope: ServerScope, group: string, name: string): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>(scope, 'project-group/rename', { group, name })
 }
 
 /** POST /cli/project-group/delete — cascades the group's member/
  *  message/dashboard rows only, NEVER the workspaces themselves
  *  (locked default, §6.5 danger zone). */
-export async function deleteProjectGroup(group: string): Promise<void> {
-  await daemonCliPost('project-group/delete', { group })
+export async function deleteProjectGroup(scope: ServerScope, group: string): Promise<void> {
+  await daemonCliPost(scope, 'project-group/delete', { group })
 }
 
 /** POST /cli/project-group/add-member — `workspace` accepts a name,
  *  absolute path, or workspace UUID; the FIRST member of an empty
  *  group auto-becomes the PoC (daemon rule). */
-export async function addProjectGroupMember(group: string, workspace: string): Promise<void> {
-  await daemonCliPost('project-group/add-member', { group, workspace })
+export async function addProjectGroupMember(scope: ServerScope, group: string, workspace: string): Promise<void> {
+  await daemonCliPost(scope, 'project-group/add-member', { group, workspace })
 }
 
 /** POST /cli/project-group/remove-member — removing the PoC throws the
  *  409 `poc_successor_required` backstop (the Settings UI disables the
  *  button first; §6.5). */
-export async function removeProjectGroupMember(group: string, workspace: string): Promise<void> {
-  await daemonCliPost('project-group/remove-member', { group, workspace })
+export async function removeProjectGroupMember(scope: ServerScope, group: string, workspace: string): Promise<void> {
+  await daemonCliPost(scope, 'project-group/remove-member', { group, workspace })
 }
 
 /** POST /cli/project-group/set-poc — the reassignment dropdown's
  *  write; the target must already be a member (`not_a_member`). */
-export async function setProjectGroupPoc(group: string, workspace: string): Promise<void> {
-  await daemonCliPost('project-group/set-poc', { group, workspace })
+export async function setProjectGroupPoc(scope: ServerScope, group: string, workspace: string): Promise<void> {
+  await daemonCliPost(scope, 'project-group/set-poc', { group, workspace })
 }
 
 /** GET /cli/project-group/icon — the group's icon dataUrl (§6.7.7),
  *  deliberately outside list/show payloads. `found:false` (or a null
  *  dataUrl) = unset; the avatar falls back to color + initials. */
 export async function fetchProjectGroupIcon(
+  scope: ServerScope,
   group: string,
 ): Promise<{ found: boolean; dataUrl: string | null }> {
-  const res = await daemonCliGet<{ ok: boolean; found: boolean; dataUrl: string | null }>(
+  const res = await daemonCliGet<{ ok: boolean; found: boolean; dataUrl: string | null }>(scope,
     'project-group/icon',
     { group },
   )
@@ -164,31 +166,34 @@ export async function fetchProjectGroupIcon(
  *  PNG is far under). Owner-or-admin; emits groups-changed, which drops
  *  the icon cache (group-icon-cache.ts) so avatars refetch. */
 export async function setProjectGroupIcon(
+  scope: ServerScope,
   group: string,
   dataUrl: string | null,
 ): Promise<void> {
-  await daemonCliPost('project-group/set-icon', { group, dataUrl })
+  await daemonCliPost(scope, 'project-group/set-icon', { group, dataUrl })
 }
 
 /** POST /cli/project-group/set-color — `{group, color}` (`#rrggbb`);
  *  null clears back to the hashed palette. Owner-or-admin; emits
  *  groups-changed, so the list refetch carries the new `color`. */
 export async function setProjectGroupColor(
+  scope: ServerScope,
   group: string,
   color: string | null,
 ): Promise<void> {
-  await daemonCliPost('project-group/set-color', { group, color })
+  await daemonCliPost(scope, 'project-group/set-color', { group, color })
 }
 
 /** POST /cli/project-group/dashboard/rename — P8's §6.5 Main-row
  *  rename (owner-or-admin gated daemon-side, like save-layout). Emits
  *  `project-group:groups-changed`, so open `show` views refetch. */
 export async function renameProjectGroupDashboard(
+  scope: ServerScope,
   group: string,
   dashboardId: string,
   name: string,
 ): Promise<ProjectGroupDashboard> {
-  return daemonCliPost<ProjectGroupDashboard>('project-group/dashboard/rename', {
+  return daemonCliPost<ProjectGroupDashboard>(scope, 'project-group/dashboard/rename', {
     group,
     dashboardId,
     name,
@@ -200,10 +205,11 @@ export async function renameProjectGroupDashboard(
  *  Throws on 409 `name_taken` (Settings surfaces it inline). Emits
  *  `project-group:groups-changed`, so open `show` views refetch. */
 export async function createProjectGroupDashboard(
+  scope: ServerScope,
   group: string,
   name: string,
 ): Promise<ProjectGroupDashboard> {
-  const res = await daemonCliPost<{ ok: boolean; dashboard: ProjectGroupDashboard }>(
+  const res = await daemonCliPost<{ ok: boolean; dashboard: ProjectGroupDashboard }>(scope,
     'project-group/dashboard/create',
     { group, name },
   )
@@ -215,20 +221,22 @@ export async function createProjectGroupDashboard(
  *  Settings UI also disables the button when only one exists). Never
  *  touches sessions/workspaces. */
 export async function deleteProjectGroupDashboard(
+  scope: ServerScope,
   group: string,
   dashboardId: string,
 ): Promise<void> {
-  await daemonCliPost('project-group/dashboard/delete', { group, dashboardId })
+  await daemonCliPost(scope, 'project-group/dashboard/delete', { group, dashboardId })
 }
 
 /** POST /cli/project-group/dashboard/reorder — `{group, order}` writes
  *  the full id order → the reordered dashboard rows (new `position`s).
  *  Owner-or-admin gated; emits `project-group:groups-changed`. */
 export async function reorderProjectGroupDashboards(
+  scope: ServerScope,
   group: string,
   order: string[],
 ): Promise<ProjectGroupDashboard[]> {
-  const res = await daemonCliPost<{ ok: boolean; dashboards: ProjectGroupDashboard[] }>(
+  const res = await daemonCliPost<{ ok: boolean; dashboards: ProjectGroupDashboard[] }>(scope,
     'project-group/dashboard/reorder',
     { group, order },
   )
@@ -255,8 +263,8 @@ export interface WorkspaceResource {
 }
 
 /** GET /cli/workspace/resources?workspace= name|path|UUID. */
-export async function fetchWorkspaceResources(workspace: string): Promise<WorkspaceResource[]> {
-  const res = await daemonCliGet<{ ok: boolean; docs: WorkspaceResource[] }>(
+export async function fetchWorkspaceResources(scope: ServerScope, workspace: string): Promise<WorkspaceResource[]> {
+  const res = await daemonCliGet<{ ok: boolean; docs: WorkspaceResource[] }>(scope,
     'workspace/resources',
     { workspace },
   )
@@ -264,19 +272,19 @@ export async function fetchWorkspaceResources(workspace: string): Promise<Worksp
 }
 
 /** POST /cli/workspace/resources/add — `{workspace, path}`. Idempotent. */
-export async function addWorkspaceResource(workspace: string, path: string): Promise<void> {
-  await daemonCliPost('workspace/resources/add', { workspace, path })
+export async function addWorkspaceResource(scope: ServerScope, workspace: string, path: string): Promise<void> {
+  await daemonCliPost(scope, 'workspace/resources/add', { workspace, path })
 }
 
 /** POST /cli/workspace/resources/remove — `{workspace, path}`. 404 if missing. */
-export async function removeWorkspaceResource(workspace: string, path: string): Promise<void> {
-  await daemonCliPost('workspace/resources/remove', { workspace, path })
+export async function removeWorkspaceResource(scope: ServerScope, workspace: string, path: string): Promise<void> {
+  await daemonCliPost(scope, 'workspace/resources/remove', { workspace, path })
 }
 
 /** GET /cli/project-group/resources?group= — union of member Workspace
  *  Resources. Prefer this over the html-docs alias. */
-export async function fetchProjectGroupResources(group: string): Promise<ProjectGroupHtmlDoc[]> {
-  const res = await daemonCliGet<{ ok: boolean; docs: ProjectGroupHtmlDoc[] }>(
+export async function fetchProjectGroupResources(scope: ServerScope, group: string): Promise<ProjectGroupHtmlDoc[]> {
+  const res = await daemonCliGet<{ ok: boolean; docs: ProjectGroupHtmlDoc[] }>(scope,
     'project-group/resources',
     { group },
   )
@@ -285,8 +293,8 @@ export async function fetchProjectGroupResources(group: string): Promise<Project
 
 /** GET /cli/project-group/html-docs?group= — compat alias of
  *  {@link fetchProjectGroupResources}. */
-export async function fetchProjectGroupHtmlDocs(group: string): Promise<ProjectGroupHtmlDoc[]> {
-  return fetchProjectGroupResources(group)
+export async function fetchProjectGroupHtmlDocs(scope: ServerScope, group: string): Promise<ProjectGroupHtmlDoc[]> {
+  return fetchProjectGroupResources(scope, group)
 }
 
 /** POST /cli/project-group/dashboard/save-layout — canonical
@@ -295,11 +303,12 @@ export async function fetchProjectGroupHtmlDocs(group: string): Promise<ProjectG
  *  Owner-or-admin gated daemon-side; the response is the saved
  *  dashboard row (its `revision` feeds the echo guard). */
 export async function saveDashboardLayout(
+  scope: ServerScope,
   group: string,
   dashboardId: string,
   layoutJson: string,
 ): Promise<ProjectGroupDashboard> {
-  return daemonCliPost<ProjectGroupDashboard>('project-group/dashboard/save-layout', {
+  return daemonCliPost<ProjectGroupDashboard>(scope, 'project-group/dashboard/save-layout', {
     group,
     dashboardId,
     layoutJson,
@@ -312,6 +321,7 @@ export async function saveDashboardLayout(
  *  P6 drawer loads the recent page and "loads earlier" by re-reading
  *  the tail with a bigger limit (there is no `before` param). */
 export async function fetchProjectGroupMessages(
+  scope: ServerScope,
   group: string,
   opts: { after?: number; limit?: number } = {},
 ): Promise<ProjectGroupMessagesPage> {
@@ -319,7 +329,7 @@ export async function fetchProjectGroupMessages(
     ok: boolean
     messages: ProjectGroupMessage[]
     truncated: boolean
-  }>('project-group/messages', { group, after: opts.after, limit: opts.limit })
+  }>(scope, 'project-group/messages', { group, after: opts.after, limit: opts.limit })
   return { messages: res.messages ?? [], truncated: res.truncated ?? false }
 }
 
@@ -329,10 +339,11 @@ export async function fetchProjectGroupMessages(
  *  `project-group:message-created`, then best-effort injects into the
  *  PoC's canonical session; the outcome rides the response (§4.3/§6.4). */
 export async function postProjectGroupMessage(
+  scope: ServerScope,
   group: string,
   body: string,
 ): Promise<PostedProjectGroupMessage> {
-  return daemonCliPost<PostedProjectGroupMessage>('project-group/msg', { group, body })
+  return daemonCliPost<PostedProjectGroupMessage>(scope, 'project-group/msg', { group, body })
 }
 
 /** §4.4 badge reconciliation: a group is UNREAD when it has ≥1 chat
@@ -341,13 +352,14 @@ export async function postProjectGroupMessage(
  *  fan-out idiom); a failed probe counts as read — the badge is advisory
  *  and must never block or error the nav. */
 export async function fetchUnreadGroupIds(
+  scope: ServerScope,
   groups: Array<{ id: string }>,
   lastSeenFor: (groupId: string) => number,
 ): Promise<string[]> {
   const flags = await Promise.all(
     groups.map(async (g) => {
       try {
-        const res = await daemonCliGet<{ ok: boolean; messages: ProjectGroupMessage[] }>(
+        const res = await daemonCliGet<{ ok: boolean; messages: ProjectGroupMessage[] }>(scope,
           'project-group/messages',
           { group: g.id, after: lastSeenFor(g.id), limit: 1 },
         )

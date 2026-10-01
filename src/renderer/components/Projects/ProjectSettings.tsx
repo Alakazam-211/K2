@@ -85,6 +85,7 @@ import {
 } from './project-settings'
 import { moveDashboardId, orderedDashboards } from './project-tabs'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Uniform section header (the ProjectsSection h3 idiom). */
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
@@ -222,7 +223,7 @@ function AddDashboardTab({
     if (!trimmed || busy) return
     setBusy(true)
     try {
-      const dashboard = await createProjectGroupDashboard(groupId, trimmed)
+      const dashboard = await createProjectGroupDashboard(primaryScope(), groupId, trimmed)
       setEditing(false)
       setName('')
       setError(null)
@@ -328,7 +329,7 @@ function DashboardsBlock({
       if (order === null || busy) return
       setBusy(true)
       try {
-        await reorderProjectGroupDashboards(detail.id, order)
+        await reorderProjectGroupDashboards(primaryScope(), detail.id, order)
         // groups-changed refetches `detail` with the new positions.
       } catch (err) {
         useToastStore.getState().addToast(`Reorder failed: ${errorMessage(err)}`, 'error')
@@ -350,7 +351,7 @@ function DashboardsBlock({
       })
       if (!confirmed) return
       try {
-        await deleteProjectGroupDashboard(detail.id, dashboard.id)
+        await deleteProjectGroupDashboard(primaryScope(), detail.id, dashboard.id)
         setSelectedId(null) // heal to the first surviving tab
       } catch (err) {
         const { code } = daemonErrorInfo(err)
@@ -380,7 +381,7 @@ function DashboardsBlock({
         return
       }
       try {
-        await saveDashboardLayout(detail.id, dashboard.id, layoutJson)
+        await saveDashboardLayout(primaryScope(), detail.id, dashboard.id, layoutJson)
         setDocNote({ key, note: `Added to ${dashboard.name}` })
       } catch (err) {
         useToastStore
@@ -434,7 +435,7 @@ function DashboardsBlock({
                 value={active.name}
                 label="dashboard"
                 onSave={async (name) => {
-                  await renameProjectGroupDashboard(detail.id, active.id, name)
+                  await renameProjectGroupDashboard(primaryScope(), detail.id, active.id, name)
                 }}
               />
             )}
@@ -583,7 +584,7 @@ function ProjectSettingsDetail({
   useEffect(() => {
     let cancelled = false
     const load = (): void => {
-      fetchProjectGroupResources(detail.id)
+      fetchProjectGroupResources(primaryScope(), detail.id)
         .then((d) => {
           if (cancelled) return
           setDocs(d)
@@ -612,7 +613,7 @@ function ProjectSettingsDetail({
   const iconInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     let cancelled = false
-    fetchProjectGroupIcon(detail.id)
+    fetchProjectGroupIcon(primaryScope(), detail.id)
       .then((res) => {
         if (!cancelled) setIcon(res)
       })
@@ -639,7 +640,7 @@ function ProjectSettingsDetail({
     async (dataUrl: string | null): Promise<void> => {
       setIconBusy(true)
       try {
-        await setProjectGroupIcon(detail.id, dataUrl)
+        await setProjectGroupIcon(primaryScope(), detail.id, dataUrl)
         // Optimistic — the groups-changed refetch confirms it.
         setIcon({ found: dataUrl !== null, dataUrl })
       } catch (err) {
@@ -659,7 +660,7 @@ function ProjectSettingsDetail({
   const saveColor = useCallback(
     async (color: string | null): Promise<void> => {
       try {
-        await setProjectGroupColor(detail.id, color)
+        await setProjectGroupColor(primaryScope(), detail.id, color)
         // groups-changed refetches the list + show with the new color.
       } catch (err) {
         useToastStore.getState().addToast(`Color change failed: ${errorMessage(err)}`, 'error')
@@ -696,7 +697,7 @@ function ProjectSettingsDetail({
     async (workspaceId: string): Promise<void> => {
       setMemberBusy(workspaceId)
       try {
-        await addProjectGroupMember(detail.id, workspaceId)
+        await addProjectGroupMember(primaryScope(), detail.id, workspaceId)
         setAddQuery('')
         // The members-changed event refetches the show view live.
       } catch (err) {
@@ -712,7 +713,7 @@ function ProjectSettingsDetail({
     async (workspaceId: string, displayName: string): Promise<void> => {
       setMemberBusy(workspaceId)
       try {
-        await removeProjectGroupMember(detail.id, workspaceId)
+        await removeProjectGroupMember(primaryScope(), detail.id, workspaceId)
       } catch (err) {
         // The daemon backstop (409 poc_successor_required) or a
         // vanished row — loud either way.
@@ -729,7 +730,7 @@ function ProjectSettingsDetail({
   const setPoc = useCallback(
     async (workspaceId: string): Promise<void> => {
       try {
-        await setProjectGroupPoc(detail.id, workspaceId)
+        await setProjectGroupPoc(primaryScope(), detail.id, workspaceId)
       } catch (err) {
         useToastStore.getState().addToast(`PoC change failed: ${errorMessage(err)}`, 'error')
       }
@@ -748,7 +749,7 @@ function ProjectSettingsDetail({
     })
     if (!confirmed) return
     try {
-      await deleteProjectGroup(detail.id)
+      await deleteProjectGroup(primaryScope(), detail.id)
       onDeleted()
     } catch (err) {
       useToastStore.getState().addToast(`Delete failed: ${errorMessage(err)}`, 'error')
@@ -807,7 +808,7 @@ function ProjectSettingsDetail({
                 value={detail.name}
                 label="project"
                 onSave={async (name) => {
-                  await renameProjectGroup(detail.id, name)
+                  await renameProjectGroup(primaryScope(), detail.id, name)
                 }}
               />
             )}
@@ -953,7 +954,7 @@ function ProjectSettingsDetail({
               type="button"
               disabled={readOnly}
               onClick={() => {
-                void pinProjectGroup(detail.id, !detail.pinned).catch((err) =>
+                void pinProjectGroup(primaryScope(), detail.id, !detail.pinned).catch((err) =>
                   useToastStore.getState().addToast(`Pin failed: ${errorMessage(err)}`, 'error'),
                 )
               }}
@@ -1212,7 +1213,7 @@ export default function ProjectSettings(): React.JSX.Element {
       return
     }
     let cancelled = false
-    fetchProjectGroupShow(selectedId)
+    fetchProjectGroupShow(primaryScope(), selectedId)
       .then((data) => {
         if (cancelled) return
         setDetail(data)

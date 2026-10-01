@@ -15,6 +15,7 @@ import { onDaemonConnected } from '@/lib/daemon-reconnect'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { useToastStore } from './toast'
 import { useProjectsStore } from './projects'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Phase 2.5 fix (finding #547) — `hasLoadedFromDaemon` gate. See
  *  panels.ts for the rationale. Until the first successful
@@ -88,7 +89,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
     try {
       // camelCase FocusGroup response matches the Rust struct's
       // `#[serde(rename_all = "camelCase")]`; no params on this GET.
-      const groups = await daemonCliGet<FocusGroup[]>('focus-groups/list')
+      const groups = await daemonCliGet<FocusGroup[]>(primaryScope(), 'focus-groups/list')
       set({ focusGroups: groups })
     } catch (err) {
       console.error('[focus-groups] fetchFocusGroups failed:', err)
@@ -126,7 +127,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
 
   createFocusGroup: async (name: string, color?: string) => {
     try {
-      await daemonCliPost('focus-groups/create', { name, color })
+      await daemonCliPost(primaryScope(), 'focus-groups/create', { name, color })
       emitFocusGroupsChanged()
       await get().fetchFocusGroups()
       useToastStore.getState().addToast('Focus group created', 'success')
@@ -147,7 +148,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
           settingsUpdate({ activeFocusGroupId: nextId }).catch((e) => console.warn('[focus-groups] settings_update failed:', e))
         }
       }
-      await daemonCliPost('focus-groups/delete', { id })
+      await daemonCliPost(primaryScope(), 'focus-groups/delete', { id })
       emitFocusGroupsChanged()
       await get().fetchFocusGroups()
     } catch (err) {
@@ -157,7 +158,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
 
   renameFocusGroup: async (id: string, name: string) => {
     try {
-      await daemonCliPost('focus-groups/update', { id, name })
+      await daemonCliPost(primaryScope(), 'focus-groups/update', { id, name })
       emitFocusGroupsChanged()
       await get().fetchFocusGroups()
     } catch (err) {
@@ -167,7 +168,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
 
   updateFocusGroupColor: async (id: string, color: string | null) => {
     try {
-      await daemonCliPost('focus-groups/update', { id, color })
+      await daemonCliPost(primaryScope(), 'focus-groups/update', { id, color })
       emitFocusGroupsChanged()
       await get().fetchFocusGroups()
     } catch (err) {
@@ -178,7 +179,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
   reorderFocusGroups: async (ids: string[]) => {
     try {
       for (let i = 0; i < ids.length; i++) {
-        await daemonCliPost('focus-groups/update', { id: ids[i], tabOrder: i })
+        await daemonCliPost(primaryScope(), 'focus-groups/update', { id: ids[i], tabOrder: i })
       }
       emitFocusGroupsChanged()
       await get().fetchFocusGroups()
@@ -195,7 +196,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
       ),
     })
     try {
-      await daemonCliPost('focus-groups/assign', { projectId, focusGroupId })
+      await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId, focusGroupId })
       // The old Tauri `focus_groups_assign_project` emitted BOTH
       // `sync:focus-groups` and `sync:projects` (the project's
       // focusGroupId changed). Mirror both. Eat the actor's

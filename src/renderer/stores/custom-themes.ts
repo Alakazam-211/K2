@@ -6,6 +6,7 @@ import type { HighlightStyle } from '@codemirror/language'
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — reload custom themes against the NEW host on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Phase 2.5 fix (finding #547) — flips to true once `loadCustomThemes`
  *  successfully fetches a theme list from the daemon. Used purely for
@@ -41,13 +42,13 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
 
   loadCustomThemes: async () => {
     try {
-      const entries = await daemonCliGet<{ path: string; name: string; valid: boolean }[]>('themes/list')
+      const entries = await daemonCliGet<{ path: string; name: string; valid: boolean }[]>(primaryScope(), 'themes/list')
       const themes: CustomTheme[] = []
 
       for (const entry of entries) {
         if (!entry.valid) continue
         try {
-          const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: entry.path })
+          const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: entry.path })
           const parsed = parseCustomThemeJson(result.content)
           if (!parsed) continue
 
@@ -77,7 +78,7 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
 
   openCreator: async (baseThemeJson: string) => {
     try {
-      const result = await daemonCliPost<{ path: string }>('themes/create-template', {
+      const result = await daemonCliPost<{ path: string }>(primaryScope(), 'themes/create-template', {
         base_theme_json: baseThemeJson,
       })
       const path = result.path
@@ -99,7 +100,7 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
     const theme = get().customThemes.find((t) => t.id === id)
     if (!theme) return
     try {
-      await daemonCliPost('themes/delete', { path: theme.path })
+      await daemonCliPost(primaryScope(), 'themes/delete', { path: theme.path })
       set({ customThemes: get().customThemes.filter((t) => t.id !== id) })
     } catch (err) {
       console.error('[custom-themes] Failed to delete:', err)

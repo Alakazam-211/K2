@@ -20,6 +20,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 export type HeartbeatDeliveryMode = 'pinned' | 'auto' | 'session'
 
@@ -170,7 +171,7 @@ export async function setHeartbeatSession(
     }
     return
   }
-  const resp = await daemonCliGet<{ success?: boolean; error?: string }>(
+  const resp = await daemonCliGet<{ success?: boolean; error?: string }>(primaryScope(),
     'heartbeat/set-session',
     {
       project: projectPath,

@@ -6,6 +6,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
@@ -78,7 +79,7 @@ describe('setSqlDbAgentAccess', () => {
   it('posts workspace/set with write when the Agent-tab toggle is on', async () => {
     await setSqlDbAgentAccess('/ws/sales', true)
     expect(post).toHaveBeenCalledTimes(1)
-    expect(post).toHaveBeenCalledWith('workspace/set', {
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'workspace/set', {
       project: '/ws/sales',
       fields: { db_agent_access: 'write' },
     })
@@ -86,7 +87,7 @@ describe('setSqlDbAgentAccess', () => {
 
   it('posts workspace/set with off when the Agent-tab toggle is off', async () => {
     await setSqlDbAgentAccess('/ws/sales', false)
-    expect(post).toHaveBeenCalledWith('workspace/set', {
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'workspace/set', {
       project: '/ws/sales',
       fields: { db_agent_access: 'off' },
     })

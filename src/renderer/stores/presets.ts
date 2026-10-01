@@ -12,6 +12,7 @@ import { parseCommand } from '@/lib/agent-resolve'
 import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import { useTabsStore, registerPresetsStore } from './tabs'
 import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** One boolean per connected host. Missing key means the launch strip is shown. */
 export const SHOW_LAUNCH_BAR_STORAGE_PREFIX = 'k2.showLaunchBar.'
@@ -215,7 +216,7 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
 
   fetchPresets: async () => {
     try {
-      const result = await daemonCliGet<AgentPreset[]>('presets/list')
+      const result = await daemonCliGet<AgentPreset[]>(primaryScope(), 'presets/list')
       set({ presets: result })
     } catch (err) {
       console.error('Failed to fetch presets:', err)
@@ -234,32 +235,32 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
   // POST body is camelCase (the daemon's PresetsCreateBody/PresetsUpdateBody
   // deserialize `sortOrder` etc.). Omit `icon` to leave it unset on create.
   createPreset: async (input) => {
-    const created = await daemonCliPost<AgentPreset>('presets/create', input)
+    const created = await daemonCliPost<AgentPreset>(primaryScope(), 'presets/create', input)
     emitPresetsChanged()
     await get().fetchPresets()
     return created
   },
 
   updatePreset: async (input) => {
-    await daemonCliPost('presets/update', input)
+    await daemonCliPost(primaryScope(), 'presets/update', input)
     emitPresetsChanged()
     await get().fetchPresets()
   },
 
   deletePreset: async (id) => {
-    await daemonCliPost('presets/delete', { id })
+    await daemonCliPost(primaryScope(), 'presets/delete', { id })
     emitPresetsChanged()
     await get().fetchPresets()
   },
 
   reorderPresets: async (ids) => {
-    await daemonCliPost('presets/reorder', { ids })
+    await daemonCliPost(primaryScope(), 'presets/reorder', { ids })
     emitPresetsChanged()
     await get().fetchPresets()
   },
 
   resetPresetsToBuiltIns: async () => {
-    await daemonCliPost('presets/reset', {})
+    await daemonCliPost(primaryScope(), 'presets/reset', {})
     emitPresetsChanged()
     await get().fetchPresets()
   },

@@ -21,6 +21,7 @@ import {
   normalizeTargets,
   type SubdomainTargetInfo,
 } from '@/components/WorkspacePanel/urls-ports'
+import { primaryScope } from '@/kessel/server-scope'
 
 export interface TunnelStatus {
   running: boolean
@@ -39,7 +40,7 @@ export interface SubdomainsMap {
 }
 
 async function fetchTunnelStatus(): Promise<TunnelStatus> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const res = await fetch(
     withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/status`, creds.token),
     withDaemonFetch({ method: 'GET' }),
@@ -49,7 +50,7 @@ async function fetchTunnelStatus(): Promise<TunnelStatus> {
 }
 
 async function fetchSubdomains(): Promise<SubdomainsMap> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const res = await fetch(
     withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/subdomains`, creds.token),
     withDaemonFetch({ method: 'GET' }),

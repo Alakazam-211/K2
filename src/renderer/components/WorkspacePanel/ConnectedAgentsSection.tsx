@@ -3,6 +3,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { activateProject, useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { SectionManageCog } from './SectionManageCog'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** One row from GET `/cli/connections?action=list` — present edges only. */
 type ConnListRow = {
@@ -62,7 +63,7 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
     }
     const load = async (): Promise<void> => {
       try {
-        const body = await daemonCliGet<unknown>('connections', {
+        const body = await daemonCliGet<unknown>(primaryScope(), 'connections', {
           project: projectPath,
           action: 'list',
         })

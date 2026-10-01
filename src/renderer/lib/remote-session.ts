@@ -304,14 +304,26 @@ async function doRevive(hostId: string): Promise<ReviveOutcome> {
   return 'unreachable'
 }
 
-/** Drop the dead session token everywhere: `expireSession` raises the
- *  full-screen RemoteSignIn when `hostId` is the ACTIVE remote (and no-ops
- *  otherwise); `clearHostToken` flips a non-active host's Connections tile
- *  to signed-out. The remembered password is kept in both paths. */
+/** Drop the dead session token.
+ *
+ *  - The window's ACTIVE remote (foreground): `expireSession` drops it in
+ *    memory and the keychain and raises the full-screen RemoteSignIn, as
+ *    before.
+ *  - Any other host (background: a Connections tile, the switcher, a pane,
+ *    a pinned scope): drop it in MEMORY only (Home M1 / MS59). The keychain
+ *    token and the `k2` CLI token mirror are never deleted from a background
+ *    failure, because another window may hold a fresh token for the same
+ *    host. The host's tile still flips to signed-out.
+ *
+ *  The remembered password is kept in both paths. */
 function expireAndClear(hostId: string): void {
   const store = useConnectHostStore.getState()
-  store.expireSession(hostId)
-  store.clearHostToken(hostId)
+  const active = store.activeHost
+  if (active !== 'local' && active.id === hostId) {
+    store.expireSession(hostId)
+    return
+  }
+  store.dropSessionInMemory(hostId)
 }
 
 /** Test-only: clear the single-flight + backoff maps. */

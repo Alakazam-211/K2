@@ -43,14 +43,17 @@ const h = vi.hoisted(() => {
   }
   return { SAVED, state }
 })
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => {
-    if (route === 'workspace-layouts/load-all') return h.SAVED
-    if (route === 'terminal/list-running') return h.state.runningPtys
-    return []
-  }),
-  daemonCliPost: vi.fn(async () => ({})),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(vi.fn(async (route: string) => {
+      if (route === 'workspace-layouts/load-all') return h.SAVED
+      if (route === 'terminal/list-running') return h.state.runningPtys
+      return []
+    })),
+    daemonCliPost: primaryOnly(vi.fn(async () => ({}))),
+  }
+})
 vi.mock('@/lib/daemon-reconnect', () => ({
   onDaemonConnected: vi.fn(),
 }))

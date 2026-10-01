@@ -9,6 +9,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { CANONICAL_SETUP_SEED, CANONICAL_MANAGE_SEED } from './canonicalAgentSeeds'
 import type { HarnessProbe } from './canonicalState'
 import { harnessStateLabel } from './canonicalState'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Manifest shapes (mirror crates/k2so-core/src/workspace/canonical.rs) ──
 interface ManifestEntry {
@@ -83,7 +84,7 @@ export function CanonicalAgentModal({
   // Detect per-harness state up front (and on manual refresh).
   const refreshState = useCallback(async () => {
     try {
-      const next = await daemonCliPost<HarnessProbe[]>('canonical/detect-state', { project_path: projectPath })
+      const next = await daemonCliPost<HarnessProbe[]>(primaryScope(), 'canonical/detect-state', { project_path: projectPath })
       setProbes(next)
     } catch (err) {
       console.warn('[canonical-modal] detect_canonical_state failed:', err)
@@ -103,7 +104,7 @@ export function CanonicalAgentModal({
         setManifest(null)
         return
       }
-      const r = await daemonCliGet<{ content: string }>('fs/read-file', {
+      const r = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', {
         path: `${projectPath}/.k2/backups/${latest}/manifest.json`,
       })
       setManifest(JSON.parse(r.content) as SetupManifest)

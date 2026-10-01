@@ -5,6 +5,7 @@ import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   isVoidedHitl,
   type OverlayDoc,
@@ -25,6 +26,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   active = true,
 }: ThreadOverlayPaneProps): JSX.Element {
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder } = useOverlayThread({
+    scope: primaryScope(),
     addr,
     conversationId,
     enabled: active,

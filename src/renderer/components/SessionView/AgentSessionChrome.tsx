@@ -15,6 +15,7 @@ import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT } from './sessionViewTab'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -97,7 +98,7 @@ export function AgentSessionChrome({
         // Server kills and respawns the same provider session. The
         // nonce bump remounts so TerminalPane attaches to that PTY;
         // it is not a close-then-spawn.
-        await daemonCliPost('sessions/v2/refresh', {
+        await daemonCliPost(primaryScope(), 'sessions/v2/refresh', {
           agent_name: agentName,
           ...(cwd ? { cwd } : {}),
         })
@@ -324,7 +325,7 @@ export function useSidecarOverlayAddr(
     const lookup = async (): Promise<void> => {
       let found = ''
       try {
-        const rows = await daemonCliGet<DaemonHandleRow[]>('sessions/list-for-workspace', {
+        const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
           path: projectPath,
         })
         if (cancelled) return

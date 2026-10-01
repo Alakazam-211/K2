@@ -12,6 +12,7 @@ import { scoreEntry } from '@/components/Settings/searchManifest'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 import { menuNewTab } from '@/lib/menu-new-tab'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { showLaunchBarStorageKey, usePresetsStore, type AgentPreset } from '@/stores/presets'
@@ -39,7 +40,7 @@ vi.mock('@/lib/daemon-cli', async () => {
   const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
   return {
     ...actual,
-    daemonCliPost: vi.fn(async (route: string) => {
+    daemonCliPost: vi.fn(async (_scope: unknown, route: string) => {
       if (route === 'agents/ensure-cli') return { ok: true, installed: false }
       return {}
     }),
@@ -549,7 +550,7 @@ describe('tab bar plus menu', () => {
     })
     expect(launch).toHaveBeenCalledTimes(1)
     expect(launch).toHaveBeenCalledWith('codex', '/ws', 'tab', 0)
-    expect(vi.mocked(daemonCliPost).mock.calls.some((call) => call[0] === 'sandbox/open')).toBe(false)
+    expect(vi.mocked(daemonCliPost).mock.calls.some((call) => call[1] === 'sandbox/open')).toBe(false)
   })
 
   it('Option-click posts sandbox/open and does not call launchPreset; 409 adds no tab', async () => {
@@ -571,7 +572,7 @@ describe('tab bar plus menu', () => {
       await Promise.resolve()
     })
     expect(launch).not.toHaveBeenCalled()
-    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sandbox/open', {
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(primaryScope(), 'sandbox/open', {
       project_path: '/ws',
       preset_id: 'codex',
     })
@@ -621,7 +622,7 @@ describe('tab bar plus menu', () => {
       await Promise.resolve()
     })
     expect(launch).not.toHaveBeenCalled()
-    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sandbox/open', {
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(primaryScope(), 'sandbox/open', {
       project_path: '/ws',
       preset_id: 'claude',
     })

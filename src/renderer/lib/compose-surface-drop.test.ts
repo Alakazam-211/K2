@@ -19,13 +19,17 @@ const dropMocks = vi.hoisted(() => ({
   executeRemoteDrop: vi.fn(async (..._args: unknown[]) => null as string | null),
 }))
 
-vi.mock('./handle-remote-drop', () => ({
-  executeBrowserFileDrop: (...args: unknown[]) => dropMocks.executeBrowserFileDrop(...args),
-  executeRemoteDrop: (...args: unknown[]) => dropMocks.executeRemoteDrop(...args),
-}))
+vi.mock('./handle-remote-drop', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    executeBrowserFileDrop: primaryOnly((...args: unknown[]) => dropMocks.executeBrowserFileDrop(...args)),
+    executeRemoteDrop: primaryOnly((...args: unknown[]) => dropMocks.executeRemoteDrop(...args)),
+  }
+})
 
 import { routeBrowserFileDrop } from './external-drop-router'
 
+import { primaryScope } from '@/kessel/server-scope'
 const SEL_KEY: Record<string, string> = {
   [COMPOSE_BAR_SELECTOR]: 'composeBar',
   [COMPOSE_DROP_SURFACE_SELECTOR]: 'composeDropSurface',
@@ -216,7 +220,7 @@ describe('routeBrowserFileDrop image surface', () => {
     const bar = node({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     const surface = node({ composeDropSurface: 'thread' }, [row, bar])
     const file = { name: 'shot.png', type: 'image/png' } as File
-    await routeBrowserFileDrop([file], { x: 1, y: 1 }, docOf(row))
+    await routeBrowserFileDrop(primaryScope(), [file], { x: 1, y: 1 }, docOf(row))
     expect(dropMocks.executeBrowserFileDrop).toHaveBeenCalledWith(
       [file],
       { kind: 'terminal' },
@@ -234,7 +238,7 @@ describe('routeBrowserFileDrop image surface', () => {
     const bar = node({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     node({ composeDropSurface: 'thread' }, [row, bar])
     const file = { name: 'notes.txt', type: 'text/plain' } as File
-    await routeBrowserFileDrop([file], { x: 1, y: 1 }, docOf(row))
+    await routeBrowserFileDrop(primaryScope(), [file], { x: 1, y: 1 }, docOf(row))
     expect(dropMocks.executeBrowserFileDrop).toHaveBeenCalledWith(
       [file],
       { kind: 'miss' },
@@ -247,7 +251,7 @@ describe('routeBrowserFileDrop image surface', () => {
     const fileRow = node({ path: '/ws/shot.png', isDirectory: 'false' })
     const panel = node({ fileTreePanel: '', rootPath: '/ws' }, [fileRow])
     const file = { name: 'shot.png', type: 'image/png' } as File
-    await routeBrowserFileDrop([file], { x: 1, y: 1 }, docOf(fileRow, [panel]))
+    await routeBrowserFileDrop(primaryScope(), [file], { x: 1, y: 1 }, docOf(fileRow, [panel]))
     expect(dropMocks.executeBrowserFileDrop).toHaveBeenCalledWith(
       [file],
       { kind: 'folder', path: '/ws' },

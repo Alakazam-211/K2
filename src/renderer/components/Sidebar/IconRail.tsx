@@ -19,6 +19,7 @@ import { EMPTY_NAV_TAGS, navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
+import { primaryScope } from '@/kessel/server-scope'
 
 const RAIL_WIDTH = 48
 
@@ -144,7 +145,7 @@ export default function IconRail(): React.JSX.Element {
         // Trigger the skill write immediately so the user sees the effect
         // of the migration without having to restart K2.
         try {
-          await daemonCliPost('agents/run-workspace-ingest', { project_path: folderPath })
+          await daemonCliPost(primaryScope(), 'agents/run-workspace-ingest', { project_path: folderPath })
         } catch (err) {
           console.warn('[add-workspace] run ingest failed:', err)
         }

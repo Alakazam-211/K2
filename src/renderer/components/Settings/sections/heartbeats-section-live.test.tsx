@@ -28,15 +28,18 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: async (route: string, params?: unknown) => {
-    gets.calls.push([route, params])
-    return []
-  },
-  daemonCliGetText: async () => '{}',
-  daemonCliPost: async () => ({}),
-  RecoveringError: class RecoveringError extends Error {},
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(async (route: string, params?: unknown) => {
+      gets.calls.push([route, params])
+      return []
+    }),
+    daemonCliGetText: primaryOnly(async () => '{}'),
+    daemonCliPost: primaryOnly(async () => ({})),
+    RecoveringError: class RecoveringError extends Error {},
+  }
+})
 vi.mock('@/lib/heartbeat-launch', () => ({
   launchHeartbeat: vi.fn(async () => undefined),
 }))

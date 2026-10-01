@@ -1,5 +1,6 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { Tab, TerminalItemData } from '@/stores/tabs'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** SSOT display: non-empty trimmed customName, else provider title. */
 export function chatDisplayName(s: { customName?: string | null; title: string }): string {
@@ -462,7 +463,7 @@ export async function restampSessionTabsFromChatList(
       sessionId: string
       customName?: string | null
       title?: string
-    }>>('chat/list', { project_path: projectPath })
+    }>>(primaryScope(), 'chat/list', { project_path: projectPath })
     restampListedChatTabs(tabs, Array.isArray(rows) ? rows : [], setTabTitle)
   } catch {
     /* layout titles stay */
@@ -482,7 +483,7 @@ export async function persistChatRenameIfSessionTab(
   if (!hit?.sessionId) return false
   const provider = hit.provider
   if (!provider) return false
-  await daemonCliPost('chat/rename', {
+  await daemonCliPost(primaryScope(), 'chat/rename', {
     provider,
     session_id: hit.sessionId,
     custom_name: name,
@@ -547,7 +548,7 @@ export async function resolveSessionTabCopyableAddress(
 ): Promise<CopyableAddress | null> {
   if (tab.isSystemAgent || !projectPath) return null
   try {
-    const rows = await daemonCliGet<DaemonHandleRow[]>('sessions/list-for-workspace', {
+    const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
       path: projectPath,
     })
     const row = daemonRowForTab(tab, Array.isArray(rows) ? rows : [])
@@ -563,7 +564,7 @@ export async function resolvePinnedChatCopyableAddress(
 ): Promise<CopyableAddress | null> {
   if (!projectPath) return null
   try {
-    const rows = await daemonCliGet<DaemonHandleRow[]>('sessions/list-for-workspace', {
+    const rows = await daemonCliGet<DaemonHandleRow[]>(primaryScope(), 'sessions/list-for-workspace', {
       path: projectPath,
     })
     const row = daemonRowForCanonicalChat(Array.isArray(rows) ? rows : [], projectId)
@@ -573,7 +574,7 @@ export async function resolvePinnedChatCopyableAddress(
     /* fall through to workspace/handle */
   }
   try {
-    const r = await daemonCliGet<{ handle?: string }>('workspace/handle', {
+    const r = await daemonCliGet<{ handle?: string }>(primaryScope(), 'workspace/handle', {
       project: projectPath,
     })
     return copyableAddressForWorkspaceHandle(r?.handle ?? '')

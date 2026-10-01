@@ -7,6 +7,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { Toggle } from '@/components/ui'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -539,21 +540,21 @@ export function SkinAccessSection(): React.JSX.Element {
     setError(null)
     const failures: string[] = []
     try {
-      const roster = await daemonCliGet<unknown>('skin/users')
+      const roster = await daemonCliGet<unknown>(primaryScope(), 'skin/users')
       setUsers(parseSkinUsers(roster))
     } catch (e) {
       failures.push(`users: ${errText(e)}`)
       setUsers([])
     }
     try {
-      const roleList = await daemonCliGet<unknown>('skin/roles')
+      const roleList = await daemonCliGet<unknown>(primaryScope(), 'skin/roles')
       setRoles(parseSkinRoles(roleList))
     } catch (e) {
       failures.push(`roles: ${errText(e)}`)
       setRoles([])
     }
     try {
-      const keys = await daemonCliGet<unknown>('skin-tokens')
+      const keys = await daemonCliGet<unknown>(primaryScope(), 'skin-tokens')
       setTokens(parseSkinTokens(keys))
     } catch (e) {
       failures.push(`keys: ${errText(e)}`)
@@ -561,7 +562,7 @@ export function SkinAccessSection(): React.JSX.Element {
     }
     let workspaceRows: SkinWorkspace[] = []
     try {
-      const projects = await daemonCliGet<unknown>('projects/list')
+      const projects = await daemonCliGet<unknown>(primaryScope(), 'projects/list')
       workspaceRows = parseWorkspaces(projects)
       setWorkspaces(workspaceRows)
     } catch (e) {
@@ -571,7 +572,7 @@ export function SkinAccessSection(): React.JSX.Element {
     const apps: PublishedApp[] = []
     for (const workspace of workspaceRows) {
       try {
-        const listed = await daemonCliGet<unknown>('publish/list', { project: workspace.id })
+        const listed = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: workspace.id })
         apps.push(...parsePublishedApps(listed))
       } catch (e) {
         failures.push(`publish ${workspace.handle}: ${errText(e)}`)
@@ -579,14 +580,14 @@ export function SkinAccessSection(): React.JSX.Element {
     }
     setPublishedApps(apps)
     try {
-      const listed = await daemonCliGet<unknown>('skin/grants')
+      const listed = await daemonCliGet<unknown>(primaryScope(), 'skin/grants')
       setGrants(parseSkinGrants(listed))
     } catch (e) {
       failures.push(`grants: ${errText(e)}`)
       setGrants([])
     }
     try {
-      const h = await daemonCliGet<unknown>('skin/hydra')
+      const h = await daemonCliGet<unknown>(primaryScope(), 'skin/hydra')
       setHydra(parseHydra(h))
     } catch (e) {
       failures.push(`hydra: ${errText(e)}`)
@@ -619,7 +620,7 @@ export function SkinAccessSection(): React.JSX.Element {
     setMintBusy(true)
     setMintError(null)
     try {
-      const res = await daemonCliPost<unknown>('skin-tokens', { name, caps, rooms })
+      const res = await daemonCliPost<unknown>(primaryScope(), 'skin-tokens', { name, caps, rooms })
       const secret = mintSecretFrom(res)
       if (!secret) throw new Error('mint returned no secret')
       setMintedSecret(secret)
@@ -649,7 +650,7 @@ export function SkinAccessSection(): React.JSX.Element {
         roomAccess,
       }
       if (selectedApp && selectedApp !== 'host') body.appId = selectedApp
-      await daemonCliPost('skin/roles', body)
+      await daemonCliPost(primaryScope(), 'skin/roles', body)
       setNewRoleName('')
       setNewRoleRooms(new Set())
       setNewRoleCapsByRoom({})
@@ -670,7 +671,7 @@ export function SkinAccessSection(): React.JSX.Element {
           handle,
           caps: [...(capsByRoom[handle] ?? new Set(DEFAULT_SKIN_CAPS))],
         }))
-        await daemonCliPost('skin/roles/update', { id, roomAccess })
+        await daemonCliPost(primaryScope(), 'skin/roles/update', { id, roomAccess })
         setEditRoleId(null)
         await refresh()
       } catch (e) {
@@ -686,7 +687,7 @@ export function SkinAccessSection(): React.JSX.Element {
     async (id: string) => {
       setRoleError(null)
       try {
-        await daemonCliPost('skin/roles/remove', { id })
+        await daemonCliPost(primaryScope(), 'skin/roles/remove', { id })
         setRemoveRoleConfirm(null)
         await refresh()
       } catch (e) {
@@ -701,9 +702,9 @@ export function SkinAccessSection(): React.JSX.Element {
       setError(null)
       try {
         if (role) {
-          await daemonCliPost('skin/roles/assign', { username, role })
+          await daemonCliPost(primaryScope(), 'skin/roles/assign', { username, role })
         } else {
-          await daemonCliPost('skin/roles/unassign', { username })
+          await daemonCliPost(primaryScope(), 'skin/roles/unassign', { username })
         }
         await refresh()
       } catch (e) {
@@ -718,7 +719,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setMintError(null)
       setBusyId(id)
       try {
-        await daemonCliPost('skin-tokens/rooms', { id, rooms: handles })
+        await daemonCliPost(primaryScope(), 'skin-tokens/rooms', { id, rooms: handles })
         setEditKeyId(null)
         await refresh()
       } catch (e) {
@@ -754,7 +755,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setPublishBusy(app.id)
       setError(null)
       try {
-        await daemonCliPost(`publish/${action}`, { name: app.name, project: app.projectId })
+        await daemonCliPost(primaryScope(), `publish/${action}`, { name: app.name, project: app.projectId })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -770,7 +771,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setBusyId(grant.id)
       setError(null)
       try {
-        await daemonCliPost('skin/grants/enabled', { id: grant.id, enabled })
+        await daemonCliPost(primaryScope(), 'skin/grants/enabled', { id: grant.id, enabled })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -786,7 +787,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setBusyId(id)
       setError(null)
       try {
-        await daemonCliPost('skin/grants/delete', { id })
+        await daemonCliPost(primaryScope(), 'skin/grants/delete', { id })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -808,7 +809,7 @@ export function SkinAccessSection(): React.JSX.Element {
       const prev = hydra
       setHydra((h) => ({ ...h, enabled }))
       try {
-        const posted = await daemonCliPost<unknown>('skin/hydra', { enabled, apply: true })
+        const posted = await daemonCliPost<unknown>(primaryScope(), 'skin/hydra', { enabled, apply: true })
         setHydra(parseHydra(posted))
       } catch (e) {
         setHydra(prev)
@@ -829,7 +830,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setBusyId(id)
       setMintError(null)
       try {
-        await daemonCliPost('skin-tokens/revoke', { id })
+        await daemonCliPost(primaryScope(), 'skin-tokens/revoke', { id })
         await refresh()
       } catch (e) {
         setMintError(errText(e))
@@ -848,7 +849,7 @@ export function SkinAccessSection(): React.JSX.Element {
     setBusyId('add-user')
     setError(null)
     try {
-      await daemonCliPost('skin/grants', {
+      await daemonCliPost(primaryScope(), 'skin/grants', {
         subjectKind: 'principal',
         subjectId: addPersonId,
         kind: 'app',

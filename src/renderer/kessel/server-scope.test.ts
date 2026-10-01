@@ -21,8 +21,11 @@ import {
   scopedKey,
   hostKeyOf,
   noteServerVersion,
+  ServerRemovedError,
+  LOCAL_SCOPE_LABEL,
   __resetServerScopesForTests,
 } from './server-scope'
+import { canonicalHostKey, homeHostKey } from '@/lib/host-key'
 import { invalidateDaemonWs } from './daemon-ws'
 import {
   useConnectHostStore,
@@ -96,6 +99,48 @@ describe('primaryScope — the window active host at call time', () => {
   })
 })
 
+describe('host keys are canonical (MS60)', () => {
+  it('one https server has one key however it is spelled', () => {
+    for (const spelling of [
+      'dtl.k2.dev',
+      'DTL.k2.dev',
+      ' dtl.k2.dev ',
+      'dtl.k2.dev:443',
+      'https://dtl.k2.dev',
+      'https://dtl.k2.dev/',
+      'https://DTL.k2.dev:443',
+      'wss://dtl.k2.dev',
+    ]) {
+      expect(canonicalHostKey(spelling)).toBe('dtl.k2.dev')
+    }
+    expect(scopeForHost('https://dtl.k2.dev')).toBe(scopeForHost('dtl.k2.dev:443'))
+  })
+
+  it('plain http keeps its port, :80 included, so http and https never share a key', () => {
+    expect(canonicalHostKey('http://box.lan')).toBe('box.lan:80')
+    expect(canonicalHostKey('http://box.lan:80')).toBe('box.lan:80')
+    expect(canonicalHostKey('box.lan:80')).toBe('box.lan:80')
+    expect(canonicalHostKey('192.168.1.20:38471')).toBe('192.168.1.20:38471')
+    expect(canonicalHostKey('http://192.168.1.20:38471/')).toBe('192.168.1.20:38471')
+    expect(homeHostKey({ hostname: 'box.lan', port: 80, secure: false })).toBe('box.lan:80')
+    expect(homeHostKey({ hostname: 'box.lan', port: 443, secure: true })).toBe('box.lan')
+    expect(homeHostKey({ hostname: 'box.lan', port: 8443, secure: true })).toBe('box.lan:8443')
+  })
+
+  it('IPv6 literals are bracketed with a port', () => {
+    expect(homeHostKey({ hostname: '::1', port: 38471, secure: false })).toBe('[::1]:38471')
+    expect(homeHostKey({ hostname: '[FE80::1]', port: 443, secure: true })).toBe('[fe80::1]:443')
+    expect(canonicalHostKey('http://[::1]:38471')).toBe('[::1]:38471')
+    expect(canonicalHostKey('[::1]:38471')).toBe('[::1]:38471')
+  })
+
+  it('anything that is not a server address throws', () => {
+    for (const bad of ['', 'https://', 'dtl.k2.dev/cli/x', 'user@dtl.k2.dev', 'dtl.k2.dev:0', 'dtl.k2.dev:99999', 'a b', 'dtl.k2.dev:abc', '[::1']) {
+      expect(() => canonicalHostKey(bad)).toThrow('not a host key')
+    }
+  })
+})
+
 describe('scopeForHost — pinned to one saved server', () => {
   it('host keys match Home row keys (local, <sub>.k2.dev, ip:port)', () => {
     expect(hostKeyOf('local')).toBe('local')
@@ -135,10 +180,30 @@ describe('scopeForHost — pinned to one saved server', () => {
     expect(local.serverSupports('canonical-active')).toBe(true)
   })
 
-  it('an unsaved host refuses to resolve creds (no silent fallback to the window host)', async () => {
+  it('a removed server rejects with ServerRemovedError (no fallback to the window host)', async () => {
     const ghost = scopeForHost('ghost.k2.dev')
     expect(ghost.connectHost()).toBe(null)
-    await expect(ghost.creds()).rejects.toThrow('no saved server for ghost.k2.dev')
+    await expect(ghost.creds()).rejects.toBeInstanceOf(ServerRemovedError)
+    await expect(ghost.httpBase()).rejects.toThrow('no saved server for ghost.k2.dev')
+    // A saved one that is then removed goes the same way.
+    const a = scopeForHost(ROSSON)
+    expect((await a.creds()).token).toBe('tok-rosson')
+    useConnectHostStore.getState().removeHost('h1')
+    const err = await a.creds().then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(ServerRemovedError)
+    expect((err as ServerRemovedError).hostKey).toBe('rosson.k2.dev')
+  })
+
+  it('label is the saved label, or This computer for local', () => {
+    expect(LOCAL_SCOPE_LABEL).toBe('This computer')
+    expect(primaryScope().label).toBe('This computer')
+    expect(scopeForHost('local').label).toBe('This computer')
+    expect(scopeForHost(ROSSON).label).toBe('Box')
+    useConnectHostStore.getState().selectHost(LAN)
+    expect(primaryScope().label).toBe('LAN')
   })
 
   it('serverSupports uses that server version, not the window one', () => {

@@ -24,17 +24,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const daemonCliGet = vi.fn()
 const daemonCliPost = vi.fn()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
-  daemonCliPost: (...args: unknown[]) => daemonCliPost(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+    daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPost(...args)),
+  }
+})
 
 import { daemonCliGet as cli, daemonCliPost as cliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Mirrors HeartbeatsSection.commitRename: renderer holds row.name (old) +
 // the trimmed/lowercased draft (new); the route reads `from`/`to`.
 function renameHeartbeat(project: string, oldName: string, newName: string) {
-  return cli('heartbeat/rename', { project, from: oldName, to: newName })
+  return cli(primaryScope(), 'heartbeat/rename', { project, from: oldName, to: newName })
 }
 
 // Mirrors the agents/lock call sites (active-agents ×2, AgentPane ×2,
@@ -46,7 +50,7 @@ function lockAgent(
   terminalId: string,
   owner: 'user' | 'system',
 ) {
-  return cli('agents/lock', {
+  return cli(primaryScope(), 'agents/lock', {
     project: projectPath,
     agent: agentName,
     terminal_id: terminalId,
@@ -113,7 +117,7 @@ describe('host-aware CLI swaps — wire contract', () => {
 // Mirrors ProjectsSection.handleAdd: renderer holds projectId (source) +
 // the picked targetProjectId; the route reads source/target_project_id.
 function createRelation(sourceProjectId: string, targetProjectId: string) {
-  return cliPost('relations/create', {
+  return cliPost(primaryScope(), 'relations/create', {
     source_project_id: sourceProjectId,
     target_project_id: targetProjectId,
   })
@@ -128,7 +132,7 @@ function createRelation(sourceProjectId: string, targetProjectId: string) {
 // query string), so the body must stay `{}` — no stray fields that an
 // older/stricter handler could choke on.
 function restartHost() {
-  return cliPost('daemon/restart', {})
+  return cliPost(primaryScope(), 'daemon/restart', {})
 }
 
 function setSurfaced(
@@ -140,7 +144,7 @@ function setSurfaced(
   heartbeatName: string,
   attachAgentName: string,
 ) {
-  return cliPost('session/set-surfaced', {
+  return cliPost(primaryScope(), 'session/set-surfaced', {
     project_path: projectPath,
     agent_name: agentName,
     surfaced: true,
@@ -198,10 +202,10 @@ describe('host-aware CLI POST swaps — GAP wire contract', () => {
 
 // Mirrors ProjectsSection.fetchRelations: source (outgoing) + incoming.
 function listRelations(projectId: string) {
-  return cli('relations/list', { project_id: projectId })
+  return cli(primaryScope(), 'relations/list', { project_id: projectId })
 }
 function listRelationsIncoming(projectId: string) {
-  return cli('relations/list-incoming', { project_id: projectId })
+  return cli(primaryScope(), 'relations/list-incoming', { project_id: projectId })
 }
 
 describe('host-aware CLI GET swaps — relations LIST wire contract', () => {
@@ -251,19 +255,19 @@ describe('host-aware CLI GET swaps — relations LIST wire contract', () => {
 
 // Mirrors UpdateHostRow.handleCheck: POST with an EMPTY body.
 function updateCheck() {
-  return cliPost('daemon/update/check', {})
+  return cliPost(primaryScope(), 'daemon/update/check', {})
 }
 // Mirrors UpdateHostRow.handleDownload: POST with an EMPTY body → {job_id}.
 function updateStart() {
-  return cliPost('daemon/update/start', {})
+  return cliPost(primaryScope(), 'daemon/update/start', {})
 }
 // Mirrors the status poll: GET reading the `job_id` query param.
 function updateStatus(jobId: string) {
-  return cli('daemon/update/status', { job_id: jobId })
+  return cli(primaryScope(), 'daemon/update/status', { job_id: jobId })
 }
 // Mirrors UpdateHostRow.handleApply: POST with the staged job in the body.
 function updateApply(jobId: string) {
-  return cliPost('daemon/update/apply', { job_id: jobId })
+  return cliPost(primaryScope(), 'daemon/update/apply', { job_id: jobId })
 }
 
 describe('host-aware CLI — remote self-update wire contract (P4)', () => {

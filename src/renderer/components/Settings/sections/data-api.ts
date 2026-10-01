@@ -5,6 +5,7 @@
 // network calls. Rows NEVER carry DSNs, passwords, or secret refs.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 export interface SqlStatus {
   ok: boolean
@@ -87,20 +88,20 @@ export function formatSqlListen(listen: string | null | undefined, port?: number
 }
 
 export async function fetchSqlStatus(): Promise<SqlStatus> {
-  return daemonCliGet<SqlStatus>('db/status')
+  return daemonCliGet<SqlStatus>(primaryScope(), 'db/status')
 }
 
 export async function fetchSqlDatabases(): Promise<SqlDatabase[]> {
-  const res = await daemonCliGet<{ ok: boolean; databases: SqlDatabase[] }>('db/list')
+  const res = await daemonCliGet<{ ok: boolean; databases: SqlDatabase[] }>(primaryScope(), 'db/list')
   return Array.isArray(res?.databases) ? res.databases : []
 }
 
 export async function enableSqlServer(): Promise<{ ok: boolean; state?: string }> {
-  return daemonCliPost('db/server/enable', {})
+  return daemonCliPost(primaryScope(), 'db/server/enable', {})
 }
 
 export async function disableSqlServer(): Promise<{ ok: boolean; state?: string }> {
-  return daemonCliPost('db/server/disable', {})
+  return daemonCliPost(primaryScope(), 'db/server/disable', {})
 }
 
 export async function createSqlDatabase(project: string): Promise<{
@@ -108,7 +109,7 @@ export async function createSqlDatabase(project: string): Promise<{
   name?: string
   existing?: boolean
 }> {
-  return daemonCliPost('db/create', { project })
+  return daemonCliPost(primaryScope(), 'db/create', { project })
 }
 
 export async function grantSqlAccess(body: {
@@ -117,14 +118,14 @@ export async function grantSqlAccess(body: {
   level: SqlLevel
   manage?: boolean
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('db/grant', body)
+  return daemonCliPost(primaryScope(), 'db/grant', body)
 }
 
 export async function revokeSqlAccess(body: {
   project: string
   db: string
 }): Promise<{ ok: boolean }> {
-  return daemonCliPost('db/revoke', body)
+  return daemonCliPost(primaryScope(), 'db/revoke', body)
 }
 
 export async function bindSqlRole(body: {
@@ -132,7 +133,7 @@ export async function bindSqlRole(body: {
   db?: string
   role: string
 }): Promise<{ ok: boolean; bindRole?: string }> {
-  return daemonCliPost('db/bind', body)
+  return daemonCliPost(primaryScope(), 'db/bind', body)
 }
 
 /** Owner/admin: agents may create new DBs on this owning workspace. */
@@ -140,7 +141,7 @@ export async function setSqlDbAgentAccess(
   ownerPath: string,
   canCreate: boolean,
 ): Promise<void> {
-  await daemonCliPost('workspace/set', {
+  await daemonCliPost(primaryScope(), 'workspace/set', {
     project: ownerPath,
     fields: { db_agent_access: canCreate ? 'write' : 'off' },
   })

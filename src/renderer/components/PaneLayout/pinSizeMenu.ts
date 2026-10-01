@@ -20,6 +20,7 @@
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { agentChatId } from '@/lib/terminal-id'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -212,14 +213,14 @@ export async function applyPinSize(
   dims: { cols: number; rows: number } | null,
 ): Promise<void> {
   if (dims === null) {
-    await daemonCliPost<PinSizeResponse>('terminal/pin-size', {
+    await daemonCliPost<PinSizeResponse>(primaryScope(), 'terminal/pin-size', {
       session: sessionId,
       clear: true,
     })
     usePinnedSizeStore.getState().setPin(sessionId, null)
     return
   }
-  const res = await daemonCliPost<PinSizeResponse>('terminal/pin-size', {
+  const res = await daemonCliPost<PinSizeResponse>(primaryScope(), 'terminal/pin-size', {
     session: sessionId,
     cols: dims.cols,
     rows: dims.rows,

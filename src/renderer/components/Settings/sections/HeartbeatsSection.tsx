@@ -19,6 +19,7 @@ import {
   setHeartbeatSession,
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -473,7 +474,7 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
   // so the AI can catch conflicts/duplication without ballooning prompt size.
   const [agentMd, setAgentMd] = useState<string>('')
   useEffect(() => {
-    daemonCliGet<{ content: string }>('fs/read-file', {
+    daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', {
       path: `${projectPath}/.k2/agent/ROLE.md`,
     })
       .then((r) => setAgentMd(r.content))
@@ -693,7 +694,7 @@ export function HistoryPanel({
       // 0.40.48 host-aware fix: same story as the roster — the fires audit
       // log must come from the ACTIVE host, not this Mac's in-process
       // k2_core. Same route the k2 CLI uses.
-      const list = await daemonCliGet<HeartbeatFire[]>('heartbeat/fires-list', {
+      const list = await daemonCliGet<HeartbeatFire[]>(primaryScope(), 'heartbeat/fires-list', {
         project: projectPath,
         limit: 50,
       })
@@ -883,7 +884,7 @@ export function HeartbeatsPanel({
       // wrong machine's heartbeats. Load from the ACTIVE host's route
       // instead — the same one this section's mutations (add/edit/archive/
       // enable/rename) already use.
-      const list = await daemonCliGet<HeartbeatRow[]>('heartbeat/list', {
+      const list = await daemonCliGet<HeartbeatRow[]>(primaryScope(), 'heartbeat/list', {
         project: project.path,
       })
       setRows(list)
@@ -909,7 +910,7 @@ export function HeartbeatsPanel({
 
   const handleAdd = async (name: string, spec: ScheduleSpec): Promise<void> => {
     if (!project) return
-    await daemonCliGet('heartbeat/add', {
+    await daemonCliGet(primaryScope(), 'heartbeat/add', {
       project: project.path,
       name,
       frequency: spec.frequency,
@@ -922,7 +923,7 @@ export function HeartbeatsPanel({
 
   const handleEdit = async (name: string, spec: ScheduleSpec): Promise<void> => {
     if (!project) return
-    await daemonCliGet('heartbeat/edit', {
+    await daemonCliGet(primaryScope(), 'heartbeat/edit', {
       project: project.path,
       name,
       frequency: spec.frequency,
@@ -940,7 +941,7 @@ export function HeartbeatsPanel({
       `It will stop firing on its schedule and disappear from this list.\n` +
       `The chat history stays available in the sidebar's Archived section.`
     )) return
-    await daemonCliGet('heartbeat/archive', { project: project.path, name })
+    await daemonCliGet(primaryScope(), 'heartbeat/archive', { project: project.path, name })
     toast.addToast(`Archived heartbeat "${name}"`, 'info', 3000)
     await refresh()
     // Archiving changes the workspace's heartbeat aggregate (archived
@@ -951,7 +952,7 @@ export function HeartbeatsPanel({
 
   const handleToggle = async (row: HeartbeatRow): Promise<void> => {
     if (!project) return
-    await daemonCliGet('heartbeat/enable', {
+    await daemonCliGet(primaryScope(), 'heartbeat/enable', {
       project: project.path,
       name: row.name,
       enabled: !row.enabled,
@@ -1015,7 +1016,7 @@ export function HeartbeatsPanel({
       return
     }
     try {
-      await daemonCliGet('heartbeat/rename', {
+      await daemonCliGet(primaryScope(), 'heartbeat/rename', {
         project: project.path,
         from: row.name,
         to: newName,

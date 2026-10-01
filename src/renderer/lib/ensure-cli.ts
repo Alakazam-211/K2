@@ -2,6 +2,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { useToastStore } from '@/stores/toast'
 import { create } from 'zustand'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Installers the daemon will run. Copy buttons use these same strings. */
 export const CLI_INSTALL_COMMANDS = {
@@ -87,7 +88,7 @@ async function runEnsure(program: InstallableCli): Promise<EnsureCliResult> {
     useCliInstallStore.getState().setInstalling(program)
   }, CLI_INSTALL_NOTICE_MS)
   try {
-    const result = await daemonCliPost<EnsureCliResult>('agents/ensure-cli', { program })
+    const result = await daemonCliPost<EnsureCliResult>(primaryScope(), 'agents/ensure-cli', { program })
     if (result?.installed !== true && result?.installed !== false) {
       throw new Error('ensure-cli returned an unexpected body')
     }

@@ -24,6 +24,7 @@ import { isAgentPtyTerminalItem, persistChatRenameIfSessionTab, resolvePinnedCha
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface TabBarProps {
   cwd: string
@@ -70,7 +71,7 @@ async function openPresetInSandbox(
   groupIndex: number,
 ): Promise<void> {
   try {
-    const resp = await daemonCliPost<{ sessionId?: string; agentName?: string }>('sandbox/open', {
+    const resp = await daemonCliPost<{ sessionId?: string; agentName?: string }>(primaryScope(), 'sandbox/open', {
       project_path: projectPath,
       preset_id: presetId,
     })
@@ -636,7 +637,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     } else if (clickedId === 'force-reap-all') {
       useTabsStore.getState().forceReapAllTabsInGroup(groupIndex)
     } else if (clickedId === 'show-in-finder' && fileViewerPath) {
-      daemonCliPost('fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
+      daemonCliPost(primaryScope(), 'fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
     } else if (clickedId === 'copy-file-path' && fileViewerPath) {
       navigator.clipboard.writeText(fileViewerPath).catch((err) => console.warn('[tab-bar] copy-file-path', err))
     } else if (clickedId === 'copy-terminal-id' && tabTerminalId) {

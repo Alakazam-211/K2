@@ -54,6 +54,7 @@ import {
 import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { KindBadge, PriorityBadge } from './badges'
+import { primaryScope } from '@/kessel/server-scope'
 
 const TOPBAR_HEIGHT = 38
 
@@ -522,7 +523,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
       return
     }
     let cancelled = false
-    fetchProjectGroupShow(projectFilterId)
+    fetchProjectGroupShow(primaryScope(), projectFilterId)
       .then((show) => {
         if (cancelled) return
         setProjectMemberIds(new Set(show.members.map((m) => m.workspaceId)))

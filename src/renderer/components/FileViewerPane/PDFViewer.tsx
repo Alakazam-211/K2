@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import * as pdfjsLib from 'pdfjs-dist'
+import { primaryScope } from '@/kessel/server-scope'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -46,7 +47,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
         // `atob` is the smallest path; ~50 MB files top out the
         // implementation's V8 string limit headroom (~256 MB) by a
         // wide margin so no chunking needed here.
-        const r = await daemonCliGet<{ base64: string }>('fs/read-binary', { path: filePath })
+        const r = await daemonCliGet<{ base64: string }>(primaryScope(), 'fs/read-binary', { path: filePath })
         const binary = atob(r.base64)
         const data = new Uint8Array(binary.length)
         for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i)

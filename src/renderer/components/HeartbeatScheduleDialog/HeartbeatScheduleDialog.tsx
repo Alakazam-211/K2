@@ -9,6 +9,7 @@ import { DialogScrim } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useHeartbeatScheduleStore } from '@/stores/heartbeat-schedule'
 import { useProjectsStore } from '@/stores/projects'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -170,7 +171,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
     setSaving(true)
     try {
       const mode = tab === 'hourly' ? 'hourly' : 'scheduled'
-      await daemonCliPost('projects/update', { id: projectId, heartbeatMode: mode, heartbeatSchedule: scheduleJson })
+      await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, heartbeatMode: mode, heartbeatSchedule: scheduleJson })
       void emit('sync:projects').catch(() => {})
       await invoke('k2so_agents_update_heartbeat_projects')
       try { await invoke('k2so_agents_install_heartbeat') } catch { /* may already be installed */ }
@@ -191,7 +192,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
 
   const handleTurnOff = useCallback(async () => {
     if (!projectId) return
-    await daemonCliPost('projects/update', { id: projectId, heartbeatMode: 'off', heartbeatSchedule: '' })
+    await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, heartbeatMode: 'off', heartbeatSchedule: '' })
     void emit('sync:projects').catch(() => {})
     await invoke('k2so_agents_update_heartbeat_projects')
     useProjectsStore.setState({

@@ -61,6 +61,7 @@ import {
   collapseEmptyLeadingColumns,
   mergeSerializedLayouts,
 } from '@/lib/layout-merge'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Phase 2.5 fix (finding #547) — gate for `loadWorkspaceSessionsFromDb`.
  *  Flips to true on the first successful load (regardless of whether the
@@ -508,7 +509,7 @@ async function runLayoutSaveJob(key: string, job: LayoutSaveJob, attempt = 0): P
   const base = layoutRevisions.get(key)
   let res: { success?: boolean; revision?: number } | undefined
   try {
-    res = await daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+    res = await daemonCliPost<{ success?: boolean; revision?: number }>(primaryScope(), 'workspace-layouts/save', {
       projectId: job.projectId,
       workspaceId: job.workspaceId,
       layoutJson: JSON.stringify(layout),
@@ -554,7 +555,7 @@ interface FetchedLayout {
 /** GET the stored layout with its revision (V14). An older daemon ignores
  *  `with_revision` and answers with the bare JSON string. */
 async function fetchLayoutWithRevision(projectId: string, workspaceId: string): Promise<FetchedLayout> {
-  const res = await daemonCliGet<unknown>('workspace-layouts/load', {
+  const res = await daemonCliGet<unknown>(primaryScope(), 'workspace-layouts/load', {
     project_id: projectId,
     workspace_id: workspaceId,
     with_revision: '1',
@@ -733,7 +734,7 @@ function closeTerminalForRenderer(
     return
   }
   if (data.heartbeatName && data.projectPath && data.surfacedAgentName) {
-    daemonCliPost('session/set-surfaced', {
+    daemonCliPost(primaryScope(), 'session/set-surfaced', {
       project_path: data.projectPath,
       agent_name: data.surfacedAgentName,
       surfaced: false,
@@ -778,7 +779,7 @@ function closeTerminalForRenderer(
       // /cli/terminal/kill route. (A MISSING renderer stamp lands
       // here too — matches PaneGroupView's render dispatch, where an
       // unstamped item hosts the legacy Alacritty view.)
-      terminalKill(data.terminalId).catch((e) =>
+      terminalKill(primaryScope(), data.terminalId).catch((e) =>
         console.warn('[tabs] terminal/kill failed:', e),
       )
       break
@@ -825,7 +826,7 @@ function closeTerminalForRenderer(
 async function liveSubscriberCountForProject(projectId: string): Promise<number> {
   try {
     const agents = asArray<{ agentName?: string; subscriberCount?: number }>(
-      await daemonCliGet('agents/running'),
+      await daemonCliGet(primaryScope(), 'agents/running'),
     )
     let max = 0
     for (const a of agents) {
@@ -845,7 +846,7 @@ async function closeV2Session(
   opts?: { clearIndex?: boolean; reason?: 'tab_close' },
 ): Promise<void> {
   try {
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     const url = withCliTokenQuery(
       `${daemonHttpBase(creds)}/cli/sessions/v2/close`,
       creds.token,
@@ -928,7 +929,7 @@ async function resolveSessionResumeLaunch(
     try {
       const rows = await daemonCliGet<
         Array<{ sessionId: string; provider?: string; archived?: boolean }>
-      >('chat/list', { project_path: projectPath })
+      >(primaryScope(), 'chat/list', { project_path: projectPath })
       // Archived sessions are not resume-eligible until restored.
       const row = rows.find((r) => r.sessionId === sessionId && !r.archived)
       if (row) {
@@ -3108,7 +3109,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     try {
       // Host-aware: the live PTY is on the ACTIVE host. A local
       // invoke would miss a remote heartbeat and fall through to spawn.
-      const raw = await daemonCliGetText('heartbeat/active-session', {
+      const raw = await daemonCliGetText(primaryScope(), 'heartbeat/active-session', {
         project: projectPath,
         name: heartbeatName,
       })
@@ -3132,7 +3133,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       let surfacedAgentName: string | undefined
       try {
         const agents = asArray<{ name: string; agentType: string }>(
-          await daemonCliGet('agents/list', { project: projectPath }).catch(() => []),
+          await daemonCliGet(primaryScope(), 'agents/list', { project: projectPath }).catch(() => []),
         )
         surfacedAgentName = agents.find((a) =>
           a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType),
@@ -3193,7 +3194,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     let sessionId = sessionFromActive
     if (!sessionId) {
       const listed = asArray<{ name: string; lastSessionId?: string | null }>(
-        await daemonCliGet('heartbeat/list', { project: projectPath }).catch(() => []),
+        await daemonCliGet(primaryScope(), 'heartbeat/list', { project: projectPath }).catch(() => []),
       )
       const hb = listed.find((row) => row.name === heartbeatName)
       if (!hb) {
@@ -3211,7 +3212,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
     const launch = await resolveSessionResumeLaunch(projectPath, sessionId)
     if (launch.provider === 'claude') {
-      const jsonlExists = await daemonCliGet<{ exists: boolean }>('chat/session-exists', {
+      const jsonlExists = await daemonCliGet<{ exists: boolean }>(primaryScope(), 'chat/session-exists', {
         project_path: projectPath,
         session_id: sessionId,
       })
@@ -3921,7 +3922,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (serverSupports('daemon-broadcasts')) {
       const projectId = get().activeWorkspaceKey?.split(':')[0]
       if (projectId) {
-        daemonCliPost('workspace/set-tab-title', {
+        daemonCliPost(primaryScope(), 'workspace/set-tab-title', {
           projectId,
           tabId,
           title: adopted.title,
@@ -4930,7 +4931,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // field-identical wrapper struct (also camelCase) — a pure rename
       // with no shape change — so the raw daemon response already matches
       // this type and needs NO post-fetch transform.
-      const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string, revision?: number }>>('workspace-layouts/load-all')
+      const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string, revision?: number }>>(primaryScope(), 'workspace-layouts/load-all')
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== loadHostKey) return
       const layouts: Record<string, SerializedLayout> = {}
       for (const session of sessions) {
@@ -5004,7 +5005,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             const toolConfig = RESUMABLE_CLI_TOOLS[d.command]
             if (!toolConfig) continue
             try {
-              const r = await daemonCliGet<{ sessionId: string | null }>('chat/detect-active', {
+              const r = await daemonCliGet<{ sessionId: string | null }>(primaryScope(), 'chat/detect-active', {
                 provider: toolConfig.provider,
                 project_path: d.cwd,
               })
@@ -5074,7 +5075,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             cwd: string
             isV2: boolean
           }>
-        >('sessions/list-for-workspace', { path: cwd })
+        >(primaryScope(), 'sessions/list-for-workspace', { path: cwd })
 
         const adoptable = sessions.filter(
           (s) => s.isV2 && typeof s.agentName === 'string' && s.agentName.startsWith('tab-'),
@@ -5146,7 +5147,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
           const toolConfig = RESUMABLE_CLI_TOOLS[agentOpts.command]
           if (toolConfig) {
             try {
-              const r = await daemonCliGet<{ sessionId: string | null }>('chat/detect-active', {
+              const r = await daemonCliGet<{ sessionId: string | null }>(primaryScope(), 'chat/detect-active', {
                 provider: toolConfig.provider,
                 project_path: cwd,
               })
@@ -5471,7 +5472,7 @@ async function fetchDaemonSessions(projectPath: string): Promise<DaemonSessionRo
     // host reconcile asked the wrong machine, got nothing, and never
     // refilled item `command` — which is what drives tab agent icons
     // (the icons-vanish-on-relogin bug).
-    return await daemonCliGet<DaemonSessionRow[]>('sessions/list-for-workspace', {
+    return await daemonCliGet<DaemonSessionRow[]>(primaryScope(), 'sessions/list-for-workspace', {
       path: projectPath,
     })
   } catch (err) {
@@ -6527,7 +6528,7 @@ export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
 export async function hydrateApiSandboxSessions(): Promise<number> {
   let rows: DaemonSessionRow[] | null = null
   try {
-    rows = await daemonCliGet<DaemonSessionRow[]>('sessions/list-for-workspace', {
+    rows = await daemonCliGet<DaemonSessionRow[]>(primaryScope(), 'sessions/list-for-workspace', {
       path: '/',
     })
   } catch (err) {
@@ -6649,7 +6650,7 @@ interface DaemonTabTitle {
  *  remains the fallback). */
 async function applyTabTitlesSnapshot(projectId: string): Promise<void> {
   try {
-    const titles = await daemonCliGet<DaemonTabTitle[]>('workspace/tab-titles', {
+    const titles = await daemonCliGet<DaemonTabTitle[]>(primaryScope(), 'workspace/tab-titles', {
       project_id: projectId,
     })
     if (!Array.isArray(titles)) return

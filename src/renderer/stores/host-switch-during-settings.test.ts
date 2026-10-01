@@ -53,11 +53,14 @@ vi.mock('@tauri-apps/api/event', () => ({
 // including a dead-session remote that rejects everything.
 const daemonCliGet = vi.fn<(route: string, params?: Record<string, unknown>) => Promise<unknown>>()
 const daemonCliPost = vi.fn(async () => ({}))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...(args as [string, Record<string, unknown>?])),
-  daemonCliGetText: vi.fn(async () => ''),
-  daemonCliPost: (...args: unknown[]) => (daemonCliPost as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...(args as [string, Record<string, unknown>?]))),
+    daemonCliGetText: primaryOnly(vi.fn(async () => '')),
+    daemonCliPost: primaryOnly((...args: unknown[]) => (daemonCliPost as unknown as (...a: unknown[]) => Promise<unknown>)(...args)),
+  }
+})
 
 // daemon-settings — host-aware like the real settingsGet (reads activeHost
 // at call time); each host remembers ITS OWN last-active selection.

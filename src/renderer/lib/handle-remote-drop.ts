@@ -29,7 +29,7 @@ import { uploadBrowserFile, uploadToRemote } from './upload-to-remote'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
-import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** What the drop landed on (hit-tested at the drop position). */
 export type DropTarget =
@@ -142,6 +142,7 @@ export function __clearRemoteDropFlightsForTests(): void {
  * @returns the terminal payload to inject, or null (folder/miss/cancel).
  */
 export async function executeRemoteDrop(
+  scope: ServerScope,
   localPaths: string[],
   target: DropTarget,
   ctx: DropContext,
@@ -163,12 +164,13 @@ export async function executeRemoteDrop(
 
   // R3: join an in-flight transfer for the same paths+dest+host rather
   // than starting a second upload (which would land as `name (1)`).
-  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
-  const flightKey = remoteDropFlightKey(localPaths, destDir, hostKey)
+  // The scope's connection key (the window's `activeHostKey` for the
+  // primary scope, exactly as before).
+  const flightKey = remoteDropFlightKey(localPaths, destDir, scope.connectionKey)
   const existing = inflightDrops.get(flightKey)
   if (existing) return existing
 
-  const flight = runRemoteDropUploads(localPaths, destDir, dest.inject, buildPayload).finally(
+  const flight = runRemoteDropUploads(scope, localPaths, destDir, dest.inject, buildPayload).finally(
     () => {
       if (inflightDrops.get(flightKey) === flight) {
         inflightDrops.delete(flightKey)
@@ -181,6 +183,7 @@ export async function executeRemoteDrop(
 
 /** Upload loop + toasts for one resolved destination (inside the flight). */
 async function runRemoteDropUploads(
+  scope: ServerScope,
   localPaths: string[],
   destDir: string,
   inject: boolean,
@@ -200,7 +203,7 @@ async function runRemoteDropUploads(
       const transfers = useTransferProgressStore.getState()
       const tid = transfers.begin('upload', label)
       try {
-        const remote = await uploadToRemote(local, destDir, {
+        const remote = await uploadToRemote(scope, local, destDir, {
           onProgress: (sent, total) =>
             useTransferProgressStore.getState().update(tid, total > 0 ? sent / total : 1),
           isCancelled: () => useTransferProgressStore.getState().isCancelRequested(tid),
@@ -241,6 +244,7 @@ async function runRemoteDropUploads(
  * instead of Tauri local paths. Always uploads (no "local path paste").
  */
 export async function executeBrowserFileDrop(
+  scope: ServerScope,
   files: File[],
   target: DropTarget,
   ctx: DropContext,
@@ -265,7 +269,7 @@ export async function executeBrowserFileDrop(
       const transfers = useTransferProgressStore.getState()
       const tid = transfers.begin('upload', label)
       try {
-        const remote = await uploadBrowserFile(file, destDir, {
+        const remote = await uploadBrowserFile(scope, file, destDir, {
           onProgress: (sent, total) =>
             useTransferProgressStore.getState().update(tid, total > 0 ? sent / total : 1),
           isCancelled: () => useTransferProgressStore.getState().isCancelRequested(tid),

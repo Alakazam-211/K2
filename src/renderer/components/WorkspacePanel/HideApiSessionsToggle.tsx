@@ -6,6 +6,7 @@ import {
   hydrateApiSandboxSessions,
   minimizeApiSessionsForWorkspace,
 } from '@/stores/tabs'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Per-workspace hide-sessions: do not auto-surface API tabs. */
 export function HideApiSessionsToggle({
@@ -21,7 +22,7 @@ export function HideApiSessionsToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliPost('workspace/set', {
+      await daemonCliPost(primaryScope(), 'workspace/set', {
         project: project.path,
         fields: { hide_api_sessions: next ? '1' : '0' },
       })

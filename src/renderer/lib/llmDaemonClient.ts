@@ -19,6 +19,7 @@
 
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
+import { primaryScope } from '@/kessel/server-scope'
 
 export interface LlmStatus {
   loaded: boolean
@@ -45,7 +46,7 @@ export interface ChatResponse {
 }
 
 async function daemonGet(pathSuffix: string): Promise<Response> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const url = withCliTokenQuery(
     `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}`,
     creds.token,
@@ -57,7 +58,7 @@ async function daemonPostJson(
   pathSuffix: string,
   body: unknown,
 ): Promise<Response> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const url = withCliTokenQuery(
     `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}`,
     creds.token,

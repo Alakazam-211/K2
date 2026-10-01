@@ -5,6 +5,7 @@ import { isAirgap } from '@/lib/airgap'
 import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
 import k2Logo from '../../assets/k2-logo.png'
+import { primaryScope } from '@/kessel/server-scope'
 
 const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
 
@@ -81,7 +82,7 @@ export default function WhatsNewModal({
     let attempt = 0
     while (attempt < MAX_ATTEMPTS) {
       try {
-        const data = await daemonCliGet<WhatsNewPayload>('whats_new')
+        const data = await daemonCliGet<WhatsNewPayload>(primaryScope(), 'whats_new')
         setPayload(data)
         if (data.has_new || forceShow) {
           setVisible(true)
@@ -170,7 +171,7 @@ export default function WhatsNewModal({
     if (dismissing) return
     setDismissing(true)
     try {
-      await daemonCliGet('whats_new/mark_seen')
+      await daemonCliGet(primaryScope(), 'whats_new/mark_seen')
     } catch (err) {
       // eslint-disable-next-line no-console
       console.debug('[whats-new] mark_seen failed:', err)

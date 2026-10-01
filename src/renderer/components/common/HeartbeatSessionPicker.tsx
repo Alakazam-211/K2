@@ -14,6 +14,7 @@ import {
   type HeartbeatDeliveryTarget,
   type HeartbeatSessionCandidate,
 } from '@/lib/heartbeat-delivery'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Per-heartbeat delivery drop-down — answers "where does this
@@ -97,8 +98,8 @@ export function HeartbeatSessionPicker({
         provider?: string
         archived?: boolean
         customName?: string | null
-      }>>('chat/list', { project_path: projectPath }),
-      daemonCliGet<Record<string, string>>('chat/custom-names').catch(() => ({}) as Record<string, string>),
+      }>>(primaryScope(), 'chat/list', { project_path: projectPath }),
+      daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names').catch(() => ({}) as Record<string, string>),
     ])
       .then(([rows, names]) => {
         if (cancelled) return
@@ -135,7 +136,7 @@ export function HeartbeatSessionPicker({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void daemonCliGet<string[]>('chat/pinned')
+    void daemonCliGet<string[]>(primaryScope(), 'chat/pinned')
       .then((ids) => {
         if (cancelled) return
         setPinnedIds(ids)

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
+import { primaryScope } from '@/kessel/server-scope'
 
 type SkillTier = 'manager' | 'agent_template' | 'custom_agent'
 
@@ -110,7 +111,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
   const loadLayers = useCallback(async () => {
     if (!tier) { setCustomLayers([]); return }
     try {
-      const list = await daemonCliGet<SkillLayer[]>('skill-layers/list', { tier })
+      const list = await daemonCliGet<SkillLayer[]>(primaryScope(), 'skill-layers/list', { tier })
       setCustomLayers(list)
     } catch {
       setCustomLayers([])
@@ -121,7 +122,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
     try {
       // 0.40.48 host-aware fix: same as HeartbeatsSection — the preview
       // must show the ACTIVE host's heartbeats, not this Mac's.
-      const list = await daemonCliGet<AgentHeartbeat[]>('heartbeat/list', {
+      const list = await daemonCliGet<AgentHeartbeat[]>(primaryScope(), 'heartbeat/list', {
         project: projectPath,
       })
       setHeartbeats(list.filter((h) => h.enabled))
@@ -132,7 +133,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
 
   const checkProjectContext = useCallback(async () => {
     try {
-      const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
+      const r = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
       setHasProjectContext(!!r.content && r.content.trim().length > 0)
     } catch {
       setHasProjectContext(false)
@@ -169,7 +170,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
       editAction: onOpenSettings,
       loadOnExpand: async () => {
         try {
-          const r = await daemonCliGet<{ content: string }>('skill-layers/get-content', { tier, filename: layer.filename })
+          const r = await daemonCliGet<{ content: string }>(primaryScope(), 'skill-layers/get-content', { tier, filename: layer.filename })
           return r.content || '*Empty layer.*'
         } catch {
           return '*Failed to load layer content.*'
@@ -187,7 +188,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
       description: '**Workspace-scoped.** Shared codebase knowledge — tech stack, conventions, key directories. Injected into every agent launch via --append-system-prompt.',
       loadOnExpand: async () => {
         try {
-          const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
+          const r = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
           return r.content || '*Empty file.*'
         } catch {
           return '*Failed to load PROJECT.md.*'
@@ -206,7 +207,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
       editAction: onEditHeartbeat ? () => onEditHeartbeat(hb.name) : undefined,
       loadOnExpand: async () => {
         try {
-          const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/${hb.wakeupPath}` })
+          const r = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: `${projectPath}/${hb.wakeupPath}` })
           return r.content || '*Empty WAKEUP.md.*'
         } catch {
           return '*Failed to load WAKEUP.md.*'

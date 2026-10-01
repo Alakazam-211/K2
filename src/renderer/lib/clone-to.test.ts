@@ -27,6 +27,8 @@ import {
 } from './clone-to'
 import type { ConnectHost } from '@/stores/connect-host'
 
+import { primaryScope } from '@/kessel/server-scope'
+import { primaryOnly } from '@/test-utils/scope'
 const DEST: ConnectHost = {
   id: 'host-1',
   label: 'Hetzner box',
@@ -110,6 +112,14 @@ function makeDeps(
     pickRemoteFolder,
     ...overrides,
   }
+  // Home M1: the code passes the scope first. The spies keep the pre-M1
+  // argument list; `primaryOnly` fails loudly unless the scope is primary.
+  deps.daemonCliPost = primaryOnly(
+    deps.daemonCliPost as unknown as (...a: unknown[]) => Promise<unknown>,
+  ) as unknown as CloneDeps['daemonCliPost']
+  deps.daemonCliGet = primaryOnly(
+    deps.daemonCliGet as unknown as (...a: unknown[]) => Promise<unknown>,
+  ) as unknown as CloneDeps['daemonCliGet']
   return {
     deps,
     spies: {
@@ -149,7 +159,7 @@ describe('cloneWorkspaceTo — happy path', () => {
     const onDone = vi.fn()
     const onError = vi.fn()
 
-    const result = await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {
+    const result = await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {
       onStage,
       onBundled,
       onDone,
@@ -207,7 +217,7 @@ describe('cloneWorkspaceTo — happy path', () => {
   })
 
   it('sizes the bundle while local is active, then reads bytes lazily after the switch', async () => {
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps)
     const bundleIdx = order.indexOf('post:clone/bundle')
     const sizeIdx = order.indexOf('size-probe')
     const switchIdx = order.indexOf('pickHost')
@@ -230,7 +240,7 @@ describe('cloneWorkspaceTo — happy path', () => {
         throw new Error('fs/info not supported')
       }) as unknown) as CloneDeps['daemonCliGet'],
     }))
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('fs/upload-binary', {
       dir: '/home/rosson/work',
       filename: 'myworkspace.tar.gz',
@@ -243,7 +253,7 @@ describe('cloneWorkspaceTo — carry_secrets toggle', () => {
   it('passes carry_secrets: true to clone/bundle by default (include)', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
@@ -254,7 +264,7 @@ describe('cloneWorkspaceTo — carry_secrets toggle', () => {
   it('passes carry_secrets: true when explicitly opted in', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {}, true)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, true)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
@@ -265,7 +275,7 @@ describe('cloneWorkspaceTo — carry_secrets toggle', () => {
   it('passes carry_secrets: false to clone/bundle when the toggle is unchecked', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {}, false)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, false)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: false,
@@ -278,7 +288,7 @@ describe('cloneWorkspaceTo — include-all-history toggle (GitHub #21)', () => {
   it('passes live_only: false (carry ALL history) by default', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
@@ -289,7 +299,7 @@ describe('cloneWorkspaceTo — include-all-history toggle (GitHub #21)', () => {
   it('passes live_only: false when all-history is explicitly opted in', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {}, true, true)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, true, true)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
@@ -300,7 +310,7 @@ describe('cloneWorkspaceTo — include-all-history toggle (GitHub #21)', () => {
   it('passes live_only: true when the all-history toggle is unchecked', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {}, true, false)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, true, false)
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
@@ -322,7 +332,7 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
     const onDone = vi.fn()
 
     await expect(
-      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError, onDone }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onError, onDone }),
     ).rejects.toBeInstanceOf(CloneCancelledError)
 
     expect(spies.daemonCliPost).not.toHaveBeenCalledWith('fs/upload-binary', expect.anything())
@@ -342,7 +352,7 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
     const onError = vi.fn()
 
     await expect(
-      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onError }),
     ).rejects.toBeInstanceOf(CloneCancelledError)
 
     // Bundle + size-probe happened; byte read / picker / upload / unpack did
@@ -371,7 +381,7 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
     const onStage = vi.fn()
 
     await expect(
-      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError, onDone, onStage }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onError, onDone, onStage }),
     ).rejects.toThrow('disk full on host')
 
     // unpack never fired.
@@ -392,7 +402,7 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
     const onError = vi.fn()
 
     await expect(
-      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onError }),
     ).rejects.toThrow('no such project')
 
     expect(spies.pickHost).not.toHaveBeenCalled()
@@ -417,7 +427,7 @@ describe('cloneWorkspaceTo — large bundle (chunked streaming, GH #3)', () => {
     })
     const onUploadProgress = vi.fn()
 
-    const result = await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {
+    const result = await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {
       onUploadProgress,
     })
     expect(result).toEqual(UNPACK)
@@ -487,7 +497,7 @@ describe('cloneWorkspaceTo — large bundle (chunked streaming, GH #3)', () => {
     const onError = vi.fn()
 
     await expect(
-      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onError }),
     ).rejects.toThrow('relay dropped the chunk')
     expect(order).not.toContain('post:clone/unpack')
     expect(onError).toHaveBeenCalledWith('relay dropped the chunk')

@@ -27,6 +27,7 @@ import {
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
 import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types matching Rust GridUpdate / CompactLine / StyleSpan ──────────
 
@@ -364,7 +365,7 @@ export function AlacrittyTerminalView({
     if (cols !== lastColsRef.current || rows !== lastRowsRef.current) {
       lastColsRef.current = cols
       lastRowsRef.current = rows
-      terminalResize(ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
+      terminalResize(primaryScope(), ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
     }
   }, [fontSize, created, calculateDimensions, measureCell])
 
@@ -381,7 +382,7 @@ export function AlacrittyTerminalView({
       // Measure cell metrics first
       measureCell()
 
-      const exists = await terminalExists(terminalId)
+      const exists = await terminalExists(primaryScope(), terminalId)
 
       if (!exists) {
         // Measure container and create terminal with correct initial dimensions
@@ -394,7 +395,7 @@ export function AlacrittyTerminalView({
           'color:#ff0;font-weight:bold',
           { cwd, command, args, cols, rows },
         )
-        await terminalCreate({
+        await terminalCreate(primaryScope(), {
           id: terminalId,
           cwd,
           command: command ?? null,
@@ -407,7 +408,7 @@ export function AlacrittyTerminalView({
       // Reattach: get current grid state
       if (exists) {
         try {
-          const grid = await terminalGetGrid<GridUpdate>(terminalId)
+          const grid = await terminalGetGrid<GridUpdate>(primaryScope(), terminalId)
           if (mounted) applyGridUpdate(grid)
         } catch { /* fallback */ }
         // Reset so the resize poll fires on the next tick
@@ -440,7 +441,7 @@ export function AlacrittyTerminalView({
         })
       }
 
-      terminalSetFocus(terminalId, true).catch((e) => console.warn('[terminal]', e))
+      terminalSetFocus(primaryScope(), terminalId, true).catch((e) => console.warn('[terminal]', e))
 
       // Parity instrumentation with Kessel's SessionStreamView.
       // first-frame = first grid update received.
@@ -580,7 +581,7 @@ export function AlacrittyTerminalView({
       lastColsRef.current = cols
       lastRowsRef.current = rows
       if (ptyIdRef.current) {
-        terminalResize(ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
+        terminalResize(primaryScope(), ptyIdRef.current, cols, rows).catch((e) => console.warn('[terminal]', e))
       }
     }
 
@@ -602,10 +603,10 @@ export function AlacrittyTerminalView({
   // ── Focus tracking ─────────────────────────────────────────────────
 
   const handleFocus = useCallback(() => {
-    if (ptyIdRef.current) terminalSetFocus(ptyIdRef.current, true).catch((e) => console.warn('[terminal]', e))
+    if (ptyIdRef.current) terminalSetFocus(primaryScope(), ptyIdRef.current, true).catch((e) => console.warn('[terminal]', e))
   }, [])
   const handleBlur = useCallback(() => {
-    if (ptyIdRef.current) terminalSetFocus(ptyIdRef.current, false).catch((e) => console.warn('[terminal]', e))
+    if (ptyIdRef.current) terminalSetFocus(primaryScope(), ptyIdRef.current, false).catch((e) => console.warn('[terminal]', e))
   }, [])
 
   // ── Keyboard ───────────────────────────────────────────────────────
@@ -618,7 +619,7 @@ export function AlacrittyTerminalView({
       const seq = naturalTextEditingSequence(ne)
       if (seq) {
         e.preventDefault(); e.stopPropagation()
-        terminalWrite(ptyIdRef.current, seq)
+        terminalWrite(primaryScope(), ptyIdRef.current, seq)
         return
       }
     }
@@ -626,7 +627,7 @@ export function AlacrittyTerminalView({
     const data = keyEventToSequence(ne, termModeRef.current)
     if (data) {
       e.preventDefault(); e.stopPropagation()
-      terminalWrite(ptyIdRef.current, data)
+      terminalWrite(primaryScope(), ptyIdRef.current, data)
     }
   }, [naturalTextEditing])
 
@@ -648,7 +649,7 @@ export function AlacrittyTerminalView({
         )
         return
       }
-      terminalWrite(ptyIdRef.current, payload)
+      terminalWrite(primaryScope(), ptyIdRef.current, payload)
     }
 
     // Finder path bridge only when the local macOS daemon owns the
@@ -659,11 +660,11 @@ export function AlacrittyTerminalView({
       return
     }
 
-    daemonCliGet<string[]>('fs/clipboard-paths')
+    daemonCliGet<string[]>(primaryScope(), 'fs/clipboard-paths')
       .then((paths) => {
         if (!ptyIdRef.current) return
         if (paths && paths.length > 0) {
-          terminalWrite(ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(primaryScope(), ptyIdRef.current, buildDropPayload(paths))
           return
         }
         writeText(text)
@@ -701,7 +702,7 @@ export function AlacrittyTerminalView({
         const lines = Math.round(accum / lineHeight)
         const delta = -lines
         if (delta !== 0) {
-          terminalScroll(ptyIdRef.current, delta).catch((e) => console.warn('[terminal]', e))
+          terminalScroll(primaryScope(), ptyIdRef.current, delta).catch((e) => console.warn('[terminal]', e))
         }
       }, 50)
     }
@@ -750,16 +751,16 @@ export function AlacrittyTerminalView({
         // host-aware for parity when dragDropEnabled is off.
         if (useConnectHostStore.getState().activeHost !== 'local') {
           const pty = ptyIdRef.current
-          void executeRemoteDrop(
+          void executeRemoteDrop(primaryScope(),
             paths,
             { kind: 'terminal' },
             { workspacePath: cwd },
             buildDropPayload,
           ).then((payload) => {
-            if (payload && pty) terminalWrite(pty, payload)
+            if (payload && pty) terminalWrite(primaryScope(), pty, payload)
           })
         } else {
-          terminalWrite(ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(primaryScope(), ptyIdRef.current, buildDropPayload(paths))
         }
         return
       }
@@ -768,13 +769,13 @@ export function AlacrittyTerminalView({
       const browserFiles = filesFromDataTransfer(e.dataTransfer)
       if (browserFiles.length > 0) {
         const pty = ptyIdRef.current
-        void executeBrowserFileDrop(
+        void executeBrowserFileDrop(primaryScope(),
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: cwd || undefined },
           buildDropPayload,
         ).then((payload) => {
-          if (payload && pty) terminalWrite(pty, payload)
+          if (payload && pty) terminalWrite(primaryScope(), pty, payload)
         })
         return
       }
@@ -783,7 +784,7 @@ export function AlacrittyTerminalView({
     // Handle text drops
     const text = e.dataTransfer.getData('text/plain')
     if (text && files.length === 0) {
-      terminalWrite(ptyIdRef.current, text)
+      terminalWrite(primaryScope(), ptyIdRef.current, text)
     }
   }, [cwd])
 
@@ -898,7 +899,7 @@ export function AlacrittyTerminalView({
     e.stopPropagation()
 
     if (clicked.type === 'url') {
-      daemonCliPost('fs/open-external', { target: clicked.target }).catch((e: unknown) => console.warn('[terminal-link]', e))
+      daemonCliPost(primaryScope(), 'fs/open-external', { target: clicked.target }).catch((e: unknown) => console.warn('[terminal-link]', e))
     } else if (clicked.type === 'file' && clicked.filePath) {
       const tabsStore = useTabsStore.getState()
       const openInSplit = useTerminalSettingsStore.getState().openLinksInSplitPane
@@ -1086,7 +1087,7 @@ export function AlacrittyTerminalView({
         sessionId={terminalId}
         workspacePath={cwd}
         onInjectInput={(data) => {
-          if (ptyIdRef.current) void terminalWrite(ptyIdRef.current, data)
+          if (ptyIdRef.current) void terminalWrite(primaryScope(), ptyIdRef.current, data)
         }}
       />
     </div>

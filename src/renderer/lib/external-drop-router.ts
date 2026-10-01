@@ -45,9 +45,9 @@ import {
   surfaceComposeBar,
   COMPOSE_BAR_SELECTOR,
 } from './compose-surface-drop'
-import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 // ── Public event names ────────────────────────────────────────────────
 
@@ -322,6 +322,7 @@ export function buildComposeDropPayload(paths: string[]): string {
 // ── Inject / refresh side-effects ─────────────────────────────────────
 
 function injectIntoTerminal(
+  scope: ServerScope,
   target: Extract<ExternalDropTarget, { kind: 'terminal' }>,
   payload: string,
 ): void {
@@ -334,7 +335,7 @@ function injectIntoTerminal(
   }
   // v1 legacy TerminalManager path.
   if (target.terminalId) {
-    terminalWrite(target.terminalId, payload).catch((e) =>
+    terminalWrite(scope, target.terminalId, payload).catch((e) =>
       console.warn('[external-drop-router] terminalWrite failed', e),
     )
     return
@@ -397,6 +398,7 @@ export function notifyFileTreeRefresh(
  * listener; never re-enters another tauri://drag-drop handler.
  */
 export async function routeExternalDrop(
+  scope: ServerScope,
   paths: string[],
   position: { x: number; y: number },
   doc: Document = document,
@@ -406,20 +408,21 @@ export async function routeExternalDrop(
   const target = hitTestExternalDrop(position, doc, {
     composeSurfaceImages: pathsAreComposeSurfaceImages(paths),
   })
-  const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+  const isRemote = scope.isRemote
 
   switch (target.kind) {
     case 'terminal': {
       if (isRemote) {
         const payload = await executeRemoteDrop(
+          scope,
           paths,
           { kind: 'terminal' },
           { workspacePath: target.workspacePath || undefined },
           buildTerminalDropPayload,
         )
-        if (payload) injectIntoTerminal(target, payload)
+        if (payload) injectIntoTerminal(scope, target, payload)
       } else {
-        injectIntoTerminal(target, buildTerminalDropPayload(paths))
+        injectIntoTerminal(scope, target, buildTerminalDropPayload(paths))
       }
       return
     }
@@ -428,6 +431,7 @@ export async function routeExternalDrop(
       // but insert the host path into the message draft, not the PTY.
       if (isRemote) {
         const payload = await executeRemoteDrop(
+          scope,
           paths,
           { kind: 'terminal' },
           { workspacePath: target.workspacePath || undefined },
@@ -441,7 +445,7 @@ export async function routeExternalDrop(
     }
     case 'folder': {
       if (isRemote) {
-        await executeRemoteDrop(paths, { kind: 'folder', path: target.path }, {})
+        await executeRemoteDrop(scope, paths, { kind: 'folder', path: target.path }, {})
         notifyFileTreeRefresh(target.path, doc)
         return
       }
@@ -450,7 +454,7 @@ export async function routeExternalDrop(
       const undo = useFileUndoStore.getState()
       const plan = planLocalExternalDrop(paths, target.path)
       try {
-        await daemonCliPost(plan.endpoint, plan.payload)
+        await daemonCliPost(scope, plan.endpoint, plan.payload)
         undo.push(plan.undo)
         toast.addToast(plan.toast, 'success')
         notifyFileTreeRefresh(target.path, doc)
@@ -462,7 +466,7 @@ export async function routeExternalDrop(
     case 'miss': {
       // Local window-chrome drops have no product meaning.
       if (!isRemote) return
-      await executeRemoteDrop(paths, { kind: 'miss' }, {})
+      await executeRemoteDrop(scope, paths, { kind: 'miss' }, {})
       return
     }
   }
@@ -490,6 +494,7 @@ export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
  * daemon — there are no local filesystem paths in the browser.
  */
 export async function routeBrowserFileDrop(
+  scope: ServerScope,
   files: File[],
   position: { x: number; y: number },
   doc: Document = document,
@@ -503,16 +508,18 @@ export async function routeBrowserFileDrop(
   switch (target.kind) {
     case 'terminal': {
       const payload = await executeBrowserFileDrop(
+        scope,
         files,
         { kind: 'terminal' },
         { workspacePath: target.workspacePath || undefined },
         buildTerminalDropPayload,
       )
-      if (payload) injectIntoTerminal(target, payload)
+      if (payload) injectIntoTerminal(scope, target, payload)
       return
     }
     case 'compose': {
       const payload = await executeBrowserFileDrop(
+        scope,
         files,
         { kind: 'terminal' },
         { workspacePath: target.workspacePath || undefined },
@@ -522,12 +529,12 @@ export async function routeBrowserFileDrop(
       return
     }
     case 'folder': {
-      await executeBrowserFileDrop(files, { kind: 'folder', path: target.path }, {})
+      await executeBrowserFileDrop(scope, files, { kind: 'folder', path: target.path }, {})
       notifyFileTreeRefresh(target.path, doc)
       return
     }
     case 'miss': {
-      await executeBrowserFileDrop(files, { kind: 'miss' }, {})
+      await executeBrowserFileDrop(scope, files, { kind: 'miss' }, {})
       return
     }
   }
@@ -576,7 +583,7 @@ export function mountExternalDropRouter(): () => void {
       if (files.length === 0) return
       e.preventDefault()
       e.stopPropagation()
-      void routeBrowserFileDrop(files, { x: e.clientX, y: e.clientY })
+      void routeBrowserFileDrop(primaryScope(), files, { x: e.clientX, y: e.clientY })
     }
     window.addEventListener('dragover', onDragOver)
     window.addEventListener('drop', onDrop)
@@ -602,7 +609,7 @@ export function mountExternalDropRouter(): () => void {
           (event) => {
             const { paths, position } = event.payload
             if (!paths || paths.length === 0 || !position) return
-            void routeExternalDrop(paths, position)
+            void routeExternalDrop(primaryScope(), paths, position)
           },
         )
         .then(track)

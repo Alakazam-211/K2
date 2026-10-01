@@ -76,6 +76,7 @@ import {
   overlayItemFromThreadPost,
 } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -284,7 +285,7 @@ export function TerminalComposeBar({
       return
     }
     let cancelled = false
-    void daemonCliGet<{ items?: ComposeHistoryItem[] }>('terminal/compose-history', {
+    void daemonCliGet<{ items?: ComposeHistoryItem[] }>(primaryScope(), 'terminal/compose-history', {
       workspace_path: workspacePath,
     })
       .then((resp) => {
@@ -354,7 +355,7 @@ export function TerminalComposeBar({
         }
         if (paths.length > 0) {
           if (useConnectHostStore.getState().activeHost !== 'local') {
-            void executeRemoteDrop(
+            void executeRemoteDrop(primaryScope(),
               paths,
               { kind: 'terminal' },
               { workspacePath: workspacePath || undefined },
@@ -370,7 +371,7 @@ export function TerminalComposeBar({
         // Hosted web / no File.path — upload File bytes then insert host path.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
-          void executeBrowserFileDrop(
+          void executeBrowserFileDrop(primaryScope(),
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: workspacePath || undefined },
@@ -428,7 +429,7 @@ export function TerminalComposeBar({
       }
       const browserFiles = Array.from(list)
       if (browserFiles.length > 0) {
-        void executeBrowserFileDrop(
+        void executeBrowserFileDrop(primaryScope(),
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: workspacePath || undefined },
@@ -468,7 +469,7 @@ export function TerminalComposeBar({
           via: 'compose',
         }
         if (command) body.command = command
-        const resp = await daemonCliPost<Record<string, unknown>>('thread/post', body)
+        const resp = await daemonCliPost<Record<string, unknown>>(primaryScope(), 'thread/post', body)
         if (resp?.ok === false) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
@@ -485,7 +486,7 @@ export function TerminalComposeBar({
           text,
         }
         if (command) body.command = command
-        const resp = await daemonCliPost<MsgResponse>('terminal/send-message', body)
+        const resp = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', body)
         // Failed send → restore the text so it's not lost (the box reappearing
         // IS the feedback) — but never clobber a fresh draft already started.
         // Keep the selected slash-command on failure so retry still sends it.

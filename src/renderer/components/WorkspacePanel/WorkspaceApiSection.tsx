@@ -9,6 +9,7 @@ import {
   workspaceGrantSlug,
   type ApiKeyRow,
 } from '@/components/Settings/sections/api-keys-api'
+import { primaryScope } from '@/kessel/server-scope'
 
 type ListResponse = { keys?: ApiKeyRow[] }
 
@@ -39,7 +40,7 @@ export function WorkspaceApiSection({
 
   const refresh = useCallback(async () => {
     try {
-      const d = await daemonCliGet<ListResponse>('api-keys/list')
+      const d = await daemonCliGet<ListResponse>(primaryScope(), 'api-keys/list')
       const all = Array.isArray(d.keys) ? d.keys : []
       setKeys(all.filter((k) => keyGrantsWorkspace(k, slug)))
     } catch {
@@ -58,7 +59,7 @@ export function WorkspaceApiSection({
     async (id: string, action: 'disable' | 'enable') => {
       setBusyId(id)
       try {
-        await daemonCliPost(`api-keys/${action}`, { id })
+        await daemonCliPost(primaryScope(), `api-keys/${action}`, { id })
         await refresh()
       } catch {
         /* list refresh surfaces emptiness; keep drawer quiet */

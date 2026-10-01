@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ServerScope } from '@/kessel/server-scope'
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { OVERLAY_PAGE_SIZE } from './overlayThread'
@@ -16,19 +17,29 @@ const getDaemonWs = vi.hoisted(() =>
   }),
 )
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet,
-  daemonCliPost,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(daemonCliGet),
+    daemonCliPost: primaryOnly(daemonCliPost),
+  }
+})
 
+// test-utils/scope imports server-scope, which imports this module, so the
+// scope check is imported lazily at call time (an eager import in the
+// factory deadlocks module collection).
 vi.mock('@/kessel/daemon-ws', () => ({
-  getDaemonWs,
+  getDaemonWs: async (scope: ServerScope) => {
+    const { primaryOnly } = await import('@/test-utils/scope')
+    return primaryOnly(getDaemonWs)(scope)
+  },
   daemonWsBase: () => 'ws://test',
 }))
 
 import { ingestOverlayThreadItem } from './overlayThread'
 import { useOverlayThread } from './useOverlayThread'
 import { useOverlayChatter } from './useOverlayChatter'
+import { primaryScope } from '@/kessel/server-scope'
 
 function pageItems(start: number, end: number, collection: 'thread' | 'chatter') {
   const items = []
@@ -68,7 +79,7 @@ describe('useOverlayThread paging', () => {
       })
 
     const { result } = renderHook(() =>
-      useOverlayThread({ addr: 'sales', conversationId: null, enabled: true }),
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
     )
     await waitFor(() => expect(result.current.items).toHaveLength(25))
     expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_PAGE_SIZE })
@@ -96,7 +107,7 @@ describe('useOverlayThread paging', () => {
       items: pageItems(1, 3, 'thread'),
     })
     const { result } = renderHook(() =>
-      useOverlayThread({ addr: 'sales', conversationId: null, enabled: true }),
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
     )
     await waitFor(() => expect(result.current.items).toHaveLength(3))
     await act(async () => {
@@ -112,7 +123,7 @@ describe('useOverlayThread paging', () => {
       items: pageItems(1, 2, 'thread'),
     })
     const { result } = renderHook(() =>
-      useOverlayThread({ addr: 'sales', conversationId: 'conv-1', enabled: true }),
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: 'conv-1', enabled: true }),
     )
     await waitFor(() => expect(result.current.items).toHaveLength(2))
     act(() => {
@@ -148,7 +159,7 @@ describe('useOverlayChatter paging', () => {
       })
 
     const { result } = renderHook(() =>
-      useOverlayChatter({ addr: 'sales', conversationId: null, enabled: true }),
+      useOverlayChatter({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
     )
     await waitFor(() => expect(result.current.items).toHaveLength(25))
     expect(daemonCliGet).toHaveBeenCalledWith('chatter', { addr: 'sales', limit: OVERLAY_PAGE_SIZE })
@@ -205,7 +216,7 @@ describe('overlay hooks disable', () => {
       items: pageItems(1, 2, 'thread'),
     })
     const { result } = renderHook(() =>
-      useOverlayThread({ addr: 'sales', conversationId: null, enabled: false }),
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: false }),
     )
     await act(async () => {
       await Promise.resolve()
@@ -229,7 +240,7 @@ describe('overlay hooks disable', () => {
     })
     const { result, rerender } = renderHook(
       ({ enabled }: { enabled: boolean }) =>
-        useOverlayThread({ addr: 'sales', conversationId: 'conv-1', enabled }),
+        useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: 'conv-1', enabled }),
       { initialProps: { enabled: true } },
     )
     await waitFor(() => expect(FakeOverlayWS.instances.length).toBeGreaterThan(0))
@@ -254,7 +265,7 @@ describe('overlay hooks disable', () => {
     })
     const { result, rerender } = renderHook(
       ({ enabled }: { enabled: boolean }) =>
-        useOverlayChatter({ addr: 'sales', conversationId: 'conv-1', enabled }),
+        useOverlayChatter({ scope: primaryScope(), addr: 'sales', conversationId: 'conv-1', enabled }),
       { initialProps: { enabled: true } },
     )
     await waitFor(() => expect(FakeOverlayWS.instances.length).toBeGreaterThan(0))

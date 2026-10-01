@@ -19,6 +19,7 @@ import {
 } from './pinSizeMenu'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: vi.fn(),
@@ -213,7 +214,7 @@ describe('applyPinSize', () => {
     await applyPinSize('sess-1', { cols: 120, rows: 36 })
 
     expect(daemonCliPostMock).toHaveBeenCalledTimes(1)
-    expect(daemonCliPostMock).toHaveBeenCalledWith('terminal/pin-size', {
+    expect(daemonCliPostMock).toHaveBeenCalledWith(primaryScope(), 'terminal/pin-size', {
       session: 'sess-1',
       cols: 120,
       rows: 36,
@@ -232,7 +233,7 @@ describe('applyPinSize', () => {
     await applyPinSize('sess-1', null)
 
     expect(daemonCliPostMock).toHaveBeenCalledTimes(1)
-    expect(daemonCliPostMock).toHaveBeenCalledWith('terminal/pin-size', {
+    expect(daemonCliPostMock).toHaveBeenCalledWith(primaryScope(), 'terminal/pin-size', {
       session: 'sess-1',
       clear: true,
     })

@@ -51,13 +51,18 @@ const cli = vi.hoisted(() => ({
   getImpl: (async (route: string) =>
     route === 'workspace-layouts/load' ? null : []) as (route: string, params?: unknown) => Promise<unknown>,
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string, params?: unknown) => cli.getImpl(route, params)),
-  daemonCliPost: vi.fn(async (route: string, body?: unknown) => {
-    cli.posts.push({ route, body })
-    return {}
-  }),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string, params?: unknown) => cli.getImpl(route, params))),
+    daemonCliPost: vi.fn(
+      primaryOnly(async (route: string, body?: unknown) => {
+        cli.posts.push({ route, body })
+        return {}
+      }),
+    ),
+  }
+})
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
 vi.mock('@/lib/daemon-settings', () => ({
   settingsGet: vi.fn(async () => ({ settings: {} })),

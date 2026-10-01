@@ -9,6 +9,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Status helpers ───────────────────────────────────────────────────────────
 
@@ -59,26 +60,26 @@ export default function ChangesPanel(): React.JSX.Element {
 
   const handleStage = useCallback(async (filePath: string) => {
     if (!workspacePath) return
-    await daemonCliPost('git/stage', { path: workspacePath, filePath }).catch(console.error)
+    await daemonCliPost(primaryScope(), 'git/stage', { path: workspacePath, filePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleUnstage = useCallback(async (filePath: string) => {
     if (!workspacePath) return
-    await daemonCliPost('git/unstage', { path: workspacePath, filePath }).catch(console.error)
+    await daemonCliPost(primaryScope(), 'git/unstage', { path: workspacePath, filePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleStageAll = useCallback(async () => {
     if (!workspacePath) return
-    await daemonCliPost('git/stage-all', { path: workspacePath }).catch(console.error)
+    await daemonCliPost(primaryScope(), 'git/stage-all', { path: workspacePath }).catch(console.error)
     refetch()
   }, [workspacePath, refetch])
 
   const handleUnstageAll = useCallback(async () => {
     if (!workspacePath) return
     for (const file of staged) {
-      await daemonCliPost('git/unstage', { path: workspacePath, filePath: file.path }).catch(console.error)
+      await daemonCliPost(primaryScope(), 'git/unstage', { path: workspacePath, filePath: file.path }).catch(console.error)
     }
     refetch()
   }, [workspacePath, staged, refetch])
@@ -87,7 +88,7 @@ export default function ChangesPanel(): React.JSX.Element {
     if (!workspacePath || !commitMsg.trim() || staged.length === 0) return
     setCommitting(true)
     try {
-      await daemonCliPost('git/commit', { path: workspacePath, message: commitMsg.trim() })
+      await daemonCliPost(primaryScope(), 'git/commit', { path: workspacePath, message: commitMsg.trim() })
       setCommitMsg('')
       refetch()
     } catch (e) {

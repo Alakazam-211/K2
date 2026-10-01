@@ -43,6 +43,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { COMPOSE_BAR_SELECTOR, COMPOSE_DROP_SURFACE_SELECTOR } from './compose-surface-drop'
 import { BRACKETED_PASTE_START, BRACKETED_PASTE_END } from './file-drag'
 
+import { primaryScope } from '@/kessel/server-scope'
 describe('parentDir', () => {
   it('returns the parent of a nested path', () => {
     expect(parentDir('/ws/docs/a.txt')).toBe('/ws/docs')
@@ -581,7 +582,7 @@ describe('routeExternalDrop — thread surface images', () => {
     const row = surfaceNode({})
     const bar = surfaceNode({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
-    await routeExternalDrop(['/tmp/Screen Shot.png'], { x: 3, y: 3 }, surfaceDoc(row))
+    await routeExternalDrop(primaryScope(), ['/tmp/Screen Shot.png'], { x: 3, y: 3 }, surfaceDoc(row))
     expect(bar._events).toHaveLength(1)
     const ev = bar._events[0] as CustomEvent<{ data: string }>
     expect(ev.type).toBe('k2so:compose-insert')
@@ -593,7 +594,7 @@ describe('routeExternalDrop — thread surface images', () => {
     const row = surfaceNode({})
     const bar = surfaceNode({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
-    await routeExternalDrop(['/tmp/notes.txt'], { x: 3, y: 3 }, surfaceDoc(row))
+    await routeExternalDrop(primaryScope(), ['/tmp/notes.txt'], { x: 3, y: 3 }, surfaceDoc(row))
     expect(bar._events).toHaveLength(0)
   })
 
@@ -603,7 +604,7 @@ describe('routeExternalDrop — thread surface images', () => {
       { terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/ws' },
       [grid],
     )
-    await routeExternalDrop(['/tmp/shot.png'], { x: 3, y: 3 }, surfaceDoc(grid))
+    await routeExternalDrop(primaryScope(), ['/tmp/shot.png'], { x: 3, y: 3 }, surfaceDoc(grid))
     expect(term._events).toHaveLength(1)
     expect(term._events[0].type).toBe('k2so:terminal-write')
     expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toContain('/tmp/shot.png')

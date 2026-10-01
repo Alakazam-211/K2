@@ -197,13 +197,16 @@ vi.mock('@/stores/session-events', () => ({
   onceRecovered: vi.fn(() => () => undefined),
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: strip.daemonCliGet,
-  daemonCliGetText: vi.fn(async () => ''),
-  daemonCliPost: strip.daemonCliPost,
-  localDaemonCliPost: vi.fn(async () => ({})),
-  RecoveringError: class RecoveringError extends Error {},
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...a: Parameters<typeof strip.daemonCliGet>) => strip.daemonCliGet(...a)),
+    daemonCliGetText: primaryOnly(vi.fn(async () => '')),
+    daemonCliPost: primaryOnly((...a: Parameters<typeof strip.daemonCliPost>) => strip.daemonCliPost(...a)),
+    localDaemonCliPost: vi.fn(async () => ({})),
+    RecoveringError: class RecoveringError extends Error {},
+  }
+})
 
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ port: 0, token: 't', secure: false, host: '127.0.0.1' })),

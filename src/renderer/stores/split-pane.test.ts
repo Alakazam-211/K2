@@ -106,50 +106,53 @@ const daemon = vi.hoisted(() => ({
   deferSaveResponse: false,
   pendingSaveResolvers: [] as Array<() => void>,
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string, params?: { project_id?: string; workspace_id?: string; with_revision?: string }) => {
-    if (route === 'workspace-layouts/load') {
-      const key = `${params?.project_id}:${params?.workspace_id}`
-      const row = daemon.layouts.get(key)
-      // V14 — opt-in `{layoutJson, revision}` (0 when there is no row).
-      if (params?.with_revision === '1') {
-        return { layoutJson: row?.json ?? null, revision: row?.revision ?? 0 }
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string, params?: { project_id?: string; workspace_id?: string; with_revision?: string }) => {
+      if (route === 'workspace-layouts/load') {
+        const key = `${params?.project_id}:${params?.workspace_id}`
+        const row = daemon.layouts.get(key)
+        // V14 — opt-in `{layoutJson, revision}` (0 when there is no row).
+        if (params?.with_revision === '1') {
+          return { layoutJson: row?.json ?? null, revision: row?.revision ?? 0 }
+        }
+        return row?.json ?? null
       }
-      return row?.json ?? null
-    }
-    if (route === 'workspace/tab-titles') return []
-    return []
-  }),
-  daemonCliPost: vi.fn(async (route: string, body?: { projectId?: string; workspaceId?: string; layoutJson?: string; baseRevision?: number }) => {
-    if (route === 'workspace-layouts/save') {
-      const key = `${body?.projectId}:${body?.workspaceId}`
-      daemon.savePosts.push({ key, layoutJson: body?.layoutJson ?? '', baseRevision: body?.baseRevision })
-      // V15 — compare-and-set: a base that is not the stored revision is
-      // refused with the daemon's 409 message (parseDaemonResponse surfaces
-      // `error`). No base = last-write-wins (D4, old clients).
-      const stored = daemon.layouts.get(key)
-      if (body?.baseRevision !== undefined && stored && body.baseRevision !== stored.revision) {
-        daemon.conflicts += 1
-        throw new Error('layout_revision_conflict')
+      if (route === 'workspace/tab-titles') return []
+      return []
+    })),
+    daemonCliPost: vi.fn(primaryOnly(async (route: string, body?: { projectId?: string; workspaceId?: string; layoutJson?: string; baseRevision?: number }) => {
+      if (route === 'workspace-layouts/save') {
+        const key = `${body?.projectId}:${body?.workspaceId}`
+        daemon.savePosts.push({ key, layoutJson: body?.layoutJson ?? '', baseRevision: body?.baseRevision })
+        // V15 — compare-and-set: a base that is not the stored revision is
+        // refused with the daemon's 409 message (parseDaemonResponse surfaces
+        // `error`). No base = last-write-wins (D4, old clients).
+        const stored = daemon.layouts.get(key)
+        if (body?.baseRevision !== undefined && stored && body.baseRevision !== stored.revision) {
+          daemon.conflicts += 1
+          throw new Error('layout_revision_conflict')
+        }
+        daemon.revisionCounter += 1
+        const revision = daemon.revisionCounter
+        daemon.layouts.set(key, { json: body?.layoutJson ?? '', revision })
+        // Broadcast fires daemon-side BEFORE the HTTP response is written —
+        // but never before the renderer's synchronous post-POST code (a WS
+        // frame can't outrun the statement after fetch()). queueMicrotask
+        // models that: after the caller's synchronous frame, before (or
+        // racing) the response promise chain.
+        queueMicrotask(() => daemon.saveBroadcast?.(revision))
+        if (daemon.deferSaveResponse) {
+          await new Promise<void>((r) => daemon.pendingSaveResolvers.push(r))
+        }
+        return { success: true, revision }
       }
-      daemon.revisionCounter += 1
-      const revision = daemon.revisionCounter
-      daemon.layouts.set(key, { json: body?.layoutJson ?? '', revision })
-      // Broadcast fires daemon-side BEFORE the HTTP response is written —
-      // but never before the renderer's synchronous post-POST code (a WS
-      // frame can't outrun the statement after fetch()). queueMicrotask
-      // models that: after the caller's synchronous frame, before (or
-      // racing) the response promise chain.
-      queueMicrotask(() => daemon.saveBroadcast?.(revision))
-      if (daemon.deferSaveResponse) {
-        await new Promise<void>((r) => daemon.pendingSaveResolvers.push(r))
-      }
-      return { success: true, revision }
-    }
-    daemon.otherPosts.push({ route, body })
-    return {}
-  }),
-}))
+      daemon.otherPosts.push({ route, body })
+      return {}
+    })),
+  }
+})
 vi.mock('@/lib/terminal-daemon', () => ({
   terminalListRunning: vi.fn(async () => []),
   terminalCreate: vi.fn(async () => undefined),

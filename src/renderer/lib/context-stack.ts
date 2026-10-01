@@ -5,6 +5,7 @@
 // See `.k2/prds/prd-context-hamburger-v1.md`.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** One optional context layer (DB row + disk meta). */
 export interface ContextLayer {
@@ -177,13 +178,13 @@ function normalizeCatalog(raw: unknown): ContextCatalogEntry[] {
 
 /** GET /cli/context/layers?project=… */
 export async function fetchContextStack(projectPath: string): Promise<LayerStack> {
-  const raw = await daemonCliGet<unknown>('context/layers', { project: projectPath })
+  const raw = await daemonCliGet<unknown>(primaryScope(), 'context/layers', { project: projectPath })
   return normalizeStack(raw)
 }
 
 /** GET /cli/context/catalog */
 export async function fetchContextCatalog(): Promise<ContextCatalogEntry[]> {
-  const raw = await daemonCliGet<unknown>('context/catalog')
+  const raw = await daemonCliGet<unknown>(primaryScope(), 'context/catalog')
   return normalizeCatalog(raw)
 }
 
@@ -194,7 +195,7 @@ export async function addContextLayer(args: {
   catalog?: string
   label?: string
 }): Promise<ContextLayer> {
-  const raw = await daemonCliPost<unknown>('context/add', {
+  const raw = await daemonCliPost<unknown>(primaryScope(), 'context/add', {
     project: args.project,
     path: args.path,
     catalog: args.catalog,
@@ -207,7 +208,7 @@ export async function addContextLayer(args: {
 
 /** POST /cli/context/remove */
 export async function removeContextLayer(project: string, id: string): Promise<void> {
-  await daemonCliPost('context/remove', { project, id })
+  await daemonCliPost(primaryScope(), 'context/remove', { project, id })
 }
 
 /** POST /cli/context/set-enabled */
@@ -216,7 +217,7 @@ export async function setContextLayerEnabled(
   id: string,
   enabled: boolean,
 ): Promise<ContextLayer> {
-  const raw = await daemonCliPost<unknown>('context/set-enabled', {
+  const raw = await daemonCliPost<unknown>(primaryScope(), 'context/set-enabled', {
     project,
     id,
     enabled,
@@ -234,14 +235,14 @@ export async function moveContextLayer(
   const body: Record<string, unknown> = { project, id }
   if (opts.direction !== undefined) body.direction = opts.direction
   if (opts.position !== undefined) body.position = opts.position
-  const raw = await daemonCliPost<unknown>('context/move', body)
+  const raw = await daemonCliPost<unknown>(primaryScope(), 'context/move', body)
   const wrapped = raw as { layer?: ContextLayer }
   return normalizeLayerResult(wrapped.layer ?? raw)
 }
 
 /** POST /cli/context/regen — force compose. */
 export async function regenContextStack(project: string): Promise<void> {
-  await daemonCliPost('context/regen', { project })
+  await daemonCliPost(primaryScope(), 'context/regen', { project })
 }
 
 export interface CreatedCatalogPack {
@@ -255,7 +256,7 @@ export async function createContextCatalogPack(args: {
   label?: string
   tags?: string[]
 }): Promise<CreatedCatalogPack> {
-  const raw = await daemonCliPost<unknown>('context/catalog/create', {
+  const raw = await daemonCliPost<unknown>(primaryScope(), 'context/catalog/create', {
     id: args.id,
     label: args.label,
     tags: args.tags,
@@ -271,7 +272,7 @@ export async function createContextCatalogPack(args: {
 
 /** POST /cli/context/catalog/delete — remove host pack dir only. */
 export async function deleteContextCatalogPack(id: string): Promise<void> {
-  await daemonCliPost('context/catalog/delete', { id })
+  await daemonCliPost(primaryScope(), 'context/catalog/delete', { id })
 }
 
 /** Display label for an optional layer. */

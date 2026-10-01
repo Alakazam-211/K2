@@ -26,6 +26,7 @@
 // summary surfacing); the orchestration is otherwise UI-free.
 
 import type { ConnectHost } from '@/stores/connect-host'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** Manifest summary the daemon returns from `clone/bundle`. */
 export interface CloneManifestSummary {
@@ -104,10 +105,12 @@ export interface CloneHooks {
  * The defaults (`defaultCloneDeps`) bind the real implementations.
  */
 export interface CloneDeps {
-  /** POST a `/cli/*` route against the ACTIVE host. */
-  daemonCliPost: <T = unknown>(route: string, body?: unknown) => Promise<T>
-  /** GET a `/cli/*` route against the ACTIVE host. */
+  /** POST a `/cli/*` route on `scope`'s server (same shape as
+   *  `daemonCliPost`). */
+  daemonCliPost: <T = unknown>(scope: ServerScope, route: string, body?: unknown) => Promise<T>
+  /** GET a `/cli/*` route on `scope`'s server. */
   daemonCliGet: <T = unknown>(
+    scope: ServerScope,
     route: string,
     params?: Record<string, string | number | boolean | undefined | null>,
   ) => Promise<T>
@@ -189,6 +192,7 @@ export class CloneCancelledError extends Error {
  * surfaced through `hooks.onError`.
  */
 export async function cloneWorkspaceTo(
+  scope: ServerScope,
   projectPath: string,
   destinationHost: ConnectHost,
   deps: CloneDeps,
@@ -212,11 +216,18 @@ export async function cloneWorkspaceTo(
    */
   includeAllHistory = true,
 ): Promise<CloneUnpackResult> {
+  // This flow SWITCHES THE WINDOW to the destination (step 2) and keeps
+  // talking to "the window's server" across that switch: bundle on the
+  // source, then upload + unpack on the destination. Only the primary scope
+  // follows a switch, so a pinned scope here would be a wrong-server bug.
+  if (!scope.isPrimary) {
+    throw new Error('cloneWorkspaceTo switches the window, so it runs on the primary scope only')
+  }
   const { onStage, onBundled, onDone, onError } = hooks
   try {
     // ── 1. Build the bundle on the SOURCE (local is active) ──────────────
     onStage?.('bundling')
-    const bundle = await deps.daemonCliPost<CloneBundleResult>('clone/bundle', {
+    const bundle = await deps.daemonCliPost<CloneBundleResult>(scope, 'clone/bundle', {
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
@@ -250,7 +261,7 @@ export async function cloneWorkspaceTo(
     //     writable on the host. The daemon create_dir_all's it on first write.
     let uploadDir = destParent
     try {
-      const info = await deps.daemonCliGet<CloneFsInfo>('fs/info')
+      const info = await deps.daemonCliGet<CloneFsInfo>(scope, 'fs/info')
       if (info?.home) {
         const sep = info.separator || '/'
         const home = info.home.endsWith(sep) ? info.home.slice(0, -sep.length) : info.home
@@ -271,7 +282,7 @@ export async function cloneWorkspaceTo(
     let remoteBundlePath: string
     if (bundleSize <= CLONE_SINGLE_SHOT_MAX_BYTES) {
       const base64 = await deps.readLocalFileBase64(bundle.bundle_path)
-      const uploaded = await deps.daemonCliPost<{ path: string }>('fs/upload-binary', {
+      const uploaded = await deps.daemonCliPost<{ path: string }>(scope, 'fs/upload-binary', {
         dir: uploadDir,
         filename,
         base64,
@@ -281,7 +292,7 @@ export async function cloneWorkspaceTo(
       }
       remoteBundlePath = uploaded.path
     } else {
-      remoteBundlePath = await uploadBundleChunked(deps, bundle.bundle_path, bundleSize, {
+      remoteBundlePath = await uploadBundleChunked(scope, deps, bundle.bundle_path, bundleSize, {
         dir: uploadDir,
         filename,
         onProgress: hooks.onUploadProgress,
@@ -290,7 +301,7 @@ export async function cloneWorkspaceTo(
 
     // ── 5. Unpack on the destination ────────────────────────────────────
     onStage?.('unpacking')
-    const result = await deps.daemonCliPost<CloneUnpackResult>('clone/unpack', {
+    const result = await deps.daemonCliPost<CloneUnpackResult>(scope, 'clone/unpack', {
       bundle_path: remoteBundlePath,
       dest_parent: destParent,
     })
@@ -317,6 +328,7 @@ export async function cloneWorkspaceTo(
  * deps so the mock-based sequencing tests keep driving the real loop.
  */
 async function uploadBundleChunked(
+  scope: ServerScope,
   deps: CloneDeps,
   localPath: string,
   size: number,
@@ -324,6 +336,7 @@ async function uploadBundleChunked(
 ): Promise<string> {
   const { uploadFileChunked } = await import('./upload-to-remote')
   return uploadFileChunked(
+    scope,
     { daemonCliPost: deps.daemonCliPost, readLocalFileRange: deps.readLocalFileRange },
     localPath,
     size,
@@ -349,13 +362,13 @@ async function uploadBundleChunked(
  */
 export function defaultCloneDeps(): CloneDeps {
   return {
-    daemonCliPost: async (route, body) => {
+    daemonCliPost: async (scope, route, body) => {
       const { daemonCliPost } = await import('./daemon-cli')
-      return daemonCliPost(route, body)
+      return daemonCliPost(scope, route, body)
     },
-    daemonCliGet: async (route, params) => {
+    daemonCliGet: async (scope, route, params) => {
       const { daemonCliGet } = await import('./daemon-cli')
-      return daemonCliGet(route, params)
+      return daemonCliGet(scope, route, params)
     },
     readLocalFileBase64: async (path) => {
       const { invoke } = await import('@tauri-apps/api/core')

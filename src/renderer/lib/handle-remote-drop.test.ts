@@ -17,15 +17,21 @@ import {
   __clearRemoteDropFlightsForTests,
 } from './handle-remote-drop'
 
+import { primaryScope } from '@/kessel/server-scope'
 // Mock the upload substrate (the IO half) + the toast store. The router
 // imports `uploadToRemote` from upload-to-remote and the toast store; we
 // replace both so the test stays in-memory.
 const uploadMock = vi.fn<(local: string, dir: string) => Promise<string>>()
-vi.mock('./upload-to-remote', () => ({
-  uploadToRemote: (local: string, dir: string) => uploadMock(local, dir),
-  // Hosted-web path (not exercised here) — keep export surface complete.
-  uploadBrowserFile: async (file: File, dir: string) => `${dir}/${file.name}`,
-}))
+vi.mock('./upload-to-remote', async () => {
+  // Home M1: the drop passes its scope first; `primaryOnly` fails loudly
+  // unless it is the primary scope, then forwards the old arguments.
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    uploadToRemote: primaryOnly((local: string, dir: string) => uploadMock(local, dir)),
+    // Hosted-web path (not exercised here) — keep export surface complete.
+    uploadBrowserFile: primaryOnly(async (file: File, dir: string) => `${dir}/${file.name}`),
+  }
+})
 vi.mock('@/stores/toast', () => ({
   useToastStore: { getState: () => ({ addToast: () => {} }) },
 }))
@@ -104,7 +110,7 @@ describe('remoteDropFlightKey', () => {
 describe('executeRemoteDrop', () => {
   it('terminal: uploads to downloads dir and returns the built payload from REMOTE paths', async () => {
     const buildPayload = vi.fn((paths: string[]) => `PAYLOAD(${paths.join(',')})`)
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/a.png', '/local/b.txt'],
       { kind: 'terminal' },
       { workspacePath: '/ws' },
@@ -123,7 +129,7 @@ describe('executeRemoteDrop', () => {
 
   it('folder: uploads into the folder and returns null (no injection)', async () => {
     const buildPayload = vi.fn()
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
@@ -136,7 +142,7 @@ describe('executeRemoteDrop', () => {
 
   it('miss: opens the picker, uploads into the chosen dir, returns null', async () => {
     const openPicker = vi.fn(async () => '/chosen/dir')
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/x.bin'],
       { kind: 'miss' },
       { openPicker },
@@ -148,7 +154,7 @@ describe('executeRemoteDrop', () => {
 
   it('miss: a cancelled picker uploads nothing and returns null', async () => {
     const openPicker = vi.fn(async () => null)
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/x.bin'],
       { kind: 'miss' },
       { openPicker },
@@ -161,7 +167,7 @@ describe('executeRemoteDrop', () => {
   it('terminal with no workspace: falls back to the picker, then injects', async () => {
     const openPicker = vi.fn(async () => '/picked')
     const buildPayload = vi.fn((paths: string[]) => paths.join('|'))
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/y.txt'],
       { kind: 'terminal' },
       { openPicker },
@@ -173,7 +179,7 @@ describe('executeRemoteDrop', () => {
   })
 
   it('empty local paths → returns null without uploading', async () => {
-    const payload = await executeRemoteDrop([], { kind: 'terminal' }, { workspacePath: '/ws' })
+    const payload = await executeRemoteDrop(primaryScope(), [], { kind: 'terminal' }, { workspacePath: '/ws' })
     expect(uploadMock).not.toHaveBeenCalled()
     expect(payload).toBeNull()
   })
@@ -181,7 +187,7 @@ describe('executeRemoteDrop', () => {
   it('an upload error returns null (does not throw) and stops', async () => {
     uploadMock.mockRejectedValueOnce(new Error('boom'))
     const buildPayload = vi.fn()
-    const payload = await executeRemoteDrop(
+    const payload = await executeRemoteDrop(primaryScope(), 
       ['/local/a', '/local/b'],
       { kind: 'terminal' },
       { workspacePath: '/ws' },
@@ -204,12 +210,12 @@ describe('executeRemoteDrop', () => {
         }),
     )
 
-    const p1 = executeRemoteDrop(
+    const p1 = executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
     )
-    const p2 = executeRemoteDrop(
+    const p2 = executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
@@ -241,12 +247,12 @@ describe('executeRemoteDrop', () => {
       return `${dir}/${name}`
     })
 
-    const p1 = executeRemoteDrop(
+    const p1 = executeRemoteDrop(primaryScope(), 
       ['/local/b.txt', '/local/a.txt'],
       { kind: 'folder', path: '/srv' },
       {},
     )
-    const p2 = executeRemoteDrop(
+    const p2 = executeRemoteDrop(primaryScope(), 
       ['/local/a.txt', '/local/b.txt'],
       { kind: 'folder', path: '/srv' },
       {},
@@ -266,20 +272,20 @@ describe('executeRemoteDrop', () => {
 
   it('R3: different destDir does not join', async () => {
     await Promise.all([
-      executeRemoteDrop(['/local/a.pdf'], { kind: 'folder', path: '/srv/a' }, {}),
-      executeRemoteDrop(['/local/a.pdf'], { kind: 'folder', path: '/srv/b' }, {}),
+      executeRemoteDrop(primaryScope(), ['/local/a.pdf'], { kind: 'folder', path: '/srv/a' }, {}),
+      executeRemoteDrop(primaryScope(), ['/local/a.pdf'], { kind: 'folder', path: '/srv/b' }, {}),
     ])
     expect(uploadMock).toHaveBeenCalledTimes(2)
   })
 
   it('R3: key clears on settle — a later drop uploads again', async () => {
-    await executeRemoteDrop(
+    await executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
     )
     expect(uploadMock).toHaveBeenCalledTimes(1)
-    await executeRemoteDrop(
+    await executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
@@ -289,7 +295,7 @@ describe('executeRemoteDrop', () => {
 
   it('R3: key clears on failure so a retry can upload', async () => {
     uploadMock.mockRejectedValueOnce(new Error('network'))
-    const failed = await executeRemoteDrop(
+    const failed = await executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},
@@ -300,7 +306,7 @@ describe('executeRemoteDrop', () => {
       const name = local.split('/').pop() ?? local
       return `${dir}/${name}`
     })
-    await executeRemoteDrop(
+    await executeRemoteDrop(primaryScope(), 
       ['/local/report.pdf'],
       { kind: 'folder', path: '/srv/inbox' },
       {},

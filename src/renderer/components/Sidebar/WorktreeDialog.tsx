@@ -11,6 +11,7 @@ import { DialogScrim } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Sanitize a string into a valid git branch name */
 function sanitizeBranchName(input: string): string {
@@ -66,7 +67,7 @@ export default function WorktreeDialog({
     requestAnimationFrame(() => inputRef.current?.focus())
 
     // Fetch available branches
-    daemonCliGet<BranchList>('git/branches', { path: projectPath })
+    daemonCliGet<BranchList>(primaryScope(), 'git/branches', { path: projectPath })
       .then((result) => {
         setBranches(result.local.filter((b) => b !== result.current))
       })
@@ -95,7 +96,7 @@ export default function WorktreeDialog({
     setError(null)
 
     try {
-      const result = await daemonCliPost<{ workspaceId: string; path: string; branch: string }>(
+      const result = await daemonCliPost<{ workspaceId: string; path: string; branch: string }>(primaryScope(),
         'git/create-worktree',
         {
           projectPath,

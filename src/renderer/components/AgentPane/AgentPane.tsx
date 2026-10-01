@@ -11,6 +11,7 @@ import { AgentInboxPane } from './AgentInboxPane'
 import { PinnedChatGate } from './PinnedChatRetainer'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface AgentPaneProps {
   agentName: string
@@ -427,7 +428,7 @@ function WorktreeChatTerminal({
     const resolve = async (): Promise<void> => {
       const myTerminalId = terminalIdRef.current
       try {
-        const exists = await terminalExists(myTerminalId)
+        const exists = await terminalExists(primaryScope(), myTerminalId)
         if (!cancelled && exists) {
           setLaunchConfig(null)
           setReady(true)
@@ -442,7 +443,7 @@ function WorktreeChatTerminal({
         }>('k2so_agents_build_launch', { projectPath, agentName })
         if (!cancelled && result) {
           setLaunchConfig({ command: result.command, args: result.args, cwd: result.cwd })
-          daemonCliGet('agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+          daemonCliGet(primaryScope(), 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
           setReady(true)
           return
         }
@@ -451,7 +452,7 @@ function WorktreeChatTerminal({
       }
       if (!cancelled) {
         setLaunchConfig({ command: 'claude', args: ['--dangerously-skip-permissions'], cwd })
-        daemonCliGet('agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
+        daemonCliGet(primaryScope(), 'agents/lock', { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})
         setReady(true)
       }
     }

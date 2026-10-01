@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { AgentContextDiagram } from './AgentContextDiagram'
 import { FANOUT_ENABLE_WARNING } from './CanonicalAgentButtons'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Shared confirmation modal for the per-workspace "Canonical Agent" /
 // "Enable harness fan-out" checkbox. Replaces the bare `window.confirm`
@@ -70,7 +71,7 @@ export function FanoutConfirmModal({
     setBusy('skill')
     setError(null)
     try {
-      await daemonCliPost('skills/write-opt-in', {
+      await daemonCliPost(primaryScope(), 'skills/write-opt-in', {
         project_path: projectPath,
         skill: 'k2-canonical-agent',
       })
@@ -89,7 +90,7 @@ export function FanoutConfirmModal({
     setBusy('programmatic')
     setError(null)
     try {
-      await daemonCliPost('onboarding/set-harness-fanout-enabled', {
+      await daemonCliPost(primaryScope(), 'onboarding/set-harness-fanout-enabled', {
         project_path: projectPath,
         enabled: true,
       })

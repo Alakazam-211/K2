@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
+import { primaryScope } from '@/kessel/server-scope'
 
 type CertState = { state: string; issuer?: string; expiresAt?: string | null }
 
@@ -22,7 +23,7 @@ type DomainRow = {
 }
 
 async function cliGet(path: string): Promise<unknown> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
     method: 'GET',
   })
@@ -38,7 +39,7 @@ async function cliGet(path: string): Promise<unknown> {
 }
 
 async function cliPost(path: string, payload: Record<string, string>): Promise<unknown> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -4,6 +4,7 @@ import {
   isStale,
   type SubscriptionDoc,
 } from '@/lib/subscription-usage'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface SubscriptionUsageStore {
   doc: SubscriptionDoc | null
@@ -34,7 +35,7 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
     const epoch = loadEpoch
     loadInflight = (async () => {
       try {
-        const doc = await daemonCliGet<SubscriptionDoc>('usage/subscriptions')
+        const doc = await daemonCliGet<SubscriptionDoc>(primaryScope(), 'usage/subscriptions')
         if (epoch === loadEpoch) set({ doc, error: null })
       } catch (e) {
         if (epoch === loadEpoch) set({ error: String(e) })
@@ -49,13 +50,13 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
     const current = get().doc
     try {
       if (isStale(current, Date.now())) {
-        const doc = await daemonCliPost<SubscriptionDoc>(
+        const doc = await daemonCliPost<SubscriptionDoc>(primaryScope(),
           'usage/subscriptions/refresh',
           {},
         )
         set({ doc, error: null })
       } else {
-        const doc = await daemonCliGet<SubscriptionDoc>('usage/subscriptions')
+        const doc = await daemonCliGet<SubscriptionDoc>(primaryScope(), 'usage/subscriptions')
         set({ doc, error: null })
       }
     } catch (e) {
@@ -65,7 +66,7 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
 
   refresh: async () => {
     try {
-      const doc = await daemonCliPost<SubscriptionDoc>('usage/subscriptions/refresh', {})
+      const doc = await daemonCliPost<SubscriptionDoc>(primaryScope(), 'usage/subscriptions/refresh', {})
       set({ doc, error: null })
     } catch (e) {
       set({ error: String(e) })

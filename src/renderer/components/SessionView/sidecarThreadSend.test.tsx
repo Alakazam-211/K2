@@ -21,10 +21,13 @@ const h = vi.hoisted(() => {
   return { listQueue, sticky, daemonCliGet, daemonCliPost }
 })
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: h.daemonCliGet,
-  daemonCliPost: h.daemonCliPost,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(h.daemonCliGet),
+    daemonCliPost: primaryOnly(h.daemonCliPost),
+  }
+})
 
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => {

@@ -17,6 +17,7 @@ import { daemonCliGet, daemonCliPost } from './daemon-cli'
 import { isWebClient } from './is-web'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Wire shape of `GET /cli/fs/compress-status`. */
 interface CompressStatus {
@@ -56,16 +57,16 @@ export async function compressFolder(path: string): Promise<string | null> {
   const tid = useTransferProgressStore.getState().begin('compress', label)
   let cancelSent = false
   try {
-    const { job_id } = await daemonCliPost<{ job_id: string }>('fs/compress', { path })
+    const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'fs/compress', { path })
     for (;;) {
       await sleep(COMPRESS_POLL_MS)
       // Cancel is a separate POST (the job runs server-side); send it once
       // and keep polling — the worker flips the job to `failed` terminally.
       if (!cancelSent && useTransferProgressStore.getState().isCancelRequested(tid)) {
         cancelSent = true
-        await daemonCliPost('fs/compress-cancel', { job_id })
+        await daemonCliPost(primaryScope(), 'fs/compress-cancel', { job_id })
       }
-      const status = await daemonCliGet<CompressStatus>('fs/compress-status', { job_id })
+      const status = await daemonCliGet<CompressStatus>(primaryScope(), 'fs/compress-status', { job_id })
       if (status.phase === 'running') {
         useTransferProgressStore
           .getState()
@@ -124,14 +125,14 @@ export async function extractArchive(path: string): Promise<string | null> {
   const tid = useTransferProgressStore.getState().begin('extract', label)
   let cancelSent = false
   try {
-    const { job_id } = await daemonCliPost<{ job_id: string }>('fs/extract', { path })
+    const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'fs/extract', { path })
     for (;;) {
       await sleep(EXTRACT_POLL_MS)
       if (!cancelSent && useTransferProgressStore.getState().isCancelRequested(tid)) {
         cancelSent = true
-        await daemonCliPost('fs/extract-cancel', { job_id })
+        await daemonCliPost(primaryScope(), 'fs/extract-cancel', { job_id })
       }
-      const status = await daemonCliGet<ExtractStatus>('fs/extract-status', { job_id })
+      const status = await daemonCliGet<ExtractStatus>(primaryScope(), 'fs/extract-status', { job_id })
       if (status.phase === 'running') {
         useTransferProgressStore
           .getState()
@@ -280,7 +281,7 @@ async function downloadFileDesktop(remotePath: string): Promise<string | null> {
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>('fs/read-range', {
+      const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
         path: remotePath,
         offset,
         len: DOWNLOAD_CHUNK_BYTES,
@@ -333,7 +334,7 @@ async function downloadFileInBrowser(remotePath: string): Promise<string | null>
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>('fs/read-range', {
+      const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
         path: remotePath,
         offset,
         len: DOWNLOAD_CHUNK_BYTES,

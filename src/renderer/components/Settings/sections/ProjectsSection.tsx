@@ -55,6 +55,7 @@ import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
 import { normalizeHexColor } from '@/components/Projects/projects-api'
 import { setSqlDbAgentAccess } from './data-api'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -495,7 +496,7 @@ export function ProjectsSection(): React.JSX.Element {
           onClick={async (e) => {
             e.stopPropagation()
             const newPinned = p.pinned ? 0 : 1
-            await daemonCliPost('projects/update', { id: p.id, pinned: newPinned })
+            await daemonCliPost(primaryScope(), 'projects/update', { id: p.id, pinned: newPinned })
             emitProjectsChanged()
             const store = useProjectsStore.getState()
             useProjectsStore.setState({
@@ -849,7 +850,7 @@ function WorktreeFoldersOnDisk({
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    daemonCliGet<any[]>('git/worktrees', { path: project.path })
+    daemonCliGet<any[]>(primaryScope(), 'git/worktrees', { path: project.path })
       .then((wts) => {
         if (!cancelled) {
           setDiskWorktrees(wts)
@@ -882,7 +883,7 @@ function WorktreeFoldersOnDisk({
       // `project_path` — never consumed; the handler only needs the
       // worktree path + branch and echoes project_path back, so we now send
       // the correct project.path.)
-      await daemonCliPost('git/reopen-worktree', {
+      await daemonCliPost(primaryScope(), 'git/reopen-worktree', {
         projectPath: project.path,
         worktreePath: wt.path,
         branch: wt.branch
@@ -1103,7 +1104,7 @@ function ProjectDetail({
   // button in its default "Set up …" state.
   useEffect(() => {
     let cancelled = false
-    daemonCliPost<HarnessProbe[]>('canonical/detect-state', { project_path: project.path })
+    daemonCliPost<HarnessProbe[]>(primaryScope(), 'canonical/detect-state', { project_path: project.path })
       .then((p) => { if (!cancelled) setCanonicalProbes(p) })
       .catch((err) => { if (!cancelled) console.warn('[canonical-state] detect failed:', err) })
     return () => { cancelled = true }
@@ -1135,7 +1136,7 @@ function ProjectDetail({
   const handleDetectIcon = async (): Promise<void> => {
     setIconLoading(true)
     try {
-      await daemonCliPost('projects/detect-icon', { projectId: project.id })
+      await daemonCliPost(primaryScope(), 'projects/detect-icon', { projectId: project.id })
       emitProjectsChanged()
       await fetchProjects()
     } catch (err) {
@@ -1172,7 +1173,7 @@ function ProjectDetail({
     setCropImage(null)
     setIconLoading(true)
     try {
-      await daemonCliPost('projects/update', { id: project.id, iconUrl: croppedDataUrl })
+      await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, iconUrl: croppedDataUrl })
       emitProjectsChanged()
       await fetchProjects()
     } catch (err) {
@@ -1185,7 +1186,7 @@ function ProjectDetail({
   const handleClearIcon = async (): Promise<void> => {
     setIconLoading(true)
     try {
-      await daemonCliPost('projects/clear-icon', { projectId: project.id })
+      await daemonCliPost(primaryScope(), 'projects/clear-icon', { projectId: project.id })
       emitProjectsChanged()
       await fetchProjects()
     } catch (err) {
@@ -1715,7 +1716,7 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
   const load = useCallback(async () => {
     setError(null)
     try {
-      const s = await daemonCliGet<Record<string, unknown>>('settings', { project: projectPath })
+      const s = await daemonCliGet<Record<string, unknown>>(primaryScope(), 'settings', { project: projectPath })
       const v = s.hostSessionCellCap ?? s.host_session_cell_cap
       if (v === null || v === undefined) {
         setRaw(null)
@@ -1740,7 +1741,7 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
     setError(null)
     setHint(null)
     try {
-      await daemonCliPost('workspace/set', {
+      await daemonCliPost(primaryScope(), 'workspace/set', {
         project: projectPath,
         fields: { host_session_cell_cap: value },
       })
@@ -1841,7 +1842,7 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
     setBusy(true)
     setEnabled(next) // optimistic
     try {
-      await daemonCliPost('heartbeat/set-show-sessions', {
+      await daemonCliPost(primaryScope(), 'heartbeat/set-show-sessions', {
         project_path: projectPath,
         enabled: next,
       })
@@ -1925,7 +1926,7 @@ function RemoteInstructToggle({
     try {
       // Path-scoped GET write (mirrors /cli/worktree). The daemon still
       // enforces the gate server-side; this only records the opt-in.
-      await daemonCliGet('remote-instruct', {
+      await daemonCliGet(primaryScope(), 'remote-instruct', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -2005,7 +2006,7 @@ function DnsManageToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliGet('dns-manage', {
+      await daemonCliGet(primaryScope(), 'dns-manage', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -2081,7 +2082,7 @@ function MailManageToggle({
       ),
     }))
     try {
-      await daemonCliPost('mail-manage', {
+      await daemonCliPost(primaryScope(), 'mail-manage', {
         project: project.path,
         enable: next ? 1 : 0,
       })
@@ -2236,7 +2237,7 @@ function AgentsManageSkinToggle({
       ),
     }))
     try {
-      await daemonCliPost('agents-manage-skin', {
+      await daemonCliPost(primaryScope(), 'agents-manage-skin', {
         project: project.path,
         enable: next ? 1 : 0,
       })
@@ -2316,7 +2317,7 @@ function AgentsCreateConnectionsToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliGet('agents-create-connections', {
+      await daemonCliGet(primaryScope(), 'agents-create-connections', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -2473,7 +2474,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
   const handleChange = async (presetId: string): Promise<void> => {
     setSelected(presetId)
     try {
-      await daemonCliPost('projects/update', { id: projectId, defaultAgent: presetId || '' })
+      await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, defaultAgent: presetId || '' })
       emitProjectsChanged()
       const store = useProjectsStore.getState()
       const updated = store.projects.map((p) =>
@@ -2559,7 +2560,7 @@ function DefaultModelControls({
     const stored = nextModel.trim()
     const forceVal = stored && nextForce ? 1 : 0
     try {
-      await daemonCliPost('projects/update', {
+      await daemonCliPost(primaryScope(), 'projects/update', {
         id: project.id,
         defaultModel: stored,
         forceModelOnResume: forceVal,
@@ -2717,14 +2718,14 @@ function ContextLayerFileEditor({
     : projectPath
 
   useEffect(() => {
-    daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+    daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
       .then((r) => setContent(r.content))
       .catch(() => setContent(''))
   }, [filePath])
 
   const handleClose = useCallback(async () => {
     try {
-      await daemonCliPost('agents/regenerate-workspace-skill', { project_path: projectPath })
+      await daemonCliPost(primaryScope(), 'agents/regenerate-workspace-skill', { project_path: projectPath })
     } catch (err) {
       console.warn('[context-layer] regen on close failed:', err)
     }
@@ -2827,7 +2828,7 @@ function ContextLayerFileEditor({
                 filePath={filePath}
                 onSave={async (c) => {
                   try {
-                    await daemonCliPost('fs/write-file', { path: filePath, content: c })
+                    await daemonCliPost(primaryScope(), 'fs/write-file', { path: filePath, content: c })
                   } catch {
                     /* write failed — leave buffer for retry */
                   }
@@ -2856,7 +2857,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   useEffect(() => {
-    daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+    daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
       .then((r) => setContent(r.content))
       .catch(() => setContent(''))
   }, [filePath])
@@ -2867,7 +2868,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   // propagate to every harness file before the user closes the editor.
   const handleClose = useCallback(async () => {
     try {
-      await daemonCliPost('agents/regenerate-workspace-skill', { project_path: projectPath })
+      await daemonCliPost(primaryScope(), 'agents/regenerate-workspace-skill', { project_path: projectPath })
     } catch (err) {
       console.warn('[workspace-knowledge] regen on close failed:', err)
     }
@@ -2982,7 +2983,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
                 code={content}
                 filePath={filePath}
                 onSave={async (c) => {
-                  try { await daemonCliPost('fs/write-file', { path: filePath, content: c }) } catch {}
+                  try { await daemonCliPost(primaryScope(), 'fs/write-file', { path: filePath, content: c }) } catch {}
                 }}
                 onChange={(c) => setContent(c)}
               />
@@ -3311,7 +3312,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
     // already exists, k2so_agents_create returns the existing agent's
     // info without overwriting (post-0.37.0 unification behavior).
     try {
-      await daemonCliGet('agents/create', {
+      await daemonCliGet(primaryScope(), 'agents/create', {
         project: projectPath,
         name: techName,
         role: 'Custom agent — customize via the persona editor',
@@ -3354,7 +3355,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
         if (existing) {
           setAgentName(existing.name)
         } else {
-          await daemonCliGet('agents/create', {
+          await daemonCliGet(primaryScope(), 'agents/create', {
             project: projectPath,
             name: 'k2so-agent',
             role: 'K2 planner — builds PRDs, milestones, and technical plans',
@@ -3424,8 +3425,8 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const fetchRelations = useCallback(async () => {
     try {
       const [outgoing, inc, remote] = await Promise.all([
-        daemonCliGet<WorkspaceRelation[]>('relations/list', { project_id: projectId }),
-        daemonCliGet<WorkspaceRelation[]>('relations/list-incoming', { project_id: projectId }),
+        daemonCliGet<WorkspaceRelation[]>(primaryScope(), 'relations/list', { project_id: projectId }),
+        daemonCliGet<WorkspaceRelation[]>(primaryScope(), 'relations/list-incoming', { project_id: projectId }),
         listRemoteConnections(sourcePath),
       ])
       setRelations(outgoing)
@@ -3520,7 +3521,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
       setAdding(true)
       setLocalError(null)
       try {
-        await daemonCliPost('relations/create', {
+        await daemonCliPost(primaryScope(), 'relations/create', {
           source_project_id: projectId,
           target_project_id: targetProjectId,
         })
@@ -3540,7 +3541,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     async (id: string) => {
       setLocalError(null)
       try {
-        await daemonCliPost('relations/delete', { id })
+        await daemonCliPost(primaryScope(), 'relations/delete', { id })
         await fetchRelations()
       } catch (e) {
         setLocalError(e instanceof Error ? e.message : String(e))
@@ -4065,7 +4066,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
     if (!newName.trim()) return
     setCreating(true)
     try {
-      await daemonCliPost('skills/create', {
+      await daemonCliPost(primaryScope(), 'skills/create', {
         project_path: projectPath,
         name: newName.trim().toLowerCase().replace(/\s+/g, '-'),
         from_skill: newSeed.trim() ? newSeed.trim() : null,
@@ -4091,7 +4092,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
     })
     if (!confirmed) return
     try {
-      await daemonCliPost('skills/remove', { project_path: projectPath, name })
+      await daemonCliPost(primaryScope(), 'skills/remove', { project_path: projectPath, name })
       await fetchSkills()
       await fetchAgents()
     } catch (e) {
@@ -4239,7 +4240,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 
   const fetchIdeSessions = useCallback(async () => {
     try {
-      const result = await daemonCliGet<CursorIdeSession[]>('chat/discover-ide', { project_path: projectPath })
+      const result = await daemonCliGet<CursorIdeSession[]>(primaryScope(), 'chat/discover-ide', { project_path: projectPath })
       setSessions(result)
     } catch {
       setSessions([])
@@ -4268,7 +4269,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
     for (const session of unmigratedSessions) {
       setMigratingIds(new Set([session.composerId]))
       try {
-        const r = await daemonCliPost<{ migrated: number }>('chat/migrate-ide', {
+        const r = await daemonCliPost<{ migrated: number }>(primaryScope(), 'chat/migrate-ide', {
           project_path: projectPath,
           composer_ids: [session.composerId],
         })

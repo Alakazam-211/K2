@@ -17,6 +17,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Extension → MIME for the image types the picker accepts. */
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
@@ -63,7 +64,7 @@ export async function pickRemoteImageDataUrl(): Promise<string | null> {
   })
   if (!path) return null
   try {
-    const r = await daemonCliGet<{ base64: string }>('fs/read-binary', { path })
+    const r = await daemonCliGet<{ base64: string }>(primaryScope(), 'fs/read-binary', { path })
     return `data:${imageMimeFromPath(path)};base64,${r.base64}`
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

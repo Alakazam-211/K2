@@ -51,6 +51,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
+import { primaryScope } from '@/kessel/server-scope'
 
 const DEFAULT_SERVER_ADDR = '178.156.232.105'
 const DEFAULT_SERVER_PORT = 7000
@@ -232,7 +233,7 @@ async function tunnelPost(suffix: string, body?: unknown): Promise<Response> {
 async function userGet(suffix: string): Promise<Response> {
   return withRemoteRetry(async () => {
     const send = async (): Promise<Response> => {
-      const creds = await getDaemonWs()
+      const creds = await getDaemonWs(primaryScope())
       return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, { method: 'GET' })
     }
     const res = await send()
@@ -245,7 +246,7 @@ async function userGet(suffix: string): Promise<Response> {
 async function userPost(suffix: string, body?: unknown): Promise<Response> {
   return withRemoteRetry(async () => {
     const send = async (): Promise<Response> => {
-      const creds = await getDaemonWs()
+      const creds = await getDaemonWs(primaryScope())
       return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, {
         method: 'POST',
         headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -265,7 +266,7 @@ async function userPost(suffix: string, body?: unknown): Promise<Response> {
 async function whoamiGet(): Promise<Response> {
   return withRemoteRetry(async () => {
     const send = async (): Promise<Response> => {
-      const creds = await getDaemonWs()
+      const creds = await getDaemonWs(primaryScope())
       return fetch(`${daemonHttpBase(creds)}/cli/auth/whoami?token=${creds.token}`, { method: 'GET' })
     }
     const res = await send()

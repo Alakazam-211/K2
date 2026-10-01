@@ -62,6 +62,7 @@ import {
   getProjectChatDraft,
   setProjectChatDraft,
 } from '@/lib/composer-drafts'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -140,7 +141,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const load = useCallback(
     async (lim: number): Promise<void> => {
       try {
-        const page = await fetchProjectGroupMessages(show.id, { limit: lim })
+        const page = await fetchProjectGroupMessages(primaryScope(), show.id, { limit: lim })
         // Merge, don't replace: earlier-loaded history survives a live
         // refetch whose window is smaller than what's on screen.
         setMessages((prev) => mergeMessages(prev ?? [], page.messages))
@@ -218,7 +219,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     if (!text || busy) return
     setBusy(true)
     setSendError(null)
-    postProjectGroupMessage(show.id, text)
+    postProjectGroupMessage(primaryScope(), show.id, text)
       .then((posted) => {
         setDraftAndPersist('')
         clearProjectChatDraft(show.id)

@@ -3,6 +3,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Checks if the active project has unmigrated Cursor IDE conversations.
@@ -26,7 +27,7 @@ export function useCursorMigrationCheck(): void {
     // Delay check slightly so it doesn't compete with project load
     const timer = setTimeout(async () => {
       try {
-        const sessions = await daemonCliGet<any[]>('chat/discover-ide', {
+        const sessions = await daemonCliGet<any[]>(primaryScope(), 'chat/discover-ide', {
           project_path: activeProject.path,
         })
         const unmigrated = sessions.filter((s: any) => !s.alreadyMigrated && s.migratable)

@@ -8,6 +8,7 @@ import {
   type ChatTurn,
 } from './chatTranscript'
 import type { SessionViewTab } from './sessionViewTab'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /**
  * Tail socket for the chat face. `enabled` is only true while Chat is the
@@ -15,13 +16,15 @@ import type { SessionViewTab } from './sessionViewTab'
  * sets `visible` false and the effect cleanup closes the socket.
  */
 export function useChatTranscript(opts: {
+  /** The server this room lives on (Home M1). */
+  scope: ServerScope
   view: SessionViewTab
   visible: boolean
   provider: string | null
   conversationId: string | null
   agentName: string | null
 }): { turns: ChatTurn[]; error: string | null } {
-  const { view, visible, provider, conversationId, agentName } = opts
+  const { scope, view, visible, provider, conversationId, agentName } = opts
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [error, setError] = useState<string | null>(null)
   const open = shouldOpenChatTranscriptSocket({ view, visible, provider, conversationId })
@@ -38,7 +41,7 @@ export function useChatTranscript(opts: {
 
     async function boot(): Promise<void> {
       try {
-        const creds = await getDaemonWs()
+        const creds = await getDaemonWs(scope)
         if (cancelled) return
         const url = chatTranscriptWsUrl(daemonWsBase(creds), creds.token, {
           provider: provider as string,
@@ -73,7 +76,7 @@ export function useChatTranscript(opts: {
         ws = null
       }
     }
-  }, [open, provider, conversationId, agentName])
+  }, [scope, open, provider, conversationId, agentName])
 
   return { turns, error }
 }

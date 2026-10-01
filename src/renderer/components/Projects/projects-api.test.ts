@@ -22,6 +22,7 @@ import {
   setProjectGroupIcon,
 } from './projects-api'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 const get = vi.mocked(daemonCliGet)
 const post = vi.mocked(daemonCliPost)
@@ -66,8 +67,8 @@ describe('dashboard route wrappers (§6.7.6 contract shapes)', () => {
   it('create posts {group, name} and unwraps the {ok, dashboard} envelope', async () => {
     const dashboard = { id: 'd2', groupId: 'g1', name: 'Ops', position: 1 }
     post.mockResolvedValueOnce({ ok: true, dashboard })
-    await expect(createProjectGroupDashboard('g1', 'Ops')).resolves.toBe(dashboard)
-    expect(post).toHaveBeenCalledWith('project-group/dashboard/create', {
+    await expect(createProjectGroupDashboard(primaryScope(), 'g1', 'Ops')).resolves.toBe(dashboard)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/dashboard/create', {
       group: 'g1',
       name: 'Ops',
     })
@@ -76,8 +77,8 @@ describe('dashboard route wrappers (§6.7.6 contract shapes)', () => {
   it('reorder posts the FULL id order and unwraps {ok, dashboards}', async () => {
     const dashboards = [{ id: 'd2' }, { id: 'd1' }]
     post.mockResolvedValueOnce({ ok: true, dashboards })
-    await expect(reorderProjectGroupDashboards('g1', ['d2', 'd1'])).resolves.toBe(dashboards)
-    expect(post).toHaveBeenCalledWith('project-group/dashboard/reorder', {
+    await expect(reorderProjectGroupDashboards(primaryScope(), 'g1', ['d2', 'd1'])).resolves.toBe(dashboards)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/dashboard/reorder', {
       group: 'g1',
       order: ['d2', 'd1'],
     })
@@ -85,47 +86,47 @@ describe('dashboard route wrappers (§6.7.6 contract shapes)', () => {
 
   it('reorder degrades a dashboards-less body to an empty list', async () => {
     post.mockResolvedValueOnce({ ok: true })
-    await expect(reorderProjectGroupDashboards('g1', ['d1'])).resolves.toEqual([])
+    await expect(reorderProjectGroupDashboards(primaryScope(), 'g1', ['d1'])).resolves.toEqual([])
   })
 })
 
 describe('icon + color route wrappers (§6.7.7 contract shapes)', () => {
   it('icon GETs {group} and unwraps the {ok, found, dataUrl} envelope', async () => {
     get.mockResolvedValueOnce({ ok: true, found: true, dataUrl: 'data:image/png;base64,x' })
-    await expect(fetchProjectGroupIcon('g1')).resolves.toEqual({
+    await expect(fetchProjectGroupIcon(primaryScope(), 'g1')).resolves.toEqual({
       found: true,
       dataUrl: 'data:image/png;base64,x',
     })
-    expect(get).toHaveBeenCalledWith('project-group/icon', { group: 'g1' })
+    expect(get).toHaveBeenCalledWith(primaryScope(), 'project-group/icon', { group: 'g1' })
   })
 
   it('icon degrades a fieldless body to not-found (advisory decoration)', async () => {
     get.mockResolvedValueOnce({ ok: true })
-    await expect(fetchProjectGroupIcon('g1')).resolves.toEqual({ found: false, dataUrl: null })
+    await expect(fetchProjectGroupIcon(primaryScope(), 'g1')).resolves.toEqual({ found: false, dataUrl: null })
   })
 
   it('set-icon posts {group, dataUrl} and null clears', async () => {
     post.mockResolvedValueOnce({ ok: true })
-    await setProjectGroupIcon('g1', 'data:image/png;base64,x')
-    expect(post).toHaveBeenCalledWith('project-group/set-icon', {
+    await setProjectGroupIcon(primaryScope(), 'g1', 'data:image/png;base64,x')
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-icon', {
       group: 'g1',
       dataUrl: 'data:image/png;base64,x',
     })
     post.mockResolvedValueOnce({ ok: true })
-    await setProjectGroupIcon('g1', null)
-    expect(post).toHaveBeenCalledWith('project-group/set-icon', { group: 'g1', dataUrl: null })
+    await setProjectGroupIcon(primaryScope(), 'g1', null)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-icon', { group: 'g1', dataUrl: null })
   })
 
   it('set-color posts {group, color} and null clears', async () => {
     post.mockResolvedValueOnce({ ok: true })
-    await setProjectGroupColor('g1', '#61afef')
-    expect(post).toHaveBeenCalledWith('project-group/set-color', {
+    await setProjectGroupColor(primaryScope(), 'g1', '#61afef')
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-color', {
       group: 'g1',
       color: '#61afef',
     })
     post.mockResolvedValueOnce({ ok: true })
-    await setProjectGroupColor('g1', null)
-    expect(post).toHaveBeenCalledWith('project-group/set-color', { group: 'g1', color: null })
+    await setProjectGroupColor(primaryScope(), 'g1', null)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-color', { group: 'g1', color: null })
   })
 })
 

@@ -19,13 +19,16 @@ const cli = vi.hoisted(() => ({
   whoami: { role: 'owner', owner: true } as unknown,
   getCalls: [] as string[],
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => {
-    cli.getCalls.push(route)
-    return cli.whoami
-  }),
-  daemonCliPost: vi.fn(async () => ({ success: true })),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string) => {
+      cli.getCalls.push(route)
+      return cli.whoami
+    })),
+    daemonCliPost: primaryOnly(vi.fn(async () => ({ success: true }))),
+  }
+})
 
 import {
   canKick,

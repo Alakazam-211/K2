@@ -11,10 +11,13 @@ const endMock = vi.fn()
 const isCancelRequestedMock = vi.fn(() => false)
 const addToastMock = vi.fn()
 
-vi.mock('./daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGetMock(...args),
-  daemonCliPost: vi.fn(),
-}))
+vi.mock('./daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGetMock(...args)),
+    daemonCliPost: vi.fn(),
+  }
+})
 
 vi.mock('./is-web', () => ({
   isWebClient: () => isWebClientMock(),

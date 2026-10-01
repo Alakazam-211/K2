@@ -174,10 +174,13 @@ const daemonMocks = vi.hoisted(() => ({
   daemonCliPost: vi.fn(),
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: daemonMocks.daemonCliGet,
-  daemonCliPost: daemonMocks.daemonCliPost,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...a: unknown[]) => daemonMocks.daemonCliGet(...a)),
+    daemonCliPost: primaryOnly((...a: unknown[]) => daemonMocks.daemonCliPost(...a)),
+  }
+})
 
 describe('persistChatRenameIfSessionTab', () => {
   beforeEach(() => {

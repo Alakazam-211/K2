@@ -22,6 +22,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -114,7 +115,7 @@ const UNAVAILABLE = { available: false } as const
  */
 export async function listFederationPeers(): Promise<FederationResult<FederationPeer[]>> {
   try {
-    const body = await daemonCliGet<{ peers?: FederationPeer[] }>('federation/peers')
+    const body = await daemonCliGet<{ peers?: FederationPeer[] }>(primaryScope(), 'federation/peers')
     return { available: true, data: Array.isArray(body?.peers) ? body.peers : [] }
   } catch {
     return UNAVAILABLE
@@ -204,7 +205,7 @@ export async function fetchPeerRoster(
 ): Promise<FederationResult<RosterAgent[]>> {
   if (!peerSelector) return UNAVAILABLE
   try {
-    const body = await daemonCliGet<{ peer?: string; roster?: { agents?: RosterAgent[] } }>(
+    const body = await daemonCliGet<{ peer?: string; roster?: { agents?: RosterAgent[] } }>(primaryScope(),
       'federation/peer-roster',
       { peer: peerSelector },
     )
@@ -263,7 +264,7 @@ interface DaemonCreds {
 /** Creds for the ACTIVE host (the daemon the renderer is currently driving —
  *  the one that owns the source workspace). Host-aware via daemon-ws. */
 async function activeCreds(): Promise<DaemonCreds> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   return { base: daemonHttpBase(creds), token: creds.token }
 }
 
@@ -876,7 +877,7 @@ export interface AggregatedRemoteConnection extends RemoteConnectionEntry {
  */
 export async function listAllRemoteConnections(): Promise<AggregatedRemoteConnection[]> {
   try {
-    const projects = await daemonCliGet<Array<{ id: string; name?: string; path: string }>>(
+    const projects = await daemonCliGet<Array<{ id: string; name?: string; path: string }>>(primaryScope(),
       'projects/list',
     )
     const list = Array.isArray(projects) ? projects : []

@@ -10,8 +10,11 @@ import {
   type OverlayThreadItem,
   type OverlayWsFrame,
 } from './overlayThread'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export function useOverlayChatter(opts: {
+  /** The server this room lives on (Home M1). */
+  scope: ServerScope
   addr: string
   conversationId: string | null
   enabled: boolean
@@ -23,7 +26,7 @@ export function useOverlayChatter(opts: {
   loadOlder: () => Promise<void>
   loadingOlder: boolean
 } {
-  const { addr, conversationId, enabled } = opts
+  const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
   const [resolvedConv, setResolvedConv] = useState(conversationId ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -52,7 +55,7 @@ export function useOverlayChatter(opts: {
 
     async function boot(): Promise<void> {
       try {
-        const raw = await daemonCliGet<unknown>('chatter', { addr, limit: OVERLAY_PAGE_SIZE })
+        const raw = await daemonCliGet<unknown>(scope, 'chatter', { addr, limit: OVERLAY_PAGE_SIZE })
         if (cancelled) return
         const snap = chatterItemsFromSnapshot(raw)
         const conv = snap.conversation_id || conversationId || ''
@@ -64,7 +67,7 @@ export function useOverlayChatter(opts: {
         setError(null)
         if (!conv) return
 
-        const creds = await getDaemonWs()
+        const creds = await getDaemonWs(scope)
         if (cancelled) return
         const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
         ws = new WebSocket(url)
@@ -99,7 +102,7 @@ export function useOverlayChatter(opts: {
       cancelled = true
       if (ws) releaseOverlayWebSocket(ws)
     }
-  }, [addr, conversationId, enabled])
+  }, [scope, addr, conversationId, enabled])
 
   const loadOlder = useCallback(async () => {
     if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return
@@ -111,7 +114,7 @@ export function useOverlayChatter(opts: {
     loadingOlderRef.current = true
     setLoadingOlder(true)
     try {
-      const raw = await daemonCliGet<unknown>('chatter', {
+      const raw = await daemonCliGet<unknown>(scope, 'chatter', {
         addr,
         limit: OVERLAY_PAGE_SIZE,
         before_seq: minSeq,
@@ -128,7 +131,7 @@ export function useOverlayChatter(opts: {
       loadingOlderRef.current = false
       setLoadingOlder(false)
     }
-  }, [addr])
+  }, [scope, addr])
 
   return { items, conversationId: resolvedConv, error, hasMore, loadOlder, loadingOlder }
 }

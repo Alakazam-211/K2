@@ -28,6 +28,7 @@ import {
   onSessionRemovedApp,
   onSessionActivityChanged,
 } from '@/stores/session-events'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Daemon-broadcast workspace path per pane (from agent_status_changed /
@@ -1174,7 +1175,7 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     // daemon-side, so this is behaviour-preserving — just one round-trip.
     let running: RunningTerminalInfo[] = []
     try {
-      running = await terminalListRunning()
+      running = await terminalListRunning(primaryScope())
     } catch {
       // Daemon momentarily unreachable — skip this cycle's agent
       // detection rather than thrash with per-terminal retries.
@@ -1191,7 +1192,7 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     const liveCwds = new Set(running.map((r) => r.cwd))
     try {
       const agentSessions = asArray<{ cwd: string }>(
-        await daemonCliGet('agents/running'),
+        await daemonCliGet(primaryScope(), 'agents/running'),
       )
       for (const a of agentSessions) {
         if (a?.cwd) liveCwds.add(a.cwd)
@@ -1531,12 +1532,12 @@ export function startAgentPolling(): void {
         if (wsId) {
           const bgTerminalId = worktreeChatId(wsId)
           try {
-            const exists = await terminalExists(bgTerminalId)
+            const exists = await terminalExists(primaryScope(), bgTerminalId)
             if (!exists) {
-              await terminalCreate({ cwd, command, args, id: bgTerminalId })
+              await terminalCreate(primaryScope(), { cwd, command, args, id: bgTerminalId })
             }
             // Register system-managed worktree session
-            daemonCliGet('agents/lock', {
+            daemonCliGet(primaryScope(), 'agents/lock', {
               project: cwd,
               agent: agentName,
               terminal_id: bgTerminalId,
@@ -1563,9 +1564,9 @@ export function startAgentPolling(): void {
       }
       const bgTerminalId = agentChatId(owningProject.id, agentName)
       try {
-        const exists = await terminalExists(bgTerminalId)
+        const exists = await terminalExists(primaryScope(), bgTerminalId)
         if (!exists) {
-          await terminalCreate({
+          await terminalCreate(primaryScope(), {
             cwd,
             command,
             args,
@@ -1573,7 +1574,7 @@ export function startAgentPolling(): void {
           })
         }
         // Register system-managed session in DB (owner='system' so scheduler knows)
-        daemonCliGet('agents/lock', {
+        daemonCliGet(primaryScope(), 'agents/lock', {
           project: cwd,
           agent: agentName,
           terminal_id: bgTerminalId,
@@ -1582,13 +1583,13 @@ export function startAgentPolling(): void {
         // Detect and save session ID after a brief delay
         setTimeout(async () => {
           try {
-            const r = await daemonCliGet<{ sessionId: string | null }>('chat/detect-active', {
+            const r = await daemonCliGet<{ sessionId: string | null }>(primaryScope(), 'chat/detect-active', {
               provider: 'claude',
               project_path: cwd,
             })
             const sessionId = r.sessionId
             if (sessionId) {
-              daemonCliPost('agents/save-session-id', {
+              daemonCliPost(primaryScope(), 'agents/save-session-id', {
                 project_path: cwd,
                 agent_name: agentName,
                 session_id: sessionId,

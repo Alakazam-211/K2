@@ -31,6 +31,7 @@ import {
   type MailMessageFull,
   type MailMessageSummary,
 } from './inbox-browser'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface AgentInboxPaneProps {
   agentName: string
@@ -91,7 +92,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (!projectPath) return
     setCatalogLoaded(false)
     try {
-      const raw = await daemonCliGet<unknown>('mail/inboxes', { project: projectPath })
+      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/inboxes', { project: projectPath })
       setMailSources(parseMailCatalog(raw))
       setCatalogError(null)
     } catch (err) {
@@ -106,7 +107,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (!projectPath) return
     setListLoading(true)
     try {
-      const raw = await daemonCliGet<unknown>('inbox/list', {
+      const raw = await daemonCliGet<unknown>(primaryScope(), 'inbox/list', {
         project: projectPath,
       })
       setTrayItems(parseTrayList(raw))
@@ -126,7 +127,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (append) setLoadingMore(true)
     else setListLoading(true)
     try {
-      const raw = await daemonCliGet<unknown>('mail/messages', {
+      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/messages', {
         project: projectPath,
         address: selectedAddress,
         limit: MAIL_PAGE_LIMIT,
@@ -211,7 +212,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setBodyLoading(true)
     setBodyError(null)
     try {
-      const raw = await daemonCliGet<unknown>('inbox/read', {
+      const raw = await daemonCliGet<unknown>(primaryScope(), 'inbox/read', {
         project: projectPath,
         id: item.id,
       })
@@ -240,7 +241,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setBodyError(null)
     const stampKind = selectedSource.kind
     try {
-      const raw = await daemonCliGet<unknown>('mail/read', {
+      const raw = await daemonCliGet<unknown>(primaryScope(), 'mail/read', {
         project: projectPath,
         id: item.id,
         html: 1,

@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { RosterUser } from '@/stores/presence'
+import { primaryScope } from '@/kessel/server-scope'
 
 // One whoami per modal-open: the rows all mount together and share the
 // in-flight promise; it clears after settling so the NEXT open re-checks
@@ -28,7 +29,7 @@ let whoamiInflight: Promise<boolean> | null = null
 
 async function actorCanManage(): Promise<boolean> {
   if (!whoamiInflight) {
-    whoamiInflight = daemonCliGet<{ owner?: boolean; role?: string }>('auth/whoami')
+    whoamiInflight = daemonCliGet<{ owner?: boolean; role?: string }>(primaryScope(), 'auth/whoami')
       .then((d) => d.owner === true || d.role === 'owner' || d.role === 'admin')
       .catch(() => false)
       .finally(() => {
@@ -77,7 +78,7 @@ export default function PresenceGrantToggle({
     setPending(next)
     setError(null)
     try {
-      await daemonCliPost('presence/grant', { username: user.user, granted: next })
+      await daemonCliPost(primaryScope(), 'presence/grant', { username: user.user, granted: next })
       // Keep the optimistic value; the presence_changed broadcast (or the
       // catch-up effect above) reconciles it away.
     } catch (err) {

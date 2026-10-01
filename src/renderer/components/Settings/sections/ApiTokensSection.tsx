@@ -13,6 +13,7 @@ import {
   keyState,
   type ApiKeyRow,
 } from './api-keys-api'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const API_TOKENS_MANIFEST: SettingEntry[] = [
   {
@@ -58,7 +59,7 @@ export function ApiTokensSection(): React.JSX.Element {
   const refresh = useCallback(async () => {
     setError(null)
     try {
-      const d = await daemonCliGet<ListResponse>('api-keys/list')
+      const d = await daemonCliGet<ListResponse>(primaryScope(), 'api-keys/list')
       setKeys(Array.isArray(d.keys) ? d.keys : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -83,7 +84,7 @@ export function ApiTokensSection(): React.JSX.Element {
       setBusyId(id)
       setError(null)
       try {
-        await daemonCliPost(`api-keys/${action}`, { id })
+        await daemonCliPost(primaryScope(), `api-keys/${action}`, { id })
         await refresh()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -284,7 +285,7 @@ function CreateKeyModal({
       } else if (selected.size > 0) {
         body.workspaces = [...selected]
       }
-      const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(
+      const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(),
         'api-keys/create',
         body,
       )
@@ -407,7 +408,7 @@ export function WorkspaceApiKeysPanel({
   const refresh = useCallback(async () => {
     setError(null)
     try {
-      const d = await daemonCliGet<ListResponse>('api-keys/list')
+      const d = await daemonCliGet<ListResponse>(primaryScope(), 'api-keys/list')
       const all = Array.isArray(d.keys) ? d.keys : []
       setKeys(all.filter((k) => keyGrantsWorkspace(k, workspaceSlug)))
     } catch (e) {
@@ -436,7 +437,7 @@ export function WorkspaceApiKeysPanel({
       }
       setBusyId(id)
       try {
-        await daemonCliPost(`api-keys/${action}`, { id })
+        await daemonCliPost(primaryScope(), `api-keys/${action}`, { id })
         await refresh()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))

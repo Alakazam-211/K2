@@ -39,6 +39,7 @@ import { CloneCancelledError } from './clone-to'
 // Static import is safe in headless tests: the store module only pulls
 // zustand (no Tauri / daemon side effects at import time).
 import { useTransferProgressStore } from '@/stores/transfer-progress'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** Wire shape of `GET /cli/clone/pack-status`. */
 export interface ClonePackStatus {
@@ -70,10 +71,11 @@ export const PULL_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
  * The defaults (`defaultClonePullDeps`) bind the real implementations.
  */
 export interface ClonePullDeps {
-  /** POST a `/cli/*` route against the ACTIVE (remote) host. */
-  daemonCliPost: <T = unknown>(route: string, body?: unknown) => Promise<T>
-  /** GET a `/cli/*` route against the ACTIVE (remote) host. */
+  /** POST a `/cli/*` route on the source (remote) server's scope. */
+  daemonCliPost: <T = unknown>(scope: ServerScope, route: string, body?: unknown) => Promise<T>
+  /** GET a `/cli/*` route on the source (remote) server's scope. */
   daemonCliGet: <T = unknown>(
+    scope: ServerScope,
     route: string,
     params?: Record<string, string | number | boolean | undefined | null>,
   ) => Promise<T>
@@ -124,6 +126,8 @@ function basename(p: string): string {
  * also surfaced through `hooks.onError` with the failing stage named.
  */
 export async function cloneWorkspaceToThisComputer(
+  /** The REMOTE server the workspace is packed and downloaded from. */
+  scope: ServerScope,
   projectPath: string,
   projectName: string,
   deps: ClonePullDeps,
@@ -137,7 +141,7 @@ export async function cloneWorkspaceToThisComputer(
   try {
     // ── 1. Pack on the REMOTE (active) host — async job ─────────────────
     onStage?.('packing')
-    const { job_id } = await deps.daemonCliPost<{ job_id: string }>('clone/pack', {
+    const { job_id } = await deps.daemonCliPost<{ job_id: string }>(scope, 'clone/pack', {
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
@@ -148,7 +152,7 @@ export async function cloneWorkspaceToThisComputer(
     let packed: ClonePackStatus
     for (;;) {
       await deps.sleep(PACK_POLL_MS)
-      const status = await deps.daemonCliGet<ClonePackStatus>('clone/pack-status', {
+      const status = await deps.daemonCliGet<ClonePackStatus>(scope, 'clone/pack-status', {
         job_id,
       })
       if (status.phase === 'running') continue
@@ -171,7 +175,7 @@ export async function cloneWorkspaceToThisComputer(
     // The daemon's hourly stale-prune is the backstop if even this fails.
     const cleanupRemote = async (): Promise<void> => {
       try {
-        await deps.daemonCliPost('clone/pack-cleanup', { job_id })
+        await deps.daemonCliPost(scope, 'clone/pack-cleanup', { job_id })
       } catch (e) {
         console.warn('[clone-pull] server-side bundle cleanup failed:', e)
       }
@@ -203,7 +207,7 @@ export async function cloneWorkspaceToThisComputer(
           await cleanupRemote()
           throw new CloneCancelledError('Clone cancelled.')
         }
-        const slice = await deps.daemonCliGet<ReadRangeResponse>('fs/read-range', {
+        const slice = await deps.daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
           path: remoteBundlePath,
           offset,
           len: PULL_DOWNLOAD_CHUNK_BYTES,
@@ -284,13 +288,13 @@ export async function cloneWorkspaceToThisComputer(
  */
 export function defaultClonePullDeps(): ClonePullDeps {
   return {
-    daemonCliPost: async (route, body) => {
+    daemonCliPost: async (scope, route, body) => {
       const { daemonCliPost } = await import('./daemon-cli')
-      return daemonCliPost(route, body)
+      return daemonCliPost(scope, route, body)
     },
-    daemonCliGet: async (route, params) => {
+    daemonCliGet: async (scope, route, params) => {
       const { daemonCliGet } = await import('./daemon-cli')
-      return daemonCliGet(route, params)
+      return daemonCliGet(scope, route, params)
     },
     localDaemonCliPost: async (route, body) => {
       const { localDaemonCliPost } = await import('./daemon-cli')

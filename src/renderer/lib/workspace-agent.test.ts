@@ -11,9 +11,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const daemonCliGet = vi.fn()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+  }
+})
 
 import {
   agentDisplayName,

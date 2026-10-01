@@ -54,6 +54,7 @@ import { AgentSkillsSection } from './AgentSkillsSection'
 import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
@@ -1149,7 +1150,7 @@ function RestartHostRow(): React.JSX.Element | null {
     let cancelled = false
     void (async () => {
       try {
-        const data = await daemonCliGet<{ role?: string; owner?: boolean }>('auth/whoami')
+        const data = await daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
         if (cancelled) return
         const resolved: RestartRole | null =
           data.role === 'owner' || data.role === 'admin' || data.role === 'member'
@@ -1185,7 +1186,7 @@ function RestartHostRow(): React.JSX.Element | null {
     if (!ok) return
     setRestarting(true)
     try {
-      await daemonCliPost('daemon/restart', {})
+      await daemonCliPost(primaryScope(), 'daemon/restart', {})
       addToast(`Restarting ${hostLabel}… it'll reconnect automatically.`, 'info', 8000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -1325,7 +1326,7 @@ function UpdateHostRow(): React.JSX.Element | null {
     let cancelled = false
     void (async () => {
       try {
-        const data = await daemonCliGet<{ role?: string; owner?: boolean }>('auth/whoami')
+        const data = await daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
         if (cancelled) return
         const resolved: UpdateRole | null =
           data.role === 'owner' || data.role === 'admin' || data.role === 'member'
@@ -1353,7 +1354,7 @@ function UpdateHostRow(): React.JSX.Element | null {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const s = await daemonCliGet<UpdateStatusResult>('daemon/update/status', { job_id: jobId })
+        const s = await daemonCliGet<UpdateStatusResult>(primaryScope(), 'daemon/update/status', { job_id: jobId })
         if (!cancelled) setStatus(s)
       } catch (e) {
         if (cancelled) return
@@ -1483,7 +1484,7 @@ function UpdateHostRow(): React.JSX.Element | null {
     // under a correct "is on v0.40.47" check result).
     setComeback(null)
     try {
-      const result = await daemonCliPost<UpdateCheckResult>('daemon/update/check', {})
+      const result = await daemonCliPost<UpdateCheckResult>(primaryScope(), 'daemon/update/check', {})
       setCheck(result)
       if (!result.available) {
         // B4: a newer version exists but there's no build for this host's
@@ -1507,7 +1508,7 @@ function UpdateHostRow(): React.JSX.Element | null {
 
   const handleDownload = async (): Promise<void> => {
     try {
-      const { job_id } = await daemonCliPost<{ job_id: string }>('daemon/update/start', {})
+      const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'daemon/update/start', {})
       setStatus({ phase: 'downloading' })
       setJobId(job_id)
     } catch (e) {
@@ -1527,7 +1528,7 @@ function UpdateHostRow(): React.JSX.Element | null {
     if (!ok) return
     setApplying(true)
     try {
-      await daemonCliPost('daemon/update/apply', { job_id: jobId })
+      await daemonCliPost(primaryScope(), 'daemon/update/apply', { job_id: jobId })
       // The host now installs + restarts; show the restarting line and let
       // the ConnectionGate's soft-reconnect bring us back on the new version.
       setStatus({ phase: 'restarting' })

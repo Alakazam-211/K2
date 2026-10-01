@@ -13,7 +13,7 @@
 //
 // Usage:
 //   await prewarmDaemonWs()               // call at app startup
-//   const { port, token } = await getDaemonWs() // cheap on subsequent calls
+//   const { port, token } = await getDaemonWs(primaryScope()) // cheap on subsequent calls
 //
 // On error the cache invalidates so the next caller retries — the
 // daemon may have been briefly unavailable (e.g. a reinstall).
@@ -22,6 +22,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
 import { forceSameOriginHost } from '@/web/boot-host'
+import type { ServerScope } from '@/kessel/server-scope'
+import { assertServerScope } from '@/kessel/assert-scope'
 
 /** Loopback host the local bundled daemon always binds. When the active
  *  host is 'local' the resolved creds carry exactly this — so every URL
@@ -68,7 +70,9 @@ export function invalidateDaemonWs(): void {
   cached = null
 }
 
-/** Resolve to {port, token, host}. Host-aware (K2 Connect step #1):
+/** Resolve `scope`'s creds to {port, token, host}. The scope is required
+ *  (Home M1): `primaryScope()` resolves the window's active host exactly as
+ *  this function always did. Host-aware (K2 Connect step #1):
  *
  *   - `activeHost === 'local'` → resolves via the Tauri `daemon_ws_url`
  *     command EXACTLY as before, with `host: '127.0.0.1'`. The result is
@@ -80,12 +84,14 @@ export function invalidateDaemonWs(): void {
  *
  * Rejects with a message when the local daemon isn't reachable — the
  * reject invalidates the local cache so recovery is just a retry. */
-export function getDaemonWs(): Promise<DaemonWsAvailable> {
-  return resolveWindowHostCreds()
+export function getDaemonWs(scope: ServerScope): Promise<DaemonWsAvailable> {
+  assertServerScope(scope, 'getDaemonWs')
+  return scope.creds()
 }
 
-/** The window's active-host creds. `primaryScope().creds()`
- *  (kessel/server-scope.ts) resolves through this. */
+/** The window's active-host creds — the body `getDaemonWs()` had before
+ *  Home M1. Only `primaryScope().creds()` (kessel/server-scope.ts) calls
+ *  this; everything else goes through a scope. */
 export function resolveWindowHostCreds(): Promise<DaemonWsAvailable> {
   // Hosted web: never call Tauri `daemon_ws_url`. Force same-origin
   // remote creds if the store somehow still says 'local'.
@@ -194,9 +200,9 @@ export function daemonWsBase(creds: DaemonWsAvailable): string {
  *  is now just a creds-cache primer — kept so callers don't have to
  *  drop the no-op invocation. */
 export function prewarmDaemonWs(): void {
-  // Resolve cached creds. Subsequent getDaemonWs() callers reuse the
+  // Resolve cached creds. Subsequent getDaemonWs(scope) callers reuse the
   // cached promise so the disk read only happens once per app session.
-  getDaemonWs().catch(() => {
+  resolveWindowHostCreds().catch(() => {
     /* daemon not ready yet — real subscribers will retry from disk */
   })
 }

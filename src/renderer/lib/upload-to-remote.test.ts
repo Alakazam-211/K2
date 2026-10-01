@@ -17,9 +17,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }))
 
-vi.mock('./daemon-cli', () => ({
-  daemonCliPost: (...args: unknown[]) => daemonCliPostMock(...args),
-}))
+vi.mock('./daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPostMock(...args)),
+  }
+})
 
 vi.mock('@/stores/connect-host', () => ({
   activeHostKey: () => 'local',
@@ -35,6 +38,8 @@ import {
   __clearUploadToRemoteFlightsForTests,
 } from './upload-to-remote'
 
+import { primaryScope } from '@/kessel/server-scope'
+import { expectPrimaryScope } from '@/test-utils/scope'
 beforeEach(() => {
   __clearUploadToRemoteFlightsForTests()
   invokeMock.mockReset()
@@ -68,8 +73,8 @@ describe('uploadToRemote — single-flight (R4)', () => {
         }),
     )
 
-    const p1 = uploadToRemote('/Users/me/report.pdf', '/srv/inbox')
-    const p2 = uploadToRemote('/Users/me/report.pdf', '/srv/inbox')
+    const p1 = uploadToRemote(primaryScope(), '/Users/me/report.pdf', '/srv/inbox')
+    const p2 = uploadToRemote(primaryScope(), '/Users/me/report.pdf', '/srv/inbox')
 
     await Promise.resolve()
     await Promise.resolve()
@@ -98,8 +103,8 @@ describe('uploadToRemote — single-flight (R4)', () => {
     }))
 
     const [a, b] = await Promise.all([
-      uploadToRemote('/tmp/x.bin', '/srv/a'),
-      uploadToRemote('/tmp/x.bin', '/srv/b'),
+      uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/a'),
+      uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/b'),
     ])
     expect(a).toBe('/srv/a/x.bin')
     expect(b).toBe('/srv/b/x.bin')
@@ -114,8 +119,8 @@ describe('uploadToRemote — single-flight (R4)', () => {
     })
     daemonCliPostMock.mockResolvedValue({ path: '/srv/inbox/x.bin' })
 
-    await uploadToRemote('/tmp/x.bin', '/srv/inbox')
-    await uploadToRemote('/tmp/x.bin', '/srv/inbox')
+    await uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/inbox')
+    await uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/inbox')
     expect(daemonCliPostMock).toHaveBeenCalledTimes(2)
   })
 
@@ -129,8 +134,8 @@ describe('uploadToRemote — single-flight (R4)', () => {
       .mockRejectedValueOnce(new Error('Load failed'))
       .mockResolvedValueOnce({ path: '/srv/inbox/x.bin' })
 
-    await expect(uploadToRemote('/tmp/x.bin', '/srv/inbox')).rejects.toThrow('Load failed')
-    await expect(uploadToRemote('/tmp/x.bin', '/srv/inbox')).resolves.toBe('/srv/inbox/x.bin')
+    await expect(uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/inbox')).rejects.toThrow('Load failed')
+    await expect(uploadToRemote(primaryScope(), '/tmp/x.bin', '/srv/inbox')).resolves.toBe('/srv/inbox/x.bin')
     expect(daemonCliPostMock).toHaveBeenCalledTimes(2)
   })
 
@@ -163,8 +168,8 @@ describe('uploadToRemote — single-flight (R4)', () => {
       },
     )
 
-    const p1 = uploadToRemote('/tmp/big.bin', '/srv')
-    const p2 = uploadToRemote('/tmp/big.bin', '/srv')
+    const p1 = uploadToRemote(primaryScope(), '/tmp/big.bin', '/srv')
+    const p2 = uploadToRemote(primaryScope(), '/tmp/big.bin', '/srv')
 
     // Wait until the first chunk is blocked.
     for (let i = 0; i < 20 && !releaseFirst; i++) await Promise.resolve()
@@ -183,7 +188,8 @@ describe('uploadFileChunked — stable uploadId option', () => {
   it('reuses the provided uploadId on every chunk', async () => {
     const posts: Array<{ upload_id: string; offset: number }> = []
     const deps = {
-      daemonCliPost: async <T = unknown>(_route: string, body?: unknown): Promise<T> => {
+      daemonCliPost: async <T = unknown>(scope: unknown, _route: string, body?: unknown): Promise<T> => {
+        expectPrimaryScope(scope)
         const b = body as { upload_id: string; offset: number; is_last: boolean }
         posts.push({ upload_id: b.upload_id, offset: b.offset })
         if (b.is_last) return { path: '/d/f', done: true } as T
@@ -191,7 +197,7 @@ describe('uploadFileChunked — stable uploadId option', () => {
       },
       readLocalFileRange: async () => 'YQ==',
     }
-    const path = await uploadFileChunked(deps, '/local/f', 3, {
+    const path = await uploadFileChunked(primaryScope(), deps, '/local/f', 3, {
       dir: '/d',
       filename: 'f',
       uploadId: 'stable-drop-id',

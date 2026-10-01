@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 // (`path`); the JSON response shapes match the Rust structs as-is.
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { GIT_POLL_INTERVAL } from '@shared/constants'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ export function useGitInfo(projectPath?: string): UseGitInfoResult {
 
     try {
       setLoading((prev) => (prev ? prev : true))
-      const result = await daemonCliGet<GitInfo>('git/info', { path: projectPath })
+      const result = await daemonCliGet<GitInfo>(primaryScope(), 'git/info', { path: projectPath })
       setData(result)
       setError(null)
     } catch (e) {
@@ -95,7 +96,7 @@ export function useGitChanges(projectPath?: string): UseGitChangesResult {
 
     try {
       setLoading((prev) => (prev ? prev : true))
-      const result = await daemonCliGet<ChangedFile[]>('git/changes', { path: projectPath })
+      const result = await daemonCliGet<ChangedFile[]>(primaryScope(), 'git/changes', { path: projectPath })
       setData(result)
       setError(null)
     } catch (e) {

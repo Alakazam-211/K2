@@ -39,22 +39,30 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 const cliPosts = vi.hoisted(() => ({ calls: [] as Array<{ route: string; body: unknown }> }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => (route === 'workspace-layouts/load' ? null : [])),
-  daemonCliPost: vi.fn(async (route: string, body: unknown) => {
-    cliPosts.calls.push({ route, body })
-    return {}
-  }),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string) => (route === 'workspace-layouts/load' ? null : []))),
+    daemonCliPost: vi.fn(
+      primaryOnly(async (route: string, body: unknown) => {
+        cliPosts.calls.push({ route, body })
+        return {}
+      }),
+    ),
+  }
+})
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'resolved-agent'),
   setChatSession: vi.fn(async () => undefined),
 }))
 const killed = vi.hoisted(() => ({ ids: [] as string[] }))
-vi.mock('@/lib/terminal-daemon', () => ({
-  terminalKill: vi.fn(async (id: string) => void killed.ids.push(id)),
-}))
+vi.mock('@/lib/terminal-daemon', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    terminalKill: vi.fn(primaryOnly(async (id: string) => void killed.ids.push(id))),
+  }
+})
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ port: 9999, token: 'tok', host: '127.0.0.1' })),
   daemonHttpBase: vi.fn(() => 'http://127.0.0.1:9999'),

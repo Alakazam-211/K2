@@ -18,6 +18,7 @@ import { UrlsPortsSection } from './UrlsPortsSection'
 import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2so_inbox_count', ...)` so the only
@@ -358,7 +359,7 @@ function WorktreeRow({
       await invoke('projects_open_in_finder', { path: worktreePath })
     } else if (clickedId === 'close') {
       // Remove from DB, keep files on disk
-      await daemonCliPost('workspaces/delete', { id: workspaceId })
+      await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
       // Optimistic removal from store
       const state = useProjectsStore.getState()
       const updated = state.projects.map((p) => {
@@ -370,17 +371,17 @@ function WorktreeRow({
       // Remove git worktree from disk + remove from DB
       try {
         if (worktreePath) {
-          await daemonCliPost('git/remove-worktree', {
+          await daemonCliPost(primaryScope(), 'git/remove-worktree', {
             projectPath,
             worktreePath,
             workspaceId,
           })
         } else {
-          await daemonCliPost('workspaces/delete', { id: workspaceId })
+          await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
         }
       } catch {
         // If git remove fails, just delete the record
-        await daemonCliPost('workspaces/delete', { id: workspaceId })
+        await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
       }
       // Optimistic removal from store
       const state = useProjectsStore.getState()

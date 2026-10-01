@@ -33,6 +33,7 @@ import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { clientToCssPx } from '@/stores/context-menu'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -341,7 +342,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       return
     }
     let cancelled = false
-    void daemonCliGet<{ resumeSession?: string; resumedExisting?: boolean }>(
+    void daemonCliGet<{ resumeSession?: string; resumedExisting?: boolean }>(primaryScope(),
       'workspace/resume-chat-args',
       { project: projectPath },
     )
@@ -379,7 +380,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     setError(null)
 
     try {
-      const result = await daemonCliGet<ChatSession[]>('chat/list', { project_path: projectPath })
+      const result = await daemonCliGet<ChatSession[]>(primaryScope(), 'chat/list', { project_path: projectPath })
       setSessions(result)
       // N5 — first hydrate (not the 30s poll): restamp extras from custom_name
       // once conversationId is already on the restored layout.
@@ -403,13 +404,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     // API-triggered sandbox sessions for this workspace. Empty on hosts with no
     // sandbox history — the section just doesn't render.
     try {
-      const sb = await daemonCliGet<SandboxChat[]>('sandbox/list', { project_path: projectPath })
+      const sb = await daemonCliGet<SandboxChat[]>(primaryScope(), 'sandbox/list', { project_path: projectPath })
       setSandboxSessions(Array.isArray(sb) ? sb : [])
     } catch {
       setSandboxSessions([])
     }
     try {
-      const api = await daemonCliGet<ApiChat[]>('host-sessions/list', { project: projectPath })
+      const api = await daemonCliGet<ApiChat[]>(primaryScope(), 'host-sessions/list', { project: projectPath })
       setApiSessions(Array.isArray(api) ? api : [])
     } catch {
       setApiSessions([])
@@ -439,7 +440,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     if (!projectPath || reopening) return
     setReopening(session.sessionId)
     try {
-      await daemonCliPost('sandbox/reopen', {
+      await daemonCliPost(primaryScope(), 'sandbox/reopen', {
         project_path: projectPath,
         session_id: session.sessionId,
       })
@@ -453,7 +454,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // Fetch custom names and pinned state
   const fetchCustomNames = useCallback(async () => {
     try {
-      const names = await daemonCliGet<Record<string, string>>('chat/custom-names')
+      const names = await daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names')
       setCustomNames(names)
       rememberChatCustomNames(names)
     } catch {
@@ -466,7 +467,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // that's already in THIS host's list, so cross-project pins never
       // surface here. If chat/list ever stops being project-scoped, this
       // would need scoping too. (Issue #7 secondary note — left as-is.)
-      const pinned = await daemonCliGet<string[]>('chat/pinned')
+      const pinned = await daemonCliGet<string[]>(primaryScope(), 'chat/pinned')
       setPinnedKeys(new Set(pinned))
     } catch {
       // ignore
@@ -488,7 +489,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       fetchSessions(false)
       fetchCustomNames()
       if (!projectPath) return
-      void daemonCliGet<ChatSession[]>('chat/list', { project_path: projectPath })
+      void daemonCliGet<ChatSession[]>(primaryScope(), 'chat/list', { project_path: projectPath })
         .then((rows) => {
           const tabsStore = useTabsStore.getState()
           const tabs = collectStoreTabs(tabsStore)
@@ -593,7 +594,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const handleAgenticSearch = useCallback(async () => {
     if (!projectPath || !searchQuery.trim()) return
 
-    const paths = await daemonCliGet<ChatStoragePaths>('chat/storage-paths', { project_path: projectPath })
+    const paths = await daemonCliGet<ChatStoragePaths>(primaryScope(), 'chat/storage-paths', { project_path: projectPath })
     // Resolve the default agent through the one seam (id-first,
     // legacy-token tolerant, first-enabled fallback).
     const resolved = resolveAgentCommand(
@@ -646,7 +647,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
   const handleArchive = useCallback(async (session: ChatSession) => {
     try {
-      await daemonCliPost('chat/archive', {
+      await daemonCliPost(primaryScope(), 'chat/archive', {
         project_path: session.project || projectPath,
         provider: session.provider,
         session_id: session.sessionId,
@@ -660,7 +661,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
   const handleRestore = useCallback(async (session: ChatSession) => {
     try {
-      await daemonCliPost('chat/restore', {
+      await daemonCliPost(primaryScope(), 'chat/restore', {
         project_path: session.project || projectPath,
         provider: session.provider,
         session_id: session.sessionId,
@@ -676,7 +677,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     const key = `${session.provider}:${session.sessionId}`
     const isPinned = pinnedKeys.has(key)
     try {
-      await daemonCliPost('chat/toggle-pin', {
+      await daemonCliPost(primaryScope(), 'chat/toggle-pin', {
         provider: session.provider,
         session_id: session.sessionId,
         pinned: !isPinned,
@@ -736,7 +737,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // Daemon resolves live path or Claude user-archive path on the host.
       const projectForResolve = session.project || projectPath || ''
       try {
-        const res = await daemonCliGet<{ path: string | null; project: string | null }>(
+        const res = await daemonCliGet<{ path: string | null; project: string | null }>(primaryScope(),
           'chat/session-path',
           {
             provider: session.provider,
@@ -846,7 +847,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     if (!stillOpen()) return
     const ptyId = await waitForPinnedPty(paneGroupId)
     if (!stillOpen()) return
-    const msg = await daemonCliPost<MsgResponse>('terminal/send-message', {
+    const msg = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
       session_id: ptyId,
       text: seed.text,
     })
@@ -867,7 +868,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       return
     }
     try {
-      await daemonCliPost('chat/rename', {
+      await daemonCliPost(primaryScope(), 'chat/rename', {
         provider: renamingSession.provider,
         session_id: renamingSession.sessionId,
         custom_name: renameValue.trim(),

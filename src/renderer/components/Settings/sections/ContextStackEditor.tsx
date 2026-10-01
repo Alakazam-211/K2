@@ -26,6 +26,7 @@ import { seedWiki } from '@/components/Wiki/wiki-api'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** What Edit should open in the parent Settings takeover. */
 export type ContextEditTarget =
@@ -110,8 +111,8 @@ export function ContextStackEditor({
       const indexPath = `${path}/.k2/wiki/_Index.md`
       const homePath = `${path}/.k2/wiki/Home.md`
       const [i, h] = await Promise.all([
-        daemonCliGet<{ content?: string }>('fs/read-file', { path: indexPath }).then(() => true).catch(() => false),
-        daemonCliGet<{ content?: string }>('fs/read-file', { path: homePath }).then(() => true).catch(() => false),
+        daemonCliGet<{ content?: string }>(primaryScope(), 'fs/read-file', { path: indexPath }).then(() => true).catch(() => false),
+        daemonCliGet<{ content?: string }>(primaryScope(), 'fs/read-file', { path: homePath }).then(() => true).catch(() => false),
       ])
       if (projectPathRef.current === path) setWikiSeeded(i || h)
     } catch {

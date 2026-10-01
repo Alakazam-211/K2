@@ -25,11 +25,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // ── Mock the host-aware daemon-cli layer (the thing we migrated TO) ──────
 const daemonCliGet = vi.fn()
 const daemonCliPost = vi.fn()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
-  daemonCliGetText: vi.fn(),
-  daemonCliPost: (...args: unknown[]) => daemonCliPost(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+    daemonCliGetText: vi.fn(),
+    daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPost(...args)),
+  }
+})
 
 // ── Mock the cross-window emit bus ───────────────────────────────────────
 const emitMock = vi.fn((..._args: unknown[]) => Promise.resolve())

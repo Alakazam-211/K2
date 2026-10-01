@@ -15,6 +15,7 @@ import {
   setHeartbeatSession,
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -303,7 +304,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       // no dependency on the local daemon having the new route.
       const rows =
         useConnectHostStore.getState().activeHost !== 'local'
-          ? await daemonCliGet<SystemHeartbeatRow[]>('heartbeat/list-all')
+          ? await daemonCliGet<SystemHeartbeatRow[]>(primaryScope(), 'heartbeat/list-all')
           : await invoke<SystemHeartbeatRow[]>('k2so_heartbeat_list_all')
       const sorted = [...rows].sort((a, b) => {
         const byProj = a.projectName.toLowerCase().localeCompare(b.projectName.toLowerCase())
@@ -351,7 +352,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
         // /cli/heartbeat/fires-list-all route); local keeps in-process.
         const rows =
           useConnectHostStore.getState().activeHost !== 'local'
-            ? await daemonCliGet<SystemFireRow[]>('heartbeat/fires-list-all', { limit: 100 })
+            ? await daemonCliGet<SystemFireRow[]>(primaryScope(), 'heartbeat/fires-list-all', { limit: 100 })
             : await invoke<SystemFireRow[]>('k2so_heartbeat_fires_list_all', { limit: 100 })
         if (!cancelled) setFires(rows)
       } catch {
@@ -371,7 +372,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const status = await daemonCliGet<SchedulerStatus>('heartbeat/scheduler-status', {})
+        const status = await daemonCliGet<SchedulerStatus>(primaryScope(), 'heartbeat/scheduler-status', {})
         if (!cancelled) setSchedulerStatus(status)
       } catch {
         // Silent — health polling must never toast on a transient miss.
@@ -392,7 +393,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
         rows.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)),
       )
       try {
-        await daemonCliGet('heartbeat/enable', {
+        await daemonCliGet(primaryScope(), 'heartbeat/enable', {
           project: row.projectPath,
           name: row.name,
           enabled: next,
@@ -449,7 +450,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       // the same machine (the old Tauri invoke applied THIS Mac's local
       // settings to THIS Mac's scheduler, silently diverging from the
       // remote config the page displays). Same POST route the bridge used.
-      const resp = await daemonCliPost<{ success?: boolean; message?: string }>(
+      const resp = await daemonCliPost<{ success?: boolean; message?: string }>(primaryScope(),
         'heartbeat/apply-wake-scheduler',
         {
           mode: settings.mode,

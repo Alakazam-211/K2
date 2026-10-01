@@ -37,7 +37,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import { daemonCliPost } from './daemon-cli'
-import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /**
  * Files at or under this take the single-shot `fs/upload-binary` path —
@@ -71,7 +71,8 @@ export interface TransferHooks {
 /** The two side-effecting collaborators the chunk loop needs — injected so
  *  clone-to's mock-based sequencing tests drive the SAME loop. */
 export interface ChunkedUploadDeps {
-  daemonCliPost: <T = unknown>(route: string, body?: unknown) => Promise<T>
+  /** Same shape as `daemonCliPost`: the target server's scope comes first. */
+  daemonCliPost: <T = unknown>(scope: ServerScope, route: string, body?: unknown) => Promise<T>
   readLocalFileRange: (path: string, offset: number, len: number) => Promise<string>
 }
 
@@ -138,6 +139,7 @@ function chunkedUploadIdForFlight(flightKey: string, idPrefix: string): string {
  *   omitted a new id is minted (clone-to / one-off callers).
  */
 export async function uploadFileChunked(
+  scope: ServerScope,
   deps: ChunkedUploadDeps,
   localPath: string,
   size: number,
@@ -169,7 +171,7 @@ export async function uploadFileChunked(
     const len = Math.min(chunkBytes, size - offset)
     const isLast = offset + len >= size
     const base64 = await deps.readLocalFileRange(localPath, offset, len)
-    const resp = await deps.daemonCliPost<{ path?: string; done?: boolean }>('fs/upload-chunk', {
+    const resp = await deps.daemonCliPost<{ path?: string; done?: boolean }>(scope, 'fs/upload-chunk', {
       upload_id: uploadId,
       dir: opts.dir,
       filename: opts.filename,
@@ -213,16 +215,18 @@ export async function uploadFileChunked(
  *   handling may have appended ` (1)`, ` (2)`, …).
  */
 export async function uploadToRemote(
+  scope: ServerScope,
   localPath: string,
   destDir: string,
   hooks: TransferHooks = {},
 ): Promise<string> {
-  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
-  const flightKey = uploadToRemoteFlightKey(localPath, destDir, hostKey)
+  // The scope's connection key: for the primary scope this is the window's
+  // `activeHostKey`, exactly as before.
+  const flightKey = uploadToRemoteFlightKey(localPath, destDir, scope.connectionKey)
   const existing = inflightUploads.get(flightKey)
   if (existing) return existing
 
-  const flight = runUploadToRemote(localPath, destDir, hooks, flightKey).finally(() => {
+  const flight = runUploadToRemote(scope, localPath, destDir, hooks, flightKey).finally(() => {
     if (inflightUploads.get(flightKey) === flight) {
       inflightUploads.delete(flightKey)
     }
@@ -233,6 +237,7 @@ export async function uploadToRemote(
 }
 
 async function runUploadToRemote(
+  scope: ServerScope,
   localPath: string,
   destDir: string,
   hooks: TransferHooks,
@@ -248,7 +253,7 @@ async function runUploadToRemote(
     const base64 = await invoke<string>('read_local_file_base64', {
       path: localPath,
     })
-    const res = await daemonCliPost<{ path: string }>('fs/upload-binary', {
+    const res = await daemonCliPost<{ path: string }>(scope, 'fs/upload-binary', {
       dir: destDir,
       filename,
       base64,
@@ -259,6 +264,7 @@ async function runUploadToRemote(
 
   const uploadId = chunkedUploadIdForFlight(flightKey, 'drop')
   return uploadFileChunked(
+    scope,
     {
       daemonCliPost,
       readLocalFileRange: (path, offset, len) =>
@@ -293,13 +299,14 @@ export function bytesToBase64(data: ArrayBuffer | Uint8Array): string {
  * `File.slice` / `arrayBuffer` instead of Tauri path commands.
  */
 export async function uploadBrowserFile(
+  scope: ServerScope,
   file: File,
   destDir: string,
   hooks: TransferHooks = {},
 ): Promise<string> {
   const filename = file.name || 'upload.bin'
   const size = file.size
-  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
+  const hostKey = scope.connectionKey
   // Flight key uses a synthetic "path" so concurrent same-name drops on
   // different Files do not falsely join (name alone is not unique).
   const flightKey = uploadToRemoteFlightKey(
@@ -310,7 +317,7 @@ export async function uploadBrowserFile(
   const existing = inflightUploads.get(flightKey)
   if (existing) return existing
 
-  const flight = runUploadBrowserFile(file, destDir, hooks, flightKey).finally(() => {
+  const flight = runUploadBrowserFile(scope, file, destDir, hooks, flightKey).finally(() => {
     if (inflightUploads.get(flightKey) === flight) {
       inflightUploads.delete(flightKey)
     }
@@ -321,6 +328,7 @@ export async function uploadBrowserFile(
 }
 
 async function runUploadBrowserFile(
+  scope: ServerScope,
   file: File,
   destDir: string,
   hooks: TransferHooks,
@@ -335,7 +343,7 @@ async function runUploadBrowserFile(
     }
     const buf = await file.arrayBuffer()
     const base64 = bytesToBase64(buf)
-    const res = await daemonCliPost<{ path: string }>('fs/upload-binary', {
+    const res = await daemonCliPost<{ path: string }>(scope, 'fs/upload-binary', {
       dir: destDir,
       filename,
       base64,
@@ -346,6 +354,7 @@ async function runUploadBrowserFile(
 
   const uploadId = chunkedUploadIdForFlight(flightKey, 'web-drop')
   return uploadFileChunked(
+    scope,
     {
       daemonCliPost,
       readLocalFileRange: async (_path, offset, len) => {

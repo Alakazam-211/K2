@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ServerScope } from '@/kessel/server-scope'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 
@@ -9,8 +10,14 @@ const getDaemonWs = vi.hoisted(() => vi.fn(async () => ({
   secure: false,
 })))
 
+// test-utils/scope imports server-scope, which imports this module, so the
+// scope check is imported lazily at call time (an eager import in the
+// factory deadlocks module collection).
 vi.mock('@/kessel/daemon-ws', () => ({
-  getDaemonWs,
+  getDaemonWs: async (scope: ServerScope) => {
+    const { primaryOnly } = await import('@/test-utils/scope')
+    return primaryOnly(getDaemonWs)(scope)
+  },
   daemonWsBase: () => 'ws://127.0.0.1:9',
 }))
 
@@ -32,6 +39,7 @@ class FakeWS {
 vi.stubGlobal('WebSocket', FakeWS)
 
 import { useChatTranscript } from './useChatTranscript'
+import { primaryScope } from '@/kessel/server-scope'
 
 describe('useChatTranscript', () => {
   beforeEach(() => {
@@ -42,6 +50,7 @@ describe('useChatTranscript', () => {
   it('does not open a socket without a provider conversation id', async () => {
     renderHook(() =>
       useChatTranscript({
+        scope: primaryScope(),
         view: 'chat',
         visible: true,
         provider: 'codex',
@@ -58,6 +67,7 @@ describe('useChatTranscript', () => {
     const { rerender, unmount } = renderHook(
       (props: { view: 'chat' | 'thread'; visible: boolean }) =>
         useChatTranscript({
+          scope: primaryScope(),
           view: props.view,
           visible: props.visible,
           provider: 'claude',

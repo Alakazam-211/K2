@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react'
 // `file_path`); the JSON DiffHunk[] response matches the Rust struct as-is.
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
     setLoading(true)
     setError(null)
 
-    daemonCliGet<DiffHunk[]>('git/diff-file', { path: repoPath, file_path: filePath })
+    daemonCliGet<DiffHunk[]>(primaryScope(), 'git/diff-file', { path: repoPath, file_path: filePath })
       .then((result) => {
         setHunks(result)
         setLoading(false)

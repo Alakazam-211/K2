@@ -37,6 +37,7 @@ import {
   type PublishedService,
   type PublishLeftover,
 } from './urls-ports'
+import { primaryScope } from '@/kessel/server-scope'
 
 const DETAILS_BTN =
   'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
@@ -111,7 +112,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     setServices(undefined)
     const refresh = async (): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>('publish/list', { project: projectId })
+        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
         if (!cancelled) {
           setServices(parsePublishList(raw))
           setListError(null)
@@ -151,7 +152,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     setLeftovers(undefined)
     const refresh = async (): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>('publish/leftovers', { project: projectId })
+        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/leftovers', { project: projectId })
         if (!cancelled) {
           setLeftovers(parsePublishLeftovers(raw))
           setLeftoversError(null)
@@ -189,8 +190,8 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       if (!projectId) return
       setBusyName(name)
       try {
-        await daemonCliPost(`publish/${action}`, { name, project: projectId })
-        const raw = await daemonCliGet<unknown>('publish/list', { project: projectId })
+        await daemonCliPost(primaryScope(), `publish/${action}`, { name, project: projectId })
+        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
         setServices(parsePublishList(raw))
         setListError(null)
       } catch {

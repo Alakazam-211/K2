@@ -11,6 +11,7 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '../../stores/proje
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { DialogScrim } from '@/components/ui'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface DisableWorktreesDialogProps {
   project: ProjectWithWorkspaces
@@ -46,7 +47,7 @@ export default function DisableWorktreesDialog({
       for (const ws of worktrees) {
         if (!ws.worktreePath) continue
         try {
-          const changes = await daemonCliGet<any[]>('git/changes', { path: ws.worktreePath })
+          const changes = await daemonCliGet<any[]>(primaryScope(), 'git/changes', { path: ws.worktreePath })
           if (!cancelled && changes.length > 0) {
             setHasUnmerged(true)
             return
@@ -99,34 +100,34 @@ export default function DisableWorktreesDialog({
     try {
       if (selectedAction === 'conceal') {
         // Just disable worktreeMode — keep all workspace records
-        await daemonCliPost('projects/update', { id: project.id, worktreeMode: 0 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, worktreeMode: 0 })
         void emit('sync:projects').catch(() => {})
       } else if (selectedAction === 'close') {
         // Delete worktree workspace records, keep files on disk
         for (const ws of worktrees) {
-          await daemonCliPost('workspaces/delete', { id: ws.id })
+          await daemonCliPost(primaryScope(), 'workspaces/delete', { id: ws.id })
         }
-        await daemonCliPost('projects/update', { id: project.id, worktreeMode: 0 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, worktreeMode: 0 })
         void emit('sync:projects').catch(() => {})
       } else if (selectedAction === 'recycle') {
         // Trash worktree folders + remove workspace records
         for (const ws of worktrees) {
           if (ws.worktreePath) {
             try {
-              await daemonCliPost('git/remove-worktree', {
+              await daemonCliPost(primaryScope(), 'git/remove-worktree', {
                 projectPath: project.path,
                 worktreePath: ws.worktreePath,
                 workspaceId: ws.id
               })
             } catch {
               // If git remove fails, just delete the record
-              await daemonCliPost('workspaces/delete', { id: ws.id })
+              await daemonCliPost(primaryScope(), 'workspaces/delete', { id: ws.id })
             }
           } else {
-            await daemonCliPost('workspaces/delete', { id: ws.id })
+            await daemonCliPost(primaryScope(), 'workspaces/delete', { id: ws.id })
           }
         }
-        await daemonCliPost('projects/update', { id: project.id, worktreeMode: 0 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, worktreeMode: 0 })
         void emit('sync:projects').catch(() => {})
       }
 

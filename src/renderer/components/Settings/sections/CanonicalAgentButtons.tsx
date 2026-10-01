@@ -3,6 +3,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { type RoleSkill, roleSkillLabel } from './canonicalAgentSeeds'
 import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
 import { FanoutConfirmModal } from './FanoutConfirmModal'
+import { primaryScope } from '@/kessel/server-scope'
 
 // The value-pitch WHY copy relocated VERBATIM from the removed consent page
 // (AddWorkspaceDialog:147-164) into the canonical button subtitle + the skill
@@ -37,7 +38,7 @@ export function RoleSkillButton({
 
   useEffect(() => {
     let cancelled = false
-    daemonCliGet<{ content: string }>('fs/read-file', {
+    daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', {
       path: `${projectPath}/.k2/skills/${role}/SKILL.md`,
     })
       .then(() => { if (!cancelled) setSkillPresent(true) })
@@ -92,11 +93,11 @@ export function CanonicalAgentButton({
 
   useEffect(() => {
     let cancelled = false
-    daemonCliPost<{ enabled: boolean }>('onboarding/agents-md-generate-enabled', { project_path: projectPath })
+    daemonCliPost<{ enabled: boolean }>(primaryScope(), 'onboarding/agents-md-generate-enabled', { project_path: projectPath })
       .then((r) => r.enabled)
       .then((on) => { if (!cancelled) setGenerateEnabled(on) })
       .catch(() => { /* default off for existing workspaces without a marker */ })
-    daemonCliPost<{ enabled: boolean }>('onboarding/harness-fanout-enabled', { project_path: projectPath })
+    daemonCliPost<{ enabled: boolean }>(primaryScope(), 'onboarding/harness-fanout-enabled', { project_path: projectPath })
       .then((r) => r.enabled)
       .then((on) => { if (!cancelled) setFanoutEnabled(on) })
       .catch(() => { /* default off */ })
@@ -110,7 +111,7 @@ export function CanonicalAgentButton({
     setGenerateEnabled(next)
     setGenerateSkip(null)
     try {
-      const r = await daemonCliPost<{ success?: boolean; skipped?: string }>(
+      const r = await daemonCliPost<{ success?: boolean; skipped?: string }>(primaryScope(),
         'onboarding/set-agents-md-generate-enabled',
         { project_path: projectPath, enabled: next },
       )
@@ -138,7 +139,7 @@ export function CanonicalAgentButton({
     setFanoutBusy(true)
     setFanoutEnabled(false) // optimistic
     try {
-      await daemonCliPost('onboarding/set-harness-fanout-enabled', { project_path: projectPath, enabled: false })
+      await daemonCliPost(primaryScope(), 'onboarding/set-harness-fanout-enabled', { project_path: projectPath, enabled: false })
     } catch (err) {
       console.error('[canonical] set_harness_fanout_enabled failed:', err)
       setFanoutEnabled(true) // reconcile on failure

@@ -32,6 +32,7 @@ import {
   noteRemoteEventsClosed,
   noteRemoteEventsOpened,
 } from '@/lib/remote-ws-drop'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -550,7 +551,7 @@ export function subscribeToWorkspaceSessionEvents(
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs()
+      creds = await getDaemonWs(primaryScope())
     } catch (err) {
       // Daemon not reachable yet — invalidate the cached creds so the
       // retry pulls fresh values off disk, then schedule a backoff
@@ -753,7 +754,7 @@ export function subscribeToWorkspaceSessionEvents(
 export async function refreshActiveSnapshot(): Promise<void> {
   if (!serverSupports('canonical-active')) return
   try {
-    const snap = await daemonCliGet<{ projectIds: string[]; activeWindowHours: number }>(
+    const snap = await daemonCliGet<{ projectIds: string[]; activeWindowHours: number }>(primaryScope(),
       'projects/active',
     )
     useActiveStore.getState().setFromSnapshot({
@@ -1125,7 +1126,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs()
+      creds = await getDaemonWs(primaryScope())
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[active-state] daemon credentials unavailable, retrying:', err)
@@ -1369,7 +1370,7 @@ export function subscribeToWorkspaceTabEvents(
     if (stopped) return
     let creds: DaemonWsAvailable
     try {
-      creds = await getDaemonWs()
+      creds = await getDaemonWs(primaryScope())
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[tab-events] daemon credentials unavailable, retrying:', err)

@@ -14,6 +14,7 @@ import { daemonCliGet, daemonCliGetText, daemonCliPost } from '@/lib/daemon-cli'
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — re-init timer settings against the NEW host on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Phase 2.5 fix (finding #547) — persist gate. See panels.ts. */
 let hasLoadedFromDaemon = false
@@ -274,7 +275,7 @@ export const useTimerStore = create<TimerState>((set, get) => ({
     const projectId = useProjectsStore.getState().activeProjectId ?? undefined
 
     try {
-      await daemonCliPost('timer/create', {
+      await daemonCliPost(primaryScope(), 'timer/create', {
         id: generateId(),
         projectId: projectId ?? null,
         startTime: startTimeSec,
@@ -308,7 +309,7 @@ export const useTimerStore = create<TimerState>((set, get) => ({
 
     const id = generateId()
     try {
-      await daemonCliPost('timer/create', {
+      await daemonCliPost(primaryScope(), 'timer/create', {
         id,
         projectId: projectId ?? null,
         startTime: startTimeSec,
@@ -344,7 +345,7 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase TimeEntry response shape matches the Rust struct's
       // `#[serde(rename_all = "camelCase")]`.
-      const entries = await daemonCliGet<TimeEntry[]>('timer/entries-list', {
+      const entries = await daemonCliGet<TimeEntry[]>(primaryScope(), 'timer/entries-list', {
         start,
         end,
         project_id: projectId,
@@ -357,7 +358,7 @@ export const useTimerStore = create<TimerState>((set, get) => ({
 
   deleteEntry: async (id: string) => {
     try {
-      await daemonCliPost('timer/delete', { id })
+      await daemonCliPost(primaryScope(), 'timer/delete', { id })
       // Remove locally
       set({ entries: get().entries.filter((e) => e.id !== id) })
       emitEntriesChanged()
@@ -372,7 +373,7 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       // variant so a `format=json` body is NOT parsed into an array — the
       // caller blobs the string verbatim for download (parsing would break
       // `new Blob([data])`). snake_case query params, as everywhere.
-      const result = await daemonCliGetText('timer/entries-export', {
+      const result = await daemonCliGetText(primaryScope(), 'timer/entries-export', {
         format,
         start,
         end,

@@ -5,10 +5,13 @@ import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-libra
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async () => ({ ok: true, conversation_id: 'conv', items: [] })),
-  daemonCliPost: vi.fn(async () => ({})),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly(vi.fn(async () => ({ ok: true, conversation_id: 'conv', items: [] }))),
+    daemonCliPost: vi.fn(async () => ({})),
+  }
+})
 
 const dropTabAfterFailedSidecarRefresh = vi.hoisted(() => vi.fn())
 vi.mock('@/stores/tabs', () => ({
@@ -21,8 +24,11 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 
 vi.mock('@/stores/connect-host', () => ({
-  useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) =>
-    sel({ activeHost: 'local' }),
+  // `getState` backs primaryScope()'s call-time getters (Home M1).
+  useConnectHostStore: Object.assign(
+    (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
+    { getState: () => ({ activeHost: 'local' as const, hosts: [] }) },
+  ),
   activeHostKey: () => 'local',
   onActiveHostChange: () => () => {},
 }))
@@ -40,6 +46,7 @@ class FakeWS {
 vi.stubGlobal('WebSocket', FakeWS)
 
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   resetSidecarRefreshGuards,
   sidecarRefreshMark,
@@ -281,7 +288,7 @@ describe('sidecar refresh resumes on the server', () => {
 
   it('posts sessions/v2/refresh and does not close-then-remount', async () => {
     let resolveRefresh: (value: unknown) => void = () => {}
-    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+    vi.mocked(daemonCliPost).mockImplementation((_scope: unknown, route: string) => {
       if (route === 'sessions/v2/refresh') {
         return new Promise((resolve) => {
           resolveRefresh = resolve
@@ -294,11 +301,11 @@ describe('sidecar refresh resumes on the server', () => {
     await act(async () => {
       fireEvent.click(screen.getByLabelText('Refresh session'))
     })
-    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sessions/v2/refresh', {
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(primaryScope(), 'sessions/v2/refresh', {
       agent_name: 'tab-xyz',
       cwd: '/ws/sales',
     })
-    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).not.toContain(
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[1])).not.toContain(
       'sessions/v2/close',
     )
     expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
@@ -327,7 +334,7 @@ describe('sidecar refresh resumes on the server', () => {
     })
     expect(screen.getByRole('alert').textContent).toContain('sidecar refresh has no resumable session')
     expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
-    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[1])).toEqual([
       'sessions/v2/refresh',
     ])
     expect(sidecarRefreshMark('xyz')).toBe('none')
@@ -338,7 +345,7 @@ describe('sidecar refresh resumes on the server', () => {
 
   it('leaves the skip mark after success until that SessionRemoved arrives', async () => {
     let resolveRefresh: (value: unknown) => void = () => {}
-    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+    vi.mocked(daemonCliPost).mockImplementation((_scope: unknown, route: string) => {
       if (route === 'sessions/v2/refresh') {
         return new Promise((resolve) => {
           resolveRefresh = resolve
@@ -363,14 +370,14 @@ describe('sidecar refresh resumes on the server', () => {
     expect(sidecarRefreshMark('xyz')).toBe('none')
     expect(takeSessionRemoved('xyz')).toBe('passthrough')
     expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
-    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[1])).toEqual([
       'sessions/v2/refresh',
     ])
   })
 
   it('skips a remove that arrives during the POST, then keeps on success', async () => {
     let resolveRefresh: (value: unknown) => void = () => {}
-    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+    vi.mocked(daemonCliPost).mockImplementation((_scope: unknown, route: string) => {
       if (route === 'sessions/v2/refresh') {
         return new Promise((resolve) => {
           resolveRefresh = resolve
@@ -397,7 +404,7 @@ describe('sidecar refresh resumes on the server', () => {
 
   it('drops locally when spawn fails after the remove was already skipped', async () => {
     let rejectRefresh: (reason: unknown) => void = () => {}
-    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+    vi.mocked(daemonCliPost).mockImplementation((_scope: unknown, route: string) => {
       if (route === 'sessions/v2/refresh') {
         return new Promise((_resolve, reject) => {
           rejectRefresh = reject
@@ -421,7 +428,7 @@ describe('sidecar refresh resumes on the server', () => {
     expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
     expect(sidecarRefreshMark('xyz')).toBe('none')
     expect(takeSessionRemoved('xyz')).toBe('passthrough')
-    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[1])).toEqual([
       'sessions/v2/refresh',
     ])
     expect(screen.getByTestId('sidecar-refresh-error').textContent).toContain('v2 spawn failed: pty')
@@ -468,7 +475,7 @@ describe('sidecar refresh resumes on the server', () => {
     pinned.unmount()
 
     let resolveRefresh: (value: unknown) => void = () => {}
-    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+    vi.mocked(daemonCliPost).mockImplementation((_scope: unknown, route: string) => {
       if (route === 'sessions/v2/refresh') {
         return new Promise((resolve) => {
           resolveRefresh = resolve
@@ -493,7 +500,7 @@ describe('sidecar refresh resumes on the server', () => {
     })
     expect(sidecarRefreshMark('sales')).toBe('none')
     expect(takeSessionRemoved('sales')).toBe('passthrough')
-    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sessions/v2/refresh', {
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(primaryScope(), 'sessions/v2/refresh', {
       agent_name: 'sales',
       cwd: '/ws/sales',
     })

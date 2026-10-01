@@ -20,8 +20,11 @@
 //     read at call time so a re-login is picked up. It never follows a
 //     server switch.
 //
-// Host keys match Home's `handle::host` keys (`lib/home-address.ts`):
-// `local`, `<sub>.k2.dev`, or `ip:port`.
+// Host keys match Home's `handle::host` keys and are canonical
+// (`lib/host-key.ts`, MS60): `local`, `<sub>.k2.dev` for https on 443,
+// `host:port` otherwise (plain http on 80 included), `[v6]:port` for IPv6.
+// `scopeForHost('https://DTL.k2.dev/')`, `scopeForHost('dtl.k2.dev:443')` and
+// `scopeForHost('dtl.k2.dev')` are one scope.
 //
 // `id` is the registry identity (event buses, dial queues): `primary` for the
 // primary scope (its subscribers survive a server switch, as the module-level
@@ -40,7 +43,7 @@ import {
   type ActiveHost,
   type ConnectHost,
 } from '@/stores/connect-host'
-import { LOCAL_HOME_HOST, homeHostKey, savedHostForKey } from '@/lib/home-address'
+import { LOCAL_HOME_HOST, canonicalHostKey, homeHostKey, savedHostForKey } from '@/lib/host-key'
 import { FEATURES, gte, serverSupports, type FeatureKey } from '@/lib/server-capabilities'
 
 export interface ServerScope {
@@ -56,8 +59,9 @@ export interface ServerScope {
   readonly connectionKey: string
   /** Is this server another machine (not this computer's daemon)? */
   readonly isRemote: boolean
-  /** Short human label for logs and debug output. */
-  readonly debugLabel: string
+  /** Human label: the saved server's label, or **This computer** for
+   *  `local`. For logs and room copy. */
+  readonly label: string
   /** The saved server entry right now (fresh token), or null for `local`
    *  or a pinned host that is no longer saved. */
   connectHost(): ConnectHost | null
@@ -83,10 +87,28 @@ function windowActiveHost(): ActiveHost {
   return useConnectHostStore.getState().activeHost
 }
 
-function hostLabel(active: ActiveHost): string {
-  return active === 'local' ? 'local' : active.label || active.hostname
+/** What `label` says for this computer's daemon. */
+export const LOCAL_SCOPE_LABEL = 'This computer'
+
+function hostLabel(host: ConnectHost | 'local'): string {
+  return host === 'local' ? LOCAL_SCOPE_LABEL : host.label || host.hostname
 }
 
+/** A pinned scope's server is no longer in the saved list (MS10). The room
+ *  shows "This server was removed from this computer." It never falls back
+ *  to another saved entry or to the window's server. */
+export class ServerRemovedError extends Error {
+  readonly hostKey: string
+  constructor(hostKey: string) {
+    super(`no saved server for ${hostKey}: it was removed from this computer`)
+    this.name = 'ServerRemovedError'
+    this.hostKey = hostKey
+  }
+}
+
+// Hosted web (G11): `activeHost` can still read 'local' while the creds are
+// forced same-origin (`resolveWindowHostCreds`), so the primary `hostKey` is
+// `local` on web. That is harmless for single-server web.
 const PRIMARY: ServerScope = {
   id: 'primary',
   isPrimary: true,
@@ -99,8 +121,8 @@ const PRIMARY: ServerScope = {
   get isRemote(): boolean {
     return windowActiveHost() !== 'local'
   },
-  get debugLabel(): string {
-    return `primary(${hostLabel(windowActiveHost())})`
+  get label(): string {
+    return hostLabel(windowActiveHost())
   },
   connectHost(): ConnectHost | null {
     const active = windowActiveHost()
@@ -138,19 +160,16 @@ export function primaryScope(): ServerScope {
 const knownVersions = new Map<string, string>()
 
 export function noteServerVersion(hostKey: string, version: string | null): void {
-  const key = normalizeHostKey(hostKey)
+  const key = canonicalHostKey(hostKey)
   if (version) knownVersions.set(key, version)
   else knownVersions.delete(key)
 }
 
-function normalizeHostKey(key: string): string {
-  return key.trim().toLowerCase()
-}
 
 /** Host key for any `HostRef`. */
 export function hostKeyOf(ref: HostRef): string {
   if (ref === LOCAL_HOME_HOST) return LOCAL_HOME_HOST
-  if (typeof ref === 'string') return normalizeHostKey(ref)
+  if (typeof ref === 'string') return canonicalHostKey(ref)
   return homeHostKey(ref)
 }
 
@@ -165,7 +184,7 @@ function makeHostScope(hostKey: string): ServerScope {
   const creds = async (): Promise<DaemonWsAvailable> => {
     if (isLocal) return getLocalDaemonWs()
     const host = saved()
-    if (!host) throw new Error(`no saved server for ${hostKey}`)
+    if (!host) throw new ServerRemovedError(hostKey)
     return { port: host.port, token: host.token, host: host.hostname, secure: host.secure }
   }
   const isWindowHost = (): boolean => windowHostKey() === hostKey
@@ -175,7 +194,11 @@ function makeHostScope(hostKey: string): ServerScope {
     hostKey,
     connectionKey: `host:${hostKey}`,
     isRemote: !isLocal,
-    debugLabel: `host(${hostKey})`,
+    get label(): string {
+      if (isLocal) return LOCAL_SCOPE_LABEL
+      const host = saved()
+      return host ? hostLabel(host) : hostKey
+    },
     connectHost: saved,
     isWindowHost,
     creds,

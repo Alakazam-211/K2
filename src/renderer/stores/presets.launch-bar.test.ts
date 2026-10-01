@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as daemonCli from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 import { activeHostKey, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import {
   readShowLaunchBar,
@@ -93,7 +94,7 @@ describe('show launch bar persistence', () => {
       await usePresetsStore.getState().fetchPresets()
       expect(usePresetsStore.getState().showPresetsBar).toBe(false)
       expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('0')
-      expect(get).toHaveBeenCalledWith('presets/list')
+      expect(get).toHaveBeenCalledWith(primaryScope(), 'presets/list')
       expect(setItem).not.toHaveBeenCalled()
     } finally {
       setItem.mockRestore()
@@ -113,7 +114,7 @@ describe('show launch bar persistence', () => {
     const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
     try {
       await usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab', 1)
-      expect(post).toHaveBeenCalledWith('agents/ensure-cli', { program: 'claude' })
+      expect(post).toHaveBeenCalledWith(primaryScope(), 'agents/ensure-cli', { program: 'claude' })
       expect(useTabsStore.getState().tabs).toHaveLength(0)
       expect(useTabsStore.getState().activeGroupIndex).toBe(0)
       expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])

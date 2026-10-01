@@ -6,6 +6,7 @@ import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
+import { primaryScope } from '@/kessel/server-scope'
 
 const CATALOG_PACK_SYSTEM_PROMPT = `You are authoring a K2 context catalog pack (library), not AGENTS.md, not a skill.
 
@@ -42,8 +43,8 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
     const load = async () => {
       try {
         const [toml, layer] = await Promise.all([
-          daemonCliGet<{ content: string }>('fs/read-file', { path: packTomlPath }),
-          daemonCliGet<{ content: string }>('fs/read-file', { path: layerMdPath }),
+          daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: packTomlPath }),
+          daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: layerMdPath }),
         ])
         if (cancelled) return
         setTomlContent(toml.content)
@@ -69,8 +70,8 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
   const handleManualRefresh = useCallback(async () => {
     try {
       const [toml, layer] = await Promise.all([
-        daemonCliGet<{ content: string }>('fs/read-file', { path: packTomlPath }),
-        daemonCliGet<{ content: string }>('fs/read-file', { path: layerMdPath }),
+        daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: packTomlPath }),
+        daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: layerMdPath }),
       ])
       setTomlContent(toml.content)
       setLayerContent(layer.content)

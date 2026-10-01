@@ -17,6 +17,7 @@ import { fetchProjectGroupIcon } from './projects-api'
 import { getCachedGroupIcon, setCachedGroupIcon } from './group-icon-cache'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { primaryScope } from '@/kessel/server-scope'
 
 // THE SAME default palette workspaces offer (Settings → Workspaces color
 // row) so projects and workspaces share one color language; the hash
@@ -84,7 +85,7 @@ export default function ProjectGroupAvatar({
     }
 
     let cancelled = false
-    fetchProjectGroupIcon(groupId)
+    fetchProjectGroupIcon(primaryScope(), groupId)
       .then((result) => {
         setCachedGroupIcon(hostKey, groupId, result)
         if (!cancelled) setFetchedUrl(result.found && result.dataUrl ? result.dataUrl : null)

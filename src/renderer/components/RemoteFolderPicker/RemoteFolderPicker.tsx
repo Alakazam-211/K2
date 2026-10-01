@@ -4,6 +4,7 @@ import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
+import { primaryScope } from '@/kessel/server-scope'
 
 // A lightweight, self-contained directory browser over the REMOTE daemon's
 // filesystem. Deliberately does NOT reuse the full FileTree component (too
@@ -88,7 +89,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       setError(null)
       try {
         const all = normalizeFsReadDir(
-          await daemonCliGet('fs/read-dir', { path: dir }),
+          await daemonCliGet(primaryScope(), 'fs/read-dir', { path: dir }),
         ) as DirEntry[]
         const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name)
         const dirs = all.filter((e) => e.isDirectory).sort(byName)
@@ -120,7 +121,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       let start = '/'
       let separator = '/'
       try {
-        const info = await daemonCliGet<FsInfo>('fs/info')
+        const info = await daemonCliGet<FsInfo>(primaryScope(), 'fs/info')
         if (info.separator) separator = info.separator
         if (info.home) start = info.home
       } catch {
@@ -162,7 +163,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
     try {
       const base = cwd.endsWith(sep) ? cwd : `${cwd}${sep}`
       const fullPath = `${base}${name}`
-      await daemonCliPost('fs/create', { path: fullPath, is_directory: true })
+      await daemonCliPost(primaryScope(), 'fs/create', { path: fullPath, is_directory: true })
       setNewFolderName(null)
       await browse(fullPath)
     } catch (err: unknown) {

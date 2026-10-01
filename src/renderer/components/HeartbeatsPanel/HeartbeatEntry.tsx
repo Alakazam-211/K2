@@ -9,6 +9,7 @@ import {
   useHeartbeatSessionsStore,
 } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * One row in the Workspace panel's Heartbeats section.
@@ -81,7 +82,7 @@ export function HeartbeatEntryRow({
     if (busy || !projectPath || entry.state === 'archived') return
     setBusy(true)
     try {
-      await daemonCliGet('heartbeat/enable', {
+      await daemonCliGet(primaryScope(), 'heartbeat/enable', {
         project: projectPath,
         name: entry.row.name,
         enabled: entry.row.enabled ? '0' : '1',

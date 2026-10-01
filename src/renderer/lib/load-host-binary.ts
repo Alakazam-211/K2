@@ -9,6 +9,7 @@
 
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { throwIfRemoteMacTmp } from '@/lib/remote-mac-tmp'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Matches `k2_core::fs_commands::MAX_BINARY_SIZE`. */
 export const READ_BINARY_MAX_BYTES = 50 * 1024 * 1024
@@ -242,7 +243,7 @@ export async function loadHostBinary(
   throwIfRemoteMacTmp(path)
 
   try {
-    const r = await daemonCliGet<{ base64?: string } | string>('fs/read-binary', {
+    const r = await daemonCliGet<{ base64?: string } | string>(primaryScope(), 'fs/read-binary', {
       path,
     })
     throwIfAborted(signal)
@@ -287,7 +288,7 @@ export async function loadHostBinaryViaRange(
 
   for (;;) {
     throwIfAborted(signal)
-    const slice = await daemonCliGet<ReadRangeResponse>('fs/read-range', {
+    const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
       path,
       offset,
       len: RANGE_CHUNK_BYTES,

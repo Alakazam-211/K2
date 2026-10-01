@@ -26,6 +26,7 @@ import { useCloneToDialogStore } from '@/stores/clone-to-dialog'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
 import type { ConnectHost } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Open the "Clone to" modal at its pre-flight options phase. The actual run
@@ -100,7 +101,7 @@ async function runPull(
 ): Promise<void> {
   let lastStage: CloneStage = 'packing'
   try {
-    const result = await cloneWorkspaceToThisComputer(
+    const result = await cloneWorkspaceToThisComputer(primaryScope(),
       projectPath,
       projectName,
       deps,
@@ -149,7 +150,7 @@ async function runClone(
   includeAllHistory: boolean,
 ): Promise<void> {
   try {
-    await cloneWorkspaceTo(
+    await cloneWorkspaceTo(primaryScope(),
       projectPath,
       host,
       deps,

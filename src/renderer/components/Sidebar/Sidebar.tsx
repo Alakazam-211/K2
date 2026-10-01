@@ -30,6 +30,7 @@ import FocusGroupDropdown from './FocusGroupDropdown'
 import ActiveBar from './ActiveBar'
 import { NavProjectTags } from './NavProjectTags'
 import { KeyCombo } from '@/components/KeySymbol'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -45,7 +46,7 @@ function patchWorkspaceNavVisible(worktreeId: string, visible: boolean): void {
   useProjectsStore.setState({ projects: updated })
   // Persist to DB asynchronously. camelCase POST body; no cross-window
   // sync (the old `workspace_set_nav_visible` Tauri shim emitted none).
-  daemonCliPost('workspaces/set-nav-visible', { id: worktreeId, visible }).catch(() => {})
+  daemonCliPost(primaryScope(), 'workspaces/set-nav-visible', { id: worktreeId, visible }).catch(() => {})
 }
 
 export function addNavWorktree(worktreeId: string): void {
@@ -480,7 +481,7 @@ function ProjectItem({
         }
         // Remove from DB only, keep files on disk. workspaces_delete
         // emitted no cross-window sync; fetchProjects refreshes locally.
-        await daemonCliPost('workspaces/delete', { id: workspaceId })
+        await daemonCliPost(primaryScope(), 'workspaces/delete', { id: workspaceId })
         await fetchProjects()
       } else if (clickedId === 'ws-recycle') {
         // Prevent recycling the last worktree
@@ -502,7 +503,7 @@ function ProjectItem({
           // route (git cluster, Bulk-2). camelCase POST body; no
           // cross-window sync emit (the old git command had none — the
           // fetchProjects() below covers the workspaces-row delete).
-          await daemonCliPost('git/remove-worktree', {
+          await daemonCliPost(primaryScope(), 'git/remove-worktree', {
             worktreePath: workspacePath,
             projectPath: project.path,
             workspaceId: workspaceId
@@ -819,7 +820,7 @@ export default function Sidebar(): React.JSX.Element {
       onConfirm: async ({ seedWiki, seedAgentsMd, fanout }) => {
         await addProject(folderPath, { seedWiki, seedAgentsMd, fanout })
         try {
-          await daemonCliPost('agents/run-workspace-ingest', { project_path: folderPath })
+          await daemonCliPost(primaryScope(), 'agents/run-workspace-ingest', { project_path: folderPath })
         } catch (err) {
           console.warn('[add-workspace] run ingest failed:', err)
         }
@@ -926,17 +927,17 @@ export default function Sidebar(): React.JSX.Element {
       } else if (clickedId === 'new-worktree') {
         setWorktreeDialog({ projectId: project.id, projectPath: project.path })
       } else if (clickedId === 'toggle-pin') {
-        await daemonCliPost('projects/update', { id: projectId, pinned: project.pinned ? 0 : 1 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, pinned: project.pinned ? 0 : 1 })
         void emit('sync:projects').catch(() => {})
         await fetchProjects()
       } else if (clickedId === 'toggle-active') {
-        await daemonCliPost('projects/update', { id: projectId, manuallyActive: project.manuallyActive ? 0 : 1 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, manuallyActive: project.manuallyActive ? 0 : 1 })
         void emit('sync:projects').catch(() => {})
         await fetchProjects()
       } else if (clickedId === 'active-24h') {
         // Set lastInteractionAt to now — the Active Bar keeps projects with
         // interaction < 24hrs. projects_touch_interaction emitted no sync.
-        await daemonCliPost('projects/touch-interaction', { id: projectId })
+        await daemonCliPost(primaryScope(), 'projects/touch-interaction', { id: projectId })
         const store = useProjectsStore.getState()
         const updated = store.projects.map((p) =>
           p.id === projectId ? { ...p, lastInteractionAt: Math.floor(Date.now() / 1000) } : p

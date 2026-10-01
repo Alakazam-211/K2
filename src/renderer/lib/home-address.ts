@@ -13,19 +13,11 @@
 // handle, and a cloned workspace gets a new id anyway.
 
 import { formatAgentHost, slugifyAddressToken } from '@/lib/federation'
-import type { ActiveHost, ConnectHost } from '@/stores/connect-host'
+import type { ActiveHost } from '@/stores/connect-host'
+import { homeHostKey } from '@/lib/host-key'
 
-export const LOCAL_HOME_HOST = 'local'
-
-/** Row host key for `local` or a saved server. */
-export function homeHostKey(
-  h: 'local' | Pick<ConnectHost, 'hostname' | 'port' | 'secure'>,
-): string {
-  if (h === 'local') return LOCAL_HOME_HOST
-  const hostname = h.hostname.trim().toLowerCase()
-  const defaultPort = h.secure ? 443 : 80
-  return h.port === defaultPort ? hostname : `${hostname}:${h.port}`
-}
+// The host-key spelling lives in lib/host-key.ts (shared with ServerScope).
+export { LOCAL_HOME_HOST, homeHostKey, savedHostForKey } from '@/lib/host-key'
 
 /** The connected server's row host key. */
 export function activeHomeHostKey(active: ActiveHost): string {
@@ -46,7 +38,7 @@ export function parseHomeAddress(address: string): { handle: string; host: strin
   if (i <= 0) return null
   const handle = t.slice(0, i)
   const host = t.slice(i + 2)
-  if (!handle || !host || host.includes('::')) return null
+  if (!handle || !host || (host.includes('::') && !host.startsWith('['))) return null
   return { handle, host }
 }
 
@@ -79,12 +71,4 @@ export function findWorkspaceForRow<P extends { id: string; handle?: string | nu
     if (byId) return byId
   }
   return null
-}
-
-/** The saved server a row host key points at. Several saved entries can
- *  share an address; prefer the one holding a login. */
-export function savedHostForKey(hosts: ConnectHost[], hostKey: string): ConnectHost | null {
-  const matches = hosts.filter((h) => homeHostKey(h) === hostKey)
-  if (matches.length === 0) return null
-  return matches.find((h) => h.token.length > 0) ?? matches[0]
 }

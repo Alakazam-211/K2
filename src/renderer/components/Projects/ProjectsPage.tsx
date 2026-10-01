@@ -50,6 +50,7 @@ import {
   resolveActiveTab,
 } from './project-tabs'
 import { requestPaneShortcut } from './dashboard-dnd'
+import { primaryScope } from '@/kessel/server-scope'
 
 const TOPBAR_HEIGHT = 38
 
@@ -244,7 +245,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
   useEffect(() => {
     if (!isOpen || !selectedGroupId) return
     let cancelled = false
-    fetchProjectGroupShow(selectedGroupId)
+    fetchProjectGroupShow(primaryScope(), selectedGroupId)
       .then((data) => {
         if (cancelled) return
         setShow(data)

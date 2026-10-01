@@ -30,6 +30,7 @@ type MergeStep = 'preview' | 'merging' | 'success' | 'conflicts'
 // ── Store ────────────────────────────────────────────────────────────────
 
 import { create } from 'zustand'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface MergeDialogStore {
   open: boolean
@@ -72,9 +73,9 @@ export default function MergeDialog(): React.JSX.Element | null {
     setLoading(true)
 
     // Get the current branch to diff against
-    daemonCliGet<{ currentBranch: string }>('git/info', { path: projectPath })
+    daemonCliGet<{ currentBranch: string }>(primaryScope(), 'git/info', { path: projectPath })
       .then((info) => {
-        return daemonCliGet<FileDiffSummary[]>('git/diff-between', {
+        return daemonCliGet<FileDiffSummary[]>(primaryScope(), 'git/diff-between', {
           path: projectPath,
           base_branch: info.currentBranch,
           head_branch: branch,
@@ -97,7 +98,7 @@ export default function MergeDialog(): React.JSX.Element | null {
       const worktreePath = workspace?.worktreePath
 
       if (worktreePath) {
-        await daemonCliPost('git/remove-worktree', {
+        await daemonCliPost(primaryScope(), 'git/remove-worktree', {
           projectPath,
           worktreePath,
           workspaceId,
@@ -106,7 +107,7 @@ export default function MergeDialog(): React.JSX.Element | null {
       }
 
       // Delete the branch
-      await daemonCliPost('git/delete-branch', { path: projectPath, branch }).catch((e) => console.warn('[merge-dialog]', e))
+      await daemonCliPost(primaryScope(), 'git/delete-branch', { path: projectPath, branch }).catch((e) => console.warn('[merge-dialog]', e))
 
       await fetchProjects()
     } catch (e) {
@@ -119,7 +120,7 @@ export default function MergeDialog(): React.JSX.Element | null {
     setError(null)
 
     try {
-      const result = await daemonCliPost<MergeResult>('git/merge-branch', {
+      const result = await daemonCliPost<MergeResult>(primaryScope(), 'git/merge-branch', {
         path: projectPath,
         branch,
       })
@@ -141,7 +142,7 @@ export default function MergeDialog(): React.JSX.Element | null {
   }, [projectPath, branch, workspaceId, cleanupWorktree])
 
   const handleAbortMerge = useCallback(async () => {
-    await daemonCliPost('git/abort-merge', { path: projectPath }).catch(console.error)
+    await daemonCliPost(primaryScope(), 'git/abort-merge', { path: projectPath }).catch(console.error)
     close()
   }, [projectPath, close])
 

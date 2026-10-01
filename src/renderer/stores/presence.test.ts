@@ -24,12 +24,15 @@ const cli = vi.hoisted(() => ({
   getImpl: (async () => ({ roster: [] })) as (route: string) => Promise<unknown>,
   getCalls: [] as string[],
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => {
-    cli.getCalls.push(route)
-    return cli.getImpl(route)
-  }),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string) => {
+      cli.getCalls.push(route)
+      return cli.getImpl(route)
+    })),
+  }
+})
 
 // session-events — record the registered app-level handlers so tests can
 // fire presence_changed / hello exactly as the app-level WS would.

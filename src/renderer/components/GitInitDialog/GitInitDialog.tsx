@@ -9,6 +9,7 @@ import { emit } from '@tauri-apps/api/event'
 // `sync:projects` / `sync:focus-groups` events the old Tauri shims fired.
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { Callout, DialogScrim } from '@/components/ui'
+import { primaryScope } from '@/kessel/server-scope'
 
 export default function GitInitDialog(): React.JSX.Element | null {
   const isOpen = useGitInitDialogStore((s) => s.isOpen)
@@ -60,7 +61,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
       const targetGroupId = focusState.focusGroupsEnabled ? focusState.activeFocusGroupId : null
       if (targetGroupId) {
         try {
-          await daemonCliPost('focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
+          await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
           // assign emitted BOTH sync:focus-groups and sync:projects.
           void emit('sync:focus-groups').catch(() => {})
           void emit('sync:projects').catch(() => {})
@@ -98,7 +99,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/init-git-and-open', {
+      await daemonCliPost(primaryScope(), 'projects/init-git-and-open', {
         path,
         branch: branchName,
         seedWiki,
@@ -118,7 +119,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/add-without-git', { path, seedWiki, seedAgentsMd, fanout })
+      await daemonCliPost(primaryScope(), 'projects/add-without-git', { path, seedWiki, seedAgentsMd, fanout })
       void emit('sync:projects').catch(() => {})
       close()
       await selectNewProject()

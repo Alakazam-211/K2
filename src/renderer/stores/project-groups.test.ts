@@ -61,11 +61,16 @@ const api = vi.hoisted(() => ({
   fetchProjectGroupShow: vi.fn(async (_id: string) => ({ members: [] as { workspaceId: string }[] })),
   fetchUnreadGroupIds: vi.fn(async () => [] as string[]),
 }))
-vi.mock('@/components/Projects/projects-api', () => ({
-  fetchProjectGroups: api.fetchProjectGroups,
-  fetchProjectGroupShow: api.fetchProjectGroupShow,
-  fetchUnreadGroupIds: api.fetchUnreadGroupIds,
-}))
+vi.mock('@/components/Projects/projects-api', async () => {
+  // Home M1: the wrappers take the scope first; `primaryOnly` checks it is
+  // the primary scope and forwards the old arguments.
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    fetchProjectGroups: primaryOnly((...a: []) => api.fetchProjectGroups(...a)),
+    fetchProjectGroupShow: primaryOnly((id: string) => api.fetchProjectGroupShow(id)),
+    fetchUnreadGroupIds: primaryOnly((...a: []) => api.fetchUnreadGroupIds(...a)),
+  }
+})
 
 // connect-host: stable local host; the host-change bus is inert here.
 vi.mock('@/stores/connect-host', () => ({

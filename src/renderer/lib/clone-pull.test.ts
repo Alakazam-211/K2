@@ -24,6 +24,8 @@ import {
 } from './clone-pull'
 import { CloneCancelledError, type CloneUnpackResult } from './clone-to'
 
+import { primaryScope } from '@/kessel/server-scope'
+import { primaryOnly } from '@/test-utils/scope'
 const PACKED: ClonePackStatus = {
   job_id: 'job-1',
   phase: 'done',
@@ -110,6 +112,14 @@ function makeDeps(
     sleep,
     ...overrides,
   }
+  // Home M1: the code passes the scope first. The spies keep the pre-M1
+  // argument list; `primaryOnly` fails loudly unless the scope is primary.
+  deps.daemonCliPost = primaryOnly(
+    deps.daemonCliPost as unknown as (...a: unknown[]) => Promise<unknown>,
+  ) as unknown as ClonePullDeps['daemonCliPost']
+  deps.daemonCliGet = primaryOnly(
+    deps.daemonCliGet as unknown as (...a: unknown[]) => Promise<unknown>,
+  ) as unknown as ClonePullDeps['daemonCliGet']
   return {
     deps,
     spies: {
@@ -134,7 +144,7 @@ describe('cloneWorkspaceToThisComputer', () => {
     const onBundled = vi.fn()
     const onDone = vi.fn()
 
-    const result = await cloneWorkspaceToThisComputer(
+    const result = await cloneWorkspaceToThisComputer(primaryScope(),
       '/srv/work/myws',
       'myws',
       deps,
@@ -218,12 +228,12 @@ describe('cloneWorkspaceToThisComputer', () => {
       daemonCliGet: vi.fn(async (route: string) => {
         order.push(`get:${route}`)
         return failed as unknown
-      }) as ClonePullDeps['daemonCliGet'],
+      }) as unknown as ClonePullDeps['daemonCliGet'],
     })
     const onError = vi.fn()
 
     await expect(
-      cloneWorkspaceToThisComputer('/srv/work/myws', 'myws', deps, { onError }),
+      cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onError }),
     ).rejects.toThrow(/Packing failed on the server: .*transfer ceiling/)
     expect(onError).toHaveBeenCalledWith(
       expect.stringContaining('Packing failed on the server'),
@@ -243,7 +253,7 @@ describe('cloneWorkspaceToThisComputer', () => {
     })
 
     await expect(
-      cloneWorkspaceToThisComputer('/srv/work/myws', 'myws', deps),
+      cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps),
     ).rejects.toThrow(CloneCancelledError)
     expect(order).toContain('post:clone/pack-cleanup')
     expect(spies.localDownloadChunk).not.toHaveBeenCalled()
@@ -263,7 +273,7 @@ describe('cloneWorkspaceToThisComputer', () => {
     )
 
     await expect(
-      cloneWorkspaceToThisComputer('/srv/work/myws', 'myws', deps),
+      cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps),
     ).rejects.toThrow(CloneCancelledError)
     expect(spies.localDownloadAbort).toHaveBeenCalledTimes(1)
     expect(order).toContain('post:clone/pack-cleanup')
@@ -282,7 +292,7 @@ describe('cloneWorkspaceToThisComputer', () => {
     const onError = vi.fn()
 
     await expect(
-      cloneWorkspaceToThisComputer('/srv/work/myws', 'myws', deps, { onError }),
+      cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onError }),
     ).rejects.toThrow(/Unpacking on this computer failed: register project/)
     expect(localDaemonCliPost).toHaveBeenCalledWith('fs/delete', {
       paths: [LOCAL_BUNDLE],

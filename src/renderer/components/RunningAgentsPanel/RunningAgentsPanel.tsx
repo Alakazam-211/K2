@@ -10,6 +10,7 @@ import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
 import { Surface } from '@/components/ui'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface RunningAgentInfo {
   terminalId: string
@@ -71,8 +72,8 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
         // The legacy route is still unioned in (dedup by id) for any
         // stragglers spawned through the old path.
         const [v2Raw, legacyRaw] = await Promise.all([
-          daemonCliGet('agents/running').catch(() => [] as unknown),
-          terminalListRunning().catch(() => [] as RunningAgentInfo[]),
+          daemonCliGet(primaryScope(), 'agents/running').catch(() => [] as unknown),
+          terminalListRunning(primaryScope()).catch(() => [] as RunningAgentInfo[]),
         ])
         // Remote list endpoints occasionally return a non-array body
         // (empty parse, envelope object). Spreading that used to crash
@@ -293,9 +294,9 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     try {
       // Two-phase write: paste text first, then send Enter after delay
       // CLI LLMs swallow \r when it arrives in the same paste event
-      await terminalWrite(terminalId, message)
+      await terminalWrite(primaryScope(), terminalId, message)
       await new Promise((r) => setTimeout(r, 150))
-      await terminalWrite(terminalId, '\r')
+      await terminalWrite(primaryScope(), terminalId, '\r')
       setSendingTo(null)
       setMessage('')
       requestAnimationFrame(() => inputRef.current?.focus())

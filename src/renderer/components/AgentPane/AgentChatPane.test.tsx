@@ -100,10 +100,13 @@ vi.mock('@/lib/server-capabilities', () => ({
   serverSupports: () => h.supported.value,
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliPost: h.daemonCliPost,
-  daemonCliGet: h.daemonCliGet,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliPost: primaryOnly(h.daemonCliPost),
+    daemonCliGet: primaryOnly(h.daemonCliGet),
+  }
+})
 
 vi.mock('@/stores/session-events', () => ({
   subscribeToWorkspaceSessionEvents: (_path: string, handlers: unknown) => {

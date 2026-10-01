@@ -56,13 +56,16 @@ const h = vi.hoisted(() => ({
   ],
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => {
-    if (route === 'projects/list') return h.remoteProjects
-    return []
-  }),
-  daemonCliPost: vi.fn(async () => ({})),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string) => {
+      if (route === 'projects/list') return h.remoteProjects
+      return []
+    })),
+    daemonCliPost: vi.fn(primaryOnly(async () => ({}))),
+  }
+})
 vi.mock('@/lib/daemon-reconnect', () => ({
   onDaemonConnected: vi.fn(),
 }))

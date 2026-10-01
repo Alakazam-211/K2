@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 // the `/cli/projects/get-icon` HTTP layer (local OR remote) instead of
 // the localhost-pinned Tauri `projects_get_icon` invoke proxy.
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Cache icon results across component instances
 const iconCache = new Map<string, { found: boolean; dataUrl: string | null }>()
@@ -61,7 +62,7 @@ export default function ProjectAvatar({
     }
 
     let cancelled = false
-    daemonCliGet<{ found: boolean; dataUrl: string | null }>('projects/get-icon', { path: projectPath, project_id: projectId })
+    daemonCliGet<{ found: boolean; dataUrl: string | null }>(primaryScope(), 'projects/get-icon', { path: projectPath, project_id: projectId })
       .then((result) => {
         iconCache.set(projectPath, result)
         if (!cancelled && result.found && result.dataUrl) {

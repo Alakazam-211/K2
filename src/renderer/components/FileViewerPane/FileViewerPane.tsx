@@ -75,6 +75,7 @@ import {
   type FileCategory,
   type ViewMode,
 } from './fileCategory'
+import { primaryScope } from '@/kessel/server-scope'
 export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
@@ -303,7 +304,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     setLoading(true)
     setError(null)
     try {
-      const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+      const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
       if (gen !== loadGenRef.current) return
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== startedKey) return
       setContent(result.content)
@@ -353,7 +354,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       if (useTabsStore.getState().consumeDiscardPending(tabId)) return
       // Host switch unmount: do not POST the old machine's path to the new daemon.
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== mountHostKeyRef.current) return
-      void daemonCliPost('fs/write-file', { path: fp, content: edited }).catch((err) => {
+      void daemonCliPost(primaryScope(), 'fs/write-file', { path: fp, content: edited }).catch((err) => {
         if (isHostSwitchedError(err)) return
         console.error('[file-viewer] autosave-on-leave failed:', err)
       })
@@ -420,7 +421,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       intervalMs: FILE_POLL_INTERVAL,
       immediate: false,
       read: async () => {
-        const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+        const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
         return result.content
       },
       apply: (next) => {
@@ -437,7 +438,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     if (toSave === content) return // Nothing changed
     setSaving(true)
     try {
-      await daemonCliPost('fs/write-file', { path: filePath, content: toSave })
+      await daemonCliPost(primaryScope(), 'fs/write-file', { path: filePath, content: toSave })
       setContent(toSave)
       setEditedContent(null)
     } catch (err) {

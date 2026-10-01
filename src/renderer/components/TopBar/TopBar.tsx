@@ -14,6 +14,7 @@ import {
   topBarLeftClusterMinWidth,
   TRAFFIC_LIGHT_CLUSTER_GAP_PX,
 } from '@/lib/desktop-chrome'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface TopBarProps {
   projectName?: string
@@ -45,7 +46,7 @@ export default function TopBar({
     }
 
     let cancelled = false
-    daemonCliGet<{ hasRunCommand: boolean }>('project-config/has-run-command', { project: projectPath })
+    daemonCliGet<{ hasRunCommand: boolean }>(primaryScope(), 'project-config/has-run-command', { project: projectPath })
       .then((r) => {
         if (!cancelled) setHasRun(r.hasRunCommand)
       })
@@ -61,7 +62,7 @@ export default function TopBar({
   const handleRun = async (): Promise<void> => {
     if (!projectPath || !onRunCommand) return
     try {
-      const result = await daemonCliGet<{ command: string }>('project-config/run-command', { project: projectPath })
+      const result = await daemonCliGet<{ command: string }>(primaryScope(), 'project-config/run-command', { project: projectPath })
       onRunCommand(result.command)
     } catch {
       // No run command configured

@@ -8,6 +8,7 @@ import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   const handleManualRefresh = useCallback(async () => {
     if (!agentMdPath) return
     try {
-      const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: agentMdPath })
+      const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: agentMdPath })
       handleFileChange(result.content)
     } catch (err) {
       console.error('[agent-editor] Manual refresh failed:', err)
@@ -112,8 +113,8 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   const handleClose = useCallback(async () => {
     try {
       if (agentMdPath) {
-        const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: agentMdPath })
-        await daemonCliPost('agents/save-agent-md', {
+        const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: agentMdPath })
+        await daemonCliPost(primaryScope(), 'agents/save-agent-md', {
           project_path: projectPath,
           agent_name: agentName,
           content: result.content,
@@ -123,7 +124,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
       console.error('[agent-editor] Failed to save on close:', err)
     }
     try {
-      await daemonCliPost('agents/regenerate-workspace-skill', { project_path: projectPath })
+      await daemonCliPost(primaryScope(), 'agents/regenerate-workspace-skill', { project_path: projectPath })
     } catch (err) {
       console.warn('[agent-editor] regen on close failed:', err)
     }
@@ -325,7 +326,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
                 code={agentContent}
                 filePath={agentMdPath}
                 onSave={async (content) => {
-                  try { await daemonCliPost('fs/write-file', { path: agentMdPath, content }) } catch (err) { console.error('[agent-editor] Save failed:', err) }
+                  try { await daemonCliPost(primaryScope(), 'fs/write-file', { path: agentMdPath, content }) } catch (err) { console.error('[agent-editor] Save failed:', err) }
                 }}
                 onChange={(content) => setAgentContent(content)}
               />

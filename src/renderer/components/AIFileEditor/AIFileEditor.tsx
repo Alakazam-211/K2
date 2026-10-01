@@ -5,6 +5,7 @@ import { terminalKill } from '@/lib/terminal-daemon'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { commandBaseName } from '@/lib/editor-agent-args'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Session file helpers ────────────────────────────────────────────
 
@@ -12,7 +13,7 @@ const SESSION_FILE = '.last_editor_session'
 
 async function readEditorSession(cwd: string): Promise<string | null> {
   try {
-    const result = await daemonCliGet<{ content: string }>('fs/read-file', {
+    const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', {
       path: `${cwd}/${SESSION_FILE}`,
     })
     const id = result.content.trim()
@@ -29,13 +30,13 @@ async function saveEditorSession(cwd: string, command: string | undefined): Prom
   if (!provider) return
 
   try {
-    const r = await daemonCliGet<{ sessionId: string | null }>('chat/detect-active', {
+    const r = await daemonCliGet<{ sessionId: string | null }>(primaryScope(), 'chat/detect-active', {
       provider,
       project_path: cwd,
     })
     const sessionId = r.sessionId
     if (sessionId) {
-      await daemonCliPost('fs/write-file', {
+      await daemonCliPost(primaryScope(), 'fs/write-file', {
         path: `${cwd}/${SESSION_FILE}`,
         content: sessionId,
       })
@@ -263,7 +264,7 @@ export function AIFileEditor({
 
     const readOne = async (path: string) => {
       try {
-        const result = await daemonCliGet<{ content: string; path: string; name: string }>('fs/read-file', { path })
+        const result = await daemonCliGet<{ content: string; path: string; name: string }>(primaryScope(), 'fs/read-file', { path })
         const prev = lastContentByPathRef.current.get(path)
         if (result.content !== prev) {
           lastContentByPathRef.current.set(path, result.content)
@@ -337,7 +338,7 @@ export function AIFileEditor({
       clearTimeout(t)
       // Save session before killing so it can be resumed next time
       saveEditorSession(cwdRef.current, commandRef.current).finally(() => {
-        terminalKill(id).catch(() => {})
+        terminalKill(primaryScope(), id).catch(() => {})
       })
     }
   }, [])
@@ -361,7 +362,7 @@ export function AIFileEditor({
       }
     }
     await saveEditorSession(cwd, commandRef.current)
-    terminalKill(terminalIdRef.current).catch(() => {})
+    terminalKill(primaryScope(), terminalIdRef.current).catch(() => {})
     onClose()
   }, [cwd, onClose, isDirty, onSaveRequested])
 

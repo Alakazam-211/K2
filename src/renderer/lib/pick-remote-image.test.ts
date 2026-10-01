@@ -21,9 +21,12 @@ import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 // ── module mocks (IO + host + toast) ───────────────────────────────────
 
 const daemonCliGetMock = vi.fn<(route: string, params?: unknown) => Promise<unknown>>()
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (route: string, params?: unknown) => daemonCliGetMock(route, params),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((route: string, params?: unknown) => daemonCliGetMock(route, params)),
+  }
+})
 
 const hostState = { activeHost: 'local' as string }
 vi.mock('@/stores/connect-host', () => ({

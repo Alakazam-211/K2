@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { extractArchive } from '@/lib/fs-transfer'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface ZipListEntry {
   name: string
@@ -43,7 +44,7 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const r = await daemonCliGet<ZipListResponse>('fs/zip-list', { path: filePath })
+      const r = await daemonCliGet<ZipListResponse>(primaryScope(), 'fs/zip-list', { path: filePath })
       setEntries(Array.isArray(r.entries) ? r.entries : [])
       setTruncated(Boolean(r.truncated))
     } catch (err) {
@@ -62,7 +63,7 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
       setLoading(true)
       setError(null)
       try {
-        const r = await daemonCliGet<ZipListResponse>('fs/zip-list', { path: filePath })
+        const r = await daemonCliGet<ZipListResponse>(primaryScope(), 'fs/zip-list', { path: filePath })
         if (cancelled) return
         setEntries(Array.isArray(r.entries) ? r.entries : [])
         setTruncated(Boolean(r.truncated))

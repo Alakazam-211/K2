@@ -2,6 +2,7 @@
 // Field names are camelCase (Rust serde rename_all = "camelCase").
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 export type WikiNodeKind = 'note' | 'workspaceHub' | 'focusGroup' | 'project'
 export type WikiLinkKind = 'wikilink' | 'workspaceHub' | 'focusGroup' | 'project'
@@ -119,17 +120,17 @@ export async function fetchWikiIndex(
   opts?: { scope?: 'workspace' | 'k2' },
 ): Promise<WikiIndex> {
   if (opts?.scope === 'k2') {
-    return daemonCliGet<WikiIndex>('wiki/index', { scope: 'k2' })
+    return daemonCliGet<WikiIndex>(primaryScope(), 'wiki/index', { scope: 'k2' })
   }
-  return daemonCliGet<WikiIndex>('wiki/index', { project })
+  return daemonCliGet<WikiIndex>(primaryScope(), 'wiki/index', { project })
 }
 
 export async function fetchWikiNote(project: string | null, id: string): Promise<WikiNote> {
   // Fleet ids carry the workspace; project is optional for those.
   if (project) {
-    return daemonCliGet<WikiNote>('wiki/note', { project, id })
+    return daemonCliGet<WikiNote>(primaryScope(), 'wiki/note', { project, id })
   }
-  return daemonCliGet<WikiNote>('wiki/note', { id })
+  return daemonCliGet<WikiNote>(primaryScope(), 'wiki/note', { id })
 }
 
 /** Absolute path on disk for opening in editor (workspace path + note rel path). */
@@ -143,7 +144,7 @@ export function absoluteWikiNotePath(note: WikiNote, fallbackProject: string | n
 }
 
 export async function seedWiki(project: string): Promise<unknown> {
-  return daemonCliPost('wiki/seed', { project })
+  return daemonCliPost(primaryScope(), 'wiki/seed', { project })
 }
 
 export async function setWikiServe(
@@ -151,7 +152,7 @@ export async function setWikiServe(
   enabled: boolean,
   port?: number,
 ): Promise<WikiServeStatus> {
-  return daemonCliPost<WikiServeStatus>('wiki/serve', {
+  return daemonCliPost<WikiServeStatus>(primaryScope(), 'wiki/serve', {
     project,
     enabled,
     ...(port !== undefined ? { port } : {}),
@@ -163,14 +164,14 @@ export async function setWikiPublicChat(
   project: string,
   enabled: boolean,
 ): Promise<WikiServeStatus> {
-  return daemonCliPost<WikiServeStatus>('wiki/chat', {
+  return daemonCliPost<WikiServeStatus>(primaryScope(), 'wiki/chat', {
     project,
     enabled,
   })
 }
 
 export async function fetchWikiServeStatus(project: string): Promise<WikiServeStatus> {
-  return daemonCliGet<WikiServeStatus>('wiki/serve/status', { project })
+  return daemonCliGet<WikiServeStatus>(primaryScope(), 'wiki/serve/status', { project })
 }
 
 /** Resolve a `[[wikilink]]` target (title / alias / id stem) against the index. */

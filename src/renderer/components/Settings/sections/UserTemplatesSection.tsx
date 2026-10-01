@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const USER_TEMPLATES_MANIFEST: SettingEntry[] = [
   {
@@ -161,19 +162,19 @@ export function UserTemplatesSection(): React.JSX.Element {
     setError(null)
     const failures: string[] = []
     try {
-      setTemplates(parseTemplates(await daemonCliGet<unknown>('skin/templates')))
+      setTemplates(parseTemplates(await daemonCliGet<unknown>(primaryScope(), 'skin/templates')))
     } catch (e) {
       failures.push(errText(e))
       setTemplates([])
     }
     try {
-      setRoles(parseRoles(await daemonCliGet<unknown>('skin/roles')))
+      setRoles(parseRoles(await daemonCliGet<unknown>(primaryScope(), 'skin/roles')))
     } catch (e) {
       failures.push(errText(e))
       setRoles([])
     }
     try {
-      setPeople(parsePeople(await daemonCliGet<unknown>('skin/users')))
+      setPeople(parsePeople(await daemonCliGet<unknown>(primaryScope(), 'skin/users')))
     } catch (e) {
       failures.push(errText(e))
       setPeople([])
@@ -188,7 +189,7 @@ export function UserTemplatesSection(): React.JSX.Element {
 
   const loadApps = useCallback(async () => {
     if (appsLoaded) return
-    const projects = await daemonCliGet<unknown>('projects/list')
+    const projects = await daemonCliGet<unknown>(primaryScope(), 'projects/list')
     const list = Array.isArray(projects) ? projects : asList(projects, ['projects', 'items'])
     const workspaces = list.flatMap((row) => {
       const rec = asRecord(row)
@@ -198,7 +199,7 @@ export function UserTemplatesSection(): React.JSX.Element {
     })
     const next: AppOption[] = []
     for (const projectId of workspaces) {
-      const listed = await daemonCliGet<unknown>('publish/list', { project: projectId })
+      const listed = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
       next.push(...parseApps(listed))
     }
     setApps(next)
@@ -219,7 +220,7 @@ export function UserTemplatesSection(): React.JSX.Element {
     setBusy('add-template')
     setError(null)
     try {
-      await daemonCliPost('skin/templates', { name })
+      await daemonCliPost(primaryScope(), 'skin/templates', { name })
       setTemplateName('')
       await refresh()
     } catch (e) {
@@ -234,7 +235,7 @@ export function UserTemplatesSection(): React.JSX.Element {
       setBusy(id)
       setError(null)
       try {
-        await daemonCliPost('skin/templates/update', { id, name })
+        await daemonCliPost(primaryScope(), 'skin/templates/update', { id, name })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -250,7 +251,7 @@ export function UserTemplatesSection(): React.JSX.Element {
       setBusy(id)
       setError(null)
       try {
-        await daemonCliPost('skin/templates/delete', { id })
+        await daemonCliPost(primaryScope(), 'skin/templates/delete', { id })
         setSelection(null)
         await refresh()
       } catch (e) {
@@ -267,7 +268,7 @@ export function UserTemplatesSection(): React.JSX.Element {
     setBusy('add-line')
     setError(null)
     try {
-      await daemonCliPost('skin/templates/lines', {
+      await daemonCliPost(primaryScope(), 'skin/templates/lines', {
         templateId: template.id,
         kind: lineKind,
         ...(lineKind === 'app' ? { roleId: lineRole } : {}),
@@ -285,7 +286,7 @@ export function UserTemplatesSection(): React.JSX.Element {
       setBusy(id)
       setError(null)
       try {
-        await daemonCliPost('skin/templates/lines/delete', { id })
+        await daemonCliPost(primaryScope(), 'skin/templates/lines/delete', { id })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -306,7 +307,7 @@ export function UserTemplatesSection(): React.JSX.Element {
     setBusy('apply')
     setError(null)
     try {
-      await daemonCliPost('skin/templates/apply', {
+      await daemonCliPost(primaryScope(), 'skin/templates/apply', {
         principalId: who.id,
         templateId: template.id,
         lines: template.lines.map((line) => ({

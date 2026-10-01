@@ -19,12 +19,13 @@
 // field is snake_case `display_name`; resume-chat-args is camelCase.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Resolve the workspace's primary-agent display name. Total — the daemon
  *  always returns a string (display_name → name → project name fallback).
  *  Returns '' if the daemon read fails so callers degrade gracefully. */
 export async function agentDisplayName(projectPath: string): Promise<string> {
-  const r = await daemonCliGet<{ display_name?: string }>(
+  const r = await daemonCliGet<{ display_name?: string }>(primaryScope(),
     'workspace/agent-display-name',
     { project: projectPath },
   )
@@ -39,7 +40,7 @@ export async function setAgentDisplayName(
   projectPath: string,
   name: string,
 ): Promise<void> {
-  await daemonCliGet('workspace/set-agent-display-name', {
+  await daemonCliGet(primaryScope(), 'workspace/set-agent-display-name', {
     project: projectPath,
     name,
   })
@@ -47,7 +48,7 @@ export async function setAgentDisplayName(
 
 /** Current workspace handle (federated address token). */
 export async function agentHandle(projectPath: string): Promise<string> {
-  const r = await daemonCliGet<{ handle?: string }>('workspace/handle', {
+  const r = await daemonCliGet<{ handle?: string }>(primaryScope(), 'workspace/handle', {
     project: projectPath,
   })
   return r?.handle ?? ''
@@ -58,7 +59,7 @@ export async function setAgentHandle(
   projectPath: string,
   handle: string,
 ): Promise<string> {
-  const r = await daemonCliPost<{ handle?: string }>('workspace/set-handle', {
+  const r = await daemonCliPost<{ handle?: string }>(primaryScope(), 'workspace/set-handle', {
     project: projectPath,
     handle,
   })
@@ -82,7 +83,7 @@ export async function setChatSession(
   sessionId: string,
   provider?: string,
 ): Promise<void> {
-  await daemonCliGet('workspace/set-chat-session', {
+  await daemonCliGet(primaryScope(), 'workspace/set-chat-session', {
     project: projectPath,
     session_id: sessionId,
     ...(provider ? { provider } : {}),
@@ -115,7 +116,7 @@ export interface ResumeChatArgs {
  *  harness's own command + grammar (Slice 3) — `claude --resume <id>`,
  *  `codex resume <id>`, `pi --session <id>`, … camelCase response. */
 export async function resumeChatArgs(projectPath: string): Promise<ResumeChatArgs> {
-  return daemonCliGet<ResumeChatArgs>('workspace/resume-chat-args', {
+  return daemonCliGet<ResumeChatArgs>(primaryScope(), 'workspace/resume-chat-args', {
     project: projectPath,
   })
 }

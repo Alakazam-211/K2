@@ -30,13 +30,16 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (route: string, params?: unknown) =>
-    params === undefined ? cli.get(route) : cli.get(route, params),
-  daemonCliGetText: vi.fn(async () => ''),
-  daemonCliPost: vi.fn(async () => ({})),
-  RecoveringError: class RecoveringError extends Error {},
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((route: string, params?: unknown) =>
+      params === undefined ? cli.get(route) : cli.get(route, params)),
+    daemonCliGetText: primaryOnly(vi.fn(async () => '')),
+    daemonCliPost: primaryOnly(vi.fn(async () => ({}))),
+    RecoveringError: class RecoveringError extends Error {},
+  }
+})
 
 function renderInClip(ui: React.ReactElement): HTMLElement {
   const clip = document.createElement('div')

@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -230,19 +231,19 @@ export function PeopleSection(): React.JSX.Element {
     setError(null)
     const failures: string[] = []
     try {
-      setPeople(parsePeople(await daemonCliGet<unknown>('skin/users')))
+      setPeople(parsePeople(await daemonCliGet<unknown>(primaryScope(), 'skin/users')))
     } catch (e) {
       failures.push(errText(e))
       setPeople([])
     }
     try {
-      setGrants(parseGrants(await daemonCliGet<unknown>('skin/grants')))
+      setGrants(parseGrants(await daemonCliGet<unknown>(primaryScope(), 'skin/grants')))
     } catch (e) {
       failures.push(errText(e))
       setGrants([])
     }
     try {
-      setRoles(parseRoles(await daemonCliGet<unknown>('skin/roles')))
+      setRoles(parseRoles(await daemonCliGet<unknown>(primaryScope(), 'skin/roles')))
     } catch (e) {
       failures.push(errText(e))
       setRoles([])
@@ -257,7 +258,7 @@ export function PeopleSection(): React.JSX.Element {
 
   const loadApps = useCallback(async () => {
     if (appsLoaded) return
-    const projects = await daemonCliGet<unknown>('projects/list')
+    const projects = await daemonCliGet<unknown>(primaryScope(), 'projects/list')
     const list = Array.isArray(projects) ? projects : asList(projects, ['projects', 'items'])
     const workspaces = list.flatMap((row) => {
       const rec = asRecord(row)
@@ -267,7 +268,7 @@ export function PeopleSection(): React.JSX.Element {
     })
     const next: AppOption[] = []
     for (const projectId of workspaces) {
-      const listed = await daemonCliGet<unknown>('publish/list', { project: projectId })
+      const listed = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
       next.push(...parseApps(listed))
     }
     setApps(next)
@@ -286,7 +287,7 @@ export function PeopleSection(): React.JSX.Element {
       setBusy(username)
       setError(null)
       try {
-        await daemonCliPost('skin/users/full-name', { username, fullName })
+        await daemonCliPost(primaryScope(), 'skin/users/full-name', { username, fullName })
         setDrafts((prev) => {
           const next = { ...prev }
           delete next[username]
@@ -307,7 +308,7 @@ export function PeopleSection(): React.JSX.Element {
       setBusy(grant.id)
       setError(null)
       try {
-        await daemonCliPost('skin/grants/enabled', { id: grant.id, enabled })
+        await daemonCliPost(primaryScope(), 'skin/grants/enabled', { id: grant.id, enabled })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -323,7 +324,7 @@ export function PeopleSection(): React.JSX.Element {
       setBusy(`host:${username}`)
       setError(null)
       try {
-        await daemonCliPost('skin/grants/host', { username, present })
+        await daemonCliPost(primaryScope(), 'skin/grants/host', { username, present })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -339,7 +340,7 @@ export function PeopleSection(): React.JSX.Element {
       setBusy(id)
       setError(null)
       try {
-        await daemonCliPost('skin/grants/delete', { id })
+        await daemonCliPost(primaryScope(), 'skin/grants/delete', { id })
         await refresh()
       } catch (e) {
         setError(errText(e))
@@ -355,7 +356,7 @@ export function PeopleSection(): React.JSX.Element {
       setBusy(`delete:${username}`)
       setError(null)
       try {
-        await daemonCliPost('skin/users/remove', { username })
+        await daemonCliPost(primaryScope(), 'skin/users/remove', { username })
         setDeleteConfirm(null)
         setSelection(null)
         await refresh()
@@ -377,7 +378,7 @@ export function PeopleSection(): React.JSX.Element {
     setError(null)
     try {
       const targetId = grantKind === 'app' ? grantApp : grantTarget.trim()
-      await daemonCliPost('skin/grants', {
+      await daemonCliPost(primaryScope(), 'skin/grants', {
         subjectKind: 'principal',
         subjectId: person.id,
         kind: grantKind,
@@ -405,9 +406,9 @@ export function PeopleSection(): React.JSX.Element {
     try {
       const body: { username: string; password: string; email?: string } = { username, password }
       if (email) body.email = email
-      await daemonCliPost('skin/users', body)
+      await daemonCliPost(primaryScope(), 'skin/users', body)
       if (fullName) {
-        await daemonCliPost('skin/users/full-name', { username, fullName })
+        await daemonCliPost(primaryScope(), 'skin/users/full-name', { username, fullName })
       }
       setNewUsername('')
       setNewFullName('')

@@ -12,6 +12,7 @@ import {
   roleSeedSystemPrompt,
   roleSeedMessage,
 } from './canonicalAgentSeeds'
+import { primaryScope } from '@/kessel/server-scope'
 
 /**
  * Workspace Manager / K2 Agent role-skill editor (canonical-agents PRD
@@ -48,13 +49,13 @@ export function RoleSkillEditor({
   // Ensure the role SKILL.md exists before the agent runs (PRD §8.1
   // "Enable"). Idempotent + upgrade-tracked in core.
   useEffect(() => {
-    daemonCliPost('skills/write-opt-in', { project_path: projectPath, skill: role }).catch((err) =>
+    daemonCliPost(primaryScope(), 'skills/write-opt-in', { project_path: projectPath, skill: role }).catch((err) =>
       console.warn('[role-skill] write_opt_in_skill failed:', err),
     )
   }, [projectPath, role])
 
   useEffect(() => {
-    daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+    daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
       .then((r) => setContent(r.content))
       .catch(() => setContent(''))
   }, [filePath])
@@ -122,7 +123,7 @@ export function RoleSkillEditor({
                 filePath={filePath}
                 onSave={async (c) => {
                   try {
-                    await daemonCliPost('fs/write-file', { path: filePath, content: c })
+                    await daemonCliPost(primaryScope(), 'fs/write-file', { path: filePath, content: c })
                   } catch {
                     // best-effort manual save
                   }

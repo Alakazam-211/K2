@@ -11,8 +11,11 @@ import {
   type OverlayThreadItem,
   type OverlayWsFrame,
 } from './overlayThread'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export function useOverlayThread(opts: {
+  /** The server this room lives on (Home M1). */
+  scope: ServerScope
   addr: string
   conversationId: string | null
   enabled: boolean
@@ -28,7 +31,7 @@ export function useOverlayThread(opts: {
   loadOlder: () => Promise<void>
   loadingOlder: boolean
 } {
-  const { addr, conversationId, enabled } = opts
+  const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
   const [resolvedConv, setResolvedConv] = useState(conversationId ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -58,7 +61,7 @@ export function useOverlayThread(opts: {
 
     async function boot(): Promise<void> {
       try {
-        const raw = await daemonCliGet<unknown>('thread', { addr, limit: OVERLAY_PAGE_SIZE })
+        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, limit: OVERLAY_PAGE_SIZE })
         if (cancelled) return
         const snap = threadItemsFromSnapshot(raw)
         const conv = snap.conversation_id || conversationId || ''
@@ -70,7 +73,7 @@ export function useOverlayThread(opts: {
         setError(null)
         if (!conv) return
 
-        const creds = await getDaemonWs()
+        const creds = await getDaemonWs(scope)
         if (cancelled) return
         const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
         ws = new WebSocket(url)
@@ -105,7 +108,7 @@ export function useOverlayThread(opts: {
       cancelled = true
       if (ws) releaseOverlayWebSocket(ws)
     }
-  }, [addr, conversationId, enabled])
+  }, [scope, addr, conversationId, enabled])
 
   useEffect(() => {
     if (!enabled) return
@@ -137,7 +140,7 @@ export function useOverlayThread(opts: {
     loadingOlderRef.current = true
     setLoadingOlder(true)
     try {
-      const raw = await daemonCliGet<unknown>('thread', {
+      const raw = await daemonCliGet<unknown>(scope, 'thread', {
         addr,
         limit: OVERLAY_PAGE_SIZE,
         before_seq: minSeq,
@@ -154,7 +157,7 @@ export function useOverlayThread(opts: {
       loadingOlderRef.current = false
       setLoadingOlder(false)
     }
-  }, [addr])
+  }, [scope, addr])
 
   const post = useCallback(
     async (text: string) => {
@@ -170,7 +173,7 @@ export function useOverlayThread(opts: {
           body?: string
           kind?: string
           conversation_id?: string
-        }>('thread/post', { addr, text: trimmed, via: 'compose' })
+        }>(scope, 'thread/post', { addr, text: trimmed, via: 'compose' })
         if (res?.id && typeof res.seq === 'number') {
           const item: OverlayThreadItem = {
             collection: 'thread',
@@ -195,7 +198,7 @@ export function useOverlayThread(opts: {
         setPosting(false)
       }
     },
-    [addr],
+    [scope, addr],
   )
 
   const answer = useCallback(
@@ -211,7 +214,7 @@ export function useOverlayThread(opts: {
         answer?: string
         name?: string
         kind?: string
-      }>('thread/answer', body)
+      }>(scope, 'thread/answer', body)
       setItems((prev) =>
         prev.map((it) => {
           if (it.id !== id) return it
@@ -241,13 +244,13 @@ export function useOverlayThread(opts: {
         }),
       )
     },
-    [addr],
+    [scope, addr],
   )
 
   const voidCard = useCallback(
     async (id: string) => {
       if (!addr.trim() || !id) return
-      await daemonCliPost('thread/void', { addr, id })
+      await daemonCliPost(scope, 'thread/void', { addr, id })
       setItems((prev) =>
         prev.map((it) => {
           if (it.id !== id) return it
@@ -267,7 +270,7 @@ export function useOverlayThread(opts: {
         }),
       )
     },
-    [addr],
+    [scope, addr],
   )
 
   return {

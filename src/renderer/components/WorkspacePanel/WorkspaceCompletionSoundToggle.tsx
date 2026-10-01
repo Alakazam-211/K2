@@ -3,6 +3,7 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { primaryScope } from '@/kessel/server-scope'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
 
@@ -10,7 +11,7 @@ async function writeWorkspaceCompletionSound(
   project: SoundProject,
   next: boolean,
 ): Promise<void> {
-  await daemonCliPost('workspace/set', {
+  await daemonCliPost(primaryScope(), 'workspace/set', {
     project: project.path,
     fields: { completion_sound_enabled: next ? '1' : '0' },
   })

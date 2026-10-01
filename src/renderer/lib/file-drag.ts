@@ -20,6 +20,7 @@ import {
   pathsAreComposeSurfaceImages,
   surfaceComposeBar,
 } from '@/lib/compose-surface-drop'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -264,7 +265,7 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
         } else {
           const tid = termContainer.dataset.terminalId
           if (tid) {
-            terminalWrite(tid, data).catch((e) => console.warn('[file-drag]', e))
+            terminalWrite(primaryScope(), tid, data).catch((e) => console.warn('[file-drag]', e))
           }
         }
         dragPaths = []

@@ -32,6 +32,7 @@ import {
   daemonHttpBase,
   daemonWsBase,
 } from './daemon-ws'
+import { primaryScope } from './server-scope'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
@@ -87,7 +88,7 @@ describe('getDaemonWs host-awareness', () => {
 
   it('local: invokes daemon_ws_url and carries host 127.0.0.1 (secure:false)', async () => {
     invokeMock.mockResolvedValue({ state: 'available', port: 47800, token: 'local-tok' })
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     expect(invokeMock).toHaveBeenCalledWith('daemon_ws_url')
     expect(creds).toEqual({ port: 47800, token: 'local-tok', host: '127.0.0.1', secure: false })
     // The resulting URL is byte-identical to the old hardcoded literal.
@@ -113,7 +114,7 @@ describe('getDaemonWs host-awareness', () => {
     // Invalidate any cached local creds so we prove the remote path
     // doesn't fall back to invoke.
     invalidateDaemonWs()
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     expect(invokeMock).not.toHaveBeenCalled()
     expect(creds).toEqual({ port: 51234, token: 'remote-tok', host: '10.0.0.9', secure: false })
     expect(`${daemonWsBase(creds)}/cli/sessions/grid`).toBe(
@@ -137,7 +138,7 @@ describe('getDaemonWs host-awareness', () => {
     // creds resolution itself doesn't invoke.
     invokeMock.mockClear()
     invalidateDaemonWs()
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     expect(invokeMock).not.toHaveBeenCalled()
     // step #3: the remote's OWN token rides, not the local daemon's.
     expect(creds.token).toBe('hosted-tok')
@@ -163,12 +164,12 @@ describe('getDaemonWs host-awareness', () => {
     // Clear the set_active_daemon push so the remote-creds-resolution
     // assertion below stays about getDaemonWs only.
     invokeMock.mockClear()
-    await getDaemonWs()
+    await getDaemonWs(primaryScope())
     expect(invokeMock).not.toHaveBeenCalled()
 
     useConnectHostStore.getState().selectHost('local')
     invokeMock.mockResolvedValue({ state: 'available', port: 47800, token: 'local-tok' })
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     expect(invokeMock).toHaveBeenCalledWith('daemon_ws_url')
     expect(creds.host).toBe('127.0.0.1')
     expect(creds.secure).toBe(false)

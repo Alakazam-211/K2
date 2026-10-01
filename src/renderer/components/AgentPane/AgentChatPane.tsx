@@ -44,6 +44,7 @@ import {
   type BreakerState,
   type ResolveMemo,
 } from '@/lib/chat-spawn-breaker'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -269,8 +270,8 @@ function ChatHeader({
         provider?: string
         archived?: boolean
         customName?: string | null
-      }>>('chat/list', { project_path: projectPath }),
-      daemonCliGet<Record<string, string>>('chat/custom-names').catch(() => ({}) as Record<string, string>),
+      }>>(primaryScope(), 'chat/list', { project_path: projectPath }),
+      daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names').catch(() => ({}) as Record<string, string>),
     ])
       .then(([rows, names]) => {
         if (cancelled) return
@@ -529,7 +530,7 @@ async function watchFreshProviderId(opts: {
   const deadline = Date.now() + 20_000
   while (!opts.cancelled() && Date.now() < deadline) {
     try {
-      const rows = await daemonCliGet<Array<{ sessionId?: string; provider?: string }>>(
+      const rows = await daemonCliGet<Array<{ sessionId?: string; provider?: string }>>(primaryScope(),
         'chat/list',
         { project_path: opts.projectPath },
       )
@@ -563,12 +564,12 @@ async function ensurePinnedChat(
   // so an older daemon that ignores the field reuses the live PTY instead
   // of resuming the source.
   if (opts?.freshProvider) {
-    return daemonCliPost<EnsurePinnedChatResponse>('workspace/ensure-pinned-chat', {
+    return daemonCliPost<EnsurePinnedChatResponse>(primaryScope(), 'workspace/ensure-pinned-chat', {
       project: projectPath,
       freshProvider: opts.freshProvider,
     })
   }
-  return daemonCliPost<EnsurePinnedChatResponse>('workspace/ensure-pinned-chat', {
+  return daemonCliPost<EnsurePinnedChatResponse>(primaryScope(), 'workspace/ensure-pinned-chat', {
     project: projectPath,
     ...(opts?.forceRespawn ? { forceRespawn: true } : {}),
     ...(opts?.restoredSessionId ? { restoredSessionId: opts.restoredSessionId } : {}),
@@ -723,7 +724,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           agentName?: string
           sessionId?: string
           conversationId?: string
-        }>>('sessions/list-for-workspace', { path: projectPath })
+        }>>(primaryScope(), 'sessions/list-for-workspace', { path: projectPath })
         if (cancelled || !Array.isArray(rows)) return
         const row = rows.find((item) => item.agentName === projectId)
         const cid = row?.conversationId?.trim()
@@ -907,7 +908,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     freshHoldProviderIdRef.current = source.sessionId
     const known = new Set<string>([source.sessionId])
     try {
-      const rows = await daemonCliGet<Array<{ sessionId?: string }>>('chat/list', {
+      const rows = await daemonCliGet<Array<{ sessionId?: string }>>(primaryScope(), 'chat/list', {
         project_path: projectPath,
       })
       for (const row of rows ?? []) {
@@ -955,7 +956,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       setChatConversationId(null)
       setAttachNonce((n) => n + 1)
       if (!stillOpen()) return
-      const msg = await daemonCliPost<MsgResponse>('terminal/send-message', {
+      const msg = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
         session_id: res.sessionId,
         text: req.text,
       })
@@ -1328,7 +1329,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     lastResolvedRef.current = null
     // Kill the daemon-owned PTY (best-effort).
     try {
-      const creds = await getDaemonWs()
+      const creds = await getDaemonWs(primaryScope())
       await fetch(
         `${daemonHttpBase(creds)}/cli/sessions/v2/close?token=${creds.token}`,
         {
@@ -1449,7 +1450,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             cwd: projectPath,
           })
         }
-        daemonCliGet('agents/lock', {
+        daemonCliGet(primaryScope(), 'agents/lock', {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,
@@ -1462,7 +1463,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
       // Step 1: Reattach if PTY already alive in this Tauri session
       try {
-        const exists = await terminalExists(myTerminalId)
+        const exists = await terminalExists(primaryScope(), myTerminalId)
         if (!cancelled && exists) {
           setLaunchConfig(null)
           setReady(true)
@@ -1502,7 +1503,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             args: result.args,
             cwd: result.cwd,
           })
-          daemonCliGet('agents/lock', {
+          daemonCliGet(primaryScope(), 'agents/lock', {
             project: projectPath,
             agent: agentName,
             terminal_id: myTerminalId,
@@ -1526,7 +1527,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           args: ['--dangerously-skip-permissions'],
           cwd: projectPath,
         })
-        daemonCliGet('agents/lock', {
+        daemonCliGet(primaryScope(), 'agents/lock', {
           project: projectPath,
           agent: agentName,
           terminal_id: myTerminalId,

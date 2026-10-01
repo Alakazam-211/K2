@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as daemonCli from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 import { useToastStore } from '@/stores/toast'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useTabsStore } from '@/stores/tabs'
@@ -55,7 +56,7 @@ describe('launchPreset ensure-cli', () => {
     })
     vi.spyOn(daemonCli, 'daemonCliPost').mockRejectedValue(new Error('grok installed but not on PATH'))
     await usePresetsStore.getState().launchPreset('g', '/tmp/proj', 'tab')
-    expect(daemonCli.daemonCliPost).toHaveBeenCalledWith('agents/ensure-cli', { program: 'grok' })
+    expect(daemonCli.daemonCliPost).toHaveBeenCalledWith(primaryScope(), 'agents/ensure-cli', { program: 'grok' })
     expect(addTabToGroup).not.toHaveBeenCalled()
     expect(useTabsStore.getState().tabs).toHaveLength(0)
     expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(

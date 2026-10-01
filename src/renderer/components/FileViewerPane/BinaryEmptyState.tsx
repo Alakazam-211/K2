@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface BinaryEmptyStateProps {
   filePath: string
@@ -29,7 +30,7 @@ export function BinaryEmptyState({
   const fileName = filePath.split('/').pop() || filePath
 
   const reveal = useCallback(() => {
-    void daemonCliPost('fs/open-finder', { target: filePath }).catch((err) => {
+    void daemonCliPost(primaryScope(), 'fs/open-finder', { target: filePath }).catch((err) => {
       console.warn('[file-viewer] open-finder failed:', err)
     })
   }, [filePath])

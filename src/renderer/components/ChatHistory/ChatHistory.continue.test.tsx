@@ -34,8 +34,10 @@ const h = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string) => {
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+  daemonCliGet: primaryOnly(vi.fn(async (route: string) => {
     if (route === 'chat/list') return h.sessions
     if (route === 'sandbox/list') return h.sandbox
     if (route === 'host-sessions/list') return h.api
@@ -43,8 +45,8 @@ vi.mock('@/lib/daemon-cli', () => ({
     if (route === 'chat/pinned') return []
     if (route === 'chat/session-path') return h.sessionPath
     return []
-  }),
-  daemonCliPost: vi.fn(async (route: string, body: unknown) => {
+  })),
+  daemonCliPost: primaryOnly(vi.fn(async (route: string, body: unknown) => {
     h.posts.push({ route, body })
     if (route === 'chat/continue-seed') {
       if (h.seedThrows) throw h.seedThrows
@@ -55,10 +57,11 @@ vi.mock('@/lib/daemon-cli', () => ({
       return h.sendResult
     }
     return {}
-  }),
+  })),
   RecoveringError: class RecoveringError extends Error {},
   isHostSwitchedError: () => false,
-}))
+  }
+})
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => null),

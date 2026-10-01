@@ -7,6 +7,7 @@ import { onTunnelStatusChanged, onAppHello } from '@/stores/session-events'
 import type { SettingEntry } from '../searchManifest'
 import appStoreBadge from '@/assets/app-store-badge.svg?url'
 import googlePlayBadge from '@/assets/google-play-badge.png'
+import { primaryScope } from '@/kessel/server-scope'
 
 // K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
 // tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
@@ -28,7 +29,7 @@ interface TunnelStatus {
 }
 
 async function tunnelStatus(): Promise<TunnelStatus> {
-  const creds = await getDaemonWs()
+  const creds = await getDaemonWs(primaryScope())
   const res = await fetch(
     `${daemonHttpBase(creds)}/cli/tunnel/status?token=${creds.token}`,
     { method: 'GET' },

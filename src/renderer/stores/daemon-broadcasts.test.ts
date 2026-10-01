@@ -116,13 +116,16 @@ const cli = vi.hoisted(() => ({
   getImpl: (async () => []) as (route: string, params?: unknown) => Promise<unknown>,
   postImpl: (async () => ({})) as (route: string, body?: unknown) => Promise<unknown>,
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string, params?: unknown) => cli.getImpl(route, params)),
-  daemonCliPost: vi.fn(async (route: string, body?: unknown) => {
-    cli.posts.push({ route, body })
-    return cli.postImpl(route, body)
-  }),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: vi.fn(primaryOnly(async (route: string, params?: unknown) => cli.getImpl(route, params))),
+    daemonCliPost: vi.fn(primaryOnly(async (route: string, body?: unknown) => {
+      cli.posts.push({ route, body })
+      return cli.postImpl(route, body)
+    })),
+  }
+})
 vi.mock('@/lib/terminal-daemon', () => ({
   terminalListRunning: vi.fn(async () => []),
   terminalCreate: vi.fn(async () => undefined),

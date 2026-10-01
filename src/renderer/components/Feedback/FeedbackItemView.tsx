@@ -54,6 +54,7 @@ import {
   getTicketDraft,
   setTicketDraft,
 } from '@/lib/composer-drafts'
+import { primaryScope } from '@/kessel/server-scope'
 
 interface FeedbackItemViewProps {
   id: string
@@ -497,7 +498,7 @@ function AssigneePicker({
 
   useEffect(() => {
     let cancelled = false
-    void daemonCliGet<{ users?: Array<{ username: string }> }>('users', {})
+    void daemonCliGet<{ users?: Array<{ username: string }> }>(primaryScope(), 'users', {})
       .then((res) => {
         if (cancelled) return
         const names = (res.users ?? []).map((u) => u.username).filter(Boolean)
@@ -629,7 +630,7 @@ type TermPhase =
  *  sandbox cells live under ~/.k2/sandbox-sessions/, outside any
  *  registered workspace, so a workspace-scoped list would miss them). */
 async function fetchLiveSessions(): Promise<LiveSessionRow[]> {
-  const rows = await daemonCliGet<LiveSessionRow[]>('sessions/list-for-workspace', { path: '/' })
+  const rows = await daemonCliGet<LiveSessionRow[]>(primaryScope(), 'sessions/list-for-workspace', { path: '/' })
   return Array.isArray(rows) ? rows : []
 }
 
@@ -675,7 +676,7 @@ function TerminalTab({
         return { kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId }
       }
       if (action === 'ensure-pinned-chat' && projectPath) {
-        const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
+        const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(primaryScope(),
           'sessions/lookup-by-agent',
           { agent: projectId },
         )
@@ -741,7 +742,7 @@ function TerminalTab({
         await wakeCanonicalMemberSession(projectId, projectPath, {
           activateProject,
           ensurePinnedChat: (project) =>
-            daemonCliPost('workspace/ensure-pinned-chat', { project }),
+            daemonCliPost(primaryScope(), 'workspace/ensure-pinned-chat', { project }),
         })
         setPhase({ kind: 'live', agentName: projectId, cwd: projectPath })
         return
@@ -750,7 +751,7 @@ function TerminalTab({
       // Active, re-mount the cell's persistent layer + resume, then poll
       // the live list until the session registers.
       activateOnLiveSessionAttach(projectId, activateProject)
-      await daemonCliPost('sandbox/reopen', {
+      await daemonCliPost(primaryScope(), 'sandbox/reopen', {
         project_path: projectPath,
         session_id: sessionId,
       })

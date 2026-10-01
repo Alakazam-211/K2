@@ -26,15 +26,18 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (route: string, params?: unknown) => cli.get(route, params),
-  daemonCliGetText: (route: string, params?: unknown) => cli.getText(route, params),
-  daemonCliPost: (route: string, body?: unknown) => {
-    cli.posts.push({ route, body })
-    return Promise.resolve({})
-  },
-  RecoveringError: class RecoveringError extends Error {},
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((route: string, params?: unknown) => cli.get(route, params)),
+    daemonCliGetText: primaryOnly((route: string, params?: unknown) => cli.getText(route, params)),
+    daemonCliPost: primaryOnly((route: string, body?: unknown) => {
+      cli.posts.push({ route, body })
+      return Promise.resolve({})
+    }),
+    RecoveringError: class RecoveringError extends Error {},
+  }
+})
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
 vi.mock('@/lib/daemon-settings', () => ({
   settingsGet: vi.fn(async () => ({ settings: {} })),

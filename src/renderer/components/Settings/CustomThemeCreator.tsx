@@ -10,6 +10,7 @@ import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import type { ThemeColors } from '@/lib/editor-themes'
 import type { HighlightStyle } from '@codemirror/language'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Same preview code used in the Code Editor settings
 const PREVIEW_CODE = `import { useState, useEffect, useCallback } from 'react'
@@ -123,7 +124,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   useEffect(() => {
     const init = async () => {
       try {
-        const r = await daemonCliGet<{ path: string }>('themes/ensure-dir')
+        const r = await daemonCliGet<{ path: string }>(primaryScope(), 'themes/ensure-dir')
         const dir = r.path
         setThemesDir(dir)
 
@@ -139,14 +140,14 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
             DEFAULT_COLORS,
             DEFAULT_SYNTAX
           )
-          const tmpl = await daemonCliPost<{ path: string }>('themes/create-template', { base_theme_json: baseJson })
+          const tmpl = await daemonCliPost<{ path: string }>(primaryScope(), 'themes/create-template', { base_theme_json: baseJson })
           path = tmpl.path
         }
 
         setThemePath(path)
 
         // Parse the initial file to set preview
-        const { content } = await daemonCliGet<{ content: string }>('fs/read-file', { path })
+        const { content } = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path })
         const parsed = parseCustomThemeJson(content)
         if (parsed) {
           setThemeOverride({ colors: parsed.colors, highlight: parsed.highlight, isLight: parsed.type === 'light' })
@@ -178,7 +179,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
     try {
       // Scan for most recent json in the dir
       const entries = normalizeFsReadDir(
-        await daemonCliGet('fs/read-dir', { path: themesDir! }),
+        await daemonCliGet(primaryScope(), 'fs/read-dir', { path: themesDir! }),
       )
       const matching = entries
         .filter((e) => !e.isDirectory && e.name.endsWith('.json') && !e.name.startsWith('.'))
@@ -189,7 +190,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
         return
       }
       console.log('[theme-creator] Manual refresh: reading', target.path)
-      const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: target.path })
+      const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: target.path })
       const content = result.content
       console.log('[theme-creator] Manual refresh: got content, length:', content.length)
       handleFileChange(content)

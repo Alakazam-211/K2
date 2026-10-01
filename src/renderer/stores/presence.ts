@@ -34,6 +34,7 @@ import {
   type PresenceRosterUser,
 } from '@/stores/session-events'
 import { onActiveHostChange } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
 
 // Re-export the wire row type under the name the components use — the
 // shape is FROZEN against `presence.rs::RosterUser` (S1).
@@ -61,7 +62,7 @@ export const usePresenceStore = create<PresenceState>((set) => ({
   applyRoster: (roster) => set({ roster, supported: true }),
   refreshRoster: async () => {
     try {
-      const snap = await daemonCliGet<{ roster: RosterUser[] }>('presence/roster')
+      const snap = await daemonCliGet<{ roster: RosterUser[] }>(primaryScope(), 'presence/roster')
       set({ roster: Array.isArray(snap?.roster) ? snap.roster : [], supported: true })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

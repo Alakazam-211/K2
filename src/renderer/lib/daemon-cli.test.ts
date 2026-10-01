@@ -43,7 +43,7 @@ vi.mock('@/kessel/daemon-ws', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/kessel/daemon-ws')>()
   return {
     ...actual,
-    getDaemonWs: (...a: unknown[]) => getDaemonWsMock(...a),
+    resolveWindowHostCreds: (...a: unknown[]) => getDaemonWsMock(...a),
     invalidateDaemonWs: (...a: unknown[]) => invalidateDaemonWsMock(...a),
   }
 })
@@ -78,6 +78,7 @@ import {
   type ConnectHost,
 } from '@/stores/connect-host'
 import { __resetRemoteSessionForTests } from './remote-session'
+import { primaryScope } from '@/kessel/server-scope'
 
 const LOCAL_CREDS = { port: 47800, token: 'local-tok', host: '127.0.0.1', secure: false }
 const SECURE_CREDS = { port: 443, token: 'remote-tok', host: 'rosson.k2.dev', secure: true }
@@ -131,7 +132,7 @@ describe('daemonCliGet — hits the active host + carries its token', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => fakeRes({ body: JSON.stringify({ ok: 1 }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await daemonCliGet('fs/read-dir', { path: '/x', n: 2 })
+    const out = await daemonCliGet(primaryScope(), 'fs/read-dir', { path: '/x', n: 2 })
     expect(out).toEqual({ ok: 1 })
 
     const [url, opts] = fetchMock.mock.calls[0]
@@ -147,7 +148,7 @@ describe('daemonCliGet — hits the active host + carries its token', () => {
     const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify([]) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await daemonCliGet('projects/list')
+    await daemonCliGet(primaryScope(), 'projects/list')
 
     const url = lastFetchUrl(fetchMock)
     expect(url).toContain('https://rosson.k2.dev/cli/projects/list?')
@@ -164,12 +165,12 @@ describe('daemonCliGet — hits the active host + carries its token', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-    await daemonCliGet('projects/list')
+    await daemonCliGet(primaryScope(), 'projects/list')
     expect(lastFetchUrl(fetchMock)).toContain('http://127.0.0.1:47800/cli/projects/list')
     expect(lastFetchUrl(fetchMock)).toContain('token=local-tok')
 
     getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
-    await daemonCliGet('projects/list')
+    await daemonCliGet(primaryScope(), 'projects/list')
     expect(lastFetchUrl(fetchMock)).toContain('https://rosson.k2.dev/cli/projects/list')
     expect(lastFetchUrl(fetchMock)).toContain('token=remote-tok')
   })
@@ -178,7 +179,7 @@ describe('daemonCliGet — hits the active host + carries its token', () => {
     getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
     // A JSON-array STRING that must reach the caller verbatim (timer export).
     vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ body: '[1,2,3]' })))
-    const out = await daemonCliGetText('timer/entries-export', { format: 'json' })
+    const out = await daemonCliGetText(primaryScope(), 'timer/entries-export', { format: 'json' })
     expect(out).toBe('[1,2,3]')
   })
 })
@@ -196,7 +197,7 @@ describe('daemonCliPost — body in body, token in query', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => fakeRes({ body: JSON.stringify({ delivered: true }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await daemonCliPost('workspace/msg', { workspace: 'k2', body: 'hi' })
+    const out = await daemonCliPost(primaryScope(), 'workspace/msg', { workspace: 'k2', body: 'hi' })
     expect(out).toEqual({ delivered: true })
 
     const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit]
@@ -239,7 +240,7 @@ describe('remote auth failures — session revival / expiry through daemon-cli',
     vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status: 401, body: JSON.stringify({ error: 'session expired' }) })))
 
     // The call still rejects with the daemon's message...
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('session expired')
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('session expired')
 
     // ...and the session was expired: token cleared, sign-in pending.
     const active = useConnectHostStore.getState().activeHost
@@ -254,7 +255,7 @@ describe('remote auth failures — session revival / expiry through daemon-cli',
     const fetchMock = vi.fn(async () => fakeRes({ status: 401, body: JSON.stringify({ error: 'nope' }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('nope')
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('nope')
     expect(useConnectHostStore.getState().activeHost).toBe('local')
     expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
     expect(fetchMock).toHaveBeenCalledTimes(1) // no probe, no replay
@@ -286,7 +287,7 @@ describe('remote auth failures — session revival / expiry through daemon-cli',
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 1 })
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).resolves.toEqual({ ok: 1 })
 
     // The replay carried the REVIVED token, and no sign-in was raised.
     const dataCalls = fetchMock.mock.calls
@@ -307,7 +308,7 @@ describe('remote auth failures — session revival / expiry through daemon-cli',
     const fetchMock = vi.fn(async () => fakeRes({ status: 403, body: JSON.stringify({ error: 'peer not allowed' }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('peer not allowed')
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('peer not allowed')
     expect(fetchMock).toHaveBeenCalledTimes(1) // no whoami, no replay
     expect((useConnectHostStore.getState().activeHost as ConnectHost).token).toBe('remote-tok')
   })
@@ -329,7 +330,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       .mockResolvedValueOnce(fakeRes({ body: JSON.stringify({ ok: 2 }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await daemonCliGet('projects/list')
+    const out = await daemonCliGet(primaryScope(), 'projects/list')
     expect(out).toEqual({ ok: 2 })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     // Creds were invalidated before the retry so the second attempt re-reads
@@ -343,7 +344,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('Failed to fetch')
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('Failed to fetch')
     expect(fetchMock).toHaveBeenCalledTimes(2)
     // invalidateDaemonWs fired before the delay-0 retry.
     expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(1)
@@ -358,7 +359,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
       const remoteFetch = vi.fn().mockRejectedValue(new Error('Load failed'))
       vi.stubGlobal('fetch', remoteFetch)
-      await expect(daemonCliGet('terminal/send-message')).rejects.toThrow('Load failed')
+      await expect(daemonCliGet(primaryScope(), 'terminal/send-message')).rejects.toThrow('Load failed')
       expect(remoteFetch).toHaveBeenCalledTimes(2)
       expect(probe).toHaveBeenCalledTimes(1)
 
@@ -367,7 +368,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
       const localFetch = vi.fn().mockRejectedValue(new Error('Load failed'))
       vi.stubGlobal('fetch', localFetch)
-      await expect(daemonCliGet('projects/list')).rejects.toThrow('Load failed')
+      await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('Load failed')
       expect(localFetch).toHaveBeenCalledTimes(2)
       expect(probe).not.toHaveBeenCalled()
     } finally {
@@ -389,7 +390,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       )
       vi.stubGlobal('fetch', fetchMock)
 
-      await expect(daemonCliGet('projects/list')).rejects.toThrow(/access-control-allow-origin/i)
+      await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow(/access-control-allow-origin/i)
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
       expect(probe).toHaveBeenCalledTimes(1)
@@ -403,7 +404,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     const fetchMock = vi.fn(async () => fakeRes({ status: 400, body: JSON.stringify({ error: 'bad request' }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('bad request')
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('bad request')
     expect(fetchMock).toHaveBeenCalledTimes(1) // no retry
     expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
   })
@@ -420,7 +421,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       )
       vi.stubGlobal('fetch', fetchMock)
 
-      await expect(daemonCliGet('fs/read-binary', { path: '/var/folders/x/Screenshot.png' })).rejects.toThrow(
+      await expect(daemonCliGet(primaryScope(), 'fs/read-binary', { path: '/var/folders/x/Screenshot.png' })).rejects.toThrow(
         'bad path',
       )
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -450,7 +451,7 @@ describe('cliFetch host-key drop — started A, host now B → discarded', () =>
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const pending = daemonCliGet('fs/read-binary', {
+    const pending = daemonCliGet(primaryScope(), 'fs/read-binary', {
       path: '/var/folders/zz/abc/T/Screenshot.png',
     })
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
@@ -475,7 +476,7 @@ describe('cliFetch host-key drop — started A, host now B → discarded', () =>
     const fetchMock = vi.fn(async () => fakeRes({ body: '{}' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const pending = daemonCliPost('fs/write-file', { path: '/tmp/x', content: 'hi' })
+    const pending = daemonCliPost(primaryScope(), 'fs/write-file', { path: '/tmp/x', content: 'hi' })
     const host = makeRemoteHost()
     useConnectHostStore.getState().addHost(host)
     useConnectHostStore.getState().selectHost(host)
@@ -519,9 +520,9 @@ describe('recovery gate — fail-fast while the active remote is recovering', ()
     const fetchMock = vi.fn(async () => fakeRes({ body: '{}' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toBeInstanceOf(RecoveringError)
-    await expect(daemonCliPost('workspace/msg', { a: 1 })).rejects.toBeInstanceOf(RecoveringError)
-    await expect(daemonCliGetText('timer/entries-export')).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliPost(primaryScope(), 'workspace/msg', { a: 1 })).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliGetText(primaryScope(), 'timer/entries-export')).rejects.toBeInstanceOf(RecoveringError)
     expect(fetchMock).not.toHaveBeenCalled()
     // The fail-fast must NOT be classified as a connection error, so the
     // shared retry never burns its backoff on it (a single throw, no timers).
@@ -535,9 +536,9 @@ describe('recovery gate — fail-fast while the active remote is recovering', ()
     const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ ok: 1 }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toBeInstanceOf(RecoveringError)
     useConnectHostStore.getState().setRecovery({ kind: 'connected' })
-    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 1 })
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).resolves.toEqual({ ok: 1 })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -549,7 +550,7 @@ describe('recovery gate — fail-fast while the active remote is recovering', ()
     const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ ok: 3 }) }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 3 })
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).resolves.toEqual({ ok: 3 })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -578,7 +579,7 @@ describe('W2 — data-plane 403 password_change_required routes to the rotation 
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow(/password_change_required/)
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow(/password_change_required/)
 
     const s = useConnectHostStore.getState()
     expect(s.signInRotate).toBe(true)
@@ -597,7 +598,7 @@ describe('W2 — data-plane 403 password_change_required routes to the rotation 
       'fetch',
       vi.fn(async () => fakeRes({ status: 403, body: JSON.stringify({ error: 'password_change_required' }) })),
     )
-    await expect(daemonCliGet('projects/list')).rejects.toThrow(/password_change_required/)
+    await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow(/password_change_required/)
     expect(useConnectHostStore.getState().signInRotate).toBe(false)
     expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
   })

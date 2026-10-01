@@ -11,10 +11,13 @@ const h = vi.hoisted(() => ({
   daemonCliPost: vi.fn(),
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: h.daemonCliGet,
-  daemonCliPost: h.daemonCliPost,
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...a: unknown[]) => h.daemonCliGet(...a)),
+    daemonCliPost: primaryOnly((...a: unknown[]) => h.daemonCliPost(...a)),
+  }
+})
 
 import {
   SkinAccessSection,

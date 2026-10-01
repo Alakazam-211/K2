@@ -12,6 +12,7 @@ import type { SettingEntry } from '../searchManifest'
 import { dailyTokenChart, type DailySeries, type UsageDay } from './dailyTokenChart'
 import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
 import { SettingDropdown } from '../controls/SettingControls'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -330,7 +331,7 @@ function UsageLog({
     setCursor(null)
     void (async () => {
       try {
-        const page = await daemonCliGet<UsageTurnsPage>('usage/turns', { limit: TURNS_PAGE })
+        const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE })
         if (ac.signal.aborted) return
         setRows(page.rows)
         setCursor(page.next_cursor)
@@ -350,7 +351,7 @@ function UsageLog({
       setLoadingMore(true)
       void (async () => {
         try {
-          const page = await daemonCliGet<UsageTurnsPage>('usage/turns', {
+          const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', {
             limit: TURNS_PAGE,
             before: cur,
           })
@@ -375,7 +376,7 @@ function UsageLog({
     return onTokenUsageChanged(() => {
       void (async () => {
         try {
-          const page = await daemonCliGet<UsageTurnsPage>('usage/turns', { limit: TURNS_PAGE })
+          const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE })
           const head = headRef.current
           setRows((prev) => {
             if (prev.length === 0) return page.rows
@@ -486,11 +487,11 @@ export function TokenUsageSection(): React.JSX.Element {
     setOpenReport(null)
     void (async () => {
       try {
-        const total = await daemonCliGet<UsageReport>('usage/tokens')
+        const total = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens')
         if (ac.signal.aborted) return
         setMachine(total)
         if (openCwd) {
-          const one = await daemonCliGet<UsageReport>('usage/tokens', { workspace: openCwd })
+          const one = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens', { workspace: openCwd })
           if (ac.signal.aborted) return
           setOpenReport(one)
         }
@@ -519,7 +520,7 @@ export function TokenUsageSection(): React.JSX.Element {
     if (chartHarness !== 'all') params.harness = chartHarness
     void (async () => {
       try {
-        const report = await daemonCliGet<UsageReport>('usage/tokens', params)
+        const report = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens', params)
         if (!ac.signal.aborted) setChartReport(report)
       } catch (err) {
         if (ac.signal.aborted) return

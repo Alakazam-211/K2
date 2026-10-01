@@ -115,6 +115,7 @@ import { nix } from '@replit/codemirror-lang-nix'
 import { solidity } from '@replit/codemirror-lang-solidity'
 import { elixir } from 'codemirror-lang-elixir'
 import { svelte } from '@replit/codemirror-lang-svelte'
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── Language detection ──────────────────────────────────────────────
 
@@ -1458,7 +1459,7 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
 
     const fetchDiff = async () => {
       try {
-        const hunks = await daemonCliGet<DiffHunk[]>('git/diff-file', { path: dirPath, file_path: filePath })
+        const hunks = await daemonCliGet<DiffHunk[]>(primaryScope(), 'git/diff-file', { path: dirPath, file_path: filePath })
         const lineChanges = hunksToLineMap(hunks)
         const es = useSettingsStore.getState().editor
         const ext = buildGitGutterExtension(lineChanges, es.scrollbarAnnotations ?? true, es.diffStyle ?? 'gutter')

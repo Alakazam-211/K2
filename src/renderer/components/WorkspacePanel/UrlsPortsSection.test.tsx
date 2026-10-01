@@ -5,10 +5,13 @@ import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-li
 const daemonCliGet = vi.fn()
 const daemonCliPost = vi.fn()
 
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
-  daemonCliPost: (...args: unknown[]) => daemonCliPost(...args),
-}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+    daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPost(...args)),
+  }
+})
 
 vi.mock('@/lib/server-capabilities', () => ({
   useServerSupports: () => true,

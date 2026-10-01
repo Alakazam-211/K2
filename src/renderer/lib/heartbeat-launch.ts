@@ -1,13 +1,14 @@
 import { daemonCliGetText } from '@/lib/daemon-cli'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Manual Launch / test-fire. Always passes `force=1` so a disabled
  *  heartbeat still runs (scheduler ticks still skip disabled rows). */
 export async function launchHeartbeat(projectPath: string, name: string): Promise<boolean> {
   const toast = useToastStore.getState()
   try {
-    const resp = await daemonCliGetText('heartbeat/launch', {
+    const resp = await daemonCliGetText(primaryScope(), 'heartbeat/launch', {
       project: projectPath,
       name,
       force: '1',

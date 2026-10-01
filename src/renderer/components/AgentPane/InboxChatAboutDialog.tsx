@@ -17,6 +17,7 @@ import {
   formatInboxError,
   type ChatAboutStamp,
 } from './inbox-browser'
+import { primaryScope } from '@/kessel/server-scope'
 
 function sendFailureMessage(status: ComposeStatus): string {
   if (status.kind === 'pty_died') {
@@ -42,7 +43,7 @@ export async function sendInboxChatAbout(args: {
   if (!note) return
   const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : ''
   if (workspaceId) activateProject(workspaceId)
-  const ensured = await daemonCliPost<{ sessionId?: unknown }>('workspace/ensure-pinned-chat', {
+  const ensured = await daemonCliPost<{ sessionId?: unknown }>(primaryScope(), 'workspace/ensure-pinned-chat', {
     project: args.projectPath,
   })
   const sessionId = typeof ensured?.sessionId === 'string' ? ensured.sessionId.trim() : ''
@@ -50,7 +51,7 @@ export async function sendInboxChatAbout(args: {
     throw new Error('Pinned chat did not return sessionId')
   }
   const text = formatChatAboutPayload(args.stamp, note)
-  const resp = await daemonCliPost<MsgResponse>('terminal/send-message', {
+  const resp = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
     session_id: sessionId,
     text,
   })

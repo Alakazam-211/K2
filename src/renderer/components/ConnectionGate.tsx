@@ -68,6 +68,7 @@ import { setConnectedAirgap } from '@/lib/airgap'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
  *  for the UI only — never branch on it. `instanceId` (0.40.48, optional —
@@ -333,7 +334,7 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
     // Host-aware (K2 Connect step #1): polls the ACTIVE host's
     // /boot-status. For 'local' this is byte-identical to before
     // (host === '127.0.0.1').
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     const resp = await fetch(`${daemonHttpBase(creds)}/boot-status`, {
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -373,7 +374,7 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
  *  503 migrating / network / 401 → not ready. */
 export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
   try {
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     const url = withCliTokenQuery(
       `${daemonHttpBase(creds)}/cli/settings/get`,
       creds.token,
@@ -636,7 +637,7 @@ export function classifyWhoamiStatus(httpStatus: number | null): SessionProbe {
  */
 async function probeRemoteSession(): Promise<SessionProbe> {
   try {
-    const creds = await getDaemonWs()
+    const creds = await getDaemonWs(primaryScope())
     // Desktop: ?token=. Hosted web: cookie (credentials include) — omit query
     // credential so it never lands in URL logs; X-K2-Client still sent.
     const url = withCliTokenQuery(

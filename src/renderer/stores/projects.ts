@@ -31,6 +31,7 @@ import { useSettingsStore } from './settings'
 import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 import { takeHostSelect } from '@/lib/home-pending-select'
+import { primaryScope } from '@/kessel/server-scope'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -160,7 +161,7 @@ export function activateProject(projectId: string): void {
   _lastActivatedProjectId = projectId
   // Optimistic echo — the daemon's active_changed delta reconciles this.
   useActiveStore.getState().echoActive(projectId)
-  void daemonCliPost('projects/activate', { projectId }).catch((e) =>
+  void daemonCliPost(primaryScope(), 'projects/activate', { projectId }).catch((e) =>
     console.warn('[projects] activate failed:', e),
   )
 }
@@ -326,7 +327,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase Project/Workspace response shapes match the
       // Rust structs' `#[serde(rename_all = "camelCase")]` so no remap.
-      const projectListRaw = await daemonCliGet<Array<Project & { workspaces?: unknown }>>('projects/list')
+      const projectListRaw = await daemonCliGet<Array<Project & { workspaces?: unknown }>>(primaryScope(), 'projects/list')
       // Daemon data is host-aware: a host swap (or an older/odd remote) can
       // return a non-array body (null, an error envelope, a {…}-wrapper). The
       // rest of the renderer treats `projects` / `workspaces` as arrays
@@ -344,7 +345,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       } else {
         projectsWithWorkspaces = await Promise.all(
           projectList.map(async (project) => {
-            const wsRaw = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
+            const wsRaw = await daemonCliGet<Workspace[]>(primaryScope(), 'workspaces/list', { project_id: project.id })
             const ws: Workspace[] = Array.isArray(wsRaw) ? wsRaw : []
             return {
               ...project,
@@ -492,7 +493,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       const fanout = opts?.fanout === true
       // Capture the new project's ID from the backend result (untagged enum:
       // NeedsGitInit has needsGitInit field, Project has id field)
-      const result = await daemonCliPost<Record<string, unknown>>('projects/add-from-path', {
+      const result = await daemonCliPost<Record<string, unknown>>(primaryScope(), 'projects/add-from-path', {
         path,
         seedWiki,
         seedAgentsMd,
@@ -546,7 +547,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         const targetGroupId = focusState.focusGroupsEnabled ? focusState.activeFocusGroupId : null
         if (targetGroupId) {
           try {
-            await daemonCliPost('focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
+            await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
             // The old Tauri `focus_groups_assign_project` emitted BOTH
             // `sync:focus-groups` and `sync:projects` (the project's
             // focusGroupId changed). Mirror both.
@@ -615,9 +616,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       }
       // Delete saved layouts from DB (no sync emit — layouts aren't a
       // cross-window-synced surface; the projects refresh below covers it).
-      daemonCliPost('workspace-layouts/delete', { projectId: id, workspaceId: null }).catch((e) => console.warn('[projects] workspace-layouts/delete failed:', e))
+      daemonCliPost(primaryScope(), 'workspace-layouts/delete', { projectId: id, workspaceId: null }).catch((e) => console.warn('[projects] workspace-layouts/delete failed:', e))
 
-      await daemonCliPost('projects/delete', { id })
+      await daemonCliPost(primaryScope(), 'projects/delete', { id })
       emitProjectsChanged()
 
       const state = get()
@@ -854,7 +855,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ projects: reordered })
 
     try {
-      await daemonCliPost('projects/reorder', { ids })
+      await daemonCliPost(primaryScope(), 'projects/reorder', { ids })
       // Local multi-window: other Tauri windows re-fetch via useWindowSync.
       // Actor paint is already optimistic — do NOT fetchProjects here.
       noteOptimisticProjectsMutationSuccess()
@@ -874,7 +875,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, color } : p)),
     }))
     try {
-      await daemonCliPost('projects/update', { id, color })
+      await daemonCliPost(primaryScope(), 'projects/update', { id, color })
       noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()
       // Success: trust the local patch. Do not full-refetch the project graph.
@@ -897,7 +898,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)),
     }))
     try {
-      await daemonCliPost('projects/update', { id, name })
+      await daemonCliPost(primaryScope(), 'projects/update', { id, name })
       noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()
       // Success: trust the local patch. Do not full-refetch the project graph.
@@ -925,7 +926,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // Write to DB — await so subsequent fetchProjects picks up the value.
     // projects_touch_interaction did NOT emit a cross-window sync.
     try {
-      await daemonCliPost('projects/touch-interaction', { id: projectId })
+      await daemonCliPost(primaryScope(), 'projects/touch-interaction', { id: projectId })
     } catch (err) {
       console.warn('[projects] touchInteraction failed:', err)
     }
@@ -943,9 +944,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         // daemon's active_changed delta reconciles it.
         if (active) useActiveStore.getState().echoActive(projectId)
         else useActiveStore.getState().echoInactive(projectId)
-        await daemonCliPost('projects/pin', { projectId, pinned: active })
+        await daemonCliPost(primaryScope(), 'projects/pin', { projectId, pinned: active })
       } else {
-        await daemonCliPost('projects/update', { id: projectId, manuallyActive: active ? 1 : 0 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, manuallyActive: active ? 1 : 0 })
       }
       noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()

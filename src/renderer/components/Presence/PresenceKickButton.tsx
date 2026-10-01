@@ -31,6 +31,7 @@ import { useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { onActiveHostChange } from '@/stores/connect-host'
 import type { RosterUser } from '@/stores/presence'
+import { primaryScope } from '@/kessel/server-scope'
 
 /** Wire roles the kick matrix reasons about. `viewer` ships with S4 but
  *  is gated here already so the matrix doesn't need a second pass. */
@@ -62,7 +63,7 @@ export function fetchViewerRole(): Promise<WireRole | null> {
   if (!whoamiCache || now - whoamiCache.at > WHOAMI_TTL_MS) {
     whoamiCache = {
       at: now,
-      promise: daemonCliGet<{ role?: string; owner?: boolean }>('auth/whoami')
+      promise: daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
         .then((data): WireRole | null => {
           if (data.role === 'owner' || data.role === 'admin' || data.role === 'member' || data.role === 'viewer') {
             return data.role
@@ -113,7 +114,7 @@ export default function PresenceKickButton({ user }: PresenceKickButtonProps): R
     setBusy(true)
     setError(null)
     try {
-      await daemonCliPost('presence/kick', { username: user.user })
+      await daemonCliPost(primaryScope(), 'presence/kick', { username: user.user })
       // Success: nothing to do — the kicked sockets deregister and the
       // roster (this row included) updates via presence_changed events.
       setConfirming(false)

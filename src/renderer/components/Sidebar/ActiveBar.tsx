@@ -23,6 +23,7 @@ import ProjectAvatar from './ProjectAvatar'
 import { KeyCombo } from '@/components/KeySymbol'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { primaryScope } from '@/kessel/server-scope'
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60
 
@@ -511,15 +512,15 @@ export default function ActiveBar(): React.JSX.Element | null {
         // Optimistic echo so the bar drops it immediately; the daemon's
         // delta reconciles.
         useActiveStore.getState().echoInactive(project.id)
-        await daemonCliPost('projects/dismiss', { projectId: project.id }).catch((e) => console.warn('[active-bar] dismiss failed:', e))
+        await daemonCliPost(primaryScope(), 'projects/dismiss', { projectId: project.id }).catch((e) => console.warn('[active-bar] dismiss failed:', e))
       } else {
         // Fallback (un-updated daemon): legacy unpin + clear-interaction so
         // the local-derivation bar drops it. No reap happens against an old
         // daemon (the renderer reaper is gone) — accepted transitional
         // degradation per the PRD.
-        await daemonCliPost('projects/update', { id: project.id, manuallyActive: 0 })
+        await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, manuallyActive: 0 })
         void emit('sync:projects').catch(() => {})
-        await daemonCliPost('projects/touch-interaction-clear', { id: project.id }).catch((e) => console.warn('[active-bar]', e))
+        await daemonCliPost(primaryScope(), 'projects/touch-interaction-clear', { id: project.id }).catch((e) => console.warn('[active-bar]', e))
       }
       // Clear background workspaces for this project (stashed terminals keep it visible)
       const tabsStore = useTabsStore.getState()

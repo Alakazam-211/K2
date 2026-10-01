@@ -43,6 +43,7 @@ import {
   togglePinnedMember,
   togglePinnedResource,
 } from './member-pins'
+import { primaryScope } from '@/kessel/server-scope'
 
 export const PROJECT_NAV_WIDTH = 280
 /** Collapsed-rail width (IconRail's RAIL_WIDTH). */
@@ -87,7 +88,7 @@ function GroupRow({
     if (pinBusy) return
     setPinBusy(true)
     try {
-      await pinProjectGroup(group.id, !group.pinned)
+      await pinProjectGroup(primaryScope(), group.id, !group.pinned)
       // groups-changed also fires; refetch now so the row moves sections
       // without waiting out the coalesce window.
       await useProjectGroupsStore.getState().fetchGroups()
@@ -412,7 +413,7 @@ function ResourceRow({
     if (clickedId === 'toggle-pin') onTogglePin(doc)
     if (clickedId === 'remove') {
       try {
-        await removeWorkspaceResource(doc.workspaceId, doc.filePath)
+        await removeWorkspaceResource(primaryScope(), doc.workspaceId, doc.filePath)
         onRemoved()
       } catch (err) {
         useToastStore.getState().addToast(
@@ -478,7 +479,7 @@ function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | 
   React.useEffect(() => {
     let cancelled = false
     const load = (): void => {
-      fetchProjectGroupResources(groupId)
+      fetchProjectGroupResources(primaryScope(), groupId)
         .then((d) => {
           if (!cancelled) setDocs(d)
         })
@@ -674,7 +675,7 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
     if (!trimmed || busy) return
     setBusy(true)
     try {
-      const group = await createProjectGroup(trimmed)
+      const group = await createProjectGroup(primaryScope(), trimmed)
       const store = useProjectGroupsStore.getState()
       await store.fetchGroups()
       store.selectGroup(group.id)
@@ -783,7 +784,7 @@ function RailIcon({
       useSettingsStore.getState().openSettings('project-groups', group.id)
     } else if (clickedId === 'toggle-pin') {
       try {
-        await pinProjectGroup(group.id, !group.pinned)
+        await pinProjectGroup(primaryScope(), group.id, !group.pinned)
         await useProjectGroupsStore.getState().fetchGroups()
       } catch (err) {
         useToastStore
@@ -1002,7 +1003,7 @@ export function ProjectNavRail({
     let cancelled = false
     setResourceDocs(null)
     const load = (): void => {
-      fetchProjectGroupResources(selectedGroupId)
+      fetchProjectGroupResources(primaryScope(), selectedGroupId)
         .then((d) => {
           if (!cancelled) setResourceDocs(d)
         })
@@ -1190,7 +1191,7 @@ function RailResource({
     if (clickedId === 'toggle-pin') onTogglePin(doc)
     if (clickedId === 'remove') {
       try {
-        await removeWorkspaceResource(doc.workspaceId, doc.filePath)
+        await removeWorkspaceResource(primaryScope(), doc.workspaceId, doc.filePath)
         onRemoved()
       } catch (err) {
         useToastStore.getState().addToast(

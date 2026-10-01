@@ -23,7 +23,7 @@
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
-import { createPinnedRoom, type PinnedRoom, type RoomProjectsStore } from '@/stores/room'
+import { createPinnedRoom, type PinnedRoom, type PinnedRoomInput, type RoomProjectsStore } from '@/stores/room'
 import { roomTiers, type RoomTierChange, type RoomTierManager } from '@/lib/room-tiers'
 import { createRoomKeepAlive, type RoomKeepAlive } from '@/lib/room-keep-alive'
 import { hostPool } from '@/lib/host-pool-instance'
@@ -65,6 +65,8 @@ interface HomeRoomsState {
 
 export interface HomeRoomsDeps {
   tiers: RoomTierManager
+  /** Build the pinned room (tests pass a fake). */
+  createRoom(input: PinnedRoomInput): PinnedRoom
   listProjects(scope: ServerScope): Promise<ProjectWithWorkspaces[]>
   keepAlive(hostKey: string, projectId: string): Promise<KeepAliveResult>
   scopeFor(hostKey: string): ServerScope
@@ -166,7 +168,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     if (!project || !ws) return patch(address, { phase: 'not-found', error: null })
 
     const projectsStore = createStore<{ projects: ProjectWithWorkspaces[] }>(() => ({ projects }))
-    const room = createPinnedRoom({
+    const room = deps.createRoom({
       scope,
       workspace: { projectId: project.id, workspaceId: ws.id, path: ws.worktreePath ?? project.path },
       projects: projectsStore as RoomProjectsStore,
@@ -268,6 +270,7 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
 /** This window's Home rooms. */
 export const homeRooms: HomeRooms = createHomeRooms({
   tiers: roomTiers,
+  createRoom: createPinnedRoom,
   listProjects: fetchServerProjects,
   keepAlive: (hostKey, projectId) => hostPool.keepRoomAlive(hostKey, projectId),
   scopeFor: (hostKey) => scopeForHost(hostKey),

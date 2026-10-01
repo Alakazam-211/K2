@@ -297,7 +297,14 @@ pub fn handle_companion_sessions(_params: &HashMap<String, String>) -> CliRespon
         let is_main_chat = agent_name == ws.id;
 
         // Canonical tab-title resolution for tab-driven sessions.
-        let mut label = derived_label;
+        // The pinned chat's Locked label is set at spawn (canonical
+        // session), not by a rename, so only extras take the session label.
+        let mut label = companion_label(
+            derived_label,
+            agent_name.starts_with("tab-") || is_main_chat,
+            session.0.label_source(),
+            session.0.label(),
+        );
         let mut tab_id: Option<String> = None;
         if let Some(pgid) = agent_name.strip_prefix("tab-") {
             if let Some((resolved_tab_id, resolved_title)) =
@@ -335,6 +342,26 @@ pub fn handle_companion_sessions(_params: &HashMap<String, String>) -> CliRespon
         }));
     }
     CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()))
+}
+
+/// The label a companion row shows for a session. A non-tab session
+/// (overlay extras such as `qa088`) shows the name a person
+/// set through `/cli/sessions/label` (label source `Locked`). The pinned
+/// chat is excluded by the caller: its label is locked at spawn. PTY title
+/// churn (`Pty`/`Seed`) never replaces the derived agent label. `tab-*`
+/// sessions keep the `tab_titles` overlay applied after this.
+fn companion_label(
+    derived: String,
+    is_tab: bool,
+    source: k2_core::terminal::daemon_pty::LabelSource,
+    session_label: String,
+) -> String {
+    use k2_core::terminal::daemon_pty::LabelSource;
+    if !is_tab && source == LabelSource::Locked && !session_label.trim().is_empty() {
+        session_label
+    } else {
+        derived
+    }
 }
 
 /// Handler for `GET /cli/companion/projects-summary`.
@@ -519,6 +546,17 @@ fn count_pending_reviews(project_path: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn companion_label_uses_a_locked_rename_for_non_tab_sessions_only() {
+        use k2_core::terminal::daemon_pty::LabelSource;
+        let d = || "qa088".to_string();
+        assert_eq!(companion_label(d(), false, LabelSource::Locked, "Weekly review".into()), "Weekly review");
+        assert_eq!(companion_label(d(), false, LabelSource::Pty, "✳ Claude Code".into()), "qa088");
+        assert_eq!(companion_label(d(), false, LabelSource::Seed, "seeded".into()), "qa088");
+        assert_eq!(companion_label(d(), false, LabelSource::Locked, "   ".into()), "qa088");
+        assert_eq!(companion_label(d(), true, LabelSource::Locked, "Weekly review".into()), "qa088");
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

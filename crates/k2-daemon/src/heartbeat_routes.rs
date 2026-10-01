@@ -10,7 +10,8 @@
 //!
 //! ## Read-side (GET, dispatched via `cli::dispatch`)
 //!
-//! - `/cli/heartbeat/add` — schedule a new heartbeat (query string).
+//! - `/cli/heartbeat/add` — schedule a new heartbeat (query string;
+//!   optional `instructions` = the WAKEUP.md body, written by the daemon).
 //! - `/cli/heartbeat/list` / `/cli/heartbeat/list-archived` — list rows.
 //! - `/cli/heartbeat/archive` / `/cli/heartbeat/unarchive` — soft delete.
 //! - `/cli/heartbeat/remove` — hard delete.
@@ -358,10 +359,20 @@ pub fn dispatch_get(
             if name.is_empty() || frequency.is_empty() {
                 return Err("Missing 'name' or 'frequency' parameter".to_string());
             }
+            // S5 HB32: the daemon writes the WAKEUP.md body on its own
+            // disk before it answers. Absent/blank = the row waits with
+            // `waitReason: wakeup_empty` until instructions are written.
+            let instructions = params.get("instructions").cloned();
             with_roster_broadcast(
                 project_path,
-                hb::k2so_heartbeat_add(project_path.to_string(), name, frequency, spec_json)
-                    .map(|v| v.to_string()),
+                hb::k2so_heartbeat_add_with_instructions(
+                    project_path.to_string(),
+                    name,
+                    frequency,
+                    spec_json,
+                    instructions,
+                )
+                .map(|v| v.to_string()),
             )
         }
         "/cli/heartbeat/list" => hb::k2so_heartbeat_list(project_path.to_string())

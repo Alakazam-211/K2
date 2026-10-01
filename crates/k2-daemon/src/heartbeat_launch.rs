@@ -648,7 +648,10 @@ fn run_inject(
     let body = wake::strip_frontmatter(&body_raw);
     let body_trimmed = body.trim();
     if body_trimmed.is_empty() {
-        return record_fire_failure(project_id, agent_name, hb, "WAKEUP.md body is empty");
+        // S5 HB33: empty is a wait, not a failure (no backoff, no
+        // failure count). The helper sees the empty file and answers
+        // `wakeup_empty` without disabling.
+        return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     }
 
     if let Err(e) = live.write(body_trimmed.as_bytes()) {
@@ -1104,6 +1107,23 @@ fn auto_disable_missing_wakeup(
     wakeup_abs: &Path,
 ) -> serde_json::Value {
     release_lease(project_id, &hb.name);
+    // S5 HB33: an EMPTY WAKEUP.md is not a missing one. The row stays
+    // enabled, no failure is counted, and the launch says why. The
+    // scheduler tick already skips empty bodies, so only a manual
+    // Launch (or a body emptied between tick and fire) lands here.
+    if k2_core::heartbeats::wait::wakeup_body(wakeup_abs)
+        == k2_core::heartbeats::wait::WakeupBody::Empty
+    {
+        let detail = k2_core::heartbeats::wait::WAKEUP_EMPTY_DETAIL;
+        write_audit(
+            project_id,
+            agent_name,
+            hb,
+            k2_core::heartbeats::wait::DECISION_WAKEUP_EMPTY,
+            detail,
+        );
+        return error_value(k2_core::heartbeats::WAIT_WAKEUP_EMPTY, detail, &hb.name);
+    }
     let reason = format!(
         "WAKEUP.md missing or unreadable at {}; heartbeat auto-disabled",
         wakeup_abs.display()

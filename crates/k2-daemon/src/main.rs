@@ -622,6 +622,31 @@ async fn async_main() {
         }
     }
 
+    // S5 (prd-heartbeat-firing-v1 HB33/HB35): relabel old
+    // `wakeup_missing` auto-disables whose WAKEUP.md is just empty
+    // (they stay disabled), and flag every enabled row whose schedule
+    // can never fire (Reggie's `frequency: list`) with `schedule_error`.
+    // Nothing is enabled, disabled, rewritten or deleted.
+    match k2_core::heartbeats::boot_reconcile() {
+        Ok(r) => {
+            if !r.relabelled.is_empty() {
+                log_debug!(
+                    "[daemon] heartbeat: relabelled {} empty-WAKEUP auto-disable(s) as wakeup_empty: {}",
+                    r.relabelled.len(),
+                    r.relabelled.join(", ")
+                );
+            }
+            if !r.flagged.is_empty() {
+                log_debug!(
+                    "[daemon] heartbeat: flagged {} invalid schedule(s): {}",
+                    r.flagged.len(),
+                    r.flagged.join(", ")
+                );
+            }
+        }
+        Err(e) => log_debug!("[daemon] WARN: heartbeat boot reconcile: {e}"),
+    }
+
     // Heartbeat audit retention (reliability overhaul): prune
     // `heartbeat_fires` rows older than 90 days. The pruner existed
     // since the audit table did but had zero callers — combined with

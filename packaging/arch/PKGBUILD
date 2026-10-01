@@ -51,11 +51,16 @@ source=(
     'k2.desktop'
     'k2.install'
 )
+# Every source above is a file in this repo, so its sum is 'SKIP'. The
+# repo is already the trust root, and a pinned sum is a second place to
+# edit: 0.43.0's tag build died because k2.install changed and its sum
+# did not. Anything downloaded (a URL source) keeps a real sha256.
+# scripts/check-arch-pkgbuild.sh enforces both rules on every push.
 sha256sums=(
-    '6bb7459f3123a86e64a2ece31c99cc20381312c97e463c8de500e5425fd207a3'
-    'b6e50bb9e9a3c06f05876082cbf6971bb0a80c714f52946eba3f3fcd78f2cb4e'
-    '2c4f8a6482a31e0f40f9b2834e43eafdec731157b63e9609447687c8fe12ad3d'
-    '44073b555a571e44c3ff38d5c0ef5ab3dccf13ebc620e1b4d7acc88a42313683'
+    'SKIP'
+    'SKIP'
+    'SKIP'
+    'SKIP'
 )
 
 _tree() {

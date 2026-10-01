@@ -184,6 +184,13 @@ pub struct SpawnRequest {
     /// workspace-scoped door sets it (to the id it provisioned the layer under).
     #[serde(skip)]
     pub forced_session_id: Option<SessionId>,
+    /// Home M4: a view-only remote room ATTACHES to a live session and never
+    /// spawns, evicts, recovers or resizes one. `true` => a live session for
+    /// `agent_name` is returned as-is (`reused: true`, its current size);
+    /// anything else is `404 {"error":"session_not_live"}`. Absent / false =>
+    /// the find-or-spawn path, byte-identical.
+    #[serde(default)]
+    pub attach_only: bool,
 }
 
 /// Default session cwd when the client omits one.
@@ -711,8 +718,61 @@ fn closed_tab_gate(req: &SpawnRequest) -> Option<HandlerResult> {
 
 /// Body of [`spawn_session`]. Caller MUST already hold
 /// [`canonical_spawn_lock`] for `req.agent_name`.
+/// Home M4 — attach-only: hand back a live session for `agent_name`
+/// without touching it (no spawn, no eviction, no recovery, no resize).
+fn attach_only_session(req: &SpawnRequest) -> HandlerResult {
+    let not_live = || HandlerResult {
+        status: "404 Not Found",
+        body: serde_json::json!({ "error": "session_not_live", "agent_name": req.agent_name })
+            .to_string(),
+    };
+    let Some(existing) = v2_session_map::lookup_by_agent_name(&req.agent_name) else {
+        return not_live();
+    };
+    if !existing.is_child_alive() {
+        return not_live();
+    }
+    let live_cwd = existing
+        .cwd
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if session_owned_elsewhere(&live_cwd, &req.cwd) {
+        return HandlerResult {
+            status: "409 Conflict",
+            body: r#"{"error":"session_owned_elsewhere"}"#.to_string(),
+        };
+    }
+    let (cols, rows) = current_dims(&existing);
+    let mut out = serde_json::json!({
+        "sessionId": existing.session_id.to_string(),
+        "agentName": req.agent_name,
+        "cols": cols,
+        "rows": rows,
+        "reused": true,
+        "attachOnly": true,
+    });
+    put_conversation_id(
+        &mut out,
+        conversation_id_for_agent(
+            &req.agent_name,
+            &req.cwd,
+            existing.program.as_deref(),
+            &existing.args,
+        ),
+    );
+    HandlerResult {
+        status: "200 OK",
+        body: out.to_string(),
+    }
+}
+
 fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     let __t_total = std::time::Instant::now();
+
+    if req.attach_only {
+        return attach_only_session(&req);
+    }
 
     // Canonical chat key = bare project_id. Empty-command attach on that
     // key is a NEED (R5/R16), not leftover-argv recovery. `tab-*` visits
@@ -1881,6 +1941,7 @@ pub fn handle_v2_refresh(body: &[u8]) -> HandlerResult {
         quota_workspace: None,
         overlay: None,
         forced_session_id: None,
+        attach_only: false,
     })
 }
 
@@ -2582,6 +2643,67 @@ mod tests {
             crate::v2_session_map::lookup_by_agent_name(&agent).expect("session stays registered");
         assert!(live.is_child_alive(), "child must stay alive");
         assert_eq!(live.session_id.to_string(), first_id);
+    }
+
+    /// Home M4: a view-only room's attach never spawns, evicts or resizes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_only_never_spawns_and_returns_the_live_session_untouched() {
+        k2_core::db::init_for_tests();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let agent = format!("tab-attach-only-{n}");
+        let root = std::env::temp_dir().join(format!("k2-attach-only-{n}"));
+        std::fs::create_dir_all(&root).expect("create cwd");
+        let cwd = root.to_string_lossy().into_owned();
+        let pid = format!("proj-attach-only-{n}");
+        seed_project_row(&pid, &cwd);
+        let _cleanup = SpawnCleanup {
+            agent: agent.clone(),
+            root,
+            ids: vec![pid],
+        };
+
+        // No session yet: 404, and nothing was spawned.
+        let missing = handle_v2_spawn(
+            &serde_json::json!({ "agent_name": agent, "cwd": cwd, "attach_only": true, "command": "sleep", "args": ["30"] })
+                .to_string()
+                .into_bytes(),
+        );
+        assert_eq!(missing.status, "404 Not Found", "body={}", missing.body);
+        let missing_json: serde_json::Value = serde_json::from_str(&missing.body).expect("404 json");
+        assert_eq!(missing_json["error"], "session_not_live");
+        assert!(crate::v2_session_map::lookup_by_agent_name(&agent).is_none());
+
+        let first = spawn_sleep(&agent, &cwd);
+        assert_eq!(first.status, "200 OK", "body={}", first.body);
+        let first_id = session_id_of(&first.body);
+        let live = crate::v2_session_map::lookup_by_agent_name(&agent).expect("registered");
+        let before = current_dims(&live);
+
+        // A different command and another size: attach-only still neither
+        // evicts the live program nor resizes it.
+        let attach = handle_v2_spawn(
+            &serde_json::json!({
+                "agent_name": agent,
+                "cwd": cwd,
+                "attach_only": true,
+                "command": "bash",
+                "cols": before.0 + 17,
+                "rows": before.1 + 9,
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        assert_eq!(attach.status, "200 OK", "body={}", attach.body);
+        let json: serde_json::Value = serde_json::from_str(&attach.body).expect("attach json");
+        assert_eq!(json["reused"], true);
+        assert_eq!(json["attachOnly"], true);
+        assert_eq!(json["sessionId"].as_str().expect("sessionId"), first_id);
+        assert_eq!(json["cols"].as_u64().expect("cols"), u64::from(before.0));
+        assert_eq!(json["rows"].as_u64().expect("rows"), u64::from(before.1));
+        let after = crate::v2_session_map::lookup_by_agent_name(&agent).expect("still registered");
+        assert!(after.is_child_alive(), "the live child must not be evicted");
+        assert_eq!(after.session_id.to_string(), first_id);
+        assert_eq!(current_dims(&after), before);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

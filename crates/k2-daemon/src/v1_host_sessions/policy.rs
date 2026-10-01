@@ -519,6 +519,7 @@ pub(crate) fn resolve_host_spawn(
         // FORCE the host-decided id so the returned/addressable sessionId
         // equals the conversation id spliced into the agent argv above.
         forced_session_id: Some(*session_id),
+        attach_only: false,
     };
     (spawn, plan, model_decision)
 }

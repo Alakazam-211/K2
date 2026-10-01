@@ -195,6 +195,10 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     if (!(store.getState().shown === address && pageVisible)) deps.tiers.hide(room.key)
     ka.setHot(deps.tiers.tier(room.key) === 'hot')
     await room.tabs.room.open()
+    // The room's pinned Chat and Inbox tabs, as the window's own room gets
+    // them after a workspace restore (R3). Agent names come from the room's
+    // server (`agents/list`); nothing is saved (view-only).
+    room.tabs.room.ensurePinnedAgentTabForMode(project.agentMode ?? 'off', project.path)
     void ka.opened()
     return opened
   }

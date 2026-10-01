@@ -147,6 +147,11 @@ async function activeIds(port: number, owner: string): Promise<string[]> {
   return (await daemon<{ projectIds: string[] }>(port, owner, 'projects/active')).projectIds
 }
 
+/** The room's tabs from the layout (not the pinned Chat / Inbox tabs). */
+function userTabs(r: PinnedRoom): string[] {
+  return r.tabs.getState().tabs.filter((t) => !t.isSystemAgent).map((t) => t.id)
+}
+
 function portOf(url: string): number {
   return Number(new URL(url).port)
 }
@@ -254,9 +259,10 @@ describe("B's room on Home while the window is on A (Home M4)", () => {
     expect(homeRooms.store.getState().shown).toBe(row.address)
   })
 
-  it("shows B's tabs from B's layout", () => {
-    expect(room.tabs.getState().tabs.map((t) => t.id)).toEqual(['tab-b1', 'tab-b2'])
+  it("shows B's tabs from B's layout, with its pinned Chat / Inbox tabs", async () => {
+    expect(userTabs(room)).toEqual(['tab-b1', 'tab-b2'])
     expect(room.tabs.getState().activeWorkspaceKey).toBe(`${projB.id}:${projB.workspaces[0].id}`)
+    await until(() => room.tabs.getState().tabs.some((t) => t.isSystemAgent), 'the pinned Chat tab')
   })
 
   it("B's who's-here lists the room's user on that workspace, and the room shows B's people (R7)", async () => {
@@ -292,6 +298,7 @@ describe("B's room on Home while the window is on A (Home M4)", () => {
     const after = await stored(B_PORT, B_OWNER, projB)
     expect(after.revision).toBe(bRevisionAtOpen)
     expect((JSON.parse(after.layoutJson) as { tabs: Array<{ id: string }> }).tabs.map((t) => t.id)).toEqual(['tab-b1', 'tab-b2'])
+    expect(room.tabs.getState().tabs.filter((t) => !t.isSystemAgent).length).toBe(3)
   })
 
   it('holds ONE workspace socket on B (MS46)', () => {
@@ -314,7 +321,7 @@ describe("B's room on Home while the window is on A (Home M4)", () => {
     roomTiers.reconfigure({ ...DEFAULT_ROOM_TIER_CONFIG })
     const again = await openRow()
     expect(again).not.toBe(room)
-    expect(again.tabs.getState().tabs.map((t) => t.id)).toEqual(['tab-b1', 'tab-b2'])
+    expect(userTabs(again)).toEqual(['tab-b1', 'tab-b2'])
     await until(() => openSocketsTo(B_PORT).length === 1, "the room's socket on B to reopen")
     await until(async () => annaHere(await rosterOnB()), 'B to list anna again')
     room = again

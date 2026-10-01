@@ -29,6 +29,8 @@ interface FakeRoom {
   opened: number
   disposed: number
   sockets: number
+  /** ensurePinnedAgentTabForMode calls (agent mode, project path). */
+  pinned: Array<[string, string]>
 }
 
 function harness() {
@@ -62,7 +64,7 @@ function harness() {
   const homeRooms: HomeRooms = createHomeRooms({
     tiers,
     createRoom: (input) => {
-      const fake = { input, opened: 0, disposed: 0, sockets: 0 } as FakeRoom
+      const fake = { input, opened: 0, disposed: 0, sockets: 0, pinned: [] } as unknown as FakeRoom
       fake.room = {
         key: `${input.scope.hostKey}|${input.workspace.projectId}:${input.workspace.workspaceId}`,
         isPrimary: false,
@@ -73,6 +75,9 @@ function harness() {
             open: async () => {
               fake.opened += 1
               fake.sockets += 1
+            },
+            ensurePinnedAgentTabForMode: (mode: string, path: string) => {
+              fake.pinned.push([mode, path])
             },
           },
         },
@@ -156,6 +161,8 @@ describe('Home rooms (M4)', () => {
     expect(fake.input.workspace).toEqual({ projectId: 'pb', workspaceId: 'pb-ws', path: '/srv/anna' })
     expect(fake.opened).toBe(1)
     expect(fake.sockets).toBe(1)
+    // Its pinned Chat / Inbox tabs, as the window's room gets them.
+    expect(fake.pinned).toEqual([['off', '/srv/anna']])
     expect(h.tiers.tier(fake.room.key)).toBe('hot')
     expect(h.homeRooms.store.getState().shown).toBe('anna::b.test')
     // projects/activate on B through the pool, on open; and the room's own

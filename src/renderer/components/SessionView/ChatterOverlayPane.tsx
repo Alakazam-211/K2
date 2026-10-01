@@ -3,7 +3,7 @@ import { ChatMessage } from '@/components/common/ChatMessage'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayChatter } from './useOverlayChatter'
-import { primaryScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 import type { OverlayDoc, OverlayThreadItem } from './overlayThread'
 
 interface ChatterOverlayPaneProps {
@@ -20,7 +20,8 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
   active = true,
 }: ChatterOverlayPaneProps): JSX.Element {
   const { items, error, hasMore, loadOlder, loadingOlder } = useOverlayChatter({
-    scope: primaryScope(),
+    // Home M4: the room's server (B's thread in B's room).
+    scope: useRoom().scope,
     addr,
     conversationId,
     enabled: active,

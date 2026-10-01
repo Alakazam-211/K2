@@ -5,7 +5,7 @@ import { chatHarnessLabel } from './chatHarness'
 import type { ChatBlock, ChatTurn } from './chatTranscript'
 import type { SessionViewTab } from './sessionViewTab'
 import { useChatTranscript } from './useChatTranscript'
-import { primaryScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 export function ChatOverlayPane({
   view,
@@ -21,7 +21,8 @@ export function ChatOverlayPane({
   agentName: string | null
 }): JSX.Element {
   const { turns, error } = useChatTranscript({
-    scope: primaryScope(),
+    // Home M4: the room's server (B's thread in B's room).
+    scope: useRoom().scope,
     view,
     visible,
     provider,

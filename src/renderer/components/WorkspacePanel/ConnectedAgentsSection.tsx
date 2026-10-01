@@ -3,7 +3,8 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { activateProject, useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { SectionManageCog } from './SectionManageCog'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 
 /** One row from GET `/cli/connections?action=list` — present edges only. */
 type ConnListRow = {
@@ -33,12 +34,14 @@ function parseConnectionRows(body: unknown): ConnListRow[] {
 
 /** Collapsible Connected Agents — only workspaces with a present connection. */
 export function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element {
-  const collapseKey = scopedKey(primaryScope(), `connected-agents.section-collapsed.${projectId}`)
+  // Home M4: the room's server and its own project list (MS3).
+  const room = useRoom()
+  const collapseKey = scopedKey(room.scope, `connected-agents.section-collapsed.${projectId}`)
   const [open, setOpen] = useState<boolean>(() => localStorage.getItem(collapseKey) !== 'closed')
   const [rows, setRows] = useState<ConnListRow[]>([])
   const [loaded, setLoaded] = useState(false)
-  const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId) ?? null)
-  const projects = useProjectsStore((s) => s.projects)
+  const projects = useRoomProjects((p) => p)
+  const project = projects.find((p) => p.id === projectId) ?? null
   const projectPath = project?.path ?? ''
 
   useEffect(() => {
@@ -63,7 +66,7 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
     }
     const load = async (): Promise<void> => {
       try {
-        const body = await daemonCliGet<unknown>(primaryScope(), 'connections', {
+        const body = await daemonCliGet<unknown>(room.scope, 'connections', {
           project: projectPath,
           action: 'list',
         })

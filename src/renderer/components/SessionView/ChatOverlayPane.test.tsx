@@ -10,6 +10,11 @@ vi.mock('./useChatTranscript', () => ({
 }))
 
 import { ChatOverlayPane } from './ChatOverlayPane'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 describe('chat overlay paint', () => {
   it('renders user text as owner ChatMessage and a tool call as the tool name only', () => {
@@ -30,7 +35,7 @@ describe('chat overlay paint', () => {
         ],
       },
     ]
-    const { container } = render(
+    const { container } = renderInRoom(overlayRoom, 
       <ChatOverlayPane
         view="chat"
         visible

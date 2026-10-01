@@ -60,7 +60,7 @@ export function removeNavWorktree(worktreeId: string): void {
 // ── Worktree git badge (shows changed files count) ──────────────────────────
 
 function WorkspaceGitBadge({ path }: { path?: string }): React.JSX.Element | null {
-  const { data } = useGitInfo(path)
+  const { data } = useGitInfo(primaryScope(), path)
   if (!data?.isRepo) return null
 
   const count = data.changedFiles + data.untrackedFiles
@@ -76,7 +76,7 @@ function WorkspaceGitBadge({ path }: { path?: string }): React.JSX.Element | nul
 // ── Worktree status dot (amber pulsing if dirty) ────────────────────────────
 
 function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | null {
-  const { data } = useGitInfo(path)
+  const { data } = useGitInfo(primaryScope(), path)
   if (!data?.isRepo) return null
 
   const count = data.changedFiles + data.untrackedFiles

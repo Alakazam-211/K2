@@ -11,7 +11,6 @@
 import { useEffect, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
-import { serverSupports } from '@/lib/server-capabilities'
 import {
   onAppHello,
   onTunnelStatusChanged,
@@ -21,7 +20,7 @@ import {
   normalizeTargets,
   type SubdomainTargetInfo,
 } from '@/components/WorkspacePanel/urls-ports'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export interface TunnelStatus {
   running: boolean
@@ -39,8 +38,8 @@ export interface SubdomainsMap {
   targets: Record<string, SubdomainTargetInfo>
 }
 
-async function fetchTunnelStatus(): Promise<TunnelStatus> {
-  const creds = await getDaemonWs(primaryScope())
+async function fetchTunnelStatus(scope: ServerScope): Promise<TunnelStatus> {
+  const creds = await getDaemonWs(scope)
   const res = await fetch(
     withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/status`, creds.token),
     withDaemonFetch({ method: 'GET' }),
@@ -49,8 +48,8 @@ async function fetchTunnelStatus(): Promise<TunnelStatus> {
   return (await res.json()) as TunnelStatus
 }
 
-async function fetchSubdomains(): Promise<SubdomainsMap> {
-  const creds = await getDaemonWs(primaryScope())
+async function fetchSubdomains(scope: ServerScope): Promise<SubdomainsMap> {
+  const creds = await getDaemonWs(scope)
   const res = await fetch(
     withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/subdomains`, creds.token),
     withDaemonFetch({ method: 'GET' }),
@@ -74,11 +73,12 @@ export interface TunnelUrlsState {
   subs: SubdomainsMap | null | undefined
 }
 
-/** Live tunnel status + nested-subdomain map for the ACTIVE daemon.
+/** Live tunnel status + nested-subdomain map for `scope`'s daemon (the
+ *  window's server in Settings; the room's server in a room's drawer).
  *  Fetches on mount, then converges via broadcasts (with the safety /
  *  fallback polls). One instance per consumer — the underlying GETs are
  *  cheap and the broadcast fan-out is shared anyway. */
-export function useTunnelUrls(): TunnelUrlsState {
+export function useTunnelUrls(scope: ServerScope): TunnelUrlsState {
   const [status, setStatus] = useState<TunnelStatus | null>(null)
   const [subs, setSubs] = useState<SubdomainsMap | null | undefined>(undefined)
 
@@ -86,7 +86,7 @@ export function useTunnelUrls(): TunnelUrlsState {
     let cancelled = false
     const refreshStatus = async (): Promise<void> => {
       try {
-        const s = await fetchTunnelStatus()
+        const s = await fetchTunnelStatus(scope)
         if (!cancelled) setStatus(s)
       } catch {
         /* ignore — leave previous status / null */
@@ -94,7 +94,7 @@ export function useTunnelUrls(): TunnelUrlsState {
     }
     const refreshSubs = async (): Promise<void> => {
       try {
-        const m = await fetchSubdomains()
+        const m = await fetchSubdomains(scope)
         if (!cancelled) setSubs(m)
       } catch {
         // Route missing (older daemon) or transient failure — show the
@@ -108,16 +108,16 @@ export function useTunnelUrls(): TunnelUrlsState {
     }
     refreshAll()
 
-    if (serverSupports('daemon-broadcasts')) {
-      const offHello = onAppHello(primaryScope(), refreshAll)
-      const offTunnel = onTunnelStatusChanged(primaryScope(), () => {
+    if (scope.serverSupports('daemon-broadcasts')) {
+      const offHello = onAppHello(scope, refreshAll)
+      const offTunnel = onTunnelStatusChanged(scope, () => {
         // The event only carries running + publicUrl; consumers also
         // render local_port / server_addr / subdomain, so re-snapshot the
         // full status (one cheap GET on a rare transition). A start/stop
         // can also change the map's relevance — refresh it too.
         refreshAll()
       })
-      const offSubs = onTunnelSubdomainsChanged(primaryScope(), (e) => {
+      const offSubs = onTunnelSubdomainsChanged(scope, (e) => {
         // Whole-map replace (the ActiveChanged convention) — no GET
         // needed. Normalize: older daemons broadcast bare-string targets.
         if (!cancelled) setSubs({ primary: e.primary, targets: normalizeTargets(e.targets) })

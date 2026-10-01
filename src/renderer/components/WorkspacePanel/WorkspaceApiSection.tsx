@@ -9,7 +9,8 @@ import {
   workspaceGrantSlug,
   type ApiKeyRow,
 } from '@/components/Settings/sections/api-keys-api'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 type ListResponse = { keys?: ApiKeyRow[] }
 
@@ -19,8 +20,10 @@ export function WorkspaceApiSection({
 }: {
   project: { id: string; name: string; path: string; hideApiSessions?: number }
 }): React.JSX.Element {
+  // Home M4: the room's server's API keys.
+  const room = useRoom()
   const slug = workspaceGrantSlug(project)
-  const collapseKey = scopedKey(primaryScope(), `workspace-api.section-collapsed.${project.id}`)
+  const collapseKey = scopedKey(room.scope, `workspace-api.section-collapsed.${project.id}`)
   const [open, setOpen] = useState<boolean>(() => localStorage.getItem(collapseKey) !== 'closed')
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -40,7 +43,7 @@ export function WorkspaceApiSection({
 
   const refresh = useCallback(async () => {
     try {
-      const d = await daemonCliGet<ListResponse>(primaryScope(), 'api-keys/list')
+      const d = await daemonCliGet<ListResponse>(room.scope, 'api-keys/list')
       const all = Array.isArray(d.keys) ? d.keys : []
       setKeys(all.filter((k) => keyGrantsWorkspace(k, slug)))
     } catch {
@@ -59,7 +62,7 @@ export function WorkspaceApiSection({
     async (id: string, action: 'disable' | 'enable') => {
       setBusyId(id)
       try {
-        await daemonCliPost(primaryScope(), `api-keys/${action}`, { id })
+        await daemonCliPost(room.scope, `api-keys/${action}`, { id })
         await refresh()
       } catch {
         /* list refresh surfaces emptiness; keep drawer quiet */

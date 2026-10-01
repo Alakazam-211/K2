@@ -309,7 +309,8 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
     // `data-room-key` — pointer-down / focus-in here focuses this room for
     // window-level input (MS17), and tab drags stay inside it (MS4).
     <div className="flex h-full w-full flex-col overflow-hidden" data-room-key={room.key}>
-      <PresetsBar cwd={cwd} />
+      {/* Home M4: a view-only room launches nothing on its server. */}
+      {!room.readOnly && <PresetsBar cwd={cwd} />}
       {/* ST3: inter-column pane gap (0 in Square; resize handles keep their own width) */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {Array.from({ length: splitCount }, (_, i) => (

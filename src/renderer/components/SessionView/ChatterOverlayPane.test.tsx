@@ -22,6 +22,11 @@ vi.mock('@/stores/settings', () => ({
 }))
 
 import { ChatterOverlayPane } from './ChatterOverlayPane'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 describe('Chatter overlay pane', () => {
   afterEach(() => {
@@ -34,7 +39,7 @@ describe('Chatter overlay pane', () => {
   })
 
   it('has no compose / send / textarea', () => {
-    render(<ChatterOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ChatterOverlayPane addr="sales" conversationId="c" />)
     expect(screen.getByTestId('chatter-overlay-pane')).not.toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
     expect(screen.queryByTestId('chatter-compose')).toBeNull()
@@ -44,7 +49,7 @@ describe('Chatter overlay pane', () => {
   })
 
   it('shows empty mailbox copy, not the Thread compose hint', () => {
-    render(<ChatterOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ChatterOverlayPane addr="sales" conversationId="c" />)
     expect(screen.getByText('No agent-to-agent messages yet.')).not.toBeNull()
     expect(screen.queryByText(/Message the agent below/i)).toBeNull()
   })
@@ -79,7 +84,7 @@ describe('Chatter overlay pane', () => {
         },
       },
     ]
-    render(<ChatterOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ChatterOverlayPane addr="sales" conversationId="c" />)
     const rows = screen.getAllByTestId('chatter-item')
     expect(rows).toHaveLength(2)
     expect(screen.getByText('sales → sales/reviewer')).not.toBeNull()
@@ -95,7 +100,7 @@ describe('Chatter overlay pane', () => {
     const loadOlder = vi.fn(async () => {})
     chatterHook.hasMore = true
     chatterHook.loadOlder = loadOlder
-    render(<ChatterOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ChatterOverlayPane addr="sales" conversationId="c" />)
     fireEvent.click(screen.getByTestId('overlay-load-older'))
     expect(loadOlder).toHaveBeenCalledTimes(1)
   })

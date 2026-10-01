@@ -29,7 +29,7 @@ import {
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
-import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
+import { useStore } from 'zustand'
 import { clientToCssPx } from '@/stores/context-menu'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -322,9 +322,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     [projects, hostProjectPath, activeProjectId, activeWorkspaceId],
   )
 
-  const heartbeatEntries = useHeartbeatSessionsStore((s) => s.active)
-  const heartbeatLoadedFor = useHeartbeatSessionsStore((s) => s.loadedFor)
-  const refreshHeartbeats = useHeartbeatSessionsStore((s) => s.refresh)
+  // Home M4 (MS14): the room's own heartbeat rows, on the room's server.
+  const heartbeatEntries = useStore(room.heartbeats, (s) => s.active)
+  const heartbeatLoadedFor = useStore(room.heartbeats, (s) => s.loadedFor)
+  const refreshHeartbeats = useStore(room.heartbeats, (s) => s.refresh)
   const [pinnedWorkspaceSessionId, setPinnedWorkspaceSessionId] = useState<string | null>(null)
 
   useEffect(() => {

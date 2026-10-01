@@ -9,10 +9,9 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { useStore } from 'zustand'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { useWindowFocusStore } from '@/stores/window-focus'
-import { useConnectHostStore } from '@/stores/connect-host'
 import {
   LOOPBACK_ON_REMOTE_ERROR,
-  loopbackForbiddenOnRemote,
+  isLoopbackHttpUrl,
 } from '@/lib/loopback-remote'
 import { webFeatures } from '@/web/features'
 import { normalizeUrl } from './normalizeUrl'
@@ -82,13 +81,6 @@ interface Rect {
 /** Message shown when the Rust stub (browser-pane feature off) rejects. */
 const STUB_ERROR_FRAGMENT = 'not enabled in this build'
 
-function refuseLoopbackOnRemote(targetUrl: string): string | null {
-  const activeHost = useConnectHostStore.getState().activeHost
-  if (loopbackForbiddenOnRemote(activeHost, targetUrl)) {
-    return LOOPBACK_ON_REMOTE_ERROR
-  }
-  return null
-}
 
 /** Stable parent window label for this renderer instance. */
 function currentParentWindow(): string {
@@ -120,8 +112,35 @@ export function browserPaneVisible(input: {
   return input.tabVisible && !workspaceCovered
 }
 
+/** FNV-1a 32-bit of a host key, as 8 hex chars (Home M4, MS69). */
+export function hostHash(hostKey: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < hostKey.length; i++) {
+    h ^= hostKey.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** The id this pane's NATIVE webview goes by (its Tauri label is
+ *  `browser-{parent}-{id}`, its registry key `parent\0{id}`). The primary
+ *  room keeps the layout's item id; a pinned room prefixes a host hash, so
+ *  the same layout item open in two rooms (a cloned layout, or one daemon
+ *  under two host keys) never shares a native webview. The item id saved
+ *  in that server's layout is never altered (MS69). */
+export function browserNativeItemId(room: { isPrimary: boolean; scope: { hostKey: string } }, itemId: string): string {
+  return room.isPrimary ? itemId : `${hostHash(room.scope.hostKey)}-${itemId}`
+}
+
+/** Loopback in the Browser pane is THIS computer: refused in a room on
+ *  another server, allowed in a room on this computer even when the
+ *  window is on another server (MS20). */
+export function refuseLoopbackInRoom(scope: { isRemote: boolean }, targetUrl: string): string | null {
+  return scope.isRemote && isLoopbackHttpUrl(targetUrl) ? LOOPBACK_ON_REMOTE_ERROR : null
+}
+
 export function BrowserPane({
-  itemId,
+  itemId: layoutItemId,
   tabId,
   paneGroupId,
   url,
@@ -130,6 +149,9 @@ export function BrowserPane({
 }: BrowserPaneProps): React.JSX.Element {
   // Home M3 — URL / page-meta stamps go to this pane's room's tabs store.
   const room = useRoom()
+  // Every browser_* invoke and page-meta event uses the native id; layout
+  // stamps use the layout's item id.
+  const itemId = browserNativeItemId(room, layoutItemId)
   const tabVisible = useIsTabVisible()
   // Settings is a fixed overlay while the workspace stays mounted (display:none
   // only). Projects / Feedback / Wiki are full-page overlays on top of agents.
@@ -210,7 +232,7 @@ export function BrowserPane({
     }
     const normalized = normalizeUrl(targetUrl)
     if (!normalized) return
-    const remoteErr = refuseLoopbackOnRemote(normalized)
+    const remoteErr = refuseLoopbackInRoom(room.scope, normalized)
     if (remoteErr) {
       pendingUrlRef.current = ''
       setError(remoteErr)
@@ -318,7 +340,7 @@ export function BrowserPane({
       lastKnownUrlRef.current = current
       if (!addressFocusedRef.current) setAddress(current)
       if (!standalone) {
-        setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+        setBrowserItemState(tabId, paneGroupId, layoutItemId, { url: current })
       }
     } catch {
       // View gone (close race). The address poll owns recovery.
@@ -326,7 +348,7 @@ export function BrowserPane({
   }, [itemId, parentWindow, standalone, setBrowserItemState, tabId, paneGroupId])
 
   const navigateView = useCallback(async (targetUrl: string): Promise<void> => {
-    const remoteErr = refuseLoopbackOnRemote(targetUrl)
+    const remoteErr = refuseLoopbackInRoom(room.scope, targetUrl)
     if (remoteErr) {
       setError(remoteErr)
       return
@@ -404,7 +426,7 @@ export function BrowserPane({
         if (typeof payload.title === 'string') meta.title = payload.title
         if (typeof payload.icon === 'string') meta.icon = payload.icon
         if (meta.title === undefined && meta.icon === undefined) return
-        room.tabs.getState().applyBrowserPageMeta(tabId, paneGroupId, itemId, meta)
+        room.tabs.getState().applyBrowserPageMeta(tabId, paneGroupId, layoutItemId, meta)
       },
     ).then((fn) => {
       if (cancelled) {
@@ -448,7 +470,7 @@ export function BrowserPane({
             // Stamp the store so serialize captures in-page navigation.
             // Standalone embeds (Settings OAuth) are not tab items.
             if (!standalone) {
-              setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+              setBrowserItemState(tabId, paneGroupId, layoutItemId, { url: current })
             }
           }
         } catch {
@@ -468,7 +490,7 @@ export function BrowserPane({
     // Stamp immediately so the layout autosave captures the intent even
     // if create/navigate fails or the poll hasn't run yet.
     if (!standalone) {
-      setBrowserItemState(tabId, paneGroupId, itemId, { url: target })
+      setBrowserItemState(tabId, paneGroupId, layoutItemId, { url: target })
     }
     if (createdRef.current) {
       void navigateView(target)

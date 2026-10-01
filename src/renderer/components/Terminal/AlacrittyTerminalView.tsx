@@ -20,7 +20,6 @@ import { TerminalComposeBar } from './TerminalComposeBar'
 import { useRoom } from '@/components/Room/RoomContext'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById, stripOscIdleGlyphs } from '@/lib/chat-session-tab'
 import { useToastStore } from '@/stores/toast'
-import { useConnectHostStore } from '@/stores/connect-host'
 import {
   executeBrowserFileDrop,
   executeRemoteDrop,
@@ -384,6 +383,12 @@ export function AlacrittyTerminalView({
 
       const exists = await terminalExists(room.scope, terminalId)
 
+      // Home M4: a view-only room never creates a terminal on its server.
+      if (!exists && room.readOnly) {
+        console.info('[Alacritty] view-only room: %s is not running on %s', terminalId, room.scope.hostKey)
+        return
+      }
+
       if (!exists) {
         // Measure container and create terminal with correct initial dimensions
         const { cols, rows } = calculateDimensions()
@@ -654,8 +659,8 @@ export function AlacrittyTerminalView({
 
     // Finder path bridge only when the local macOS daemon owns the
     // user's pasteboard. Web + remote host: paste text immediately.
-    const active = useConnectHostStore.getState().activeHost
-    if (active !== 'local') {
+    // The ROOM's server decides (MS57).
+    if (room.scope.isRemote) {
       writeText(text)
       return
     }
@@ -749,7 +754,7 @@ export function AlacrittyTerminalView({
         // remote paths. This DOM handler is a rare fallback under Tauri
         // (native drag-drop is owned by external-drop-router); keep it
         // host-aware for parity when dragDropEnabled is off.
-        if (useConnectHostStore.getState().activeHost !== 'local') {
+        if (room.scope.isRemote) {
           const pty = ptyIdRef.current
           void executeRemoteDrop(room.scope,
             paths,

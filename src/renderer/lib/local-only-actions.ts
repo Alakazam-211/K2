@@ -17,15 +17,10 @@
 //   - a pinned room on `local` (this computer, while the window is on
 //     another server): yes (MS57);
 //   - a pinned room on any other server: no;
-//   - the primary room: `room.localCommands` is true today, even when the
-//     window itself is on a remote server.
-//
-// TODO(M4-integrate): decide the primary room on a remote window. MS57 says
-// these actions are hidden in a remote room, and a primary room on a remote
-// window is one; today it keeps them (Sidebar, IconRail, the Focus-window
-// menu, TabBar's Finder/terminal). The one-line change is `primaryRoom()`'s
-// `localCommands` becoming a getter `!primaryScope().isRemote` (stores/room.ts);
-// sites gated with `mayRunLocalActions(room)` already follow it.
+//   - the primary room: only while the window is on this computer.
+//     `primaryRoom().localCommands` is `!primaryScope().isRemote` (Home M4):
+//     a window connected to a remote server shows that server's paths, so
+//     Finder / editor / terminal-app actions are hidden there too (MS57).
 
 import type { ServerScope } from '@/kessel/server-scope'
 

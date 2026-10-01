@@ -5,8 +5,7 @@ import { useState, useMemo, useCallback } from 'react'
 // (`filePath`). The old Tauri git commands emitted NO cross-window sync, so
 // the local `refetch()` after each mutation is the full contract.
 import { daemonCliPost } from '@/lib/daemon-cli'
-import { useProjectsStore } from '@/stores/projects'
-import { useRoom } from '@/components/Room/RoomContext'
+import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { useRoomResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
 
@@ -35,16 +34,17 @@ export default function ChangesPanel(): React.JSX.Element {
   const [commitMsg, setCommitMsg] = useState('')
   const [committing, setCommitting] = useState(false)
 
-  const projects = useProjectsStore((s) => s.projects)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
-  const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
+  // MS3: the room's own project list and selection.
+  const projects = useRoomProjects((p) => p)
+  const activeProjectId = useRoomTabs((s) => s.activeProjectId)
+  const activeWorkspaceId = useRoomTabs((s) => s.activeWorkspaceId)
 
   const activeProject = projects.find((p) => p.id === activeProjectId)
   const activeWorkspace = activeProject?.workspaces.find((w) => w.id === activeWorkspaceId)
   const workspacePath = activeWorkspace?.worktreePath ?? activeProject?.path
 
-  const { data: gitInfo } = useGitInfo(workspacePath)
-  const { data: changes, refetch } = useGitChanges(workspacePath)
+  const { data: gitInfo } = useGitInfo(room.scope, workspacePath)
+  const { data: changes, refetch } = useGitChanges(room.scope, workspacePath)
 
   // Split files into staged and unstaged groups
   const { staged, unstaged } = useMemo(() => {

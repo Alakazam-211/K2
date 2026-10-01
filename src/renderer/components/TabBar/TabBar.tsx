@@ -110,7 +110,16 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
   const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
   const splitCount = useRoomTabs((s) => s.splitCount)
-  const removeTabFromGroup = useRoomTabs((s) => s.removeTabFromGroup)
+  const removeTabFromGroupRaw = useRoomTabs((s) => s.removeTabFromGroup)
+  // Home M4: a view-only room shows its server's tabs and closes none of
+  // them (no close button, no + , no split; every close path below no-ops).
+  const removeTabFromGroup = useCallback(
+    (index: number, tabId: string): void => {
+      if (room.readOnly) return
+      removeTabFromGroupRaw(index, tabId)
+    },
+    [room, removeTabFromGroupRaw],
+  )
   const setActiveTabInGroup = useRoomTabs((s) => s.setActiveTabInGroup)
   const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
@@ -1078,6 +1087,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
                   </svg>
                 )
+                if (room.readOnly) return null
                 return (
                   <button
                     className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
@@ -1119,7 +1129,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       </div>
 
       {/* + is the next sibling after the scroller, outside the overflow node. */}
-      <button
+      {!room.readOnly && <button
         type="button"
         data-tab-add=""
         aria-haspopup="menu"
@@ -1138,7 +1148,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           <line x1="6" y1="1" x2="6" y2="11" />
           <line x1="1" y1="6" x2="11" y2="6" />
         </svg>
-      </button>
+      </button>}
 
       {/* Spare width sits between + and split, not between the last tab and +. */}
       <div className="min-w-0 flex-1" data-tab-bar-spacer="" />
@@ -1155,7 +1165,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       )}
 
       {/* Only show split/unsplit on the rightmost group's tab bar */}
-      {groupIndex === splitCount - 1 && (
+      {groupIndex === splitCount - 1 && !room.readOnly && (
         <>
           {/* Split button */}
           {splitCount < 3 && (

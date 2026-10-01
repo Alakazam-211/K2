@@ -145,7 +145,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
   const focusHeaderSide = usePanelsStore((s) => s.focusWorkspaceHeaderSide)
   const leftHeader = focusHeaderSide === 'left' ? <FocusWorkspaceHeader side="left" /> : undefined
   const rightHeader = focusHeaderSide === 'right' ? <FocusWorkspaceHeader side="right" /> : undefined
-  const { data: gitInfo } = useGitInfo(activeProject?.path)
+  const { data: gitInfo } = useGitInfo(primaryScope(), activeProject?.path)
 
   // Home M3 — a Focus window shows the window's primary room (MS13).
   const room = primaryRoom()

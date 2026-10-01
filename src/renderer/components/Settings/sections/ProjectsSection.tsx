@@ -3173,7 +3173,7 @@ function AgentHandleField({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const confirm = useConfirmDialogStore((s) => s.confirm)
-  const { status } = useTunnelUrls()
+  const { status } = useTunnelUrls(primaryScope())
   const tunnelHost = federatedHostFromTunnel(status)
 
   useEffect(() => {

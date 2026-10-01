@@ -14,13 +14,11 @@
 // The pool dedupes per (server, project) to once per 10 min, so a burst of
 // focus changes costs one request. B decides; the room only reports need.
 //
-// TODO(M4-integrate): the pinned-room shell creates one per room with
-// `hostPool.keepRoomAlive` and `room.scope.hostKey` / `room.activeProjectId()`,
-// calls `opened()` after `room.tabs.room.open()`, `focused()` when
-// `stores/window-room` focuses the room, `input()` from the room's key and
-// pointer handlers, `setHot()` from `roomTiers.onTierChange`, and
-// `dispose()` with `room.tabs.room.dispose()`. `createPinnedRoom`'s
-// `activateProject` input becomes `(pid) => void hostPool.keepRoomAlive(scope.hostKey, pid)`.
+// `stores/home-rooms.ts` creates one per room with `hostPool.keepRoomAlive`:
+// `opened()` after `room.tabs.room.open()`, `focused()` when the room is
+// shown again or takes focus, `input()` from the room's key and pointer
+// handlers, `setHot()` from `roomTiers.onTierChange`, `dispose()` with the
+// room. `createPinnedRoom`'s `activateProject` is the same pool call.
 
 import type { KeepAliveResult } from '@/lib/host-pool'
 

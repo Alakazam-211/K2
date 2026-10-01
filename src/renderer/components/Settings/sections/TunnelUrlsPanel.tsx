@@ -1,3 +1,4 @@
+import { primaryScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import {
@@ -28,7 +29,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 }
 
 export function TunnelUrlsPanel(): React.JSX.Element {
-  const { status, subs } = useTunnelUrls()
+  const { status, subs } = useTunnelUrls(primaryScope())
   const projects = useProjectsStore((s) => s.projects)
 
   const running = status?.running ?? false

@@ -11,7 +11,7 @@
 //   - Open B's server: the explicit switch of this window to B, the same
 //     path Home uses with the preview off (`pickHost`).
 //
-// TODO(M4-integrate): the pinned-room shell wraps its content in
+// The pinned-room shell (`HomeRemoteRooms`) wraps its content in
 // `<RoomFailureGate hostKey={room.scope.hostKey}>`, so a failing server
 // shows the banner over its last frame (dimmed, input off) and never falls
 // back to the window's server.

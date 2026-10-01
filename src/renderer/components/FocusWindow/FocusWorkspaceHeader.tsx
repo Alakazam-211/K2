@@ -1,3 +1,4 @@
+import { primaryScope } from '@/kessel/server-scope'
 import { useState, useCallback } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { usePanelsStore } from '@/stores/panels'
@@ -42,6 +43,7 @@ export default function FocusWorkspaceHeader({ side }: FocusWorkspaceHeaderProps
   }, [activeProjectId, setActiveWorkspace])
 
   const { data: gitInfo } = useGitInfo(
+    primaryScope(),
     projects.find((p) => p.id === activeProjectId)?.path
   )
 

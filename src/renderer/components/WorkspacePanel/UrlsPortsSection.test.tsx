@@ -61,6 +61,11 @@ vi.mock('@/stores/connect-host', () => ({
 
 import { UrlsPortsSection } from './UrlsPortsSection'
 import { PUBLISH_RUN_EXAMPLE } from './urls-ports'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 function mockPublishGets(opts: {
   list?: unknown
@@ -115,7 +120,7 @@ describe('UrlsPortsSection', () => {
 
   it('empty hint only when run and leftovers GET are both empty', async () => {
     mockPublishGets({ list: { services: [] }, leftovers: { leftovers: [] } })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText(PUBLISH_RUN_EXAMPLE)).toBeTruthy()
     })
@@ -127,7 +132,7 @@ describe('UrlsPortsSection', () => {
       primary: 'rosson',
       targets: { stray: { target: 'localhost:9', projectId: null } },
     }
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText(PUBLISH_RUN_EXAMPLE)).toBeTruthy()
     })
@@ -136,7 +141,7 @@ describe('UrlsPortsSection', () => {
 
   it('list GET failure is a loud error, not the empty publish hint (P11)', async () => {
     mockPublishGets({ listError: new Error('daemon down') })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('daemon down')).toBeTruthy()
     })
@@ -147,7 +152,7 @@ describe('UrlsPortsSection', () => {
 
   it('leftovers GET failure is a loud error, never the run example', async () => {
     mockPublishGets({ leftoversError: new Error('leftovers down') })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('leftovers down')).toBeTruthy()
     })
@@ -161,7 +166,7 @@ describe('UrlsPortsSection', () => {
     })
     tunnelState.subs = { primary: '', targets: {} }
     tunnelState.status = { public_url: null }
-    render(<UrlsPortsSection projectId="docs" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="docs" />)
     await waitFor(() => {
       expect(document.querySelector('[data-published-byo="portal"]')).toBeTruthy()
     })
@@ -180,7 +185,7 @@ describe('UrlsPortsSection', () => {
         leftovers: [{ label: 'portal', target: 'localhost:3000', url: 'https://portal.rosson.k2.dev' }],
       },
     })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('portal')).toBeTruthy()
     })
@@ -194,7 +199,7 @@ describe('UrlsPortsSection', () => {
       primary: 'rosson',
       targets: { staging: { target: 'localhost:4000', projectId: 'proj-1' } },
     }
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('→ localhost:4000')).toBeTruthy()
     })
@@ -207,7 +212,7 @@ describe('UrlsPortsSection', () => {
       leftovers: { leftovers: [{ label: 'portal', target: 'localhost:3000', url: null }] },
     })
     tunnelState.subs = null
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(document.querySelector('[data-published-byo="portal"]')).toBeTruthy()
     })
@@ -228,7 +233,7 @@ describe('UrlsPortsSection', () => {
         ],
       },
     })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('worker')).toBeTruthy()
     })
@@ -242,7 +247,7 @@ describe('UrlsPortsSection', () => {
     mockPublishGets({
       list: { services: [wire({ name: 'agents', kind: 'skin', cmd: '(skin)', skinRoot: 'ui', pid: 7 })] },
     })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('agents')).toBeTruthy()
     })
@@ -267,7 +272,7 @@ describe('UrlsPortsSection', () => {
         ],
       },
     })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('→ localhost:4000')).toBeTruthy()
     })
@@ -287,7 +292,7 @@ describe('UrlsPortsSection', () => {
     mockPublishGets({
       list: { services: [wire({ name: 'web', pid: 99, status: 'running' })] },
     })
-    render(<UrlsPortsSection projectId="proj-1" />)
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('web')).toBeTruthy()
     })

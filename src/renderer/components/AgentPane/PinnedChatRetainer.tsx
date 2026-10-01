@@ -35,6 +35,7 @@ import { createPortal } from 'react-dom'
 import { AgentChatPane } from './AgentChatPane'
 import { TabVisibilityContext, useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { useActiveStore } from '@/stores/active'
+import { useStore } from 'zustand'
 import { useProjectsStore } from '@/stores/projects'
 import { useRoom, useRoomProjects, useRoomSupports } from '@/components/Room/RoomContext'
 import { useServerSupports } from '@/lib/server-capabilities'
@@ -82,7 +83,9 @@ export function PinnedChatGate({
     (projects) => projects.find((p) => p.path === projectPath)?.id ?? null,
   )
   const daemonOwnsChat = useRoomSupports('daemon-pinned-chat')
-  const isActive = useActiveStore(
+  // MS14: the room's server's Active set.
+  const isActive = useStore(
+    room.activeSet,
     (s) => projectId !== null && s.activeProjectIds.has(projectId),
   )
   // The retainer holds the PRIMARY room's chats only (MS14); a pinned

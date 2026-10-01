@@ -3,6 +3,11 @@ import { describe, expect, it, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 const threadHook = vi.hoisted(() => ({
   items: [] as unknown[],
@@ -62,7 +67,7 @@ describe('ThreadOverlayColumn', () => {
       },
     )
 
-    render(
+    renderInRoom(overlayRoom, 
       <ThreadOverlayColumn
         addr="sales"
         conversationId="c"
@@ -84,14 +89,14 @@ describe('ThreadOverlayColumn', () => {
   })
 
   it('is an image compose-drop surface for the thread column', () => {
-    render(<ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} />)
+    renderInRoom(overlayRoom, <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} />)
     const root = screen.getByTestId('agent-session-thread')
     expect(root.matches(COMPOSE_DROP_SURFACE_SELECTOR)).toBe(true)
     expect(root.getAttribute('data-compose-drop-surface')).toBe('thread')
   })
 
   it('clicking empty compose-slot padding focuses the textarea', () => {
-    render(
+    renderInRoom(overlayRoom, 
       <ThreadOverlayColumn
         addr="sales"
         conversationId="c"

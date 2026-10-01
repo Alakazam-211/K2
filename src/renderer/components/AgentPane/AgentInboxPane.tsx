@@ -285,7 +285,8 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
 
   const headerLabel = isWorkspaceBoard ? 'Work Board' : displayName
   const emptyCatalog = catalogLoaded && mailSources.length === 0 && !catalogError
-  const canChatAbout = Boolean(chatAboutStamp) && !bodyLoading && !bodyError
+  // Home M4: a view-only room sends nothing to its server's chat.
+  const canChatAbout = Boolean(chatAboutStamp) && !bodyLoading && !bodyError && !room.readOnly
 
   return (
     <>

@@ -9,6 +9,11 @@ vi.mock('@/kessel/daemon-ws', () => ({
 
 import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ChatOverlayColumn } from './ChatOverlayColumn'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 describe('chat overlay dock', () => {
   afterEach(() => cleanup())
@@ -23,7 +28,7 @@ describe('chat overlay dock', () => {
       }
       return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON() { return {} } }
     }
-    render(
+    renderInRoom(overlayRoom, 
       <ChatOverlayColumn
         view="chat"
         visible={false}
@@ -44,7 +49,7 @@ describe('chat overlay dock', () => {
   })
 
   it('is an image compose-drop surface for the chat overlay', () => {
-    render(
+    renderInRoom(overlayRoom, 
       <ChatOverlayColumn
         view="chat"
         visible={false}

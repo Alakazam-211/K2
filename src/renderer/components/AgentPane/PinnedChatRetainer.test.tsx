@@ -81,7 +81,7 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 
 // Home M3 — the gate reads its room's own project list; this is the
 // primary room (the retainer holds primary-room chats only).
-const room = testRoom({ tabs: {}, projects: useProjectsStore as never })
+const room = testRoom({ tabs: {}, projects: useProjectsStore as never, activeSet: useActiveStore as never })
 
 type AnyStore = { setState: (s: object) => void }
 

@@ -22,12 +22,12 @@
 // emits tier changes, and M4's room shell opens and closes that room's
 // sockets on them.
 //
-// TODO(M4-integrate): the pinned-room shell (Home main area) calls
-// `roomTiers.show(room.key)` when its `RoomProvider shown` mounts, `hide`
-// when another room replaces it, and `close` on dispose; `onTierChange`
-// drives `room.tabs.room` socket open/close (hot: full set, warm: the one
-// workspace events socket, cold: none). Keys are `Room.key`
-// (`stores/room.ts`, `<hostKey>|<projectId>:<workspaceId>`).
+// `stores/home-rooms.ts` drives it: `show(room.key)` when a Home row's room
+// comes on screen, `hide` when another room (or the window's own room, or
+// another page) replaces it, `close` on dispose. On `onTierChange`: hot =
+// the room is mounted (grids, overlays, its workspace socket), warm = only
+// its tabs store and ONE workspace socket stay, cold = the room is disposed
+// and forgotten. Keys are `Room.key` (`<hostKey>|<projectId>:<workspaceId>`).
 
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { useStore } from 'zustand'

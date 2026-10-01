@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 // (`path`); the JSON response shapes match the Rust structs as-is.
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { GIT_POLL_INTERVAL } from '@shared/constants'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ interface UseGitChangesResult {
 
 // ── useGitInfo ───────────────────────────────────────────────────────────────
 
-export function useGitInfo(projectPath?: string): UseGitInfoResult {
+export function useGitInfo(scope: ServerScope, projectPath?: string): UseGitInfoResult {
   const [data, setData] = useState<GitInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -54,7 +54,7 @@ export function useGitInfo(projectPath?: string): UseGitInfoResult {
 
     try {
       setLoading((prev) => (prev ? prev : true))
-      const result = await daemonCliGet<GitInfo>(primaryScope(), 'git/info', { path: projectPath })
+      const result = await daemonCliGet<GitInfo>(scope, 'git/info', { path: projectPath })
       setData(result)
       setError(null)
     } catch (e) {
@@ -82,7 +82,7 @@ export function useGitInfo(projectPath?: string): UseGitInfoResult {
 
 // ── useGitChanges ────────────────────────────────────────────────────────────
 
-export function useGitChanges(projectPath?: string): UseGitChangesResult {
+export function useGitChanges(scope: ServerScope, projectPath?: string): UseGitChangesResult {
   const [data, setData] = useState<ChangedFile[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -96,7 +96,7 @@ export function useGitChanges(projectPath?: string): UseGitChangesResult {
 
     try {
       setLoading((prev) => (prev ? prev : true))
-      const result = await daemonCliGet<ChangedFile[]>(primaryScope(), 'git/changes', { path: projectPath })
+      const result = await daemonCliGet<ChangedFile[]>(scope, 'git/changes', { path: projectPath })
       setData(result)
       setError(null)
     } catch (e) {

@@ -17,7 +17,8 @@ import {
   formatInboxError,
   type ChatAboutStamp,
 } from './inbox-browser'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 function sendFailureMessage(status: ComposeStatus): string {
   if (status.kind === 'pty_died') {
@@ -34,6 +35,11 @@ function sendFailureMessage(status: ComposeStatus): string {
 }
 
 export async function sendInboxChatAbout(args: {
+  /** The room's server (Home M4): the chat it writes to lives there. */
+  scope: ServerScope
+  /** The room's open ⇒ activate gesture (the primary room's projects
+   *  store); null for a pinned room, which keeps itself alive. */
+  activate: ((projectId: string) => void) | null
   projectPath: string
   workspaceId: string | null | undefined
   stamp: ChatAboutStamp
@@ -42,8 +48,8 @@ export async function sendInboxChatAbout(args: {
   const note = args.note.trim()
   if (!note) return
   const workspaceId = typeof args.workspaceId === 'string' ? args.workspaceId.trim() : ''
-  if (workspaceId) activateProject(workspaceId)
-  const ensured = await daemonCliPost<{ sessionId?: unknown }>(primaryScope(), 'workspace/ensure-pinned-chat', {
+  if (workspaceId && args.activate) args.activate(workspaceId)
+  const ensured = await daemonCliPost<{ sessionId?: unknown }>(args.scope, 'workspace/ensure-pinned-chat', {
     project: args.projectPath,
   })
   const sessionId = typeof ensured?.sessionId === 'string' ? ensured.sessionId.trim() : ''
@@ -51,7 +57,7 @@ export async function sendInboxChatAbout(args: {
     throw new Error('Pinned chat did not return sessionId')
   }
   const text = formatChatAboutPayload(args.stamp, note)
-  const resp = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', {
+  const resp = await daemonCliPost<MsgResponse>(args.scope, 'terminal/send-message', {
     session_id: sessionId,
     text,
   })
@@ -72,6 +78,8 @@ export function InboxChatAboutDialog({
   workspaceId: string | null
   onClose: () => void
 }): React.JSX.Element {
+  // Home M4: the dialog writes to the ROOM's server.
+  const room = useRoom()
   const [frozen] = useState(stamp)
   const [note, setNote] = useState('')
   const [sending, setSending] = useState(false)
@@ -96,6 +104,8 @@ export function InboxChatAboutDialog({
     setNote('')
     try {
       await sendInboxChatAbout({
+        scope: room.scope,
+        activate: room.isPrimary ? activateProject : null,
         projectPath,
         workspaceId,
         stamp: frozen,

@@ -10,6 +10,11 @@ import {
 } from './ThreadOverlayPane'
 import { overlayViewer } from './sessionViewTab'
 import type { OverlayThreadItem } from './overlayThread'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+
+// Home M4: room components read their scope from their room.
+const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
 
 const threadHook = vi.hoisted(() => ({
   items: [] as OverlayThreadItem[],
@@ -44,13 +49,13 @@ describe('Thread overlay pane', () => {
   })
 
   it('has no compose box — Message-the-agent stays on the terminal bar', () => {
-    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
   })
 
   it('overlay root is a flex-1 min-h-0 overflow-hidden column (not height 100%)', () => {
-    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     const pane = screen.getByTestId('thread-overlay-pane')
     expect(pane.className).toContain('flex-1')
     expect(pane.className).toContain('min-h-0')
@@ -59,7 +64,7 @@ describe('Thread overlay pane', () => {
   })
 
   it('thread pane is a selectable region (copy-paste)', () => {
-    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     const pane = screen.getByTestId('thread-overlay-pane')
     expect(pane.className).toContain('selectable-copy')
     expect(pane.className).toContain('chat-thread-selectable')
@@ -69,7 +74,7 @@ describe('Thread overlay pane', () => {
     const loadOlder = vi.fn(async () => {})
     threadHook.hasMore = true
     threadHook.loadOlder = loadOlder
-    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     const list = overlayList()
     stubListBox(list, { scrollHeight: 800, clientHeight: 200, scrollTop: 40 })
     fireEvent.click(screen.getByTestId('overlay-load-older'))
@@ -77,7 +82,7 @@ describe('Thread overlay pane', () => {
   })
 
   it('hides Load older when hasMore is false', () => {
-    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(screen.queryByTestId('overlay-load-older')).toBeNull()
   })
 })
@@ -106,7 +111,7 @@ describe('Thread overlay choice chips + secret field', () => {
         body: '**Hello** and `code`',
       },
     }
-    render(<ThreadItemRow item={item} />)
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
     expect(screen.getByText('You')).not.toBeNull()
     expect(screen.getByText('Hello').tagName).toBe('STRONG')
     expect(screen.getByText('code').tagName).toBe('CODE')
@@ -126,7 +131,7 @@ describe('Thread overlay choice chips + secret field', () => {
         body: 'agent said hello',
       },
     }
-    render(<ThreadItemRow item={item} />)
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
     expect(screen.queryByText('You')).toBeNull()
     expect(screen.getByText('owner')).not.toBeNull()
     expect(screen.getByText('agent said hello')).not.toBeNull()
@@ -151,7 +156,7 @@ describe('Thread overlay choice chips + secret field', () => {
         },
       },
     }
-    render(<ThreadItemRow item={item} onAnswer={(p) => picks.push(p.answer || '')} />)
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} onAnswer={(p) => picks.push(p.answer || '')} />)
     const card = screen.getByTestId('thread-choice-card')
     expect(card.className).toContain('flex-col')
     expect(card.className).toContain('w-full')
@@ -187,7 +192,7 @@ describe('Thread overlay choice chips + secret field', () => {
         },
       },
     }
-    render(<ThreadItemRow item={item} />)
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
     expect(screen.getByTestId('thread-choice-card')).not.toBeNull()
     const go = screen.getAllByTestId('thread-choice-chip')[0]
     expect(go.getAttribute('disabled')).not.toBeNull()
@@ -210,7 +215,7 @@ describe('Thread overlay choice chips + secret field', () => {
         secret: { name: 'API_TOKEN', status: 'pending', prompt: 'Paste the Grok token' },
       },
     }
-    render(
+    renderInRoom(overlayRoom, 
       <ThreadItemRow
         item={item}
         onAnswer={(p) => submitted.push(p.secret || '')}
@@ -316,7 +321,7 @@ function observerOf(el: Element): FakeResizeObserver {
 }
 
 function renderOverlay(visible = true) {
-  return render(
+  return renderInRoom(overlayRoom, 
     createElement(
       TabVisibilityContext.Provider,
       { value: visible },
@@ -488,7 +493,7 @@ describe('Thread overlay list scroll restore', () => {
         }),
       )
     }
-    render(createElement(Flip))
+    renderInRoom(overlayRoom, createElement(Flip))
     const list = overlayList()
     const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
     stubListBox(list, box)
@@ -520,7 +525,7 @@ describe('Thread overlay list scroll restore', () => {
         }),
       )
     }
-    render(createElement(Flip))
+    renderInRoom(overlayRoom, createElement(Flip))
     const list = overlayList()
     const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
     stubListBox(list, box)

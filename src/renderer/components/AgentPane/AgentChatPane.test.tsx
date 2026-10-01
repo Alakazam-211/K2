@@ -246,6 +246,13 @@ const room = testRoom({
   tabs: useTabsStore,
   projects: [{ id: 'proj-1', path: '/ws', workspaces: [] } as never],
   activity: { bindPaneProject },
+  // Home M4: the pane reads its room's server's Active set (this suite's
+  // live fixture).
+  activeSet: {
+    getState: () => ({ activeProjectIds: h.activeIds.value }),
+    getInitialState: () => ({ activeProjectIds: h.activeIds.value }),
+    subscribe: () => () => {},
+  },
 })
 
 beforeEach(() => {

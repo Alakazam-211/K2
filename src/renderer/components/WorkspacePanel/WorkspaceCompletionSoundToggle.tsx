@@ -3,23 +3,28 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
 
 async function writeWorkspaceCompletionSound(
+  scope: ServerScope,
   project: SoundProject,
   next: boolean,
 ): Promise<void> {
-  await daemonCliPost(primaryScope(), 'workspace/set', {
+  await daemonCliPost(scope, 'workspace/set', {
     project: project.path,
     fields: { completion_sound_enabled: next ? '1' : '0' },
   })
-  useProjectsStore.setState((s) => ({
-    projects: s.projects.map((p) =>
-      p.id === project.id ? { ...p, completionSoundEnabled: next ? 1 : 0 } : p,
-    ),
-  }))
+  // The window's projects store mirrors only the window's server.
+  if (scope.isPrimary) {
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, completionSoundEnabled: next ? 1 : 0 } : p,
+      ),
+    }))
+  }
   void emit('sync:projects').catch(() => {})
 }
 
@@ -38,7 +43,7 @@ export function WorkspaceCompletionSoundToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await writeWorkspaceCompletionSound(project, next)
+      await writeWorkspaceCompletionSound(primaryScope(), project, next)
     } catch (err) {
       console.error('[completion-sound] write failed', err)
     } finally {
@@ -95,15 +100,17 @@ export function WorkspaceCompletionSoundBell({
 }: {
   project: SoundProject
 }): React.JSX.Element {
+  // Home M4: the drawer's room's server; a view-only room writes nothing.
+  const room = useRoom()
   const [busy, setBusy] = useState(false)
   const enabled = (project.completionSoundEnabled ?? 1) !== 0
 
   const toggle = useCallback(async (): Promise<void> => {
-    if (busy) return
+    if (busy || room.readOnly) return
     const next = !enabled
     setBusy(true)
     try {
-      await writeWorkspaceCompletionSound(project, next)
+      await writeWorkspaceCompletionSound(room.scope, project, next)
     } catch (err) {
       console.error('[completion-sound] write failed', err)
     } finally {

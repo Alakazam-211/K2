@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { useServerSupports } from '@/lib/server-capabilities'
+import { useRoom, useRoomSupports } from '@/components/Room/RoomContext'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
-import { useConnectHostStore } from '@/stores/connect-host'
 import {
   onAppHello,
   onPublishServicesChanged,
@@ -60,12 +59,16 @@ function statusDotClass(status: string): string {
 }
 
 export function UrlsPortsSection({ projectId }: { projectId: string }): React.JSX.Element {
-  const { status, subs } = useTunnelUrls()
-  const supportsPublish = useServerSupports('publish-services')
+  // Home M4: the drawer's room's server — its tunnel, its published
+  // services, its version.
+  const room = useRoom()
+  const scope = room.scope
+  const { status, subs } = useTunnelUrls(scope)
+  const supportsPublish = useRoomSupports('publish-services')
 
   // Collapse state, persisted per-workspace (the Worktrees idiom).
   const collapseKey = projectId
-    ? scopedKey(primaryScope(), `urls-ports.section-collapsed.${projectId}`)
+    ? scopedKey(scope, `urls-ports.section-collapsed.${projectId}`)
     : null
   const [open, setOpen] = useState<boolean>(() => {
     if (!collapseKey) return true
@@ -96,8 +99,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const [leftoversMissing, setLeftoversMissing] = useState(false)
   const [detailsName, setDetailsName] = useState<string | null>(null)
   const [detailsByo, setDetailsByo] = useState<string | null>(null)
-  const activeHost = useConnectHostStore((s) => s.activeHost)
-  const hostLabel = publishedHostLabel(activeHost === 'local' ? 'local' : activeHost)
+  const hostLabel = publishedHostLabel(scope.connectHost() ?? 'local')
 
   useEffect(() => {
     setDetailsName(null)
@@ -114,7 +116,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     setServices(undefined)
     const refresh = async (): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
+        const raw = await daemonCliGet<unknown>(scope, 'publish/list', { project: projectId })
         if (!cancelled) {
           setServices(parsePublishList(raw))
           setListError(null)
@@ -129,10 +131,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       }
     }
     void refresh()
-    const offHello = onAppHello(primaryScope(), () => {
+    const offHello = onAppHello(scope, () => {
       void refresh()
     })
-    const offChanged = onPublishServicesChanged(primaryScope(), (e) => {
+    const offChanged = onPublishServicesChanged(scope, (e) => {
       if (e.projectId && e.projectId !== projectId) return
       void refresh()
     })
@@ -154,7 +156,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     setLeftovers(undefined)
     const refresh = async (): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/leftovers', { project: projectId })
+        const raw = await daemonCliGet<unknown>(scope, 'publish/leftovers', { project: projectId })
         if (!cancelled) {
           setLeftovers(parsePublishLeftovers(raw))
           setLeftoversError(null)
@@ -174,10 +176,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       }
     }
     void refresh()
-    const offHello = onAppHello(primaryScope(), () => {
+    const offHello = onAppHello(scope, () => {
       void refresh()
     })
-    const offSubs = onTunnelSubdomainsChanged(primaryScope(), () => {
+    const offSubs = onTunnelSubdomainsChanged(scope, () => {
       void refresh()
     })
     return () => {
@@ -192,8 +194,8 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       if (!projectId) return
       setBusyName(name)
       try {
-        await daemonCliPost(primaryScope(), `publish/${action}`, { name, project: projectId })
-        const raw = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
+        await daemonCliPost(scope, `publish/${action}`, { name, project: projectId })
+        const raw = await daemonCliGet<unknown>(scope, 'publish/list', { project: projectId })
         setServices(parsePublishList(raw))
         setListError(null)
       } catch {

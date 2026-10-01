@@ -20,7 +20,7 @@ import {
 } from '@/components/ChatHistory/ContinueNewChatDialog'
 import { agentDisplayName, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
-import { useActiveStore } from '@/stores/active'
+import { useStore } from 'zustand'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
@@ -652,7 +652,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // stops Active-section tab flips from full remount → re-toy-spawn.
   // Covered by AgentChatPane.test "pinned-chat retention — retainWhileHidden
   // threading". Do not gate or drop this prop without replacing that test.
-  const retainWhileHidden = useActiveStore((s) => s.activeProjectIds.has(projectId))
+  // Home M4 (MS14): the ROOM's server's Active set — B's project id is
+  // never looked up in A's set.
+  const retainWhileHidden = useStore(room.activeSet, (s) => s.activeProjectIds.has(projectId))
 
   // #689 — the session id TerminalPane is currently attached to. The
   // remount-guard: a SessionAdded broadcast only forces a re-attach
@@ -755,6 +757,33 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // RESPONSE directly so a cold mount renders without waiting for the WS.
   const ensure = useCallback(
     async (forceRespawn: boolean, explicitSelection = false): Promise<void> => {
+      // Home M4: a view-only room never find-or-spawns the pinned chat on
+      // its server. It looks the live canonical session up and attaches
+      // (TerminalPane posts attach_only); none live ⇒ the idle state.
+      if (room.readOnly) {
+        try {
+          const rows = await daemonCliGet<Array<{
+            agentName?: string
+            sessionId?: string
+            conversationId?: string
+            command?: string | null
+          }>>(room.scope, 'sessions/list-for-workspace', { path: projectPath })
+          const row = Array.isArray(rows) ? rows.find((r) => r.agentName === projectId) : undefined
+          if (!row?.sessionId) {
+            setPhase({ kind: 'idle' })
+            return
+          }
+          const cid = row.conversationId?.trim() || null
+          setPhase({ kind: 'ready', sessionId: row.sessionId, canonicalSessionId: cid ?? '' })
+          setChatProvider(chatHarnessName({ provider: undefined, command: row.command ?? undefined }))
+          setHarnessReady(true)
+          setChatConversationId(cid && cid !== row.sessionId ? cid : null)
+          attachedSessionIdRef.current = row.sessionId
+        } catch (err) {
+          setPhase({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
       try {
         const res = await ensurePinnedChat(room.scope, projectPath, {
           forceRespawn,
@@ -1092,12 +1121,14 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
-            Chat session ended
+            {room.readOnly ? `Not running on ${room.scope.label}` : 'Chat session ended'}
           </div>
           <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-            The chat process exited. Click Retry to start a fresh session.
+            {room.readOnly
+              ? 'View only (preview): this room does not start the chat. Retry looks again.'
+              : 'The chat process exited. Click Retry to start a fresh session.'}
           </div>
-          <RetryButton onClick={handleRefresh} refreshing={refreshing} />
+          <RetryButton onClick={room.readOnly ? () => void ensure(false) : handleRefresh} refreshing={refreshing} />
         </div>
         </OverlayTabBody>
       </div>

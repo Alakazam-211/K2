@@ -1,4 +1,6 @@
 import './globals.css'
+// Dev-only room-frame shim (Home P1.5 spike). Must stay the first JS import.
+import './dev/room-frame-shim'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
@@ -51,6 +53,22 @@ bootWebHostIfNeeded()
 // JS context until the daemon is confirmed healthy, so no store
 // fires a fetch against a down daemon. Closes the black-screen
 // race + reusable for K2 Connect's remote-daemon scenario.
-ReactDOM.createRoot(root).render(
-  <ConnectionGate />
-)
+//
+// Dev-only (Home P1.5 spike): `VITE_K2_ROOMFRAME_PROBE=1` or `?roomframe=1`
+// renders the room-frame IPC probe instead of the app. `import.meta.env.DEV`
+// is a build-time constant, so a production bundle drops this branch and the
+// probe module.
+const roomFrameProbe =
+  import.meta.env.DEV &&
+  (window === window.top
+    ? Boolean(import.meta.env.VITE_K2_ROOMFRAME_PROBE) ||
+      new URLSearchParams(window.location.search).has('roomframe')
+    : window.location.hash === '#room=probe')
+
+if (roomFrameProbe) {
+  void import('./dev/room-frame-probe').then((m) => m.startRoomFrameProbe(root))
+} else {
+  ReactDOM.createRoot(root).render(
+    <ConnectionGate />
+  )
+}

@@ -38,6 +38,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { isWebClient } from '@/lib/is-web'
+import { devRoomFrameHost } from '@/dev/room-frame-shim'
 import { LOGIN_404_K2DEV_MESSAGE, k2DevApexLabel, loginUrlFor } from '@/lib/login-url'
 import { emitSoftResync, shouldEmitSoftResync } from '@/lib/soft-resync'
 import {
@@ -763,7 +764,8 @@ export async function loginToHost(
 }
 
 export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
-  activeHost: 'local',
+  // Dev-only Home P1.5 spike: a `#room=<hostId>` frame boots on that host.
+  activeHost: devRoomFrameHost<ConnectHost>() ?? 'local',
   hosts: loadHosts(),
   connectionStatus: 'connecting',
   recovery: { kind: 'connected' },

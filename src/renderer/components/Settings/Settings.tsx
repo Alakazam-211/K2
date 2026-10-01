@@ -218,11 +218,12 @@ export default function Settings(): React.JSX.Element {
     // General sub-tabs: search entries carry a group so we open the right tab
     // (e.g. Canonical Agent Flow → Workspaces) before scrolling to the row.
     if (entry.section === 'general' && entry.group) {
-      const subByGroup: Record<string, 'general' | 'workspaces' | 'server' | 'local-llm'> = {
+      const subByGroup: Record<string, 'general' | 'workspaces' | 'server' | 'local-llm' | 'experimental'> = {
         General: 'general',
         Workspaces: 'workspaces',
         Server: 'server',
         'Local LLM': 'local-llm',
+        Experimental: 'experimental',
       }
       const sub = subByGroup[entry.group]
       if (sub) useSettingsStore.setState({ generalSubTab: sub })

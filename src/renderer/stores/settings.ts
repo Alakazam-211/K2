@@ -87,7 +87,7 @@ export interface TerminalSettings {
 }
 
 /** Sub-tabs inside Settings → General (Canonical Agent Flow deep-links to workspaces). */
-export type GeneralSubTab = 'general' | 'workspaces' | 'server' | 'local-llm'
+export type GeneralSubTab = 'general' | 'workspaces' | 'server' | 'local-llm' | 'experimental'
 
 interface SettingsState {
   settingsOpen: boolean

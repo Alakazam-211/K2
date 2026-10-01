@@ -55,6 +55,7 @@ import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
+import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
@@ -74,6 +75,9 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.model-status', section: 'general', group: 'Local LLM', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
   { id: 'general.download-model', section: 'general', group: 'Local LLM', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
   { id: 'general.custom-model', section: 'general', group: 'Local LLM', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
+  ...(webFeatures.multiHost
+    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Experimental', label: 'Remote rooms (preview)', description: 'Open a Home agent on another server in place, without switching this window’s server', keywords: ['home', 'remote', 'room', 'server', 'preview', 'experimental', 'multi', 'switch'] }]
+    : []),
 ]
 
 const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> = [
@@ -81,6 +85,8 @@ const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> 
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'server', label: 'Server' },
   { id: 'local-llm', label: 'Local LLM', beta: true },
+  // Home M4 (MS55, answer Q3). Desktop only: web is single-server (MS56).
+  ...(webFeatures.multiHost ? [{ id: 'experimental' as const, label: 'Experimental' }] : []),
 ]
 
 export function GeneralSection(): React.JSX.Element {
@@ -392,6 +398,15 @@ export function GeneralSection(): React.JSX.Element {
       {tab === 'local-llm' && (
         <div>
           <LocalLLMSettings />
+        </div>
+      )}
+
+      {tab === 'experimental' && webFeatures.multiHost && (
+        <div className="space-y-4">
+          <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
+            Early features on this computer. They may change or go away.
+          </p>
+          <RemoteRoomsPreviewRow />
         </div>
       )}
       </div>

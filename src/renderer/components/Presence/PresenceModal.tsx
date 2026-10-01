@@ -3,9 +3,9 @@
 // role chip, window count, workspaces, connected-since) and live-updates
 // as `presence_changed` events replace the store's roster.
 //
-// Each row ends in a right-aligned ACTIONS area that is intentionally
-// empty for now — S3 slots the Kick button and S4 the edit-grant toggle
-// into it without any relayout.
+// Each row ends in a right-aligned ACTIONS area holding the S3 Kick
+// button. (The S4 edit-grant toggle went with the Viewer role —
+// prd-remove-viewer-role-v1.md.)
 //
 // Overlay/escape/close conventions mirror ConfirmDialog (backdrop
 // mousedown closes, Escape closes via a capture-phase window listener,
@@ -16,7 +16,6 @@ import { DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { ROLE_COLORS, presenceDisplayName } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
-import PresenceGrantToggle from './PresenceGrantToggle'
 
 interface PresenceModalProps {
   onClose: () => void
@@ -157,11 +156,9 @@ function PresenceRow({ user }: { user: RosterUser }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Right-aligned actions area — each moderation control self-gates
-          (grant toggle: viewer rows + managing onlooker only; kick:
-          viewer's role may kick this row). */}
+      {/* Right-aligned actions area — the kick control self-gates (the
+          onlooker's role may kick this row). */}
       <div className="flex flex-shrink-0 items-center gap-1.5">
-        <PresenceGrantToggle user={user} />
         <PresenceKickButton user={user} />
       </div>
     </div>

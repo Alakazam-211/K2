@@ -90,13 +90,15 @@ export function composerPlaceholder(
 }
 
 // ── Connect-role post gate (not window-mode) ─────────────────────────────
-// Project chat postability is a Connect *role* decision (≥ Member),
-// independent of presence window-mode (viewer/claimer). Fail-closed:
+// Project chat postability is a Connect *role* decision, independent of
+// presence window-mode (viewer/claimer). Every login role may post (the
+// Viewer role was removed — prd-remove-viewer-role-v1.md). Fail-closed:
 // null/unresolved → cannot post.
 
-export type ConnectRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type ConnectRole = 'owner' | 'admin' | 'member'
 
-/** Project chat postability: ≥ Member. null/unresolved → false (fail-closed). */
+/** Project chat postability: any resolved login role. null/unresolved →
+ *  false (fail-closed). */
 export function canPostProjectChat(role: ConnectRole | null): boolean {
   return role === 'owner' || role === 'admin' || role === 'member'
 }

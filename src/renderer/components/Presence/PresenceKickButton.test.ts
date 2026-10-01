@@ -41,7 +41,6 @@ describe('canKick — the client-side kick matrix (PRD §4)', () => {
   it('owner kicks any non-owner row', () => {
     expect(canKick('owner', 'admin')).toBe(true)
     expect(canKick('owner', 'member')).toBe(true)
-    expect(canKick('owner', 'viewer')).toBe(true)
   })
 
   it('nobody kicks the owner row', () => {
@@ -50,15 +49,13 @@ describe('canKick — the client-side kick matrix (PRD §4)', () => {
     expect(canKick('member', 'owner')).toBe(false)
   })
 
-  it('admin kicks member/viewer rows only — never fellow admins', () => {
+  it('admin kicks member rows only — never fellow admins', () => {
     expect(canKick('admin', 'member')).toBe(true)
-    expect(canKick('admin', 'viewer')).toBe(true)
     expect(canKick('admin', 'admin')).toBe(false)
   })
 
-  it('member / viewer / unresolved viewers kick nobody', () => {
+  it('member / unresolved kick nobody', () => {
     expect(canKick('member', 'member')).toBe(false)
-    expect(canKick('viewer', 'member')).toBe(false)
     expect(canKick(null, 'member')).toBe(false)
   })
 })

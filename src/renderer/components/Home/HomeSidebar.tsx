@@ -87,8 +87,10 @@ function RowStateText({ status }: { status: RowStatus }): React.JSX.Element {
   )
 }
 
-function asRole(role: string): 'owner' | 'admin' | 'member' | 'viewer' {
-  return role === 'owner' || role === 'admin' || role === 'viewer' ? role : 'member'
+// Avatar color only. There is no viewer role; an older server's `viewer`
+// row paints with the member color.
+function asRole(role: string): 'owner' | 'admin' | 'member' {
+  return role === 'owner' || role === 'admin' ? role : 'member'
 }
 
 /** "Same server as …" (MS81): one daemon saved at two addresses stays two

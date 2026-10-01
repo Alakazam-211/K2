@@ -181,32 +181,14 @@ describe('presence store — presence_changed replace-whole-set', () => {
     expect(roster[1].windowCount).toBe(3)
   })
 
-  it('a grant flip rides the whole-set replace (S4: viewer grantedEdit live-update)', () => {
-    // Grant: the daemon re-broadcasts the roster with grantedEdit true.
-    ev.presence[0]({
-      kind: 'presence_changed',
-      roster: [row('owner'), row('vera', { role: 'viewer', grantedEdit: false })],
-    })
-    expect(usePresenceStore.getState().roster[1]).toMatchObject({
-      user: 'vera',
-      role: 'viewer',
-      grantedEdit: false,
-    })
-
-    ev.presence[0]({
-      kind: 'presence_changed',
-      roster: [row('owner'), row('vera', { role: 'viewer', grantedEdit: true })],
-    })
-    expect(usePresenceStore.getState().roster[1].grantedEdit).toBe(true)
-
-    // Auto-revoke on last disconnect: the departure broadcast drops the
-    // row; a reconnect broadcast carries grantedEdit false again.
-    ev.presence[0]({ kind: 'presence_changed', roster: [row('owner')] })
-    ev.presence[0]({
-      kind: 'presence_changed',
-      roster: [row('owner'), row('vera', { role: 'viewer', grantedEdit: false })],
-    })
-    expect(usePresenceStore.getState().roster[1].grantedEdit).toBe(false)
+  it('a roster without grantedEdit (retired field) is stored as-is', () => {
+    // The Viewer role and its edit grants were removed; the daemon still
+    // sends grantedEdit:false for older clients, and nothing depends on it.
+    const { grantedEdit: _dropped, ...noGrant } = row('vera')
+    ev.presence[0]({ kind: 'presence_changed', roster: [row('owner'), noGrant] })
+    const stored = usePresenceStore.getState().roster[1]
+    expect(stored).toMatchObject({ user: 'vera', role: 'member' })
+    expect('grantedEdit' in stored).toBe(false)
   })
 
   it('an empty-roster event clears everything', () => {

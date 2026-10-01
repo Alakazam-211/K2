@@ -33,17 +33,17 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import type { RosterUser } from '@/stores/presence'
 import { primaryScope } from '@/kessel/server-scope'
 
-/** Wire roles the kick matrix reasons about. `viewer` ships with S4 but
- *  is gated here already so the matrix doesn't need a second pass. */
-type WireRole = 'owner' | 'admin' | 'member' | 'viewer'
+/** Login roles the kick matrix reasons about. There is no `viewer`
+ *  (prd-remove-viewer-role-v1.md). */
+type WireRole = 'owner' | 'admin' | 'member'
 
 /** The kick matrix, client-side mirror of `handle_kick` (PRD §4):
- *  owner kicks any non-owner; admin kicks member/viewer only. Pure —
+ *  owner kicks any non-owner; admin kicks members only. Pure —
  *  unit-tested directly. */
-export function canKick(viewerRole: string | null, targetRole: string): boolean {
+export function canKick(myRole: string | null, targetRole: string): boolean {
   if (targetRole === 'owner') return false
-  if (viewerRole === 'owner') return true
-  if (viewerRole === 'admin') return targetRole === 'member' || targetRole === 'viewer'
+  if (myRole === 'owner') return true
+  if (myRole === 'admin') return targetRole === 'member'
   return false
 }
 
@@ -65,7 +65,7 @@ export function fetchViewerRole(): Promise<WireRole | null> {
       at: now,
       promise: daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
         .then((data): WireRole | null => {
-          if (data.role === 'owner' || data.role === 'admin' || data.role === 'member' || data.role === 'viewer') {
+          if (data.role === 'owner' || data.role === 'admin' || data.role === 'member') {
             return data.role
           }
           // Pre-#629 daemons return no role; `owner:true` still means owner.

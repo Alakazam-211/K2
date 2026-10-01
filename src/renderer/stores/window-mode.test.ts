@@ -57,10 +57,9 @@ describe('deriveDefaultMode', () => {
     expect(deriveDefaultMode('owner')).toBe('claimer')
   })
 
-  it('every non-owner role → viewer', () => {
+  it('every non-owner role → viewer (eye) mode', () => {
     expect(deriveDefaultMode('admin')).toBe('viewer')
     expect(deriveDefaultMode('member')).toBe('viewer')
-    expect(deriveDefaultMode('viewer')).toBe('viewer')
   })
 
   it('unresolved identity → null (no default applied)', () => {

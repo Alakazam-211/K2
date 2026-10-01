@@ -21,7 +21,7 @@ export type AuthAuditEvent = {
   ip: string
 }
 
-export type ViewerRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type ViewerRole = 'owner' | 'admin' | 'member'
 
 export type UsersAuditResult =
   | { kind: 'ok'; events: AuthAuditEvent[]; tail: number }
@@ -162,7 +162,7 @@ export async function fetchWhoamiRole(opts?: { signal?: AbortSignal }): Promise<
     return null
   }
   const role = data.role
-  if (role === 'owner' || role === 'admin' || role === 'member' || role === 'viewer') return role
+  if (role === 'owner' || role === 'admin' || role === 'member') return role
   if (data.owner === true) return 'owner'
   return null
 }

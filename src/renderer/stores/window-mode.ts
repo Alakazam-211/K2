@@ -10,7 +10,12 @@
 //     keeping the wire quiet and the UI honest), and
 //   - the `capable` mirror of the daemon's mode-ACK frames
 //     (`{"event":"mode","payload":{mode,capable}}`), which the toggle
-//     uses to disable the claimer option for ungranted viewer-role users.
+//     uses to disable the claimer option. Every login is capable since
+//     the Viewer role was removed (prd-remove-viewer-role-v1.md); it is
+//     false only for a login revoked while its socket is still open.
+//
+// The eye/pencil MODE is a per-window input mode, not a login role: any
+// login may flip it, and non-owner windows still start on the eye.
 //
 // DEFAULT (derived ONCE from whoami, the PresenceKickButton cached
 // approach): owner → claimer (local windows keep today's behavior),

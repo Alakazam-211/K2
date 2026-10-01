@@ -30,6 +30,14 @@ import { getDaemonWs, getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } fro
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
+import {
+  ROLE_OPTIONS,
+  needsEnableAsMember,
+  parseK2Role,
+  type K2Role,
+  type K2User,
+} from './connect-user-roles'
+import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
@@ -132,17 +140,8 @@ interface TunnelStatus {
   released?: boolean
 }
 
-// K2 #629 — connect-user permission tier. 'viewer' (presence S4) is the
-// LOWEST tier: view-only unless holding an ephemeral edit grant.
-type K2Role = 'owner' | 'admin' | 'member' | 'viewer'
-
-interface K2User {
-  username: string
-  createdAt?: string | null
-  disabled: boolean
-  // K2 #629. Pre-#629 daemons omit it → treat as 'member'.
-  role?: K2Role
-}
+// K2 #629 — connect-user permission tier. There is no Viewer tier any
+// more (prd-remove-viewer-role-v1.md); see ./connect-user-roles.
 
 // Whether a viewer of `role` may see + use the Users/Access management UI
 // (add/remove/enable/disable). Admin + Owner only.
@@ -467,17 +466,13 @@ export function K2ConnectSection({
   const serverVersion = useConnectHostStore((s) => s.serverVersion)
   const supportsRoles = useServerSupports('roles')
   const oldHostNoRoles = isRemote && serverVersion !== null && !supportsRoles
-  // Presence S4: only OFFER the viewer tier when the active daemon's
-  // Role::from_wire accepts "viewer" — an older daemon would 400 the
-  // set-role. (Capabilities are version-derived; local is always true.)
-  const supportsViewerRole = useServerSupports('viewer-role')
 
   // ── Users / Access state ──────────────────────────────────────────────
   // K2 #629: the LOCAL viewer's role (from whoami). The desktop app talks
   // to its OWN daemon with the owner token, so this is normally 'owner';
   // null until resolved. It gates the whole management panel + the role
   // selector below.
-  const [viewerRole, setViewerRole] = useState<K2Role | null>(null)
+  const [myRole, setMyRole] = useState<K2Role | null>(null)
   const [whoamiLoaded, setWhoamiLoaded] = useState(false)
   const [users, setUsers] = useState<K2User[]>([])
   const [usersLoaded, setUsersLoaded] = useState(false)
@@ -497,6 +492,8 @@ export function K2ConnectSection({
   const [resetMsg, setResetMsg] = useState<string | null>(null)
   // username currently pending a remove confirm
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
+  // username whose "Enable as Member" (former Viewer) is in flight
+  const [enableBusy, setEnableBusy] = useState<string | null>(null)
 
   // ── Password policy state (K2 #620) ─────────────────────────────────
   const [policyMinLength, setPolicyMinLength] = useState('8')
@@ -639,22 +636,14 @@ export function K2ConnectSection({
       const res = await whoamiGet()
       if (res.ok) {
         const data = (await res.json()) as { role?: string; owner?: boolean }
-        const role: K2Role | null =
-          data.role === 'owner' ||
-          data.role === 'admin' ||
-          data.role === 'member' ||
-          data.role === 'viewer'
-            ? data.role
-            : data.owner
-              ? 'owner'
-              : null
-        setViewerRole(role)
+        const role: K2Role | null = parseK2Role(data.role) ?? (data.owner ? 'owner' : null)
+        setMyRole(role)
         return role
       }
-      setViewerRole(null)
+      setMyRole(null)
       return null
     } catch {
-      setViewerRole(null)
+      setMyRole(null)
       return null
     } finally {
       setWhoamiLoaded(true)
@@ -736,7 +725,7 @@ export function K2ConnectSection({
       }
       // add_user always creates Member. Owner can pick a starting role
       // here; apply it with the same set-role path as the per-row selector.
-      if (canChangeRoles(viewerRole) && newRole !== 'member') {
+      if (canChangeRoles(myRole) && newRole !== 'member') {
         const roleRes = await userPost('/set-role', { username, role: newRole })
         if (!roleRes.ok) {
           setAddError(`Added as member, but role could not be set: ${await errText(roleRes)}`)
@@ -794,6 +783,26 @@ export function K2ConnectSection({
     } catch (e) {
       setUsers((prev) => prev.map((u) => (u.username === username ? { ...u, disabled: !disabled } : u)))
       setUsersError(e instanceof Error ? e.message : 'Failed to update user')
+    }
+  }
+
+  // Former Viewer → Member (prd-remove-viewer-role-v1.md RV16). The daemon
+  // already stores the account as a disabled Member; enabling it is the
+  // owner's explicit choice and clears `wasViewer` server-side.
+  const enableAsMember = async (username: string): Promise<void> => {
+    setEnableBusy(username)
+    setUsersError(null)
+    try {
+      const res = await userPost('/set-disabled', { username, disabled: false })
+      if (!res.ok) {
+        setUsersError(await errText(res))
+        return
+      }
+      await refreshUsers()
+    } catch (e) {
+      setUsersError(e instanceof Error ? e.message : 'Failed to enable user')
+    } finally {
+      setEnableBusy(null)
     }
   }
 
@@ -1215,7 +1224,7 @@ export function K2ConnectSection({
             Same SettingsGroup chrome as Account / URLs (title + left rule). */}
         {panel === 'policies' && (
           <SettingsGroup title="Policies">
-            {viewerRole !== 'member' ? (
+            {myRole !== 'member' ? (
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
                   <div className="min-w-0">
@@ -1581,7 +1590,7 @@ export function K2ConnectSection({
                 see the management surface. A Member viewer (or an
                 unresolved/forbidden whoami) gets a clean note — never the
                 raw token/403 error. */}
-            {whoamiLoaded && !canManageUsers(viewerRole) ? (
+            {whoamiLoaded && !canManageUsers(myRole) ? (
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed py-1">
                 {oldHostNoRoles
                   ? `This host (v${serverVersion}) predates roles — update it to v${featureMinVersion('roles')} to manage users here.`
@@ -1701,18 +1710,15 @@ export function K2ConnectSection({
                     )}
                   </button>
                 </div>
-                {canChangeRoles(viewerRole) && (
+                {canChangeRoles(myRole) && (
                   <SettingDropdown
                     value={newRole}
-                    options={[
-                      ...(supportsViewerRole
-                        ? [{ value: 'viewer', label: 'Viewer — view-only unless granted' }]
-                        : []),
-                      { value: 'member', label: 'Member' },
-                      { value: 'admin', label: 'Admin' },
-                      { value: 'owner', label: 'Owner' },
-                    ]}
-                    onChange={(value) => setNewRole(value as K2Role)}
+                    options={[...ROLE_OPTIONS]}
+                    ariaLabel="New user role"
+                    onChange={(value) => {
+                      const r = parseK2Role(value)
+                      if (r) setNewRole(r)
+                    }}
                     menuAlign="left"
                   />
                 )}
@@ -1764,26 +1770,24 @@ export function K2ConnectSection({
                             disabled
                           </span>
                         )}
+                        {u.wasViewer && <WasViewerBadge />}
                       </span>
                       <div className="flex items-center gap-3 flex-shrink-0">
                         {/* K2 #629 — role selector. Editable only for an
                             Owner viewer; Admins see the role read-only. */}
-                        {canChangeRoles(viewerRole) ? (
+                        {canChangeRoles(myRole) ? (
                           <SettingDropdown
                             value={u.role ?? 'member'}
-                            options={[
-                              // Presence S4 — viewer is offered only when
-                              // the daemon speaks it (older ones 400 the
-                              // set-role); a row ALREADY viewer keeps the
-                              // option so its value renders + can change.
-                              ...(supportsViewerRole || u.role === 'viewer'
-                                ? [{ value: 'viewer', label: 'Viewer — view-only unless granted' }]
-                                : []),
-                              { value: 'member', label: 'Member' },
-                              { value: 'admin', label: 'Admin' },
-                              { value: 'owner', label: 'Owner' },
-                            ]}
-                            onChange={(value) => void changeRole(u.username, value as K2Role)}
+                            // No Viewer option. An older server can still
+                            // report "viewer"; it shows as the placeholder
+                            // and can be changed to a real role.
+                            placeholder={u.role ?? 'member'}
+                            options={[...ROLE_OPTIONS]}
+                            ariaLabel={`${u.username} role`}
+                            onChange={(value) => {
+                              const r = parseK2Role(value)
+                              if (r) void changeRole(u.username, r)
+                            }}
                           />
                         ) : (
                           <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]">
@@ -1844,6 +1848,13 @@ export function K2ConnectSection({
                         )}
                       </div>
                     </div>
+                    {needsEnableAsMember(u) && (
+                      <WasViewerNotice
+                        username={u.username}
+                        busy={enableBusy === u.username}
+                        onEnableAsMember={(name) => void enableAsMember(name)}
+                      />
+                    )}
                     {resetFor === u.username && (
                       <form
                         className="flex items-center gap-1.5"

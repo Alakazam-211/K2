@@ -200,15 +200,11 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
   })
 })
 
-describe('canPostProjectChat (Connect role ≥ Member; fail-closed)', () => {
+describe('canPostProjectChat (any login role; fail-closed)', () => {
   it('owner, admin, member can post', () => {
     expect(canPostProjectChat('owner')).toBe(true)
     expect(canPostProjectChat('admin')).toBe(true)
     expect(canPostProjectChat('member')).toBe(true)
-  })
-
-  it('viewer cannot post', () => {
-    expect(canPostProjectChat('viewer')).toBe(false)
   })
 
   it('null/unresolved is fail-closed', () => {

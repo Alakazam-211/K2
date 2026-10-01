@@ -148,7 +148,7 @@ describe('resolveRowStatus — the connected server', () => {
   const roster: RosterUser[] = [
     { user: 'owner', role: 'owner', windowCount: 1, workspaces: ['/srv/bee'], grantedEdit: false, connectedAt: 1 },
     { user: 'anna', role: 'member', windowCount: 1, workspaces: ['/srv/bee/sub'], grantedEdit: false, connectedAt: 1 },
-    { user: 'zoe', role: 'viewer', windowCount: 1, workspaces: ['/srv/other'], grantedEdit: false, connectedAt: 1 },
+    { user: 'zoe', role: 'member', windowCount: 1, workspaces: ['/srv/other'], grantedEdit: false, connectedAt: 1 },
   ]
   const base = {
     where: 'connected' as const,

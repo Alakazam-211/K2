@@ -8,20 +8,21 @@
 // any call site — but it is deliberately not rendered yet.
 
 /** Role → border color, decided 2026-07-04 (PRD §10): owner=amber-gold,
- *  admin=purple, member=blue, viewer=gray. Single source of truth for
- *  every presence surface — the top-bar chips, the modal's role labels,
- *  and the future workspace-nav mini avatars (S6) all read this map. */
-export const ROLE_COLORS: Record<'owner' | 'admin' | 'member' | 'viewer', string> = {
+ *  admin=purple, member=blue. Single source of truth for every presence
+ *  surface — the top-bar chips, the modal's role labels, and the
+ *  workspace-nav mini avatars (S6) all read this map. (No viewer: the
+ *  role was removed; an older server's `viewer` row falls back to the
+ *  member color at the call sites.) */
+export const ROLE_COLORS: Record<'owner' | 'admin' | 'member', string> = {
   owner: '#e2a92d', // amber-gold
   admin: '#a855f7', // purple
   member: '#3b82f6', // blue
-  viewer: '#8b93a1', // gray
 }
 
 export interface PresenceAvatarProps {
   /** Username, or the wire literal `"owner"` (displayed as "Owner"). */
   name: string
-  role: 'owner' | 'admin' | 'member' | 'viewer'
+  role: 'owner' | 'admin' | 'member'
   /** Diameter in px. ~20 for the top bar; renders fine down to 14-16
    *  (the S6 workspace-nav size) and up to ~32 (the modal). */
   size?: number

@@ -279,17 +279,18 @@ export interface ProjectsChangedEvent {
 
 /** One aggregated PER-USER presence roster row — wire-frozen against
  *  `crates/k2-daemon/src/presence.rs::RosterUser` (S1, presence arc).
- *  `user` is `"owner"` for the synthesized owner row, else the username;
- *  `role` gains `"viewer"` once S4 lands the role. */
+ *  `user` is `"owner"` for the synthesized owner row, else the username.
+ *  There is no `viewer` role (prd-remove-viewer-role-v1.md). */
 export interface PresenceRosterUser {
   user: string
-  role: 'owner' | 'admin' | 'member' | 'viewer'
+  role: 'owner' | 'admin' | 'member'
   /** Open windows (app-level events sockets) this user holds. */
   windowCount: number
   /** Deduped, sorted workspace paths the user is viewing. */
   workspaces: string[]
-  /** Ephemeral edit grant (S4); always false until the grant routes land. */
-  grantedEdit: boolean
+  /** RETIRED — the daemon still sends it (always false) for older
+   *  clients; nothing reads it. Edit grants went with the Viewer role. */
+  grantedEdit?: boolean
   /** Unix seconds of the user's EARLIEST live connection. */
   connectedAt: number
 }

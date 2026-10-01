@@ -70,6 +70,7 @@ import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
 import { scopeMayWrite } from '@/kessel/server-scope'
+import { planRoomSpawn } from '@/lib/room-spawn'
 import { openTerminalUrl } from '@/lib/terminal-link-open'
 import { paneRoomMode } from '@/stores/room'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
@@ -1495,6 +1496,26 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         if (!cancelled) setPhase({ kind: 'error', message: `Starting a session is not allowed from this room on ${room.scope.label}.` })
         return
       }
+      // A view-only room on a server that does not report
+      // `spawn-attach-only` (released up to 0.41.6 ignore the flag and would
+      // spawn) sends the spawn only for a session that server lists as live.
+      let plan
+      try {
+        plan = await planRoomSpawn(room, agentName, cwd)
+      } catch (err) {
+        if (!cancelled) {
+          setPhase({ kind: 'error', message: `Could not read the sessions on ${room.scope.label}: ${err instanceof Error ? err.message : String(err)}` })
+        }
+        return
+      }
+      if (cancelled) return
+      if (plan.kind === 'not-live') {
+        setPhase({
+          kind: 'error',
+          message: `Not running on ${room.scope.label}. View only (preview): this room does not start sessions.`,
+        })
+        return
+      }
       const spawnBody = {
         agent_name: agentName,
         cwd,
@@ -1513,7 +1534,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sandbox: sandbox ? true : undefined,
         // Home M4: a view-only room attaches to a live session only. The
         // daemon never spawns, evicts, recovers or resizes for it.
-        attach_only: readOnlyRoom ? true : undefined,
+        attach_only: plan.attachOnly ? true : undefined,
       }
 
       // Boot with retry. `Tauri auto-update → relaunch` produces a

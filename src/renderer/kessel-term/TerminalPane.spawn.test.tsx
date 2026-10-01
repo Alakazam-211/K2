@@ -133,6 +133,7 @@ vi.mock('@/stores/connect-host', () => ({
 import { TerminalPane } from './TerminalPane'
 import { fixedStore, renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import { useTabsStore } from '@/stores/tabs'
 import { getDaemonWs } from '../kessel/daemon-ws'
 
@@ -637,5 +638,111 @@ describe('named chat spawn seed+lock', () => {
     expect(body.label).toBe('Code Review')
     expect(body.label_locked).toBe(true)
     expect(body.label).not.toBe('claude')
+  })
+})
+
+// Home M5 — released daemons up to 0.41.6 ignore `attach_only` and would
+// SPAWN a tab that is not running. A view-only room on a server that does
+// not report `spawn-attach-only` sends the spawn only for a session that
+// server lists as live; otherwise it shows "Not running on …" and sends
+// nothing. A usable room is unchanged.
+describe('a view-only room on a server without spawn-attach-only (released ≤ 0.41.6)', () => {
+  function roomOn(opts: { readOnly: boolean; attachOnly: boolean }) {
+    const base = fakeScope('old-b.test')
+    const scope = {
+      ...base,
+      serverSupports: (f: string) => (f === 'spawn-attach-only' ? opts.attachOnly : true),
+    } as typeof base
+    return testRoom({
+      presence: fixedStore({ roster: [], supported: true }),
+      key: 'old-b.test|p1:w1',
+      isPrimary: false,
+      localCommands: false,
+      readOnly: opts.readOnly,
+      scope,
+      cwd: '/srv/ws',
+      tabs: {
+        getState: () => ({
+          setTerminalSandboxBackend: vi.fn(),
+          setTerminalConversationId: vi.fn(),
+          setTabTitle: vi.fn(),
+          tabs: [],
+          extraGroups: [],
+          releasePaneOwnedElsewhere: vi.fn(),
+        }),
+      },
+      activity: activitySpies(),
+    })
+  }
+
+  function liveOnB(agentNames: string[]): void {
+    vi.mocked(daemonCliGet).mockImplementation(async (_scope, route) => {
+      if (route !== 'sessions/list-for-workspace') throw new Error(`unexpected GET ${route}`)
+      return agentNames.map((agentName) => ({ agentName, sessionId: `s-${agentName}` }))
+    })
+  }
+
+  function listCalls(): Array<{ scopeHost: string; params: unknown }> {
+    return vi
+      .mocked(daemonCliGet)
+      .mock.calls.filter((c) => c[1] === 'sessions/list-for-workspace')
+      .map((c) => ({ scopeHost: (c[0] as { hostKey: string }).hostKey, params: c[2] }))
+  }
+
+  it('never issues a spawn for a tab that is not live there, and says Not running', async () => {
+    const { spawnCalls } = installFetchSpy()
+    liveOnB(['tab-someone-else'])
+    renderInRoom(roomOn({ readOnly: true, attachOnly: false }), pane(true))
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Not running on old-b.test'))
+    await settle()
+    expect(spawnCalls()).toBe(0)
+    expect(listCalls()).toEqual([{ scopeHost: 'old-b.test', params: { path: '/srv/ws' } }])
+  })
+
+  it('a hidden tab with a sessionId (eager) that is not live still sends nothing', async () => {
+    const { spawnCalls } = installFetchSpy()
+    liveOnB([])
+    renderInRoom(roomOn({ readOnly: true, attachOnly: false }), pane(false, { sessionId: 'gone-1' }))
+    await waitFor(() => expect(listCalls().length).toBe(1))
+    await settle()
+    expect(spawnCalls()).toBe(0)
+  })
+
+  it('attaches (one spawn, attach_only) when that server lists the tab live', async () => {
+    const { spawnCalls, spawnBodies } = installFetchSpy()
+    liveOnB(['tab-pg-test'])
+    renderInRoom(roomOn({ readOnly: true, attachOnly: false }), pane(true))
+    await waitFor(() => expect(spawnCalls()).toBe(1))
+    expect(spawnBodies()[0].agent_name).toBe('tab-pg-test')
+    expect(spawnBodies()[0].attach_only).toBe(true)
+  })
+
+  it('a failed live list is an error, never a spawn', async () => {
+    const { spawnCalls } = installFetchSpy()
+    vi.mocked(daemonCliGet).mockImplementation(async () => {
+      throw new Error('503 starting')
+    })
+    renderInRoom(roomOn({ readOnly: true, attachOnly: false }), pane(true))
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Could not read the sessions on old-b.test'))
+    await settle()
+    expect(spawnCalls()).toBe(0)
+  })
+
+  it('a server that reports spawn-attach-only gets the attach_only spawn with no list read (M4 path)', async () => {
+    const { spawnCalls, spawnBodies } = installFetchSpy()
+    liveOnB([])
+    renderInRoom(roomOn({ readOnly: true, attachOnly: true }), pane(true))
+    await waitFor(() => expect(spawnCalls()).toBe(1))
+    expect(spawnBodies()[0].attach_only).toBe(true)
+    expect(listCalls()).toEqual([])
+  })
+
+  it('a usable room spawns as before: no list read, no attach_only (M5 path unchanged)', async () => {
+    const { spawnCalls, spawnBodies } = installFetchSpy()
+    liveOnB([])
+    renderInRoom(roomOn({ readOnly: false, attachOnly: false }), pane(true))
+    await waitFor(() => expect(spawnCalls()).toBe(1))
+    expect(spawnBodies()[0].attach_only).toBe(undefined)
+    expect(listCalls()).toEqual([])
   })
 })

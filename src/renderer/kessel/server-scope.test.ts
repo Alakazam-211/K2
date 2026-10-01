@@ -217,6 +217,29 @@ describe('scopeForHost — pinned to one saved server', () => {
     expect(b.serverSupports('canonical-active')).toBe(true)
   })
 
+  it('a reported feature (spawn-attach-only) is only what that server listed, never its version', () => {
+    const b = scopeForHost(ROSSON)
+    // Unknown server: unsupported.
+    expect(b.serverSupports('spawn-attach-only')).toBe(false)
+    // A released daemon (no `features` in /boot-status) with the same
+    // version string as main: still unsupported.
+    noteServerVersion('rosson.k2.dev', '0.41.6', [])
+    expect(b.serverSupports('spawn-attach-only')).toBe(false)
+    expect(b.serverSupports('canonical-active')).toBe(true)
+    noteServerVersion('rosson.k2.dev', '0.41.6', ['spawn-attach-only'])
+    expect(b.serverSupports('spawn-attach-only')).toBe(true)
+    // A later boot without the key (downgraded) takes it back.
+    noteServerVersion('rosson.k2.dev', '0.41.6', [])
+    expect(b.serverSupports('spawn-attach-only')).toBe(false)
+    // The window's remote server: the same rule, from its own report.
+    useConnectHostStore.getState().selectHost(LAN)
+    expect(primaryScope().serverSupports('spawn-attach-only')).toBe(false)
+    noteServerVersion('192.168.1.20:38471', '0.41.6', ['spawn-attach-only'])
+    expect(primaryScope().serverSupports('spawn-attach-only')).toBe(true)
+    // This computer's daemon supports everything.
+    expect(scopeForHost('local').serverSupports('spawn-attach-only')).toBe(true)
+  })
+
   it('scopedKey never collides across two servers for the same key', () => {
     const a = scopeForHost(ROSSON)
     const b = scopeForHost(LAN)

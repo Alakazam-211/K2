@@ -49,6 +49,8 @@ export interface PoolBoot {
   version: string | null
   protocol: number | null
   instanceId: string | null
+  /** `/boot-status` `features` (REPORTED_FEATURES); `[]` from an older daemon. */
+  features: string[]
   at: number
 }
 
@@ -78,6 +80,7 @@ export interface BootBody {
   version?: unknown
   protocol?: unknown
   instanceId?: unknown
+  features?: unknown
 }
 
 export type ReviveResult =
@@ -109,7 +112,9 @@ export interface HostPoolDeps {
   /** MS36/MS59: forget a dead token in MEMORY only. */
   dropSessionInMemory: (hostId: string) => void
   coord: LoginCoordinator
-  noteVersion: (hostKey: string, version: string | null) => void
+  /** What `/boot-status` said: the version, and its `features` list (an
+   *  older daemon without one reports `[]`). */
+  noteVersion: (hostKey: string, version: string | null, features: readonly string[]) => void
   /** `POST projects/activate {projectId}` on `hostKey`, with THAT server's
    *  scope and login (MS39). Throws on failure. */
   activate: (hostKey: string, projectId: string) => Promise<void>
@@ -244,6 +249,7 @@ function parseBoot(b: BootBody, at: number): PoolBoot {
     version: str(b.version),
     protocol: typeof b.protocol === 'number' ? b.protocol : null,
     instanceId: str(b.instanceId),
+    features: Array.isArray(b.features) ? b.features.filter((f): f is string => typeof f === 'string') : [],
     at,
   }
 }
@@ -535,7 +541,7 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     }
     const boot = parseBoot(body, at)
     const prevBoot = read(hostKey).boot
-    deps.noteVersion(hostKey, boot.version)
+    deps.noteVersion(hostKey, boot.version, boot.features)
     write(hostKey, { boot, reach: boot.ready ? 'live' : 'starting', offlineStreak: 0, checkedAt: at })
     // MS29: a new instanceId means this server restarted. Only its own
     // listeners hear about it.

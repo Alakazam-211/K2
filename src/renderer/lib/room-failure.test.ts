@@ -11,7 +11,7 @@ function entry(patch: Partial<HostEntry> = {}): HostEntry {
     saved: true,
     hostId: 'id-dtl',
     reach: 'live',
-    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', at: 1 },
+    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', features: [], at: 1 },
     auth: 'ok',
     authNote: null,
     role: 'member',
@@ -88,7 +88,7 @@ describe('roomFailure', () => {
   it('version too old: names both versions; Open B’s server', () => {
     const f = roomFailure({
       ...base,
-      entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', at: 1 } }),
+      entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
     })
     expect(f).toEqual({
       kind: 'version-too-old',
@@ -102,14 +102,14 @@ describe('roomFailure', () => {
     expect(
       roomFailure({
         ...base,
-        entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.39', protocol: 1, instanceId: 'i', at: 1 } }),
+        entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.39', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
       }),
     ).toBeNull()
     // Unknown version is too old (MS11: unknown means no).
     expect(
       roomFailure({
         ...base,
-        entry: entry({ boot: { phase: 'ready', ready: true, version: null, protocol: 1, instanceId: 'i', at: 1 } }),
+        entry: entry({ boot: { phase: 'ready', ready: true, version: null, protocol: 1, instanceId: 'i', features: [], at: 1 } }),
       })?.title,
     ).toBe('dtl is on an unknown version. This room needs v0.40.39 or newer.')
   })
@@ -117,7 +117,7 @@ describe('roomFailure', () => {
   it('too old wins over a login state: the room cannot open either way', () => {
     const f = roomFailure({
       ...base,
-      entry: entry({ auth: 'signin-required', boot: { phase: 'ready', ready: true, version: '0.40.1', protocol: 1, instanceId: 'i', at: 1 } }),
+      entry: entry({ auth: 'signin-required', boot: { phase: 'ready', ready: true, version: '0.40.1', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
     })
     expect(f?.kind).toBe('version-too-old')
   })

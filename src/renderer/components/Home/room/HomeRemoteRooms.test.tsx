@@ -50,7 +50,7 @@ function poolEntry(patch: Partial<HostEntry>): HostEntry {
     saved: true,
     hostId: 'id-b',
     reach: 'live',
-    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', at: 1 },
+    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', features: [], at: 1 },
     auth: 'ok',
     authNote: null,
     role: 'member',
@@ -174,7 +174,7 @@ describe('remote rooms in Home (M4)', () => {
     ['restarting', { reach: 'starting' as const }, 'restarting', 'retry'],
     ['kicked', { auth: 'kicked' as const }, 'kicked', 'sign-in'],
     ['sign-in needed', { auth: 'signin-required' as const }, 'signin-required', 'sign-in'],
-    ['too old', { boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', at: 1 } }, 'version-too-old', 'open-server'],
+    ['too old', { boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', features: [], at: 1 } }, 'version-too-old', 'open-server'],
   ] as const) {
     it(`${name}: the banner shows over the room's last frame, dimmed with input off`, () => {
       hostPool.store.setState({ entries: { [KEY]: poolEntry(patch as Partial<HostEntry>) } })

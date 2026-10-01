@@ -33,6 +33,8 @@ interface FakeDaemon {
   phase: string
   version: string
   instanceId: string
+  /** `/boot-status` `features`; null = an older daemon that sends none. */
+  features: string[] | null
   password: string
   role: string
   mustChange: boolean
@@ -50,6 +52,7 @@ function daemon(base: string): FakeDaemon {
     phase: 'ready',
     version: '0.41.6',
     instanceId: `inst-${base}`,
+    features: null,
     password: 'pw',
     role: 'member',
     mustChange: false,
@@ -71,6 +74,7 @@ let keychain: Map<string, string>
 let passwords: Map<string, string>
 let daemons: Map<string, FakeDaemon>
 let windows: FakeWindow[]
+let noted: Array<{ hostKey: string; version: string | null; features: readonly string[] }>
 
 function serve(url: string, init?: RequestInit): Response {
   const u = new URL(url)
@@ -78,7 +82,13 @@ function serve(url: string, init?: RequestInit): Response {
   if (!d || !d.up) throw new TypeError('Load failed')
   const token = u.searchParams.get('token') ?? ''
   if (u.pathname === '/boot-status') {
-    return json(200, { version: d.version, protocol: 1, phase: d.phase, instanceId: d.instanceId })
+    return json(200, {
+      version: d.version,
+      protocol: 1,
+      phase: d.phase,
+      instanceId: d.instanceId,
+      ...(d.features ? { features: d.features } : {}),
+    })
   }
   if (u.pathname === '/cli/auth/whoami') {
     if (!d.tokens.has(token)) return json(403, { error: 'Invalid or missing auth token' })
@@ -165,7 +175,7 @@ function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
     login,
     dropSessionInMemory: (hostId) => setToken(hostId, ''),
     coord,
-    noteVersion: () => {},
+    noteVersion: (hostKey, version, features) => void noted.push({ hostKey, version, features }),
     activate: async () => {
       throw new Error('projects/activate is not part of this test')
     },
@@ -194,6 +204,7 @@ const B_BASE = 'https://b.k2.dev'
 const C_BASE = 'https://c.k2.dev'
 
 beforeEach(() => {
+  noted = []
   now = 1_000_000
   shared = new MemStorage()
   keychain = new Map()
@@ -226,6 +237,19 @@ describe('pool state transitions', () => {
     expect(e.boot?.instanceId).toBe(`inst-${B_BASE}`)
     expect(e.presence).toEqual([])
     expect(e.hostId).toBe('id-b.k2.dev')
+  })
+
+  it('the boot-status features list reaches noteVersion; an older daemon with none notes []', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE), hostFor(C_BASE)])
+    daemons.get(B_BASE)!.features = ['spawn-attach-only', 7 as unknown as string]
+    const b = await w.pool.check('b.k2.dev')
+    expect(b.boot?.features).toEqual(['spawn-attach-only'])
+    const c = await w.pool.check('c.k2.dev')
+    expect(c.boot?.features).toEqual([])
+    expect(noted).toEqual([
+      { hostKey: 'b.k2.dev', version: '0.41.6', features: ['spawn-attach-only'] },
+      { hostKey: 'c.k2.dev', version: '0.41.6', features: [] },
+    ])
   })
 
   it('not ready → starting; unreachable → offline with the 5 s / 15 s / 30 s probe backoff', async () => {
@@ -495,7 +519,7 @@ describe('cross-window login broadcast (MS28, MS62)', () => {
 describe('same server at two addresses (MS81, answer Q2(a))', () => {
   it('a later key with the same instanceId gets a note naming the earlier one', () => {
     const boot = (id: string): Pick<HostEntry, 'boot'> => ({
-      boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: id, at: 1 },
+      boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: id, features: [], at: 1 },
     })
     const pairs = sameServerPairs(['local', 'rosson.k2.dev', 'b.k2.dev', '192.168.1.20:38471'], {
       local: boot('i-1'),

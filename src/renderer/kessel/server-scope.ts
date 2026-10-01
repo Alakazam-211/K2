@@ -45,6 +45,7 @@ import {
 } from '@/stores/connect-host'
 import { LOCAL_HOME_HOST, canonicalHostKey, homeHostKey, savedHostForKey } from '@/lib/host-key'
 import { FEATURES, gte, serverSupports, type FeatureKey } from '@/lib/server-capabilities'
+import { isReportedFeature, type ReportedFeatureKey } from '@/lib/reported-features'
 import { hostScopedKey } from '@/lib/host-scoped-storage'
 import { ROOM_WRITE_ROUTES } from '@/kessel/room-writes'
 
@@ -77,8 +78,11 @@ export interface ServerScope {
   httpBase(): Promise<string>
   /** `<ws|wss>://<host>[:<port>]` for sockets. */
   wsBase(): Promise<string>
-  /** Does this server's version support `feature`? */
-  serverSupports(feature: FeatureKey): boolean
+  /** Does this server support `feature`? A version key (`FEATURES`) is
+   *  decided by its version; a reported key (`REPORTED_FEATURES`) by the
+   *  `features` its `/boot-status` listed (unknown ⇒ false). This computer's
+   *  daemon supports everything. */
+  serverSupports(feature: FeatureKey | ReportedFeatureKey): boolean
   /** Home M4: a view-only room's scope (`viewOnlyScope`). The request layer
    *  refuses every POST on it except the keep-alive (`projects/activate`).
    *  Absent / false for every other scope. */
@@ -151,7 +155,11 @@ const PRIMARY: ServerScope = {
   async wsBase(): Promise<string> {
     return daemonWsBase(await resolveWindowHostCreds())
   },
-  serverSupports(feature: FeatureKey): boolean {
+  serverSupports(feature: FeatureKey | ReportedFeatureKey): boolean {
+    if (isReportedFeature(feature)) {
+      const active = windowActiveHost()
+      return active === 'local' || reportedSupports(homeHostKey(active), feature)
+    }
     return serverSupports(feature)
   },
 }
@@ -169,11 +177,21 @@ export function primaryScope(): ServerScope {
  *  server's `/boot-status` (M2's connection pool). Unknown → feature gates
  *  return false, the same rule as an active remote with no version yet. */
 const knownVersions = new Map<string, string>()
+/** The `features` each server's `/boot-status` listed (REPORTED_FEATURES).
+ *  No entry ⇒ every reported key reads false. */
+const knownFeatures = new Map<string, ReadonlySet<string>>()
 
-export function noteServerVersion(hostKey: string, version: string | null): void {
+/** Note what a server's `/boot-status` said: its version and, when given,
+ *  its `features` list (a body without one is an older daemon: none). */
+export function noteServerVersion(hostKey: string, version: string | null, features?: readonly string[]): void {
   const key = canonicalHostKey(hostKey)
   if (version) knownVersions.set(key, version)
   else knownVersions.delete(key)
+  if (features !== undefined) knownFeatures.set(key, new Set(features))
+}
+
+function reportedSupports(hostKey: string, feature: ReportedFeatureKey): boolean {
+  return knownFeatures.get(canonicalHostKey(hostKey))?.has(feature) ?? false
 }
 
 
@@ -219,8 +237,9 @@ function makeHostScope(hostKey: string): ServerScope {
     async wsBase(): Promise<string> {
       return daemonWsBase(await creds())
     },
-    serverSupports(feature: FeatureKey): boolean {
+    serverSupports(feature: FeatureKey | ReportedFeatureKey): boolean {
       if (isLocal) return true
+      if (isReportedFeature(feature)) return reportedSupports(hostKey, feature)
       if (isWindowHost()) return serverSupports(feature)
       const version = knownVersions.get(hostKey)
       if (!version) return false
@@ -367,4 +386,5 @@ export function scopedKey(scope: ServerScope, key: string): string {
 export function __resetServerScopesForTests(): void {
   pinned.clear()
   knownVersions.clear()
+  knownFeatures.clear()
 }

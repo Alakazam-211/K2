@@ -47,7 +47,7 @@ function entry(patch: Partial<HostEntry>): HostEntry {
     saved: true,
     hostId: 'id-dtl',
     reach: 'live',
-    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', at: 1 },
+    boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', features: [], at: 1 },
     auth: 'ok',
     authNote: null,
     role: 'member',
@@ -99,7 +99,7 @@ const CASES: Array<[string, Partial<HostEntry>, string, string, string]> = [
   ['kicked', { auth: 'kicked' }, 'Removed from dtl. Sign in again.', 'Sign in to dtl', 'sign-in'],
   [
     'version-too-old',
-    { boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', at: 1 } },
+    { boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', features: [], at: 1 } },
     'dtl is on v0.40.30. This room needs v0.40.39 or newer.',
     'Open dtl’s server',
     'open-server',

@@ -20,7 +20,7 @@ const BINARY = join(REPO, 'target', 'debug', 'k2-daemon')
 export const B_USER = 'anna'
 export const B_PASSWORD = 'correct horse ms'
 
-interface Spawned {
+export interface Spawned {
   child: ChildProcess
   home: string
   port: number
@@ -37,7 +37,11 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms))
 }
 
-async function spawnDaemon(tag: string): Promise<Spawned> {
+/** Spawn one daemon under a fresh temp HOME. `extraEnv` is for test hooks,
+ *  e.g. `K2_TEST_SIMULATE_NO_ATTACH_ONLY=1` for a daemon that behaves like a
+ *  released one up to 0.41.6 (Home M5 old-B test). Also used by tests that
+ *  need a third daemon; they kill it and remove its HOME themselves. */
+export async function spawnDaemon(tag: string, extraEnv: Record<string, string> = {}): Promise<Spawned> {
   const home = mkdtempSync(join(tmpdir(), `k2-ms-${tag}-`))
   mkdirSync(join(home, '.k2'), { recursive: true })
   const shim = join(home, 'agent-shim-empty')
@@ -46,7 +50,7 @@ async function spawnDaemon(tag: string): Promise<Spawned> {
   // the shim dir offers (the OS shell, never an agent CLI).
   symlinkSync('/bin/sh', join(shim, 'sh'))
   const child = spawn(BINARY, [], {
-    env: { ...process.env, HOME: home, K2_TEST_AGENT_SHIM_DIR: shim, K2SO_WATCHDOG_DISABLED: '1' },
+    env: { ...process.env, HOME: home, K2_TEST_AGENT_SHIM_DIR: shim, K2SO_WATCHDOG_DISABLED: '1', ...extraEnv },
     stdio: 'ignore',
   })
   const deadline = Date.now() + 20_000
@@ -81,6 +85,16 @@ async function spawnDaemon(tag: string): Promise<Spawned> {
   return { child, home, port, owner }
 }
 
+/** Seed the Connect user `anna` (Member) with the owner token. */
+export async function seedMember(d: Spawned): Promise<void> {
+  const add = await fetch(`http://127.0.0.1:${d.port}/cli/users/add?token=${d.owner}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: B_USER, password: B_PASSWORD }),
+  })
+  if (add.status !== 200) throw new Error(`seeding ${B_USER} on ${d.port} failed: ${add.status} ${await add.text()}`)
+}
+
 let spawned: Spawned[] = []
 
 export async function setup(): Promise<void> {
@@ -91,12 +105,7 @@ export async function setup(): Promise<void> {
   spawned.push(a)
   const b = await spawnDaemon('b')
   spawned.push(b)
-  const add = await fetch(`http://127.0.0.1:${b.port}/cli/users/add?token=${b.owner}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: B_USER, password: B_PASSWORD }),
-  })
-  if (add.status !== 200) throw new Error(`seeding ${B_USER} on B failed: ${add.status} ${await add.text()}`)
+  await seedMember(b)
   process.env.K2_MS_A_PORT = String(a.port)
   process.env.K2_MS_A_OWNER = a.owner
   process.env.K2_MS_B_PORT = String(b.port)

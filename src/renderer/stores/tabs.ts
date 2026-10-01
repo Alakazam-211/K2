@@ -60,7 +60,7 @@ import {
   collapseEmptyLeadingColumns,
   mergeSerializedLayouts,
 } from '@/lib/layout-merge'
-import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { assertScopeMayPost, primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 /** Project path → id (+ primary workspace) for host-session tab routing.
  *  Scout sales pilot: api- SessionAdded must park under the event's
@@ -314,6 +314,8 @@ export async function closeV2Session(
   agentName: string,
   opts?: { clearIndex?: boolean; reason?: 'tab_close' },
 ): Promise<void> {
+  // Home M4: a view-only room never closes a session on its server.
+  assertScopeMayPost(scope, 'sessions/v2/close')
   try {
     const creds = await getDaemonWs(scope)
     const url = withCliTokenQuery(
@@ -2222,6 +2224,10 @@ export type TabsStore = UseBoundStore<StoreApi<TabsState>> & { readonly room: Ta
 export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   const { scope, deps } = binding
   const isPrimary = binding.workspace === null
+  /** Home M4: a view-only (preview) pinned room — no layout save, no close,
+   *  no tab-title write on its server. Its scope's request layer refuses
+   *  every other write too (`viewOnlyScope`). */
+  const readOnly = scope.viewOnly === true
 
   /** A primary-room-only path reached from a pinned room is a bug: fail
    *  loudly instead of stashing, bulk-loading or switching servers. */
@@ -2438,6 +2444,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
    *  refetch is in flight. Resolves when this save (or the one that replaced
    *  it) has settled. */
   function submitLayoutSave(key: string, job: LayoutSaveJob): Promise<void> {
+    // Home M4: a view-only room shows its server's tabs and never saves
+    // them (no layout write reaches B until M5).
+    if (readOnly) return Promise.resolve()
     const lane = laneFor(key)
     if (lane.busy) {
       lane.queuedSave = job
@@ -2627,6 +2636,12 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     // `tab-<pg>` from a window that has not dropped the tab yet. A pane or
     // item close inside a tab does not (the pane-group id can be reused).
     const closeReason = opts?.wholeTab ? ({ reason: 'tab_close' } as const) : {}
+    // Home M4: a view-only room closes nothing on its server. Its tab
+    // strip offers no close; this guards every other path (MS38 read).
+    if (readOnly) {
+      console.info('[tabs] view-only room — close not sent to %s (terminal %s)', scope.hostKey, data.terminalId)
+      return
+    }
     // Heartbeat tabs are "minimize, don't kill" — the daemon-owned PTY
     // keeps running in the background after the tab closes so the
     // heartbeat continues to fire on schedule. We still flip the
@@ -6176,9 +6191,10 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     // gated; against an older/remote daemon these events never arrive and the
     // renderer keeps its local-layout behavior). On (re)connect re-snapshot
     // the canonical tab titles so a rename missed during a drop is backfilled.
-    if (scope.serverSupports('daemon-broadcasts')) {
-      void applyTabTitlesSnapshot(projectId)
-      activeTabEventsUnsub = subscribeToWorkspaceTabEvents(scope, cwd, {
+    // Home M4 (MS46): a pinned room carries these on its ONE workspace
+    // socket (below) instead of a second tab-events socket.
+    const tabEvents = scope.serverSupports('daemon-broadcasts')
+    const tabHandlers = {
         onTabTitleChanged: (event: TabTitleChangedEvent) => {
           // Match on project_id (the event's `project` is the project PATH
           // echoed, but the title store is keyed by tab id which is globally
@@ -6227,14 +6243,25 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
             }
           })()
         },
-        onHello: () => {
-          if (store.getState().activeWorkspaceKey !== key) return
-          void applyTabTitlesSnapshot(projectId)
-        },
-      })
+    }
+    if (tabEvents) {
+      void applyTabTitlesSnapshot(projectId)
+      if (isPrimary) {
+        activeTabEventsUnsub = subscribeToWorkspaceTabEvents(scope, cwd, {
+          ...tabHandlers,
+          onHello: () => {
+            if (store.getState().activeWorkspaceKey !== key) return
+            void applyTabTitlesSnapshot(projectId)
+          },
+        })
+      }
     }
 
     activeSessionEventsUnsub = subscribeToWorkspaceSessionEvents(scope, cwd, {
+      ...(tabEvents && !isPrimary ? tabHandlers : {}),
+      // Home M4: a pinned room's socket feeds its server's app bus
+      // (presence, Active set) while that server has no app socket here.
+      carryAppBus: !isPrimary,
       onAdded: (event: SessionAddedEvent) => {
         // Only adopt `tab-<paneGroupId>` sessions — pinned chat and
         // heartbeats live under their own canonical agent_names with
@@ -6284,6 +6311,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
         // emit window — defensively re-fetch the daemon's snapshot
         // and re-run the orphan-adoption pass.
         if (store.getState().activeWorkspaceKey !== key) return
+        // Pinned room: this one socket also carries the tab titles.
+        if (tabEvents && !isPrimary) void applyTabTitlesSnapshot(projectId)
         void (async () => {
           const sessions = await fetchDaemonSessions(cwd)
           if (sessions === null) return

@@ -1,18 +1,16 @@
-import { create } from 'zustand'
+import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning } from '@/lib/terminal-daemon'
-import { serverSupports } from '@/lib/server-capabilities'
 import { daemonCliGet, RecoveringError } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import { isBuiltinAgentType } from '@/lib/agent-type'
-import { useConnectHostStore } from '@/stores/connect-host'
 import {
   subscribeToWorkspaceTabEvents,
   type HeartbeatRosterChangedEvent,
   type HeartbeatStateChangedEvent,
   type UnsubscribeFn,
 } from '@/stores/session-events'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 /**
  * Heartbeat sessions store — drives the sidebar Heartbeats panel.
@@ -66,7 +64,7 @@ export interface HeartbeatEntry {
   liveTerminalId: string | null
 }
 
-interface HeartbeatSessionsState {
+export interface HeartbeatSessionsState {
   /** Active (non-archived) heartbeats for the currently-loaded project. */
   active: HeartbeatEntry[]
   /** Archived heartbeats — rendered in the sidebar's collapsed
@@ -122,7 +120,6 @@ interface RunningAgentInfo {
  *  re-fetch, 250ms after the last event — long enough to swallow a burst,
  *  short enough to still feel live. */
 const ROSTER_REFRESH_DEBOUNCE_MS = 250
-let rosterRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Map a heartbeat row to its display state by joining against running PTY
@@ -223,7 +220,28 @@ export async function resolvePrimaryAgent(projectPath: string): Promise<string |
   }
 }
 
-export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, get) => ({
+/** One room's heartbeat rows (Home M4, MS14 "heartbeat-sessions: per
+ *  room"). The primary room's instance is `useHeartbeatSessionsStore`; a
+ *  pinned room builds its own on its scope, so B's rows never come from A
+ *  and two rooms never thrash one `loadedFor`. */
+export interface HeartbeatSessionsBinding {
+  scope: ServerScope
+  /** May it run this computer's commands (`k2so_agents_list`) to enrich
+   *  liveness? Only for this computer's daemon. */
+  localCommands: boolean
+}
+
+export type HeartbeatSessionsStore = UseBoundStore<StoreApi<HeartbeatSessionsState>> & {
+  /** (Re)subscribe the live-dot stream to `projectPath` (null tears it
+   *  down). */
+  subscribeLive(projectPath: string | null): void
+  unsubscribeLive(): void
+}
+
+export function createHeartbeatSessionsStore(binding: HeartbeatSessionsBinding): HeartbeatSessionsStore {
+  const { scope } = binding
+  let rosterRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  const store = create<HeartbeatSessionsState>((set, get) => ({
   active: [],
   archived: [],
   loadedFor: null,
@@ -246,14 +264,14 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
       //
       // Local still enriches liveness with in-app PTY telemetry when
       // available; remote trusts daemon-stamped `activeTerminalId`.
-      const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+      const isRemote = scope.isRemote || !binding.localCommands
       // Remote hosts must never land a non-array in the store — panel
       // render does `[...active].sort` and would black-screen the SPA.
       const activeRows = asArray<HeartbeatRow>(
-        await daemonCliGet(primaryScope(), 'heartbeat/list', { project: projectPath }),
+        await daemonCliGet(scope, 'heartbeat/list', { project: projectPath }),
       )
       const archivedRows = asArray<HeartbeatRow>(
-        await daemonCliGet(primaryScope(), 'heartbeat/list-archived', {
+        await daemonCliGet(scope, 'heartbeat/list-archived', {
           project: projectPath,
         }),
       )
@@ -266,7 +284,7 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
         }))
       } else {
         const [running, agentName] = await Promise.all([
-          terminalListRunning(primaryScope()).catch((): RunningAgentInfo[] => []),
+          terminalListRunning(scope).catch((): RunningAgentInfo[] => []),
           resolvePrimaryAgent(projectPath),
         ])
         const runningList = asArray<RunningAgentInfo>(running)
@@ -368,6 +386,53 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
   },
 }))
 
+  let hbEventsUnsub: UnsubscribeFn | null = null
+  let hbSubscribedPath: string | null = null
+
+  const unsubscribeLive = (): void => {
+    if (hbEventsUnsub) {
+      hbEventsUnsub()
+      hbEventsUnsub = null
+    }
+    hbSubscribedPath = null
+  }
+
+  const subscribeLive = (projectPath: string | null): void => {
+    if (!scope.serverSupports('daemon-broadcasts')) {
+      // Unsupported daemon — drop any stale subscription and rely on the
+      // refresh-time derivation fallback.
+      unsubscribeLive()
+      return
+    }
+    if (projectPath === hbSubscribedPath) return
+    if (hbEventsUnsub) {
+      hbEventsUnsub()
+      hbEventsUnsub = null
+    }
+    hbSubscribedPath = projectPath
+    if (!projectPath) return
+    hbEventsUnsub = subscribeToWorkspaceTabEvents(scope, projectPath, {
+      onHeartbeatStateChanged: (e: HeartbeatStateChangedEvent) => {
+        // `project` is the project id. The event has no session id;
+        // this only flips the live dot (settings refetches the list).
+        store.getState().applyHeartbeatLive(e.project, e.agent, e.live)
+      },
+      onHeartbeatRosterChanged: (e: HeartbeatRosterChangedEvent) => {
+        // CRUD nudge (add/remove/archive/…) from any mutation source —
+        // re-fetch the roster. Debounced inside the store.
+        store.getState().applyRosterChanged(e.projectId)
+      },
+      // Re-snapshot on (re)connect to backfill liveness missed during a drop.
+      onHello: () => {
+        const loadedFor = store.getState().loadedFor
+        if (loadedFor) void store.getState().refresh(loadedFor)
+      },
+    })
+  }
+
+  return Object.assign(store, { subscribeLive, unsubscribeLive })
+}
+
 // 0.39.39 (#677.1) — push-primary heartbeat live-dot. The per-renderer
 // derive-vs-`terminal/list-running` join (`deriveState`) only reflects
 // liveness at refresh time and never updates a headless/remote-driven
@@ -376,58 +441,19 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
 // `refresh()` derivation remains the initial snapshot + the fallback when
 // the daemon doesn't support the broadcast. The subscription is keyed on
 // the loaded workspace path and swapped when the workspace changes.
-let hbEventsUnsub: UnsubscribeFn | null = null
-let hbSubscribedPath: string | null = null
 
-/** (Re)subscribe the heartbeat live-dot stream to `projectPath`. No-op when
- *  already subscribed to that path or when the daemon lacks the broadcast
- *  capability (the `refresh()` derivation covers display). Pass `null` to
- *  tear the subscription down (no workspace active). */
+/** The primary room's heartbeat rows (the window's server). */
+export const useHeartbeatSessionsStore: HeartbeatSessionsStore = createHeartbeatSessionsStore({
+  scope: primaryScope(),
+  localCommands: true,
+})
+
+/** Primary room: (re)subscribe the live-dot stream to `projectPath`. */
 export function subscribeHeartbeatLive(projectPath: string | null): void {
-  if (!serverSupports('daemon-broadcasts')) {
-    // Unsupported daemon — drop any stale subscription and rely on the
-    // refresh-time derivation fallback.
-    if (hbEventsUnsub) {
-      hbEventsUnsub()
-      hbEventsUnsub = null
-    }
-    hbSubscribedPath = null
-    return
-  }
-  if (projectPath === hbSubscribedPath) return
-  if (hbEventsUnsub) {
-    hbEventsUnsub()
-    hbEventsUnsub = null
-  }
-  hbSubscribedPath = projectPath
-  if (!projectPath) return
-  hbEventsUnsub = subscribeToWorkspaceTabEvents(primaryScope(), projectPath, {
-    onHeartbeatStateChanged: (e: HeartbeatStateChangedEvent) => {
-      // `project` is the project id. The event has no session id;
-      // this only flips the live dot (settings refetches the list).
-      useHeartbeatSessionsStore
-        .getState()
-        .applyHeartbeatLive(e.project, e.agent, e.live)
-    },
-    onHeartbeatRosterChanged: (e: HeartbeatRosterChangedEvent) => {
-      // CRUD nudge (add/remove/archive/…) from any mutation source —
-      // re-fetch the roster. Debounced inside the store.
-      useHeartbeatSessionsStore.getState().applyRosterChanged(e.projectId)
-    },
-    // Re-snapshot on (re)connect to backfill liveness missed during a drop.
-    onHello: () => {
-      const loadedFor = useHeartbeatSessionsStore.getState().loadedFor
-      if (loadedFor) void useHeartbeatSessionsStore.getState().refresh(loadedFor)
-    },
-  })
+  useHeartbeatSessionsStore.subscribeLive(projectPath)
 }
 
-/** Tear down the heartbeat live-dot subscription (call when no workspace is
- *  active or on host switch). Idempotent. */
+/** Primary room: tear down the live-dot subscription. Idempotent. */
 export function unsubscribeHeartbeatLive(): void {
-  if (hbEventsUnsub) {
-    hbEventsUnsub()
-    hbEventsUnsub = null
-  }
-  hbSubscribedPath = null
+  useHeartbeatSessionsStore.unsubscribeLive()
 }

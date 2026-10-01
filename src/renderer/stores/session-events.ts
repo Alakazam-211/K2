@@ -405,6 +405,16 @@ export interface SessionEventHandlers {
    *  Use it to trigger a one-shot reconcile so any events the renderer
    *  missed during the drop window get backfilled. */
   onHello?: (event: HelloEvent) => void
+  /** Home M4 (MS46): a pinned room's ONE workspace socket also carries the
+   *  tab-title / tab-order broadcasts (no second tab-events socket). */
+  onTabTitleChanged?: (event: TabTitleChangedEvent) => void
+  onTabOrderChanged?: (event: TabOrderChangedEvent) => void
+  /** Home M4 (MS14/MS16): a pinned room's workspace socket is also its
+   *  server's app-bus CARRIER while no app socket is open for that server:
+   *  presence, the Active set, chat-history and file-change frames reach
+   *  `onPresenceChanged(scope, …)` etc. One carrier per server dispatches
+   *  (the first registered); the others stand by. */
+  carryAppBus?: boolean
 }
 
 export type UnsubscribeFn = () => void
@@ -498,6 +508,7 @@ export function subscribeToWorkspaceSessionEvents(
   let recoveryWait: (() => void) | null = null
   let backoffMs = INITIAL_BACKOFF_MS
   let stopped = false
+  const carrier = handlers.carryAppBus ? registerAppBusCarrier(scope) : null
 
   const clearReconnect = (): void => {
     if (reconnectTimer !== null) {
@@ -644,6 +655,7 @@ export function subscribeToWorkspaceSessionEvents(
         console.warn('[session-events] failed to parse frame:', err, raw)
         return
       }
+      if (carrier) carrier.frame(msg)
       switch (msg.kind) {
         case 'hello':
           handlers.onHello?.(msg)
@@ -676,7 +688,11 @@ export function subscribeToWorkspaceSessionEvents(
           // app-level event to every subscriber regardless of `?path=`).
           break
         case 'tab_title_changed':
+          handlers.onTabTitleChanged?.(msg)
+          break
         case 'tab_order_changed':
+          handlers.onTabOrderChanged?.(msg)
+          break
         case 'heartbeat_state_changed':
         case 'heartbeat_roster_changed':
           // 0.39.39 (#676/#677) — these workspace-scoped broadcasts share the
@@ -739,6 +755,7 @@ export function subscribeToWorkspaceSessionEvents(
 
   return () => {
     stopped = true
+    carrier?.release()
     clearReconnect()
     if (socket) {
       try {
@@ -841,6 +858,7 @@ type ProjectsChangedHandler = (e: ProjectsChangedEvent) => void
 // Presence S2 — APP-LEVEL `presence_changed` (whole-set roster replace).
 // Rides the same app-level WS; `stores/presence.ts` is the consumer.
 type PresenceChangedHandler = (e: PresenceChangedEvent) => void
+type ActiveChangedHandler = (e: ActiveChangedEvent) => void
 
 // Browser-pane arc (0.40.34) — APP-LEVEL `open_url` (daemon-routed URL
 // opens: `k2 open <url>` shim + terminal hyperlink clicks through
@@ -897,6 +915,7 @@ interface AppBusHandlers {
   chatHistoryChanged: Set<ChatHistoryChangedHandler>
   tokenUsageChanged: Set<TokenUsageChangedHandler>
   fsChanged: Set<FsChangedHandler>
+  activeChanged: Set<ActiveChangedHandler>
 }
 
 interface BusState {
@@ -928,6 +947,7 @@ function createBusState(scopeId: string): BusState {
       chatHistoryChanged: new Set(),
       tokenUsageChanged: new Set(),
       fsChanged: new Set(),
+      activeChanged: new Set(),
     },
   }
 }
@@ -1097,9 +1117,85 @@ export function onFsChanged(scope: ServerScope, fn: FsChangedHandler): Unsubscri
   return addHandler(busFor(scope).handlers.fsChanged, fn)
 }
 
+/** Home M4: the server's whole Active set changed (`active_changed`).
+ *  Fed by a pinned room's carrier socket; the window's own Active set
+ *  stays on `subscribeToActiveState` → `useActiveStore`. */
+export function onActiveChanged(scope: ServerScope, fn: ActiveChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.activeChanged, fn)
+}
+
+/** Live handler count on `scope`'s bus (tests and leak checks, MS52 j). */
+export function appBusHandlerCount(scope: ServerScope): number {
+  let n = 0
+  for (const set of Object.values(busFor(scope).handlers) as Array<Set<unknown>>) n += set.size
+  return n
+}
+
+// ── App-bus carriers (Home M4) ────────────────────────────────────────────
+//
+// A server with an open pinned room but no app socket of its own (every
+// server but the window's) gets its app-level frames from the room's
+// workspace socket: the daemon forwards every app-level event to every
+// subscriber regardless of `?path=`. Only the HEAD carrier per server
+// dispatches, so two rooms on one server never deliver a frame twice; when
+// it closes, the next one takes over. A dedicated app socket
+// (`subscribeToActiveState`) on that server always wins.
+
+/** App-level frames a carrier forwards. Not `open_url` (a view-only room
+ *  never opens tabs on B's say-so) and not session add/remove (the room's
+ *  own workspace handlers own those). */
+const CARRIED_KINDS: ReadonlySet<string> = new Set([
+  'presence_changed',
+  'active_changed',
+  'projects_changed',
+  'chat_history_changed',
+  'fs_changed',
+  'session_activity_changed',
+  'workspace_resources_changed',
+  'publish_services_changed',
+])
+
+const _carriers = new Map<string, Array<symbol>>()
+
+function registerAppBusCarrier(scope: ServerScope): { frame(msg: SessionEventMessage): void; release(): void } {
+  const token = Symbol(scope.id)
+  const list = _carriers.get(scope.id) ?? []
+  list.push(token)
+  _carriers.set(scope.id, list)
+  const isHead = (): boolean => _carriers.get(scope.id)?.[0] === token
+  return {
+    frame(msg) {
+      if (!isHead()) return
+      const bus = busFor(scope)
+      if (bus.openSockets > 0) return
+      if (msg.kind === 'hello') {
+        for (const fn of bus.handlers.appHello) fn()
+        return
+      }
+      if (!CARRIED_KINDS.has(msg.kind)) return
+      dispatchAppEvent(bus, msg)
+    },
+    release() {
+      const cur = _carriers.get(scope.id)
+      if (!cur) return
+      const next = cur.filter((t) => t !== token)
+      if (next.length === 0) _carriers.delete(scope.id)
+      else _carriers.set(scope.id, next)
+    },
+  }
+}
+
+/** Test seam: carriers registered for `scope`'s server. */
+export function appBusCarrierCountForTests(scope: ServerScope): number {
+  return _carriers.get(scope.id)?.length ?? 0
+}
+
 function dispatchAppEvent(bus: BusState, msg: SessionEventMessage): void {
   const h = bus.handlers
   switch (msg.kind) {
+    case 'active_changed':
+      for (const fn of h.activeChanged) fn(msg)
+      break
     case 'llm_status_changed':
       for (const fn of h.llmStatus) fn(msg)
       break

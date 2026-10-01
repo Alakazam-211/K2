@@ -15,7 +15,7 @@
 // working unchanged.
 
 import { getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
-import type { ServerScope } from '@/kessel/server-scope'
+import { assertScopeMayPost, type ServerScope } from '@/kessel/server-scope'
 import { assertServerScope } from '@/kessel/assert-scope'
 import type { ConnectHost } from '@/stores/connect-host'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -385,6 +385,9 @@ export async function daemonCliPost<T = unknown>(
   route: string,
   body?: unknown,
 ): Promise<T> {
+  assertServerScope(scope, 'daemonCliPost')
+  // Home M4: a view-only (preview) room never writes to its server.
+  assertScopeMayPost(scope, route)
   const { res, text } = await cliFetch(scope, (creds) => ({
     url: getUrl(creds, route),
     init: {

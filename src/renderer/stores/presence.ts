@@ -35,6 +35,7 @@ import {
 } from '@/stores/session-events'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+import { registerPrimaryRoomPresence } from '@/stores/primary-room-sources'
 
 // Re-export the wire row type under the name the components use — the
 // shape is FROZEN against `presence.rs::RosterUser` (S1).
@@ -77,6 +78,9 @@ export const usePresenceStore = create<PresenceState>((set) => ({
     }
   },
 }))
+
+// Home M4: the primary room's roster (a pinned room reads its own server's).
+registerPrimaryRoomPresence(usePresenceStore)
 
 // ── Roster display math (top-bar stack) ───────────────────────────────────
 

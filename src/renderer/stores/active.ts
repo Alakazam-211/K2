@@ -20,6 +20,7 @@
 
 import { create } from 'zustand'
 import { clampActiveWindowHours } from '@/stores/settings'
+import { registerPrimaryRoomActiveSet } from '@/stores/primary-room-sources'
 
 export interface ActiveState {
   /** The canonical set of Active project IDs, mirrored from the daemon.
@@ -80,6 +81,9 @@ export const useActiveStore = create<ActiveState>((set) => ({
     })
   },
 }))
+
+// Home M4: the primary room's Active set (a pinned room reads its server's).
+registerPrimaryRoomActiveSet(useActiveStore)
 
 /** Test-only reset to a clean mirror. */
 export function __resetActiveStoreForTests(): void {

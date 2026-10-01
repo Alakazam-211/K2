@@ -23,7 +23,10 @@ import { playCompletionSound } from '@/lib/completion-sound'
 import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
 import { createTabsStore, useTabsStore, type TabsStore, type TabsRoomWorkspace, type ProjectPathEntry } from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
-import type { HeartbeatEntry } from '@/stores/heartbeat-sessions'
+import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
+import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
+import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
+import { viewOnlyScope } from '@/kessel/server-scope'
 
 /** Where a terminal pane reports what its agent is doing (MS68). The pane
  *  never reaches for a global store: the primary room's sink is the window's
@@ -64,6 +67,17 @@ export interface Room {
    *  The primary room keeps today's behaviour (true) until M4 decides the
    *  remote-window case; a pinned room only when its scope is `local`. */
   readonly localCommands: boolean
+  /** Home M4 — a view-only (preview) room: it shows its server's tabs,
+   *  drawers and terminals and changes nothing there (no typing, no layout
+   *  save, attach-only terminals, no file writes). Its `scope` is the
+   *  view-only twin, so the request layer refuses writes too. */
+  readonly readOnly: boolean
+  /** Its server's presence roster (R7, MS14 per server). */
+  readonly presence: PresenceViewStore
+  /** Its server's canonical Active set (MS14 per server). */
+  readonly activeSet: ActiveViewStore
+  /** Its heartbeat rows (MS14 per room). */
+  readonly heartbeats: HeartbeatSessionsStore
   /** The project the room shows (primary: the window's selected project). */
   activeProjectId(): string | null
   /** `<hostKey>|<projectId>:<workspaceId>` of what the room shows now (MS17),
@@ -181,7 +195,15 @@ export function primaryRoom(): Room {
     tabs: useTabsStore,
     projects: PRIMARY_PROJECTS,
     activity: PRIMARY_ACTIVITY,
-    localCommands: true,
+    // Home M4 (MS57): a window connected to a remote server shows that
+    // server's paths, so this computer's commands are off there.
+    get localCommands(): boolean {
+      return !primaryScope().isRemote
+    },
+    readOnly: false,
+    presence: PRIMARY_PRESENCE,
+    activeSet: PRIMARY_ACTIVE_SET,
+    heartbeats: useHeartbeatSessionsStore,
     activeProjectId: () => requirePrimaryProjects().getState().activeProjectId,
     roomId: () => {
       const s = useTabsStore.getState()
@@ -271,8 +293,15 @@ export interface PinnedRoomInput {
   activateProject: (projectId: string) => void
   /** That server's agent presets, read-only (MS14). */
   presets?: () => { presets: any[] } | null
-  /** That room's heartbeat rows (M4: a per-room heartbeat store). */
-  heartbeatEntries?: () => HeartbeatEntry[]
+  /** Home M4: open it view-only (the M4 preview). Default false. */
+  readOnly?: boolean
+}
+
+/** A pinned room plus its teardown. */
+export interface PinnedRoom extends Room {
+  /** Flush (a view-only room saves nothing), close its sockets, drop its
+   *  server-view reference. Idempotent. */
+  dispose(): Promise<void>
 }
 
 function pathIndex(projects: RoomProjectsStore): () => ProjectPathEntry[] {
@@ -291,9 +320,14 @@ function pathIndex(projects: RoomProjectsStore): () => ProjectPathEntry[] {
 /** A room for one workspace on one server. Its tabs store saves, closes and
  *  subscribes on `scope` only. The caller opens it (`room.tabs.room.open()`)
  *  and disposes it (`room.tabs.room.dispose()`). */
-export function createPinnedRoom(input: PinnedRoomInput): Room {
-  const { scope, workspace, projects } = input
+export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
+  const { workspace, projects } = input
+  const readOnly = input.readOnly === true
+  const scope = readOnly ? viewOnlyScope(input.scope) : input.scope
+  if (scope.isPrimary) throw new Error('createPinnedRoom: a pinned room needs a pinned scope (scopeForHost)')
   const localCommands = scope.hostKey === LOCAL_HOME_HOST
+  const heartbeats = createHeartbeatSessionsStore({ scope, localCommands })
+  const serverView = acquireServerView(scope)
   const tabs = createTabsStore({
     scope,
     workspace,
@@ -305,10 +339,11 @@ export function createPinnedRoom(input: PinnedRoomInput): Room {
       projectDefaultAgent: (projectId) =>
         projects.getState().projects.find((p) => p.id === projectId)?.defaultAgent ?? undefined,
       presets: input.presets ?? (() => null),
-      heartbeatEntries: input.heartbeatEntries ?? (() => []),
+      heartbeatEntries: () => heartbeats.getState().active,
     },
   })
   const activity = createRoomActivity(projects, workspace.projectId)
+  let disposed: Promise<void> | null = null
   return {
     key: scopedKey(scope, `${workspace.projectId}:${workspace.workspaceId}`),
     isPrimary: false,
@@ -317,6 +352,23 @@ export function createPinnedRoom(input: PinnedRoomInput): Room {
     projects,
     activity,
     localCommands,
+    readOnly,
+    presence: serverView.view.presence,
+    activeSet: serverView.view.active,
+    heartbeats,
+    dispose: () => {
+      if (!disposed) {
+        disposed = (async () => {
+          heartbeats.unsubscribeLive()
+          try {
+            await tabs.room.dispose()
+          } finally {
+            serverView.release()
+          }
+        })()
+      }
+      return disposed
+    },
     activeProjectId: () => workspace.projectId,
     roomId: () => roomIdFor(scope, workspace.projectId, workspace.workspaceId),
     cwd: () => workspace.path,

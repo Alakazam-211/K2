@@ -78,6 +78,10 @@ export interface ServerScope {
   wsBase(): Promise<string>
   /** Does this server's version support `feature`? */
   serverSupports(feature: FeatureKey): boolean
+  /** Home M4: a view-only room's scope (`viewOnlyScope`). The request layer
+   *  refuses every POST on it except the keep-alive (`projects/activate`).
+   *  Absent / false for every other scope. */
+  readonly viewOnly?: boolean
 }
 
 /** What `scopeForHost` accepts: `local`, a Home host key string, or a saved
@@ -232,6 +236,55 @@ export function scopeForHost(ref: HostRef): ServerScope {
     pinned.set(key, scope)
   }
   return scope
+}
+
+// ── View-only scopes (Home M4) ───────────────────────────────────────────
+//
+// A remote room opened from Home in M4 is READ-ONLY on its server: it shows
+// B's tabs, drawers and terminals, holds B's presence socket and tells B it
+// is watching (`projects/activate`), and changes nothing else on B. The room
+// runs on a view-only twin of B's scope: the same server, the same id (so
+// buses, dial queues and caps are shared), the same creds — but
+// `daemonCliPost` refuses every route except `VIEW_ONLY_POST_ROUTES` with a
+// `ViewOnlyWriteError`. That is the one net under every write path in the
+// room's components (file ops, renames, compose sends, toggles). What stays
+// allowed past M4 is M5's decision.
+
+/** POST routes a view-only room may still send: the keep-alive (MS39). */
+export const VIEW_ONLY_POST_ROUTES: ReadonlySet<string> = new Set(['projects/activate'])
+
+/** A write was attempted from a view-only (M4 preview) room. */
+export class ViewOnlyWriteError extends Error {
+  readonly hostKey: string
+  readonly route: string
+  constructor(hostKey: string, route: string) {
+    super(`View only (preview): ${route} is not sent to ${hostKey} from a remote room`)
+    this.name = 'ViewOnlyWriteError'
+    this.hostKey = hostKey
+    this.route = route
+  }
+}
+
+const viewOnlyTwins = new WeakMap<ServerScope, ServerScope>()
+
+/** The view-only twin of `base` (one object per base scope). Every field
+ *  and method is `base`'s; only `viewOnly` differs. */
+export function viewOnlyScope(base: ServerScope): ServerScope {
+  if (base.viewOnly) return base
+  let twin = viewOnlyTwins.get(base)
+  if (!twin) {
+    twin = Object.create(base, { viewOnly: { value: true, enumerable: true } }) as ServerScope
+    viewOnlyTwins.set(base, twin)
+  }
+  return twin
+}
+
+/** Throws `ViewOnlyWriteError` when `scope` is view-only and `route` is not
+ *  allowed. The request layer calls it before every POST. */
+export function assertScopeMayPost(scope: ServerScope, route: string): void {
+  if (scope.viewOnly && !VIEW_ONLY_POST_ROUTES.has(route)) {
+    throw new ViewOnlyWriteError(scope.hostKey, route)
+  }
 }
 
 /** Prefix a workspace-only storage key (or in-memory map key) with the

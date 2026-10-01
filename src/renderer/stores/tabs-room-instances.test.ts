@@ -311,7 +311,14 @@ describe('one tabs store per room (two rooms, same path and project id)', () => 
     seedLayout(B.id)
     const { roomA, roomB } = await openRooms()
     expect(net.sessionSubs.map((s) => s.scopeId).sort()).toEqual([A.id, B.id])
-    expect(net.tabSubs.map((s) => s.scopeId).sort()).toEqual([A.id, B.id])
+    // Home M4 (MS46): a pinned room holds ONE workspace socket; it carries
+    // the tab-title / tab-order events and its server's app bus.
+    expect(net.tabSubs).toEqual([])
+    for (const sub of net.sessionSubs) {
+      expect(typeof sub.handlers.onTabOrderChanged).toBe('function')
+      expect(typeof sub.handlers.onTabTitleChanged).toBe('function')
+      expect(sub.handlers.carryAppBus).toBe(true)
+    }
     expect(activated.sort()).toEqual([`${A.id}:p1`, `${B.id}:p1`])
 
     const bSub = net.sessionSubs.find((s) => s.scopeId === B.id)
@@ -370,7 +377,7 @@ describe('one tabs store per room (two rooms, same path and project id)', () => 
 
     expect(net.daemons.get(B.id)!.savePosts.length).toBe(1)
     expect(net.sessionSubs.map((s) => s.scopeId)).toEqual([A.id])
-    expect(net.tabSubs.map((s) => s.scopeId)).toEqual([A.id])
+    expect(net.tabSubs).toEqual([])
 
     // No autosave after dispose.
     roomB.getState().addTab(PATH)

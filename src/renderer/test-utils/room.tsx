@@ -19,6 +19,8 @@ import { RoomProvider } from '@/components/Room/RoomContext'
 import type { Room, RoomActivitySink, RoomProjectsStore } from '@/stores/room'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import type { TabsStore } from '@/stores/tabs'
+import type { ActiveViewStore, PresenceViewStore } from '@/stores/server-view'
+import type { HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 
 /** Render `ui` inside `room`. The provider is RTL's `wrapper`, so
@@ -75,6 +77,17 @@ function throwingActivity(): RoomActivitySink {
   }
 }
 
+/** A store stand-in that throws when read: a test that renders a room
+ *  surface reading it must pass its own. */
+function throwingStore(what: string): unknown {
+  return { getState: unset(what), getInitialState: unset(what), subscribe: unset(what) }
+}
+
+/** A fixed store for a test room's presence / Active set. */
+export function fixedStore<T>(state: T): { getState: () => T; getInitialState: () => T; subscribe: () => () => void } {
+  return { getState: () => state, getInitialState: () => state, subscribe: () => () => {} }
+}
+
 export function testRoom(opts: {
   tabs: unknown
   /** A fixture list, a live getter, or a project store with `getState` /
@@ -87,6 +100,10 @@ export function testRoom(opts: {
   key?: string
   cwd?: string
   activeProjectId?: string | null
+  readOnly?: boolean
+  presence?: PresenceViewStore
+  activeSet?: ActiveViewStore
+  heartbeats?: unknown
 }): Room {
   const scope = opts.scope ?? primaryScope()
   return {
@@ -105,6 +122,10 @@ export function testRoom(opts: {
     } as unknown as RoomProjectsStore),
     activity: { ...throwingActivity(), ...opts.activity },
     localCommands: opts.localCommands ?? true,
+    readOnly: opts.readOnly ?? false,
+    presence: opts.presence ?? (throwingStore('presence') as PresenceViewStore),
+    activeSet: opts.activeSet ?? (throwingStore('activeSet') as ActiveViewStore),
+    heartbeats: (opts.heartbeats ?? throwingStore('heartbeats')) as HeartbeatSessionsStore,
     activeProjectId: () => opts.activeProjectId ?? null,
     roomId: () => null,
     cwd: opts.cwd ? () => opts.cwd as string : unset('cwd'),

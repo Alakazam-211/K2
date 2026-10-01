@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 
 const gets = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown]>,
@@ -101,7 +101,7 @@ vi.mock('@/hooks/useResolvedAgentCommand', () => ({
   useResolvedAgentCommand: () => ({ command: 'claude', args: [] }),
 }))
 
-import { HeartbeatsPanel } from './HeartbeatsSection'
+import { HeartbeatsPanel, heartbeatErrorBadge, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../../../../')
 
@@ -157,5 +157,96 @@ describe('lock 8 boundaries', () => {
     expect(wake).not.toContain('emit_heartbeat_live("")')
     expect(launch).toContain('emit_heartbeat_live(project_path, project_id, &hb.name, true)')
     expect(launch).not.toContain('emit_heartbeat_live("")')
+  })
+})
+
+// ── S5 (prd-heartbeat-firing-v1 D6, HB32, HB34) ──────────────────────
+
+function addCalls(): Array<[string, unknown]> {
+  return gets.calls.filter((c) => c[0] === 'heartbeat/add')
+}
+
+describe('S5: Settings → Add requires instructions', () => {
+  it('cannot submit an empty Add, and sends the instructions to the daemon', async () => {
+    const view = render(<HeartbeatsPanel projectPath="/ws/proj" agentName="claude" />)
+    await waitFor(() => {
+      expect(listCalls().length).toBeGreaterThan(0)
+    })
+    fireEvent.click(view.getByTitle('Add heartbeat'))
+    fireEvent.change(view.getByPlaceholderText('daily-brief'), { target: { value: 'morning-brief' } })
+
+    const add = view.getByRole('button', { name: 'Add' }) as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    fireEvent.click(add)
+    expect(addCalls()).toEqual([])
+
+    const box = view.getByLabelText('Instructions')
+    fireEvent.change(box, { target: { value: '   \n  ' } })
+    expect(add.disabled).toBe(true)
+
+    fireEvent.change(box, { target: { value: 'check inbox' } })
+    expect(add.disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(add)
+    })
+    await waitFor(() => {
+      expect(addCalls().length).toBe(1)
+    })
+    expect(addCalls()[0][1]).toEqual({
+      project: '/ws/proj',
+      name: 'morning-brief',
+      frequency: 'daily',
+      spec: JSON.stringify({ frequency: 'daily', time: '07:00' }),
+      instructions: 'check inbox',
+    })
+  })
+})
+
+describe('S5: schedule form rules', () => {
+  it('refuses unknown frequencies and sub-minute or non-whole intervals', () => {
+    expect(scheduleFormError({ frequency: 'list' }, 'x', true)).toBe("Choose a frequency ('list' is not one)")
+    expect(scheduleFormError({ frequency: 'hourly', every_seconds: 30 }, 'x', false)).toMatch(/at least 1/)
+    expect(scheduleFormError({ frequency: 'hourly', every_seconds: Number.NaN }, 'x', false)).toMatch(/whole number/)
+    expect(scheduleFormError({ frequency: 'hourly', every_seconds: 60 }, 'x', false)).toBeNull()
+    expect(scheduleFormError({ frequency: 'hourly' }, 'x', false)).toBeNull()
+  })
+
+  it('requires instructions on Add only', () => {
+    expect(scheduleFormError({ frequency: 'daily' }, '', false)).toMatch(/instructions/)
+    expect(scheduleFormError({ frequency: 'daily' }, '', true)).toBeNull()
+  })
+})
+
+describe('S5: the Settings badge shows the daemon wait reason', () => {
+  const base: HeartbeatRow = {
+    id: 'id',
+    projectId: 'p',
+    name: 'hb',
+    frequency: 'daily',
+    specJson: '{}',
+    wakeupPath: '.k2/heartbeats/hb/WAKEUP.md',
+    enabled: true,
+    lastFired: null,
+    createdAt: 0,
+    useWorkspaceSession: true,
+    lastSessionId: null,
+    consecutiveFailures: 0,
+    nextRetryAt: null,
+    disabledReason: null,
+    scheduleError: null,
+  }
+
+  it('names an empty WAKEUP.md and an invalid schedule', () => {
+    expect(heartbeatErrorBadge({ ...base, waitReason: 'wakeup_empty' })).toBe('waiting: WAKEUP.md is empty')
+    expect(
+      heartbeatErrorBadge({
+        ...base,
+        frequency: 'list',
+        scheduleError: "unknown frequency 'list'",
+        waitReason: 'schedule_error',
+        waitDetail: "unknown frequency 'list'",
+      }),
+    ).toBe("invalid schedule: unknown frequency 'list'")
+    expect(heartbeatErrorBadge(base)).toBeNull()
   })
 })

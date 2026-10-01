@@ -19,6 +19,7 @@ import {
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
+import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -144,6 +145,9 @@ interface SystemHeartbeatRow {
   consecutiveFailures: number
   disabledReason: string | null
   scheduleError: string | null
+  // S5 — daemon-decided wait reason (older daemons omit both).
+  waitReason?: string | null
+  waitDetail?: string | null
 }
 
 /** Payload of `/cli/heartbeat/scheduler-status` — daemon-wide tick
@@ -180,13 +184,9 @@ function transportDownMessage(
   return `Heartbeat transport down ${since}: scheduler ticks are not arriving (machine asleep, daemon restarts, or launchd agent stalled). Missed fires will catch up on the next tick.`
 }
 
-/** Same error-badge derivation HeartbeatsSection uses, for the
- *  system-wide row shape. */
+/** Same badge HeartbeatsSection shows: the shared wait formatter. */
 function systemRowErrorBadge(row: SystemHeartbeatRow): string | null {
-  if (!row.enabled && row.disabledReason === 'failures') return 'Disabled after repeated failures'
-  if (!row.enabled && row.disabledReason === 'wakeup_missing') return 'Disabled — WAKEUP.md missing'
-  if (row.scheduleError) return 'Invalid schedule'
-  return null
+  return describeHeartbeatWait(row)
 }
 
 /** Compact one-liner for the heartbeat list row — "Every day at 9 AM",

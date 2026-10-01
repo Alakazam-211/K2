@@ -25,6 +25,7 @@ import {
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
+import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -61,15 +62,39 @@ export interface HeartbeatRow {
   // Human-readable reason the schedule can never fire (unparseable
   // spec). null = schedule evaluates cleanly.
   scheduleError: string | null
+  // S5 — why an enabled row is waiting, decided by the daemon
+  // (`wakeup_empty`, `schedule_error`). Older daemons omit both.
+  waitReason?: string | null
+  waitDetail?: string | null
 }
 
-/** Red status badge under the heartbeat name for system-flagged error
- *  states: auto-disabled after repeated failures, auto-disabled for a
- *  missing WAKEUP.md, or a schedule the evaluator can't parse. */
+/** Status badge under the heartbeat name: the daemon's wait or
+ *  disabled reason, through the shared formatter. */
 export function heartbeatErrorBadge(row: HeartbeatRow): string | null {
-  if (!row.enabled && row.disabledReason === 'failures') return 'Disabled after repeated failures'
-  if (!row.enabled && row.disabledReason === 'wakeup_missing') return 'Disabled — WAKEUP.md missing'
-  if (row.scheduleError) return `Invalid schedule: ${row.scheduleError}`
+  return describeHeartbeatWait(row)
+}
+
+/** Frequencies the daemon accepts (HB34). Anything else is refused. */
+export const HEARTBEAT_FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly', 'hourly'] as const
+
+/** Why the Add/Edit form can't submit yet, or null when it can. Pure so
+ *  the rules are testable without rendering the modal. D6: Add requires
+ *  wakeup instructions. */
+export function scheduleFormError(
+  spec: { frequency: string; every_seconds?: number },
+  instructions: string,
+  isEdit: boolean,
+): string | null {
+  if (!(HEARTBEAT_FREQUENCIES as readonly string[]).includes(spec.frequency)) {
+    return spec.frequency ? `Choose a frequency ('${spec.frequency}' is not one)` : 'Choose a frequency'
+  }
+  if (spec.frequency === 'hourly' && spec.every_seconds !== undefined) {
+    const s = spec.every_seconds
+    if (!Number.isInteger(s) || s < 60) return 'Every (minutes) must be a whole number, at least 1'
+  }
+  if (!isEdit && instructions.trim() === '') {
+    return 'Add wakeup instructions: what the agent should do each time this fires'
+  }
   return null
 }
 
@@ -168,13 +193,15 @@ function describeLastFired(lastFired: string | null): string {
 interface ScheduleEditorProps {
   initial?: { name: string; spec: ScheduleSpec }
   onCancel: () => void
-  onSave: (name: string, spec: ScheduleSpec) => Promise<void>
+  /** `instructions` is the WAKEUP.md body; required on Add, unused on Edit. */
+  onSave: (name: string, spec: ScheduleSpec, instructions: string) => Promise<void>
   isEdit: boolean
 }
 
 function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorProps): React.JSX.Element {
   const [name, setName] = useState(initial?.name ?? '')
   const [spec, setSpec] = useState<ScheduleSpec>(initial?.spec ?? { frequency: 'daily', time: '07:00' })
+  const [instructions, setInstructions] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -205,16 +232,21 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
   }
 
   const nameValid = /^[a-z][a-z0-9-]*[a-z0-9]$/.test(name) && !['default', 'legacy'].includes(name)
+  const formError = scheduleFormError(spec, instructions, isEdit)
 
   const handleSave = async (): Promise<void> => {
     if (!nameValid && !isEdit) {
       setError('Name must be lowercase letters, digits, and hyphens (not starting/ending with hyphen, not "default" or "legacy")')
       return
     }
+    if (formError) {
+      setError(formError)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await onSave(name, spec)
+      await onSave(name, spec, instructions)
     } catch (e) {
       setError(String(e))
       setBusy(false)
@@ -355,8 +387,20 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                 <input
                   type="number"
                   min={1}
-                  value={Math.round((spec.every_seconds ?? 3600) / 60)}
-                  onChange={(e) => update({ every_seconds: Math.max(60, parseInt(e.target.value, 10) * 60) })}
+                  step={1}
+                  value={
+                    spec.every_seconds === undefined
+                      ? 60
+                      : Number.isFinite(spec.every_seconds)
+                        ? Math.round(spec.every_seconds / 60)
+                        : ''
+                  }
+                  onChange={(e) => {
+                    // Keep what was typed (even blank) so the form can
+                    // refuse it, instead of silently clamping.
+                    const mins = e.target.value === '' ? NaN : Number(e.target.value)
+                    update({ every_seconds: mins * 60 })
+                  }}
                   className="w-24 px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               </div>
@@ -434,6 +478,28 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           </div>
         )}
 
+        {!isEdit && (
+          <div className="mb-3">
+            <label
+              htmlFor="heartbeat-add-instructions"
+              className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1"
+            >
+              Instructions
+            </label>
+            <textarea
+              id="heartbeat-add-instructions"
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={5}
+              placeholder="Check the inbox and summarise anything new."
+              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-y"
+            />
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              Required. What the agent does each time this fires. Saved as the heartbeat's <code>WAKEUP.md</code>.
+            </div>
+          </div>
+        )}
+
         {error && <div className="text-[11px] text-[var(--color-status-error-soft)] mb-3">{error}</div>}
 
         <div className="flex justify-end gap-2">
@@ -446,7 +512,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           </button>
           <button
             onClick={handleSave}
-            disabled={busy || (!isEdit && !nameValid)}
+            disabled={busy || (!isEdit && !nameValid) || formError !== null}
             className="px-3 py-1.5 text-xs bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
           >
             {busy ? 'Saving…' : isEdit ? 'Update' : 'Add'}
@@ -915,13 +981,16 @@ export function HeartbeatsPanel({
     })
   }, [refresh, project.path])
 
-  const handleAdd = async (name: string, spec: ScheduleSpec): Promise<void> => {
+  const handleAdd = async (name: string, spec: ScheduleSpec, instructions: string): Promise<void> => {
     if (!project) return
+    // D6: Add requires instructions; the editor already refuses blank.
+    // The daemon writes them as the WAKEUP.md body (HB32).
     await daemonCliGet(primaryScope(), 'heartbeat/add', {
       project: project.path,
       name,
       frequency: spec.frequency,
       spec: JSON.stringify(spec),
+      instructions,
     })
     toast.addToast(`Added heartbeat "${name}"`, 'success', 3000)
     setShowAdd(false)

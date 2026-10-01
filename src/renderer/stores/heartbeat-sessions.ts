@@ -52,6 +52,12 @@ export interface HeartbeatRow {
    *  per-tab stamped metadata. See migration 0036 +
    *  `.k2so/prds/heartbeat-active-session-tracking.md`. */
   activeTerminalId?: string | null
+  /** S5 — the daemon's reason this row is not firing, rendered through
+   *  `lib/heartbeat-wait.ts`. Older daemons omit these. */
+  waitReason?: string | null
+  waitDetail?: string | null
+  disabledReason?: string | null
+  scheduleError?: string | null
 }
 
 export interface HeartbeatEntry {

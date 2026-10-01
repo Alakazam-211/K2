@@ -5,6 +5,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
+import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
 import {
   type HeartbeatEntry,
 } from '@/stores/heartbeat-sessions'
@@ -117,7 +118,10 @@ export function HeartbeatEntryRow({
     }
   }
 
-  const nextRun = entry.row.enabled && entry.state !== 'archived'
+  // S5: the daemon's wait reason (empty WAKEUP.md, invalid schedule,
+  // disabled-why) replaces the guessed countdown. S4 replaces the rest.
+  const waitText = entry.state !== 'archived' ? describeHeartbeatWait(entry.row) : null
+  const nextRun = !waitText && entry.row.enabled && entry.state !== 'archived'
     ? describeNextRun(entry.row.frequency, entry.row.specJson, entry.row.lastFired)
     : null
 
@@ -155,6 +159,14 @@ export function HeartbeatEntryRow({
           {describeSpec(entry.row.frequency, entry.row.specJson)}
         </span>
       </div>
+      {waitText && (
+        <div
+          className="text-[9px] text-[var(--color-status-error-soft)] truncate pt-0.5"
+          title={entry.row.waitDetail ?? waitText}
+        >
+          {waitText}
+        </div>
+      )}
       {nextRun && (
         <div className="text-[9px] text-[var(--color-text-muted)] truncate pt-0.5">
           Next run: {nextRun}

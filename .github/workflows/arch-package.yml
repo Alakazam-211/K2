@@ -5,6 +5,12 @@
 # packaging/arch/build-release-pkg.sh and uploads
 # k2-<version>-x86_64.pkg.tar.zst onto that GitHub release.
 #
+# Pre-tag gate: release.sh (scripts/arch-build-gate.sh) dispatches this
+# with upload=false, ref=<release commit> and a gate_id. That run builds
+# the same package and keeps it only as a short-lived workflow artifact.
+# It never touches a release. gate_id goes into run-name so the script
+# can find the run it started.
+#
 # runs-on includes k2-arch and must not include k2-linux. The Ubuntu ship
 # runner also has self-hosted + Linux + X64. The extra label is what keeps
 # makepkg off that box and apt jobs off this one.
@@ -13,6 +19,8 @@
 
 name: arch-package
 
+run-name: ${{ inputs.gate_id && format('arch-package gate {0}', inputs.gate_id) || format('arch-package {0}', github.ref_name) }}
+
 on:
   push:
     tags:
@@ -20,10 +28,20 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "GitHub release to upload to (e.g. v0.40.150 or v0.40.150a)"
-        required: true
+        description: "GitHub release to upload to (e.g. v0.40.150 or v0.40.150a). Required when upload is true."
+        required: false
+        default: ""
       ref:
         description: "Git ref to build. Empty uses the tag. Use main for a follow-up release."
+        required: false
+        default: ""
+      upload:
+        description: "Upload the package to the release. false = build only and keep it as a workflow artifact (release.sh pre-tag gate)."
+        type: boolean
+        required: false
+        default: true
+      gate_id:
+        description: "Set by release.sh so it can find this run. Leave empty by hand."
         required: false
         default: ""
 
@@ -40,6 +58,23 @@ jobs:
     runs-on: [self-hosted, linux, k2-arch]
     timeout-minutes: 180
     steps:
+      - name: Check inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          IN_TAG: ${{ inputs.tag }}
+          IN_REF: ${{ inputs.ref }}
+          IN_UPLOAD: ${{ inputs.upload }}
+        run: |
+          set -euo pipefail
+          if [ "$IN_UPLOAD" = "true" ] && [ -z "$IN_TAG" ]; then
+            echo "::error::upload=true needs a tag to upload to"
+            exit 1
+          fi
+          if [ "$IN_UPLOAD" != "true" ] && [ -z "$IN_REF" ] && [ -z "$IN_TAG" ]; then
+            echo "::error::upload=false needs a ref (or tag) to build"
+            exit 1
+          fi
+
       - name: Checkout (at the release tag)
         uses: actions/checkout@v4
         with:
@@ -52,18 +87,18 @@ jobs:
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
           K2_GMAIL_CLIENT_SECRET: ${{ secrets.K2_GMAIL_CLIENT_SECRET }}
           K2_MICROSOFT_CLIENT_ID: ${{ secrets.K2_MICROSOFT_CLIENT_ID }}
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          IN_REF: ${{ github.event.inputs.ref }}
         run: |
           set -euo pipefail
           # Do not assign SHELLOPTS. Bash marks it readonly, and the build
           # script already strips it around makepkg.
           command -v pacman
           command -v makepkg
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          REF="${{ github.event.inputs.ref }}"
-          if [ -n "$REF" ]; then
+          if [ -n "$IN_REF" ]; then
             packaging/arch/build-release-pkg.sh
           else
-            VER="${TAG#v}"
+            VER="${IN_TAG#v}"
             packaging/arch/build-release-pkg.sh "$VER"
           fi
           pkg="$(find dist -maxdepth 1 -name 'k2-*-x86_64.pkg.tar.zst' -size +0c | head -1)"
@@ -71,9 +106,21 @@ jobs:
           echo "PKG_PATH=$pkg" >> "$GITHUB_ENV"
 
       - name: Upload to release
+        if: github.event_name != 'workflow_dispatch' || inputs.upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" "$PKG_PATH" --clobber
+          gh release upload "$IN_TAG" "$PKG_PATH" --clobber
+
+      # Gate build: keep the package for a day so a human can pull it with
+      # `gh run download`. Never a release asset.
+      - name: Keep as a workflow artifact (gate build, no release)
+        if: github.event_name == 'workflow_dispatch' && !inputs.upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-package-gate
+          path: ${{ env.PKG_PATH }}
+          retention-days: 1
+          if-no-files-found: error

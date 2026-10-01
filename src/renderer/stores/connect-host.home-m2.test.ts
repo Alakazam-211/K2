@@ -206,6 +206,9 @@ describe('MS61 — an address edit re-keys', () => {
         recentAttempts: () => 0,
       },
       noteVersion: () => {},
+      activate: async () => {
+        throw new Error('projects/activate is not part of this test')
+      },
       now: () => 1,
     })
     await pool.check('b.k2.dev')

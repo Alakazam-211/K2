@@ -166,6 +166,9 @@ function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
     dropSessionInMemory: (hostId) => setToken(hostId, ''),
     coord,
     noteVersion: () => {},
+    activate: async () => {
+      throw new Error('projects/activate is not part of this test')
+    },
     now: () => now,
   })
   w.sync = createHostSessionSync({

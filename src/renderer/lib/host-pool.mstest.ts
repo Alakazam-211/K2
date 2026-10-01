@@ -104,6 +104,9 @@ beforeAll(() => {
       settle: async () => {},
     }),
     noteVersion: () => {},
+    activate: async () => {
+      throw new Error('projects/activate is not part of this test')
+    },
     now: () => Date.now(),
   })
 })

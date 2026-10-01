@@ -110,8 +110,19 @@ export interface HostPoolDeps {
   dropSessionInMemory: (hostId: string) => void
   coord: LoginCoordinator
   noteVersion: (hostKey: string, version: string | null) => void
+  /** `POST projects/activate {projectId}` on `hostKey`, with THAT server's
+   *  scope and login (MS39). Throws on failure. */
+  activate: (hostKey: string, projectId: string) => Promise<void>
   now: () => number
 }
+
+/** MS39: at most one `projects/activate` per (server, project) per 10 min. */
+export const KEEP_ALIVE_DEDUPE_MS = 10 * 60_000
+
+/** What `keepRoomAlive` did: posted it, skipped it (sent in the last
+ *  10 min, or one is in flight), or the post failed (logged; the next
+ *  open, focus or hourly tick tries again). Never throws. */
+export type KeepAliveResult = 'sent' | 'deduped' | 'failed'
 
 /** Copy for a row or room in each sign-in state (MS27, MS45). */
 export function authNoteFor(block: LoginBlock | null, serverLabel: string, now: number): string | null {
@@ -192,6 +203,16 @@ export interface HostPool {
   noteSignedOut(hostKey: string): void
   /** A server left the saved list or changed host key: drop its entry. */
   forget(hostKey: string): void
+  /**
+   * MS39 / GH#22: tell `hostKey`'s daemon that someone is watching
+   * `projectId` there, so its reaper (need clock, 24 h default) never kills
+   * a session a room shows. `POST projects/activate` on THAT server with
+   * its own scope and login; deduped per (server, project) to once per
+   * 10 min, single-flight, and independent of the window's own activate
+   * dedupe (`stores/projects.ts`). A restart of that server (new
+   * `instanceId`) clears its dedupe so the next call re-sends.
+   */
+  keepRoomAlive(hostKey: string, projectId: string): Promise<KeepAliveResult>
   onRestart(fn: (hostKey: string, prevInstanceId: string, nextInstanceId: string) => void): () => void
   onAuth(fn: (hostKey: string, auth: PoolAuth) => void): () => void
 }
@@ -245,6 +266,15 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
   const closes = new Map<string, Array<{ code: number; at: number }>>()
   const restartListeners = new Set<(k: string, a: string, b: string) => void>()
   const authListeners = new Set<(k: string, a: PoolAuth) => void>()
+  /** `hostKey\0projectId` → when its last activate landed. */
+  const keepAliveSent = new Map<string, number>()
+  const keepAliveInflight = new Map<string, Promise<KeepAliveResult>>()
+  const keepAliveKey = (hostKey: string, projectId: string): string => `${hostKey}\u0000${projectId}`
+  const clearKeepAlive = (hostKey: string): void => {
+    for (const k of [...keepAliveSent.keys()]) {
+      if (k.startsWith(`${hostKey}\u0000`)) keepAliveSent.delete(k)
+    }
+  }
 
   const read = (hostKey: string): HostEntry => store.getState().entries[hostKey] ?? blankEntry(hostKey)
 
@@ -510,6 +540,8 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     // MS29: a new instanceId means this server restarted. Only its own
     // listeners hear about it.
     if (prevBoot?.instanceId && boot.instanceId && prevBoot.instanceId !== boot.instanceId) {
+      // MS29: a restarted server re-hears every room's activate.
+      clearKeepAlive(hostKey)
       for (const fn of [...restartListeners]) fn(hostKey, prevBoot.instanceId, boot.instanceId)
     }
     if (bootOnly || !boot.ready) return read(hostKey)
@@ -565,8 +597,32 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     noteSignedOut(hostKey) {
       write(hostKey, { ...signedOutState(hostKey), role: null })
     },
+    keepRoomAlive(hostKey, projectId) {
+      if (!projectId) return Promise.resolve('failed')
+      const key = keepAliveKey(hostKey, projectId)
+      const inflight = keepAliveInflight.get(key)
+      if (inflight) return inflight.then((r) => (r === 'sent' ? 'deduped' : r))
+      const last = keepAliveSent.get(key)
+      if (last !== undefined && deps.now() - last < KEEP_ALIVE_DEDUPE_MS) return Promise.resolve('deduped')
+      const p = deps
+        .activate(hostKey, projectId)
+        .then((): KeepAliveResult => {
+          keepAliveSent.set(key, deps.now())
+          return 'sent'
+        })
+        .catch((err: unknown): KeepAliveResult => {
+          console.warn(`[host-pool] projects/activate on ${hostKey} failed:`, err)
+          return 'failed'
+        })
+        .finally(() => {
+          keepAliveInflight.delete(key)
+        })
+      keepAliveInflight.set(key, p)
+      return p
+    },
     forget(hostKey) {
       closes.delete(hostKey)
+      clearKeepAlive(hostKey)
       store.setState((s) => {
         if (!(hostKey in s.entries)) return s
         const entries = { ...s.entries }

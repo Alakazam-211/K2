@@ -13,7 +13,7 @@
 import { emit, listen } from '@tauri-apps/api/event'
 import { daemonHttpBase, getLocalDaemonWs } from '@/kessel/daemon-ws'
 import { noteServerVersion, scopeForHost } from '@/kessel/server-scope'
-import { withHostCliSlot } from '@/lib/daemon-cli'
+import { daemonCliPost, withHostCliSlot } from '@/lib/daemon-cli'
 import { setPinnedAuthRecovery, setPoolSocketCloseSink } from '@/lib/pool-hooks'
 import { homeHostKey } from '@/lib/host-key'
 import { createHostPool, type BootBody, type HostPool } from '@/lib/host-pool'
@@ -79,6 +79,11 @@ export const hostPool: HostPool = createHostPool({
   dropSessionInMemory: (hostId) => useConnectHostStore.getState().dropSessionInMemory(hostId),
   coord: loginCoordinator,
   noteVersion: noteServerVersion,
+  // MS39: on THAT server's scope, so its cap, its login and its one
+  // revive-and-replay apply; never the window's server.
+  activate: async (hostKey, projectId) => {
+    await daemonCliPost(scopeForHost(hostKey), 'projects/activate', { projectId })
+  },
   now: () => Date.now(),
 })
 

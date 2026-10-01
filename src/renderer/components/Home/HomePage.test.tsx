@@ -301,6 +301,9 @@ describe('Home — the Agents page shell', () => {
     rerender(<Shell />)
     expect(screen.queryByTestId('agents-sidebar')).toBeNull()
     expect(homeSidebar()).toBeTruthy()
+    // The beta notice sits above the Home picker, on Home only.
+    const notice = within(homeSidebar()).getByTestId('home-beta-notice')
+    expect(notice.textContent).toBe('Home is inBeta')
     // Every Home row is the Agents row shell.
     const rows = homeSidebar().querySelectorAll('[data-agent-row]')
     expect(rows.length).toBe(3)

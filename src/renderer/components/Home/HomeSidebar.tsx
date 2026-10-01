@@ -349,8 +349,32 @@ export default function HomeSidebar(): React.JSX.Element {
     <div className="relative flex flex-col h-full" data-home-sidebar="">
       <ResizeHandle />
 
+      {/* Beta notice, above the Home picker and the command palette button. */}
+      <div
+        className="px-3 pt-3 no-drag flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
+        data-testid="home-beta-notice"
+      >
+        <span>Home is in</span>
+        <span
+          className="flex-shrink-0 uppercase"
+          style={{
+            fontSize: '9px',
+            fontWeight: 600,
+            letterSpacing: '0.04em',
+            lineHeight: 1.2,
+            padding: '2px 5px',
+            borderRadius: 3,
+            color: 'var(--color-on-accent, #ffffff)',
+            background: 'var(--color-accent, #3b82f6)',
+            border: '1px solid var(--color-accent, #3b82f6)',
+          }}
+        >
+          Beta
+        </span>
+      </div>
+
       {/* Header controls — the focus-group row's spot and look. */}
-      <div className="px-3 pt-3 pb-2 no-drag flex items-center gap-1.5">
+      <div className="px-3 pt-2 pb-2 no-drag flex items-center gap-1.5">
         <div className="flex-1 min-w-0">
           <HomePicker />
         </div>

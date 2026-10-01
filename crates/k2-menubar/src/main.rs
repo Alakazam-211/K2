@@ -148,7 +148,19 @@ mod macos {
     }
 }
 
+/// Exact non-launching identity contract for the bare menubar artifact.
+fn version_output(args: &[std::ffi::OsString]) -> Option<&'static str> {
+    (args.len() == 1 && args[0] == "--version")
+        .then_some(concat!("k2-menubar ", env!("CARGO_PKG_VERSION")))
+}
+
 fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(version) = version_output(&args) {
+        println!("{version}");
+        return;
+    }
+
     #[cfg(target_os = "macos")]
     if let Err(err) = macos::run() {
         eprintln!("k2-menubar: {err}");
@@ -158,5 +170,21 @@ fn main() {
     {
         eprintln!("k2-menubar is macOS-only");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_output;
+    use std::ffi::OsString;
+
+    #[test]
+    fn version_is_exact_and_no_flag_keeps_the_launch_path() {
+        assert_eq!(
+            version_output(&[OsString::from("--version")]),
+            Some("k2-menubar 0.41.3")
+        );
+        assert_eq!(version_output(&[]), None);
+        assert_eq!(version_output(&[OsString::from("other")]), None);
     }
 }

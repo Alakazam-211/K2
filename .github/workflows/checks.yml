@@ -31,6 +31,15 @@ jobs:
       - name: Arch/Omarchy packaging lock (O14–O27 files)
         run: bash tests/packaging/arch-omarchy-bundle.sh
 
+      # The Arch package only builds on k2-arch after a tag. These are the
+      # text-level breaks (sum drift, missing source, shell syntax) that
+      # do not need Arch. 0.43.0 died at the tag on a stale k2.install sum.
+      - name: Arch PKGBUILD sources, sums, pkgver, syntax
+        run: bash scripts/check-arch-pkgbuild.sh
+
+      - name: Arch PKGBUILD check fails on broken fixtures
+        run: bash tests/packaging/check-arch-pkgbuild.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

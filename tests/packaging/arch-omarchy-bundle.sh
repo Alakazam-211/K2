@@ -89,13 +89,19 @@ matches "PKGBUILD pkgname=k2" "$ARCH/PKGBUILD" '^pkgname=k2$'
 matches "PKGBUILD license FSL-1.1-Apache-2.0" "$ARCH/PKGBUILD" "license=\\('FSL-1.1-Apache-2.0'\\)"
 matches "PKGBUILD arch x86_64 first" "$ARCH/PKGBUILD" "^arch=\\('x86_64'\\)"
 
-# pkgver tracks the live tree (this feat must not bump versions)
+# pkgver: release.sh does not bump the PKGBUILD, so the committed pkgver
+# goes stale. build-release-pkg.sh rewrites it to the tree version before
+# makepkg. scripts/check-arch-pkgbuild.sh owns the full rule.
 conf_ver="$(grep -m1 '"version"' "$ROOT/src-tauri/tauri.conf.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/')"
 pkg_ver="$(grep -E '^pkgver=' "$ARCH/PKGBUILD" | head -1 | cut -d= -f2)"
+# shellcheck disable=SC2016
+pkgver_rewrite='sed -i "s/^pkgver=.*/pkgver=${version}/" "$pkgbuild"'
 if [[ -n "$conf_ver" && "$pkg_ver" == "$conf_ver" ]]; then
     pass "PKGBUILD pkgver=$pkg_ver matches tauri.conf.json"
+elif grep -Fq "$pkgver_rewrite" "$ARCH/build-release-pkg.sh"; then
+    pass "PKGBUILD pkgver=$pkg_ver is rewritten to $conf_ver by build-release-pkg.sh"
 else
-    fail "PKGBUILD pkgver matches tauri.conf.json" "pkgver=$pkg_ver tauri=$conf_ver"
+    fail "PKGBUILD pkgver matches tauri.conf.json or is rewritten" "pkgver=$pkg_ver tauri=$conf_ver"
 fi
 
 # O19 depends until ldd — gtk3 not gtk4
@@ -169,6 +175,7 @@ contains "PKGBUILD excludes finished package" "$ARCH/PKGBUILD" "--exclude='./pac
 # O22 — packaged install is the install; pacman -R does not wipe ~/.k2
 contains ".install says do not run k2 daemon install" "$ARCH/k2.install" "k2 daemon install"
 absent ".install does not rm ~/.k2" "$ARCH/k2.install" "rm -rf"
+# shellcheck disable=SC2088 # literal text in the install message
 contains ".install leaves ~/.k2 on remove" "$ARCH/k2.install" "~/.k2"
 contains "README pacman -R leaves ~/.k2" "$ARCH/README.md" "pacman -R"
 

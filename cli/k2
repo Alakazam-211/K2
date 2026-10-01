@@ -1611,6 +1611,11 @@ hb_parse_spec() {
     if [ -n "$every" ] && ! [[ "$every" =~ ^[0-9]+$ ]]; then
         echo "Error: --every must be a whole number (got '$every')" >&2; exit 2
     fi
+    # S5 HB34: the daemon refuses an hourly interval under 60 seconds;
+    # say so here before the request instead of after.
+    if [ -n "$every" ] && [ "$((10#$every))" -lt 1 ]; then
+        echo "Error: --every must be at least 1 minute (got '$every')" >&2; exit 2
+    fi
     local t
     for t in "$time" "$start" "$end"; do
         if [ -n "$t" ] && ! [[ "$t" =~ ^([01][0-9]|2[0-3]|[0-9]):[0-5][0-9]$ ]]; then
@@ -1698,9 +1703,15 @@ cmd_heartbeat_add() {
     local freq
     freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
     local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
+    # S5 HB32: the DAEMON writes the instructions, on its own disk. The
+    # CLI used to write the returned `wakeupAbs` itself, which is the
+    # wrong machine when the daemon is remote.
+    if [ -n "$instructions" ]; then
+        params="${params}&instructions=$(urlencode "$instructions")"
+    fi
     local resp
     resp=$(cli_send cli_request "/cli/heartbeat/add" "$params")
-    local wakeup_abs
+    local wakeup_abs written
     if printf '%s' "$resp" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if isinstance(d,dict) and 'error' in d else 1)" 2>/dev/null; then
         printf '%s' "$resp" | _hb_print_err
         return $?
@@ -1713,18 +1724,31 @@ try:
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 ")
+    # true | false | missing (a daemon older than S5 ignores the param).
+    written=$(printf '%s' "$resp" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+v = d.get('instructionsWritten')
+print('missing' if v is None else ('true' if v else 'false'))
+")
     echo "Created heartbeat: $name"
-    [ -n "$wakeup_abs" ] && echo "Wakeup file: $wakeup_abs"
+    [ -n "$wakeup_abs" ] && echo "Wakeup file (on the daemon's machine): $wakeup_abs"
     echo
     echo "NOTE: this schedule lands in the workspace PINNED chat." >&2
     echo "      A sidecar + \`k2 heartbeat session $name --set sales/reviewer\`" >&2
     echo "      (or --set <session-id> --provider <p>) is often better for a trained flow." >&2
     echo
-    if [ -n "$instructions" ] && [ -n "$wakeup_abs" ]; then
-        printf '%s\n' "$instructions" > "$wakeup_abs"
+    if [ -n "$instructions" ] && [ "$written" = "missing" ]; then
+        echo "Error: this daemon is older than 'heartbeat add --instructions' and did not write them." >&2
+        echo "       The heartbeat exists with an empty WAKEUP.md. Write the instructions to" >&2
+        echo "       $wakeup_abs on the daemon's machine, or update the daemon." >&2
+        return 1
+    fi
+    if [ "$written" = "true" ]; then
         echo "Wake instructions written ($(printf '%s' "$instructions" | wc -c | tr -d ' ') bytes)."
     else
-        echo "Edit the wakeup.md to define what runs on this schedule (or re-run with --instructions)."
+        echo "Needs instructions: WAKEUP.md is empty. The heartbeat stays enabled and waits;"
+        echo "it fires at the next scheduled slot after you add them (or re-run with --instructions)."
     fi
     hb_warn_if_transport_down
 }
@@ -1825,6 +1849,16 @@ try:
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         en = 'yes' if r.get('enabled') else 'no'
         print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en}')
+        # S5: the daemon names why an enabled row is waiting.
+        wr = r.get('waitReason')
+        if wr == 'wakeup_empty':
+            print('    waiting: WAKEUP.md is empty (needs instructions)')
+        elif wr == 'schedule_error':
+            print(f\"    invalid schedule: {r.get('waitDetail') or r.get('scheduleError') or '?'}\")
+        elif wr:
+            print(f\"    waiting: {wr}\")
+        if not r.get('enabled') and r.get('disabledReason') == 'wakeup_empty':
+            print('    disabled: WAKEUP.md was empty (add instructions, then enable)')
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 "
@@ -20119,7 +20153,10 @@ SCHEDULE (CRUD on heartbeat definitions)
          --yearly --months jan,jul --time HH:MM
          --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
        --instructions "text" | --instructions-file <path>
-         write the WAKEUP.md (the job that runs on fire) at create time
+         write the WAKEUP.md (the job that runs on fire) at create time;
+         the daemon writes it on its own machine. Without it the
+         heartbeat stays enabled and waits ("needs instructions"), then
+         fires at the next scheduled slot after a body is added
        New schedules land in the PINNED chat. For a trained flow prefer
        a sidecar: k2 heartbeat session <n> --set sales/reviewer
        (UUID form still works: --set <session-id> --provider <p>)

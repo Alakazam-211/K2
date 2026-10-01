@@ -3549,6 +3549,55 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Heartbeat S6: Keep awake. GET reports what is really held;
+        // POST sets Off / While agents are working / Always. Turning it on
+        // on a Mac without the helper shows the one admin dialog (up to 2
+        // minutes), and the macOS lid hold runs `sudo -n`, so both run on
+        // the blocking pool.
+        "/cli/power/status" => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let r = tokio::task::spawn_blocking(crate::power::keep_awake::handle_status)
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                    status: "500 Internal Server Error",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        "/cli/power/keep-awake" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || crate::power::keep_awake::handle_set(&body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                    status: "500 Internal Server Error",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         "/cli/heartbeat/apply-wake-scheduler" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {

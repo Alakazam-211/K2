@@ -1212,6 +1212,10 @@ async fn async_main() {
     // provider JSONL. Does not walk every transcript tree on idle.
     token_usage_scan::spawn();
 
+    // Heartbeat S6: Keep awake (Off / While agents are working / Always)
+    // runs here so it holds with no client attached.
+    power::keep_awake::spawn();
+
     // P19: re-assert CLI folder trust after ready (never blocks the gate;
     // worktree cwds not in projects.path are covered by spawn P16).
     tokio::spawn(async move {

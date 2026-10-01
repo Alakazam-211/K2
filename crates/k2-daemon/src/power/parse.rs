@@ -44,6 +44,23 @@ pub fn linux_supplies(entries: &[(String, Option<u8>, Option<u8>)]) -> PowerSour
 /// Windows `powercfg /q SCHEME_CURRENT SUB_SLEEP RTCWAKE` → (AC, DC)
 /// "Allow wake timers" index: 0 disable, 1 enable, 2 important only.
 pub fn windows_rtcwake(text: &str) -> (Option<u32>, Option<u32>) {
+    windows_setting_index(text)
+}
+
+/// S6 — Windows `LIDACTION` index in words (0 Do nothing, 1 Sleep,
+/// 2 Hibernate, 3 Shut down).
+pub fn windows_lid_action_word(index: u32) -> &'static str {
+    match index {
+        0 => "Do nothing",
+        1 => "Sleep",
+        2 => "Hibernate",
+        3 => "Shut down",
+        _ => "not Do nothing",
+    }
+}
+
+/// Any `powercfg /q` single-setting output -> (AC, DC) current index.
+pub fn windows_setting_index(text: &str) -> (Option<u32>, Option<u32>) {
     let read = |label: &str| {
         text.lines()
             .find(|l| l.contains(label))
@@ -88,5 +105,14 @@ mod tests {
         let text = "    Power Setting GUID: bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d  (Allow wake timers)\n      Possible Setting Index: 000\n    Current AC Power Setting Index: 0x00000001\n    Current DC Power Setting Index: 0x00000000\n";
         assert_eq!(windows_rtcwake(text), (Some(1), Some(0)));
         assert_eq!(windows_rtcwake("garbage"), (None, None));
+    }
+
+    /// S6 / D14 — the lid action reads the same way.
+    #[test]
+    fn windows_lidaction_index_parses() {
+        let text = "    Power Setting GUID: 5ca83367-6e45-459f-a27b-476b1d01c936  (Lid close action)\n    Current AC Power Setting Index: 0x00000000\n    Current DC Power Setting Index: 0x00000001\n";
+        assert_eq!(windows_setting_index(text), (Some(0), Some(1)));
+        assert_eq!(windows_lid_action_word(0), "Do nothing");
+        assert_eq!(windows_lid_action_word(1), "Sleep");
     }
 }

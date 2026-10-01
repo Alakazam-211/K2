@@ -31,6 +31,7 @@
 
 pub mod fake;
 pub mod helper;
+pub mod keep_awake;
 pub mod parse;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -68,6 +69,40 @@ pub enum WakeSupport {
     Unavailable(String),
 }
 
+/// Heartbeat S6 — can this machine stay up with the lid closed?
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LidAccess {
+    /// Worth trying: macOS with the helper in, Windows with the lid
+    /// action "Do nothing", Linux (logind decides at hold time).
+    Ready,
+    /// macOS without the helper: the one admin dialog comes first (D11).
+    NeedsApproval,
+    /// No, with the reason and any steps (Windows lid action, D14).
+    Unavailable(String),
+}
+
+/// S6 — the per-OS lid facts the Keep awake policy needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LidFacts {
+    pub access: LidAccess,
+    /// macOS: the lid hold is `pmset disablesleep`, system-wide and
+    /// battery-blind, so it is AC only unless "Also on battery" is on
+    /// (D12). Other OSes: logind / the power plan decide.
+    pub ac_only_unless_allowed: bool,
+}
+
+/// S6 — why a lid-closed hold was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LidRefusal {
+    /// Linux with no login session (D13): "limited (no session)".
+    pub no_session: bool,
+    pub reason: String,
+}
+
+/// Prefix the Linux layer uses when logind refuses for lack of a
+/// session (D13). The Keep awake status keys on it.
+pub const NO_SESSION_PREFIX: &str = "limited (no session)";
+
 /// The thin per-OS layer. Each method is one OS call or a read.
 pub trait PowerOs: Send + Sync {
     /// Take an OS sleep assertion. Dropping the returned value releases it.
@@ -92,6 +127,22 @@ pub trait PowerOs: Send + Sync {
     fn notes(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
+    /// S6 — lid-closed facts for the current power source.
+    fn lid_facts(&self, _src: PowerSource) -> LidFacts {
+        LidFacts {
+            access: LidAccess::Unavailable("lid-closed keep awake is not supported on this platform".into()),
+            ac_only_unless_allowed: false,
+        }
+    }
+    /// S6 — keep running with the lid closed. Dropping the value
+    /// releases it. Only called when [`Self::lid_facts`] said `Ready`.
+    fn hold_lid_closed(&self, _reason: &str) -> Result<Box<dyn Send>, LidRefusal> {
+        Err(LidRefusal { no_session: false, reason: "lid-closed keep awake is not supported on this platform".into() })
+    }
+    /// S6 — boot: undo a lid hold a previous daemon run left behind
+    /// (macOS `disablesleep` survives a reboot; the helper's watcher
+    /// does not).
+    fn clear_stale_lid_hold(&self) {}
 }
 
 /// A backend that touches nothing (test daemons, opted-out daemons).
@@ -278,7 +329,7 @@ impl Power {
         h.next_id += 1;
         h.active.insert(id, reason.to_string());
         if h.os_guard.is_none() {
-            match self.os.hold_awake("K2 heartbeat") {
+            match self.os.hold_awake("K2 keep awake") {
                 Ok(g) => {
                     h.os_guard = Some(g);
                     h.last_error = None;
@@ -303,6 +354,18 @@ impl Power {
             }
         };
         drop(guard); // release outside the lock
+    }
+
+    /// Is the shared OS assertion held right now, and the last error
+    /// taking it (S6 reports this, not the setting).
+    pub fn assertion_state(&self) -> (bool, Option<String>) {
+        let h = self.holds.lock();
+        (h.os_guard.is_some(), h.last_error.clone())
+    }
+
+    /// The OS layer (S6's Keep awake uses the same one).
+    pub fn os(&self) -> Arc<dyn PowerOs> {
+        Arc::clone(&self.os)
     }
 
     /// Re-plan the one wake event and apply it if it changed.

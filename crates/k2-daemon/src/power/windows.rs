@@ -13,7 +13,7 @@ use std::ffi::c_void;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
-use super::{PowerOs, PowerSource, WakeSupport};
+use super::{LidAccess, LidFacts, LidRefusal, PowerOs, PowerSource, WakeSupport};
 
 type Handle = *mut c_void;
 
@@ -88,6 +88,9 @@ unsafe impl Sync for Timer {}
 
 /// D14 — the steps K2 shows; it never changes the plan itself.
 pub(crate) const WAKE_TIMER_STEPS: &str = "Control Panel → Hardware and Sound → Power Options → Change plan settings → Change advanced power settings → Sleep → Allow wake timers → set \"Plugged in\" (and \"On battery\" if you want) to Enable.";
+
+/// D14 — the lid steps K2 shows; it never changes the plan itself.
+pub(crate) const LID_ACTION_STEPS: &str = "Control Panel → Hardware and Sound → Power Options → Choose what closing the lid does → When I close the lid → set \"Plugged in\" (and \"On battery\" if you want) to Do nothing → Save changes.";
 
 pub struct WindowsPowerOs {
     timer: Mutex<Option<Timer>>,
@@ -189,6 +192,35 @@ impl PowerOs for WindowsPowerOs {
             },
             battery_percent: if s.battery_life_percent <= 100 { Some(s.battery_life_percent) } else { None },
         }
+    }
+
+    /// S6 / D14 — lid closed keeps running only when the plan's lid
+    /// action for this power source is "Do nothing". K2 reads it and
+    /// shows the steps; it never changes it.
+    fn lid_facts(&self, src: PowerSource) -> LidFacts {
+        let (ac, dc) = match std::process::Command::new("powercfg")
+            .args(["/q", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION"])
+            .output()
+        {
+            Ok(o) if o.status.success() => super::parse::windows_setting_index(&String::from_utf8_lossy(&o.stdout)),
+            _ => (None, None),
+        };
+        let current = if src.on_ac == Some(false) { dc } else { ac };
+        let access = match current {
+            Some(0) => LidAccess::Ready,
+            Some(n) => LidAccess::Unavailable(format!(
+                "the power plan's lid action is {}. {LID_ACTION_STEPS}",
+                super::parse::windows_lid_action_word(n)
+            )),
+            None => LidAccess::Unavailable(format!("could not read the lid action. {LID_ACTION_STEPS}")),
+        };
+        LidFacts { access, ac_only_unless_allowed: false }
+    }
+
+    /// Nothing to take: with the lid action "Do nothing", the system
+    /// request from the lid-open hold keeps it running.
+    fn hold_lid_closed(&self, _reason: &str) -> Result<Box<dyn Send>, LidRefusal> {
+        Ok(Box::new(()))
     }
 
     fn notes(&self) -> serde_json::Value {

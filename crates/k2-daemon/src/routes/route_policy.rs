@@ -484,6 +484,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
     get("/cli/overlay/events", Member),
+    post("/cli/power/keep-awake", Member),
+    get("/cli/power/status", Member),
     post("/cli/presence/kick", Admin),
     get("/cli/presence/roster", Member),
     get("/cli/presence/summary", Member),

@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
-use super::{PowerOs, PowerSource, WakeSupport};
+use super::{LidAccess, LidFacts, LidRefusal, PowerOs, PowerSource, WakeSupport, NO_SESSION_PREFIX};
 
 struct Inhibitor {
     child: Child,
@@ -112,9 +112,23 @@ impl PowerOs for LinuxPowerOs {
                     k2_core::log_debug!("[power] lid lock refused, holding sleep only: {first}");
                     Ok(Box::new(i))
                 }
-                Err(second) => Err(format!("limited (no session): {second}")),
+                Err(second) => Err(format!("{NO_SESSION_PREFIX}: {second}")),
             },
         }
+    }
+
+    /// S6 — logind decides at hold time (D13: no polkit rule).
+    fn lid_facts(&self, _src: PowerSource) -> LidFacts {
+        LidFacts { access: LidAccess::Ready, ac_only_unless_allowed: false }
+    }
+
+    /// S6 — a `handle-lid-switch` lock. In a seat session logind allows
+    /// it with no prompt; with no session it is refused and Keep awake
+    /// reports `limited (no session)`.
+    fn hold_lid_closed(&self, reason: &str) -> Result<Box<dyn Send>, LidRefusal> {
+        spawn_inhibitor("handle-lid-switch", reason)
+            .map(|i| Box::new(i) as Box<dyn Send>)
+            .map_err(|reason| LidRefusal { no_session: true, reason })
     }
 
     fn wake_support(&self) -> WakeSupport {

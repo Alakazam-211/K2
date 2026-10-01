@@ -7,13 +7,63 @@
 //!   powerd drops both if the daemon dies.
 //! - Wake: `sudo -n dev.k2.power-helper wake-set <ts>` (D11). Without the
 //!   helper, wake is unavailable and turning it on shows one dialog.
+//! - Lid closed (S6 Keep awake): `sudo -n dev.k2.power-helper awake-hold
+//!   --pid <daemon> --max 180`, renewed every 60 s by a thread the hold
+//!   owns; `awake-release` on drop. The helper's watcher restores sleep if
+//!   the daemon dies or stops renewing. A marker under `~/.k2` lets the
+//!   next boot clear a hold a crash or reboot left behind.
 
 use std::ffi::{c_char, c_void, CString};
 
 use chrono::{DateTime, Utc};
 
 use super::helper;
-use super::{PowerOs, PowerSource, WakeSupport};
+use super::{LidAccess, LidFacts, LidRefusal, PowerOs, PowerSource, WakeSupport};
+
+/// S6 — each `awake-hold` lasts this long unless renewed.
+const LID_HOLD_MAX_SECS: u64 = 180;
+/// S6 — renew well inside the max.
+const LID_RENEW_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn lid_marker() -> std::path::PathBuf {
+    k2_core::paths::k2_home().join("keep-awake-lid.hold")
+}
+
+fn awake_hold_args() -> Vec<String> {
+    vec![
+        "awake-hold".into(),
+        "--pid".into(),
+        std::process::id().to_string(),
+        "--max".into(),
+        LID_HOLD_MAX_SECS.to_string(),
+    ]
+}
+
+fn call_owned(args: &[String]) -> Result<String, String> {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    helper::call(&refs)
+}
+
+/// The lid-closed hold: a renewer thread; drop stops it and releases.
+struct MacLidHold {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    renewer: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for MacLidHold {
+    fn drop(&mut self) {
+        drop(self.stop.take()); // disconnect -> the renewer exits
+        if let Some(t) = self.renewer.take() {
+            let _ = t.join();
+        }
+        if let Err(e) = helper::call(&["awake-release"]) {
+            k2_core::log_debug!(
+                "[keep-awake] awake-release failed (the helper watcher restores sleep within {LID_HOLD_MAX_SECS}s): {e}"
+            );
+        }
+        let _ = std::fs::remove_file(lid_marker());
+    }
+}
 
 type CFStringRef = *const c_void;
 const UTF8: u32 = 0x0800_0100;
@@ -165,6 +215,58 @@ impl PowerOs for MacPowerOs {
                 Err(e) => return Err(format!("wait osascript: {e}")),
             }
         }
+    }
+
+    fn lid_facts(&self, _src: PowerSource) -> LidFacts {
+        LidFacts {
+            access: if helper::installed() { LidAccess::Ready } else { LidAccess::NeedsApproval },
+            ac_only_unless_allowed: true,
+        }
+    }
+
+    fn hold_lid_closed(&self, _reason: &str) -> Result<Box<dyn Send>, LidRefusal> {
+        let refuse = |reason: String| LidRefusal { no_session: false, reason };
+        if !helper::installed() {
+            return Err(refuse("the helper is not installed".into()));
+        }
+        let args = awake_hold_args();
+        call_owned(&args).map_err(refuse)?;
+        if let Err(e) = std::fs::write(lid_marker(), std::process::id().to_string()) {
+            k2_core::log_debug!("[keep-awake] could not write the lid marker: {e}");
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let renewer = std::thread::Builder::new()
+            .name("k2-keep-awake-lid".into())
+            .spawn(move || loop {
+                match rx.recv_timeout(LID_RENEW_EVERY) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if let Err(e) = call_owned(&args) {
+                            k2_core::log_debug!("[keep-awake] lid hold renewal failed: {e}");
+                        }
+                    }
+                    _ => return,
+                }
+            })
+            .map_err(|e| {
+                let _ = helper::call(&["awake-release"]);
+                let _ = std::fs::remove_file(lid_marker());
+                refuse(format!("could not start the renewal thread: {e}"))
+            })?;
+        Ok(Box::new(MacLidHold { stop: Some(tx), renewer: Some(renewer) }))
+    }
+
+    fn clear_stale_lid_hold(&self) {
+        let marker = lid_marker();
+        if !marker.exists() {
+            return;
+        }
+        if helper::installed() {
+            match helper::call(&["awake-release"]) {
+                Ok(_) => k2_core::log_debug!("[keep-awake] cleared a lid hold left by a previous run"),
+                Err(e) => k2_core::log_debug!("[keep-awake] stale lid hold not cleared: {e}"),
+            }
+        }
+        let _ = std::fs::remove_file(marker);
     }
 
     fn notes(&self) -> serde_json::Value {

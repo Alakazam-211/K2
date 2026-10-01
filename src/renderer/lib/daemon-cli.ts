@@ -33,6 +33,7 @@ import {
   reviveRemoteSession,
 } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
+import { getPinnedAuthRecovery } from '@/lib/pool-hooks'
 
 /** A response plus its (already-consumed) body text. The body is read
  *  exactly once, up front, because BOTH the auth-failure classifier and the
@@ -188,6 +189,18 @@ function releaseRemoteCliSlot(pool: CliSlotPool): void {
   if (next) next()
 }
 
+/** Run `fn` holding one of `scope`'s `/cli` slots (Home M2, MS25): the
+ *  connection pool's status checks share the same per-server cap of 4 as
+ *  every `daemonCli*` call. Local is uncapped. */
+export async function withHostCliSlot<T>(scope: ServerScope, fn: () => Promise<T>): Promise<T> {
+  const held = await acquireRemoteCliSlot(scope)
+  try {
+    return await fn()
+  } finally {
+    if (held) releaseRemoteCliSlot(held)
+  }
+}
+
 /** Test seam: in-flight `/cli/*` count for one host key. */
 export function remoteCliInflightForTests(hostKey: string): number {
   const pool = remoteCliPools.get(hostKey)
@@ -231,13 +244,21 @@ async function cliFetch(
       }
       let result = await attempt()
       throwIfHostSwitched(scope, startedKey)
-      // Re-login and the rotation prompt run ONLY for the window's own
-      // server (Home M1 / MS77). A pinned scope for another server gets the
-      // original 401/403 back with no auth side effects; its revive lands
-      // with M2's connection pool.
+      // Re-login and the rotation prompt of the window's own server run
+      // here as before (Home M1 / MS77). A pinned scope for another server
+      // goes to the connection pool instead (Home M2): one revive through
+      // the app-wide login lease, then one replay. No keychain delete and
+      // no overlay on that path.
       if (isPossibleAuthFailure(result.res.status, result.text)) {
         const host = scope.isWindowHost() ? windowActiveRemote() : null
-        if (host) {
+        const pinnedAuthRecovery = getPinnedAuthRecovery()
+        if (!scope.isWindowHost() && scope.isRemote && pinnedAuthRecovery) {
+          const outcome = await pinnedAuthRecovery(scope)
+          if (outcome === 'revived') {
+            throwIfHostSwitched(scope, startedKey)
+            result = await attempt()
+          }
+        } else if (host) {
           const outcome = await reviveRemoteSession(host.id)
           // 'revived' means the store now carries a NEW token — replay once so
           // the caller never sees the transient stale-session rejection. Any

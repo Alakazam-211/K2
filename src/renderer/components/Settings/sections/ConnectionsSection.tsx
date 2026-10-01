@@ -32,9 +32,12 @@ import {
   rememberPassword,
   forgetPassword,
   forgetToken,
+  duplicateSavedHost,
+  duplicateSavedHostMessage,
   type ConnectHost,
   type ConnectionStatus,
 } from '@/stores/connect-host'
+import { homeHostKey } from '@/lib/host-key'
 import { verifyHostCredentials } from '@/lib/add-server-login'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
@@ -63,6 +66,7 @@ import {
 import { isAirgap } from '@/lib/airgap'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
+import { signOutOfHost } from '@/lib/host-pool-instance'
 import { recoveryStatusText } from '@/lib/remote-recovery'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
@@ -246,17 +250,16 @@ export function ConnectionsSection(): React.JSX.Element {
       return
     }
 
-    // Block duplicate URL (same host:port:scheme) on ADD. Edits keep their id.
-    if (isNew) {
-      const dup = hosts.find(
-        (h) =>
-          h.hostname === parsed.hostname &&
-          h.port === parsed.port &&
-          h.secure === parsed.secure,
-      )
-      if (dup) {
+    // MS61: one saved entry per server (host key), for an add AND for an
+    // edit that would move an entry onto another entry's address.
+    {
+      const dup = duplicateSavedHost(hosts, parsed, draft.id ?? null)
+      const editKeepsKey =
+        draft.id !== null &&
+        hosts.some((h) => h.id === draft.id && homeHostKey(h) === homeHostKey(parsed))
+      if (dup && !editKeepsKey) {
         setError(
-          `A server for ${parsed.hostname}${parsed.port === 443 && parsed.secure ? '' : `:${parsed.port}`} is already saved as “${dup.label}”. Edit that tile (or remove it) instead of adding a duplicate.`,
+          `${duplicateSavedHostMessage(dup)} Edit that tile (or remove it) instead of adding a duplicate.`,
         )
         return
       }
@@ -1326,6 +1329,20 @@ function HostTile({
                 {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking peer…' : 'Pair as federated peer'}
               </button>
             ))}
+          {/* Home M2: sign out of a server this window is not on. Its Home
+              rows then say Sign in, in every window, and nothing signs back
+              in on its own until you do. */}
+          {!isActive && (
+            <button
+              type="button"
+              onClick={() => void signOutOfHost(host)}
+              className={BTN_SECONDARY}
+              data-settings-id="connections.sign-out"
+              title={`Sign out of ${label} on this computer. The saved password is kept.`}
+            >
+              Sign out
+            </button>
+          )}
           <button onClick={() => void doRestart()} disabled={restartBusy || reconnecting} className={BTN_ORANGE}>
             {restartBusy ? 'Restarting…' : reconnecting ? 'Reconnecting…' : 'Restart'}
           </button>

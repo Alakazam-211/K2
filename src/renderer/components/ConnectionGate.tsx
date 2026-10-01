@@ -44,6 +44,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore, activeHostKey, type ConnectHost } from '@/stores/connect-host'
+import { installHostSessionSync } from '@/lib/host-pool-instance'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import {
@@ -736,6 +737,8 @@ export function ConnectionGate(): React.ReactElement {
   // is 'local', and hydration only fills the hosts[] list + tokens).
   useEffect(() => {
     void useConnectHostStore.getState().hydrateFromDisk()
+    // Home M2 (MS28): pick up logins and sign-outs from other windows.
+    void installHostSessionSync()
   }, [])
 
   // Phase 1: resolve the app version once, then poll the ACTIVE host's

@@ -36,7 +36,7 @@ import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButto
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
-import { useHomeAddPickerStore, useRowStatus } from './home-room'
+import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
 
 /** Avatar color for an agent on another server (its color lives there). */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
@@ -47,8 +47,11 @@ const STATUS_TEXT: Record<RowStatus['kind'], string> = {
   review: 'text-[var(--color-status-ok-soft)]',
   idle: 'text-[var(--color-text-muted)]',
   live: 'text-[var(--color-status-ok-soft)]',
+  starting: 'text-[var(--color-text-muted)]',
   offline: 'text-[var(--color-text-muted)]',
+  'signing-in': 'text-[var(--color-text-muted)]',
   'sign-in': 'text-[var(--color-status-warn)]',
+  'no-access': 'text-[var(--color-status-error-soft)]',
   checking: 'text-[var(--color-text-muted)]',
   'not-found': 'text-[var(--color-status-error-soft)]',
 }
@@ -88,6 +91,20 @@ function asRole(role: string): 'owner' | 'admin' | 'member' | 'viewer' {
   return role === 'owner' || role === 'admin' || role === 'viewer' ? role : 'member'
 }
 
+/** "Same server as …" (MS81): one daemon saved at two addresses stays two
+ *  rows; this says so. */
+function SameServerNote({ note }: { note: string }): React.JSX.Element {
+  return (
+    <span
+      className="truncate text-[9px] leading-none text-[var(--color-text-muted)]"
+      title={`${note}: both addresses answer with the same daemon`}
+      data-same-server=""
+    >
+      {note.toLowerCase()}
+    </span>
+  )
+}
+
 /** Right-click menu on a Home row (the Agents rows' menu idiom). */
 export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: HomeRow): Promise<void> {
   e.preventDefault()
@@ -121,16 +138,20 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
 function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
   const remoteOnWeb = isWebClient() && !onConnected
-  const canOpen = !remoteOnWeb && status.kind !== 'not-found'
-  const title = remoteOnWeb
+  // MS83: "No access" rows never open a room.
+  const canOpen = !remoteOnWeb && status.kind !== 'not-found' && status.kind !== 'no-access'
+  const base = remoteOnWeb
     ? 'Open this agent from the desktop app — the web page has no server switcher'
-    : status.kind === 'sign-in'
-      ? `Sign in to ${place} and open ${row.label}`
-      : !onConnected
-        ? `Switch this window to ${place} and open ${row.label}`
-        : status.kind === 'not-found'
-          ? `${row.label} is not on this server any more`
-          : `Open ${row.label}`
+    : status.kind === 'no-access'
+      ? (status.detail ?? `Your login on ${place} cannot open agents there`)
+      : status.kind === 'sign-in'
+        ? `${status.detail ? `${status.detail} ` : ''}Sign in to ${place} and open ${row.label}`
+        : !onConnected
+          ? `Switch this window to ${place} and open ${row.label}`
+          : status.kind === 'not-found'
+            ? `${row.label} is not on this server any more`
+            : `Open ${row.label}`
+  const title = status.note ? `${base} (${status.note})` : base
 
   return (
     <AgentRowButton
@@ -159,6 +180,7 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
         <>
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
             {place !== null && <MachineChip place={place} />}
+            {status.note && <SameServerNote note={status.note} />}
           </div>
           <RowStateText status={status} />
         </>
@@ -177,13 +199,28 @@ function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Ele
     parsed && parsed.host === connectedKey && connectionStatus === 'connected'
       ? findWorkspaceForRow(projects, row)
       : null
-  if (ws) {
+  const note = useConnectedRowNote(row)
+  if (ws && !note) {
     return (
       <SingleProjectItem
         project={ws}
         isActive={ws.id === activeProjectId}
         onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       />
+    )
+  }
+  if (ws && note) {
+    return (
+      <div className="relative" title={note}>
+        <SingleProjectItem
+          project={ws}
+          isActive={ws.id === activeProjectId}
+          onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
+        />
+        <div className="pointer-events-none absolute right-2 top-1">
+          <SameServerNote note={note} />
+        </div>
+      </div>
     )
   }
   return (

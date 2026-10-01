@@ -9,11 +9,14 @@
 //
 // Nothing here resets on a server switch: the Homes live in `stores/homes`
 // (never subscribed to `onActiveHostChange`) and the page stays `home`.
-// Row status polls other servers every 30s, only while Home is on screen
-// and the window is visible (`HomeShellEffects` is mounted only then).
+// Row status comes from the connection pool (Home M2, `lib/host-pool.ts`).
+// It checks each row's server every 30 s (offline: 5 s, 15 s, then 30 s),
+// only while Home is on screen and the window is visible
+// (`HomeShellEffects` is mounted only then). The connected server gets the
+// public `/boot-status` read only, for its `instanceId` (MS81).
 
 import { useEffect, useMemo } from 'react'
-import { create } from 'zustand'
+import { create, useStore } from 'zustand'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -28,14 +31,9 @@ import {
   savedHostForKey,
   workspaceHandle,
 } from '@/lib/home-address'
-import {
-  HOME_POLL_MS,
-  probeHost,
-  resolveRowStatus,
-  useHomeProbeStore,
-  type RowStatus,
-} from '@/lib/home-status'
-import { credsForHomeHost } from '@/lib/home-creds'
+import { HOME_POLL_MS, resolveRowStatus, type RowStatus } from '@/lib/home-status'
+import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
+import { hostPool } from '@/lib/host-pool-instance'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -71,9 +69,34 @@ export function rowPlace(hostKey: string, connectedKey: string, hosts: ReturnTyp
   return saved ? saved.label : hostKey || 'unknown server'
 }
 
+/** Row host keys of the selected Home, in row order, without repeats. */
+function homeHostKeys(home: Home): string[] {
+  const keys: string[] = []
+  for (const r of home.rows) {
+    const p = parseHomeAddress(r.address)
+    if (p && !keys.includes(p.host)) keys.push(p.host)
+  }
+  return keys
+}
+
+/** MS81 / answer Q2(a): the label of an earlier row's server that answers
+ *  with the same `instanceId` as `hostKey`, or null. */
+function useSameServerAs(hostKey: string): string | null {
+  const home = useHomesStore(selectedHome)
+  const hosts = useConnectHostStore((s) => s.hosts)
+  const entries = useStore(hostPool.store, (s) => s.entries)
+  return useMemo(() => {
+    const earlier = sameServerPairs(homeHostKeys(home), entries)[hostKey]
+    if (!earlier) return null
+    if (earlier === LOCAL_HOME_HOST) return 'This computer'
+    const saved = savedHostForKey(hosts, earlier)
+    return saved ? saved.label || saved.hostname : earlier
+  }, [home, entries, hostKey, hosts])
+}
+
 /** Status of a row that does not paint as a live Agents row: a row on
- *  another server (live / offline / sign in), or a connected-server row
- *  whose workspace is gone or still loading. */
+ *  another server (live / starting / offline / sign in / no access), or a
+ *  connected-server row whose workspace is gone or still loading. */
 export function useRowStatus(row: HomeRow): { status: RowStatus; place: string | null; onConnected: boolean } {
   const parsed = parseHomeAddress(row.address)
   const activeHost = useConnectHostStore((s) => s.activeHost)
@@ -81,7 +104,8 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
   const projects = useProjectsStore((s) => s.projects)
   const hostKey = parsed?.host ?? ''
-  const probe = useHomeProbeStore((s) => s.probes[hostKey])
+  const entry = useStore(hostPool.store, (s) => s.entries[hostKey])
+  const sameServerAs = useSameServerAs(hostKey)
   const connectedKey = activeHomeHostKey(activeHost)
   const onConnected = hostKey === connectedKey
   const place = rowPlace(hostKey, connectedKey, hosts)
@@ -108,68 +132,69 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
       row,
       saved: isLocal ? !isWebClient() : saved !== null,
       hasLogin: isLocal ? true : (saved?.token.length ?? 0) > 0,
-      probe,
+      entry,
       self: isLocal ? 'owner' : saved?.username || 'owner',
+      sameServerAs,
+      serverLabel: place ?? hostKey,
     }),
     place,
     onConnected,
   }
 }
 
-// ── Polling (other servers) ──────────────────────────────────────────────
+/** The "same server as …" note for a row on the connected server (its
+ *  status paints as the Agents row, so the note rides beside it). */
+export function useConnectedRowNote(row: HomeRow): string | null {
+  const parsed = parseHomeAddress(row.address)
+  const label = useSameServerAs(parsed?.host ?? '')
+  return label ? `Same server as ${label}` : null
+}
+
+// ── Polling (every row's server, through the pool) ───────────────────────
 
 function useHomeStatusPoll(home: Home): void {
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const hosts = useConnectHostStore((s) => s.hosts)
-  const otherKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const r of home.rows) {
-      const p = parseHomeAddress(r.address)
-      if (p && p.host !== connectedKey) keys.add(p.host)
-    }
-    return [...keys].sort()
-  }, [home.rows, connectedKey])
-  const otherKeysJoined = otherKeys.join('\n')
-  // A login landing (or dropping) for one of them re-polls right away.
+  const keys = useMemo(() => homeHostKeys(home).sort(), [home])
+  const keysJoined = keys.join('\n')
+  // A login landing (or dropping) for one of them re-checks right away.
   const loginsKey = hosts.map((h) => `${h.id}:${h.token.length > 0 ? 1 : 0}`).join('|')
 
   useEffect(() => {
-    if (otherKeys.length === 0) return
+    if (keys.length === 0) return
     let cancelled = false
-    const run = async (): Promise<void> => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      const savedHosts = useConnectHostStore.getState().hosts
-      await Promise.all(
-        otherKeys.map(async (key) => {
-          const c = await credsForHomeHost(key, savedHosts)
-          if (cancelled) return
-          const setProbe = useHomeProbeStore.getState().setProbe
-          if (c.kind === 'unsaved') return
-          if (c.kind === 'unreachable') {
-            setProbe(key, { reach: 'offline', auth: 'ok', presence: null, at: Date.now() })
-            return
-          }
-          // No login: the row says "Sign in" without asking the server.
-          if (!c.creds.token) return
-          const probe = await probeHost(c.creds)
-          if (!cancelled) setProbe(key, probe)
-        }),
-      )
+    const timers = new Map<string, ReturnType<typeof setTimeout>>()
+    const schedule = (key: string, ms: number): void => {
+      const prev = timers.get(key)
+      if (prev !== undefined) clearTimeout(prev)
+      timers.set(key, setTimeout(() => void run(key), ms))
     }
-    void run()
-    const timer = setInterval(() => void run(), HOME_POLL_MS)
+    const run = async (key: string): Promise<void> => {
+      if (cancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        schedule(key, HOME_POLL_MS)
+        return
+      }
+      // This computer's daemon does not exist for the web client.
+      if (key === LOCAL_HOME_HOST && isWebClient()) return
+      // The connected server: readiness and instanceId only — its login,
+      // presence and recovery are the window's own (ConnectionGate).
+      const entry = await hostPool.check(key, { bootOnly: key === connectedKey })
+      if (!cancelled) schedule(key, nextCheckDelayMs(entry))
+    }
+    for (const key of keys) void run(key)
     const onVisible = (): void => {
-      if (document.visibilityState === 'visible') void run()
+      if (document.visibilityState === 'visible') for (const key of keys) void run(key)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
-      clearInterval(timer)
+      for (const t of timers.values()) clearTimeout(t)
       document.removeEventListener('visibilitychange', onVisible)
     }
-    // otherKeysJoined stands in for otherKeys (stable string identity).
+    // keysJoined stands in for keys (stable string identity).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otherKeysJoined, loginsKey])
+  }, [keysJoined, connectedKey, loginsKey])
 }
 
 /** Rows on the connected server follow a workspace rename (handle moved:

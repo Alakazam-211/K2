@@ -4,19 +4,22 @@
 // server switch never changes it:
 //   - a row on the connected server: working / idle / permission / review
 //     from the existing activity store; presence from the live roster;
-//   - a row on another saved server: live / offline from that server's
-//     PUBLIC `/boot-status` (`phase:"ready"` or `ready:true` — the dark-
-//     tunnel draft trims the body to `{version, ready, connectLogin}`),
-//     plus who is on it from `GET /cli/presence/summary` read with that
-//     server's own saved login;
+//   - a row on another saved server: the connection pool's entry for that
+//     server (Home M2, `lib/host-pool.ts`): live / starting / offline from
+//     its PUBLIC `/boot-status` (`phase:"ready"` or `ready:true` — the
+//     dark-tunnel draft trims the body to `{version, ready, connectLogin}`),
+//     the login state, the role from whoami, and who is on it from
+//     `GET /cli/presence/summary` read with that server's own saved login;
 //   - a saved server with no login in hand: "Sign in", not offline;
-//   - a server that rejects the saved login: "Sign in" too.
+//   - a server that rejects the saved login, removed this login, or wants
+//     a new password: "Sign in", with the reason as the row's detail;
+//   - a login whose role there is below Member, or unknown: "No access".
 // `/boot-status` never carries who is online; the summary is the separate
 // signed-in read.
 
-import { create } from 'zustand'
-import { hostBootStatus, type HostCreds } from '@/lib/host-ops'
 import type { PaneStatus } from '@/stores/active-agents'
+import type { HostEntry } from '@/lib/host-pool'
+import { roleAllowsRoom } from '@/lib/host-pool'
 import { usersForWorkspace, type RosterUser } from '@/stores/presence'
 import { parseHomeAddress, workspaceHandle, type HomeRowRef } from '@/lib/home-address'
 
@@ -39,23 +42,17 @@ export interface PresenceWorkspace {
   people: PresencePerson[]
 }
 
-export interface HostProbe {
-  reach: 'live' | 'offline'
-  /** 'none' = no login held; 'rejected' = the server refused it. */
-  auth: 'ok' | 'none' | 'rejected'
-  /** Null when not read (offline, no login, older server, network miss). */
-  presence: PresenceWorkspace[] | null
-  at: number
-}
-
 export type RowStatusKind =
   | 'working'
   | 'permission'
   | 'review'
   | 'idle'
   | 'live'
+  | 'starting'
   | 'offline'
+  | 'signing-in'
   | 'sign-in'
+  | 'no-access'
   | 'checking'
   | 'not-found'
 
@@ -64,6 +61,11 @@ export interface RowStatus {
   label: string
   /** Other people on this agent right now (never includes you). */
   people: PresencePerson[]
+  /** Why, for the row's tooltip ("Removed from B. Sign in again."). */
+  detail?: string | null
+  /** "Same server as …" (MS81): this server answers with the same
+   *  `instanceId` as an earlier row's server. */
+  note?: string | null
 }
 
 const LABELS: Record<RowStatusKind, string> = {
@@ -72,14 +74,24 @@ const LABELS: Record<RowStatusKind, string> = {
   review: 'Done',
   idle: 'Idle',
   live: 'Live',
+  starting: 'Starting',
   offline: 'Offline',
+  'signing-in': 'Signing in…',
   'sign-in': 'Sign in',
+  'no-access': 'No access',
   checking: 'Checking…',
   'not-found': 'Not found',
 }
 
-function status(kind: RowStatusKind, people: PresencePerson[] = []): RowStatus {
-  return { kind, label: LABELS[kind], people }
+function status(
+  kind: RowStatusKind,
+  people: PresencePerson[] = [],
+  extra: { detail?: string | null; note?: string | null } = {},
+): RowStatus {
+  const out: RowStatus = { kind, label: LABELS[kind], people }
+  if (extra.detail) out.detail = extra.detail
+  if (extra.note) out.note = extra.note
+  return out
 }
 
 /** `/boot-status` says ready: `phase === 'ready'` or `ready === true`. */
@@ -108,8 +120,15 @@ export type RowStatusInput =
       saved: boolean
       /** You hold a login (token) for that server. `local` always does. */
       hasLogin: boolean
-      probe: HostProbe | undefined
+      /** The connection pool's entry for that server (undefined = never
+       *  checked). */
+      entry: HostEntry | undefined
       self: string
+      /** The label of an earlier row's server that answers with the same
+       *  `instanceId` (MS81), or null. */
+      sameServerAs?: string | null
+      /** The server's label, for copy. */
+      serverLabel?: string
     }
 
 /** Pure: fold everything we know into what the row shows. */
@@ -123,13 +142,39 @@ export function resolveRowStatus(input: RowStatusInput): RowStatus {
       : []
     return status(input.activity, people)
   }
-  if (!input.saved) return status('offline')
-  if (!input.hasLogin) return status('sign-in')
-  const p = input.probe
-  if (!p) return status('checking')
-  if (p.reach === 'offline') return status('offline')
-  if (p.auth === 'rejected' || p.auth === 'none') return status('sign-in')
-  return status('live', presenceForRow(p.presence, input.row, input.self))
+  const note = input.sameServerAs ? `Same server as ${input.sameServerAs}` : null
+  if (!input.saved) return status('offline', [], { note })
+  const e = input.entry
+  if (!input.hasLogin) {
+    // No login held. The pool may be signing in on its own (another window
+    // holds the lease), or know why the login is gone.
+    if (e?.auth === 'signing-in') return status('signing-in', [], { note })
+    return status('sign-in', [], { detail: e?.authNote ?? null, note })
+  }
+  if (!e || e.reach === 'unknown') return status('checking', [], { note })
+  if (e.reach === 'offline') return status('offline', [], { note })
+  if (e.reach === 'starting') return status('starting', [], { note })
+  if (e.auth === 'signing-in') return status('signing-in', [], { note })
+  if (e.auth !== 'ok') {
+    const server = input.serverLabel ?? 'this server'
+    const detail =
+      e.authNote ??
+      (e.auth === 'rotate-required'
+        ? `${server} needs a new password.`
+        : e.auth === 'kicked'
+          ? `Removed from ${server}. Sign in again.`
+          : null)
+    return status('sign-in', [], { detail, note })
+  }
+  // MS83: a login below Member — or a role this app does not know — opens
+  // nothing there.
+  if (!roleAllowsRoom(e.role)) {
+    return status('no-access', [], {
+      detail: `Your login on ${input.serverLabel ?? 'this server'} is ${e.role ?? 'unknown'}. Ask its owner for Member access.`,
+      note,
+    })
+  }
+  return status('live', presenceForRow(e.presence, input.row, input.self), { note })
 }
 
 /** The people a summary lists on this row's workspace, minus you. Match
@@ -161,66 +206,3 @@ export function personInitials(name: string): string {
   if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase()
   return (parts[0][0] + parts[1][0]).toUpperCase()
 }
-
-// ── Probe (one server) ────────────────────────────────────────────────────
-
-export interface ProbeDeps {
-  bootStatus: (creds: HostCreds) => Promise<{ phase?: unknown; ready?: unknown } | null>
-  fetch: typeof fetch
-  now: () => number
-}
-
-const defaultDeps: ProbeDeps = {
-  bootStatus: (creds) => hostBootStatus(creds),
-  fetch: (...args) => fetch(...args),
-  now: () => Date.now(),
-}
-
-/** Check one server: public readiness, then (with a login) who is on it.
- *  Never throws — an unreachable server is `offline`. */
-export async function probeHost(creds: HostCreds, deps: ProbeDeps = defaultDeps): Promise<HostProbe> {
-  const boot = await deps.bootStatus(creds)
-  const at = deps.now()
-  if (!bootIsReady(boot)) {
-    return { reach: 'offline', auth: creds.token ? 'ok' : 'none', presence: null, at }
-  }
-  if (!creds.token) return { reach: 'live', auth: 'none', presence: null, at }
-  let res: Response
-  try {
-    res = await deps.fetch(
-      `${creds.base}/cli/presence/summary?token=${encodeURIComponent(creds.token)}`,
-      { method: 'GET', signal: AbortSignal.timeout(5000) },
-    )
-  } catch (err) {
-    console.debug('[home] presence summary unreachable:', creds.base, err)
-    return { reach: 'live', auth: 'ok', presence: null, at }
-  }
-  if (res.status === 401 || res.status === 403) {
-    return { reach: 'live', auth: 'rejected', presence: null, at }
-  }
-  if (!res.ok) {
-    // 404 = a server older than the summary route. Live, no presence.
-    return { reach: 'live', auth: 'ok', presence: null, at }
-  }
-  let body: { workspaces?: unknown }
-  try {
-    body = (await res.json()) as { workspaces?: unknown }
-  } catch (err) {
-    console.debug('[home] presence summary was not JSON:', creds.base, err)
-    return { reach: 'live', auth: 'ok', presence: null, at }
-  }
-  const list = Array.isArray(body?.workspaces) ? (body.workspaces as PresenceWorkspace[]) : null
-  return { reach: 'live', auth: 'ok', presence: list, at }
-}
-
-// ── Probe results (module store; never cleared on a server switch) ─────────
-
-interface HomeProbeState {
-  probes: Record<string, HostProbe>
-  setProbe: (hostKey: string, probe: HostProbe) => void
-}
-
-export const useHomeProbeStore = create<HomeProbeState>((set) => ({
-  probes: {},
-  setProbe: (hostKey, probe) => set((s) => ({ probes: { ...s.probes, [hostKey]: probe } })),
-}))

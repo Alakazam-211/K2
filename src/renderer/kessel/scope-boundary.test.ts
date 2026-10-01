@@ -49,15 +49,13 @@ const RAW_TRANSPORT = /(?<![\w.$])fetch\(|new WebSocket\(/
 const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   // The scoped layer.
   'lib/daemon-cli.ts': 'the scoped /cli/* client (cliFetch, localDaemonCliPost)',
-  'lib/grid-dial-queue.ts': 'the scoped grid dial queue',
-  'stores/session-events.ts': 'the scoped event sockets',
-  'components/SessionView/useOverlayThread.ts': 'overlay socket, creds from getDaemonWs(scope)',
-  'components/SessionView/useOverlayChatter.ts': 'overlay socket, creds from getDaemonWs(scope)',
-  'components/SessionView/useChatTranscript.ts': 'transcript socket, creds from getDaemonWs(scope)',
+  // MS70: every daemon socket (grid, events, overlay, transcript, chatter)
+  // dials through the per-server queue, so no other file constructs one.
+  'lib/grid-dial-queue.ts': 'the per-server dial queue for every daemon socket',
   // Window-level connection plumbing (any saved host, by its own creds).
   'components/ConnectionGate.tsx': 'boot-status / session probes for the window host',
   'lib/host-ops.ts': 'per-saved-host ops with that host\'s own creds',
-  'lib/home-status.ts': 'Home row status probe with the row host\'s own creds',
+  'lib/host-pool-instance.ts': 'the connection pool\'s status checks and sign-out, each server\'s own creds',
   'lib/remote-session.ts': 'whoami + login for one host id',
   'stores/connect-host.ts': 'login for one saved host',
   'lib/connect-validate.ts': 'add-server validation probe',

@@ -41,6 +41,8 @@ import { deriveRecovery, authSignalFromRevive, type RemoteRecoveryState } from '
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { jittered } from '@/lib/backoff'
 import { isPasswordChangeRequired } from '@/lib/password-rotation'
+import { loginCoordinator } from '@/lib/host-login-coord'
+import { homeHostKey } from '@/lib/host-key'
 
 export { isPasswordChangeRequired }
 
@@ -256,6 +258,19 @@ async function doRevive(hostId: string): Promise<ReviveOutcome> {
     if (probe === 'unknown') return 'unreachable'
   }
 
+  // Home M2 (MS31, MS37): an app-wide block stops every automatic login for
+  // this server, the window's own included: B's owner removed this login
+  // (kicked), B already refused the remembered password once (refused —
+  // a second wrong try walks toward the 3-strike lockout), or the user
+  // signed out of B. Only the user's own sign-in clears it. A 429 wait is
+  // honoured without dropping anything.
+  const block = loginCoordinator.block(homeHostKey(host))
+  if (block && block.reason === 'throttled') return 'unreachable'
+  if (block) {
+    expireAndClear(hostId)
+    return 'signin-required'
+  }
+
   // Legacy raw-token host (no username): there is no login flow to re-run —
   // drop the dead token and surface sign-in.
   if (!host.username || host.username.length === 0) {
@@ -292,7 +307,16 @@ async function doRevive(hostId: string): Promise<ReviveOutcome> {
     invalidateDaemonWs()
     return 'revived'
   }
+  if (result.kind === 'throttled') {
+    loginCoordinator.setBlock(
+      homeHostKey(host),
+      'throttled',
+      Date.now() + (result.retryAfterSec ?? 300) * 1000,
+    )
+    return 'unreachable'
+  }
   if (result.kind === 'auth' || result.kind === 'not-found') {
+    loginCoordinator.setBlock(homeHostKey(host), 'refused')
     // 'auth': the remembered password itself is rejected — only the user
     // can fix this. 'not-found' (D3): the login endpoint 404'd — on a
     // hosted host that is the edge-only gate, and no amount of backoff

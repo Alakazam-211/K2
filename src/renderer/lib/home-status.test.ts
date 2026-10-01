@@ -1,24 +1,36 @@
-// Home P1 — row status resolver (ready / offline / sign-in / presence) and
-// the one-server probe (public /boot-status, then the signed-in presence
-// summary). Plan decisions 1 and 5; vs-live H14 / H19 f.
+// Home P1 / M2 — row status resolver (ready / starting / offline / sign-in /
+// no access / presence) over the connection pool's entry for the row's
+// server. The probe itself is the pool's (lib/host-pool.test.ts). Plan
+// decisions 1 and 5; vs-live H14 / H19 f; MS27, MS81, MS83.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   bootIsReady,
   personInitials,
   presenceForRow,
-  probeHost,
   resolveRowStatus,
-  type HostProbe,
   type PresenceWorkspace,
-  type ProbeDeps,
 } from './home-status'
+import type { HostEntry } from './host-pool'
 import type { RosterUser } from '@/stores/presence'
 
 const row = { address: 'bee::b.k2.dev', workspaceId: 'pb' }
 
-function probe(p: Partial<HostProbe>): HostProbe {
-  return { reach: 'live', auth: 'ok', presence: [], at: 1, ...p }
+function probe(p: Partial<HostEntry>): HostEntry {
+  return {
+    hostKey: 'b.k2.dev',
+    saved: true,
+    hostId: 'b',
+    reach: 'live',
+    boot: null,
+    auth: 'ok',
+    authNote: null,
+    role: 'member',
+    presence: [],
+    offlineStreak: 0,
+    checkedAt: 1,
+    ...p,
+  }
 }
 
 const summary: PresenceWorkspace[] = [
@@ -52,34 +64,81 @@ describe('resolveRowStatus — another saved server', () => {
   const base = { where: 'other' as const, row, saved: true, hasLogin: true, self: 'me' }
 
   it('ready → live, with the others on that agent (never you)', () => {
-    const s = resolveRowStatus({ ...base, probe: probe({ presence: summary }) })
+    const s = resolveRowStatus({ ...base, entry: probe({ presence: summary }) })
     expect(s.kind).toBe('live')
     expect(s.label).toBe('Live')
     expect(s.people.map((p) => p.user)).toEqual(['owner', 'anna'])
   })
 
   it('unreachable / not ready → offline', () => {
-    expect(resolveRowStatus({ ...base, probe: probe({ reach: 'offline', presence: null }) }).kind).toBe('offline')
+    expect(resolveRowStatus({ ...base, entry: probe({ reach: 'offline', presence: null }) }).kind).toBe('offline')
   })
 
   it('no login held → "Sign in" instead of offline, even with no probe', () => {
-    const s = resolveRowStatus({ ...base, hasLogin: false, probe: undefined })
+    const s = resolveRowStatus({ ...base, hasLogin: false, entry: undefined })
     expect(s.kind).toBe('sign-in')
     expect(s.label).toBe('Sign in')
-    expect(resolveRowStatus({ ...base, hasLogin: false, probe: probe({ reach: 'offline' }) }).kind).toBe('sign-in')
+    expect(resolveRowStatus({ ...base, hasLogin: false, entry: probe({ reach: 'offline' }) }).kind).toBe('sign-in')
   })
 
   it('the server refused the saved login → "Sign in"', () => {
-    expect(resolveRowStatus({ ...base, probe: probe({ auth: 'rejected', presence: null }) }).kind).toBe('sign-in')
+    expect(resolveRowStatus({ ...base, entry: probe({ auth: 'signin-required', presence: null }) }).kind).toBe('sign-in')
+  })
+
+  it('kicked / new password → "Sign in", with the reason as the detail', () => {
+    const kicked = resolveRowStatus({ ...base, serverLabel: 'Box B', entry: probe({ auth: 'kicked' }) })
+    expect(kicked.kind).toBe('sign-in')
+    expect(kicked.detail).toBe('Removed from Box B. Sign in again.')
+    const rotate = resolveRowStatus({ ...base, serverLabel: 'Box B', entry: probe({ auth: 'rotate-required' }) })
+    expect(rotate.kind).toBe('sign-in')
+    expect(rotate.detail).toBe('Box B needs a new password.')
+    const noted = resolveRowStatus({
+      ...base,
+      hasLogin: false,
+      entry: probe({ auth: 'signin-required', authNote: 'Too many sign-ins from this network. Try again in 4 min.' }),
+    })
+    expect(noted.kind).toBe('sign-in')
+    expect(noted.detail).toBe('Too many sign-ins from this network. Try again in 4 min.')
+  })
+
+  it('another window is signing in → "Signing in…", never a login of our own', () => {
+    expect(resolveRowStatus({ ...base, hasLogin: false, entry: probe({ auth: 'signing-in' }) }).kind).toBe('signing-in')
+    expect(resolveRowStatus({ ...base, entry: probe({ auth: 'signing-in' }) }).label).toBe('Signing in…')
+  })
+
+  it('restarting (not ready yet) → "Starting"', () => {
+    const s = resolveRowStatus({ ...base, entry: probe({ reach: 'starting' }) })
+    expect(s.kind).toBe('starting')
+    expect(s.label).toBe('Starting')
+  })
+
+  it('MS83: a role below Member, or one this app does not know, → "No access"', () => {
+    for (const role of ['viewer', 'auditor', '']) {
+      const s = resolveRowStatus({ ...base, serverLabel: 'Box B', entry: probe({ role }) })
+      expect([role, s.kind]).toEqual([role, 'no-access'])
+      expect(s.label).toBe('No access')
+    }
+    for (const role of ['owner', 'admin', 'member']) {
+      expect([role, resolveRowStatus({ ...base, entry: probe({ role }) }).kind]).toEqual([role, 'live'])
+    }
+    // Not read (an older server without whoami) is not "No access".
+    expect(resolveRowStatus({ ...base, entry: probe({ role: null }) }).kind).toBe('live')
+  })
+
+  it('MS81: the same daemon at a second address carries a "same server as" note', () => {
+    const s = resolveRowStatus({ ...base, entry: probe({}), sameServerAs: 'This computer' })
+    expect(s.kind).toBe('live')
+    expect(s.note).toBe('Same server as This computer')
+    expect(resolveRowStatus({ ...base, entry: probe({}) }).note).toBeUndefined()
   })
 
   it('not probed yet → checking; not a saved server → offline', () => {
-    expect(resolveRowStatus({ ...base, probe: undefined }).kind).toBe('checking')
-    expect(resolveRowStatus({ ...base, saved: false, probe: undefined }).kind).toBe('offline')
+    expect(resolveRowStatus({ ...base, entry: undefined }).kind).toBe('checking')
+    expect(resolveRowStatus({ ...base, saved: false, entry: undefined }).kind).toBe('offline')
   })
 
   it('live on an older server with no summary → live, nobody shown', () => {
-    const s = resolveRowStatus({ ...base, probe: probe({ presence: null }) })
+    const s = resolveRowStatus({ ...base, entry: probe({ presence: null }) })
     expect(s.kind).toBe('live')
     expect(s.people).toEqual([])
   })
@@ -130,58 +189,5 @@ describe('presenceForRow', () => {
     expect(personInitials('Rosson Long')).toBe('RL')
     expect(personInitials('sum_member')).toBe('SM')
     expect(personInitials('  ')).toBe('?')
-  })
-})
-
-describe('probeHost', () => {
-  const creds = { base: 'https://b.k2.dev', token: 'tok' }
-
-  function deps(boot: unknown, fetchImpl: ProbeDeps['fetch']): ProbeDeps {
-    return { bootStatus: vi.fn(async () => boot as { phase?: unknown }), fetch: fetchImpl, now: () => 42 }
-  }
-
-  it('ready + login → reads the summary with that server’s token', async () => {
-    const f = vi.fn(async () => new Response(JSON.stringify({ online: 3, workspaces: summary }), { status: 200 }))
-    const p = await probeHost(creds, deps({ phase: 'ready' }, f as unknown as typeof fetch))
-    expect(p).toEqual({ reach: 'live', auth: 'ok', presence: summary, at: 42 })
-    expect(f).toHaveBeenCalledTimes(1)
-    const firstCall = f.mock.calls[0] as unknown as [string]
-    expect(firstCall[0]).toBe('https://b.k2.dev/cli/presence/summary?token=tok')
-  })
-
-  it('dark-tunnel body {ready:true} counts as ready', async () => {
-    const f = vi.fn(async () => new Response(JSON.stringify({ workspaces: [] }), { status: 200 }))
-    const p = await probeHost(creds, deps({ ready: true, version: '0.41.6' }, f as unknown as typeof fetch))
-    expect(p.reach).toBe('live')
-    expect(p.presence).toEqual([])
-  })
-
-  it('unreachable → offline, and the summary is never asked', async () => {
-    const f = vi.fn()
-    const p = await probeHost(creds, deps(null, f as unknown as typeof fetch))
-    expect(p).toEqual({ reach: 'offline', auth: 'ok', presence: null, at: 42 })
-    expect(f).not.toHaveBeenCalled()
-  })
-
-  it('no token → live, auth none, no summary call', async () => {
-    const f = vi.fn()
-    const p = await probeHost({ base: creds.base, token: '' }, deps({ phase: 'ready' }, f as unknown as typeof fetch))
-    expect(p).toEqual({ reach: 'live', auth: 'none', presence: null, at: 42 })
-    expect(f).not.toHaveBeenCalled()
-  })
-
-  it('401 / 403 → the saved login was refused', async () => {
-    for (const status of [401, 403]) {
-      const f = vi.fn(async () => new Response('{"error":"invalid or missing token"}', { status }))
-      const p = await probeHost(creds, deps({ phase: 'ready' }, f as unknown as typeof fetch))
-      expect(p.auth).toBe('rejected')
-      expect(p.reach).toBe('live')
-    }
-  })
-
-  it('404 (older server) → live, no presence', async () => {
-    const f = vi.fn(async () => new Response('{"error":"route not found"}', { status: 404 }))
-    const p = await probeHost(creds, deps({ phase: 'ready' }, f as unknown as typeof fetch))
-    expect(p).toEqual({ reach: 'live', auth: 'ok', presence: null, at: 42 })
   })
 })

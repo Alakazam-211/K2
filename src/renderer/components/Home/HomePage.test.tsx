@@ -59,6 +59,8 @@ vi.mock('@/lib/titlebar-drag', () => ({
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async () => ({ found: false, dataUrl: null })),
   daemonCliPost: vi.fn(async () => ({})),
+  // The pool's status checks take the per-server /cli slot (Home M2).
+  withHostCliSlot: async <T,>(_scope: unknown, fn: () => Promise<T>): Promise<T> => fn(),
 }))
 vi.mock('@/lib/daemon-settings', () => ({
   settingsGet: vi.fn(async () => ({})),
@@ -164,7 +166,7 @@ import { usePanelsStore } from '@/stores/panels'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
-import { useHomeProbeStore } from '@/lib/home-status'
+import { __resetHostPoolForTests } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 
 const boxB: ConnectHost = {
@@ -183,6 +185,12 @@ const boxC: ConnectHost = { ...boxB, id: 'c', label: 'Box C', hostname: 'c.k2.de
 const fetchMock = vi.fn(async (url: string) => {
   if (url === 'https://b.k2.dev/boot-status') {
     return new Response(JSON.stringify({ version: '0.41.6', protocol: 1, phase: 'ready' }), { status: 200 })
+  }
+  if (url === 'https://b.k2.dev/cli/auth/whoami?token=tok-b') {
+    return new Response(
+      JSON.stringify({ username: 'rosson', owner: false, role: 'member', mustChangePassword: false }),
+      { status: 200 },
+    )
   }
   if (url === 'https://b.k2.dev/cli/presence/summary?token=tok-b') {
     return new Response(
@@ -231,7 +239,7 @@ beforeEach(() => {
   __resetConnectHostStoreForTests()
   useConnectHostStore.setState({ hosts: [boxB, boxC], connectionStatus: 'connected' })
   clearHostSelect()
-  useHomeProbeStore.setState({ probes: {} })
+  __resetHostPoolForTests()
   useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
   useSidebarStore.setState({ isCollapsed: false })
   usePanelsStore.setState({
@@ -401,7 +409,11 @@ describe('Home — the Agents page shell', () => {
     const urls = fetchMock.mock.calls.map((c) => c[0])
     expect(urls).toContain('https://b.k2.dev/boot-status')
     expect(urls).toContain('https://b.k2.dev/cli/presence/summary?token=tok-b')
-    expect(urls.some((u) => u.includes('c.k2.dev'))).toBe(false)
+    // No login held for C: only its PUBLIC readiness is read (Home M2
+    // pool) — never an authed route, and never a login POST.
+    const cUrls = urls.filter((u) => u.includes('c.k2.dev'))
+    expect(cUrls.length).toBeGreaterThan(0)
+    expect(cUrls.every((u) => u === 'https://c.k2.dev/boot-status')).toBe(true)
   })
 
   it('Add Agent is the one bottom button; its picker has This server and From a server', () => {

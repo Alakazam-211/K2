@@ -26,6 +26,7 @@ import {
   reconcileColdBootSession,
   type ResumeChatArgs,
 } from './workspace-agent'
+import { primaryScope } from '@/kessel/server-scope'
 
 describe('workspace-agent — Plan B host-aware migration', () => {
   beforeEach(() => {
@@ -34,7 +35,7 @@ describe('workspace-agent — Plan B host-aware migration', () => {
 
   it('agentDisplayName GETs the snake_case route and unwraps display_name', async () => {
     daemonCliGet.mockResolvedValueOnce({ display_name: 'manager' })
-    const name = await agentDisplayName('/work/proj')
+    const name = await agentDisplayName(primaryScope(), '/work/proj')
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/agent-display-name', {
       project: '/work/proj',
     })
@@ -43,12 +44,12 @@ describe('workspace-agent — Plan B host-aware migration', () => {
 
   it('agentDisplayName returns "" when display_name is absent', async () => {
     daemonCliGet.mockResolvedValueOnce({})
-    expect(await agentDisplayName('/work/proj')).toBe('')
+    expect(await agentDisplayName(primaryScope(), '/work/proj')).toBe('')
   })
 
   it('setAgentDisplayName GETs the mutation route with project + name', async () => {
     daemonCliGet.mockResolvedValueOnce({ success: true })
-    await setAgentDisplayName('/work/proj', 'lead')
+    await setAgentDisplayName(primaryScope(), '/work/proj', 'lead')
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-agent-display-name', {
       project: '/work/proj',
       name: 'lead',
@@ -61,7 +62,7 @@ describe('workspace-agent — Plan B host-aware migration', () => {
   // right grammar on the next ensure.
   it('setChatSession sends the picked provider alongside the session id', async () => {
     daemonCliGet.mockResolvedValueOnce({ success: true })
-    await setChatSession('/work/proj', 'sid-9', 'pi')
+    await setChatSession(primaryScope(), '/work/proj', 'sid-9', 'pi')
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
       project: '/work/proj',
       session_id: 'sid-9',
@@ -71,7 +72,7 @@ describe('workspace-agent — Plan B host-aware migration', () => {
 
   it('setChatSession OMITS provider when not given (keep stored harness)', async () => {
     daemonCliGet.mockResolvedValueOnce({ success: true })
-    await setChatSession('/work/proj', 'sid-9')
+    await setChatSession(primaryScope(), '/work/proj', 'sid-9')
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
       project: '/work/proj',
       session_id: 'sid-9',
@@ -86,7 +87,7 @@ describe('workspace-agent — Plan B host-aware migration', () => {
       resumeSession: 'sid-1',
     }
     daemonCliGet.mockResolvedValueOnce(payload)
-    const result = await resumeChatArgs('/work/proj')
+    const result = await resumeChatArgs(primaryScope(), '/work/proj')
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/resume-chat-args', {
       project: '/work/proj',
     })
@@ -95,7 +96,7 @@ describe('workspace-agent — Plan B host-aware migration', () => {
 
   it('propagates a daemon error (display-name read)', async () => {
     daemonCliGet.mockRejectedValueOnce(new Error('daemon down'))
-    await expect(agentDisplayName('/work/proj')).rejects.toThrow('daemon down')
+    await expect(agentDisplayName(primaryScope(), '/work/proj')).rejects.toThrow('daemon down')
   })
 })
 

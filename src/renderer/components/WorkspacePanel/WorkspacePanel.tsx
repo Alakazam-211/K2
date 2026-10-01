@@ -94,10 +94,10 @@ export default function WorkspacePanel(): React.JSX.Element {
     }
     let cancelled = false
     const loadName = (): void => {
-      void agentDisplayName(activeProjectPath)
+      void agentDisplayName(primaryScope(), activeProjectPath)
         .then((n) => { if (!cancelled) setDisplayName(n) })
         .catch(() => { if (!cancelled) setDisplayName('') })
-      void agentHandle(activeProjectPath)
+      void agentHandle(primaryScope(), activeProjectPath)
         .then((h) => { if (!cancelled) setHandle(h) })
         .catch(() => { if (!cancelled) setHandle('') })
     }

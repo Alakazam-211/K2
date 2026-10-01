@@ -464,7 +464,7 @@ function useDisplayName(projectPath: string, agentName: string): string {
   const [displayName, setDisplayName] = useState<string>(agentName)
   useEffect(() => {
     let cancelled = false
-    agentDisplayName(projectPath)
+    agentDisplayName(primaryScope(), projectPath)
       .then((n) => { if (!cancelled && n) setDisplayName(n) })
       .catch(() => { /* keep agentName as fallback */ })
     return () => { cancelled = true }
@@ -473,7 +473,7 @@ function useDisplayName(projectPath: string, agentName: string): string {
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      agentDisplayName(projectPath)
+      agentDisplayName(primaryScope(), projectPath)
         .then((n) => { if (n) setDisplayName(n) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })
@@ -872,7 +872,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       try {
         // HOST-AWARE persist of the pinned session (same client the legacy
         // path uses; the route reads query params).
-        await setChatSession(projectPath, newSessionId, provider)
+        await setChatSession(primaryScope(), projectPath, newSessionId, provider)
       } catch (err) {
         console.error('[AgentChatPane] switchToSession DB update failed:', err)
         setRefreshing(false)
@@ -973,7 +973,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         }
       }
       if (!res.pendingSessionDiscovery && premint) {
-        await setChatSession(projectPath, premint, req.targetProvider)
+        await setChatSession(primaryScope(), projectPath, premint, req.targetProvider)
         stamp(premint)
         freshHoldProviderIdRef.current = null
         setPhase({
@@ -994,7 +994,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       }).then((id) => {
         if (!id || myGen !== discoveryGenRef.current) return
         freshHoldProviderIdRef.current = null
-        void setChatSession(projectPath, id, req.targetProvider).then(() => {
+        void setChatSession(primaryScope(), projectPath, id, req.targetProvider).then(() => {
           stamp(id)
           setPhase((prev) => (
             prev.kind === 'ready' ? { ...prev, canonicalSessionId: id } : prev
@@ -1357,7 +1357,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       return
     }
     try {
-      await setChatSession(projectPath, newSessionId, provider)
+      await setChatSession(primaryScope(), projectPath, newSessionId, provider)
     } catch (err) {
       console.error('[AgentChatPane] switchToSession DB update failed:', err)
       return
@@ -1409,7 +1409,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       if (restoredSessionId && !cancelled) {
         let decision: ColdBootDecision = { kind: 'fallback', sessionId: restoredSessionId }
         try {
-          const canonical = await resumeChatArgs(projectPath)
+          const canonical = await resumeChatArgs(primaryScope(), projectPath)
           decision = reconcileColdBootSession(restoredSessionId, canonical)
         } catch (err) {
           console.warn('[AgentChatPane] cold-boot SQLite reconcile failed, using layout hint:', err)
@@ -1496,7 +1496,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
       // Step 2: Build a *bare resume* command for the chat tab.
       try {
-        const result = await resumeChatArgs(projectPath)
+        const result = await resumeChatArgs(primaryScope(), projectPath)
         if (!cancelled && result) {
           setLaunchConfig({
             command: result.command,

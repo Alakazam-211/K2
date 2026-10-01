@@ -186,7 +186,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
       setDisplayName(agentName)
       return
     }
-    agentDisplayName(projectPath)
+    agentDisplayName(primaryScope(), projectPath)
       .then((n) => { if (!cancelled && n) setDisplayName(n) })
       .catch(() => { /* keep agentName as fallback */ })
     return () => { cancelled = true }
@@ -197,7 +197,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      agentDisplayName(projectPath)
+      agentDisplayName(primaryScope(), projectPath)
         .then((n) => { if (n) setDisplayName(n) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })

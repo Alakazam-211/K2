@@ -194,10 +194,12 @@ vi.mock('@/stores/connect-host', () => ({
   // overlay pulls that store in through this pane.
   onActiveHostChange: () => () => {},
 }))
-vi.mock('@/lib/workspace-agent', () => ({
+vi.mock('@/lib/workspace-agent', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
   agentDisplayName: vi.fn(async () => 'Agent One'),
-  setChatSession: h.setChatSession,
-  resumeChatArgs: h.resumeChatArgs,
+  setChatSession: primaryOnly(h.setChatSession),
+  resumeChatArgs: primaryOnly(h.resumeChatArgs),
   // Mirrors the Slice-4 shape: resume/fresh carry the daemon's
   // command+args verbatim (per-harness grammar).
   reconcileColdBootSession: (hint: string, c: { command?: string; resumeSession?: string; resumedExisting?: boolean; args?: string[] } | null) => {
@@ -205,7 +207,8 @@ vi.mock('@/lib/workspace-agent', () => ({
     if (c.resumedExisting) return { kind: 'resume', sessionId: c.resumeSession || hint, command: c.command ?? 'claude', args: c.args ?? [] }
     return { kind: 'fresh', sessionId: c.resumeSession || hint, command: c.command ?? 'claude', args: c.args ?? [] }
   },
-}))
+  }
+})
 // Slice 4 — provider icon stub: renders an inspectable marker instead of
 // dragging the AgentIcon svg-asset graph into jsdom.
 vi.mock('@/components/AgentIcon/ProviderIcon', () => ({

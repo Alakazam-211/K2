@@ -62,7 +62,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'lib/password-rotation.ts': 'password rotation for one host',
   'web/session-token.ts': 'hosted-web cookie session',
   // Pre-M1 raw daemon calls that resolve creds through getDaemonWs(scope).
-  'stores/tabs.ts': 'closeV2Session (M3 moves it onto the room scope)',
+  'stores/tabs.ts': 'closeV2Session(scope): v2/close on the room\'s own scope (M3, MS42)',
   'kessel-term/TerminalPane.tsx': 'v2 spawn (M4 gives the pane a scope prop)',
   'components/AgentPane/AgentChatPane.tsx': 'v2/close force path (MS75)',
   'components/Settings/sections/access-audit-api.ts': 'raw /cli fetch via getDaemonWs(scope)',
@@ -189,7 +189,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'lib/load-host-binary.ts',
   'lib/pick-remote-image.ts',
   'lib/start-clone-to.ts',
-  'lib/workspace-agent.ts',
   'stores/active-agents.ts',
   'stores/assistant.ts',
   'stores/claude-auth.ts',

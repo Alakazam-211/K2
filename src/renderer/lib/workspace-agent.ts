@@ -19,13 +19,13 @@
 // field is snake_case `display_name`; resume-chat-args is camelCase.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** Resolve the workspace's primary-agent display name. Total — the daemon
  *  always returns a string (display_name → name → project name fallback).
  *  Returns '' if the daemon read fails so callers degrade gracefully. */
-export async function agentDisplayName(projectPath: string): Promise<string> {
-  const r = await daemonCliGet<{ display_name?: string }>(primaryScope(),
+export async function agentDisplayName(scope: ServerScope, projectPath: string): Promise<string> {
+  const r = await daemonCliGet<{ display_name?: string }>(scope,
     'workspace/agent-display-name',
     { project: projectPath },
   )
@@ -37,18 +37,19 @@ export async function agentDisplayName(projectPath: string): Promise<string> {
  *  pushes the new label to any live canonical session. (GET-with-mutation,
  *  mirroring the old `cli_get` proxy — body is ignored.) */
 export async function setAgentDisplayName(
+  scope: ServerScope,
   projectPath: string,
   name: string,
 ): Promise<void> {
-  await daemonCliGet(primaryScope(), 'workspace/set-agent-display-name', {
+  await daemonCliGet(scope, 'workspace/set-agent-display-name', {
     project: projectPath,
     name,
   })
 }
 
 /** Current workspace handle (federated address token). */
-export async function agentHandle(projectPath: string): Promise<string> {
-  const r = await daemonCliGet<{ handle?: string }>(primaryScope(), 'workspace/handle', {
+export async function agentHandle(scope: ServerScope, projectPath: string): Promise<string> {
+  const r = await daemonCliGet<{ handle?: string }>(scope, 'workspace/handle', {
     project: projectPath,
   })
   return r?.handle ?? ''
@@ -56,10 +57,11 @@ export async function agentHandle(projectPath: string): Promise<string> {
 
 /** D11: change the handle. Caller must have confirmed the federation break. */
 export async function setAgentHandle(
+  scope: ServerScope,
   projectPath: string,
   handle: string,
 ): Promise<string> {
-  const r = await daemonCliPost<{ handle?: string }>(primaryScope(), 'workspace/set-handle', {
+  const r = await daemonCliPost<{ handle?: string }>(scope, 'workspace/set-handle', {
     project: projectPath,
     handle,
   })
@@ -79,11 +81,12 @@ export async function setAgentHandle(
  *  so the resume resolver picks the right ProviderResume adapter.
  *  Omitted = keep the stored harness (backward compatible). */
 export async function setChatSession(
+  scope: ServerScope,
   projectPath: string,
   sessionId: string,
   provider?: string,
 ): Promise<void> {
-  await daemonCliGet(primaryScope(), 'workspace/set-chat-session', {
+  await daemonCliGet(scope, 'workspace/set-chat-session', {
     project: projectPath,
     session_id: sessionId,
     ...(provider ? { provider } : {}),
@@ -115,8 +118,8 @@ export interface ResumeChatArgs {
  *  chat tab. The daemon's multi-agent resolver returns the stored
  *  harness's own command + grammar (Slice 3) — `claude --resume <id>`,
  *  `codex resume <id>`, `pi --session <id>`, … camelCase response. */
-export async function resumeChatArgs(projectPath: string): Promise<ResumeChatArgs> {
-  return daemonCliGet<ResumeChatArgs>(primaryScope(), 'workspace/resume-chat-args', {
+export async function resumeChatArgs(scope: ServerScope, projectPath: string): Promise<ResumeChatArgs> {
+  return daemonCliGet<ResumeChatArgs>(scope, 'workspace/resume-chat-args', {
     project: projectPath,
   })
 }

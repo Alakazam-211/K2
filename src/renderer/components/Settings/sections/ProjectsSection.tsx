@@ -1121,7 +1121,7 @@ function ProjectDetail({
       setPrimaryAgentName('')
       return () => { cancelled = true }
     }
-    agentDisplayName(project.path)
+    agentDisplayName(primaryScope(), project.path)
       .then((n) => { if (!cancelled) setPrimaryAgentName(n) })
       .catch((err) => {
         if (!cancelled) {
@@ -3039,7 +3039,7 @@ function AgentDisplayNameField({
 
   useEffect(() => {
     let cancelled = false
-    agentDisplayName(projectPath)
+    agentDisplayName(primaryScope(), projectPath)
       .then((n) => { if (!cancelled) { setDraft(n); setSaved(n); setReady(true) } })
       .catch((e) => { if (!cancelled) { console.error('[display-name] read failed:', e); setReady(true) } })
     return () => { cancelled = true }
@@ -3074,7 +3074,7 @@ function AgentDisplayNameField({
     setError(null)
     setBusy(true)
     try {
-      await setAgentDisplayName(projectPath, candidate)
+      await setAgentDisplayName(primaryScope(), projectPath, candidate)
       setDraft(candidate)
       setSaved(candidate)
       setFlash(true)
@@ -3173,7 +3173,7 @@ function AgentHandleField({
 
   useEffect(() => {
     let cancelled = false
-    agentHandle(projectPath)
+    agentHandle(primaryScope(), projectPath)
       .then((h) => {
         if (!cancelled) {
           setHandle(h)
@@ -3200,7 +3200,7 @@ function AgentHandleField({
     setBusy(true)
     setError(null)
     try {
-      const stored = await setAgentHandle(projectPath, next)
+      const stored = await setAgentHandle(primaryScope(), projectPath, next)
       setHandle(stored)
       setDraft(stored)
       void emit('sync:projects').catch(() => {})

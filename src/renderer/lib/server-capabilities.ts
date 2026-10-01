@@ -112,6 +112,13 @@ export const FEATURES = {
    *  server shows schedule text only (HB30). Set to the release that
    *  ships S3 — confirm at release cut. */
   'heartbeat-next-fire': '0.41.7',
+  /** App heartbeats surface (prd-app-heartbeats-surface-v1 AH24): the
+   *  `heartbeats:read` / `heartbeats:write` app caps and the room-jailed
+   *  `/cli/heartbeat/*` app doors. Must be at or above
+   *  `heartbeat-next-fire` (the app rows carry those fields). Settings →
+   *  User Access offers the two caps only at or above this. Moves to the
+   *  real version at the release cut (Rosson R5: 0.43.0). */
+  'app-heartbeats': '0.41.7',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

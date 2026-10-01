@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
+import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
 import type { SettingEntry } from '../searchManifest'
 import { WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
@@ -90,6 +91,8 @@ interface SystemFireRow {
   decision: string
   reason: string | null
   durationMs: number | null
+  /** 0125 (AH18): who did it; null for scheduler rows / older servers. */
+  actor?: string | null
 }
 
 /** Decision → terse one-letter chip color. `fired` is the happy path; all
@@ -788,7 +791,12 @@ export function WakeSchedulerSection(): React.JSX.Element {
               <div
                 key={fire.id}
                 className="px-2 py-1 flex items-center gap-2 hover:bg-white/[0.03] transition-colors text-[10px] font-mono"
-                title={fire.reason ? `${fire.decision} — ${fire.reason}` : fire.decision}
+                title={[
+                  fire.reason ? `${fire.decision} — ${fire.reason}` : fire.decision,
+                  heartbeatHistoryActorLine(fire),
+                ]
+                  .filter(Boolean)
+                  .join('\n')}
               >
                 <span className={`flex-shrink-0 ${style.color}`} aria-hidden="true">
                   {style.label}

@@ -8,6 +8,7 @@ import { Toggle } from '@/components/ui'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
+import { useServerSupports } from '@/lib/server-capabilities'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -67,7 +68,36 @@ export const SKIN_WIKI_CAPS = ['wiki:read'] as const
 export const SKIN_STORE_CAPS = ['store:read', 'store:write'] as const
 // Own group. Not a files cap — files:read / files:write do not imply it.
 export const SKIN_ACTIVITY_CAPS = ['activity:read'] as const
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS] as const
+// Own group (prd-app-heartbeats-surface-v1 AH1). Not implied by files or
+// activity, and neither implies the other. Offered only when the window's
+// server supports `app-heartbeats` (AH24).
+export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS] as const
+export type SkinCap = (typeof SKIN_CAP_CHOICES)[number]
+
+/** What each cap lets an app do in a room — the checkbox tooltip. */
+export const SKIN_CAP_LABELS: Record<SkinCap, string> = {
+  'thread:read': 'Read the Thread',
+  'thread:post': 'Post to the Thread',
+  'files:read': 'Read files (also shows heartbeat instructions)',
+  'files:write': 'Write files (not .k2/heartbeats)',
+  'tickets:read': 'Read tickets',
+  'tickets:post': 'Open and answer tickets',
+  'wiki:read': 'Read the wiki',
+  'store:read': 'Read the workspace store',
+  'store:write': 'Change dump-table rows',
+  'activity:read': 'See when the agent is working',
+  'heartbeats:read': 'See heartbeats: schedule, next fire, history',
+  'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
+}
+
+/** AH24: the heartbeat caps are offered only when the server ships them. */
+export function skinCapChoices(appHeartbeats: boolean): readonly SkinCap[] {
+  if (appHeartbeats) return SKIN_CAP_CHOICES
+  return SKIN_CAP_CHOICES.filter(
+    (c) => !(SKIN_HEARTBEAT_CAPS as readonly string[]).includes(c),
+  )
+}
 
 export type FrontDoorMode = 'connect' | 'direct'
 
@@ -502,6 +532,8 @@ export function prefixLabel(prefix: string): string {
 }
 
 export function SkinAccessSection(): React.JSX.Element {
+  const appHeartbeats = useServerSupports('app-heartbeats')
+  const capChoices = useMemo(() => skinCapChoices(appHeartbeats), [appHeartbeats])
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
@@ -1033,9 +1065,10 @@ export function SkinAccessSection(): React.JSX.Element {
                         </label>
                         {included ? (
                           <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                            {SKIN_CAP_CHOICES.map((cap) => (
+                            {capChoices.map((cap) => (
                               <label
                                 key={`role-${ws.handle}-${cap}`}
+                                title={SKIN_CAP_LABELS[cap]}
                                 className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                               >
                                 <input
@@ -1182,9 +1215,10 @@ export function SkinAccessSection(): React.JSX.Element {
                                   </label>
                                   {included ? (
                                     <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                                      {SKIN_CAP_CHOICES.map((cap) => (
+                                      {capChoices.map((cap) => (
                                         <label
                                           key={`edit-role-${r.name}-${ws.handle}-${cap}`}
+                                          title={SKIN_CAP_LABELS[cap]}
                                           className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                                         >
                                           <input
@@ -1404,9 +1438,10 @@ export function SkinAccessSection(): React.JSX.Element {
                 aria-label="Platform token name"
               />
               <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {SKIN_CAP_CHOICES.map((cap) => (
+                {capChoices.map((cap) => (
                   <label
                     key={cap}
+                    title={SKIN_CAP_LABELS[cap]}
                     className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                   >
                     <input

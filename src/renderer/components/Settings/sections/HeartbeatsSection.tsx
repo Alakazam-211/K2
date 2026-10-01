@@ -9,6 +9,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { primaryRoom } from '@/stores/room'
 import { serverSupports } from '@/lib/server-capabilities'
+import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
 import { subscribeToWorkspaceTabEvents } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
 import type { SettingEntry } from '../searchManifest'
@@ -111,6 +112,9 @@ interface HeartbeatFire {
   inboxPriority: string | null
   inboxCount: number | null
   durationMs: number | null
+  /** 0125 (AH18): who did it — `owner-token`, `user:`, `agent:`, `app:`,
+   *  `app-token:`; null for scheduler rows and older servers. */
+  actor?: string | null
 }
 
 interface ScheduleSpec {
@@ -867,8 +871,21 @@ export function HistoryPanel({
                       </span>
                       <span className={`ml-auto ${decisionColor(f.decision)}`}>{shortDecision(f.decision)}</span>
                     </div>
-                    {f.reason && (
-                      <div className="text-[9px] text-[var(--color-text-muted)] truncate">{f.reason}</div>
+                    {f.decision === 'changed' ? (
+                      <div className="text-[9px] text-[var(--color-text-muted)] truncate">
+                        {heartbeatHistoryActorLine(f)}
+                      </div>
+                    ) : (
+                      <>
+                        {f.reason && (
+                          <div className="text-[9px] text-[var(--color-text-muted)] truncate">{f.reason}</div>
+                        )}
+                        {heartbeatHistoryActorLine(f) && (
+                          <div className="text-[9px] text-[var(--color-text-muted)] truncate">
+                            {heartbeatHistoryActorLine(f)}
+                          </div>
+                        )}
+                      </>
                     )}
                     {(inbox || f.durationMs != null) && (
                       <div className="text-[9px] text-[var(--color-text-muted)] flex gap-2">

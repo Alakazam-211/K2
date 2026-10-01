@@ -1345,6 +1345,7 @@ pub fn k2so_heartbeat_fires_list_all(
                 "inboxPriority": fire.inbox_priority,
                 "inboxCount": fire.inbox_count,
                 "durationMs": fire.duration_ms,
+                "actor": fire.actor,
             })
         })
         .collect();

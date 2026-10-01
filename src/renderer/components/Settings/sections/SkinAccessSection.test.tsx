@@ -26,6 +26,9 @@ import {
   DEFAULT_SKIN_CAPS,
   SKIN_ACTIVITY_CAPS,
   SKIN_CAP_CHOICES,
+  SKIN_CAP_LABELS,
+  SKIN_HEARTBEAT_CAPS,
+  skinCapChoices,
   SKIN_FILE_CAPS,
   SKIN_STORE_CAPS,
   parseFrontDoor,
@@ -357,9 +360,54 @@ describe('SkinAccessSection', () => {
       'store:read',
       'store:write',
       'activity:read',
+      'heartbeats:read',
+      'heartbeats:write',
     ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
+  })
+
+  it('T14: heartbeat caps are their own group, labelled, never default, and gated by app-heartbeats', async () => {
+    expect(SKIN_HEARTBEAT_CAPS).toEqual(['heartbeats:read', 'heartbeats:write'])
+    expect(DEFAULT_SKIN_CAPS).not.toContain('heartbeats:read')
+    expect(DEFAULT_SKIN_CAPS).not.toContain('heartbeats:write')
+    expect(SKIN_FILE_CAPS).not.toContain('heartbeats:read')
+    expect(SKIN_ACTIVITY_CAPS).not.toContain('heartbeats:read')
+    for (const cap of SKIN_CAP_CHOICES) {
+      expect(SKIN_CAP_LABELS[cap].length).toBeGreaterThan(0)
+    }
+    expect(skinCapChoices(true)).toEqual(SKIN_CAP_CHOICES)
+    const older = skinCapChoices(false)
+    expect(older).not.toContain('heartbeats:read')
+    expect(older).not.toContain('heartbeats:write')
+    expect(older).toContain('activity:read')
+    expect(older.length).toBe(SKIN_CAP_CHOICES.length - 2)
+
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'skin-tokens') {
+        return { id: 'tok-hb', prefix: 'k2skn_hbhb', name: 'kiosk', secret: 'k2skn_HBSECRET' }
+      }
+      return { ok: true }
+    })
+    render(<SkinAccessSection />)
+    await openHost()
+    const read = screen.getByLabelText('Mint cap heartbeats:read') as HTMLInputElement
+    const write = screen.getByLabelText('Mint cap heartbeats:write') as HTMLInputElement
+    expect(read.checked).toBe(false)
+    expect(write.checked).toBe(false)
+    expect(read.closest('label')?.getAttribute('title')).toBe(SKIN_CAP_LABELS['heartbeats:read'])
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'kiosk' } })
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
+    fireEvent.click(read)
+    fireEvent.click(write)
+    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    await waitFor(() => {
+      expect(screen.getByText('k2skn_HBSECRET')).not.toBeNull()
+    })
+    const mintCall = h.daemonCliPost.mock.calls.find((c) => c[0] === 'skin-tokens')
+    expect(mintCall).toBeTruthy()
+    const body = mintCall![1] as { caps: string[] }
+    expect(body.caps).toEqual(['thread:read', 'thread:post', 'heartbeats:read', 'heartbeats:write'])
   })
 
   it('offers files read/write checkboxes next to Thread and mints them when checked', async () => {

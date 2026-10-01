@@ -588,6 +588,64 @@ pub(crate) fn owner_role_identity(query: &str, owner_token: &str) -> Option<Stri
     }
 }
 
+/// AH28 (prd-app-heartbeats-surface-v1-vs-live) — the ONE actor resolver.
+/// Names who is calling, for audit rows; it never authorizes anything.
+///
+/// - the owner token → `owner-token`
+/// - a live Connect login session (any role) → `user:<username>`
+/// - an agent passport (`<sid>.<secret>`) → `agent:<workspace handle>`
+/// - an app pass (`k2skn_`): login session → `app:<username>`, platform
+///   token → `app-token:<name>`
+///
+/// Anything else → `None`. Never returns a secret.
+pub(crate) fn actor_label(query: &str, owner_token: &str, bearer: Option<&str>) -> Option<String> {
+    let tok = extract_token(query)
+        .filter(|t| !t.is_empty())
+        .or_else(|| bearer.map(str::trim).filter(|t| !t.is_empty()))?;
+    if k2_core::skin::is_skin_token(tok) {
+        let pass = k2_core::skin::resolve_skin_token(tok)?;
+        return Some(app_actor_label(&pass));
+    }
+    if ct_eq_token(tok, owner_token) {
+        return Some("owner-token".to_string());
+    }
+    if let Some(username) = k2_core::connect_users::validate_session(tok) {
+        return Some(format!("user:{username}"));
+    }
+    let hook = crate::session_token::validate_hook(tok)?;
+    Some(agent_actor_label(&hook.principal))
+}
+
+/// AH18 app actor: `app:<username>` (login) or `app-token:<name>`.
+pub(crate) fn app_actor_label(pass: &k2_core::skin::SkinPass) -> String {
+    if pass.session {
+        format!("app:{}", pass.username)
+    } else {
+        format!("app-token:{}", pass.username)
+    }
+}
+
+/// AH18 agent actor: `agent:<workspace handle>`; the workspace name when
+/// it has no handle, else the agent address.
+pub(crate) fn agent_actor_label(p: &crate::session_token::HookPrincipal) -> String {
+    let named = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::get(&conn, &p.workspace_uuid)
+            .ok()
+            .map(|proj| {
+                let h = proj.handle.trim().to_string();
+                if h.is_empty() {
+                    proj.name.trim().to_string()
+                } else {
+                    h
+                }
+            })
+            .filter(|s| !s.is_empty())
+    };
+    format!("agent:{}", named.unwrap_or_else(|| p.agent_address.clone()))
+}
+
 /// The shared authorization gate for the bulk of `/cli/*` routes.
 ///
 /// K2SO #617: a request is authorized when its `?token=` is EITHER the
@@ -926,6 +984,28 @@ pub(crate) async fn send_response_with_cookie_and_location(
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Expose-Headers: *\r\n\
          {cookie_line}{location_line}\r\n{}",
+        body.len(),
+        body,
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
+/// Like [`send_response`] plus extra header lines. `extra` is zero or more
+/// complete `Name: value\r\n` lines (AH17 `Retry-After`).
+pub(crate) async fn send_response_with_headers(
+    stream: &mut TcpStream,
+    status: &str,
+    ct: &str,
+    body: &str,
+    extra: &str,
+) {
+    let resp = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {ct}\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Expose-Headers: *\r\n\
+         {extra}\r\n{}",
         body.len(),
         body,
     );

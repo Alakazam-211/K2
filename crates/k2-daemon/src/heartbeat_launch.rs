@@ -97,12 +97,51 @@ pub fn smart_launch_scheduled(
     )
 }
 
+/// AH16/AH27 — an app's fire now. Same manual launch, but the lease claim
+/// refuses while ANY fire holds the lease (every `concurrency_policy`),
+/// checked inside the lease transaction. A refusal answers
+/// `decision: "skipped_locked"`.
+pub fn smart_launch_app(project_path: &str, name: &str) -> serde_json::Value {
+    smart_launch_checked(project_path, name, None, LeaseCheck::App)
+}
+
+thread_local! {
+    /// AH18 — the actor stamped on every audit row a MANUAL (or app) fire
+    /// writes on this thread. Scheduler-origin fires leave it `None`, so
+    /// their rows keep `actor` NULL even when a request thread runs them.
+    static FIRE_ACTOR: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn fire_actor() -> Option<String> {
+    FIRE_ACTOR.with(|c| c.borrow().clone())
+}
+
+/// Sets [`FIRE_ACTOR`] for one launch and restores the previous value.
+struct FireActorGuard(Option<String>);
+impl FireActorGuard {
+    fn set(actor: Option<String>) -> Self {
+        Self(FIRE_ACTOR.with(|c| std::mem::replace(&mut *c.borrow_mut(), actor)))
+    }
+}
+impl Drop for FireActorGuard {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        FIRE_ACTOR.with(|c| *c.borrow_mut() = prev);
+    }
+}
+
 fn smart_launch_checked(
     project_path: &str,
     name: &str,
     catchup_of: Option<&str>,
     check: LeaseCheck<'_>,
 ) -> serde_json::Value {
+    let actor = match check {
+        LeaseCheck::Manual | LeaseCheck::App => crate::heartbeat_routes::request_actor(),
+        LeaseCheck::Scheduled(_) => None,
+    };
+    let _actor_guard = FireActorGuard::set(actor);
     // Heartbeat S3 (HB19/HB23): on every return below, re-derive the
     // stored next_fire_at / wait_reason and emit heartbeat_roster_changed.
     let _s3_outcome = crate::heartbeat_wait::FireOutcomeGuard::new(project_path, name);
@@ -1141,12 +1180,13 @@ fn write_audit(
     decision: &str,
     reason: &str,
 ) {
+    let actor = fire_actor();
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let _ = HeartbeatFire::insert_with_schedule(
+    let _ = HeartbeatFire::insert_with_actor(
         &conn, project_id, Some(agent_name), Some(&hb.name),
         &hb.frequency, decision, Some(reason),
-        None, None, None,
+        None, None, None, actor.as_deref(),
     );
 }
 

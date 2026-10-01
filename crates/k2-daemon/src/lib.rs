@@ -56,6 +56,7 @@ pub mod charter_compose_watch;
 pub mod notify_bound;
 pub mod grid_emitter;
 pub mod git_routes;
+pub mod heartbeat_app_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
 pub mod heartbeat_routes;

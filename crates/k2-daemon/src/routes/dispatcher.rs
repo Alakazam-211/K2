@@ -1208,15 +1208,19 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
+                    // AH29: activity:read OR heartbeats:read opens the
+                    // socket; each frame checks its own cap.
                     Some(pass)
-                        if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_READ) =>
+                        if pass.dispatcher_admits_any(
+                            &crate::activity_events_ws::SOCKET_CAPS,
+                        ) =>
                     {
                         Some(pass)
                     }
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
-                            crate::skin_routes::ACTIVITY_READ,
+                            crate::activity_events_ws::SOCKET_CAPS_TEXT,
                         );
                         super::http::send_response(
                             &mut *stream,
@@ -8405,8 +8409,53 @@ async fn handle_one_request(
         // when a valid scoped passport hits them. Scoped callers are
         // stamped to their own workspace so they cannot schedule into
         // another project's heartbeats.
+        // App heartbeats surface (prd-app-heartbeats-surface-v1 AH4): a
+        // `k2skn_` pass on an app door gets the dedicated, room-jailed arm.
+        // A pass on any other heartbeat path falls through to the prefix
+        // arm below, which refuses it (403) exactly as before.
+        p if crate::heartbeat_app_routes::is_app_door(p)
+            && super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) =>
+        {
+            let raw_body = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let pass = super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token);
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let method_owned = method.clone();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::heartbeat_app_routes::handle(&method_owned, &p_owned, &params, &raw_body, pass)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response_with_headers(
+                &mut *stream,
+                resp.status,
+                resp.content_type,
+                &resp.body,
+                &crate::heartbeat_app_routes::extra_headers(&resp),
+            )
+            .await;
+        }
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
-            let _ = stream.read(&mut buf).await;
+            // AH6: six writes are `both(…)` in route_policy, so an owner /
+            // Connect / passport POST reaches here with a JSON body. Its
+            // fields fold into the params (query wins on a clash).
+            let post_body = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            // AH28: one actor resolver; the heartbeat routes stamp it on
+            // `changed` rows and manual fires (AH18).
+            let actor =
+                super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref());
             if crate::session_token::is_agent_verb(p) {
                 let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
                     p,
@@ -8421,13 +8470,16 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
                 let mut params = super::http::parse_params(&path, &query);
+                crate::heartbeat_app_routes::fold_json_body(&mut params, &post_body);
                 if let Some(ref principal) = scoped_principal {
                     crate::caller_workspace::stamp_principal(&mut params, principal);
                 }
                 let p_owned = p.to_string();
                 let resp = tokio::task::spawn_blocking(move || {
                     crate::caller_workspace::with_request_principal(scoped_principal, || {
-                        crate::cli::dispatch(&p_owned, &params)
+                        crate::heartbeat_routes::with_request_actor(actor, || {
+                            crate::cli::dispatch(&p_owned, &params)
+                        })
                     })
                 })
                 .await
@@ -8444,8 +8496,11 @@ async fn handle_one_request(
                         .await;
                     return DispatchOutcome::Done;
                 }
-                let params = super::http::parse_params(&path, &query);
-                let resp = crate::cli::dispatch(p, &params);
+                let mut params = super::http::parse_params(&path, &query);
+                crate::heartbeat_app_routes::fold_json_body(&mut params, &post_body);
+                let resp = crate::heartbeat_routes::with_request_actor(actor, || {
+                    crate::cli::dispatch(p, &params)
+                });
                 super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                     .await;
             }
@@ -9168,7 +9223,7 @@ fn auth_scope_failure(
                     "ok": false,
                     "error": {
                         "code": "owner_only",
-                        "hint": "requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, and set-show-sessions are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules)",
+                        "hint": "requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, set-show-sessions, and hard delete are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules, and k2 heartbeat archive instead of remove)",
                     },
                 })
                 .to_string(),

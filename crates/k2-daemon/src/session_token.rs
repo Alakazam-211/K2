@@ -495,6 +495,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/heartbeat/fires-list-all",
         "/cli/heartbeat/set-show-sessions",
         "/cli/heartbeat/active-projects",
+        // Rosson R1 (prd-app-heartbeats-surface-v1): hard delete trashes
+        // the WAKEUP.md folder and is owner-only. Agents archive instead.
+        "/cli/heartbeat/remove",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;

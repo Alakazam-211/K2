@@ -937,6 +937,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     };
                     match result {
                         Ok(body) => CliResponse::ok_json(body),
+                        // AH13: an unknown name is a 404, never a success.
+                        Err(msg) if k2_core::heartbeats::is_no_such_heartbeat(&msg) => {
+                            crate::heartbeat_app_routes::no_such_heartbeat_response(&msg)
+                        }
                         Err(msg) => CliResponse::bad_request(msg),
                     }
                 }

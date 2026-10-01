@@ -537,6 +537,11 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    // Rosson R2: `.k2/heartbeats/**` is not files:write ground. Only each
+    // heartbeat's WAKEUP.md, and only with heartbeats:write.
+    if crate::heartbeat_app_routes::lexically_in_heartbeats(&rel) {
+        return skin_write_heartbeat_wakeup(pass, &resolved, &rel, &content);
+    }
     if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
         return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE);
     }
@@ -544,6 +549,9 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &jailed, false) {
+        return heartbeats_area_response();
+    }
     let abs = jailed.to_string_lossy().to_string();
     match fsc::write_file(&abs, &content) {
         Ok(()) => {
@@ -551,6 +559,107 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// R2 refusal: a files:write op that reaches `.k2/heartbeats/`.
+pub fn heartbeats_area_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "heartbeats_area",
+            "message": ".k2/heartbeats/ is managed by heartbeats; edit a heartbeat's WAKEUP.md with heartbeats:write",
+        })
+        .to_string(),
+    }
+}
+
+/// R2 — `heartbeats:write` edits exactly `.k2/heartbeats/<name>/WAKEUP.md`
+/// of an existing heartbeat in the room, and nothing else in `.k2/`.
+fn skin_write_heartbeat_wakeup(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    content: &str,
+) -> CliResponse {
+    let Some(name) = crate::heartbeat_app_routes::exact_wakeup_name(rel) else {
+        return heartbeats_area_response();
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_HEARTBEATS_WRITE) {
+        return crate::skin_routes::missing_cap_response(k2_core::skin::CAP_HEARTBEATS_WRITE);
+    }
+    let expected_rel = format!(".k2/heartbeats/{name}/WAKEUP.md");
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::AgentHeartbeat::get_by_name(&conn, &resolved.project_id, &name)
+    };
+    match row {
+        Ok(Some(h)) if h.archived_at.is_none() => {
+            if h.wakeup_path.trim_start_matches("./") != expected_rel {
+                return heartbeats_area_response();
+            }
+        }
+        Ok(_) => {
+            return crate::heartbeat_app_routes::no_such_heartbeat_response(
+                &k2_core::heartbeats::no_such_heartbeat(&name),
+            )
+        }
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    let jailed = match jail_rel_path(&resolved.path, &expected_rel, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    // A symlinked heartbeat folder must not turn this into a write
+    // elsewhere in the room: the parent must be that heartbeat's folder.
+    let want_parent = Path::new(&resolved.path)
+        .canonicalize()
+        .map(|r| r.join(".k2").join("heartbeats").join(&name));
+    let got_parent = jailed.parent().map(|p| p.canonicalize());
+    match (want_parent, got_parent) {
+        (Ok(want), Some(Ok(got))) if want == got => {}
+        _ => return heartbeats_area_response(),
+    }
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::write_file(&abs, content) {
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths([abs]);
+            if let Err(e) = k2_core::heartbeats::wait::refresh_project(&resolved.path) {
+                k2_core::log_debug!("[fs/write-file] heartbeat wait refresh: {e}");
+            }
+            k2_core::heartbeats::record_change(
+                &resolved.path,
+                &name,
+                "instructions edited",
+                Some(&crate::routes::http::app_actor_label(pass)),
+            );
+            crate::heartbeat_routes::broadcast_roster(&resolved.path);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// R2: refuse when `rel` (lexically) or its jailed absolute path reaches
+/// `.k2/heartbeats/`. `ancestors` also refuses `.` and `.k2` (a move or
+/// rename source that would carry the folder away).
+fn refuse_heartbeats_area(
+    resolved: &SkinWorkspace,
+    rel: &str,
+    abs: &Path,
+    ancestors: bool,
+) -> Option<CliResponse> {
+    let lexical = if ancestors {
+        crate::heartbeat_app_routes::lexically_touches_heartbeats(rel)
+    } else {
+        crate::heartbeat_app_routes::lexically_in_heartbeats(rel)
+    };
+    if lexical || crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, abs, ancestors) {
+        Some(heartbeats_area_response())
+    } else {
+        None
     }
 }
 
@@ -702,6 +811,17 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(r) = refuse_heartbeats_area(&resolved, &dir, &jailed_dir, false) {
+        return r;
+    }
+    if let Some(r) = refuse_heartbeats_area(
+        &resolved,
+        &format!("{dir}/{filename}"),
+        &jailed_dir.join(&filename),
+        false,
+    ) {
+        return r;
+    }
     let abs_dir = jailed_dir.to_string_lossy().to_string();
     match fsc::write_upload(&abs_dir, &filename, &bytes) {
         Ok(path) => {
@@ -747,6 +867,9 @@ fn handle_skin_create(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(r) = refuse_heartbeats_area(&resolved, &rel, &jailed, false) {
+        return r;
+    }
     let abs = jailed.to_string_lossy().to_string();
     match fsc::create_entry(&abs, is_directory) {
         Ok(()) => {
@@ -793,14 +916,39 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
     let mut abs_sources = Vec::with_capacity(sources.len());
     for rel in &sources {
         match jail_rel_path(&resolved.path, rel, false) {
-            Ok(p) => abs_sources.push(p.to_string_lossy().to_string()),
+            Ok(p) => {
+                // R2: a move carries the source away, so `.` / `.k2` count.
+                if is_move {
+                    if let Some(r) = refuse_heartbeats_area(&resolved, rel, &p, true) {
+                        return r;
+                    }
+                }
+                abs_sources.push(p.to_string_lossy().to_string())
+            }
             Err(e) => return CliResponse::bad_request(e),
         }
     }
-    let abs_dest = match jail_rel_path(&resolved.path, &dest, true) {
-        Ok(p) => p.to_string_lossy().to_string(),
+    let dest_path = match jail_rel_path(&resolved.path, &dest, true) {
+        Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(r) = refuse_heartbeats_area(&resolved, &dest, &dest_path, false) {
+        return r;
+    }
+    // The landed path is `<dest>/<source name>` when dest is a folder.
+    for abs in abs_sources.iter() {
+        let Some(leaf) = Path::new(abs).file_name() else { continue };
+        let leaf_s = leaf.to_string_lossy();
+        if let Some(r) = refuse_heartbeats_area(
+            &resolved,
+            &format!("{dest}/{leaf_s}"),
+            &dest_path.join(leaf),
+            false,
+        ) {
+            return r;
+        }
+    }
+    let abs_dest = dest_path.to_string_lossy().to_string();
     let result = if is_move {
         fsc::move_files(&abs_sources, &abs_dest)
     } else {
@@ -895,6 +1043,24 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    // R2: neither the source nor the renamed path may be heartbeat ground.
+    if let Some(r) = refuse_heartbeats_area(&resolved, &rel, &jailed, true) {
+        return r;
+    }
+    if let Some(parent) = jailed.parent() {
+        let parent_rel = Path::new(&rel)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(r) = refuse_heartbeats_area(
+            &resolved,
+            &format!("{parent_rel}/{new_name}"),
+            &parent.join(&new_name),
+            false,
+        ) {
+            return r;
+        }
+    }
     let abs = jailed.to_string_lossy().to_string();
     match fsc::rename(&abs, &new_name) {
         Ok(new_abs) => {

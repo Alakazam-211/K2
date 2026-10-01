@@ -280,6 +280,22 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/db/rows/delete")
             | ("POST", "/cli/db/query")
             | ("POST", "/cli/skin/password/change")
+            // App heartbeats (prd-app-heartbeats-surface-v1 AH5/AH6).
+            // Reads: heartbeats:read. Writes: POST only, heartbeats:write.
+            | ("GET", "/cli/heartbeat/list")
+            | ("HEAD", "/cli/heartbeat/list")
+            | ("GET", "/cli/heartbeat/show")
+            | ("HEAD", "/cli/heartbeat/show")
+            | ("GET", "/cli/heartbeat/status")
+            | ("HEAD", "/cli/heartbeat/status")
+            | ("GET", "/cli/heartbeat/fires-list")
+            | ("HEAD", "/cli/heartbeat/fires-list")
+            | ("POST", "/cli/heartbeat/add")
+            | ("POST", "/cli/heartbeat/edit")
+            | ("POST", "/cli/heartbeat/enable")
+            | ("POST", "/cli/heartbeat/rename")
+            | ("POST", "/cli/heartbeat/archive")
+            | ("POST", "/cli/heartbeat/fire")
     )
 }
 
@@ -1348,6 +1364,73 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/sessions/events"));
         assert!(!allowlisted_http("GET", "/cli/awareness/subscribe"));
         assert!(!allowlisted_http("GET", "/cli/ops/stream"));
+    }
+
+    /// T2 (prd-app-heartbeats-surface-v1 AH5–AH7): exactly four read pairs
+    /// and six POST pairs; every other heartbeat and power route in the
+    /// route table stays off the helper.
+    #[test]
+    fn heartbeat_allowlist_is_exact_and_walks_the_route_table() {
+        let reads = [
+            "/cli/heartbeat/list",
+            "/cli/heartbeat/show",
+            "/cli/heartbeat/status",
+            "/cli/heartbeat/fires-list",
+        ];
+        let writes = [
+            "/cli/heartbeat/add",
+            "/cli/heartbeat/edit",
+            "/cli/heartbeat/enable",
+            "/cli/heartbeat/rename",
+            "/cli/heartbeat/archive",
+            "/cli/heartbeat/fire",
+        ];
+        for p in reads {
+            assert!(allowlisted_http("GET", p), "{p}");
+            assert!(allowlisted_http("GET", &format!("{p}?workspace=sales")), "{p}");
+            assert!(!allowlisted_http("POST", p), "POST {p} must not pass");
+        }
+        for p in writes {
+            assert!(allowlisted_http("POST", p), "{p}");
+            assert!(!allowlisted_http("GET", p), "GET {p} must not pass");
+            assert!(!allowlisted_ws(p), "{p} is not a socket");
+        }
+        let mut walked = 0;
+        for r in crate::routes::route_policy::ROUTES {
+            let is_hb = r.path.starts_with("/cli/heartbeat") || r.path.starts_with("/cli/power");
+            if !is_hb {
+                continue;
+            }
+            walked += 1;
+            let get_ok = allowlisted_http("GET", r.path);
+            let post_ok = allowlisted_http("POST", r.path);
+            if reads.contains(&r.path) {
+                assert!(get_ok && !post_ok, "{} read pair", r.path);
+            } else if writes.contains(&r.path) {
+                assert!(post_ok && !get_ok, "{} write pair", r.path);
+            } else {
+                assert!(
+                    !get_ok && !post_ok && !allowlisted_ws(r.path),
+                    "{} must never be allowlisted (AH7)",
+                    r.path
+                );
+            }
+        }
+        assert!(walked >= 25, "walked only {walked} heartbeat/power routes");
+        for p in [
+            "/cli/heartbeat/scheduler-status",
+            "/cli/heartbeat/remove",
+            "/cli/heartbeat/launch",
+            "/cli/heartbeat/unarchive",
+            "/cli/heartbeat/list-archived",
+            "/cli/heartbeat/set-session",
+            "/cli/heartbeat/wake",
+            "/cli/heartbeat-log",
+            "/cli/scheduler-tick",
+        ] {
+            assert!(!allowlisted_http("GET", p), "{p}");
+            assert!(!allowlisted_http("POST", p), "{p}");
+        }
     }
 
     #[test]

@@ -2900,3 +2900,146 @@ async fn publish_run_skin_gateway_activity_ws_per_room() {
         let _ = std::fs::remove_dir_all(&docs_path);
     });
 }
+
+/// Read one unmasked server WebSocket text frame (test-only parser).
+fn read_ws_text(stream: &mut StdTcpStream) -> String {
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).expect("ws frame head");
+    assert_eq!(head[0] & 0x0f, 0x1, "expected a text frame, opcode {:#x}", head[0]);
+    let len = match head[1] & 0x7f {
+        126 => {
+            let mut ext = [0u8; 2];
+            stream.read_exact(&mut ext).expect("ws len16");
+            u16::from_be_bytes(ext) as usize
+        }
+        127 => {
+            let mut ext = [0u8; 8];
+            stream.read_exact(&mut ext).expect("ws len64");
+            u64::from_be_bytes(ext) as usize
+        }
+        n => n as usize,
+    };
+    let mut payload = vec![0u8; len];
+    stream.read_exact(&mut payload).expect("ws payload");
+    String::from_utf8(payload).expect("utf8 frame")
+}
+
+/// AH20–AH22 through the helper: an app with `heartbeats:read` (no
+/// `activity:read`) opens the room socket through the gateway and hears
+/// `heartbeat_changed` after a heartbeat add made through the gateway.
+/// The heartbeat routes are allowlisted; host-wide ones are not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_heartbeats_and_socket() {
+    let _g = lock();
+    struct NoSelfHeal(Option<std::ffi::OsString>);
+    impl Drop for NoSelfHeal {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("K2_HEARTBEAT_NO_SELF_HEAL", v),
+                None => std::env::remove_var("K2_HEARTBEAT_NO_SELF_HEAL"),
+            }
+        }
+    }
+    let _no_self_heal = NoSelfHeal(std::env::var_os("K2_HEARTBEAT_NO_SELF_HEAL"));
+    std::env::set_var("K2_HEARTBEAT_NO_SELF_HEAL", "1");
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_docs_id, _conv, docs_path) = seed_files_workspace(&docs);
+        add_user(dport, "hbguest");
+        set_password(dport, "hbguest", "s3cret-horse");
+        let created = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"hbrole"}"#),
+        );
+        assert_eq!(created.status, 200, "role; {}", created.body);
+        let room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"hbrole","handle":"{docs}","caps":["thread:read","heartbeats:read","heartbeats:write"]}}"#
+            )),
+        );
+        assert_eq!(room.status, 200, "room; {}", room.body);
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"hbguest","role":"hbrole"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+
+        let gport = free_port();
+        publish_skin(dport, &docs_path, gport, None);
+        let cookie = gateway_login_cookie(gport, "hbguest", "s3cret-horse");
+
+        let list = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/heartbeat/list?workspace={docs}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(list.status, 200, "list through the helper; {}", list.body);
+        assert_eq!(json(&list.body), serde_json::json!([]));
+        let host_wide = http_ex(gport, "GET", "/cli/heartbeat/scheduler-status", None, &cookie);
+        assert_eq!(host_wide.status, 404, "never allowlisted; {}", host_wide.body);
+        let get_write = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/heartbeat/add?workspace={docs}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(get_write.status, 404, "GET on a write path; {}", get_write.body);
+
+        // Open the room socket through the helper and keep it.
+        let mut sock = StdTcpStream::connect(("127.0.0.1", gport)).expect("ws connect");
+        sock.set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("read timeout");
+        let req = format!(
+            "GET /cli/activity/events?workspace={docs} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{cookie}\r\n\r\n"
+        );
+        sock.write_all(req.as_bytes()).expect("ws write");
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            sock.read_exact(&mut byte).expect("upgrade head");
+            head.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&head).to_string();
+        assert!(
+            head.starts_with("HTTP/1.1 101"),
+            "heartbeats:read opens the room socket through the helper: {head}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+
+        let add = http_ex(
+            gport,
+            "POST",
+            "/cli/heartbeat/add",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","name":"inbox-sweep","frequency":"hourly","spec":{{"every_seconds":900}},"instructions":"Check the inbox."}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(add.status, 200, "add through the helper; {}", add.body);
+        let v = json(&add.body);
+        assert_eq!(v["name"], "inbox-sweep", "{v}");
+        assert!(v.get("wakeupAbs").is_none(), "{v}");
+
+        let frame = read_ws_text(&mut sock);
+        let fv = json(&frame);
+        assert_eq!(fv["kind"], "heartbeat_changed", "{frame}");
+        assert_eq!(fv["workspace"], docs.as_str(), "{frame}");
+        assert!(!frame.contains(&docs_path), "no path on the wire: {frame}");
+
+        drop(sock);
+        stop_skin(dport, &docs_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
+    });
+}

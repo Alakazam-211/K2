@@ -75,6 +75,7 @@ mod charter_compose_watch;
 mod notify_bound;
 mod grid_emitter;
 mod git_routes;
+mod heartbeat_app_routes;
 mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;

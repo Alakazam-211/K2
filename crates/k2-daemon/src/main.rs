@@ -582,21 +582,6 @@ async fn async_main() {
     // parse failure) so plaintext passwords never linger on disk.
     let _ = seed_users::consume_seed_file();
 
-    // Viewer role removal (prd-remove-viewer-role-v1.md RV3): rewrite any
-    // stored `"role":"viewer"` account as a DISABLED Member flagged
-    // `was_viewer`, bump its token epoch, and audit it. Loading already
-    // folds such rows to disabled (fail closed), so a failure here only
-    // costs the audit line + the on-disk rewrite; log it and keep booting.
-    match k2_core::connect_users::migrate_removed_viewers() {
-        Ok(names) if names.is_empty() => {}
-        Ok(names) => log_debug!(
-            "[daemon/users] Viewer role removed: disabled {} former viewer account(s): {}",
-            names.len(),
-            names.join(", ")
-        ),
-        Err(e) => log_debug!("[daemon/users] ERROR: viewer-role migration: {e}"),
-    }
-
     // Open (or create) ~/.k2so/k2so.db and populate k2_core's process-
     // wide shared connection. Every migrated hook handler (e.g.
     // handle_hook_complete) reads via db::shared(), so this has to run
@@ -606,6 +591,23 @@ async fn async_main() {
     if let Err(e) = k2_core::db::init_database() {
         log_debug!("[daemon] FATAL: db::init_database: {e}");
         std::process::exit(2);
+    }
+
+    // Viewer role removal (prd-remove-viewer-role-v1.md RV3): rewrite any
+    // stored `"role":"viewer"` account as a DISABLED Member flagged
+    // `was_viewer`, bump its token epoch, and audit it. Loading already
+    // folds such rows to disabled (fail closed), so a failure here only
+    // costs the audit line + the on-disk rewrite; log it and keep booting.
+    // MUST run after `init_database`: the users-roster refresh it triggers
+    // reads `db::shared()` (which panics before init).
+    match k2_core::connect_users::migrate_removed_viewers() {
+        Ok(names) if names.is_empty() => {}
+        Ok(names) => log_debug!(
+            "[daemon/users] Viewer role removed: disabled {} former viewer account(s): {}",
+            names.len(),
+            names.join(", ")
+        ),
+        Err(e) => log_debug!("[daemon/users] ERROR: viewer-role migration: {e}"),
     }
 
     // P5.3: clear stale heartbeat leases left behind by a daemon that

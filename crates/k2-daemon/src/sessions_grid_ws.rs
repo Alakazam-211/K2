@@ -1212,7 +1212,8 @@ pub async fn serve_session_grid_connection(
                          closing grid WS for session {}",
                         session.session_id
                     );
-                    let _ = write.send(Message::Close(None)).await;
+                    // MS71: 4003 "revoked" — the client re-checks its login.
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
             }

@@ -289,6 +289,41 @@ pub fn close_connections_for(username: &str) -> usize {
     fired
 }
 
+// ── WebSocket close codes (Home M2: MS44 a / MS71) ──────────────────────
+//
+// A client must tell "the owner removed you" from "the network dropped" so
+// it can stay signed out after a kick instead of logging straight back in
+// with a remembered password. Before these codes every close was a bare
+// `Close(None)` (the browser sees 1005). Codes in 4000–4999 are private to
+// the application; older clients ignore the code and treat the close as a
+// drop, as they always did.
+
+/// A presence close handle fired: this login was kicked
+/// ([`close_connections_for`], the S3 kick route).
+pub const WS_CLOSE_KICKED: u16 = 4001;
+/// The 5 s re-check found the connecting token no longer valid (revoked,
+/// expired, user disabled or changed). Not necessarily a kick.
+pub const WS_CLOSE_SESSION_REVOKED: u16 = 4003;
+
+fn close_message(code: u16, reason: &'static str) -> tokio_tungstenite::tungstenite::Message {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    tokio_tungstenite::tungstenite::Message::Close(Some(CloseFrame {
+        code: CloseCode::from(code),
+        reason: std::borrow::Cow::Borrowed(reason),
+    }))
+}
+
+/// The close frame a socket sends when its presence close handle fires.
+pub fn kicked_close_message() -> tokio_tungstenite::tungstenite::Message {
+    close_message(WS_CLOSE_KICKED, "kicked")
+}
+
+/// The close frame a socket sends when the 5 s re-check rejects its token.
+pub fn session_revoked_close_message() -> tokio_tungstenite::tungstenite::Message {
+    close_message(WS_CLOSE_SESSION_REVOKED, "revoked")
+}
+
 /// Compute the aggregated PER-USER roster (see [`RosterUser`] for the
 /// wire shape). Multiple windows/sockets for one user collapse into one
 /// row: `windowCount` counts app-level sockets, `workspaces` dedupes

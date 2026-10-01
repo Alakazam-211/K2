@@ -183,7 +183,8 @@ pub async fn serve_session_events_connection(
                          closing events WS for subscriber {}",
                         subscriber_id,
                     );
-                    let _ = write.send(Message::Close(None)).await;
+                    // MS71: 4003 "revoked" — the client re-checks its login.
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
             }
@@ -208,9 +209,12 @@ pub async fn serve_session_events_connection(
                 // and fires each entry's sender) OR the sender vanished
                 // (registry entry gone — shouldn't happen while we hold
                 // the guard; treat as close). Either way: clean close.
-                let fired = match changed {
-                    Ok(()) => *close_rx.borrow_and_update(),
-                    Err(_) => true,
+                let (fired, kicked) = match changed {
+                    Ok(()) => {
+                        let fired = *close_rx.borrow_and_update();
+                        (fired, fired)
+                    }
+                    Err(_) => (true, false),
                 };
                 if fired {
                     log_debug!(
@@ -218,7 +222,15 @@ pub async fn serve_session_events_connection(
                          close handle fired; closing",
                         subscriber_id,
                     );
-                    let _ = write.send(Message::Close(None)).await;
+                    // MS71: a fired handle is the kick → 4001 "kicked", so
+                    // the client stays signed out. A vanished sender is a
+                    // plain close, as before.
+                    let frame = if kicked {
+                        crate::presence::kicked_close_message()
+                    } else {
+                        Message::Close(None)
+                    };
+                    let _ = write.send(frame).await;
                     break;
                 }
             }

@@ -902,6 +902,14 @@ fn save_sessions(store: &SessionStore) -> Result<(), String> {
 /// Load-modify-save the session store under a process lock so concurrent
 /// session mutations + lockout updates don't clobber each other. Separate
 /// from `update_store`'s lock (different file) but the same discipline.
+///
+/// Home M2 (MS44 b / MS82): the file is rewritten ONLY when `f` actually
+/// changed a record. `validate_session` runs here on every authed request
+/// and on every socket's 5 s re-check; on the steady path it changes
+/// nothing, so it no longer rewrites the file (several clients × several
+/// sockets used to mean a few full rewrites a second under this one lock).
+/// Any real change — a new session, a revoke, an expired or stale record
+/// reaped, a lockout update — still saves exactly as before.
 fn update_sessions<R>(f: impl FnOnce(&mut SessionStore) -> Result<R, String>) -> Result<R, String> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _g = LOCK
@@ -909,8 +917,12 @@ fn update_sessions<R>(f: impl FnOnce(&mut SessionStore) -> Result<R, String>) ->
         .lock()
         .unwrap_or_else(|p| p.into_inner());
     let mut store = load_sessions()?;
+    let before = serde_json::to_vec(&store).map_err(|e| format!("serialize store: {e}"))?;
     let r = f(&mut store)?;
-    save_sessions(&store)?;
+    let after = serde_json::to_vec(&store).map_err(|e| format!("serialize store: {e}"))?;
+    if before != after {
+        save_sessions(&store)?;
+    }
     Ok(r)
 }
 
@@ -2437,6 +2449,75 @@ mod tests {
                 Duration::days(7),
                 "expires_at must be created_at + 7 days"
             );
+        });
+    }
+
+    /// Home M2 (MS44 b / MS82): validating a live session — every authed
+    /// request and every socket's 5 s re-check — must NOT rewrite
+    /// `connect-sessions.json`. A real change still does. Each save is a
+    /// tmp-file + rename, so the file's inode changes on every rewrite and
+    /// stays the same when nothing was written.
+    #[cfg(unix)]
+    #[test]
+    fn validate_session_does_not_rewrite_the_file_unless_a_record_changes() {
+        use std::os::unix::fs::MetadataExt;
+        with_temp_home(|| {
+            add_user("steady", "password").expect("add");
+            let token = create_session("steady");
+            let path = sessions_store_path();
+            let ino = |p: &std::path::Path| fs::metadata(p).expect("sessions file exists").ino();
+            let bytes_before = fs::read(&path).expect("read sessions file");
+            let ino_before = ino(&path);
+            for _ in 0..25 {
+                assert_eq!(validate_session(&token).as_deref(), Some("steady"));
+            }
+            assert_eq!(validate_session("not-a-token"), None);
+            assert_eq!(ino(&path), ino_before, "a steady validate must not rewrite the file");
+            assert_eq!(fs::read(&path).expect("read sessions file"), bytes_before);
+
+            // A new session is a real change: rewritten.
+            let other = create_session("steady");
+            let ino_after_create = ino(&path);
+            assert_ne!(ino_after_create, ino_before, "a new session must be saved");
+
+            // Revoking is a real change too, and the revoked token is gone.
+            assert_eq!(revoke_user_sessions("steady"), 2);
+            assert_ne!(ino(&path), ino_after_create, "a revoke must be saved");
+            assert_eq!(validate_session(&token), None);
+            assert_eq!(validate_session(&other), None);
+            assert!(load_sessions().expect("load").sessions.is_empty());
+        });
+    }
+
+    /// Home M2 (MS82): an expired record found by validate is still reaped
+    /// from disk (the one validate path that changes a record).
+    #[cfg(unix)]
+    #[test]
+    fn validate_session_still_saves_when_it_reaps_an_expired_record() {
+        use std::os::unix::fs::MetadataExt;
+        with_temp_home(|| {
+            add_user("expiring", "password").expect("add");
+            let tok = new_token();
+            update_sessions(|store| {
+                store.sessions.push(SessionRecord {
+                    version: SESSION_RECORD_VERSION,
+                    username: "expiring".to_string(),
+                    token_digest: token_digest(&tok),
+                    created_at: Utc::now() - Duration::days(8),
+                    expires_at: Utc::now() - Duration::seconds(1),
+                    token_epoch: 0,
+                    created_ip: None,
+                    user_agent: None,
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                });
+                Ok(())
+            })
+            .expect("inject expired record");
+            let path = sessions_store_path();
+            let ino_before = fs::metadata(&path).expect("file").ino();
+            assert_eq!(validate_session(&tok), None);
+            assert_ne!(fs::metadata(&path).expect("file").ino(), ino_before, "the reap must be saved");
+            assert!(load_sessions().expect("load").sessions.is_empty());
         });
     }
 

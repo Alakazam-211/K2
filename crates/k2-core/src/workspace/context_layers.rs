@@ -3248,13 +3248,23 @@ mod tests {
         add_layer(path, None, Some("heartbeats:roster"), None).expect("stack hb roster");
         crate::workspace::skill_regen::write_workspace_skill_file(path);
 
-        crate::heartbeats::k2so_heartbeat_add(
-            path.to_string(),
-            "roster-hb".into(),
-            "daily".into(),
-            "{}".into(),
-        )
-        .expect("add heartbeat");
+        // HB7: a temp HOME under the shared HOME lock, and zero scheduler
+        // calls — this add once replaced the real `dev.k2.heartbeat` job.
+        crate::heartbeats::install::with_temp_home("roster-add", |_home| {
+            crate::heartbeats::install::test_recorder::take();
+            crate::heartbeats::k2so_heartbeat_add(
+                path.to_string(),
+                "roster-hb".into(),
+                "daily".into(),
+                "{}".into(),
+            )
+            .expect("add heartbeat");
+            assert_eq!(
+                crate::heartbeats::install::test_recorder::take(),
+                Vec::<String>::new(),
+                "heartbeat add must not run launchctl/crontab in tests"
+            );
+        });
 
         let cwd = fs::read_to_string(root.join("AGENTS.md")).expect("cwd AGENTS.md");
         assert!(

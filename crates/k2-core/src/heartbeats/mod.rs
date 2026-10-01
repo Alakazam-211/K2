@@ -1113,13 +1113,24 @@ mod tests {
             )
             .unwrap();
         }
-        let out = k2so_heartbeat_add(
-            path.clone(),
-            "daily-check".into(),
-            "daily".into(),
-            "{}".into(),
-        )
-        .expect("add must succeed when workspace type is off / unset");
+        // HB7: a temp HOME under the shared HOME lock, and zero scheduler
+        // calls — this add once replaced the real `dev.k2.heartbeat` job.
+        let out = crate::heartbeats::install::with_temp_home("add-no-mode", |_home| {
+            crate::heartbeats::install::test_recorder::take();
+            let out = k2so_heartbeat_add(
+                path.clone(),
+                "daily-check".into(),
+                "daily".into(),
+                "{}".into(),
+            )
+            .expect("add must succeed when workspace type is off / unset");
+            assert_eq!(
+                crate::heartbeats::install::test_recorder::take(),
+                Vec::<String>::new(),
+                "heartbeat add must not run launchctl/crontab in tests"
+            );
+            out
+        });
         assert_eq!(out["name"], "daily-check");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1253,9 +1253,11 @@ mod tests {
             Some(&mk_now(2026, 6, 30, 10, 0).to_rfc3339()),
         );
         assert_eq!(next_fire_estimate(&held, mk_now(2026, 7, 1, 20, 0)), Some(mk_now(2026, 7, 2, 9, 0)));
-        // Skipped (too old) → the next slot after now.
+        // Skipped (latest miss 13 h old) → the next slot after now.
         let old = mk_heartbeat("daily", r#"{"time":"09:00"}"#, Some(&mk_now(2026, 6, 1, 9, 0).to_rfc3339()));
-        assert_eq!(next_fire_estimate(&old, mk_now(2026, 7, 2, 12, 0)), Some(mk_now(2026, 7, 3, 9, 0)));
+        assert_eq!(next_fire_estimate(&old, mk_now(2026, 7, 2, 22, 0)), Some(mk_now(2026, 7, 3, 9, 0)));
+        // A 3 h old miss is a catch-up, due now.
+        assert_eq!(next_fire_estimate(&old, mk_now(2026, 7, 2, 12, 0)), Some(mk_now(2026, 7, 2, 12, 0)));
         // Backoff later than the slot wins.
         let mut backoff = hb.clone();
         backoff.next_retry_at = Some(mk_now(2026, 7, 3, 9, 8).to_rfc3339());

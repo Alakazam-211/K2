@@ -41,6 +41,12 @@ pub fn linux_supplies(entries: &[(String, Option<u8>, Option<u8>)]) -> PowerSour
     PowerSource { on_ac, battery_percent: battery }
 }
 
+/// Linux sysfs `scope`: `Device` marks a peripheral's battery (a pen,
+/// mouse or headset). Only `System` or no scope powers this machine.
+pub fn linux_supply_powers_system(scope: Option<&str>) -> bool {
+    scope != Some("Device")
+}
+
 /// Windows `powercfg /q SCHEME_CURRENT SUB_SLEEP RTCWAKE` → (AC, DC)
 /// "Allow wake timers" index: 0 disable, 1 enable, 2 important only.
 pub fn windows_rtcwake(text: &str) -> (Option<u32>, Option<u32>) {
@@ -98,6 +104,28 @@ mod tests {
             PowerSource { on_ac: Some(false), battery_percent: Some(15) }
         );
         assert_eq!(linux_supplies(&[]), PowerSource { on_ac: None, battery_percent: None });
+    }
+
+    /// Seen on z13flow: a stylus battery (`scope` Device, capacity 0)
+    /// listed before BAT0 made the laptop read as 0 %, which would pause
+    /// wake and Keep awake on battery.
+    #[test]
+    fn peripheral_batteries_are_not_the_system_battery() {
+        assert!(!linux_supply_powers_system(Some("Device")));
+        assert!(linux_supply_powers_system(Some("System")));
+        assert!(linux_supply_powers_system(None));
+        let s = |t: &str, o: Option<u8>, c: Option<u8>| (t.to_string(), o, c);
+        let sysfs = [
+            (s("Mains", Some(0), None), None),
+            (s("Battery", Some(1), Some(0)), Some("Device")),
+            (s("Battery", None, Some(64)), None),
+        ];
+        let kept: Vec<_> = sysfs
+            .iter()
+            .filter(|(_, scope)| linux_supply_powers_system(*scope))
+            .map(|(e, _)| e.clone())
+            .collect();
+        assert_eq!(linux_supplies(&kept), PowerSource { on_ac: Some(false), battery_percent: Some(64) });
     }
 
     #[test]

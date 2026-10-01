@@ -154,6 +154,11 @@ impl PowerOs for LinuxPowerOs {
             for e in dir.flatten() {
                 let p = e.path();
                 let read = |f: &str| std::fs::read_to_string(p.join(f)).ok().map(|s| s.trim().to_string());
+                // A pen, mouse or headset battery (`scope` = Device) is not
+                // this machine's power source.
+                if !super::parse::linux_supply_powers_system(read("scope").as_deref()) {
+                    continue;
+                }
                 let kind = read("type").unwrap_or_default();
                 let online = read("online").and_then(|s| s.parse().ok());
                 let cap = read("capacity").and_then(|s| s.parse().ok());

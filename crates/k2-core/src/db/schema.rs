@@ -3201,6 +3201,16 @@ pub struct SchedulerMeta;
 impl SchedulerMeta {
     /// The RFC3339 timestamp of the most recent scheduler tick.
     pub const LAST_TICK_AT: &'static str = "last_tick_at";
+    /// HB9 — the most recent tick delivered by the OS job (launchd /
+    /// crontab running `heartbeat.sh`). Stamped ONLY by the HTTP
+    /// `/cli/heartbeat/active-projects` route, so a daemon restart can
+    /// no longer hide a dead OS job.
+    pub const LAST_OS_TICK_AT: &'static str = "last_os_tick_at";
+    /// HB9 — the most recent due scan the daemon ran on its own (boot
+    /// scan, wall-clock-jump scan).
+    pub const LAST_DAEMON_TICK_AT: &'static str = "last_daemon_tick_at";
+    /// HB10 — JSON record of the last transport self-check repair.
+    pub const LAST_TRANSPORT_REPAIR: &'static str = "last_transport_repair";
 
     pub fn get(conn: &Connection, key: &str) -> Option<String> {
         conn.query_row(

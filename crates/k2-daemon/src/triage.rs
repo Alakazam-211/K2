@@ -96,29 +96,47 @@ pub fn handle_triage(project_path: &str) -> String {
 /// tolerates users who set the wake interval to a few minutes.
 const TICK_GAP_AUDIT_SECS: i64 = 300;
 
-/// Stamp `scheduler_meta.last_tick_at = now` and return the gap since
-/// the previous tick when it exceeds [`TICK_GAP_AUDIT_SECS`]. The
-/// persisted stamp is what makes "the scheduler is not ticking"
-/// observable at all (misfire study fragility #12 — the transport can
-/// die silently for weeks); the returned gap feeds `tick_gap` audit
-/// rows so downtime shows up in the fire history next to the catch-up
-/// fires it caused.
-fn note_tick_and_detect_gap() -> Option<i64> {
+/// Who delivered a scheduler tick (HB9). Each source gets its own
+/// `scheduler_meta` key so a daemon restart (boot scan) can no longer
+/// hide a dead OS job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickSource {
+    /// The OS job (launchd / crontab running `heartbeat.sh`) — only the
+    /// HTTP `/cli/heartbeat/active-projects` route stamps this.
+    Os,
+    /// A due scan the daemon ran itself (boot scan, wall-clock jump).
+    Daemon,
+}
+
+/// Stamp `scheduler_meta.last_tick_at = now` (plus the per-source key
+/// when `source` is known) and return the gap since the previous tick
+/// when it exceeds [`TICK_GAP_AUDIT_SECS`]. The persisted stamp is
+/// what makes "the scheduler is not ticking" observable at all
+/// (misfire study fragility #12 — the transport can die silently for
+/// weeks); the returned gap feeds `tick_gap` audit rows so downtime
+/// shows up in the fire history next to the catch-up fires it caused.
+///
+/// `last_tick_at` stays "the newest tick of any kind" for old clients;
+/// `last_os_tick_at` / `last_daemon_tick_at` say which kind.
+fn note_tick_and_detect_gap(source: Option<TickSource>) -> Option<i64> {
+    use k2_core::db::schema::SchedulerMeta;
     let db = shared_db();
     let conn = db.lock();
     let now = chrono::Utc::now();
-    let prev = k2_core::db::schema::SchedulerMeta::get(
-        &conn,
-        k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
-    )
-    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-    .map(|t| t.with_timezone(&chrono::Utc));
-    if let Err(e) = k2_core::db::schema::SchedulerMeta::set(
-        &conn,
-        k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
-        &now.to_rfc3339(),
-    ) {
-        k2_core::log_debug!("[daemon/scheduler-fire] WARN: persist last_tick_at: {e}");
+    let stamp = now.to_rfc3339();
+    let prev = SchedulerMeta::get(&conn, SchedulerMeta::LAST_TICK_AT)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+        .map(|t| t.with_timezone(&chrono::Utc));
+    let mut keys = vec![SchedulerMeta::LAST_TICK_AT];
+    match source {
+        Some(TickSource::Os) => keys.push(SchedulerMeta::LAST_OS_TICK_AT),
+        Some(TickSource::Daemon) => keys.push(SchedulerMeta::LAST_DAEMON_TICK_AT),
+        None => {}
+    }
+    for key in keys {
+        if let Err(e) = SchedulerMeta::set(&conn, key, &stamp) {
+            k2_core::log_debug!("[daemon/scheduler-fire] WARN: persist {key}: {e}");
+        }
     }
     let gap = (now - prev?).num_seconds();
     (gap > TICK_GAP_AUDIT_SECS).then_some(gap)
@@ -162,8 +180,28 @@ fn write_tick_gap_audit(project_path: &str, gap_secs: i64) {
 /// response. Plain text (not JSON) so bash can `while read` without
 /// a JSON parser dependency.
 ///
+/// HB9: this HTTP route is the ONLY writer of `last_os_tick_at`. The
+/// daemon's own scans use [`daemon_scan_project_paths`] instead.
+///
 /// Order: alphabetical by path, for deterministic test output.
 pub fn handle_active_projects() -> String {
+    let paths = active_project_paths();
+    stamp_tick_with_gap_audit(TickSource::Os, &paths);
+    paths.join("\n")
+}
+
+/// The daemon's own due scans (boot scan, wall-clock-jump scan): the
+/// same project list as [`handle_active_projects`], stamping
+/// `last_daemon_tick_at` instead of the OS key (HB9).
+pub fn daemon_scan_project_paths() -> Vec<String> {
+    let paths = active_project_paths();
+    stamp_tick_with_gap_audit(TickSource::Daemon, &paths);
+    paths
+}
+
+/// Projects with at least one enabled, non-archived heartbeat.
+/// Read-only — stamps nothing.
+pub fn active_project_paths() -> Vec<String> {
     let db = shared_db();
     let conn = db.lock();
     let mut stmt = match conn.prepare(
@@ -173,31 +211,27 @@ pub fn handle_active_projects() -> String {
          ORDER BY p.path",
     ) {
         Ok(s) => s,
-        Err(_) => return String::new(),
+        Err(_) => return Vec::new(),
     };
     let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
         Ok(r) => r,
-        Err(_) => return String::new(),
+        Err(_) => return Vec::new(),
     };
-    let paths: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-    drop(stmt);
-    drop(conn);
+    rows.filter_map(|r| r.ok()).collect()
+}
 
-    // heartbeat.sh calls this once per cron tick, BEFORE the per-project
-    // scheduler-tick calls — the natural once-per-tick spot to stamp
-    // `last_tick_at` and detect gaps. A detected gap writes one
-    // `tick_gap` row per active project so every affected workspace's
-    // history explains its upcoming catch-up fires.
-    if let Some(gap) = note_tick_and_detect_gap() {
+/// Once-per-tick stamp + gap detection. A detected gap writes one
+/// `tick_gap` row per active project so every affected workspace's
+/// history explains its upcoming catch-up fires.
+fn stamp_tick_with_gap_audit(source: TickSource, paths: &[String]) {
+    if let Some(gap) = note_tick_and_detect_gap(Some(source)) {
         k2_core::log_debug!(
-            "[daemon/scheduler-fire] tick gap detected: {gap}s since previous tick"
+            "[daemon/scheduler-fire] tick gap detected ({source:?}): {gap}s since previous tick"
         );
-        for p in &paths {
+        for p in paths {
             write_tick_gap_audit(p, gap);
         }
     }
-
-    paths.join("\n")
 }
 
 /// Handler for `/cli/scheduler-tick` — the destructive heartbeat
@@ -219,7 +253,9 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
     // (manual "tick now", boot overdue scan, direct curl) still stamp
     // the tick and surface a gap for this project. When heartbeat.sh
     // drove the tick, active-projects stamped seconds ago → no-op here.
-    if let Some(gap) = note_tick_and_detect_gap() {
+    // Source unknown here (OS script, manual curl, or a daemon scan that
+    // already stamped its own key) — only the combined `last_tick_at`.
+    if let Some(gap) = note_tick_and_detect_gap(None) {
         write_tick_gap_audit(project_path, gap);
     }
 

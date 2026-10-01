@@ -253,3 +253,70 @@ async fn triage_with_flag_off_does_not_land_in_session_map() {
     drain_session_map();
     clear_projects();
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// HB9 — tick stamps name their source (heartbeat S1, T-S1d)
+// ─────────────────────────────────────────────────────────────────────
+
+fn meta(key: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::SchedulerMeta::get(&conn, key)
+}
+
+fn set_meta(key: &str, value: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::SchedulerMeta::set(&conn, key, value).expect("set scheduler_meta");
+}
+
+/// A daemon scan (boot / wall-clock jump) moves `last_daemon_tick_at`
+/// and never `last_os_tick_at`. The HTTP active-projects route (what
+/// `heartbeat.sh` calls) moves `last_os_tick_at` and never the daemon
+/// key. Pre-S1 both wrote one `last_tick_at`, so a daemon restart hid
+/// a dead OS job.
+#[tokio::test(flavor = "current_thread")]
+async fn tick_stamps_name_their_source() {
+    use k2_core::db::schema::SchedulerMeta;
+    let _g = lock();
+    init_for_tests();
+
+    let old = "2000-01-01T00:00:00+00:00";
+    set_meta(SchedulerMeta::LAST_OS_TICK_AT, old);
+    set_meta(SchedulerMeta::LAST_DAEMON_TICK_AT, old);
+    set_meta(SchedulerMeta::LAST_TICK_AT, old);
+
+    // Boot / jump scan.
+    let _paths = triage::daemon_scan_project_paths();
+    assert_eq!(
+        meta(SchedulerMeta::LAST_OS_TICK_AT).as_deref(),
+        Some(old),
+        "a daemon scan must not stamp the OS tick key"
+    );
+    let daemon_tick = meta(SchedulerMeta::LAST_DAEMON_TICK_AT).expect("daemon tick stamped");
+    assert_ne!(daemon_tick, old, "a daemon scan must stamp last_daemon_tick_at");
+    assert_eq!(
+        meta(SchedulerMeta::LAST_TICK_AT).as_deref(),
+        Some(daemon_tick.as_str()),
+        "last_tick_at stays the newest tick of any kind"
+    );
+
+    // OS tick: the HTTP route heartbeat.sh calls.
+    set_meta(SchedulerMeta::LAST_DAEMON_TICK_AT, old);
+    let _list = triage::handle_active_projects();
+    assert_eq!(
+        meta(SchedulerMeta::LAST_DAEMON_TICK_AT).as_deref(),
+        Some(old),
+        "an OS tick must not stamp the daemon tick key"
+    );
+    let os_tick = meta(SchedulerMeta::LAST_OS_TICK_AT).expect("os tick stamped");
+    assert_ne!(os_tick, old, "active-projects must stamp last_os_tick_at");
+    assert_eq!(meta(SchedulerMeta::LAST_TICK_AT).as_deref(), Some(os_tick.as_str()));
+
+    // The non-stamping list stamps nothing.
+    set_meta(SchedulerMeta::LAST_OS_TICK_AT, old);
+    set_meta(SchedulerMeta::LAST_DAEMON_TICK_AT, old);
+    let _ = triage::active_project_paths();
+    assert_eq!(meta(SchedulerMeta::LAST_OS_TICK_AT).as_deref(), Some(old));
+    assert_eq!(meta(SchedulerMeta::LAST_DAEMON_TICK_AT).as_deref(), Some(old));
+}

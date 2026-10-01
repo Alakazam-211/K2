@@ -94,11 +94,9 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
 /// drives, so gap detection, catch-up coalescing, windows, and
 /// backoff all apply identically.
 async fn run_due_scan(reason: &str) {
-    let paths: Vec<String> = crate::triage::handle_active_projects()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect();
+    // HB9: stamps `last_daemon_tick_at`, never the OS key — a daemon
+    // restart must not make a dead OS job look alive.
+    let paths: Vec<String> = crate::triage::daemon_scan_project_paths();
     if paths.is_empty() {
         return;
     }

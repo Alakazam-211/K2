@@ -1,0 +1,50 @@
+gui/501/dev.k2.heartbeat = {
+	active count = 0
+	path = /private/var/folders/9x/abc123/T/k2so-tunnel-test-96642-1790837486533357000/Library/LaunchAgents/dev.k2.heartbeat.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /bin/bash
+	arguments = {
+		/bin/bash
+		/var/folders/9x/abc123/T/k2so-tunnel-test-96642-1790837486533357000/.k2/heartbeat.sh
+	}
+
+	stderr path = /var/folders/9x/abc123/T/k2so-tunnel-test-96642-1790837486533357000/.k2/heartbeat-stderr.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.GFodxuk2ay/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => dev.k2.heartbeat
+	}
+
+	domain = gui/501 [100021]
+	asid = 100021
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 31
+	last exit code = 127
+
+	resource coalition = {
+		ID = 87388
+		type = resource
+		state = active
+		active count = 1
+		name = dev.k2.heartbeat
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	cpumon = default
+	run interval = 60 seconds
+	job state = exited
+	sanitizer flags = 0x0
+
+	properties = inferred program
+}

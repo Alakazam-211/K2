@@ -1,0 +1,32 @@
+gui/501/dev.k2.heartbeat = {
+	active count = 0
+	path = /Users/k2fixture/Library/LaunchAgents/dev.k2.heartbeat.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /bin/bash
+	arguments = {
+		/bin/bash
+		/Users/k2fixture/.k2/heartbeat.sh
+	}
+
+	stderr path = /Users/k2fixture/.k2/heartbeat-stderr.log
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	domain = gui/501 [100021]
+	asid = 100021
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 0
+	last exit code = (never exited)
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	cpumon = default
+	run interval = 60 seconds
+	job state = exited
+
+	properties = inferred program
+}

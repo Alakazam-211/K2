@@ -14,9 +14,19 @@
 //!
 //! Generates `~/.k2/heartbeat.sh` (the bridge that asks the daemon
 //! `/cli/heartbeat/active-projects` and ticks each one) and installs
-//! the launchd agent (macOS) or crontab entry (Linux). All file
-//! writes are atomic; launchctl operations are best-effort
-//! (failures are logged, not fatal).
+//! the launchd agent (macOS) or crontab entry (Linux).
+//!
+//! Heartbeat S1 (`prd-heartbeat-firing-v1.md`, HB6–HB11):
+//! - [`transport_writes_allowed`] guards every write (HB6);
+//! - every `launchctl` / `crontab` call goes through a
+//!   [`CommandRunner`] (HB7);
+//! - [`transport_state`] reports `ok` / `missing` / `foreign` /
+//!   `failing` / `silent` / `unsupported` from what launchd actually has
+//!   loaded, not from the plist on disk (HB8);
+//! - [`install_from_saved_settings`] is the one installer, driven by
+//!   `app_settings.wake_scheduler` (HB11);
+//! - [`self_check_and_repair`] boots out and re-bootstraps a job that is
+//!   not `ok` (HB10).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -261,105 +271,779 @@ fn launchd_target() -> String {
     format!("gui/{uid}/dev.k2.heartbeat")
 }
 
-/// Ensure the cron infrastructure is installed. Safe to call on
-/// every heartbeat add — the underlying writes are idempotent and
-/// launchctl operations are no-ops when the agent is already in the
-/// requested state.
-///
-/// Returns `Ok(true)` if anything was installed/changed, `Ok(false)`
-/// if everything was already up-to-date. Errors are surfaced for
-/// logging but the caller is free to ignore them — a partially
-/// installed cron is better than blocking the heartbeat add.
-pub fn ensure_cron_installed() -> Result<bool, String> {
-    transport_writes_allowed()?;
-    let k2so_home = home_dir().join(".k2");
-    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2: {e}"))?;
+// ── Paths, platform, job spec ──────────────────────────────────────────
 
-    let script_path = k2so_home.join("heartbeat.sh");
-    let mut changed = false;
+/// The launchd label of the heartbeat job.
+pub const LAUNCHD_LABEL: &str = "dev.k2.heartbeat";
+/// Marker comment on the crontab line.
+pub const CRON_MARKER: &str = "k2so-agent-heartbeat";
 
-    // Write/refresh heartbeat.sh if it doesn't match the current
-    // template. This catches users upgrading from a pre-P5.6
-    // install whose on-disk script still references
-    // ~/.k2/heartbeat-projects.txt.
-    let want_script = generate_heartbeat_script();
-    let current_script = fs::read_to_string(&script_path).ok();
-    if current_script.as_deref() != Some(&want_script) {
-        fs::write(&script_path, &want_script)
-            .map_err(|e| format!("write heartbeat.sh: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))
-                .map_err(|e| format!("chmod heartbeat.sh: {e}"))?;
-        }
-        changed = true;
-    }
-
-    // Install platform scheduler if not already loaded.
-    #[cfg(target_os = "macos")]
-    {
-        if install_macos_if_missing(&script_path, DEFAULT_INTERVAL_SECS, false)? {
-            changed = true;
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if install_linux_if_missing(&script_path)? {
-            changed = true;
-        }
-    }
-
-    Ok(changed)
+/// `<home>/Library/LaunchAgents/dev.k2.heartbeat.plist`.
+pub fn plist_path(home: &Path) -> PathBuf {
+    home.join("Library/LaunchAgents/dev.k2.heartbeat.plist")
 }
 
-/// Is the tick transport actually installed AND armed?
+/// `<home>/.k2/heartbeat.sh`.
+pub fn script_path(home: &Path) -> PathBuf {
+    home.join(".k2/heartbeat.sh")
+}
+
+fn launchd_domain() -> String {
+    #[cfg(unix)]
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
+    format!("gui/{uid}")
+}
+
+/// Which OS scheduler carries the tick. Tests pass one explicitly so the
+/// launchd logic is exercised on Linux CI and the cron logic on macOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Platform {
+    Launchd,
+    Cron,
+    Unsupported,
+}
+
+impl Platform {
+    pub(crate) fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Platform::Launchd
+        } else if cfg!(target_os = "linux") {
+            Platform::Cron
+        } else {
+            Platform::Unsupported
+        }
+    }
+}
+
+/// What the OS job should look like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobSpec {
+    pub interval_secs: u32,
+    pub wake_system: bool,
+}
+
+/// HB11 — the job each saved wake-scheduler mode wants.
 ///
-/// macOS: the `dev.k2.heartbeat` plist exists on disk AND launchd
-/// reports the agent loaded (`launchctl print gui/<uid>/…`). The
-/// misfire study found this box's agent silently missing for ~3 weeks
-/// while every enabled heartbeat sat dark with zero signal — the
-/// plist-on-disk check alone is not enough.
+/// - `heartbeat` → the user's interval and `WakeSystem` setting.
+/// - `on_demand` → today's de facto job: 60 s, never wakes the machine.
+/// - `off` → the same 60 s no-wake job. Rosson decision D2 (2026-10-01):
+///   Off means "don't wake the computer from sleep"; heartbeats still
+///   fire whenever it is awake. Until the daemon ticks itself (S2), the
+///   OS job is the only thing that fires them, so Off keeps it.
 ///
-/// Linux: the `k2so-agent-heartbeat` crontab entry exists.
-///
-/// Other platforms report `true` (no supported transport to verify —
-/// don't raise false alarms).
+/// `Ok(None)` ("no OS job") is reserved for S2.
+pub fn job_spec_for(
+    ws: &crate::app_settings::WakeSchedulerSettings,
+) -> Result<Option<JobSpec>, String> {
+    match ws.mode.as_str() {
+        "heartbeat" => Ok(Some(JobSpec {
+            interval_secs: ws.interval_minutes.max(1).saturating_mul(60),
+            wake_system: ws.wake_system,
+        })),
+        "on_demand" | "off" => Ok(Some(JobSpec {
+            interval_secs: DEFAULT_INTERVAL_SECS,
+            wake_system: false,
+        })),
+        other => Err(format!(
+            "unknown wake scheduler mode '{other}'. Expected 'off', 'on_demand', or 'heartbeat'."
+        )),
+    }
+}
+
+/// The job the SAVED settings (`app_settings.wake_scheduler`) want.
+pub fn saved_job_spec() -> Result<Option<JobSpec>, String> {
+    job_spec_for(&crate::app_settings::load().wake_scheduler)
+}
+
+/// The launchd plist for `spec`, byte-identical to what every earlier
+/// installer wrote so an unchanged job is never reloaded.
+pub fn plist_for_spec(home: &Path, spec: JobSpec) -> String {
+    let wake_key = if spec.wake_system {
+        "\n    <key>WakeSystem</key>\n    <true/>"
+    } else {
+        ""
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.k2.heartbeat</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{script}</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>{interval}</integer>{wake_key}
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardErrorPath</key>
+    <string>{home}/.k2/heartbeat-stderr.log</string>
+</dict>
+</plist>"#,
+        script = script_path(home).to_string_lossy(),
+        interval = spec.interval_secs,
+        wake_key = wake_key,
+        home = home.to_string_lossy(),
+    )
+}
+
+fn cron_entry(home: &Path) -> String {
+    format!("* * * * * {} # {CRON_MARKER}", script_path(home).to_string_lossy())
+}
+
+fn describe(spec: JobSpec) -> String {
+    let mins = spec.interval_secs.max(60) / 60;
+    format!(
+        "heartbeat scheduler installed (every {} min{}).",
+        mins,
+        if spec.wake_system { " — wakes system from sleep" } else { "" }
+    )
+}
+
+// ── HB8 — an honest transport check ────────────────────────────────────
+
+/// How the loaded job last exited, per `launchctl print`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastExit {
+    NeverExited,
+    Code(i64),
+    NotShown,
+}
+
+/// The fields of `launchctl print gui/<uid>/dev.k2.heartbeat` the
+/// self-check needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchctlJob {
+    /// The plist the LOADED job came from (not the one on disk).
+    pub path: Option<String>,
+    pub program: Option<String>,
+    pub arguments: Vec<String>,
+    pub last_exit: LastExit,
+    pub run_interval_secs: Option<u64>,
+}
+
+/// Parse `launchctl print` output. Only top-level keys are read, so the
+/// nested `stderr path`, coalition `state`, etc. never leak in.
+pub fn parse_launchctl_print(text: &str) -> LaunchctlJob {
+    let mut job = LaunchctlJob {
+        path: None,
+        program: None,
+        arguments: Vec::new(),
+        last_exit: LastExit::NotShown,
+        run_interval_secs: None,
+    };
+    let mut depth: i32 = 0;
+    let mut in_args = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "}" {
+            depth -= 1;
+            if depth <= 1 {
+                in_args = false;
+            }
+            continue;
+        }
+        if line.ends_with('{') {
+            if depth == 1 && line.starts_with("arguments =") {
+                in_args = true;
+            }
+            depth += 1;
+            continue;
+        }
+        if in_args && depth == 2 {
+            job.arguments.push(line.to_string());
+            continue;
+        }
+        if depth != 1 {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(" = ") else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            "path" => job.path = Some(value.to_string()),
+            "program" => job.program = Some(value.to_string()),
+            "last exit code" => job.last_exit = parse_last_exit(value),
+            "run interval" => {
+                job.run_interval_secs = value.split_whitespace().next().and_then(|n| n.parse().ok())
+            }
+            _ => {}
+        }
+    }
+    job
+}
+
+fn parse_last_exit(value: &str) -> LastExit {
+    if value.contains("never exited") {
+        return LastExit::NeverExited;
+    }
+    let digits: String = value
+        .chars()
+        .enumerate()
+        .take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && *c == '-'))
+        .map(|(_, c)| c)
+        .collect();
+    digits.parse().map(LastExit::Code).unwrap_or(LastExit::NotShown)
+}
+
+/// HB8 states. `Ok` is the only healthy one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportState {
+    /// Loaded from the real plist, runs the real script, exits 0 (or has
+    /// not run yet), and OS ticks arrive.
+    Ok,
+    /// Not loaded, no crontab line, or the plist is gone from disk.
+    Missing,
+    /// Loaded, but from another plist or running another script — the
+    /// 2026-09-30 temp-HOME hijack.
+    Foreign,
+    /// Real paths, nonzero last exit code.
+    Failing,
+    /// Looks right, but no OS tick in three intervals.
+    Silent,
+    /// No OS scheduler on this platform.
+    Unsupported,
+}
+
+/// What [`transport_state`] found. Serialised into
+/// `/cli/heartbeat/scheduler-status` as `transport`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportReport {
+    pub state: TransportState,
+    /// The plist the loaded job came from (launchd) — not the one on disk.
+    pub plist_path: Option<String>,
+    /// The script the job runs.
+    pub program_path: Option<String>,
+    /// `None` = never exited / not shown.
+    pub last_exit_code: Option<i64>,
+    pub interval_secs: Option<u64>,
+    /// Human-readable reason.
+    pub detail: String,
+}
+
+impl TransportReport {
+    fn bare(state: TransportState, detail: impl Into<String>) -> Self {
+        Self {
+            state,
+            plist_path: None,
+            program_path: None,
+            last_exit_code: None,
+            interval_secs: None,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// The tick evidence the `silent` verdict is judged on.
+#[derive(Debug, Clone, Copy)]
+pub struct TickEvidence {
+    pub now: chrono::DateTime<chrono::Utc>,
+    /// When this daemon started watching the job (boot, wake, or the last
+    /// reload). launchd does not report when a job was loaded, so "loaded
+    /// longer than three intervals" is measured from here.
+    pub observed_since: chrono::DateTime<chrono::Utc>,
+    /// `scheduler_meta.last_os_tick_at`.
+    pub last_os_tick: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// `Some(reason)` when the job has been watched for more than three
+/// intervals and no OS tick arrived within the last three.
+fn silent_reason(interval_secs: u64, ev: &TickEvidence) -> Option<String> {
+    let window = chrono::Duration::seconds((interval_secs.max(1) as i64).saturating_mul(3));
+    if ev.now - ev.observed_since <= window {
+        return None;
+    }
+    match ev.last_os_tick {
+        Some(t) if ev.now - t <= window => None,
+        Some(t) => Some(format!(
+            "no OS tick for {}s (last {}); the job should tick every {}s",
+            (ev.now - t).num_seconds(),
+            t.to_rfc3339(),
+            interval_secs
+        )),
+        None => Some(format!(
+            "no OS tick recorded in {}s of watching; the job should tick every {}s",
+            (ev.now - ev.observed_since).num_seconds(),
+            interval_secs
+        )),
+    }
+}
+
+/// Classify a launchd job. `print` is the stdout of a successful
+/// `launchctl print`, or `None` when the label is not loaded.
+pub fn classify_launchd(
+    print: Option<&str>,
+    home: &Path,
+    plist_on_disk: bool,
+    fallback_interval_secs: u64,
+    ev: &TickEvidence,
+) -> TransportReport {
+    let want_plist = plist_path(home).to_string_lossy().into_owned();
+    let want_script = script_path(home).to_string_lossy().into_owned();
+    let Some(text) = print else {
+        return TransportReport::bare(
+            TransportState::Missing,
+            format!("{LAUNCHD_LABEL} is not loaded in launchd"),
+        );
+    };
+    let job = parse_launchctl_print(text);
+    let interval = job.run_interval_secs.unwrap_or(fallback_interval_secs);
+    let mut r = TransportReport {
+        state: TransportState::Ok,
+        plist_path: job.path.clone(),
+        program_path: job.arguments.get(1).cloned().or_else(|| job.program.clone()),
+        last_exit_code: match job.last_exit {
+            LastExit::Code(c) => Some(c),
+            _ => None,
+        },
+        interval_secs: Some(interval),
+        detail: String::new(),
+    };
+    let want_args = vec!["/bin/bash".to_string(), want_script.clone()];
+    if job.path.as_deref() != Some(want_plist.as_str()) || job.arguments != want_args {
+        r.state = TransportState::Foreign;
+        r.detail = format!(
+            "loaded job comes from {} and runs `{}`; expected {} running `/bin/bash {}`",
+            job.path.as_deref().unwrap_or("<no path>"),
+            job.arguments.join(" "),
+            want_plist,
+            want_script
+        );
+        return r;
+    }
+    if !plist_on_disk {
+        r.state = TransportState::Missing;
+        r.detail = format!("{want_plist} is missing on disk");
+        return r;
+    }
+    if let Some(code) = r.last_exit_code {
+        if code != 0 {
+            r.state = TransportState::Failing;
+            r.detail = format!("last exit code {code}");
+            return r;
+        }
+    }
+    if let Some(why) = silent_reason(interval, ev) {
+        r.state = TransportState::Silent;
+        r.detail = why;
+        return r;
+    }
+    r.detail = "loaded from the real plist and ticking".to_string();
+    r
+}
+
+/// Classify the crontab. `Err` = `crontab` could not run (not installed),
+/// `Ok(None)` = no crontab for this user.
+pub fn classify_cron(
+    crontab: Result<Option<String>, String>,
+    home: &Path,
+    ev: &TickEvidence,
+) -> TransportReport {
+    let want_script = script_path(home).to_string_lossy().into_owned();
+    let text = match crontab {
+        Err(e) => {
+            return TransportReport::bare(
+                TransportState::Missing,
+                format!("crontab is not available: {e}"),
+            )
+        }
+        Ok(None) => {
+            return TransportReport::bare(TransportState::Missing, "no crontab for this user")
+        }
+        Ok(Some(t)) => t,
+    };
+    let scripts: Vec<String> = text
+        .lines()
+        .filter(|l| l.contains(CRON_MARKER) && !l.trim_start().starts_with('#'))
+        .map(|l| l.split_whitespace().nth(5).unwrap_or("").to_string())
+        .collect();
+    if scripts.is_empty() {
+        return TransportReport::bare(
+            TransportState::Missing,
+            format!("no {CRON_MARKER} line in the crontab"),
+        );
+    }
+    let interval = DEFAULT_INTERVAL_SECS as u64;
+    let mut r = TransportReport {
+        state: TransportState::Ok,
+        plist_path: None,
+        program_path: scripts.first().cloned(),
+        last_exit_code: None,
+        interval_secs: Some(interval),
+        detail: String::new(),
+    };
+    if let Some(other) = scripts.iter().find(|s| **s != want_script) {
+        r.state = TransportState::Foreign;
+        r.program_path = Some(other.clone());
+        r.detail = format!("crontab line runs {other}; expected {want_script}");
+        return r;
+    }
+    if let Some(why) = silent_reason(interval, ev) {
+        r.state = TransportState::Silent;
+        r.detail = why;
+        return r;
+    }
+    r.detail = "crontab line points at the real script and ticks arrive".to_string();
+    r
+}
+
+/// Read the job's state through `runner`. Read-only: `launchctl print`
+/// or `crontab -l`, nothing else.
+pub(crate) fn state_with(
+    runner: &dyn CommandRunner,
+    platform: Platform,
+    home: &Path,
+    fallback_interval_secs: u64,
+    ev: &TickEvidence,
+) -> TransportReport {
+    match platform {
+        Platform::Launchd => {
+            let print = runner.run("launchctl", &["print", &launchd_target()], None);
+            let text = match &print {
+                Ok(o) if o.success => Some(o.stdout.as_str()),
+                _ => None,
+            };
+            let mut r =
+                classify_launchd(text, home, plist_path(home).exists(), fallback_interval_secs, ev);
+            if let Err(e) = &print {
+                r.detail = format!("{} ({e})", r.detail);
+            }
+            r
+        }
+        Platform::Cron => {
+            let crontab = runner
+                .run("crontab", &["-l"], None)
+                .map(|o| if o.success { Some(o.stdout) } else { None });
+            classify_cron(crontab, home, ev)
+        }
+        Platform::Unsupported => TransportReport::bare(
+            TransportState::Unsupported,
+            "no OS scheduler job on this platform",
+        ),
+    }
+}
+
+/// Start of the current watch window (see [`TickEvidence::observed_since`]).
+static OBSERVED_SINCE: parking_lot::Mutex<Option<chrono::DateTime<chrono::Utc>>> =
+    parking_lot::Mutex::new(None);
+
+/// Restart the "loaded longer than three intervals" clock. Called at
+/// daemon boot, after a wake (the job could not tick while the machine
+/// slept), and after this module reloads the job.
+pub fn reset_observation_window() {
+    *OBSERVED_SINCE.lock() = Some(chrono::Utc::now());
+}
+
+fn observed_since() -> chrono::DateTime<chrono::Utc> {
+    *OBSERVED_SINCE.lock().get_or_insert_with(chrono::Utc::now)
+}
+
+fn last_os_tick() -> Option<chrono::DateTime<chrono::Utc>> {
+    use crate::db::schema::SchedulerMeta;
+    let db = crate::db::shared();
+    let conn = db.lock();
+    SchedulerMeta::get(&conn, SchedulerMeta::LAST_OS_TICK_AT)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+fn current_evidence() -> TickEvidence {
+    TickEvidence {
+        now: chrono::Utc::now(),
+        observed_since: observed_since(),
+        last_os_tick: last_os_tick(),
+    }
+}
+
+fn fallback_interval_secs() -> u64 {
+    saved_job_spec()
+        .ok()
+        .flatten()
+        .map(|s| s.interval_secs as u64)
+        .unwrap_or(DEFAULT_INTERVAL_SECS as u64)
+}
+
+/// HB8 — the honest transport check for this machine's real job.
+pub fn transport_state() -> TransportReport {
+    state_with(
+        &SystemRunner,
+        Platform::current(),
+        &home_dir(),
+        fallback_interval_secs(),
+        &current_evidence(),
+    )
+}
+
+/// Old boolean, kept for old callers: `transport_state() == ok`.
 pub fn transport_installed() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        let plist_path = home_dir().join("Library/LaunchAgents/dev.k2.heartbeat.plist");
-        if !plist_path.exists() {
-            return false;
-        }
-        let uid_target = launchd_target();
-        SystemRunner
-            .run("launchctl", &["print", &uid_target], None)
-            .map(|o| o.success)
-            .unwrap_or(false)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        SystemRunner
-            .run("crontab", &["-l"], None)
-            .ok()
-            .and_then(|o| if o.success { Some(o.stdout) } else { None })
-            .map(|c| c.contains("k2so-agent-heartbeat"))
-            .unwrap_or(false)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        true
-    }
+    transport_state().state == TransportState::Ok
 }
 
-/// Bash script written to `~/.k2/heartbeat.sh`. Asks the daemon
+// ── HB11 — one installer, from saved settings ──────────────────────────
+
+/// Result of an install / reinstall.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InstallOutcome {
+    pub changed: bool,
+    pub message: String,
+}
+
+/// Write `<home>/.k2/heartbeat.sh` when it differs. Returns whether it
+/// changed.
+fn write_script_if_changed(home: &Path) -> Result<bool, String> {
+    let k2_dir = home.join(".k2");
+    fs::create_dir_all(&k2_dir).map_err(|e| format!("create {}: {e}", k2_dir.display()))?;
+    // Retired pre-P5.6 artifact.
+    let _ = fs::remove_file(k2_dir.join("heartbeat-projects.txt"));
+    let path = script_path(home);
+    let want = heartbeat_script_for(home);
+    if fs::read_to_string(&path).ok().as_deref() == Some(want.as_str()) {
+        return Ok(false);
+    }
+    fs::write(&path, &want).map_err(|e| format!("write heartbeat.sh: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod heartbeat.sh: {e}"))?;
+    }
+    Ok(true)
+}
+
+/// Install (or reload) the job for `spec` under `home`, through
+/// `runner`. With `force_reload` the job is booted out and bootstrapped
+/// even when it already looks right (the HB10 repair).
+///
+/// Callers that act on the REAL session must call
+/// [`transport_writes_allowed`] first; tests pass a fake runner and a
+/// temp `home`.
+pub(crate) fn install_with(
+    runner: &dyn CommandRunner,
+    platform: Platform,
+    home: &Path,
+    spec: Option<JobSpec>,
+    force_reload: bool,
+) -> Result<InstallOutcome, String> {
+    let Some(spec) = spec else {
+        return Ok(InstallOutcome {
+            changed: false,
+            message: "wake scheduler mode wants no OS job".to_string(),
+        });
+    };
+    let script_changed = write_script_if_changed(home)?;
+    let mut out = match platform {
+        Platform::Launchd => install_launchd_with(runner, home, spec, force_reload)?,
+        Platform::Cron => install_cron_with(runner, home, force_reload)?,
+        Platform::Unsupported => InstallOutcome {
+            changed: false,
+            message: "no OS scheduler on this platform; heartbeat.sh written".to_string(),
+        },
+    };
+    out.changed |= script_changed;
+    Ok(out)
+}
+
+fn install_launchd_with(
+    runner: &dyn CommandRunner,
+    home: &Path,
+    spec: JobSpec,
+    force_reload: bool,
+) -> Result<InstallOutcome, String> {
+    let plist = plist_path(home);
+    if let Some(parent) = plist.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create LaunchAgents dir: {e}"))?;
+    }
+    let want = plist_for_spec(home, spec);
+    let plist_changed = fs::read_to_string(&plist).ok().as_deref() != Some(want.as_str());
+
+    let target = launchd_target();
+    let print = runner
+        .run("launchctl", &["print", &target], None)
+        .map_err(|e| format!("launchctl print: {e}"))?;
+    let loaded = print.success;
+    let loaded_is_ours = loaded && {
+        let job = parse_launchctl_print(&print.stdout);
+        job.path.as_deref() == Some(plist.to_string_lossy().as_ref())
+            && job.arguments
+                == vec![
+                    "/bin/bash".to_string(),
+                    script_path(home).to_string_lossy().into_owned(),
+                ]
+    };
+    if !plist_changed && loaded_is_ours && !force_reload {
+        return Ok(InstallOutcome {
+            changed: false,
+            message: format!("{} Already up to date.", describe(spec)),
+        });
+    }
+
+    if plist_changed {
+        fs::write(&plist, &want).map_err(|e| format!("write plist: {e}"))?;
+    }
+    // bootout / bootstrap everywhere — the old unload/load path is gone.
+    if loaded {
+        let out = runner
+            .run("launchctl", &["bootout", &target], None)
+            .map_err(|e| format!("launchctl bootout: {e}"))?;
+        if !out.success {
+            crate::log_debug!(
+                "[heartbeat-transport] launchctl bootout {target} failed: {}",
+                out.stderr.trim()
+            );
+        }
+    }
+    let domain = launchd_domain();
+    let plist_s = plist.to_string_lossy().into_owned();
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        let out = runner
+            .run("launchctl", &["bootstrap", &domain, &plist_s], None)
+            .map_err(|e| format!("launchctl bootstrap: {e}"))?;
+        if out.success {
+            return Ok(InstallOutcome {
+                changed: true,
+                message: describe(spec),
+            });
+        }
+        last_err = out.stderr.trim().to_string();
+        // A bootout can take a moment to settle before the label is free.
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+    Err(format!("launchctl bootstrap {domain} {plist_s} failed: {last_err}"))
+}
+
+fn install_cron_with(
+    runner: &dyn CommandRunner,
+    home: &Path,
+    force_reload: bool,
+) -> Result<InstallOutcome, String> {
+    let entry = cron_entry(home);
+    let existing = match runner.run("crontab", &["-l"], None) {
+        Ok(o) if o.success => o.stdout,
+        Ok(_) => String::new(),
+        Err(e) => return Err(format!("crontab is not available: {e}")),
+    };
+    let ours: Vec<&str> = existing.lines().filter(|l| l.contains(CRON_MARKER)).collect();
+    if !force_reload && ours.len() == 1 && ours[0] == entry {
+        return Ok(InstallOutcome {
+            changed: false,
+            message: "heartbeat crontab entry already installed.".to_string(),
+        });
+    }
+    let mut lines: Vec<&str> = existing.lines().filter(|l| !l.contains(CRON_MARKER)).collect();
+    lines.push(&entry);
+    crontab_write(runner, &(lines.join("\n") + "\n"))?;
+    Ok(InstallOutcome {
+        changed: true,
+        message: "heartbeat crontab entry installed.".to_string(),
+    })
+}
+
+/// Remove the job and the script under `home`.
+pub(crate) fn uninstall_with(
+    runner: &dyn CommandRunner,
+    platform: Platform,
+    home: &Path,
+) -> Result<(), String> {
+    match platform {
+        Platform::Launchd => {
+            let target = launchd_target();
+            let print = runner
+                .run("launchctl", &["print", &target], None)
+                .map_err(|e| format!("launchctl print: {e}"))?;
+            if print.success {
+                let out = runner
+                    .run("launchctl", &["bootout", &target], None)
+                    .map_err(|e| format!("launchctl bootout: {e}"))?;
+                if !out.success {
+                    return Err(format!("launchctl bootout failed: {}", out.stderr.trim()));
+                }
+            }
+            let plist = plist_path(home);
+            if plist.exists() {
+                fs::remove_file(&plist).map_err(|e| format!("remove plist: {e}"))?;
+            }
+        }
+        Platform::Cron => {
+            let existing = crontab_read(runner);
+            if existing.lines().any(|l| l.contains(CRON_MARKER)) {
+                let kept: Vec<&str> =
+                    existing.lines().filter(|l| !l.contains(CRON_MARKER)).collect();
+                crontab_write(runner, &(kept.join("\n") + "\n"))?;
+            }
+        }
+        Platform::Unsupported => {}
+    }
+    let _ = fs::remove_file(script_path(home));
+    let _ = fs::remove_file(home.join(".k2/heartbeat-projects.txt"));
+    Ok(())
+}
+
+/// HB11 — THE installer. Add, self-heal, Settings Apply, the
+/// install-launchd route and boot all land here. Reads
+/// `app_settings.wake_scheduler`; never invents an interval or a wake
+/// value of its own.
+pub fn install_from_saved_settings() -> Result<InstallOutcome, String> {
+    transport_writes_allowed()?;
+    let spec = saved_job_spec()?;
+    let out = install_with(&SystemRunner, Platform::current(), &home_dir(), spec, false)?;
+    if out.changed {
+        reset_observation_window();
+    }
+    Ok(out)
+}
+
+/// Called by `heartbeat add`. Same as [`install_from_saved_settings`];
+/// returns whether anything changed.
+pub fn ensure_cron_installed() -> Result<bool, String> {
+    install_from_saved_settings().map(|o| o.changed)
+}
+
+/// Settings → Apply (and boot after a label migration). Settings are
+/// saved to the daemon before Apply is called, so this reads them back
+/// rather than trusting the request body.
+pub fn apply_wake_scheduler() -> Result<String, String> {
+    transport_writes_allowed()?;
+    let mode = crate::app_settings::load().wake_scheduler.mode;
+    let out = install_from_saved_settings()?;
+    let note = match mode.as_str() {
+        "heartbeat" => "",
+        _ => " Heartbeats fire while this computer is awake; it is not woken from sleep.",
+    };
+    Ok(format!("wake scheduler '{mode}': {}{note}", out.message))
+}
+
+/// Remove the job and `heartbeat.sh`. Idempotent.
+pub fn uninstall_heartbeat_scheduler() -> Result<(), String> {
+    transport_writes_allowed()?;
+    uninstall_with(&SystemRunner, Platform::current(), &home_dir())
+}
+
+/// Bash script written to `~/.k2/heartbeat.sh` for this HOME.
+pub fn generate_heartbeat_script() -> String {
+    heartbeat_script_for(&home_dir())
+}
+
+/// Bash script written to `<home>/.k2/heartbeat.sh`. Asks the daemon
 /// for active projects on every tick and forwards each to
 /// `/cli/scheduler-tick`. P5.6 retired the `heartbeat-projects.txt`
 /// dependency — the DB is the only source of truth for which
 /// workspaces have heartbeats.
-pub fn generate_heartbeat_script() -> String {
-    let home = home_dir().to_string_lossy().to_string();
+pub fn heartbeat_script_for(home: &Path) -> String {
+    let home = home.to_string_lossy().to_string();
 
     format!(r##"#!/bin/bash
 # K2SO Agent Heartbeat — DO NOT EDIT (managed by K2SO daemon)
@@ -443,396 +1127,8 @@ fi
 "##, home = home)
 }
 
-#[cfg(target_os = "macos")]
-fn install_macos_if_missing(
-    script_path: &Path,
-    interval_seconds: u32,
-    wake_system: bool,
-) -> Result<bool, String> {
-    let home = home_dir();
-    let plist_path = home.join("Library/LaunchAgents/dev.k2.heartbeat.plist");
-
-    if let Some(parent) = plist_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create LaunchAgents dir: {e}"))?;
-    }
-
-    // Compose the desired plist.
-    let wake_key = if wake_system {
-        "\n    <key>WakeSystem</key>\n    <true/>"
-    } else {
-        ""
-    };
-    let want_plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.k2.heartbeat</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>{script}</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>{interval}</integer>{wake_key}
-    <key>RunAtLoad</key>
-    <false/>
-    <key>StandardErrorPath</key>
-    <string>{home}/.k2/heartbeat-stderr.log</string>
-</dict>
-</plist>"#,
-        script = script_path.to_string_lossy(),
-        interval = interval_seconds,
-        wake_key = wake_key,
-        home = home.to_string_lossy(),
-    );
-
-    // Compare with current plist on disk; only rewrite + reload if
-    // changed. Idempotent calls are a no-op.
-    let current_plist = fs::read_to_string(&plist_path).ok();
-    let plist_changed = current_plist.as_deref() != Some(&want_plist);
-
-    // Check if launchd already has the agent loaded — `launchctl
-    // print` returns 0 if loaded, non-zero otherwise.
-    let uid_target = launchd_target();
-    let already_loaded = SystemRunner
-        .run("launchctl", &["print", &uid_target], None)
-        .map(|o| o.success)
-        .unwrap_or(false);
-
-    if !plist_changed && already_loaded {
-        return Ok(false);
-    }
-
-    // Bootout the existing agent before rewriting (safe even if not loaded).
-    if already_loaded {
-        let _ = SystemRunner.run("launchctl", &["bootout", &uid_target], None);
-    }
-
-    if plist_changed {
-        fs::write(&plist_path, &want_plist)
-            .map_err(|e| format!("write plist: {e}"))?;
-    }
-
-    // Bootstrap into the user's GUI domain.
-    let domain = format!("gui/{}", unsafe { libc::getuid() });
-    let output = SystemRunner
-        .run("launchctl", &["bootstrap", &domain, &plist_path.to_string_lossy()], None)
-        .map_err(|e| format!("launchctl bootstrap: {e}"))?;
-    if !output.success {
-        return Err(format!("launchctl bootstrap failed: {}", output.stderr));
-    }
-    Ok(true)
-}
-
-#[cfg(target_os = "linux")]
-fn install_linux_if_missing(script_path: &Path) -> Result<bool, String> {
-    let marker = "# k2so-agent-heartbeat";
-    let entry = format!("* * * * * {} {}", script_path.to_string_lossy(), marker);
-
-    let existing = crontab_read(&SystemRunner);
-
-    // Skip if our entry already present unchanged.
-    if existing.lines().any(|l| l == entry) {
-        return Ok(false);
-    }
-
-    let mut lines: Vec<&str> = existing
-        .lines()
-        .filter(|l| !l.contains("k2so-agent-heartbeat"))
-        .collect();
-    lines.push(&entry);
-    let new_crontab = lines.join("\n") + "\n";
-
-    crontab_write(&SystemRunner, &new_crontab)?;
-    Ok(true)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn ensure_platform_installed(_script_path: &Path) -> Result<bool, String> {
-    // No supported scheduler on this platform — caller already wrote
-    // heartbeat.sh; user must invoke it manually.
-    Ok(false)
-}
-
 fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
-}
-
-// ── Phase 2 Unit 7c — explicit install/uninstall/apply (daemon-owned) ──
-//
-// Pre-Unit-7c the heartbeat-launchd installer lived in
-// `src-tauri/src/commands/k2so_agents.rs`, called via Tauri commands
-// triggered from the Settings > Heartbeats UI. With Unit 7c the daemon
-// owns its own scheduler plist — K2SO Connect (remote daemon) must
-// install + remove its own launchd agent without depending on a Tauri
-// process on the same host. The functions below back the daemon's
-// `/cli/heartbeat/{install-launchd, uninstall-launchd, apply-wake-scheduler}`
-// routes.
-
-/// Write `heartbeat.sh` to `~/.k2/` (chmod 0755). Idempotent —
-/// callers can invoke before every install_launchd / install_cron pass
-/// without worrying about double-write.
-///
-/// Returns the script path so the caller can hand it to the platform
-/// installer.
-pub fn write_heartbeat_script() -> Result<PathBuf, String> {
-    transport_writes_allowed()?;
-    let k2so_home = home_dir().join(".k2");
-    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2: {e}"))?;
-
-    // Clean up the retired heartbeat-projects.txt artifact (pre-P5.6).
-    let _ = fs::remove_file(k2so_home.join("heartbeat-projects.txt"));
-
-    let script_path = k2so_home.join("heartbeat.sh");
-    let script = generate_heartbeat_script();
-    fs::write(&script_path, &script)
-        .map_err(|e| format!("write heartbeat.sh: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("chmod heartbeat.sh: {e}"))?;
-    }
-    Ok(script_path)
-}
-
-/// Install (or reinstall) the heartbeat launchd plist with a
-/// user-configurable interval + optional wake-from-sleep behavior.
-///
-/// - `interval_seconds` maps to `StartInterval` (60 = every minute,
-///   300 = every 5 minutes, etc.).
-/// - `wake_system` sets `WakeSystem: true` so launchd wakes a sleeping
-///   machine — the mechanism that makes lid-closed overnight agent
-///   work possible.
-///
-/// Idempotent: unloads any existing plist with the same label before
-/// writing, then loads the new one. Safe to call repeatedly with
-/// different settings.
-///
-/// Returns the plist path on success so callers can surface it for
-/// audit / display.
-#[cfg(target_os = "macos")]
-pub fn install_heartbeat_launchd(
-    script_path: &Path,
-    interval_seconds: u32,
-    wake_system: bool,
-) -> Result<PathBuf, String> {
-    transport_writes_allowed()?;
-    let home = home_dir();
-    let plist_path = home.join("Library/LaunchAgents/dev.k2.heartbeat.plist");
-
-    if let Some(parent) = plist_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create LaunchAgents dir: {e}"))?;
-    }
-
-    if plist_path.exists() {
-        let _ = SystemRunner.run("launchctl", &["unload", &plist_path.to_string_lossy()], None);
-    }
-
-    let wake_key = if wake_system {
-        "\n    <key>WakeSystem</key>\n    <true/>"
-    } else {
-        ""
-    };
-
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.k2.heartbeat</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>{script}</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>{interval}</integer>{wake_key}
-    <key>RunAtLoad</key>
-    <false/>
-    <key>StandardErrorPath</key>
-    <string>{home}/.k2/heartbeat-stderr.log</string>
-</dict>
-</plist>"#,
-        script = script_path.to_string_lossy(),
-        interval = interval_seconds,
-        wake_key = wake_key,
-        home = home.to_string_lossy(),
-    );
-
-    fs::write(&plist_path, &plist).map_err(|e| format!("write plist: {e}"))?;
-
-    let output = SystemRunner
-        .run("launchctl", &["load", &plist_path.to_string_lossy()], None)
-        .map_err(|e| format!("launchctl: {e}"))?;
-    if !output.success {
-        return Err(format!("launchctl load failed: {}", output.stderr));
-    }
-
-    Ok(plist_path)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn install_heartbeat_launchd(
-    _script_path: &Path,
-    _interval_seconds: u32,
-    _wake_system: bool,
-) -> Result<PathBuf, String> {
-    Err("install_heartbeat_launchd is macOS-only".to_string())
-}
-
-/// Uninstall the heartbeat launchd plist. Idempotent — missing plist
-/// is treated as success.
-#[cfg(target_os = "macos")]
-pub fn uninstall_heartbeat_launchd() -> Result<(), String> {
-    transport_writes_allowed()?;
-    let home = home_dir();
-    let plist_path = home.join("Library/LaunchAgents/dev.k2.heartbeat.plist");
-    if plist_path.exists() {
-        let _ = SystemRunner.run("launchctl", &["unload", &plist_path.to_string_lossy()], None);
-        fs::remove_file(&plist_path)
-            .map_err(|e| format!("remove plist: {e}"))?;
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn uninstall_heartbeat_launchd() -> Result<(), String> {
-    Ok(())
-}
-
-/// Install the heartbeat crontab entry (Linux). Replaces any pre-
-/// existing `k2so-agent-heartbeat` entry. Idempotent.
-#[cfg(target_os = "linux")]
-pub fn install_heartbeat_cron(script_path: &Path) -> Result<(), String> {
-    transport_writes_allowed()?;
-    let marker = "# k2so-agent-heartbeat";
-    let entry = format!("* * * * * {} {}", script_path.to_string_lossy(), marker);
-
-    let existing = crontab_read(&SystemRunner);
-
-    let mut lines: Vec<&str> = existing
-        .lines()
-        .filter(|l| !l.contains("k2so-agent-heartbeat"))
-        .collect();
-    lines.push(&entry);
-    let new_crontab = lines.join("\n") + "\n";
-
-    crontab_write(&SystemRunner, &new_crontab)?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn install_heartbeat_cron(_script_path: &Path) -> Result<(), String> {
-    Err("install_heartbeat_cron is Linux-only".to_string())
-}
-
-/// Uninstall the heartbeat crontab entry. Idempotent.
-#[cfg(target_os = "linux")]
-pub fn uninstall_heartbeat_cron() -> Result<(), String> {
-    transport_writes_allowed()?;
-    let existing = crontab_read(&SystemRunner);
-
-    let new_crontab: String = existing
-        .lines()
-        .filter(|l| !l.contains("k2so-agent-heartbeat"))
-        .collect::<Vec<&str>>()
-        .join("\n")
-        + "\n";
-
-    crontab_write(&SystemRunner, &new_crontab)?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn uninstall_heartbeat_cron() -> Result<(), String> {
-    Ok(())
-}
-
-/// Install heartbeat scheduler with the given interval / wake-system
-/// settings (macOS launchd or Linux cron). Refreshes `heartbeat.sh`
-/// before installing. Returns a brief human-readable summary.
-pub fn install_heartbeat_scheduler(
-    interval_seconds: u32,
-    wake_system: bool,
-) -> Result<String, String> {
-    transport_writes_allowed()?;
-    let script_path = write_heartbeat_script()?;
-    #[cfg(target_os = "macos")]
-    {
-        install_heartbeat_launchd(&script_path, interval_seconds, wake_system)?;
-        let mins = interval_seconds.max(60) / 60;
-        return Ok(format!(
-            "heartbeat scheduler installed (every {} min{}).",
-            mins,
-            if wake_system { " — wakes system from sleep" } else { "" }
-        ));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = interval_seconds;
-        let _ = wake_system;
-        install_heartbeat_cron(&script_path)?;
-        return Ok("heartbeat crontab entry installed.".to_string());
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (script_path, interval_seconds, wake_system);
-        Err("unsupported platform".to_string())
-    }
-}
-
-/// Uninstall whichever scheduler is appropriate for this OS, and
-/// remove the on-disk heartbeat script. Idempotent.
-pub fn uninstall_heartbeat_scheduler() -> Result<(), String> {
-    transport_writes_allowed()?;
-    #[cfg(target_os = "macos")]
-    uninstall_heartbeat_launchd()?;
-    #[cfg(target_os = "linux")]
-    uninstall_heartbeat_cron()?;
-    let k2so_home = home_dir().join(".k2");
-    let _ = fs::remove_file(k2so_home.join("heartbeat.sh"));
-    let _ = fs::remove_file(k2so_home.join("heartbeat-projects.txt"));
-    Ok(())
-}
-
-/// Apply the user's wake-scheduler settings:
-///
-/// - `mode == "off"` or `"on_demand"` → uninstall any active plist /
-///   crontab entry; daemon still fires when started by Tauri/CLI but
-///   the system stays asleep.
-/// - `mode == "heartbeat"` → write heartbeat.sh + install the plist /
-///   crontab entry with the user's `interval_minutes` + `wake_system`.
-///
-/// Idempotent — safe to call on every Apply click even if nothing
-/// changed.
-pub fn apply_wake_scheduler(
-    mode: &str,
-    interval_minutes: u32,
-    wake_system: bool,
-) -> Result<String, String> {
-    transport_writes_allowed()?;
-    match mode {
-        "off" | "on_demand" => {
-            uninstall_heartbeat_scheduler()?;
-            Ok(format!(
-                "wake scheduler set to '{}' — heartbeat plist removed.",
-                mode
-            ))
-        }
-        "heartbeat" => {
-            let interval_secs = interval_minutes.max(1) * 60;
-            install_heartbeat_scheduler(interval_secs, wake_system)
-        }
-        other => Err(format!(
-            "unknown wake scheduler mode '{}'. Expected 'off', 'on_demand', or 'heartbeat'.",
-            other
-        )),
-    }
 }
 
 /// Test scaffolding: run `f` with `$HOME` pointed at a fresh temp folder,
@@ -952,12 +1248,9 @@ mod transport_guard_tests {
             test_recorder::take();
             let results: Vec<(&str, Result<(), String>)> = vec![
                 ("ensure_cron_installed", ensure_cron_installed().map(|_| ())),
-                ("write_heartbeat_script", write_heartbeat_script().map(|_| ())),
-                ("install_heartbeat_scheduler", install_heartbeat_scheduler(60, true).map(|_| ())),
+                ("install_from_saved_settings", install_from_saved_settings().map(|_| ())),
+                ("apply_wake_scheduler", apply_wake_scheduler().map(|_| ())),
                 ("uninstall_heartbeat_scheduler", uninstall_heartbeat_scheduler()),
-                ("apply_wake_scheduler(off)", apply_wake_scheduler("off", 5, false).map(|_| ())),
-                ("apply_wake_scheduler(on_demand)", apply_wake_scheduler("on_demand", 5, false).map(|_| ())),
-                ("apply_wake_scheduler(heartbeat)", apply_wake_scheduler("heartbeat", 5, true).map(|_| ())),
             ];
             for (name, r) in results {
                 let e = r.expect_err(&format!("{name} must refuse under a temp HOME"));
@@ -975,7 +1268,7 @@ mod transport_guard_tests {
         let prev = std::env::var_os(NO_SELF_HEAL_ENV);
         std::env::set_var(NO_SELF_HEAL_ENV, "1");
         test_recorder::take();
-        let r = apply_wake_scheduler("heartbeat", 5, true);
+        let r = apply_wake_scheduler();
         match prev {
             Some(v) => std::env::set_var(NO_SELF_HEAL_ENV, v),
             None => std::env::remove_var(NO_SELF_HEAL_ENV),
@@ -1008,5 +1301,492 @@ mod transport_guard_tests {
             test_recorder::take(),
             vec!["launchctl print gui/0/dev.k2.heartbeat".to_string()]
         );
+    }
+}
+
+/// A scripted `launchctl` / `crontab`: records every call and answers
+/// from fixed text. Never runs anything.
+#[cfg(test)]
+pub(crate) mod fake_runner {
+    use super::*;
+    use std::cell::RefCell;
+
+    pub(crate) struct FakeRunner {
+        /// `launchctl print` stdout; `None` = label not loaded.
+        pub print: RefCell<Option<String>>,
+        /// What `print` becomes after a successful bootstrap.
+        pub print_after_bootstrap: Option<String>,
+        pub bootstrap_ok: bool,
+        pub bootstrap_stderr: String,
+        /// `crontab -l` stdout; `None` = no crontab.
+        pub crontab: RefCell<Option<String>>,
+        pub crontab_missing: bool,
+        pub calls: RefCell<Vec<String>>,
+    }
+
+    impl FakeRunner {
+        pub(crate) fn launchd(print: Option<String>, after: Option<String>) -> Self {
+            Self {
+                print: RefCell::new(print),
+                print_after_bootstrap: after,
+                bootstrap_ok: true,
+                bootstrap_stderr: String::new(),
+                crontab: RefCell::new(None),
+                crontab_missing: false,
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        pub(crate) fn cron(crontab: Option<String>) -> Self {
+            let r = Self::launchd(None, None);
+            *r.crontab.borrow_mut() = crontab;
+            r
+        }
+
+        pub(crate) fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+
+        /// Calls other than the read-only `print` / `crontab -l`.
+        pub(crate) fn writes(&self) -> Vec<String> {
+            self.calls()
+                .into_iter()
+                .filter(|c| !c.starts_with("launchctl print") && c != "crontab -l")
+                .collect()
+        }
+    }
+
+    fn ok(stdout: &str) -> CmdOutput {
+        CmdOutput { success: true, stdout: stdout.to_string(), stderr: String::new() }
+    }
+
+    fn fail(stderr: &str) -> CmdOutput {
+        CmdOutput { success: false, stdout: String::new(), stderr: stderr.to_string() }
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn run(&self, program: &str, args: &[&str], stdin: Option<&str>) -> Result<CmdOutput, String> {
+            self.calls.borrow_mut().push(format!("{program} {}", args.join(" ")));
+            match (program, args.first().copied()) {
+                ("launchctl", Some("print")) => Ok(match &*self.print.borrow() {
+                    Some(t) => ok(t),
+                    None => fail("Could not find service \"dev.k2.heartbeat\" in domain"),
+                }),
+                ("launchctl", Some("bootout")) => {
+                    *self.print.borrow_mut() = None;
+                    Ok(ok(""))
+                }
+                ("launchctl", Some("bootstrap")) => {
+                    if self.bootstrap_ok {
+                        *self.print.borrow_mut() = self.print_after_bootstrap.clone();
+                        Ok(ok(""))
+                    } else {
+                        Ok(fail(&self.bootstrap_stderr))
+                    }
+                }
+                ("crontab", _) if self.crontab_missing => {
+                    Err("run crontab: No such file or directory".to_string())
+                }
+                ("crontab", Some("-l")) => Ok(match &*self.crontab.borrow() {
+                    Some(t) => ok(t),
+                    None => fail("no crontab for user"),
+                }),
+                ("crontab", Some("-")) => {
+                    *self.crontab.borrow_mut() = stdin.map(str::to_string);
+                    Ok(ok(""))
+                }
+                _ => Err(format!("FakeRunner: unexpected {program} {args:?}")),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod transport_state_tests {
+    use super::fake_runner::FakeRunner;
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    const FOREIGN: &str = include_str!("fixtures/launchctl-print-foreign.txt");
+    const OK: &str = include_str!("fixtures/launchctl-print-ok.txt");
+    const NEVER: &str = include_str!("fixtures/launchctl-print-never-exited.txt");
+    const FIXTURE_HOME: &str = "/Users/k2fixture";
+    const TEMP_HOME: &str = "/private/var/folders/9x/abc123/T/k2so-tunnel-test-96642-1790837486533357000";
+    const TEMP_HOME_SHORT: &str = "/var/folders/9x/abc123/T/k2so-tunnel-test-96642-1790837486533357000";
+
+    /// Watching just started: `silent` cannot apply yet.
+    fn fresh() -> TickEvidence {
+        let now = Utc::now();
+        TickEvidence { now, observed_since: now - Duration::seconds(30), last_os_tick: None }
+    }
+
+    fn home() -> PathBuf {
+        PathBuf::from(FIXTURE_HOME)
+    }
+
+    #[test]
+    fn parses_the_fields_the_check_needs() {
+        let job = parse_launchctl_print(FOREIGN);
+        assert_eq!(
+            job.path.as_deref(),
+            Some(format!("{TEMP_HOME}/Library/LaunchAgents/dev.k2.heartbeat.plist").as_str())
+        );
+        assert_eq!(job.program.as_deref(), Some("/bin/bash"));
+        assert_eq!(
+            job.arguments,
+            vec!["/bin/bash".to_string(), format!("{TEMP_HOME_SHORT}/.k2/heartbeat.sh")]
+        );
+        assert_eq!(job.last_exit, LastExit::Code(127));
+        assert_eq!(job.run_interval_secs, Some(60));
+
+        let ok = parse_launchctl_print(OK);
+        assert_eq!(ok.last_exit, LastExit::Code(0));
+        assert_eq!(ok.run_interval_secs, Some(300));
+        assert_eq!(parse_launchctl_print(NEVER).last_exit, LastExit::NeverExited);
+    }
+
+    /// T2 — the hijacked job from 2026-09-30 is `foreign`.
+    #[test]
+    fn temp_home_job_is_foreign() {
+        let r = classify_launchd(Some(FOREIGN), &home(), true, 60, &fresh());
+        assert_eq!(r.state, TransportState::Foreign, "{}", r.detail);
+        assert_eq!(r.last_exit_code, Some(127));
+        assert!(r.plist_path.as_deref().unwrap_or("").contains("k2so-tunnel-test"));
+    }
+
+    /// T2 — the same job with the real paths is `failing` (exit 127).
+    #[test]
+    fn real_paths_with_nonzero_exit_are_failing() {
+        let text = FOREIGN.replace(TEMP_HOME, FIXTURE_HOME).replace(TEMP_HOME_SHORT, FIXTURE_HOME);
+        let r = classify_launchd(Some(&text), &home(), true, 60, &fresh());
+        assert_eq!(r.state, TransportState::Failing, "{}", r.detail);
+        assert_eq!(r.last_exit_code, Some(127));
+        assert_eq!(
+            r.plist_path.as_deref(),
+            Some("/Users/k2fixture/Library/LaunchAgents/dev.k2.heartbeat.plist")
+        );
+        assert_eq!(r.program_path.as_deref(), Some("/Users/k2fixture/.k2/heartbeat.sh"));
+    }
+
+    /// T2 — a clean job and a never-run job are `ok`.
+    #[test]
+    fn clean_and_never_exited_are_ok() {
+        let r = classify_launchd(Some(OK), &home(), true, 60, &fresh());
+        assert_eq!(r.state, TransportState::Ok, "{}", r.detail);
+        assert_eq!(r.interval_secs, Some(300));
+        let r = classify_launchd(Some(NEVER), &home(), true, 60, &fresh());
+        assert_eq!(r.state, TransportState::Ok, "{}", r.detail);
+        assert_eq!(r.last_exit_code, None);
+    }
+
+    #[test]
+    fn not_loaded_or_plist_gone_is_missing() {
+        assert_eq!(
+            classify_launchd(None, &home(), true, 60, &fresh()).state,
+            TransportState::Missing
+        );
+        assert_eq!(
+            classify_launchd(Some(OK), &home(), false, 60, &fresh()).state,
+            TransportState::Missing
+        );
+    }
+
+    /// No OS tick within three intervals, once watched longer than three
+    /// intervals, is `silent`. The OK fixture ticks every 300 s.
+    #[test]
+    fn stale_os_tick_is_silent() {
+        let now = Utc::now();
+        let stale = TickEvidence {
+            now,
+            observed_since: now - Duration::minutes(20),
+            last_os_tick: Some(now - Duration::minutes(16)),
+        };
+        let r = classify_launchd(Some(OK), &home(), true, 60, &stale);
+        assert_eq!(r.state, TransportState::Silent, "{}", r.detail);
+
+        let never = TickEvidence { last_os_tick: None, ..stale };
+        assert_eq!(
+            classify_launchd(Some(OK), &home(), true, 60, &never).state,
+            TransportState::Silent
+        );
+
+        let recent = TickEvidence { last_os_tick: Some(now - Duration::minutes(5)), ..stale };
+        assert_eq!(
+            classify_launchd(Some(OK), &home(), true, 60, &recent).state,
+            TransportState::Ok
+        );
+
+        // Watched for less than three intervals: too early to call silent.
+        let young = TickEvidence { observed_since: now - Duration::minutes(10), ..never };
+        assert_eq!(
+            classify_launchd(Some(OK), &home(), true, 60, &young).state,
+            TransportState::Ok
+        );
+    }
+
+    #[test]
+    fn cron_states() {
+        let h = home();
+        let line = format!("* * * * * {FIXTURE_HOME}/.k2/heartbeat.sh # {CRON_MARKER}");
+        assert_eq!(
+            classify_cron(Err("run crontab: not found".into()), &h, &fresh()).state,
+            TransportState::Missing
+        );
+        assert_eq!(classify_cron(Ok(None), &h, &fresh()).state, TransportState::Missing);
+        assert_eq!(
+            classify_cron(Ok(Some("0 1 * * * backup\n".into())), &h, &fresh()).state,
+            TransportState::Missing
+        );
+        let foreign = format!("* * * * * /tmp/x/.k2/heartbeat.sh # {CRON_MARKER}\n");
+        assert_eq!(
+            classify_cron(Ok(Some(foreign)), &h, &fresh()).state,
+            TransportState::Foreign
+        );
+        let r = classify_cron(Ok(Some(format!("0 1 * * * backup\n{line}\n"))), &h, &fresh());
+        assert_eq!(r.state, TransportState::Ok, "{}", r.detail);
+        assert_eq!(r.program_path.as_deref(), Some("/Users/k2fixture/.k2/heartbeat.sh"));
+    }
+
+    #[test]
+    fn state_with_reads_only() {
+        let runner = FakeRunner::launchd(Some(OK.to_string()), None);
+        let r = state_with(&runner, Platform::Launchd, &home(), 60, &fresh());
+        // /Users/k2fixture's plist does not exist on this machine.
+        assert_eq!(r.state, TransportState::Missing, "{}", r.detail);
+        assert_eq!(runner.writes(), Vec::<String>::new());
+
+        let runner = FakeRunner::cron(None);
+        let r = state_with(&runner, Platform::Cron, &home(), 60, &fresh());
+        assert_eq!(r.state, TransportState::Missing);
+        assert_eq!(runner.calls(), vec!["crontab -l".to_string()]);
+
+        let runner = FakeRunner::launchd(None, None);
+        let r = state_with(&runner, Platform::Unsupported, &home(), 60, &fresh());
+        assert_eq!(r.state, TransportState::Unsupported);
+        assert_eq!(runner.calls(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn transport_state_serialises_for_the_status_route() {
+        let r = classify_launchd(Some(FOREIGN), &home(), true, 60, &fresh());
+        let v = serde_json::to_value(&r).expect("serialise");
+        assert_eq!(v["state"], "foreign");
+        assert_eq!(v["lastExitCode"], 127);
+        assert!(v["plistPath"].as_str().expect("plistPath").ends_with("dev.k2.heartbeat.plist"));
+        assert!(v["programPath"].as_str().expect("programPath").ends_with(".k2/heartbeat.sh"));
+    }
+}
+
+#[cfg(test)]
+mod installer_tests {
+    use super::fake_runner::FakeRunner;
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "k2-hb-installer-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// `launchctl print` text for a job loaded from `home`'s real plist.
+    fn print_for(home: &Path, exit: &str) -> String {
+        include_str!("fixtures/launchctl-print-ok.txt")
+            .replace("/Users/k2fixture", &home.to_string_lossy())
+            .replace("last exit code = 0", &format!("last exit code = {exit}"))
+    }
+
+    fn ws(mode: &str, minutes: u32, wake: bool) -> crate::app_settings::WakeSchedulerSettings {
+        crate::app_settings::WakeSchedulerSettings {
+            mode: mode.to_string(),
+            interval_minutes: minutes,
+            wake_system: wake,
+        }
+    }
+
+    #[test]
+    fn job_spec_per_mode() {
+        assert_eq!(
+            job_spec_for(&ws("heartbeat", 5, true)).unwrap(),
+            Some(JobSpec { interval_secs: 300, wake_system: true })
+        );
+        // on_demand keeps today's de facto 60 s no-wake job (HB11).
+        assert_eq!(
+            job_spec_for(&ws("on_demand", 5, true)).unwrap(),
+            Some(JobSpec { interval_secs: 60, wake_system: false })
+        );
+        // Off = never wake the machine, still fire while awake (D2).
+        assert_eq!(
+            job_spec_for(&ws("off", 5, true)).unwrap(),
+            Some(JobSpec { interval_secs: 60, wake_system: false })
+        );
+        let e = job_spec_for(&ws("bogus", 5, false)).unwrap_err();
+        assert!(e.contains("unknown wake scheduler mode 'bogus'"), "{e}");
+    }
+
+    /// T-S1c — heartbeat mode, 5 min, Wake on → 300 + WakeSystem, and the
+    /// installer writes exactly those bytes.
+    #[test]
+    fn plist_follows_saved_settings_and_install_writes_the_same_bytes() {
+        let home = temp_dir("plist");
+        let spec = job_spec_for(&ws("heartbeat", 5, true)).unwrap();
+        let want = plist_for_spec(&home, spec.expect("a job"));
+        assert!(want.contains("<integer>300</integer>"), "{want}");
+        assert!(want.contains("<key>WakeSystem</key>"), "{want}");
+        assert!(want.contains(&format!("{}/.k2/heartbeat.sh", home.display())));
+
+        let runner = FakeRunner::launchd(None, Some(print_for(&home, "(never exited)")));
+        let out = install_with(&runner, Platform::Launchd, &home, spec, false).expect("install");
+        assert!(out.changed);
+        assert!(out.message.contains("every 5 min") && out.message.contains("wakes system"));
+        assert_eq!(fs::read_to_string(plist_path(&home)).unwrap(), want);
+        assert_eq!(
+            fs::read_to_string(script_path(&home)).unwrap(),
+            heartbeat_script_for(&home)
+        );
+        assert_eq!(
+            runner.writes(),
+            vec![format!(
+                "launchctl bootstrap {} {}",
+                launchd_domain(),
+                plist_path(&home).display()
+            )]
+        );
+
+        // Same settings again: nothing to do, no launchctl writes.
+        let runner = FakeRunner::launchd(Some(print_for(&home, "0")), None);
+        let out = install_with(&runner, Platform::Launchd, &home, spec, false).expect("reinstall");
+        assert!(!out.changed, "{}", out.message);
+        assert_eq!(runner.writes(), Vec::<String>::new());
+        assert_eq!(fs::read_to_string(plist_path(&home)).unwrap(), want);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// HB11 — what `heartbeat add` does (minus the guard, which refuses
+    /// in tests): read the SAVED settings and install them. A user's
+    /// 5 min + Wake-on job already in place is left alone — no rewrite
+    /// to the 60 s default, no launchctl writes. Pre-S1 the add path
+    /// hard-coded 60 s / no wake and reloaded the job.
+    #[test]
+    fn add_keeps_the_saved_interval_and_wake_setting() {
+        with_temp_home("saved-spec", |home| {
+            let mut settings = crate::app_settings::load();
+            settings.wake_scheduler = ws("heartbeat", 5, true);
+            crate::app_settings::save(&settings).expect("save settings");
+            let spec = saved_job_spec().expect("saved spec");
+            assert_eq!(spec, Some(JobSpec { interval_secs: 300, wake_system: true }));
+
+            // The user's job, as Settings → Apply left it.
+            let user_plist = plist_for_spec(home, spec.unwrap());
+            fs::create_dir_all(plist_path(home).parent().unwrap()).unwrap();
+            fs::write(plist_path(home), &user_plist).unwrap();
+            write_script_if_changed(home).unwrap();
+
+            let runner = FakeRunner::launchd(Some(print_for(home, "0")), None);
+            let out = install_with(&runner, Platform::Launchd, home, spec, false).expect("add");
+            assert!(!out.changed, "{}", out.message);
+            assert_eq!(runner.writes(), Vec::<String>::new());
+            let after = fs::read_to_string(plist_path(home)).unwrap();
+            assert_eq!(after, user_plist);
+            assert!(after.contains("<integer>300</integer>") && after.contains("WakeSystem"));
+
+            // The add itself, in this test build, never reaches the job.
+            test_recorder::take();
+            let e = ensure_cron_installed().expect_err("guard refuses in tests");
+            assert!(e.contains("refused"), "{e}");
+            assert_eq!(test_recorder::take(), Vec::<String>::new());
+            assert_eq!(fs::read_to_string(plist_path(home)).unwrap(), user_plist);
+        });
+    }
+
+    /// A job loaded from another plist is replaced: bootout, then
+    /// bootstrap of THIS home's plist.
+    #[test]
+    fn foreign_job_is_booted_out_and_rebootstrapped() {
+        let home = temp_dir("foreign");
+        let spec = Some(JobSpec { interval_secs: 60, wake_system: false });
+        let runner = FakeRunner::launchd(
+            Some(include_str!("fixtures/launchctl-print-foreign.txt").to_string()),
+            Some(print_for(&home, "(never exited)")),
+        );
+        let out = install_with(&runner, Platform::Launchd, &home, spec, false).expect("install");
+        assert!(out.changed);
+        assert_eq!(
+            runner.writes(),
+            vec![
+                format!("launchctl bootout {}", launchd_target()),
+                format!(
+                    "launchctl bootstrap {} {}",
+                    launchd_domain(),
+                    plist_path(&home).display()
+                ),
+            ]
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn bootstrap_failure_is_an_error() {
+        let home = temp_dir("bootfail");
+        let mut runner = FakeRunner::launchd(None, None);
+        runner.bootstrap_ok = false;
+        runner.bootstrap_stderr = "Bootstrap failed: 5: Input/output error".into();
+        let e = install_with(
+            &runner,
+            Platform::Launchd,
+            &home,
+            Some(JobSpec { interval_secs: 60, wake_system: false }),
+            false,
+        )
+        .expect_err("bootstrap failure must be Err");
+        assert!(e.contains("Input/output error"), "{e}");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn cron_install_keeps_other_lines_and_replaces_ours() {
+        let home = temp_dir("cron");
+        let runner = FakeRunner::cron(Some(format!(
+            "0 1 * * * backup\n* * * * * /tmp/old/.k2/heartbeat.sh # {CRON_MARKER}\n"
+        )));
+        let out = install_with(
+            &runner,
+            Platform::Cron,
+            &home,
+            Some(JobSpec { interval_secs: 60, wake_system: false }),
+            false,
+        )
+        .expect("install");
+        assert!(out.changed);
+        let tab = runner.crontab.borrow().clone().expect("crontab written");
+        assert_eq!(tab, format!("0 1 * * * backup\n{}\n", cron_entry(&home)));
+
+        let mut missing = FakeRunner::cron(None);
+        missing.crontab_missing = true;
+        let e = install_with(
+            &missing,
+            Platform::Cron,
+            &home,
+            Some(JobSpec { interval_secs: 60, wake_system: false }),
+            false,
+        )
+        .expect_err("no crontab binary must be Err");
+        assert!(e.contains("crontab is not available"), "{e}");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn uninstall_uses_bootout_not_unload() {
+        let home = temp_dir("uninstall");
+        fs::create_dir_all(plist_path(&home).parent().unwrap()).unwrap();
+        fs::write(plist_path(&home), "x").unwrap();
+        let runner = FakeRunner::launchd(Some(print_for(&home, "0")), None);
+        uninstall_with(&runner, Platform::Launchd, &home).expect("uninstall");
+        assert_eq!(runner.writes(), vec![format!("launchctl bootout {}", launchd_target())]);
+        assert!(!plist_path(&home).exists());
+        let _ = fs::remove_dir_all(&home);
     }
 }

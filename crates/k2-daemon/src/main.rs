@@ -503,12 +503,7 @@ async fn async_main() {
     // interaction.
     let swept = k2_core::migration_launchd::migrate_launchd_labels();
     if swept.contains(&"com.k2so.agent-heartbeat") {
-        let ws = k2_core::app_settings::load().wake_scheduler;
-        match k2_core::heartbeats::install::apply_wake_scheduler(
-            &ws.mode,
-            ws.interval_minutes,
-            ws.wake_system,
-        ) {
+        match k2_core::heartbeats::install::apply_wake_scheduler() {
             Ok(msg) => k2_core::log_debug!("[daemon/boot] wake scheduler re-ensured under dev.k2.heartbeat: {msg}"),
             Err(e) => eprintln!("[daemon/boot] wake scheduler re-ensure failed: {e}"),
         }

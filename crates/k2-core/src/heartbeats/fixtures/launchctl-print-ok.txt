@@ -1,0 +1,58 @@
+gui/501/dev.k2.heartbeat = {
+	active count = 0
+	path = /Users/k2fixture/Library/LaunchAgents/dev.k2.heartbeat.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /bin/bash
+	arguments = {
+		/bin/bash
+		/Users/k2fixture/.k2/heartbeat.sh
+	}
+
+	stderr path = /Users/k2fixture/.k2/heartbeat-stderr.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.GFodxuk2ay/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => dev.k2.heartbeat
+	}
+
+	domain = gui/501 [100021]
+	asid = 100021
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 34
+	last exit code = 0
+
+	resource coalition = {
+		ID = 87388
+		type = resource
+		state = active
+		active count = 1
+		name = dev.k2.heartbeat
+	}
+
+	jetsam coalition = {
+		ID = 87389
+		type = jetsam
+		state = active
+		active count = 1
+		name = dev.k2.heartbeat
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	cpumon = default
+	run interval = 300 seconds
+	job state = exited
+	sanitizer flags = 0x0
+
+	properties = inferred program
+}

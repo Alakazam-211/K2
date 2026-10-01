@@ -150,20 +150,9 @@ fn ensure_transport(context: &str) {
         "[daemon/heartbeat-monitor] {enabled_count} enabled heartbeat(s) but the tick \
          transport is missing/unloaded ({context}) — self-healing"
     );
-    // Mode "heartbeat" reinstalls with the user's configured interval +
-    // wake_system; anything else gets the same 60s default bootstrap
-    // `heartbeat add` performs.
-    let result = if ws.mode == "heartbeat" {
-        k2_core::heartbeats::install::apply_wake_scheduler(
-            &ws.mode,
-            ws.interval_minutes,
-            ws.wake_system,
-        )
-        .map(Some)
-    } else {
-        k2_core::heartbeats::install::ensure_cron_installed()
-            .map(|changed| changed.then(|| "transport reinstalled (default 60s interval)".to_string()))
-    };
+    // HB11: the one installer, from saved settings.
+    let result = k2_core::heartbeats::install::install_from_saved_settings()
+        .map(|out| out.changed.then_some(out.message));
     match result {
         Ok(Some(msg)) => log_debug!("[daemon/heartbeat-monitor] self-heal OK: {msg}"),
         Ok(None) => {}

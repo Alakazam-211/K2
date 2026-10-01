@@ -87,12 +87,13 @@ pub fn handle_install_launchd(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
         }
     };
-    let interval_seconds = parsed.interval_seconds.unwrap_or(60).max(60);
-    let wake_system = parsed.wake_system.unwrap_or(false);
-
-    match heartbeat_install::install_heartbeat_scheduler(interval_seconds, wake_system) {
-        Ok(msg) => CliResponse::ok_json(
-            serde_json::json!({ "success": true, "message": msg }).to_string(),
+    // HB11: one installer, from saved settings. The body's interval /
+    // wake values are accepted for old clients but never override the
+    // saved `wake_scheduler` — the job always matches Settings.
+    let _ = (parsed.interval_seconds, parsed.wake_system);
+    match heartbeat_install::install_from_saved_settings() {
+        Ok(out) => CliResponse::ok_json(
+            serde_json::json!({ "success": true, "message": out.message }).to_string(),
         ),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -112,10 +113,10 @@ pub fn handle_uninstall_launchd(_body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/heartbeat/apply-wake-scheduler`.
 ///
-/// Reads the user's Wake Scheduler settings and either installs or
-/// uninstalls the heartbeat plist accordingly. Mode "off" /
-/// "on_demand" uninstall, "heartbeat" installs with the user's
-/// interval + wake_system.
+/// Re-applies the SAVED Wake Scheduler settings through the one
+/// installer (HB11). Mode "heartbeat" installs the user's interval +
+/// wake_system; "on_demand" and "off" install the 60 s no-wake job
+/// (Rosson D2: Off = never wake the machine, still fire while awake).
 pub fn handle_apply_wake_scheduler(body: &[u8]) -> CliResponse {
     let parsed: ApplyWakeSchedulerBody = if body.is_empty() {
         ApplyWakeSchedulerBody::default()
@@ -125,11 +126,11 @@ pub fn handle_apply_wake_scheduler(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
         }
     };
-    let mode = parsed.mode.unwrap_or_else(|| "off".to_string());
-    let interval_minutes = parsed.interval_minutes.unwrap_or(5).max(1);
-    let wake_system = parsed.wake_system.unwrap_or(false);
-
-    match heartbeat_install::apply_wake_scheduler(&mode, interval_minutes, wake_system) {
+    // HB11: Settings saves `wake_scheduler` to this daemon before it
+    // calls Apply, so the one installer reads the saved settings. The
+    // body is still parsed (400 on garbage) but no longer decides.
+    let _ = (parsed.mode, parsed.interval_minutes, parsed.wake_system);
+    match heartbeat_install::apply_wake_scheduler() {
         Ok(msg) => CliResponse::ok_json(
             serde_json::json!({ "success": true, "message": msg }).to_string(),
         ),

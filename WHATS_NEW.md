@@ -3,6 +3,21 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.43.0 — Home, heartbeats that fire on their own, and apps
+
+- **Home (Beta).** A Home tab sits between the gear and Agents. It looks like Agents, but the list is yours: agents from any server you have saved, in named Homes, and switching servers doesn't change it. Add Agent offers This server or From a server. Rows show live, offline, or Sign in, and the initials of whoever else is on that agent.
+- **Remote rooms (preview).** Turn on Settings → General → Experimental → Remote rooms, and an agent from another server opens right on Home without switching your window. You get its tabs, drawers, chat history, and presence. You can type, open and close tabs, and split, and it all saves on that server. A server that's too old opens view only and says why.
+- **Heartbeats fire on their own.** The daemon now runs the schedule itself every minute, on Mac, Linux, and Windows, even with no window open. A heartbeat missed while the computer slept fires once when it wakes, if it's less than 12 hours late. Turning one on or editing it waits for its next slot.
+- **Wake this computer for heartbeats.** One switch in Settings. On a Mac it asks for your admin password once. "Also on battery" stops below 20%.
+- **Keep awake.** A new control next to the timer in the top bar: Off, While agents are working, or Always. It says what it can actually hold, for example "lid closed will still sleep". Keeping a Mac awake with the lid closed uses the same one-time admin approval.
+- **Heartbeat drawer.** It shows the real next fire, or the reason it's waiting, such as "needs instructions", "invalid schedule", or "retry in 2m". It never shows a stuck "now". New heartbeats need instructions. History shows who made each change. Only the Owner can delete a heartbeat for good; everyone else archives.
+- **Apps and heartbeats.** An app can list, add, edit, turn on and off, fire, and archive the heartbeats in its room with `heartbeats:read` and `heartbeats:write`. App developers can read `k2 study app-heartbeats`. Apps can hear "agent working" again.
+- **Split view.** Two windows on the same workspace share columns. A tab closed in one window stays closed in the other. A Browser tab no longer follows the other window's navigation or flickers.
+- **Tickets badge.** The badge counts only tickets you can see. Tickets left from a removed workspace show under Unlinked workspace with Resolve and Dismiss. A badge that can't refresh dims instead of showing a wrong number.
+- **Roles.** The Viewer role is gone. Logins are Owner, Admin, or Member. Use apps to give someone limited access. A Viewer account is turned off on update, and Settings lets you turn it back on as a Member.
+- **Stability.** A rare error inside a window event no longer quits the app; it's logged to `~/.k2/client-event-faults.log`. Mac stoplights stay centered after moving between displays, waking, or switching light and dark.
+- **Claude usage.** The top-bar chip shows the greater of the 5-hour and weekly limits.
+
 ## 0.41.6 — Notes you can page, and a lock you can clear
 
 - **Read what's new.** Settings → General opens on the newest note. The arrows walk back through 0.41.0 and every later note in this series, and they stop before 0.40. Closing the popup still marks this version seen. The button still opens after this version was already dismissed.

@@ -353,6 +353,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/heartbeat/status", Member),
     get("/cli/heartbeat/unarchive", Member),
     post("/cli/heartbeat/uninstall-launchd", Member),
+    post("/cli/heartbeat/wake", Member),
     get("/cli/hooks/status", Member),
     get("/cli/host-sessions/list", Member),
     get("/cli/inbox", Member),

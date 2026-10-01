@@ -1393,7 +1393,7 @@ registerPrimaryRoomActivity({
   markSeen: (id) => useActiveAgentsStore.getState().markSeen(id),
   bindPaneAgentName: (agentName, id) => useActiveAgentsStore.getState().bindPaneAgentName(agentName, id),
   bindPaneProject: (id, projectId) => useActiveAgentsStore.getState().bindPaneProject(id, projectId),
-})
+}, useActiveAgentsStore)
 
 export function startAgentPolling(): void {
   if (pollInterval || agentStatusUnsub) return

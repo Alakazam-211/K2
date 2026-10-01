@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
+import { primaryRoom } from '@/stores/room'
 import { serverSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceTabEvents } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
@@ -974,7 +975,8 @@ export function HeartbeatsPanel({
     if (!project || launchingName) return
     setLaunchingName(row.name)
     try {
-      await launchHeartbeat(project.path, row.name)
+      // Settings is about the window's server: its primary room.
+      await launchHeartbeat(primaryRoom(), project.path, row.name)
       await refresh()
     } finally {
       setLaunchingName(null)

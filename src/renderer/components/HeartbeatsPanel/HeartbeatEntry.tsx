@@ -7,7 +7,6 @@ import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import {
   type HeartbeatEntry,
-  useHeartbeatSessionsStore,
 } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
 
@@ -71,9 +70,11 @@ export function HeartbeatEntryRow({
   const handleLaunch = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (busy || !projectPath || entry.state === 'archived') return
+    // Home M4: a view-only room fires nothing on its server.
+    if (room.readOnly) return
     setBusy(true)
     try {
-      await launchHeartbeat(projectPath, entry.row.name)
+      await launchHeartbeat(room, projectPath, entry.row.name)
     } finally {
       setBusy(false)
     }
@@ -82,6 +83,9 @@ export function HeartbeatEntryRow({
   const handleToggle = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (busy || !projectPath || entry.state === 'archived') return
+    // Home M4: `heartbeat/enable` is a GET that writes: not from a
+    // view-only room.
+    if (room.readOnly) return
     setBusy(true)
     try {
       await daemonCliGet(room.scope, 'heartbeat/enable', {
@@ -89,7 +93,7 @@ export function HeartbeatEntryRow({
         name: entry.row.name,
         enabled: entry.row.enabled ? '0' : '1',
       })
-      void useHeartbeatSessionsStore.getState().refresh(projectPath)
+      void room.heartbeats.getState().refresh(projectPath)
       void emit('sync:projects').catch(() => {})
     } catch (err) {
       useToastStore.getState().addToast(`Toggle failed: ${String(err)}`, 'error', 4000)

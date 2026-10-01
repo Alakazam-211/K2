@@ -2,6 +2,7 @@
 // Desktop path stays on Tauri local_download_chunk (not re-tested here).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { primaryScope } from '@/kessel/server-scope'
 
 const daemonCliGetMock = vi.fn()
 const isWebClientMock = vi.fn(() => true)
@@ -101,7 +102,7 @@ describe('downloadFile (hosted web)', () => {
     }))
     vi.stubGlobal('showSaveFilePicker', showSaveFilePicker)
 
-    const result = await downloadFile('/srv/ws/notes.txt')
+    const result = await downloadFile(primaryScope(), '/srv/ws/notes.txt')
 
     expect(result).toBe('notes.txt')
     expect(daemonCliGetMock).toHaveBeenCalledTimes(2)
@@ -137,7 +138,7 @@ describe('downloadFile (hosted web)', () => {
       eof: false,
     })
 
-    const result = await downloadFile('/srv/ws/big.bin')
+    const result = await downloadFile(primaryScope(), '/srv/ws/big.bin')
     expect(result).toBeNull()
     expect(addToastMock).toHaveBeenCalledWith('Download cancelled', 'info', 3000)
     expect(endMock).toHaveBeenCalled()

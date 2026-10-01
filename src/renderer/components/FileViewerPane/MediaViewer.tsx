@@ -10,6 +10,7 @@
 // only works for local Tauri asset URLs and breaks remote + web clients.
 
 import { useEffect, useState } from 'react'
+import { useRoom } from '@/components/Room/RoomContext'
 import {
   loadHostBinary,
   bytesToObjectUrl,
@@ -32,6 +33,8 @@ function formatBytes(n: number): string {
 }
 
 export function MediaViewer({ filePath, kind }: MediaViewerProps): React.JSX.Element {
+  // Home M4: the room's server.
+  const scope = useRoom().scope
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [progress, setProgress] = useState<number | null>(null)
@@ -56,7 +59,7 @@ export function MediaViewer({ filePath, kind }: MediaViewerProps): React.JSX.Ele
         // client. Soft UX cap: refuse to assemble multi-GB media in RAM.
         const SOFT_RANGE_CAP = 200 * 1024 * 1024 // 200 MB assembled
 
-        const bytes = await loadHostBinary(filePath, {
+        const bytes = await loadHostBinary(scope, filePath, {
           allowRangeAssembly: true,
           signal: ac.signal,
           onProgress: (ratio) => {

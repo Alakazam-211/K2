@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { terminalExists } from '@/lib/terminal-daemon'
-import { useRoom } from '@/components/Room/RoomContext'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useProjectsStore } from '@/stores/projects'
 import { addNavWorktree } from '@/components/Sidebar/Sidebar'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
@@ -107,15 +107,16 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
   const [reviewLoaded, setReviewLoaded] = useState(false)
   const [chatMounted, setChatMounted] = useState(activeTab === 'chat')
 
-  const workspace = useProjectsStore(useCallback((s) => {
-    for (const p of s.projects) {
+  // MS3: the worktree resolves in the ROOM's own project list.
+  const workspace = useRoomProjects(useCallback((projects) => {
+    for (const p of projects) {
       const ws = p.workspaces.find((w) => w.id === worktreeId)
       if (ws) return ws
     }
     return null
   }, [worktreeId]))
-  const projectId = useProjectsStore(useCallback((s) => {
-    for (const p of s.projects) {
+  const projectId = useRoomProjects(useCallback((projects) => {
+    for (const p of projects) {
       if (p.workspaces.some((w) => w.id === worktreeId)) return p.id
     }
     return null
@@ -144,11 +145,22 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
       return () => { cancelled = true }
     }
     // Home M4 (MS57/MS67): `read_worktree_file` reads THIS computer's disk.
-    // TODO(M4-integrate): in a room on another server, read it with
-    // `daemonCliGet(room.scope, 'fs/read-file', { path })` instead of
-    // leaving the tab empty.
+    // In a room on another server, read it from THAT server
+    // (`fs/read-file`); a missing file is the empty state, as locally.
     if (!room.localCommands) {
-      setTaskLoaded(true)
+      const sep = worktreePath.endsWith('/') ? '' : '/'
+      daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: `${worktreePath}${sep}CLAUDE.md` })
+        .then((r) => {
+          if (cancelled) return
+          setTaskContent(typeof r?.content === 'string' ? r.content : '')
+          setTaskLoaded(true)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          const msg = err instanceof Error ? err.message : String(err)
+          setTaskError(/no such file|not found|not_found/i.test(msg) ? null : msg)
+          setTaskLoaded(true)
+        })
       return () => { cancelled = true }
     }
     invoke<string>('read_worktree_file', {
@@ -451,9 +463,18 @@ function WorktreeChatTerminal({
           return
         }
       } catch { /* fall through */ }
+      // Home M4: a view-only room attaches to a live worktree chat only:
+      // it never builds a launch or takes the agent lock on its server.
+      if (room.readOnly) {
+        if (!cancelled) {
+          setLaunchConfig(null)
+          setReady(true)
+        }
+        return
+      }
       // MS67: `k2so_agents_build_launch` builds on THIS computer; a room on
-      // another server falls through to the plain launch below.
-      // TODO(M4-integrate): build it on that server once a `/cli` route exists.
+      // another server falls through to the plain launch below (no `/cli`
+      // route builds it there yet — M5).
       if (room.localCommands) try {
         const result = await invoke<{
           command: string

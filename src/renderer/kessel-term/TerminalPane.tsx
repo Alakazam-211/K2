@@ -102,7 +102,9 @@ import {
   quotePathForImageDrop,
 } from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { isSoleWorkspaceViewer, usePresenceStore } from '@/stores/presence'
+import { isSoleWorkspaceViewer } from '@/stores/presence'
+import { useStore } from 'zustand'
+import { getPinnedAuthRecovery } from '@/lib/pool-hooks'
 import {
   noteSessionClaimSurface,
   useSessionClaimSurface,
@@ -562,6 +564,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // tabs store, and its activity (working / idle / bell / permission) to
   // the room's sink (MS68). No provider ⇒ throw (MS2).
   const room = useRoom()
+  // Home M4: a view-only (preview) room never types, resizes, claims or
+  // spawns on its server. Attach-only; viewer mode on every socket.
+  const readOnlyRoom = room.readOnly
   const config = useKesselConfig()
   const {
     terminalId,
@@ -1131,7 +1136,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     syncSizeOnShowRef.current = syncSizeOnShow
   }, [syncSizeOnShow])
-  const soleViewer = usePresenceStore((s) =>
+  // The ROOM's server roster (MS14): B's people, never A's, in B's room.
+  const soleViewer = useStore(room.presence, (s) =>
     isSoleWorkspaceViewer(s.roster, cwd, s.supported),
   )
   const soleViewerRef = useRef(soleViewer)
@@ -1484,6 +1490,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // the request/response stay byte-identical to today for every
         // normal (non-sandbox) tab. Default-OFF.
         sandbox: sandbox ? true : undefined,
+        // Home M4: a view-only room attaches to a live session only. The
+        // daemon never spawns, evicts, recovers or resizes for it.
+        attach_only: readOnlyRoom ? true : undefined,
       }
 
       // Boot with retry. `Tauri auto-update → relaunch` produces a
@@ -1558,6 +1567,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // V23 — `tab_closed`: this tab was closed as a whole (here or in
             // another window) in the last few minutes, and the daemon will
             // not respawn it with no command. Drop the pane the same way.
+            if (readOnlyRoom && spawnRes.status === 404 && body.includes('session_not_live')) {
+              if (!cancelled) {
+                setPhase({
+                  kind: 'error',
+                  message: `Not running on ${room.scope.label}. View only (preview): this room does not start sessions.`,
+                })
+              }
+              return
+            }
             if (
               spawnRes.status === 409 &&
               (body.includes('session_owned_elsewhere') || body.includes('"tab_closed"'))
@@ -1574,12 +1592,21 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // creds; bounded because a second rejection finds the session
             // 'still-valid' (or in cooldown) and falls through to the error.
             if (isPossibleAuthFailure(spawnRes.status, body)) {
+              // MS5/MS10: revive the ROOM's server, never the window's.
               const active = useConnectHostStore.getState().activeHost
-              if (active !== 'local') {
+              if (room.scope.isWindowHost() && active !== 'local') {
                 const outcome = await reviveRemoteSession(active.id)
                 if (cancelled) return
                 if (outcome === 'revived') {
                   creds = null // re-resolve so the retry carries the NEW token
+                  continue
+                }
+              } else if (!room.scope.isWindowHost() && room.scope.isRemote) {
+                const recover = getPinnedAuthRecovery()
+                const outcome = recover ? await recover(room.scope) : 'not-revived'
+                if (cancelled) return
+                if (outcome === 'revived') {
+                  creds = null
                   continue
                 }
               }
@@ -1587,7 +1614,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               // W2: restricted temporary-password session — route to the
               // rotation step; the spawn error below still surfaces.
               const active = useConnectHostStore.getState().activeHost
-              if (active !== 'local') requirePasswordRotation(active.id)
+              if (room.scope.isWindowHost() && active !== 'local') requirePasswordRotation(active.id)
             }
             // 4xx — genuine request error, surface immediately. Bad
             // body, missing field, etc. Won't get better by waiting.
@@ -1960,7 +1987,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // unresolved relies on the daemon defaults.
       try {
         const wm = useWindowModeStore.getState()
-        if (wm.resolved) {
+        if (readOnlyRoom) {
+          ws.send(JSON.stringify({ action: 'set_mode', mode: 'viewer' }))
+        } else if (wm.resolved) {
           ws.send(JSON.stringify({ action: 'set_mode', mode: wm.mode }))
         }
       } catch {
@@ -2031,6 +2060,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         const pending = pendingInputRef.current
         if (!pending) return
         pendingInputRef.current = ''
+        if (readOnlyRoom) return
         try {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ action: 'input', text: pending }))
@@ -2347,7 +2377,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // capability (connect-time and per set_mode ACK). Mirror
             // capability into the window-mode store (drives the
             // ModeToggle disabled state) and latch/clear the pill.
-            useWindowModeStore.getState().setCapable(parsed.payload.capable)
+            // The window's mode store is about the window's server: a
+            // pinned room's capability never overwrites it.
+            if (room.isPrimary) useWindowModeStore.getState().setCapable(parsed.payload.capable)
             if (!parsed.payload.capable) {
               setReadOnlyHint(true)
             } else if (parsed.payload.mode === 'claimer') {
@@ -3119,6 +3151,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // S5 — viewer mode sends nothing (advisory; the daemon gate is
     // authoritative and also covers clients that skip this check).
     if (noteViewerInteractionBlocked()) return
+    // Home M4: a view-only room never types on its server.
+    if (readOnlyRoom) {
+      setReadOnlyHint(true)
+      return
+    }
     // Typing auto-claims server-side (the daemon's Input handler flips
     // `active_subscriber`), so keep the CLIENT's controller mirror
     // truthful: real input is a deliberate interaction — stamp it and
@@ -3294,6 +3331,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       ) {
         return
       }
+      // Home M4: a view-only room never resizes its server's PTY.
+      if (readOnlyRoom) return
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       ws.send(JSON.stringify({ action: 'resize', cols, rows }))
@@ -3334,6 +3373,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // ever flaps again — this dedup is what makes recomputing on
       // every source change safe (no re-run thrash reaches the wire).
       if (lastSentActiveRef.current === active) return
+      // Home M4: a view-only room never claims the active slot (a claim
+      // carries this window's size and snaps B's PTY to it).
+      if (readOnlyRoom && active) return
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       const sessionId = sessionIdRef.current
@@ -3475,7 +3517,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           !wasFocused &&
           nowFocused &&
           lastSentActiveRef.current === true &&
-          lastResizeRef.current
+          lastResizeRef.current &&
+          !readOnlyRoom
         ) {
           const ws = wsRef.current
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -3559,8 +3602,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     initWindowModeDefault()
     const sendMode = (): void => {
       const s = useWindowModeStore.getState()
-      if (!s.resolved) return
       const ws = wsRef.current
+      if (readOnlyRoom) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'set_mode', mode: 'viewer' }))
+        return
+      }
+      if (!s.resolved) return
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       ws.send(JSON.stringify({ action: 'set_mode', mode: s.mode }))
     }
@@ -3685,9 +3732,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // fs/clipboard-paths hits the wrong machine (or adds a remote
       // RTT that delays/drops paste). Paste clipboard text immediately
       // in those cases (fs_commands.rs documents this Connect caveat).
-      const active = useConnectHostStore.getState().activeHost
+      // The ROOM's server decides (MS57): a room on another server never
+      // asks this computer's pasteboard through that server.
       const canQueryLocalFinderPaths =
-        !isWebClient() && active === 'local'
+        !isWebClient() && !room.scope.isRemote
 
       if (!canQueryLocalFinderPaths) {
         if (text) sendInput(text)
@@ -4659,6 +4707,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     (e: React.DragEvent) => {
       e.preventDefault()
       e.stopPropagation()
+      // Home M4: nothing is uploaded to, or typed into, a view-only room.
+      if (readOnlyRoom) {
+        setReadOnlyHint(true)
+        return
+      }
       const files = e.dataTransfer.files
       if (files.length > 0) {
         const paths: string[] = []
@@ -4670,7 +4723,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         if (paths.length > 0) {
           // REMOTE host: local paths → upload + inject remote (rare DOM
           // fallback under Tauri; native drag-drop is the usual path).
-          if (useConnectHostStore.getState().activeHost !== 'local') {
+          if (room.scope.isRemote) {
             void executeRemoteDrop(room.scope,
               paths,
               { kind: 'terminal' },
@@ -5662,7 +5715,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           can't drive the terminal (viewer mode / no edit access).
           Passive-pill styling, bottom-LEFT so it coexists with the
           viewing-at pill. */}
-      {readOnlyHint && (
+      {(readOnlyHint || readOnlyRoom) && (
         <div
           data-terminal-readonly-pill=""
           style={{

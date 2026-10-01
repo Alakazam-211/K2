@@ -9,6 +9,8 @@ import { primaryRoom } from '@/stores/room'
 // they register themselves with it when loaded.
 import '@/stores/projects'
 import '@/stores/active-agents'
+import '@/stores/presence'
+import '@/stores/active'
 import { renderInRoom } from '@/test-utils/room'
 
 export function renderInPrimaryRoom(ui: ReactElement, options?: RenderOptions): RenderResult {

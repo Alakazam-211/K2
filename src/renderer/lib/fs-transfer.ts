@@ -17,7 +17,7 @@ import { daemonCliGet, daemonCliPost } from './daemon-cli'
 import { isWebClient } from './is-web'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 /** Wire shape of `GET /cli/fs/compress-status`. */
 interface CompressStatus {
@@ -51,22 +51,22 @@ function baseName(p: string): string {
  * @returns the final zip path on the daemon, or null (failed/cancelled —
  *   already surfaced to the user).
  */
-export async function compressFolder(path: string): Promise<string | null> {
+export async function compressFolder(scope: ServerScope, path: string): Promise<string | null> {
   const toast = useToastStore.getState()
   const label = baseName(path)
   const tid = useTransferProgressStore.getState().begin('compress', label)
   let cancelSent = false
   try {
-    const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'fs/compress', { path })
+    const { job_id } = await daemonCliPost<{ job_id: string }>(scope, 'fs/compress', { path })
     for (;;) {
       await sleep(COMPRESS_POLL_MS)
       // Cancel is a separate POST (the job runs server-side); send it once
       // and keep polling — the worker flips the job to `failed` terminally.
       if (!cancelSent && useTransferProgressStore.getState().isCancelRequested(tid)) {
         cancelSent = true
-        await daemonCliPost(primaryScope(), 'fs/compress-cancel', { job_id })
+        await daemonCliPost(scope, 'fs/compress-cancel', { job_id })
       }
-      const status = await daemonCliGet<CompressStatus>(primaryScope(), 'fs/compress-status', { job_id })
+      const status = await daemonCliGet<CompressStatus>(scope, 'fs/compress-status', { job_id })
       if (status.phase === 'running') {
         useTransferProgressStore
           .getState()
@@ -119,20 +119,20 @@ const EXTRACT_POLL_MS = 500
  * @returns the final dest folder path on the daemon, or null
  *   (failed/cancelled — already surfaced to the user).
  */
-export async function extractArchive(path: string): Promise<string | null> {
+export async function extractArchive(scope: ServerScope, path: string): Promise<string | null> {
   const toast = useToastStore.getState()
   const label = baseName(path)
   const tid = useTransferProgressStore.getState().begin('extract', label)
   let cancelSent = false
   try {
-    const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'fs/extract', { path })
+    const { job_id } = await daemonCliPost<{ job_id: string }>(scope, 'fs/extract', { path })
     for (;;) {
       await sleep(EXTRACT_POLL_MS)
       if (!cancelSent && useTransferProgressStore.getState().isCancelRequested(tid)) {
         cancelSent = true
-        await daemonCliPost(primaryScope(), 'fs/extract-cancel', { job_id })
+        await daemonCliPost(scope, 'fs/extract-cancel', { job_id })
       }
-      const status = await daemonCliGet<ExtractStatus>(primaryScope(), 'fs/extract-status', { job_id })
+      const status = await daemonCliGet<ExtractStatus>(scope, 'fs/extract-status', { job_id })
       if (status.phase === 'running') {
         useTransferProgressStore
           .getState()
@@ -260,15 +260,15 @@ export async function saveBlobInBrowser(blob: Blob, filename: string): Promise<s
  *
  * @returns a local path (desktop) or the saved filename (web), or null.
  */
-export async function downloadFile(remotePath: string): Promise<string | null> {
+export async function downloadFile(scope: ServerScope, remotePath: string): Promise<string | null> {
   if (isWebClient()) {
-    return downloadFileInBrowser(remotePath)
+    return downloadFileInBrowser(scope, remotePath)
   }
-  return downloadFileDesktop(remotePath)
+  return downloadFileDesktop(scope, remotePath)
 }
 
 /** Desktop path: Tauri local_download_chunk → ~/Downloads. */
-async function downloadFileDesktop(remotePath: string): Promise<string | null> {
+async function downloadFileDesktop(scope: ServerScope, remotePath: string): Promise<string | null> {
   const toast = useToastStore.getState()
   const label = baseName(remotePath)
   const tid = useTransferProgressStore.getState().begin('download', label)
@@ -281,7 +281,7 @@ async function downloadFileDesktop(remotePath: string): Promise<string | null> {
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
+      const slice = await daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
         path: remotePath,
         offset,
         len: DOWNLOAD_CHUNK_BYTES,
@@ -322,7 +322,7 @@ async function downloadFileDesktop(remotePath: string): Promise<string | null> {
  * Hosted-web path: stream `fs/read-range` into memory, then browser save.
  * Same daemon wire as desktop; no Tauri invoke.
  */
-async function downloadFileInBrowser(remotePath: string): Promise<string | null> {
+async function downloadFileInBrowser(scope: ServerScope, remotePath: string): Promise<string | null> {
   const toast = useToastStore.getState()
   const label = baseName(remotePath)
   const tid = useTransferProgressStore.getState().begin('download', label)
@@ -334,7 +334,7 @@ async function downloadFileInBrowser(remotePath: string): Promise<string | null>
         toast.addToast('Download cancelled', 'info', 3000)
         return null
       }
-      const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
+      const slice = await daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
         path: remotePath,
         offset,
         len: DOWNLOAD_CHUNK_BYTES,

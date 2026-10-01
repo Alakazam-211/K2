@@ -23,6 +23,7 @@ import { playCompletionSound } from '@/lib/completion-sound'
 import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
 import { createTabsStore, useTabsStore, type TabsStore, type TabsRoomWorkspace, type ProjectPathEntry } from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import type { PaneStatus } from '@/stores/active-agents'
 import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
 import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
@@ -62,6 +63,8 @@ export interface Room {
   readonly projects: RoomProjectsStore
   /** MS68 — where its terminal panes report activity. */
   readonly activity: RoomActivitySink
+  /** What its tab dots read (the same activity, as state). */
+  readonly activityView: RoomActivityViewStore
   /** MS67 — may room code call THIS computer's Tauri commands
    *  (`projects_open_in_*`, `k2so_*`, `read_worktree_file`, local events)?
    *  The primary room keeps today's behaviour (true) until M4 decides the
@@ -136,15 +139,18 @@ export type PrimaryProjectsStore = Pick<
 
 let primaryProjects: PrimaryProjectsStore | null = null
 let primaryActivity: RoomActivitySink | null = null
+let primaryActivityView: RoomActivityViewStore | null = null
 
 /** projects.ts registers the window's projects store. */
 export function registerPrimaryRoomProjects(store: PrimaryProjectsStore): void {
   primaryProjects = store
 }
 
-/** active-agents.ts registers the window's activity sink (MS68). */
-export function registerPrimaryRoomActivity(sink: RoomActivitySink): void {
+/** active-agents.ts registers the window's activity sink (MS68) and the
+ *  store its tab dots read. */
+export function registerPrimaryRoomActivity(sink: RoomActivitySink, view: RoomActivityViewStore): void {
   primaryActivity = sink
+  primaryActivityView = view
 }
 
 function requirePrimaryProjects(): PrimaryProjectsStore {
@@ -172,6 +178,17 @@ const PRIMARY_PROJECTS: RoomProjectsStore = {
   subscribe: (listener) => requirePrimaryProjects().subscribe(listener),
 }
 
+const PRIMARY_ACTIVITY_VIEW: RoomActivityViewStore = {
+  getState: () => requirePrimaryActivityView().getState(),
+  getInitialState: () => requirePrimaryActivityView().getInitialState(),
+  subscribe: (listener) => requirePrimaryActivityView().subscribe(listener),
+}
+
+function requirePrimaryActivityView(): RoomActivityViewStore {
+  if (!primaryActivityView) throw new Error('primary room: the active-agents store is not loaded (registerPrimaryRoomActivity)')
+  return primaryActivityView
+}
+
 const PRIMARY_ACTIVITY: RoomActivitySink = {
   recordOutput: (id) => requirePrimaryActivity().recordOutput(id),
   recordTitleActivity: (id, working) => requirePrimaryActivity().recordTitleActivity(id, working),
@@ -195,6 +212,7 @@ export function primaryRoom(): Room {
     tabs: useTabsStore,
     projects: PRIMARY_PROJECTS,
     activity: PRIMARY_ACTIVITY,
+    activityView: PRIMARY_ACTIVITY_VIEW,
     // Home M4 (MS57): a window connected to a remote server shows that
     // server's paths, so this computer's commands are off there.
     get localCommands(): boolean {
@@ -216,12 +234,22 @@ export function primaryRoom(): Room {
 
 // ── Pinned rooms ─────────────────────────────────────────────────────────
 
-/** A pinned room's own activity slice (MS14 "per-room slice", MS68). */
-export interface RoomActivityState {
-  /** terminal id → what its agent is doing. */
-  statuses: Map<string, 'working' | 'idle' | 'permission'>
+/** What a room's tab dots read (MS14 "per-room slice", MS21): the
+ *  primary room reads the window's active-agents store (same fields); a
+ *  pinned room its own slice. */
+export interface RoomActivityView {
+  /** terminal id → what its agent is doing (client-side detection). */
+  paneStatuses: Map<string, PaneStatus>
+  /** terminal id → the daemon's word on it (empty in a pinned room). */
+  daemonPaneStatuses: Map<string, PaneStatus>
   /** terminal id → when it finished while unseen. */
   unseenDone: Map<string, number>
+}
+
+export type RoomActivityViewStore = Pick<StoreApi<RoomActivityView>, 'getState' | 'getInitialState' | 'subscribe'>
+
+/** A pinned room's own activity slice (MS14 "per-room slice", MS68). */
+export interface RoomActivityState extends RoomActivityView {
   /** daemon agent name → terminal id. */
   aliases: Map<string, string>
 }
@@ -236,19 +264,20 @@ export function createRoomActivity(
   projectId: string,
 ): RoomActivityStore {
   const store = create<RoomActivityState>(() => ({
-    statuses: new Map(),
+    paneStatuses: new Map(),
+    daemonPaneStatuses: new Map(),
     unseenDone: new Map(),
     aliases: new Map(),
   }))
-  const setStatus = (id: string, status: 'working' | 'idle' | 'permission'): void => {
-    const next = new Map(store.getState().statuses)
+  const setStatus = (id: string, status: PaneStatus): void => {
+    const next = new Map(store.getState().paneStatuses)
     next.set(id, status)
-    store.setState({ statuses: next })
+    store.setState({ paneStatuses: next })
   }
   const sink: RoomActivitySink = {
     recordOutput: () => {},
     recordTitleActivity: (id, working) => {
-      const prev = store.getState().statuses.get(id)
+      const prev = store.getState().paneStatuses.get(id)
       if (prev === 'permission') return
       if (working) {
         if (prev !== 'working') setStatus(id, 'working')
@@ -262,7 +291,7 @@ export function createRoomActivity(
       playCompletionSound(projectId, projects.getState().projects)
     },
     recordTitlePermission: (id, active) => {
-      const prev = store.getState().statuses.get(id)
+      const prev = store.getState().paneStatuses.get(id)
       if (active) setStatus(id, 'permission')
       else if (prev === 'permission') setStatus(id, 'idle')
     },
@@ -351,6 +380,7 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     tabs,
     projects,
     activity,
+    activityView: activity,
     localCommands,
     readOnly,
     presence: serverView.view.presence,

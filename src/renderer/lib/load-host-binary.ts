@@ -8,8 +8,13 @@
 // assembled via ranged reads when `allowRangeAssembly` is true.
 
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { throwIfRemoteMacTmp } from '@/lib/remote-mac-tmp'
-import { primaryScope } from '@/kessel/server-scope'
+import { isMacTmpPath, RemoteMacTmpError } from '@/lib/remote-mac-tmp'
+import type { ServerScope } from '@/kessel/server-scope'
+
+/** Mac tmp paths exist only on this computer: refused on another server. */
+function throwIfRemoteMacTmpOn(scope: ServerScope, path: string): void {
+  if (scope.isRemote && isMacTmpPath(path)) throw new RemoteMacTmpError(path)
+}
 
 /** Matches `k2_core::fs_commands::MAX_BINARY_SIZE`. */
 export const READ_BINARY_MAX_BYTES = 50 * 1024 * 1024
@@ -235,15 +240,16 @@ function looksLikeTooLarge(message: string): boolean {
  * optionally fall back to ranged assembly for large A/V.
  */
 export async function loadHostBinary(
+  scope: ServerScope,
   path: string,
   options: LoadHostBinaryOptions = {},
 ): Promise<Uint8Array> {
   const { allowRangeAssembly = false, onProgress, signal } = options
   throwIfAborted(signal)
-  throwIfRemoteMacTmp(path)
+  throwIfRemoteMacTmpOn(scope, path)
 
   try {
-    const r = await daemonCliGet<{ base64?: string } | string>(primaryScope(), 'fs/read-binary', {
+    const r = await daemonCliGet<{ base64?: string } | string>(scope, 'fs/read-binary', {
       path,
     })
     throwIfAborted(signal)
@@ -269,7 +275,7 @@ export async function loadHostBinary(
     }
   }
 
-  return loadHostBinaryViaRange(path, { onProgress, signal })
+  return loadHostBinaryViaRange(scope, path, { onProgress, signal })
 }
 
 /**
@@ -277,18 +283,19 @@ export async function loadHostBinary(
  * callers decide whether to attempt this (media viewers typically cap UX).
  */
 export async function loadHostBinaryViaRange(
+  scope: ServerScope,
   path: string,
   options: Pick<LoadHostBinaryOptions, 'onProgress' | 'signal'> = {},
 ): Promise<Uint8Array> {
   const { onProgress, signal } = options
-  throwIfRemoteMacTmp(path)
+  throwIfRemoteMacTmpOn(scope, path)
   const chunks: Uint8Array[] = []
   let offset = 0
   let total = 0
 
   for (;;) {
     throwIfAborted(signal)
-    const slice = await daemonCliGet<ReadRangeResponse>(primaryScope(), 'fs/read-range', {
+    const slice = await daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', {
       path,
       offset,
       len: RANGE_CHUNK_BYTES,
@@ -382,11 +389,12 @@ export function looksLikeBinaryText(content: string, sampleBytes = 8192): boolea
 
 /** Convenience: load host bytes and return a Blob object URL. Caller must revoke. */
 export async function loadHostObjectUrl(
+  scope: ServerScope,
   path: string,
   mime: string,
   options?: LoadHostBinaryOptions,
 ): Promise<string> {
-  const bytes = await loadHostBinary(path, options)
+  const bytes = await loadHostBinary(scope, path, options)
   return bytesToObjectUrl(bytes, mime)
 }
 
@@ -395,10 +403,11 @@ export async function loadHostObjectUrl(
  * Prefer this over `loadHostObjectUrl` + extension MIME for images.
  */
 export async function loadHostImageObjectUrl(
+  scope: ServerScope,
   path: string,
   options?: LoadHostBinaryOptions,
 ): Promise<{ url: string; mime: string; byteLength: number }> {
-  const raw = await loadHostBinary(path, options)
+  const raw = await loadHostBinary(scope, path, options)
   if (raw.byteLength === 0) {
     throw new Error('Image file is empty (0 bytes)')
   }

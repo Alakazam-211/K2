@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { useRoom } from '@/components/Room/RoomContext'
 import { extractArchive } from '@/lib/fs-transfer'
-import { primaryScope } from '@/kessel/server-scope'
 
 interface ZipListEntry {
   name: string
@@ -34,6 +34,9 @@ function formatBytes(n: number): string {
  * into the code editor.
  */
 export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
+  // Home M4: the room's server (extract is a write: off in a view-only room).
+  const room = useRoom()
+  const scope = room.scope
   const [entries, setEntries] = useState<ZipListEntry[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -44,7 +47,7 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const r = await daemonCliGet<ZipListResponse>(primaryScope(), 'fs/zip-list', { path: filePath })
+      const r = await daemonCliGet<ZipListResponse>(scope, 'fs/zip-list', { path: filePath })
       setEntries(Array.isArray(r.entries) ? r.entries : [])
       setTruncated(Boolean(r.truncated))
     } catch (err) {
@@ -63,7 +66,7 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
       setLoading(true)
       setError(null)
       try {
-        const r = await daemonCliGet<ZipListResponse>(primaryScope(), 'fs/zip-list', { path: filePath })
+        const r = await daemonCliGet<ZipListResponse>(scope, 'fs/zip-list', { path: filePath })
         if (cancelled) return
         setEntries(Array.isArray(r.entries) ? r.entries : [])
         setTruncated(Boolean(r.truncated))
@@ -87,7 +90,7 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
     setExtracting(true)
     try {
       // Reuses the Files-menu extract job (sibling folder + transfer card).
-      await extractArchive(filePath)
+      await extractArchive(scope, filePath)
     } finally {
       setExtracting(false)
     }

@@ -16,7 +16,7 @@ import { createStore } from 'zustand/vanilla'
 import { RoomProvider } from '@/components/Room/RoomContext'
 // Type-only: importing `@/stores/room` at runtime would load the real tabs,
 // projects and active-agents stores into suites that mock them.
-import type { Room, RoomActivitySink, RoomProjectsStore } from '@/stores/room'
+import type { Room, RoomActivitySink, RoomActivityViewStore, RoomProjectsStore } from '@/stores/room'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import type { TabsStore } from '@/stores/tabs'
 import type { ActiveViewStore, PresenceViewStore } from '@/stores/server-view'
@@ -104,6 +104,7 @@ export function testRoom(opts: {
   presence?: PresenceViewStore
   activeSet?: ActiveViewStore
   heartbeats?: unknown
+  activityView?: RoomActivityViewStore
 }): Room {
   const scope = opts.scope ?? primaryScope()
   return {
@@ -121,6 +122,7 @@ export function testRoom(opts: {
       subscribe: unset('projects'),
     } as unknown as RoomProjectsStore),
     activity: { ...throwingActivity(), ...opts.activity },
+    activityView: opts.activityView ?? (throwingStore('activityView') as RoomActivityViewStore),
     localCommands: opts.localCommands ?? true,
     readOnly: opts.readOnly ?? false,
     presence: opts.presence ?? (throwingStore('presence') as PresenceViewStore),

@@ -11,6 +11,11 @@
 // the Agents empty state with Home wording, and the room stays mounted
 // but hidden (like under a full-page overlay: PageLive is false then, so
 // its sockets wind down the same way).
+//
+// Home M4: with "Remote rooms (preview)" on, a Home row on another server
+// opens THAT server's room in this same main area (`HomeRemoteRooms`), with
+// the same drawers bound to it. The window's own room is then hidden, as
+// for the empty state above.
 
 import Layout from './Layout'
 import Sidebar from '@/components/Sidebar/Sidebar'
@@ -23,6 +28,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import { LeftPanelContent, RightPanelContent } from './WorkspaceDrawers'
 import { RoomProvider } from '@/components/Room/RoomContext'
 import { primaryRoom } from '@/stores/room'
+import { HomeRemoteRooms, RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
 
 interface ShellProject {
   name: string
@@ -73,7 +79,9 @@ export default function AgentsShell({
   const room = primaryRoom()
   const onHome = usePageViewStore((s) => s.page === 'home')
   const homeEmpty = useHomesStore((s) => selectedHome(s).rows.length === 0)
-  const roomShown = useRoomShown()
+  const remote = useShownRemoteRoom()
+  const remoteRoom = remote?.room ?? null
+  const roomShown = useRoomShown() && remote === null
   const hasRoom = !!(activeProject && activeWorkspace)
   const rootPath = activeWorkspace?.worktreePath ?? activeProject?.path
   const emptyHint = onHome
@@ -86,20 +94,25 @@ export default function AgentsShell({
     <Layout
       sidebar={onHome ? <HomeSidebar /> : <Sidebar />}
       rail={onHome ? <HomeIconRail /> : undefined}
-      leftPanel={roomShown ? (
+      leftPanel={remoteRoom ? (
+        <RemoteRoomDrawer key={remoteRoom.key} room={remoteRoom} side="left" />
+      ) : roomShown ? (
         <RoomProvider room={room}>
           <LeftPanelContent rootPath={rootPath} />
         </RoomProvider>
       ) : undefined}
-      rightPanel={roomShown ? (
+      rightPanel={remoteRoom ? (
+        <RemoteRoomDrawer key={remoteRoom.key} room={remoteRoom} side="right" />
+      ) : roomShown ? (
         <RoomProvider room={room}>
           <RightPanelContent rootPath={rootPath} />
         </RoomProvider>
       ) : undefined}
-      projectName={roomShown ? activeProject?.name : undefined}
-      workspaceName={roomShown ? activeWorkspace?.name : undefined}
+      projectName={remote ? remote.entry.label : roomShown ? activeProject?.name : undefined}
+      workspaceName={remote ? undefined : roomShown ? activeWorkspace?.name : undefined}
     >
-      <RoomProvider room={room} shown>
+      <HomeRemoteRooms />
+      <RoomProvider room={room} shown={remote === null}>
         {hasRoom ? (
           <>
             <div
@@ -110,11 +123,11 @@ export default function AgentsShell({
             >
               <TerminalArea cwd={cwd} />
             </div>
-            {!roomShown && <RoomEmptyState hint={emptyHint} />}
+            {!roomShown && remote === null && <RoomEmptyState hint={emptyHint} />}
           </>
-        ) : (
+        ) : remote === null ? (
           <RoomEmptyState hint={emptyHint} />
-        )}
+        ) : null}
       </RoomProvider>
     </Layout>
   )

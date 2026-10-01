@@ -9,7 +9,8 @@ import { agentDisplayName, agentHandle } from '@/lib/workspace-agent'
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
+import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
+import { parseTrayList } from '@/components/AgentPane/inbox-browser'
 import { usePageViewStore } from '@/stores/page-view'
 import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
@@ -37,10 +38,13 @@ export default function WorkspacePanel(): React.JSX.Element {
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
 
   // Use stable selectors — avoid creating new references on every store change
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
-  const activeProject = useProjectsStore(useCallback((s) => {
-    return s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null
-  }, []))
+  // MS3: the room's shown project, from the room's own list (a pinned
+  // room's project lives on its server).
+  const activeProjectId = useRoomProjects(() => room.activeProjectId())
+  const activeProject = useRoomProjects(useCallback((projects) => {
+    const id = room.activeProjectId()
+    return id ? projects.find((p) => p.id === id) ?? null : null
+  }, [room]))
   const openAgentPane = useRoomTabs((s) => s.openAgentPane)
 
   // Worktrees section collapse state, persisted per-workspace.
@@ -78,11 +82,16 @@ export default function WorkspacePanel(): React.JSX.Element {
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint
       // (replaces the legacy `k2so_agents_workspace_inbox_list` whose
       // full-payload fetch was wasted bandwidth for a sidebar badge).
-      // MS67: `k2so_inbox_count` counts THIS computer's inbox.
-      // TODO(M4-integrate): in a room on another server, count with
-      // `daemonCliGet(room.scope, 'inbox/list', …)` instead of no badge.
+      // MS67: `k2so_inbox_count` counts THIS computer's inbox. In a room on
+      // another server, count THAT server's workspace inbox (`inbox/list`,
+      // the same read the room's Inbox tab makes).
       if (!room.localCommands) {
-        if (!cancelled) setWsInboxCount(0)
+        try {
+          const raw = await daemonCliGet<unknown>(room.scope, 'inbox/list', { project: activeProjectPath })
+          if (!cancelled) setWsInboxCount(parseTrayList(raw).length)
+        } catch {
+          if (!cancelled) setWsInboxCount(0)
+        }
         return
       }
       try {

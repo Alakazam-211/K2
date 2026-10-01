@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { useRoom } from '@/components/Room/RoomContext'
 import mammoth from 'mammoth'
-import { primaryScope } from '@/kessel/server-scope'
 
 interface DocxViewerProps {
   filePath: string
 }
 
 export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
+  // Home M4: the room's server.
+  const scope = useRoom().scope
   const [html, setHtml] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -21,7 +23,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
       try {
         // Read the file as base64 via the daemon and decode locally.
-        const r = await daemonCliGet<{ base64: string }>(primaryScope(), 'fs/read-binary', { path: filePath })
+        const r = await daemonCliGet<{ base64: string }>(scope, 'fs/read-binary', { path: filePath })
 
         if (cancelled) return
 

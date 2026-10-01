@@ -1,14 +1,20 @@
 import { daemonCliGetText } from '@/lib/daemon-cli'
-import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
+import type { HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
-import { primaryScope } from '@/kessel/server-scope'
+import { ViewOnlyWriteError, type ServerScope } from '@/kessel/server-scope'
 
 /** Manual Launch / test-fire. Always passes `force=1` so a disabled
  *  heartbeat still runs (scheduler ticks still skip disabled rows). */
-export async function launchHeartbeat(projectPath: string, name: string): Promise<boolean> {
+export async function launchHeartbeat(
+  room: { scope: ServerScope; heartbeats: HeartbeatSessionsStore },
+  projectPath: string,
+  name: string,
+): Promise<boolean> {
   const toast = useToastStore.getState()
+  // `heartbeat/launch` is a GET that fires: never from a view-only room.
+  if (room.scope.viewOnly) throw new ViewOnlyWriteError(room.scope.hostKey, 'heartbeat/launch')
   try {
-    const resp = await daemonCliGetText(primaryScope(), 'heartbeat/launch', {
+    const resp = await daemonCliGetText(room.scope, 'heartbeat/launch', {
       project: projectPath,
       name,
       force: '1',
@@ -42,7 +48,7 @@ export async function launchHeartbeat(projectPath: string, name: string): Promis
       verb = 'Fired'
     }
     toast.addToast(`${verb} "${name}"`, 'success', 2500)
-    void useHeartbeatSessionsStore.getState().refresh(projectPath)
+    void room.heartbeats.getState().refresh(projectPath)
     return true
   } catch (err) {
     toast.addToast(`Launch failed: ${String(err)}`, 'error', 4000)

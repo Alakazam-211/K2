@@ -34,6 +34,7 @@ import {
 import { HOME_POLL_MS, resolveRowStatus, type RowStatus } from '@/lib/home-status'
 import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
+import { useHomeRoomsStore } from '@/stores/home-rooms'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -43,14 +44,16 @@ export function useHomeRoomSelected(): boolean {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const projects = useProjectsStore((s) => s.projects)
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
+  // Home M4: a remote room on screen hides the window's own room.
+  const remoteShown = useHomeRoomsStore((s) => s.shown !== null)
   return useMemo(() => {
-    if (!onHome || !activeProjectId) return false
+    if (!onHome || !activeProjectId || remoteShown) return false
     return home.rows.some((row) => {
       const p = parseHomeAddress(row.address)
       if (!p || p.host !== connectedKey) return false
       return findWorkspaceForRow(projects, row)?.id === activeProjectId
     })
-  }, [onHome, home.rows, activeProjectId, projects, connectedKey])
+  }, [onHome, home.rows, activeProjectId, projects, connectedKey, remoteShown])
 }
 
 /** Open state of the Add Agent picker. The collapsed rail's + opens it

@@ -4,8 +4,8 @@ import {
   revokeObjectUrl,
 } from '@/lib/load-host-binary'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
-import { isRemoteMacTmpPath, isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
-import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
+import { isMacTmpPath, isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
+import { useRoom } from '@/components/Room/RoomContext'
 
 interface ImageViewerProps {
   filePath: string
@@ -19,6 +19,8 @@ interface ImageViewerProps {
  * Revokes the object URL on unmount / path change.
  */
 export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Element {
+  // Home M4: the room's server (B's file in B's room).
+  const scope = useRoom().scope
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -30,7 +32,9 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
   useEffect(() => {
     let cancelled = false
     const ac = new AbortController()
-    const startedKey = activeHostKey(useConnectHostStore.getState().activeHost)
+    // The room's connection identity (follows a switch for the primary
+    // room; fixed for a pinned room).
+    const startedKey = scope.connectionKey
 
     async function load(): Promise<void> {
       setLoading(true)
@@ -44,7 +48,7 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
       }
       setUrl(null)
 
-      if (isRemoteMacTmpPath(filePath)) {
+      if (scope.isRemote && isMacTmpPath(filePath)) {
         if (!cancelled) {
           setQuiet(true)
           setLoading(false)
@@ -54,13 +58,14 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
 
       try {
         const { url: objectUrl, mime, byteLength } = await loadHostImageObjectUrl(
+          scope,
           filePath,
           { signal: ac.signal },
         )
         if (
           cancelled ||
           ac.signal.aborted ||
-          activeHostKey(useConnectHostStore.getState().activeHost) !== startedKey
+          scope.connectionKey !== startedKey
         ) {
           revokeObjectUrl(objectUrl)
           if (!cancelled) setLoading(false)

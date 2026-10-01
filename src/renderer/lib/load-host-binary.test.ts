@@ -19,6 +19,7 @@ import {
   revokeObjectUrl,
 } from './load-host-binary'
 import { RemoteMacTmpError } from './remote-mac-tmp'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
@@ -54,14 +55,14 @@ describe('loadHostBinary', () => {
 
   it('calls fs/read-binary and decodes base64', async () => {
     daemonCliGet.mockResolvedValueOnce({ base64: 'aGVsbG8=' }) // "hello"
-    const bytes = await loadHostBinary('/host/pic.png')
+    const bytes = await loadHostBinary(primaryScope(), '/host/pic.png')
     expect(daemonCliGet).toHaveBeenCalledWith('fs/read-binary', { path: '/host/pic.png' })
     expect(new TextDecoder().decode(bytes)).toBe('hello')
   })
 
   it('propagates daemon errors', async () => {
     daemonCliGet.mockRejectedValueOnce(new Error('payload too large'))
-    await expect(loadHostBinary('/big.bin')).rejects.toThrow('payload too large')
+    await expect(loadHostBinary(primaryScope(), '/big.bin')).rejects.toThrow('payload too large')
   })
 
   it('remote + Mac tmp refuses without daemonCliGet', async () => {
@@ -79,14 +80,14 @@ describe('loadHostBinary', () => {
     useConnectHostStore.getState().addHost(host)
     useConnectHostStore.getState().selectHost(host)
     const path = '/var/folders/zz/abc/T/NSIRD_screencaptureui_x/Screenshot.png'
-    await expect(loadHostBinary(path)).rejects.toBeInstanceOf(RemoteMacTmpError)
+    await expect(loadHostBinary(primaryScope(), path)).rejects.toBeInstanceOf(RemoteMacTmpError)
     expect(daemonCliGet).not.toHaveBeenCalled()
   })
 
   it('local /var/folders still reads', async () => {
     daemonCliGet.mockResolvedValueOnce({ base64: 'aGVsbG8=' })
     const path = '/var/folders/zz/abc/T/Screenshot.png'
-    await loadHostBinary(path)
+    await loadHostBinary(primaryScope(), path)
     expect(daemonCliGet).toHaveBeenCalledWith('fs/read-binary', { path })
   })
 })

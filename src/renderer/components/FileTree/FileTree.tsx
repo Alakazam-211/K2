@@ -7,8 +7,8 @@ import { beginFileDrag } from '@/lib/file-drag'
 import { showContextMenu } from '@/lib/context-menu'
 import { useFileTreeStore } from '@/stores/filetree'
 import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
-import { useRoom } from '@/components/Room/RoomContext'
-import { isRemoteScope, mayRunLocalActions } from '@/lib/local-only-actions'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
+import { isRemoteScope, mayRunLocalActions, roomMayRun } from '@/lib/local-only-actions'
 import { useToastStore } from '@/stores/toast'
 import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
@@ -21,7 +21,6 @@ import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { onFsChanged, onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { useStyleStore } from '@/stores/style'
-import { useProjectsStore } from '@/stores/projects'
 import {
   addWorkspaceResource,
   fetchWorkspaceResources,
@@ -827,7 +826,8 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const [aiConfigEntries, setAiConfigEntries] = useState<FileEntry[]>([])
   const [aiConfigCollapsed, setAiConfigCollapsed] = useState(true)
 
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  // MS3: the room's own project (a pinned room's id is its server's).
+  const activeProjectId = useRoomProjects(() => room.activeProjectId())
   const [workspaceResources, setWorkspaceResources] = useState<WorkspaceResource[]>([])
   const [resourcesCollapsed, setResourcesCollapsed] = useState(true)
 
@@ -1212,12 +1212,11 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const [internalDropTarget, setInternalDropTarget] = useState<string | null>(null)
 
   // ── Drag-out: in-window (terminal drop) + folder drop + Finder (OS handoff)
-  // TODO(M4-integrate): 'drag-out' is local-only (lib/local-only-actions.ts).
-  // In a room on another server, `beginFileDrag` must not hand the OS
-  // (Finder) that server's paths, and a drop into a room on a DIFFERENT
-  // server is refused (MS4/MS19): pass `room.scope.hostKey` into
-  // `beginFileDrag` and compare it with the drop target's room
-  // (`roomForElement`, stores/window-room.ts).
+  // Home M4: 'drag-out' is local-only (lib/local-only-actions.ts). The drag
+  // carries this room's scope: a room on another server never hands the OS
+  // (Finder) that server's paths (`roomMayRun(room, 'drag-out')`), and a
+  // drop into a room on a DIFFERENT server, or into a view-only room, is
+  // refused (MS4/MS19, `fileDropRefusal` in lib/file-drag).
   const handleDragOutStart = useCallback((entry: FileEntry, e: React.MouseEvent) => {
     const startX = e.clientX
     const startY = e.clientY
@@ -1232,7 +1231,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const handleMouseMove = (ev: MouseEvent): void => {
       if (!started && (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5)) {
         started = true
-        beginFileDrag(paths, ev.clientX, ev.clientY, {
+        beginFileDrag({ scope: room.scope, mayHandOffToOs: roomMayRun(room, 'drag-out') }, paths, ev.clientX, ev.clientY, {
           onDragOver: (dirPath) => {
             // Don't highlight if hovering over one of the dragged items' own directories
             if (dirPath && paths.some(p => p === dirPath || dirPath.startsWith(p + '/'))) {
@@ -1622,13 +1621,17 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // Skip only when desktop is on Local (file already on this Mac).
     // Hosted web is always same-origin remote — always offer Download.
     // Home M4: the ROOM's server decides (same as the window's for the
-    // primary room).
-    // TODO(M4-integrate): `lib/fs-transfer` (download, compress, extract)
-    // still runs on `primaryScope()`; it must take `room.scope` before a
-    // room on another server offers Download / Compress / Extract.
+    // primary room). `lib/fs-transfer` (download, compress, extract) runs
+    // on `room.scope`.
     const isRemote = isWebClient() || isRemoteScope(room.scope)
 
-    const items = [
+    // Home M4: a view-only (preview) room writes nothing to its server —
+    // only Download and Copy Path.
+    const viewOnlyItems = [
+      ...(!isDir && isSingle && isRemote ? [{ id: 'download', label: 'Download' }] : []),
+      { id: 'copy-path', label: 'Copy Path' },
+    ]
+    const items = room.readOnly ? viewOnlyItems : [
       ...(!isDir && isSingle
         ? [
             { id: 'add-resource', label: 'Add to Resources' },
@@ -1707,12 +1710,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     } else if (clickedId === 'compress') {
       // The sibling zip lands next to the folder — refresh its parent so
       // the new archive appears without a manual reload.
-      const zipPath = await compressFolder(entry.path)
+      const zipPath = await compressFolder(room.scope, entry.path)
       if (zipPath) await loadDir(parentDir(entry.path))
     } else if (clickedId === 'extract') {
       // Sibling folder lands next to the zip — refresh parent and expand
       // the dest so contents show without a manual reload.
-      const destPath = await extractArchive(entry.path)
+      const destPath = await extractArchive(room.scope, entry.path)
       if (destPath) {
         const parent = parentDir(entry.path)
         await loadDir(parent)
@@ -1724,7 +1727,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         await loadDir(destPath)
       }
     } else if (clickedId === 'download') {
-      await downloadFile(entry.path)
+      await downloadFile(room.scope, entry.path)
     } else if (clickedId === 'copy-items') {
       useFileClipboardStore.getState().copy(paths)
       useToastStore.getState().addToast(`Copied ${paths.length} item(s)`, 'success')

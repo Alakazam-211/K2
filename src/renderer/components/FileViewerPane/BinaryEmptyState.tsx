@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import { useRoom } from '@/components/Room/RoomContext'
+import { mayRunLocalActions } from '@/lib/local-only-actions'
 
 interface BinaryEmptyStateProps {
   filePath: string
@@ -28,12 +29,16 @@ export function BinaryEmptyState({
   detail,
 }: BinaryEmptyStateProps): React.JSX.Element {
   const fileName = filePath.split('/').pop() || filePath
+  // Home M4 (MS57): `fs/open-finder` opens the daemon machine's file
+  // manager: hidden in a room on another server.
+  const room = useRoom()
+  const canReveal = mayRunLocalActions(room)
 
   const reveal = useCallback(() => {
-    void daemonCliPost(primaryScope(), 'fs/open-finder', { target: filePath }).catch((err) => {
+    void daemonCliPost(room.scope, 'fs/open-finder', { target: filePath }).catch((err) => {
       console.warn('[file-viewer] open-finder failed:', err)
     })
-  }, [filePath])
+  }, [filePath, room])
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] px-6">
@@ -47,13 +52,15 @@ export function BinaryEmptyState({
           </span>
         )}
       </div>
-      <button
-        type="button"
-        className="px-3 py-1.5 text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors"
-        onClick={reveal}
-      >
-        {revealLabel()}
-      </button>
+      {canReveal && (
+        <button
+          type="button"
+          className="px-3 py-1.5 text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors"
+          onClick={reveal}
+        >
+          {revealLabel()}
+        </button>
+      )}
     </div>
   )
 }

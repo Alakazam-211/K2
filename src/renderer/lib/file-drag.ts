@@ -20,7 +20,9 @@ import {
   pathsAreComposeSurfaceImages,
   surfaceComposeBar,
 } from '@/lib/compose-surface-drop'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
+import { roomForElement } from '@/stores/window-room'
+import { useToastStore } from '@/stores/toast'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -171,6 +173,30 @@ export function inAppComposeDropElement(
   return surfaceComposeBar(el)
 }
 
+/** Where a file-tree drag starts (Home M4, MS4/MS19/MS57). */
+export interface FileDragSource {
+  /** The source room's server. Its paths only mean something there. */
+  scope: ServerScope
+  /** May the drag leave the window to the OS (Finder)? Only for this
+   *  computer's paths (`mayRunLocalActions(room)`). */
+  mayHandOffToOs: boolean
+}
+
+/** Why a drop into the room under the cursor is refused, or null. A file
+ *  path from one server means nothing on another (MS4), and a view-only
+ *  room takes no writes or input. */
+export function fileDropRefusal(
+  source: Pick<FileDragSource, 'scope'>,
+  target: { scope: Pick<ServerScope, 'hostKey' | 'label'>; readOnly: boolean } | null,
+): string | null {
+  if (!target) return null
+  if (target.scope.hostKey !== source.scope.hostKey) {
+    return `These files are on ${source.scope.label}. They can't be dropped into a room on ${target.scope.label}.`
+  }
+  if (target.readOnly) return 'View only (preview): nothing is dropped into this room.'
+  return null
+}
+
 export interface FileDragCallbacks {
   /** Called during mousemove with the directory path under the cursor (or null). */
   onDragOver?: (dirPath: string | null) => void
@@ -184,7 +210,13 @@ export interface FileDragCallbacks {
  * Start tracking a file drag from the FileTree.
  * Call this from FileTree's mousedown handler after the 5px threshold.
  */
-export function beginFileDrag(paths: string[], startX: number, startY: number, callbacks?: FileDragCallbacks): void {
+export function beginFileDrag(
+  source: FileDragSource,
+  paths: string[],
+  startX: number,
+  startY: number,
+  callbacks?: FileDragCallbacks,
+): void {
   dragPaths = paths
   active = true
   ghost = createGhost(paths)
@@ -224,6 +256,15 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
     active = false
 
     const el = document.elementFromPoint(ev.clientX, ev.clientY)
+
+    // Home M4 (MS4/MS19): never across servers, never into a view-only room.
+    const targetRoom = el ? roomForElement(el) : null
+    const refusal = fileDropRefusal(source, targetRoom)
+    if (refusal) {
+      useToastStore.getState().addToast(refusal, 'warning')
+      dragPaths = []
+      return
+    }
 
     // Hit-test: agent compose bar first — insert host paths into the draft
     // (FileTree paths are already on the active host; no re-upload).
@@ -265,7 +306,7 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
         } else {
           const tid = termContainer.dataset.terminalId
           if (tid) {
-            terminalWrite(primaryScope(), tid, data).catch((e) => console.warn('[file-drag]', e))
+            terminalWrite(targetRoom?.scope ?? source.scope, tid, data).catch((e) => console.warn('[file-drag]', e))
           }
         }
         dragPaths = []
@@ -294,7 +335,8 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
     cleanup()
     active = false
 
-    if (dragPaths.length > 0) {
+    // MS57: another server's paths never go to this computer's Finder.
+    if (dragPaths.length > 0 && source.mayHandOffToOs) {
       startDrag({ item: dragPaths, icon: 'png' }).catch((err) => {
         console.error('[file-drag] Native drag failed:', err)
       })

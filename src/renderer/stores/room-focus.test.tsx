@@ -267,9 +267,9 @@ describe("a pinned room's activity slice (MS68)", () => {
     const serverB = projectsStoreOf([{ id: 'p1', path: '/work/k2', completionSoundEnabled: 1, workspaces: [] } as never])
     const activity = createRoomActivity(serverB, 'p1')
     activity.recordTitleActivity('term-1', true)
-    expect(activity.getState().statuses.get('term-1')).toBe('working')
+    expect(activity.getState().paneStatuses.get('term-1')).toBe('working')
     activity.recordTitleActivity('term-1', false)
-    expect(activity.getState().statuses.get('term-1')).toBe('idle')
+    expect(activity.getState().paneStatuses.get('term-1')).toBe('idle')
     expect(activity.getState().unseenDone.has('term-1')).toBe(true)
     expect(chime.calls).toEqual([{ projectId: 'p1', projects: serverB.getState().projects }])
 
@@ -278,7 +278,7 @@ describe("a pinned room's activity slice (MS68)", () => {
     // A permission gate is not a completion.
     activity.recordTitlePermission('term-2', true)
     activity.recordTitleActivity('term-2', false)
-    expect(activity.getState().statuses.get('term-2')).toBe('permission')
+    expect(activity.getState().paneStatuses.get('term-2')).toBe('permission')
     expect(chime.calls.length).toBe(1)
   })
 })

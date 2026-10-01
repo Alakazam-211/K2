@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { useRoom } from '@/components/Room/RoomContext'
 import * as pdfjsLib from 'pdfjs-dist'
-import { primaryScope } from '@/kessel/server-scope'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -22,6 +22,8 @@ const DEFAULT_ZOOM = 1.0
 // ── Component ────────────────────────────────────────────────────────────
 
 export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
+  // Home M4: the room's server (a viewer in B's room reads B's file).
+  const scope = useRoom().scope
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -47,7 +49,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
         // `atob` is the smallest path; ~50 MB files top out the
         // implementation's V8 string limit headroom (~256 MB) by a
         // wide margin so no chunking needed here.
-        const r = await daemonCliGet<{ base64: string }>(primaryScope(), 'fs/read-binary', { path: filePath })
+        const r = await daemonCliGet<{ base64: string }>(scope, 'fs/read-binary', { path: filePath })
         const binary = atob(r.base64)
         const data = new Uint8Array(binary.length)
         for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i)

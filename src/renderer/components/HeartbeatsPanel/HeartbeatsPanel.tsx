@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useProjectsStore } from '@/stores/projects'
+import { useStore } from 'zustand'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useSettingsStore } from '@/stores/settings'
-import {
-  useHeartbeatSessionsStore,
-  subscribeHeartbeatLive,
-  unsubscribeHeartbeatLive,
-  type HeartbeatEntry,
-} from '@/stores/heartbeat-sessions'
-import { serverSupports } from '@/lib/server-capabilities'
+import type { HeartbeatEntry } from '@/stores/heartbeat-sessions'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
 import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
 
 /**
  * Heartbeats section — workspace-scoped audit surface for scheduled
@@ -31,20 +26,24 @@ import { primaryScope, scopedKey } from '@/kessel/server-scope'
  * section never looks broken.
  */
 export function HeartbeatsPanel(): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  // Home M4 (MS14): the room's project, from its own list, and the room's
+  // own heartbeat store on its server.
+  const room = useRoom()
+  const heartbeats = room.heartbeats
+  const projects = useRoomProjects((p) => p)
+  const activeProjectId = useRoomProjects(() => room.activeProjectId())
   const project = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
   )
   const projectPath = project?.path ?? null
 
-  const active = useHeartbeatSessionsStore((s) => s.active)
-  const archived = useHeartbeatSessionsStore((s) => s.archived)
-  const loadedFor = useHeartbeatSessionsStore((s) => s.loadedFor)
-  const lastError = useHeartbeatSessionsStore((s) => s.lastError)
-  const refresh = useHeartbeatSessionsStore((s) => s.refresh)
-  const clear = useHeartbeatSessionsStore((s) => s.clear)
+  const active = useStore(heartbeats, (s) => s.active)
+  const archived = useStore(heartbeats, (s) => s.archived)
+  const loadedFor = useStore(heartbeats, (s) => s.loadedFor)
+  const lastError = useStore(heartbeats, (s) => s.lastError)
+  const refresh = useStore(heartbeats, (s) => s.refresh)
+  const clear = useStore(heartbeats, (s) => s.clear)
 
   // Initial snapshot on workspace switch. Liveness then comes from the
   // daemon's `heartbeat_state_changed` broadcast (push-primary, #677.1);
@@ -53,24 +52,24 @@ export function HeartbeatsPanel(): React.JSX.Element {
   useEffect(() => {
     if (!projectPath) {
       clear()
-      unsubscribeHeartbeatLive()
+      heartbeats.unsubscribeLive()
       return
     }
     refresh(projectPath)
-    if (serverSupports('daemon-broadcasts')) {
-      subscribeHeartbeatLive(projectPath)
-      return () => unsubscribeHeartbeatLive()
+    if (room.scope.serverSupports('daemon-broadcasts')) {
+      heartbeats.subscribeLive(projectPath)
+      return () => heartbeats.unsubscribeLive()
     }
     const t = setInterval(() => refresh(projectPath), 5000)
     return () => clearInterval(t)
-  }, [projectPath, refresh, clear])
+  }, [projectPath, refresh, clear, heartbeats, room])
 
   // Per-workspace localStorage key for the Archived section's collapse
   // state. Strictly tied to project.id (not path or undefined) so the
   // user's "I always collapse archived for project X" preference
   // survives workspace switches.
   const archivedKey = project
-    ? scopedKey(primaryScope(), `heartbeats.archive-collapsed.${project.id}`)
+    ? scopedKey(room.scope, `heartbeats.archive-collapsed.${project.id}`)
     : null
   const [archivedOpen, setArchivedOpen] = useState<boolean>(() => {
     if (!archivedKey) return false
@@ -88,7 +87,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
   // Whole-section collapse state, persisted per-workspace. Default
   // OPEN — most users expect to see their heartbeats at a glance.
   const sectionKey = project
-    ? scopedKey(primaryScope(), `heartbeats.section-collapsed.${project.id}`)
+    ? scopedKey(room.scope, `heartbeats.section-collapsed.${project.id}`)
     : null
   const [sectionOpen, setSectionOpen] = useState<boolean>(() => {
     if (!sectionKey) return true

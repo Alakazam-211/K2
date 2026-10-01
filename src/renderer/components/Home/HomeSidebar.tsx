@@ -15,6 +15,8 @@
 //     (`AgentRowButton`) with a small machine chip and its live / offline /
 //     sign-in state on the second line, plus that server's presence.
 //     Clicking it switches this window's server (H15) and lands on Home.
+//     With "Remote rooms (preview)" on (Home M4), it instead opens that
+//     server's room in the main area, view-only, without switching.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
@@ -26,9 +28,12 @@ import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
-import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
+import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress, savedHostForKey } from '@/lib/home-address'
+import { requestHostSelect } from '@/lib/home-pending-select'
 import type { RowStatus } from '@/lib/home-status'
 import { openHomeRow } from '@/lib/home-open'
+import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
+import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
 import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
@@ -121,6 +126,8 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   } else if (parsed && parsed.host !== connectedKey && !isWebClient()) {
     items.push({ id: 'home-open', label: 'Switch to its server and open' })
   }
+  const roomOpen = homeRooms.store.getState().entries[row.address]
+  if (roomOpen) items.push({ id: 'home-close-room', label: 'Close room' })
   if (items.length > 0) items.push({ id: 'home-sep', label: '', type: 'separator' })
   items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
 
@@ -130,15 +137,32 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   } else if (clicked === 'home-wiki' && ws) {
     usePageViewStore.getState().openWiki(ws.path)
   } else if (clicked === 'home-open') {
-    openHomeRow(row)
+    switchToRowServer(row)
+  } else if (clicked === 'home-close-room') {
+    void homeRooms.close(row.address)
   } else if (clicked === 'home-remove') {
     useHomesStore.getState().removeRow(home.id, row.address)
   }
 }
 
+/** "Switch to its server and open": today's switch, even with the preview
+ *  on (the explicit gesture). */
+function switchToRowServer(row: HomeRow): void {
+  const parsed = parseHomeAddress(row.address)
+  if (!parsed) return
+  const state = useConnectHostStore.getState()
+  const target = parsed.host === 'local' ? 'local' : savedHostForKey(state.hosts, parsed.host)
+  if (!target) return
+  homeRooms.showPrimary()
+  requestHostSelect(target === 'local' ? 'local' : target.id, row, () => usePageViewStore.getState().setPage('home'))
+  state.pickHost(target)
+}
+
 /** A row that does not paint as a live Agents row. */
 function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
+  const preview = useRemoteRoomsPreview()
+  const shownRoom = useShownHomeRoom()
   const remoteOnWeb = isWebClient() && !onConnected
   // MS83: "No access" rows never open a room.
   const canOpen = !remoteOnWeb && status.kind !== 'not-found' && status.kind !== 'no-access'
@@ -149,7 +173,9 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
       : status.kind === 'sign-in'
         ? `${status.detail ? `${status.detail} ` : ''}Sign in to ${place} and open ${row.label}`
         : !onConnected
-          ? `Switch this window to ${place} and open ${row.label}`
+          ? preview
+            ? `Open ${row.label} from ${place} here, view only (preview)`
+            : `Switch this window to ${place} and open ${row.label}`
           : status.kind === 'not-found'
             ? `${row.label} is not on this server any more`
             : `Open ${row.label}`
@@ -157,7 +183,7 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
 
   return (
     <AgentRowButton
-      isActive={false}
+      isActive={preview && shownRoom === row.address}
       color={OTHER_SERVER_AVATAR_COLOR}
       dimmed={status.kind === 'offline' || status.kind === 'not-found'}
       onClick={() => {
@@ -202,21 +228,27 @@ function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Ele
       ? findWorkspaceForRow(projects, row)
       : null
   const note = useConnectedRowNote(row)
+  // Home M4: while a remote room is on screen, no connected row is active;
+  // clicking one gives the main area back to the window's own room.
+  const remoteShown = useShownHomeRoom() !== null
+  const isActive = !!ws && ws.id === activeProjectId && !remoteShown
   if (ws && !note) {
     return (
-      <SingleProjectItem
-        project={ws}
-        isActive={ws.id === activeProjectId}
-        onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
-      />
+      <div onClickCapture={() => homeRooms.showPrimary()}>
+        <SingleProjectItem
+          project={ws}
+          isActive={isActive}
+          onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
+        />
+      </div>
     )
   }
   if (ws && note) {
     return (
-      <div className="relative" title={note}>
+      <div className="relative" title={note} onClickCapture={() => homeRooms.showPrimary()}>
         <SingleProjectItem
           project={ws}
-          isActive={ws.id === activeProjectId}
+          isActive={isActive}
           onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
         />
         <div className="pointer-events-none absolute right-2 top-1">

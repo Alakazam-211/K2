@@ -21,7 +21,7 @@
 // button, no status lane, no collapse control. A successful send clears the
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
-import { useRoomProjects } from '@/components/Room/RoomContext'
+import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -35,9 +35,7 @@ import {
   pickLocalComposeFiles,
   pickRemoteComposeFile,
 } from '@/lib/pick-compose-files'
-import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
-import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import {
@@ -77,7 +75,7 @@ import {
   overlayItemFromThreadPost,
 } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
+import { scopedKey } from '@/kessel/server-scope'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -129,16 +127,22 @@ export function TerminalComposeBar({
   // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
   // instruction (default OFF). The daemon enforces the same gate per-workspace
   // server-side; this hide is defense-in-depth only.
-  const isLocalHost = useConnectHostStore((s) => s.activeHost === 'local')
+  // Home M4: the ROOM's server decides, and its own project record (MS3).
+  const room = useRoom()
+  const scope = room.scope
+  const isLocalHost = !scope.isRemote
   const allowRemoteInstruct = useSettingsStore((s) => s.allowRemoteInstruct)
-  // Per-workspace opt-in for the currently-active workspace. Approximate on
+  // Per-workspace opt-in for the room's shown workspace. Approximate on
   // the renderer (the daemon resolves the EXACT target session's workspace);
   // good enough for the convenience hide.
-  const perWorkspaceAllow = useProjectsStore((s) => {
-    const active = s.projects.find((p) => p.id === s.activeProjectId)
+  const roomProjectId = room.activeProjectId()
+  const perWorkspaceAllow = useRoomProjects((projects) => {
+    const active = projects.find((p) => p.id === roomProjectId)
     return (active?.allowRemoteInstruct ?? 0) === 1
   })
-  const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
+  // A view-only (preview) room sends nothing to its server: no composer.
+  const permitted =
+    !room.readOnly && composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
   // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   // MS3 — the pane's workspace path resolves in its room's own list.
@@ -163,12 +167,12 @@ export function TerminalComposeBar({
   // storage); the draft never touches the daemon.
   // Home M1: prefixed with the server's host key (`<hostKey>|…`).
   const draftKey = scopedKey(
-    primaryScope(),
+    scope,
     sendOnThread ? `k2:composer:draft:${sessionId}:thread` : `k2:composer:draft:${sessionId}`,
   )
   const [draft, setDraft] = useState<string>(() => {
     try {
-      return localStorage.getItem(scopedKey(primaryScope(), `k2:composer:draft:${sessionId}`)) ?? ''
+      return localStorage.getItem(scopedKey(scope, `k2:composer:draft:${sessionId}`)) ?? ''
     } catch {
       return ''
     }
@@ -289,7 +293,7 @@ export function TerminalComposeBar({
       return
     }
     let cancelled = false
-    void daemonCliGet<{ items?: ComposeHistoryItem[] }>(primaryScope(), 'terminal/compose-history', {
+    void daemonCliGet<{ items?: ComposeHistoryItem[] }>(scope, 'terminal/compose-history', {
       workspace_path: workspacePath,
     })
       .then((resp) => {
@@ -358,8 +362,8 @@ export function TerminalComposeBar({
           if (p) paths.push(p)
         }
         if (paths.length > 0) {
-          if (useConnectHostStore.getState().activeHost !== 'local') {
-            void executeRemoteDrop(primaryScope(),
+          if (scope.isRemote) {
+            void executeRemoteDrop(scope,
               paths,
               { kind: 'terminal' },
               { workspacePath: workspacePath || undefined },
@@ -375,7 +379,7 @@ export function TerminalComposeBar({
         // Hosted web / no File.path — upload File bytes then insert host path.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
-          void executeBrowserFileDrop(primaryScope(),
+          void executeBrowserFileDrop(scope,
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: workspacePath || undefined },
@@ -433,7 +437,7 @@ export function TerminalComposeBar({
       }
       const browserFiles = Array.from(list)
       if (browserFiles.length > 0) {
-        void executeBrowserFileDrop(primaryScope(),
+        void executeBrowserFileDrop(scope,
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: workspacePath || undefined },
@@ -473,7 +477,7 @@ export function TerminalComposeBar({
           via: 'compose',
         }
         if (command) body.command = command
-        const resp = await daemonCliPost<Record<string, unknown>>(primaryScope(), 'thread/post', body)
+        const resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
         if (resp?.ok === false) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
@@ -490,7 +494,7 @@ export function TerminalComposeBar({
           text,
         }
         if (command) body.command = command
-        const resp = await daemonCliPost<MsgResponse>(primaryScope(), 'terminal/send-message', body)
+        const resp = await daemonCliPost<MsgResponse>(scope, 'terminal/send-message', body)
         // Failed send → restore the text so it's not lost (the box reappearing
         // IS the feedback) — but never clobber a fresh draft already started.
         // Keep the selected slash-command on failure so retry still sends it.
@@ -1007,6 +1011,7 @@ function ComposeImageThumb({
   path: string
   onRemove: () => void
 }): React.JSX.Element {
+  const scope = useRoom().scope
   const [url, setUrl] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const urlRef = useRef<string | null>(null)
@@ -1019,7 +1024,7 @@ function ComposeImageThumb({
       urlRef.current = null
     }
     setUrl(null)
-    void loadHostImageObjectUrl(path, { signal: ac.signal })
+    void loadHostImageObjectUrl(scope, path, { signal: ac.signal })
       .then((r) => {
         if (cancelled || ac.signal.aborted) {
           revokeObjectUrl(r.url)

@@ -21,6 +21,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { ImageViewer } from './ImageViewer'
+import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
@@ -57,7 +58,7 @@ describe('ImageViewer host-switch leftover', () => {
 
   it('remount after selectHost(remote) issues zero daemonCliGet for Mac tmp PNG', async () => {
     daemonCliGet.mockResolvedValue({ base64: 'aGVsbG8=' })
-    const first = render(<ImageViewer filePath={SCREENSHOT} />)
+    const first = renderInPrimaryRoom(<ImageViewer filePath={SCREENSHOT} />)
     await waitFor(() => expect(daemonCliGet).toHaveBeenCalled())
     daemonCliGet.mockClear()
 
@@ -65,7 +66,7 @@ describe('ImageViewer host-switch leftover', () => {
     useConnectHostStore.getState().addHost(host)
     useConnectHostStore.getState().selectHost(host)
     first.unmount()
-    render(<ImageViewer filePath={SCREENSHOT} />)
+    renderInPrimaryRoom(<ImageViewer filePath={SCREENSHOT} />)
     await waitFor(() => {
       expect(document.body.textContent).toMatch(/Not available on this server/i)
     })
@@ -83,7 +84,7 @@ describe('ImageViewer host-switch leftover', () => {
           resolveGet = resolve
         }),
     )
-    render(<ImageViewer filePath={SCREENSHOT} />)
+    renderInPrimaryRoom(<ImageViewer filePath={SCREENSHOT} />)
     await waitFor(() => expect(daemonCliGet).toHaveBeenCalledTimes(1))
 
     const host = makeRemoteHost()

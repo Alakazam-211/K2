@@ -6,13 +6,13 @@ import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
+import { useStore } from 'zustand'
 import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
 import { agentChatId } from '@/lib/terminal-id'
 import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
-import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { startTabDrag } from '@/components/Terminal/TerminalArea'
@@ -115,18 +115,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
   const reorderTabs = useRoomTabs((s) => s.reorderTabs)
-  const paneStatusMap = useActiveAgentsStore((s) => s.paneStatuses)
+  // Home M4 (MS14/MS21): the ROOM's activity — the window's store for the
+  // primary room, the room's own slice for a pinned room.
+  const paneStatusMap = useStore(room.activityView, (s) => s.paneStatuses)
   // 0.40.39 — daemon-truth activity (visibility-independent). Subscribed
   // so the tab re-renders on daemon transitions; merged with the client
   // map so a hidden pane's false idle can't kill the spinner.
-  const daemonStatusMap = useActiveAgentsStore((s) => s.daemonPaneStatuses)
+  const daemonStatusMap = useStore(room.activityView, (s) => s.daemonPaneStatuses)
   // F4.1 (0.40.39) — per-TAB unseen-done: the tab whose agent finished
   // while the user wasn't looking shows an amber square in the spinner/X
   // slot until visited (markSeen clears the entry when the pane becomes
   // visible+focused). Same store the Active bar's amber square reads, so
   // the two can never disagree. Reserved orange TAB-highlight (API-
   // launched tabs) is deliberately NOT reused here.
-  const unseenDoneMap = useActiveAgentsStore((s) => s.unseenDone)
+  const unseenDoneMap = useStore(room.activityView, (s) => s.unseenDone)
   const effStatus = (id: string): PaneStatus =>
     mergePaneStatus(paneStatusMap.get(id), daemonStatusMap.get(id))
   // This TabBar is scoped to one workspace (`cwd`); resolve its projectId so
@@ -233,7 +235,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // identity is stable when nothing has changed — otherwise every
   // render allocates a new Set and the selector triggers an
   // infinite re-render loop.
-  const heartbeatActiveEntries = useHeartbeatSessionsStore((s) => s.active)
+  const heartbeatActiveEntries = useStore(room.heartbeats, (s) => s.active)
   const heartbeatLastSessionIds = useMemo(() => {
     const ids = new Set<string>()
     for (const entry of heartbeatActiveEntries) {

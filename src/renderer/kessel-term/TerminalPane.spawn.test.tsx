@@ -131,7 +131,7 @@ vi.mock('@/stores/connect-host', () => ({
 }))
 
 import { TerminalPane } from './TerminalPane'
-import { renderInRoom, testRoom } from '@/test-utils/room'
+import { fixedStore, renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { useTabsStore } from '@/stores/tabs'
 import { getDaemonWs } from '../kessel/daemon-ws'
@@ -148,7 +148,11 @@ function activitySpies() {
     bindPaneProject: vi.fn(),
   }
 }
-const room = testRoom({ tabs: useTabsStore, activity: activitySpies() })
+const room = testRoom({
+  tabs: useTabsStore,
+  activity: activitySpies(),
+  presence: fixedStore({ roster: [], supported: true }),
+})
 import {
   contentBoxSize,
   FALLBACK_SPAWN_COLS,
@@ -431,6 +435,7 @@ describe("a pane in another server's room (Home M3)", () => {
     const B = fakeScope('b.test')
     const releaseInB = vi.fn()
     const roomB = testRoom({
+      presence: fixedStore({ roster: [], supported: true }),
       key: 'b.test|p1:w1',
       isPrimary: false,
       localCommands: false,

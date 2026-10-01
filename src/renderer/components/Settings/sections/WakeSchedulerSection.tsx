@@ -1,14 +1,11 @@
 // Settings is about the window's server: heartbeats open in the primary
 // room's tabs.
 import { useTabsStore } from '@/stores/tabs'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { SquareRadio } from '@/components/ui'
+import React, { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
-// Phase 2 Unit 7a — settings live in the daemon.
-import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import type { SettingEntry } from '../searchManifest'
 import { WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
@@ -23,53 +20,59 @@ import { describeHeartbeatWait } from '@/lib/heartbeat-wait'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
-    id: 'wake-scheduler.mode',
+    id: 'wake-scheduler.wake',
     section: 'wake-scheduler',
-    label: 'Heartbeat Wake Mode',
-    description: 'Off / on-demand / scheduled heartbeat wakes',
-    keywords: ['wake', 'heartbeat', 'scheduler', 'launchd', 'sleep', 'lid'],
+    label: 'Wake This Computer for Heartbeats',
+    description: 'Wake from sleep a minute before the next heartbeat',
+    keywords: ['wake', 'heartbeat', 'scheduler', 'sleep', 'lid', 'overnight'],
   },
   {
-    id: 'wake-scheduler.interval',
+    id: 'wake-scheduler.battery',
     section: 'wake-scheduler',
-    label: 'Wake Interval',
-    description: 'Minutes between scheduled heartbeat fires',
-    keywords: ['interval', 'minutes', 'cadence', 'frequency'],
-  },
-  {
-    id: 'wake-scheduler.wake-system',
-    section: 'wake-scheduler',
-    label: 'Wake System From Sleep',
-    description: 'Let launchd wake a sleeping laptop to fire heartbeats (lid-closed overnight work)',
-    keywords: ['wake', 'sleep', 'lid', 'overnight', 'battery', 'wakesystem'],
+    label: 'Also on Battery',
+    description: 'Wake for heartbeats on battery too, never below 20%',
+    keywords: ['battery', 'wake', 'lid', 'power'],
   },
 ]
 
-type WakeMode = 'off' | 'on_demand' | 'heartbeat'
-
-interface WakeSchedulerSettings {
-  mode: WakeMode
-  intervalMinutes: number
-  wakeSystem: boolean
+/** Heartbeat S2 (W8) — what the daemon's power layer really has. */
+interface WakeStatusInfo {
+  state: 'off' | 'ok' | 'unavailable' | 'paused'
+  reason: string
+  nextWakeAt: string | null
+  nextFireAt: string | null
+  support?: { ready: boolean; reason?: string }
+  platform?: string
+  batteryFloorPercent?: number
+  powerSource?: { onAc: boolean | null; batteryPercent: number | null }
+  notes?: {
+    wakeTimers?: { pluggedIn: string; onBattery: string }
+    steps?: string
+    lidClosed?: string
+  } | null
 }
 
-interface AppSettingsShape {
-  wakeScheduler?: WakeSchedulerSettings
+/** Copy per platform for the wake switch (D8, W8, D11, D14). */
+function wakePlatformNote(platform: string | undefined): string {
+  switch (platform) {
+    case 'macos':
+      return 'The first time you turn this on, macOS asks once for an admin password to install a small helper. With the lid closed: on power it is best effort; on battery it is not supported, and the Mac may go back to sleep within a minute.'
+    case 'linux':
+      return 'Uses the wake alarm permission the K2 package sets up. Without it, K2 shows the one command to run.'
+    case 'windows':
+      return 'Windows wakes for this only when the power plan allows wake timers. K2 shows the setting below and never changes it.'
+    default:
+      return ''
+  }
 }
 
-const DEFAULT_SETTINGS: WakeSchedulerSettings = {
-  mode: 'on_demand',
-  intervalMinutes: 5,
-  wakeSystem: false,
-}
-
-const MODE_DESCRIPTIONS: Record<WakeMode, string> = {
-  off:
-    'No launchd plist. Heartbeats only fire while K2 is open. Agents sit idle when you quit.',
-  on_demand:
-    'Heartbeats fire while K2 is open. The daemon stays running in the background after you quit, but the system will not wake itself.',
-  heartbeat:
-    'launchd fires scheduled heartbeats every N minutes. With "Wake System From Sleep" on, the laptop wakes from sleep (lid closed, on battery) to run agents — the configuration that makes overnight agent work possible.',
+function formatClock(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const sameDay = d.toDateString() === new Date().toDateString()
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
 /** Row shape returned by `k2so_heartbeat_fires_list_all` — most recent
@@ -150,38 +153,38 @@ interface SystemHeartbeatRow {
   waitDetail?: string | null
 }
 
-/** Payload of `/cli/heartbeat/scheduler-status` — daemon-wide tick
- *  transport health. `lastTickAt` is stamped by every scheduler tick;
- *  stale (or absent) while heartbeats are enabled = the launchd agent /
- *  crontab / daemon is not delivering ticks. */
+/** Payload of `/cli/heartbeat/scheduler-status`. Heartbeat S2: the
+ *  daemon ticks itself every 60 s (`ticker`); `wake` / `awake` say what
+ *  the power layer really has. Older servers omit the S2 fields. */
 interface SchedulerStatus {
   lastTickAt: string | null
+  lastDaemonTickAt?: string | null
   staleSecs: number | null
   enabledCount: number
   transportInstalled: boolean
   wakeMode: string
+  ticker?: { intervalSecs: number; lastTickAt: string | null; staleSecs: number | null }
+  wakeForHeartbeats?: boolean
+  wakeOnBattery?: boolean
+  wake?: WakeStatusInfo
+  awake?: { held: boolean; reasons: string[] }
 }
 
-/** Transport-down banner text, or null when healthy. Tolerance is
- *  2 ticks at the configured interval (min 3 min) so a slow cadence
- *  doesn't false-alarm. */
-function transportDownMessage(
-  status: SchedulerStatus | null,
-  intervalMinutes: number,
-): string | null {
-  if (!status) return null
-  if (status.enabledCount === 0) return null
-  if (status.wakeMode === 'off') return null // explicit user choice
-  const toleranceSecs = Math.max(180, intervalMinutes * 120)
-  const stale = status.staleSecs == null || status.staleSecs > toleranceSecs
-  if (!stale && status.transportInstalled) return null
-  const since = status.lastTickAt
-    ? `since ${new Date(status.lastTickAt).toLocaleString()}`
-    : '— no tick has ever been recorded'
-  if (!status.transportInstalled) {
-    return `Heartbeat transport down ${since}: the launchd wake agent is not installed/loaded. The daemon will self-heal it shortly; if this persists, re-apply the wake scheduler below.`
+/** "Not ticking" banner text, or null when healthy. S2 servers report
+ *  their own 60 s loop (`ticker`); three missed ticks is a problem.
+ *  Older servers fall back to the combined tick stamp. */
+function tickerDownMessage(status: SchedulerStatus | null): string | null {
+  if (!status || status.enabledCount === 0) return null
+  const since = (iso: string | null | undefined): string =>
+    iso ? `since ${new Date(iso).toLocaleString()}` : '— no check has ever been recorded'
+  if (status.ticker) {
+    const stale = status.ticker.staleSecs == null || status.ticker.staleSecs > 180
+    if (!stale) return null
+    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt)}. The K2 daemon checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
   }
-  return `Heartbeat transport down ${since}: scheduler ticks are not arriving (machine asleep, daemon restarts, or launchd agent stalled). Missed fires will catch up on the next tick.`
+  const stale = status.staleSecs == null || status.staleSecs > 180
+  if (!stale) return null
+  return `Heartbeat ticks are not arriving ${since(status.lastTickAt)}. Update K2 on this server: newer versions check heartbeats on their own every minute.`
 }
 
 /** Same badge HeartbeatsSection shows: the shared wait formatter. */
@@ -227,8 +230,6 @@ function describeHeartbeatSpec(specJson: string, frequency: string): string {
 }
 
 export function WakeSchedulerSection(): React.JSX.Element {
-  const [loaded, setLoaded] = useState(false)
-  const [settings, setSettings] = useState<WakeSchedulerSettings>(DEFAULT_SETTINGS)
   // 0.38.3 — system-wide heartbeat list rendered in the right column.
   // Loads on mount + refreshes after any per-row toggle so the on-disk
   // state and the visible state stay in lockstep.
@@ -241,54 +242,43 @@ export function WakeSchedulerSection(): React.JSX.Element {
   // fires across all workspaces. Polled every 5s so the user sees
   // newly-firing heartbeats live without having to reopen the page.
   const [fires, setFires] = useState<SystemFireRow[]>([])
-  // Reliability overhaul — tick-transport health (last_tick_at
-  // staleness + launchd agent presence). Polled every 15s; renders the
-  // "heartbeat transport down since <t>" banner.
+  // Scheduler + wake status from the daemon (S2: ticker, wake, awake).
+  // Polled every 15s; also refreshed right after the wake switch moves.
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
-  // Last successfully-persisted snapshot. `dirty` is computed from
-  // deep-equality against this — there's no separate `setDirty` flag
-  // that can drift out of sync with the actual on-disk state. Apply
-  // updates this AFTER the invoke succeeds; any later edit that
-  // matches the snapshot byte-for-byte clears the indicator.
-  const [lastApplied, setLastApplied] = useState<WakeSchedulerSettings>(DEFAULT_SETTINGS)
-  const [applying, setApplying] = useState(false)
+  // The wake switch is daemon truth (`wakeForHeartbeats`); this only
+  // tracks a request in flight (the macOS admin dialog can take a while).
+  const [wakeSaving, setWakeSaving] = useState(false)
   const toast = useToastStore((s) => s.addToast)
 
-  const dirty = useMemo(
-    () => JSON.stringify(settings) !== JSON.stringify(lastApplied),
-    [settings, lastApplied],
-  )
+  const refreshStatus = useCallback(async () => {
+    const status = await daemonCliGet<SchedulerStatus>(primaryScope(), 'heartbeat/scheduler-status', {})
+    setSchedulerStatus(status)
+  }, [])
 
-  // Load settings on mount.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
+  /** D8 / D11 — flip "Wake this computer for heartbeats" (or "Also on
+   *  battery"). The daemon may show one admin dialog on its Mac; if it is
+   *  declined the switch stays off and the daemon says why. */
+  const handleSetWake = useCallback(
+    async (enabled: boolean, onBattery?: boolean) => {
+      setWakeSaving(true)
       try {
-        const app = (await settingsGet()) as unknown as AppSettingsShape
-        if (cancelled) return
-        const cur = app.wakeScheduler ?? DEFAULT_SETTINGS
-        const normalized: WakeSchedulerSettings = {
-          mode: (cur.mode as WakeMode) ?? 'on_demand',
-          intervalMinutes: cur.intervalMinutes ?? 5,
-          wakeSystem: cur.wakeSystem ?? false,
+        const resp = await daemonCliPost<{
+          success?: boolean
+          wakeForHeartbeats?: boolean
+          message?: string
+        }>(primaryScope(), 'heartbeat/wake', { enabled, onBattery })
+        if (resp?.success === false) {
+          toast(resp.message ?? 'Wake stays off.', 'info', 10000)
         }
-        setSettings(normalized)
-        setLastApplied(normalized)
-      } catch {
-        setSettings(DEFAULT_SETTINGS)
-        setLastApplied(DEFAULT_SETTINGS)
+        await refreshStatus()
+      } catch (err) {
+        toast(`Failed to change wake: ${String(err)}`, 'error')
       } finally {
-        if (!cancelled) setLoaded(true)
+        setWakeSaving(false)
       }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const update = useCallback((patch: Partial<WakeSchedulerSettings>) => {
-    setSettings((s) => ({ ...s, ...patch }))
-  }, [])
+    },
+    [toast, refreshStatus],
+  )
 
   // 0.38.3 — load system-wide heartbeats for the right-column list.
   // Sort case-insensitively by project name, then heartbeat name —
@@ -438,46 +428,6 @@ export function WakeSchedulerSection(): React.JSX.Element {
     setEditingHeartbeat(row)
   }, [])
 
-  const handleApply = useCallback(async () => {
-    setApplying(true)
-    try {
-      await settingsUpdate({
-        wakeScheduler: {
-          mode: settings.mode,
-          intervalMinutes: settings.intervalMinutes,
-          wakeSystem: settings.wakeSystem,
-        },
-      })
-      // 0.40.48 host-aware: settingsUpdate above already writes the
-      // wake-scheduler config to the ACTIVE host — the apply must land on
-      // the same machine (the old Tauri invoke applied THIS Mac's local
-      // settings to THIS Mac's scheduler, silently diverging from the
-      // remote config the page displays). Same POST route the bridge used.
-      const resp = await daemonCliPost<{ success?: boolean; message?: string }>(primaryScope(),
-        'heartbeat/apply-wake-scheduler',
-        {
-          mode: settings.mode,
-          interval_minutes: settings.intervalMinutes,
-          wake_system: settings.wakeSystem,
-        },
-      )
-      toast(resp?.message ?? 'Wake scheduler applied.', 'success')
-      // Snapshot the just-persisted shape. Any subsequent edit that
-      // happens to bring `settings` back to this value clears the
-      // dirty indicator — the previous boolean-flag implementation
-      // couldn't do that.
-      setLastApplied(settings)
-    } catch (err) {
-      toast(`Failed to apply: ${String(err)}`, 'error')
-    } finally {
-      setApplying(false)
-    }
-  }, [settings, toast])
-
-  if (!loaded) {
-    return <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
-  }
-
   // 0.38.3 — when the user clicks "Edit Wakeup" on a row, render the
   // WakeupEditor (AIFileEditor) takeover. The agent-name resolution
   // uses the project-name slug as a best-effort fallback; the proper
@@ -544,22 +494,21 @@ export function WakeSchedulerSection(): React.JSX.Element {
   }
 
   return (
-    // 0.38.3 — Two-column layout: left = wake-scheduler launchd mode
-    // (the existing settings); right = system-wide heartbeat list with
+    // 0.38.3 — Two-column layout: left = how heartbeats fire and the
+    // S2 wake switch; right = system-wide heartbeat list with
     // per-row enable toggle, pinned-chat checkbox, and edit-wakeup
     // button. The right column inherits the same parent container so
     // the page just spreads naturally on wider Settings panes.
     <div data-settings-id="heartbeats" className="flex flex-col gap-4">
-      {/* Reliability overhaul — transport-down banner. Rendered above
-          both columns: a dead tick transport nullifies everything
-          configured below, so it must be the first thing seen. */}
-      {transportDownMessage(schedulerStatus, settings.intervalMinutes) && (
+      {/* Heartbeat S2 — the daemon's own 60 s check has stopped. Above
+          both columns: nothing below fires while it is down. */}
+      {tickerDownMessage(schedulerStatus) && (
         <div className="border border-[var(--color-bad,#ef6f6f)]/60 bg-[var(--color-bad,#ef6f6f)]/10 px-3 py-2 text-[11px] text-[var(--color-bad,#ef6f6f)] leading-relaxed">
-          {transportDownMessage(schedulerStatus, settings.intervalMinutes)}
+          {tickerDownMessage(schedulerStatus)}
         </div>
       )}
       <div className="flex gap-8 items-start">
-      {/* ── Left column: launchd plist mode ─────────────────────────── */}
+      {/* ── Left column: when heartbeats fire, and waking ──────────── */}
       <div className="w-1/3 min-w-[280px] max-w-[420px] flex-shrink-0">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
         Heartbeats
@@ -571,137 +520,123 @@ export function WakeSchedulerSection(): React.JSX.Element {
         </span>
       </h2>
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed">
-        How launchd fires heartbeats — and whether it wakes your laptop from sleep
-        to do it. Configures{' '}
-        <code className="text-[var(--color-text-secondary)] font-mono">
-          ~/Library/LaunchAgents/com.k2so.agent-heartbeat.plist
-        </code>
-        . Heartbeat schedules themselves are configured per-workspace in{' '}
+        K2 checks your heartbeats every minute while this computer is awake, with or
+        without the app open. A heartbeat missed while the computer slept fires once
+        when it wakes, if it is less than 12 hours late; older ones are skipped and
+        logged. Heartbeat schedules themselves are set per workspace in{' '}
         <span className="text-[var(--color-text-secondary)]">Workspaces → Heartbeats</span>.
       </p>
 
-      {/* Mode — bottom-border only renders when the heartbeat-only
-          Interval + Wake-system rows appear below, so we don't get
-          a stray divider above the Apply button when those rows
-          are hidden. The radio cards already have their own outer
-          borders, so no separator is needed at the bottom of the
-          Mode group itself. */}
-      <div
-        data-settings-id="wake-scheduler.mode"
-        className={`py-2 ${settings.mode === 'heartbeat' ? 'border-b border-[var(--color-border)]' : ''}`}
-      >
-        <div className="text-xs text-[var(--color-text-secondary)] mb-2">Mode</div>
-        <div className="space-y-1">
-          {(['off', 'on_demand', 'heartbeat'] as WakeMode[]).map((mode) => (
-            <label
-              key={mode}
-              className={`flex cursor-pointer items-start gap-2 px-2 py-2 border transition-colors no-drag ${
-                settings.mode === mode
-                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/8'
-                  : 'border-[var(--color-border)] hover:border-[var(--color-text-secondary)]'
-              }`}
-            >
-              <SquareRadio
-                name="wake-mode"
-                checked={settings.mode === mode}
-                onChange={() => update({ mode })}
-                className="mt-0.5"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs text-[var(--color-text-secondary)]">
-                  {mode === 'off' && 'Off'}
-                  {mode === 'on_demand' && 'On-demand while app open'}
-                  {mode === 'heartbeat' && 'Heartbeat every N minutes'}
-                </div>
-                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                  {MODE_DESCRIPTIONS[mode]}
-                </div>
-              </div>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Interval — only when mode=heartbeat */}
-      {settings.mode === 'heartbeat' && (
-        <>
-          <div
-            data-settings-id="wake-scheduler.interval"
-            className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-          >
-            <div className="flex-1 min-w-0 mr-3">
-              <span className="text-xs text-[var(--color-text-secondary)]">Interval</span>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-                Minutes between fires (1–1440). Lower intervals burn more battery; 1–5 minutes balances responsiveness and power.
-              </p>
-            </div>
-            <input
-              type="number"
-              min={1}
-              max={1440}
-              value={settings.intervalMinutes}
-              onChange={(e) =>
-                update({
-                  intervalMinutes: Math.max(
-                    1,
-                    Math.min(1440, parseInt(e.target.value, 10) || 1),
-                  ),
-                })
-              }
-              className="w-20 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1 text-[var(--color-text-primary)] no-drag"
-            />
-          </div>
-
-          {/* Wake system from sleep */}
-          <div
-            data-settings-id="wake-scheduler.wake-system"
-            className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-          >
-            <div className="flex-1 min-w-0 mr-3">
-              <span className="text-xs text-[var(--color-text-secondary)]">
-                Wake system from sleep
-              </span>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                Adds <code className="font-mono text-[var(--color-text-secondary)]">WakeSystem: true</code> to the plist (the same mechanism Time Machine uses for battery-powered hourly backups). When off, scheduled fires run on the next user-initiated wake.
-              </p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={settings.wakeSystem}
-              onClick={() => update({ wakeSystem: !settings.wakeSystem })}
-              className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                settings.wakeSystem
-                  ? 'bg-[var(--color-accent)]'
-                  : 'bg-[var(--color-border)]'
-              }`}
-            >
-              <span
-                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                  settings.wakeSystem ? 'translate-x-3.5' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
-          </div>
-        </>
+      {schedulerStatus && !schedulerStatus.wake && (
+        <p className="text-[10px] text-[var(--color-text-muted)] py-2 border-b border-[var(--color-border)] leading-relaxed">
+          This server runs an older K2 that cannot wake the computer for heartbeats.
+          Update K2 on it to use this setting.
+        </p>
       )}
 
-      {/* Apply — no extra border on this row; the preceding setting
-          row already carries its own bottom border, so adding a
-          top-border here would render as a doubled separator. */}
-      <div className="flex items-center gap-3 mt-4">
-        <button
-          type="button"
-          onClick={handleApply}
-          disabled={!dirty || applying}
-          className="px-3 py-1 text-xs font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity cursor-pointer no-drag disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          {applying ? 'Applying…' : 'Apply'}
-        </button>
-        {dirty && !applying && (
-          <span className="text-[10px] text-[var(--color-text-muted)]">Unsaved changes</span>
-        )}
-      </div>
+      {schedulerStatus?.wake && (() => {
+        const wake = schedulerStatus.wake
+        const on = schedulerStatus.wakeForHeartbeats === true
+        const onBattery = schedulerStatus.wakeOnBattery === true
+        const floor = wake.batteryFloorPercent ?? 20
+        const note = wakePlatformNote(wake.platform)
+        return (
+          <>
+            <div
+              data-settings-id="wake-scheduler.wake"
+              className="flex items-start justify-between py-2 border-b border-[var(--color-border)]"
+            >
+              <div className="flex-1 min-w-0 mr-3">
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  Wake this computer for heartbeats
+                </span>
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                  {on
+                    ? 'On: K2 wakes this computer a minute before the next heartbeat.'
+                    : 'Off: K2 does not wake this computer from sleep. Heartbeats still fire whenever it is awake.'}
+                  {note ? ` ${note}` : ''}
+                </p>
+                {wakeSaving && wake.platform === 'macos' && !on && (
+                  <p className="text-[10px] text-[var(--color-text-secondary)] mt-1">
+                    Approve the admin dialog on this Mac to finish turning wake on.
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={on}
+                aria-label="Wake this computer for heartbeats"
+                disabled={wakeSaving}
+                onClick={() => void handleSetWake(!on)}
+                className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-40 disabled:cursor-wait ${
+                  on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+                }`}
+              >
+                <span
+                  className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+                    on ? 'translate-x-3.5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {on && (
+              <label
+                data-settings-id="wake-scheduler.battery"
+                className="flex items-start gap-2 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag"
+              >
+                <input
+                  type="checkbox"
+                  checked={onBattery}
+                  disabled={wakeSaving}
+                  onChange={(e) => void handleSetWake(true, e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs text-[var(--color-text-secondary)]">Also on battery</span>
+                  <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                    Without this, K2 wakes the computer only while it is plugged in. Never below {floor}% battery.
+                  </p>
+                </div>
+              </label>
+            )}
+
+            {on && (
+              <div className="py-2 text-[10px] leading-relaxed">
+                {wake.state === 'ok' && wake.nextWakeAt && (
+                  <span className="text-[var(--color-text-secondary)]">
+                    Next wake {formatClock(wake.nextWakeAt)}
+                    {wake.nextFireAt ? `, for a heartbeat at ${formatClock(wake.nextFireAt)}` : ''}.
+                  </span>
+                )}
+                {wake.state === 'ok' && !wake.nextWakeAt && (
+                  <span className="text-[var(--color-text-muted)]">No heartbeat is scheduled, so no wake is set.</span>
+                )}
+                {(wake.state === 'unavailable' || wake.state === 'paused') && (
+                  <span className="text-[var(--color-status-warn-amber)]">
+                    {wake.state === 'paused' ? 'Paused: ' : 'Not available: '}
+                    {wake.reason}
+                  </span>
+                )}
+                {wake.notes?.wakeTimers && (
+                  <p className="text-[var(--color-text-muted)] mt-1">
+                    Wake timers in this power plan: plugged in {wake.notes.wakeTimers.pluggedIn.replace('_', ' ')},
+                    on battery {wake.notes.wakeTimers.onBattery.replace('_', ' ')}.
+                    {wake.notes.steps ? ` To allow them: ${wake.notes.steps}` : ''}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {schedulerStatus.awake?.held && (
+              <p className="text-[10px] text-[var(--color-text-muted)] py-1">
+                Keeping this computer awake now: {schedulerStatus.awake.reasons.join(', ')}.
+              </p>
+            )}
+          </>
+        )
+      })()}
       </div>
       {/* ── Right column: every heartbeat across all workspaces ──────── */}
       <div className="flex-1 min-w-0 max-w-[640px]">

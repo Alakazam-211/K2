@@ -53,6 +53,11 @@ export function openHomeRow(row: HomeRow): OpenResult {
 
   if (isWebClient()) return 'web-remote'
 
+  // TODO(M4-integrate): with "Remote rooms (preview)" on
+  // (`remoteRoomsPreviewEnabled()`, lib/remote-rooms-preview.ts), open the
+  // row as a pinned room in Home's main area (`createPinnedRoom` on
+  // `scopeForHost(parsed.host)`) instead of switching this window below.
+
   const target = switchTargetForHost(parsed.host, hostState.hosts)
   if (!target) {
     useToastStore

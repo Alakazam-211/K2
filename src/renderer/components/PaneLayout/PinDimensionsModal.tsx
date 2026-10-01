@@ -16,7 +16,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { DialogFrame, DialogScrim } from '@/components/ui'
-import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { dimsOf, pinOf, usePinnedSizeStore } from '@/stores/pinned-size'
+import { primaryScope } from '@/kessel/server-scope'
 import {
   applyPinSize,
   buildPresetRows,
@@ -39,13 +40,13 @@ export default function PinDimensionsModal({
 }: PinDimensionsModalProps): React.JSX.Element {
   // "Match my window now" uses the dims THIS window last measured for
   // the pane (recorded by TerminalPane's sendResize even while pinned).
-  const dims = usePinnedSizeStore((s) => s.dims[sessionId] ?? null)
+  const dims = usePinnedSizeStore((s) => dimsOf(s, primaryScope(), sessionId) ?? null)
   const presetRows = useMemo(() => buildPresetRows(dims), [dims])
 
   // Re-pin path: when the session is already pinned, start from the
   // current pin so "tweak the numbers" is one edit away.
   const [form, setForm] = useState<PinFormState>(() =>
-    pinFormFromPin(usePinnedSizeStore.getState().pins[sessionId] ?? null),
+    pinFormFromPin(pinOf(usePinnedSizeStore.getState(), primaryScope(), sessionId) ?? null),
   )
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)

@@ -9,7 +9,7 @@ import {
   workspaceGrantSlug,
   type ApiKeyRow,
 } from '@/components/Settings/sections/api-keys-api'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 type ListResponse = { keys?: ApiKeyRow[] }
 
@@ -20,7 +20,7 @@ export function WorkspaceApiSection({
   project: { id: string; name: string; path: string; hideApiSessions?: number }
 }): React.JSX.Element {
   const slug = workspaceGrantSlug(project)
-  const collapseKey = `workspace-api.section-collapsed.${project.id}`
+  const collapseKey = scopedKey(primaryScope(), `workspace-api.section-collapsed.${project.id}`)
   const [open, setOpen] = useState<boolean>(() => localStorage.getItem(collapseKey) !== 'closed')
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
   const [loading, setLoading] = useState(true)

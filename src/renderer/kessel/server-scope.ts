@@ -45,6 +45,7 @@ import {
 } from '@/stores/connect-host'
 import { LOCAL_HOME_HOST, canonicalHostKey, homeHostKey, savedHostForKey } from '@/lib/host-key'
 import { FEATURES, gte, serverSupports, type FeatureKey } from '@/lib/server-capabilities'
+import { hostScopedKey } from '@/lib/host-scoped-storage'
 
 export interface ServerScope {
   /** Registry identity: `primary`, or `host:<hostKey>` for a pinned scope. */
@@ -237,7 +238,7 @@ export function scopeForHost(ref: HostRef): ServerScope {
  *  scope's host key, so two servers with the same paths and ids never share
  *  an entry. `<hostKey>|<key>`. */
 export function scopedKey(scope: ServerScope, key: string): string {
-  return `${scope.hostKey}|${key}`
+  return hostScopedKey(scope.hostKey, key)
 }
 
 export function __resetServerScopesForTests(): void {

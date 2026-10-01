@@ -26,6 +26,8 @@
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { parseHomeAddress } from '@/lib/home-address'
+import { homeHostKey } from '@/lib/host-key'
+import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 
 export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
@@ -163,6 +165,37 @@ export interface HomesEnv {
   /** This window only (sessionStorage). */
   session: KeyValueStorage | null
   newId: () => string
+  /** Saved servers, for the one-shot MS60 host-key rewrite. */
+  savedHosts?: () => ReadonlyArray<Pick<ConnectHost, 'hostname' | 'port' | 'secure'>>
+}
+
+/**
+ * Home M1 / MS60: plain `http` now always carries its port (`box.lan:80`),
+ * where the old key dropped a default `:80`. A row whose host is a bare
+ * hostname is rewritten to `<host>:80` when the ONLY saved server with that
+ * hostname is plain http on port 80 (so the bare key can no longer match
+ * it). Every other row is left exactly as it was. Returns null when nothing
+ * changed.
+ */
+export function migrateHomeRowHostKeys(
+  homes: Home[],
+  hosts: ReadonlyArray<Pick<ConnectHost, 'hostname' | 'port' | 'secure'>>,
+): Home[] | null {
+  let changed = false
+  const next = homes.map((h) => ({
+    ...h,
+    rows: h.rows.map((r) => {
+      const parsed = parseHomeAddress(r.address)
+      if (!parsed || parsed.host === 'local' || parsed.host.includes(':')) return r
+      const same = hosts.filter((x) => x.hostname.trim().toLowerCase() === parsed.host)
+      if (same.length === 0) return r
+      if (same.some((x) => homeHostKey(x) === parsed.host)) return r
+      if (!same.every((x) => !x.secure && x.port === 80)) return r
+      changed = true
+      return { ...r, address: `${parsed.handle}::${parsed.host}:80` }
+    }),
+  }))
+  return changed ? next : null
 }
 
 function seedHomes(newId: () => string): Home[] {
@@ -192,7 +225,11 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
   } else {
     const doc = parseHomesDoc(read.value)
     if (doc) {
-      initial = doc.homes
+      const migrated = env.savedHosts ? migrateHomeRowHostKeys(doc.homes, env.savedHosts()) : null
+      initial = migrated ?? doc.homes
+      if (migrated) {
+        safeSet(env.local, HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes: migrated } satisfies HomesDoc))
+      }
     } else {
       console.warn('[homes] k2.homes.v1 is not a version-1 doc; using an unsaved default')
       initial = seedHomes(env.newId)
@@ -373,6 +410,7 @@ export const useHomesStore = createHomesStore({
   local: localKv,
   session: sessionKv,
   newId: newHomeId,
+  savedHosts: () => useConnectHostStore.getState().hosts,
 })
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {

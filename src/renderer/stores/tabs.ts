@@ -1849,7 +1849,7 @@ function restampBuiltTabs(tabs: Tab[], liveById: Map<string, Tab>): Tab[] {
   return tabs.map((tab) => {
     const live = liveById.get(tab.id)
     const withCid = preserveConversationIds(tab, live)
-    const adopted = adoptRestoredTab(withCid, live)
+    const adopted = adoptRestoredTab(primaryScope(), withCid, live)
     if (withCid.title === adopted.title && withCid.locked === adopted.locked) return withCid
     return { ...withCid, title: adopted.title, locked: adopted.locked }
   })
@@ -4513,7 +4513,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     try {
     // T10/T11 — snapshot live names before rebuild (and before any
     // caller clearAllTabs). Restamp of the built array is sync.
-    rememberLiveNamedChatTitles(collectStoreTabs(get()))
+    rememberLiveNamedChatTitles(primaryScope(), collectStoreTabs(get()))
     const liveById = new Map<string, Tab>()
     for (const t of collectStoreTabs(get())) liveById.set(t.id, t)
 
@@ -4642,7 +4642,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set({ activeProjectId: projectId, activeWorkspaceId: workspaceId })
     const restampNamedChats = () => {
       const st = get()
-      void restampSessionTabsFromChatList(cwd, collectStoreTabs(st), st.setTabTitle)
+      void restampSessionTabsFromChatList(primaryScope(), cwd, collectStoreTabs(st), st.setTabTitle)
     }
     const savedLayout = get().workspaceLayouts[key]
     layoutCwds.set(key, cwd)
@@ -4959,7 +4959,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   clearAllTabs: () => {
-    rememberLiveNamedChatTitles(collectStoreTabs(get()))
+    rememberLiveNamedChatTitles(primaryScope(), collectStoreTabs(get()))
     // 0.38.0 commit 5 — view-clear only. Previously this looped every
     // terminal item and called `closeTerminalForRenderer` (which routes
     // v2 sessions to `closeV2Session`, unregistering them from the
@@ -6657,7 +6657,7 @@ async function applyTabTitlesSnapshot(projectId: string): Promise<void> {
     const store = useTabsStore.getState()
     for (const t of titles) {
       if (t && typeof t.tabId === 'string' && typeof t.title === 'string') {
-        rememberTabTitleSnapshot(t.tabId, t.title, t.locked)
+        rememberTabTitleSnapshot(primaryScope(), t.tabId, t.title, t.locked)
         // Carry the daemon's `locked` flag so a sticky user-rename stays
         // locked here (auto PTY/session titles won't overwrite it).
         store.applyDaemonTabTitle(t.tabId, t.title, typeof t.locked === 'boolean' ? t.locked : undefined)
@@ -6711,7 +6711,7 @@ function resolveRestoredSelection(
   const firstId = restoredTabs[0].id
   const { activeProjectId, activeWorkspaceId } = state
   if (!activeProjectId || !activeWorkspaceId) return firstId
-  const savedSig = getSelectedTab(activeProjectId, activeWorkspaceId)
+  const savedSig = getSelectedTab(primaryScope(), activeProjectId, activeWorkspaceId)
   if (!savedSig) return firstId
   const match = restoredTabs.find((t) => liveTabSignature(t) === savedSig)
   return match ? match.id : firstId
@@ -6732,7 +6732,7 @@ function persistGroup0Selection(
   if (!activeProjectId || !activeWorkspaceId) return
   const tab = state.tabs.find((t) => t.id === tabId)
   if (!tab) return
-  setSelectedTab(activeProjectId, activeWorkspaceId, liveTabSignature(tab))
+  setSelectedTab(primaryScope(), activeProjectId, activeWorkspaceId, liveTabSignature(tab))
 }
 
 /** If the incoming `layout.tabs` is a PURE REORDER of the live main `tabs`

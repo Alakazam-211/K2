@@ -11,6 +11,7 @@ import {
   rememberTabTitleSnapshot,
 } from '@/lib/chat-session-tab'
 
+import { primaryScope } from '@/kessel/server-scope'
 // ensurePinnedAgentTabForMode resolves the agent name via Tauri
 // `invoke`. Stub it so the async resolution completes deterministically
 // in the jsdom/node test env (no Tauri bridge).
@@ -1246,7 +1247,7 @@ describe('named chat tab title (N1–N6)', () => {
   })
 
   it('restoreLayout restamps grok + conversationId from the custom-name map (T16d)', () => {
-    rememberChatCustomName(CONV, 'Hi Test')
+    rememberChatCustomName(primaryScope(), CONV, 'Hi Test')
     const layout: SerializedLayout = {
       version: 2,
       tabs: [{
@@ -1277,7 +1278,7 @@ describe('named chat tab title (N1–N6)', () => {
   })
 
   it('restoreLayout restamps grok extras from a tab_titles snapshot when conversationId is null (T10)', () => {
-    rememberTabTitleSnapshot('extra-1', 'Hi Test', true)
+    rememberTabTitleSnapshot(primaryScope(), 'extra-1', 'Hi Test', true)
     const layout: SerializedLayout = {
       version: 2,
       tabs: [{

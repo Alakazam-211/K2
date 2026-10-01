@@ -18,7 +18,7 @@ import { UrlsPortsSection } from './UrlsPortsSection'
 import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2so_inbox_count', ...)` so the only
@@ -44,7 +44,9 @@ export default function WorkspacePanel(): React.JSX.Element {
   // Worktrees section collapse state, persisted per-workspace.
   // Default OPEN — worktrees are the action surface for review work,
   // most users want them visible by default.
-  const worktreesKey = activeProjectId ? `worktrees.section-collapsed.${activeProjectId}` : null
+  const worktreesKey = activeProjectId
+    ? scopedKey(primaryScope(), `worktrees.section-collapsed.${activeProjectId}`)
+    : null
   const [worktreesOpen, setWorktreesOpen] = useState<boolean>(() => {
     if (!worktreesKey) return true
     return localStorage.getItem(worktreesKey) !== 'closed'

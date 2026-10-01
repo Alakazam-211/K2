@@ -217,7 +217,7 @@ export async function applyPinSize(
       session: sessionId,
       clear: true,
     })
-    usePinnedSizeStore.getState().setPin(sessionId, null)
+    usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, null)
     return
   }
   const res = await daemonCliPost<PinSizeResponse>(primaryScope(), 'terminal/pin-size', {
@@ -226,7 +226,7 @@ export async function applyPinSize(
     rows: dims.rows,
   })
   if (res.pinned) {
-    usePinnedSizeStore.getState().setPin(sessionId, {
+    usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, {
       cols: res.pinned.cols,
       rows: res.pinned.rows,
       setBy: res.pinned.setBy ?? null,

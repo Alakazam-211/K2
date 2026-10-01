@@ -76,6 +76,7 @@ import ChatHistory from './ChatHistory'
 import { useTabsStore } from '@/stores/tabs'
 import { usePresetsStore } from '@/stores/presets'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { primaryScope } from '@/kessel/server-scope'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 
 function session(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -337,7 +338,7 @@ describe('Continue in a new chat', () => {
 
     const paneGroupId = pane.id
     act(() => {
-      usePinnedSizeStore.getState().registerSession(paneGroupId, 'pty-live-1')
+      usePinnedSizeStore.getState().registerSession(primaryScope(), paneGroupId, 'pty-live-1')
     })
     await waitFor(() => {
       expect(h.posts.some((post) => post.route === 'terminal/send-message')).toBe(true)
@@ -377,7 +378,7 @@ describe('Continue in a new chat', () => {
     })
     const created = useTabsStore.getState().tabs.find((tab) => tab.title.includes('(from Claude)'))!
     act(() => {
-      usePinnedSizeStore.getState().registerSession(created.paneGroups.values().next().value!.id, 'pty-live-1')
+      usePinnedSizeStore.getState().registerSession(primaryScope(), created.paneGroups.values().next().value!.id, 'pty-live-1')
     })
     const dialog = await screen.findByRole('alert')
     expect(dialog.textContent).toContain('the pty died')
@@ -408,7 +409,7 @@ describe('Continue in a new chat', () => {
     })
     const again = useTabsStore.getState().tabs.find((tab) => tab.title.includes('(from Claude)'))!
     act(() => {
-      usePinnedSizeStore.getState().registerSession(again.paneGroups.values().next().value!.id, 'pty-live-2')
+      usePinnedSizeStore.getState().registerSession(primaryScope(), again.paneGroups.values().next().value!.id, 'pty-live-2')
     })
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('invalid or missing token')

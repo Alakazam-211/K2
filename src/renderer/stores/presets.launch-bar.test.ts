@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as daemonCli from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
-import { activeHostKey, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { homeHostKey } from '@/lib/host-key'
 import {
   readShowLaunchBar,
   showLaunchBarStorageKey,
@@ -74,7 +75,7 @@ describe('show launch bar persistence', () => {
   it('a missing key means shown, including after a host switch', () => {
     usePresetsStore.getState().setShowLaunchBar(false)
     useConnectHostStore.getState().selectHost(REMOTE)
-    const remoteKey = activeHostKey(REMOTE)
+    const remoteKey = homeHostKey(REMOTE)
     expect(localStorage.getItem(showLaunchBarStorageKey(remoteKey))).toBeNull()
     expect(readShowLaunchBar(remoteKey)).toBe(true)
     expect(usePresetsStore.getState().showPresetsBar).toBe(true)
@@ -152,7 +153,7 @@ describe('show launch bar persistence', () => {
     const hostMod = await import('@/stores/connect-host')
     hostMod.useConnectHostStore.getState().selectHost(REMOTE)
     const remoteMod = await import('@/stores/presets')
-    expect(localStorage.getItem(remoteMod.showLaunchBarStorageKey(hostMod.activeHostKey(REMOTE)))).toBeNull()
+    expect(localStorage.getItem(remoteMod.showLaunchBarStorageKey(homeHostKey(REMOTE)))).toBeNull()
     expect(remoteMod.usePresetsStore.getState().showPresetsBar).toBe(true)
   })
 })

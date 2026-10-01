@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useConnectHostStore, activeHostKey } from '@/stores/connect-host'
+import { useConnectHostStore } from '@/stores/connect-host'
+import { homeHostKey } from '@/lib/host-key'
 import {
   DEFAULT_SPLIT_SIDES,
   SESSION_VIEW_TAB_DEFAULT,
@@ -25,7 +26,8 @@ export interface SessionViewChoice {
 
 /** Remembered view for this window + named conversation, including both split sides. */
 export function useSessionViewTab(sessionKey: string | null): SessionViewChoice {
-  const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
+  // The primary server's host key (Home M1): follows a server switch.
+  const hostKey = useConnectHostStore((s) => homeHostKey(s.activeHost))
   const storageKey = sessionKey ? sessionViewTabStorageKey(hostKey, sessionKey) : null
   const splitKey = sessionKey ? sessionViewSplitStorageKey(hostKey, sessionKey) : null
   const [viewTab, setViewTabState] = useState<SessionViewTab>(() =>

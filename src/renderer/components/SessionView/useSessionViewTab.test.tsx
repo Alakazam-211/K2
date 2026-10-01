@@ -16,7 +16,7 @@ describe('useSessionViewTab', () => {
   })
 
   it('remembers the view and both split sides per session', () => {
-    localStorage.setItem('k2:session-view-tab:local:conv-2', 'split')
+    localStorage.setItem('local|k2:session-view-tab:conv-2', 'split')
     const first = renderHook(() => useSessionViewTab('conv-2'))
     expect(first.result.current.viewTab).toBe('split')
     expect(first.result.current.splitLeft).toBe('terminal')

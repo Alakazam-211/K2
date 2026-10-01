@@ -17,7 +17,7 @@ import {
   resolvePinSessionId,
   validatePinDims,
 } from './pinSizeMenu'
-import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { pinOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -219,7 +219,7 @@ describe('applyPinSize', () => {
       cols: 120,
       rows: 36,
     })
-    expect(usePinnedSizeStore.getState().pins['sess-1']).toEqual({
+    expect(pinOf(usePinnedSizeStore.getState(), primaryScope(), 'sess-1')).toEqual({
       cols: 120,
       rows: 36,
       setBy: 'owner',
@@ -227,7 +227,7 @@ describe('applyPinSize', () => {
   })
 
   it('unpin (null): POSTs {session, clear: true} and drops the store entry', async () => {
-    usePinnedSizeStore.getState().setPin('sess-1', { cols: 80, rows: 24, setBy: null })
+    usePinnedSizeStore.getState().setPin(primaryScope(), 'sess-1', { cols: 80, rows: 24, setBy: null })
     daemonCliPostMock.mockResolvedValue({ success: true, pinned: null, persisted: true })
 
     await applyPinSize('sess-1', null)
@@ -237,18 +237,18 @@ describe('applyPinSize', () => {
       session: 'sess-1',
       clear: true,
     })
-    expect(usePinnedSizeStore.getState().pins['sess-1']).toBeUndefined()
+    expect(pinOf(usePinnedSizeStore.getState(), primaryScope(), 'sess-1')).toBeUndefined()
   })
 
   it('propagates daemon rejection and leaves the store untouched', async () => {
-    usePinnedSizeStore.getState().setPin('sess-1', { cols: 80, rows: 24, setBy: null })
+    usePinnedSizeStore.getState().setPin(primaryScope(), 'sess-1', { cols: 80, rows: 24, setBy: null })
     daemonCliPostMock.mockRejectedValue(new Error('cols out of range'))
 
     await expect(applyPinSize('sess-1', { cols: 9999, rows: 24 })).rejects.toThrow(
       'cols out of range',
     )
     // The pre-existing pin is untouched — no optimistic write happened.
-    expect(usePinnedSizeStore.getState().pins['sess-1']).toEqual({
+    expect(pinOf(usePinnedSizeStore.getState(), primaryScope(), 'sess-1')).toEqual({
       cols: 80,
       rows: 24,
       setBy: null,

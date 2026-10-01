@@ -11,7 +11,7 @@ import { AgentInboxPane } from './AgentInboxPane'
 import { PinnedChatGate } from './PinnedChatRetainer'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 interface AgentPaneProps {
   agentName: string
@@ -62,6 +62,7 @@ export function AgentPane({ agentName, projectPath, section, restoredSessionId }
 // (`agent-chat:<project_id>:wt-<worktree_id>`) to avoid colliding with
 // other worktrees' chat sessions.
 
+// Keyed `<hostKey>|<worktreeId>` (Home M1, MS14).
 const worktreeLastTab = new Map<string, 'task' | 'chat' | 'review'>()
 
 // ── Review tab types (mirrors k2so_core::agents::reviews::ReviewItem) ─
@@ -92,7 +93,7 @@ interface WorktreeReviewItem {
 
 function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; projectPath: string }): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<'task' | 'chat' | 'review'>(
-    worktreeLastTab.get(worktreeId) ?? 'chat'
+    worktreeLastTab.get(scopedKey(primaryScope(), worktreeId)) ?? 'chat'
   )
   // Phase 2.1 wrap-up — Task tab reads `<worktree>/CLAUDE.md` via the
   // `read_worktree_file` Tauri command (path-canonicalized, traversal-
@@ -226,7 +227,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
               onClick={() => {
                 if (!disabled) {
                   setActiveTab(key)
-                  worktreeLastTab.set(worktreeId, key)
+                  worktreeLastTab.set(scopedKey(primaryScope(), worktreeId), key)
                 }
               }}
               disabled={disabled}

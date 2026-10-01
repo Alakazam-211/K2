@@ -1685,7 +1685,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // daemon session UUID the pin-size route wants. Registered at
       // the same moment the session becomes live; dropped in this
       // effect's cleanup.
-      usePinnedSizeStore.getState().registerSession(terminalId, sessionId)
+      usePinnedSizeStore.getState().registerSession(primaryScope(), terminalId, sessionId)
       // Phase reflects spawn outcome only; the grid-WS effect will move
       // us to 'connecting'/'ready' (visible) or leave us 'parked'
       // (hidden). Reading the live visibility ref keeps the initial
@@ -1722,7 +1722,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // effect's cleanup (below) owns closing the socket.
       sessionIdRef.current = null
       // S7b — retract the tab-menu mapping; a re-run re-registers.
-      usePinnedSizeStore.getState().unregisterSession(terminalId)
+      usePinnedSizeStore.getState().unregisterSession(primaryScope(), terminalId)
     }
     // 0.39.13 — STABLE deps only. `isTabVisible` is deliberately NOT
     // here: visibility no longer drives spawn. `reconnectAttempt` still
@@ -1947,7 +1947,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // local state and the tab-menu store can never diverge.
       const applyPinFrame = (pin: PinnedSize | null) => {
         setPinnedSize(pin)
-        usePinnedSizeStore.getState().setPin(sessionId, pin)
+        usePinnedSizeStore.getState().setPin(primaryScope(), sessionId, pin)
       }
       applyPinFrame(null)
       // S5 — declare this window's mode on the fresh daemon-side
@@ -2194,7 +2194,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             const newLabel = parsed.payload.label ?? ''
             useSessionLabelsStore
               .getState()
-              .setSessionLabel(sessionId, newLabel)
+              .setSessionLabel(primaryScope(), sessionId, newLabel)
             if (newLabel && tabId) {
               const st = useTabsStore.getState()
               applyUnlockedTabLabel(
@@ -3272,7 +3272,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // window now" (keyed by daemon sessionId). Recorded even while
       // pinned, so match-after-unpin uses fresh numbers.
       const sid = sessionIdRef.current
-      if (sid) usePinnedSizeStore.getState().setDims(sid, cols, rows)
+      if (sid) usePinnedSizeStore.getState().setDims(primaryScope(), sid, cols, rows)
       // S7b — while pinned the daemon clamps EVERY resize at
       // request_resize; emitting would be pure traffic/log noise
       // (and would arm a pointless 500ms resize hold). Measurements

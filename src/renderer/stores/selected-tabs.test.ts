@@ -87,9 +87,12 @@ import { useTabsStore, __tryReorderTabsInPlaceForTests, type SerializedLayout, t
 import { useSelectedTabsStore, getSelectedTab } from './selected-tabs'
 import { __resetNamedChatTitleCachesForTests } from '@/lib/chat-session-tab'
 
+import { primaryScope } from '@/kessel/server-scope'
 const PROJECT = 'projA'
 const WORKSPACE = 'wsA'
 const KEY = `${PROJECT}:${WORKSPACE}`
+/** Stored map key: `<hostKey>|projectId:workspaceId` (Home M1). */
+const STORED_KEY = `local|${KEY}`
 const CWD = '/tmp/workspaceA'
 
 /** A two-tab serialized layout. paneGroupIds (pg-a/pg-b) are the STABLE
@@ -139,22 +142,22 @@ beforeEach(resetStores)
 
 describe('selected-tabs store', () => {
   it('setSelected → getSelected round-trips and persists to localStorage', () => {
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'sig-x')
-    expect(useSelectedTabsStore.getState().getSelected(PROJECT, WORKSPACE)).toBe('sig-x')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'sig-x')
+    expect(useSelectedTabsStore.getState().getSelected(primaryScope(), PROJECT, WORKSPACE)).toBe('sig-x')
     // localStorage holds the persisted map (a fresh load would re-hydrate it).
     const raw = mem.get('k2so:selected-tabs')
     expect(raw).toBeTruthy()
-    expect(JSON.parse(raw!)).toEqual({ [KEY]: 'sig-x' })
+    expect(JSON.parse(raw!)).toEqual({ [STORED_KEY]: 'sig-x' })
   })
 
   it('getSelected returns null for an unknown workspace', () => {
-    expect(useSelectedTabsStore.getState().getSelected('nope', 'nope')).toBeNull()
+    expect(useSelectedTabsStore.getState().getSelected(primaryScope(), 'nope', 'nope')).toBeNull()
   })
 
   it('reset clears all selections and the persisted map', () => {
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'sig-x')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'sig-x')
     useSelectedTabsStore.getState().reset()
-    expect(useSelectedTabsStore.getState().getSelected(PROJECT, WORKSPACE)).toBeNull()
+    expect(useSelectedTabsStore.getState().getSelected(primaryScope(), PROJECT, WORKSPACE)).toBeNull()
     expect(JSON.parse(mem.get('k2so:selected-tabs')!)).toEqual({})
   })
 })
@@ -220,7 +223,7 @@ describe('Phase 2 — restoreLayout uses the per-client selection, not the layou
   it('IGNORES the leaked serialized activeTabId; restores THIS client selection (B)', () => {
     // This client previously selected tab B (signature = its paneGroupId).
     useTabsStore.setState({ activeProjectId: PROJECT, activeWorkspaceId: WORKSPACE })
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'pg-b')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'pg-b')
 
     useTabsStore.getState().restoreLayout(twoTabLayout(), CWD)
 
@@ -235,7 +238,7 @@ describe('Phase 2 — restoreLayout uses the per-client selection, not the layou
   it('local selection (A) WINS even when the serialized layout leaks B', () => {
     useTabsStore.setState({ activeProjectId: PROJECT, activeWorkspaceId: WORKSPACE })
     // Local store selected A; serialized layout's leaked activeTabId is B.
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'pg-a')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'pg-a')
 
     useTabsStore.getState().restoreLayout(twoTabLayout(), CWD)
 
@@ -257,7 +260,7 @@ describe('Phase 2 — restoreLayout uses the per-client selection, not the layou
   it('saved selection no longer exists → falls back to first tab', () => {
     useTabsStore.setState({ activeProjectId: PROJECT, activeWorkspaceId: WORKSPACE })
     // Selected a paneGroup that isn't in the restored layout.
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'pg-gone')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'pg-gone')
     useTabsStore.getState().restoreLayout(twoTabLayout(), CWD)
     expect(useTabsStore.getState().activeTabId).toBe(useTabsStore.getState().tabs[0].id)
   })
@@ -270,7 +273,7 @@ describe('Phase 2 — cold-load restores the local selection (not the layout)', 
     // The per-client store says B. The on-disk layout's leaked activeTabId is
     // also 'ser-b' here, so to make the assertion meaningful we point the
     // store at A and prove A wins on cold load.
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'pg-a')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'pg-a')
     cli.getImpl = async (route: string) =>
       route === 'workspace-layouts/load' ? JSON.stringify(twoTabLayout()) : null
 
@@ -290,9 +293,9 @@ describe('Phase 2 — cold-load restores the local selection (not the layout)', 
     // User selects tab B (group 0). Persists by signature.
     const liveB = tabByPg('pg-b')!
     useTabsStore.getState().setActiveTabInGroup(0, liveB.id)
-    expect(getSelectedTab(PROJECT, WORKSPACE)).toBe('pg-b')
+    expect(getSelectedTab(primaryScope(), PROJECT, WORKSPACE)).toBe('pg-b')
     // ...and it hit localStorage so a brand-new process would see it.
-    expect(JSON.parse(mem.get('k2so:selected-tabs')!)).toEqual({ [KEY]: 'pg-b' })
+    expect(JSON.parse(mem.get('k2so:selected-tabs')!)).toEqual({ [STORED_KEY]: 'pg-b' })
 
     // Simulate a fresh load (tabs cleared, ids re-minted) → restores B.
     useTabsStore.setState({ tabs: [], activeTabId: null })
@@ -310,7 +313,7 @@ describe('Phase 3 — adoption never moves this client selection', () => {
   it('restoreLayout rebuild path: peer layout (leaks B) does NOT move local selection (A)', () => {
     useTabsStore.setState({ activeProjectId: PROJECT, activeWorkspaceId: WORKSPACE })
     // B's local selection is A.
-    useSelectedTabsStore.getState().setSelected(PROJECT, WORKSPACE, 'pg-a')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), PROJECT, WORKSPACE, 'pg-a')
 
     // Peer's adopted layout has its own (leaked) selection = B + reversed order.
     const peerLayout: SerializedLayout = {
@@ -437,12 +440,12 @@ describe('Phase 3 — adoption never moves this client selection', () => {
 
   it('two clients hold DIFFERENT selections simultaneously (no shared selection)', () => {
     // Client 1: workspace selection A.
-    useSelectedTabsStore.getState().setSelected('p1', 'w1', 'pg-a')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), 'p1', 'w1', 'pg-a')
     // Client 2 is a different store instance in reality; model its independence
     // by a different workspace key — selections never collide via the shared
     // layout because the layout no longer carries selection at all.
-    useSelectedTabsStore.getState().setSelected('p2', 'w2', 'pg-b')
-    expect(getSelectedTab('p1', 'w1')).toBe('pg-a')
-    expect(getSelectedTab('p2', 'w2')).toBe('pg-b')
+    useSelectedTabsStore.getState().setSelected(primaryScope(), 'p2', 'w2', 'pg-b')
+    expect(getSelectedTab(primaryScope(), 'p1', 'w1')).toBe('pg-a')
+    expect(getSelectedTab(primaryScope(), 'p2', 'w2')).toBe('pg-b')
   })
 })

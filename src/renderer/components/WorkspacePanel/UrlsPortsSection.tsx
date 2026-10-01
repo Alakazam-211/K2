@@ -37,7 +37,7 @@ import {
   type PublishedService,
   type PublishLeftover,
 } from './urls-ports'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 const DETAILS_BTN =
   'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
@@ -64,7 +64,9 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const supportsPublish = useServerSupports('publish-services')
 
   // Collapse state, persisted per-workspace (the Worktrees idiom).
-  const collapseKey = projectId ? `urls-ports.section-collapsed.${projectId}` : null
+  const collapseKey = projectId
+    ? scopedKey(primaryScope(), `urls-ports.section-collapsed.${projectId}`)
+    : null
   const [open, setOpen] = useState<boolean>(() => {
     if (!collapseKey) return true
     return localStorage.getItem(collapseKey) !== 'closed'

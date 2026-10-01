@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTabsStore } from '@/stores/tabs'
-import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
+import { primaryScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
@@ -139,7 +140,7 @@ export function PaneTabBar({
   // store carries the terminalId→daemon-sessionId mapping (registered
   // at spawn-resolve), which is also the "is there a live session?"
   // gate for offering the menu at all.
-  const pinSessions = usePinnedSizeStore((s) => s.sessions)
+  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), primaryScope())
   const projects = useProjectsStore((s) => s.projects)
   const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
@@ -179,14 +180,14 @@ export function PaneTabBar({
       e.stopPropagation()
       const x = e.clientX
       const y = e.clientY
-      const sessions = usePinnedSizeStore.getState().sessions
+      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())
       const copyId = resolveCopyableTerminalId([item], sessions)
       const menuItems = [
         ...(copyId ? [{ id: 'copy-terminal-id', label: 'Copy Terminal ID' }] : []),
         ...(pinSessionId
           ? [
               ...(copyId ? [{ id: 'pin-separator', label: '', type: 'separator' as const }] : []),
-              usePinnedSizeStore.getState().pins[pinSessionId]
+              pinOf(usePinnedSizeStore.getState(), primaryScope(), pinSessionId)
                 ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
                 : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
             ]

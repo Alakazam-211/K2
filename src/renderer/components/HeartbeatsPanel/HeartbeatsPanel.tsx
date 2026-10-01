@@ -11,6 +11,7 @@ import { serverSupports } from '@/lib/server-capabilities'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
 import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 /**
  * Heartbeats section — workspace-scoped audit surface for scheduled
@@ -68,7 +69,9 @@ export function HeartbeatsPanel(): React.JSX.Element {
   // state. Strictly tied to project.id (not path or undefined) so the
   // user's "I always collapse archived for project X" preference
   // survives workspace switches.
-  const archivedKey = project ? `heartbeats.archive-collapsed.${project.id}` : null
+  const archivedKey = project
+    ? scopedKey(primaryScope(), `heartbeats.archive-collapsed.${project.id}`)
+    : null
   const [archivedOpen, setArchivedOpen] = useState<boolean>(() => {
     if (!archivedKey) return false
     return localStorage.getItem(archivedKey) === 'open'
@@ -84,7 +87,9 @@ export function HeartbeatsPanel(): React.JSX.Element {
 
   // Whole-section collapse state, persisted per-workspace. Default
   // OPEN — most users expect to see their heartbeats at a glance.
-  const sectionKey = project ? `heartbeats.section-collapsed.${project.id}` : null
+  const sectionKey = project
+    ? scopedKey(primaryScope(), `heartbeats.section-collapsed.${project.id}`)
+    : null
   const [sectionOpen, setSectionOpen] = useState<boolean>(() => {
     if (!sectionKey) return true
     return localStorage.getItem(sectionKey) !== 'closed'

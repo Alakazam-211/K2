@@ -23,6 +23,12 @@
 //   so an unpin→match round-trip uses fresh numbers.
 
 import { create } from 'zustand'
+import { scopedKey, type ServerScope } from '@/kessel/server-scope'
+
+// Home M1 (MS14): every map key is `<hostKey>|<id>` (`scopedKey`), because
+// terminal ids are built from project ids and `k2 migrate` carries ids
+// between boxes, so two servers can hand out the same id. Writers pass
+// their scope; readers use `pinOf` / `dimsOf` / `sessionsOf`.
 
 export interface PinnedSize {
   cols: number
@@ -45,10 +51,10 @@ interface PinnedSizeState {
 
   /** Mirror a `pin_initial`/`pin_changed` frame (or a successful
    *  pin-size POST response). `null` clears. Idempotent. */
-  setPin: (sessionId: string, pin: PinnedSize | null) => void
-  registerSession: (terminalId: string, sessionId: string) => void
-  unregisterSession: (terminalId: string) => void
-  setDims: (sessionId: string, cols: number, rows: number) => void
+  setPin: (scope: ServerScope, sessionId: string, pin: PinnedSize | null) => void
+  registerSession: (scope: ServerScope, terminalId: string, sessionId: string) => void
+  unregisterSession: (scope: ServerScope, terminalId: string) => void
+  setDims: (scope: ServerScope, sessionId: string, cols: number, rows: number) => void
 }
 
 export const usePinnedSizeStore = create<PinnedSizeState>((set) => ({
@@ -56,8 +62,9 @@ export const usePinnedSizeStore = create<PinnedSizeState>((set) => ({
   sessions: {},
   dims: {},
 
-  setPin: (sessionId, pin) =>
+  setPin: (scope, rawSessionId, pin) =>
     set((state) => {
+      const sessionId = scopedKey(scope, rawSessionId)
       const current = state.pins[sessionId]
       if (pin === null) {
         if (current === undefined) return state
@@ -75,21 +82,24 @@ export const usePinnedSizeStore = create<PinnedSizeState>((set) => ({
       return { pins: { ...state.pins, [sessionId]: pin } }
     }),
 
-  registerSession: (terminalId, sessionId) =>
+  registerSession: (scope, rawTerminalId, sessionId) =>
     set((state) => {
+      const terminalId = scopedKey(scope, rawTerminalId)
       if (state.sessions[terminalId] === sessionId) return state
       return { sessions: { ...state.sessions, [terminalId]: sessionId } }
     }),
 
-  unregisterSession: (terminalId) =>
+  unregisterSession: (scope, rawTerminalId) =>
     set((state) => {
+      const terminalId = scopedKey(scope, rawTerminalId)
       if (!(terminalId in state.sessions)) return state
       const { [terminalId]: _drop, ...rest } = state.sessions
       return { sessions: rest }
     }),
 
-  setDims: (sessionId, cols, rows) =>
+  setDims: (scope, rawSessionId, cols, rows) =>
     set((state) => {
+      const sessionId = scopedKey(scope, rawSessionId)
       const current = state.dims[sessionId]
       if (current && current.cols === cols && current.rows === rows) {
         return state
@@ -97,3 +107,45 @@ export const usePinnedSizeStore = create<PinnedSizeState>((set) => ({
       return { dims: { ...state.dims, [sessionId]: { cols, rows } } }
     }),
 }))
+
+/** The live pin for `sessionId` on `scope`'s server. */
+export function pinOf(
+  state: Pick<PinnedSizeState, 'pins'>,
+  scope: ServerScope,
+  sessionId: string,
+): PinnedSize | undefined {
+  return state.pins[scopedKey(scope, sessionId)]
+}
+
+/** This window's measured dims for `sessionId` on `scope`'s server. */
+export function dimsOf(
+  state: Pick<PinnedSizeState, 'dims'>,
+  scope: ServerScope,
+  sessionId: string,
+): { cols: number; rows: number } | undefined {
+  return state.dims[scopedKey(scope, sessionId)]
+}
+
+const sessionViews = new WeakMap<Record<string, string>, Map<string, Record<string, string>>>()
+
+/** `terminalId → sessionId` for one server, with the host prefix removed.
+ *  Memoized per map object, so a React selector over it stays stable. */
+export function sessionsOf(
+  sessions: Record<string, string>,
+  scope: ServerScope,
+): Record<string, string> {
+  const prefix = scopedKey(scope, '')
+  let byScope = sessionViews.get(sessions)
+  if (!byScope) {
+    byScope = new Map()
+    sessionViews.set(sessions, byScope)
+  }
+  const cached = byScope.get(prefix)
+  if (cached) return cached
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(sessions)) {
+    if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v
+  }
+  byScope.set(prefix, out)
+  return out
+}

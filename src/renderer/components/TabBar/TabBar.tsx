@@ -6,7 +6,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
-import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
 import { agentChatId } from '@/lib/terminal-id'
@@ -147,7 +147,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // (terminalId→daemon-sessionId in the pinned-size store, registered
   // by TerminalPane at spawn-resolve) doubles as the "is there a live
   // Kessel session?" gate for offering the menu entry.
-  const pinSessions = usePinnedSizeStore((s) => s.sessions)
+  const pinSessions = sessionsOf(usePinnedSizeStore((s) => s.sessions), primaryScope())
   const projects = useProjectsStore((s) => s.projects)
   const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
@@ -186,7 +186,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     async (e: React.MouseEvent, sessionId: string) => {
       e.preventDefault()
       e.stopPropagation()
-      const pinned = usePinnedSizeStore.getState().pins[sessionId] ?? null
+      const pinned = pinOf(usePinnedSizeStore.getState(), primaryScope(), sessionId) ?? null
       const copyAddress = await resolvePinnedChatCopyableAddress(cwd, projectId)
       const items = [
         pinned
@@ -350,7 +350,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       const previousTitle = tab?.title ?? ''
       store.setTabTitle(tabId, value, { locked: true })
       if (tab) {
-        void persistChatRenameIfSessionTab(tab, value, cwd)
+        void persistChatRenameIfSessionTab(primaryScope(), tab, value, cwd)
           .then((ok) => {
             if (!ok && tabLooksLikeChatSession(tab)) {
               useToastStore.getState().addToast(
@@ -561,7 +561,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     let fileViewerPath: string | null = null
     let copyAddress: Awaited<ReturnType<typeof resolveSessionTabCopyableAddress>> = null
     if (tab) {
-      const sessions = usePinnedSizeStore.getState().sessions
+      const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())
       const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
       tabTerminalId = resolveCopyableTerminalId(items, sessions)
       for (const item of items) {
@@ -601,7 +601,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       // entry flips to an instant Unpin.
       ...(pinSessionId ? [
         { id: 'pin-separator', label: '', type: 'separator' as const },
-        usePinnedSizeStore.getState().pins[pinSessionId]
+        pinOf(usePinnedSizeStore.getState(), primaryScope(), pinSessionId)
           ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
           : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
       ] : []),

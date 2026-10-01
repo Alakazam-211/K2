@@ -76,7 +76,7 @@ import {
   overlayItemFromThreadPost,
 } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -159,12 +159,14 @@ export function TerminalComposeBar({
   // composer's own text instead of clearing it, and a crash/restart never loses
   // it. Per-user/per-device by nature (localStorage is the desktop app's own
   // storage); the draft never touches the daemon.
-  const draftKey = sendOnThread
-    ? `k2:composer:draft:${sessionId}:thread`
-    : `k2:composer:draft:${sessionId}`
+  // Home M1: prefixed with the server's host key (`<hostKey>|…`).
+  const draftKey = scopedKey(
+    primaryScope(),
+    sendOnThread ? `k2:composer:draft:${sessionId}:thread` : `k2:composer:draft:${sessionId}`,
+  )
   const [draft, setDraft] = useState<string>(() => {
     try {
-      return localStorage.getItem(`k2:composer:draft:${sessionId}`) ?? ''
+      return localStorage.getItem(scopedKey(primaryScope(), `k2:composer:draft:${sessionId}`)) ?? ''
     } catch {
       return ''
     }

@@ -19,6 +19,10 @@
 //   `useActiveAgentsStore`. Labels and activity are orthogonal.
 
 import { create } from 'zustand'
+import { scopedKey, type ServerScope } from '@/kessel/server-scope'
+
+// Home M1 (MS14): keys are `<hostKey>|<sessionId>` (`scopedKey`), so two
+// servers never share a label entry even if they hand out the same id.
 
 interface SessionLabelsState {
   /** sessionId → daemon-authoritative label. Empty string means
@@ -30,23 +34,25 @@ interface SessionLabelsState {
   /** Update a session's label (called from the WS handler on
    *  `label_initial` / `label_changed`). Idempotent — same value
    *  is a no-op. */
-  setSessionLabel: (sessionId: string, label: string) => void
+  setSessionLabel: (scope: ServerScope, sessionId: string, label: string) => void
 
   /** Drop a session's entry. Called when the WS closes due to
    *  `child_exit` or the pane unmounts after session death. Keeps
    *  the store from growing unbounded across long sessions. */
-  forgetSession: (sessionId: string) => void
+  forgetSession: (scope: ServerScope, sessionId: string) => void
 }
 
 export const useSessionLabelsStore = create<SessionLabelsState>((set) => ({
   labels: {},
-  setSessionLabel: (sessionId, label) =>
+  setSessionLabel: (scope, rawSessionId, label) =>
     set((state) => {
+      const sessionId = scopedKey(scope, rawSessionId)
       if (state.labels[sessionId] === label) return state
       return { labels: { ...state.labels, [sessionId]: label } }
     }),
-  forgetSession: (sessionId) =>
+  forgetSession: (scope, rawSessionId) =>
     set((state) => {
+      const sessionId = scopedKey(scope, rawSessionId)
       if (!(sessionId in state.labels)) return state
       const { [sessionId]: _drop, ...rest } = state.labels
       return { labels: rest }
@@ -57,12 +63,15 @@ export const useSessionLabelsStore = create<SessionLabelsState>((set) => ({
  *  Returns the daemon-owned label or `undefined` if no label has
  *  been received yet (component should render a fallback like the
  *  agent display name or a placeholder). */
-export function useSessionLabel(sessionId: string | null | undefined): string | undefined {
-  return useSessionLabelsStore((s) => (sessionId ? s.labels[sessionId] : undefined))
+export function useSessionLabel(
+  scope: ServerScope,
+  sessionId: string | null | undefined,
+): string | undefined {
+  return useSessionLabelsStore((s) => (sessionId ? s.labels[scopedKey(scope, sessionId)] : undefined))
 }
 
 /** Imperative access for code outside React (e.g. tab serialization
  *  on workspace switch). */
-export function getSessionLabel(sessionId: string): string | undefined {
-  return useSessionLabelsStore.getState().labels[sessionId]
+export function getSessionLabel(scope: ServerScope, sessionId: string): string | undefined {
+  return useSessionLabelsStore.getState().labels[scopedKey(scope, sessionId)]
 }

@@ -42,14 +42,13 @@ import {
   CHAT_PANEL_DEFAULT_WIDTH,
   clampChatPanelWidth,
 } from '@/components/Projects/project-chat'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 // ── Per-client last-seen read cursor (§4.4, resolved Q5) ─────────────────
 // Keyed per host + group so remoting doesn't cross-contaminate cursors.
 
 function lastSeenKey(groupId: string): string {
-  const host = activeHostKey(useConnectHostStore.getState().activeHost)
-  return `k2:project-groups:last-seen:${host}:${groupId}`
+  return scopedKey(primaryScope(), `k2:project-groups:last-seen:${groupId}`)
 }
 
 export function getLastSeen(groupId: string): number {

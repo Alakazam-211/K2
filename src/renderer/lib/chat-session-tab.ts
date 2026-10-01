@@ -1,6 +1,6 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { Tab, TerminalItemData } from '@/stores/tabs'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
 
 /** SSOT display: non-empty trimmed customName, else provider title. */
 export function chatDisplayName(s: { customName?: string | null; title: string }): string {
@@ -307,76 +307,81 @@ export function adoptTabTitle(
   return { title, locked: locked === true }
 }
 
+// Home M1 (MS14): keys are `<hostKey>|<id>` so two servers never share a
+// remembered name or title.
 const customNameByKey = new Map<string, string>()
 const tabTitleById = new Map<string, { title: string; locked?: boolean }>()
 
-export function rememberChatCustomName(sessionId: string, name: string): void {
+export function rememberChatCustomName(scope: ServerScope, sessionId: string, name: string): void {
   const id = sessionId.trim()
   const n = name.trim()
   if (!id || !n || isHarnessTabLabel(n)) return
-  customNameByKey.set(id, n)
+  customNameByKey.set(scopedKey(scope, id), n)
 }
 
-export function rememberChatCustomNames(map: Record<string, string> | null | undefined): void {
+export function rememberChatCustomNames(scope: ServerScope, map: Record<string, string> | null | undefined): void {
   if (!map) return
   for (const [key, name] of Object.entries(map)) {
-    rememberChatCustomName(key, name)
+    rememberChatCustomName(scope, key, name)
     const colon = key.lastIndexOf(':')
-    if (colon > 0) rememberChatCustomName(key.slice(colon + 1), name)
+    if (colon > 0) rememberChatCustomName(scope, key.slice(colon + 1), name)
   }
 }
 
-export function rememberTabTitleSnapshot(tabId: string, title: string, locked?: boolean): void {
+export function rememberTabTitleSnapshot(scope: ServerScope, tabId: string, title: string, locked?: boolean): void {
   const id = tabId.trim()
   const n = title.trim()
   if (!id || !n || isHarnessTabLabel(n)) return
-  tabTitleById.set(id, { title: n, ...(typeof locked === 'boolean' ? { locked } : {}) })
+  tabTitleById.set(scopedKey(scope, id), { title: n, ...(typeof locked === 'boolean' ? { locked } : {}) })
 }
 
-export function lookupNamedChatTitle(...keys: Array<string | null | undefined>): string | undefined {
+export function lookupNamedChatTitle(scope: ServerScope, ...keys: Array<string | null | undefined>): string | undefined {
   for (const key of keys) {
     const k = key?.trim()
     if (!k) continue
-    const custom = customNameByKey.get(k)
+    const custom = customNameByKey.get(scopedKey(scope, k))
     if (custom) return custom
-    const snap = tabTitleById.get(k)
+    const snap = tabTitleById.get(scopedKey(scope, k))
     if (snap?.title) return snap.title
   }
   return undefined
 }
 
-export function lookupTabTitleSnapshot(tabId: string | undefined): { title: string; locked?: boolean } | undefined {
+export function lookupTabTitleSnapshot(scope: ServerScope, tabId: string | undefined): { title: string; locked?: boolean } | undefined {
   const id = tabId?.trim()
   if (!id) return undefined
-  return tabTitleById.get(id)
+  return tabTitleById.get(scopedKey(scope, id))
 }
 
 export function rememberLiveNamedChatTitles(
+  scope: ServerScope,
   tabs: Iterable<Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>>,
 ): void {
   for (const tab of tabs) {
     const title = tab.title?.trim()
     if (!title || isHarnessTabLabel(title)) continue
-    rememberTabTitleSnapshot(tab.id, title, tab.locked)
+    rememberTabTitleSnapshot(scope, tab.id, title, tab.locked)
     const cid = conversationIdFromTab(tab)
-    if (cid) rememberChatCustomName(cid, title)
+    if (cid) rememberChatCustomName(scope, cid, title)
   }
 }
 
 /** Sync restamp input for restoreLayout (T4/T10/T11). Never awaits. */
 export function adoptRestoredTab(
+  scope: ServerScope,
   built: Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>,
   live?: Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>,
 ): { title: string; locked: boolean } {
   const conversationId = conversationIdFromTab(built) ?? conversationIdFromTab(live)
   const mapped = lookupNamedChatTitle(
+    scope,
     conversationId,
     built.id,
     live?.id,
     ...terminalLookupKeys(built),
     ...terminalLookupKeys(live),
   )
-  const snap = lookupTabTitleSnapshot(built.id) ?? lookupTabTitleSnapshot(live?.id)
+  const snap = lookupTabTitleSnapshot(scope, built.id) ?? lookupTabTitleSnapshot(scope, live?.id)
   const incomingTitle = mapped ?? built.title
   const incomingLocked = mapped
     ? (typeof snap?.locked === 'boolean' ? snap.locked : true)
@@ -435,13 +440,14 @@ export function restampSessionTabs(
 }
 
 export function restampListedChatTabs(
+  scope: ServerScope,
   tabs: Array<Pick<Tab, 'id' | 'title' | 'isSystemAgent' | 'paneGroups'>>,
   sessions: Array<{ sessionId: string; customName?: string | null; title?: string }>,
   setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
 ): void {
   for (const s of sessions) {
     if (!s.sessionId) continue
-    if (s.customName?.trim()) rememberChatCustomName(s.sessionId, s.customName)
+    if (s.customName?.trim()) rememberChatCustomName(scope, s.sessionId, s.customName)
     restampSessionTabs(
       tabs,
       s.sessionId,
@@ -453,6 +459,7 @@ export function restampListedChatTabs(
 
 /** Restore path: once conversationId is on the layout, restamp extras from custom_name. */
 export async function restampSessionTabsFromChatList(
+  scope: ServerScope,
   projectPath: string,
   tabs: Array<Pick<Tab, 'id' | 'title' | 'isSystemAgent' | 'paneGroups'>>,
   setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
@@ -463,8 +470,8 @@ export async function restampSessionTabsFromChatList(
       sessionId: string
       customName?: string | null
       title?: string
-    }>>(primaryScope(), 'chat/list', { project_path: projectPath })
-    restampListedChatTabs(tabs, Array.isArray(rows) ? rows : [], setTabTitle)
+    }>>(scope, 'chat/list', { project_path: projectPath })
+    restampListedChatTabs(scope, tabs, Array.isArray(rows) ? rows : [], setTabTitle)
   } catch {
     /* layout titles stay */
   }
@@ -473,6 +480,7 @@ export async function restampSessionTabsFromChatList(
 /** Persist a user tab rename into chat_session_names when the tab is a session tab.
  *  Does not require the uuid to already be on chat/list (fresh premint). */
 export async function persistChatRenameIfSessionTab(
+  scope: ServerScope,
   tab: Pick<Tab, 'isSystemAgent' | 'paneGroups'>,
   customName: string,
   projectPath: string,
@@ -483,12 +491,12 @@ export async function persistChatRenameIfSessionTab(
   if (!hit?.sessionId) return false
   const provider = hit.provider
   if (!provider) return false
-  await daemonCliPost(primaryScope(), 'chat/rename', {
+  await daemonCliPost(scope, 'chat/rename', {
     provider,
     session_id: hit.sessionId,
     custom_name: name,
   })
-  rememberChatCustomName(hit.sessionId, name)
+  rememberChatCustomName(scope, hit.sessionId, name)
   return true
 }
 

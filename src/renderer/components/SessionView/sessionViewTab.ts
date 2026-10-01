@@ -1,3 +1,4 @@
+import { hostScopedKey } from '@/lib/host-scoped-storage'
 /** Per-window remembered view (C8). Not daemon-canonical. */
 
 export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split' | 'chat'
@@ -24,12 +25,14 @@ export const DEFAULT_SPLIT_SIDES: SessionSplitSides = {
 const STORAGE_PREFIX = 'k2:session-view-tab:'
 const SPLIT_PREFIX = 'k2:session-view-split:'
 
+/** `hostKey` is the server's host key (`lib/host-key.ts`); the stored key
+ *  is `<hostKey>|k2:session-view-tab:<sessionKey>` (Home M1, MS6). */
 export function sessionViewTabStorageKey(hostKey: string, sessionKey: string): string {
-  return `${STORAGE_PREFIX}${hostKey}:${sessionKey}`
+  return hostScopedKey(hostKey, `${STORAGE_PREFIX}${sessionKey}`)
 }
 
 export function sessionViewSplitStorageKey(hostKey: string, sessionKey: string): string {
-  return `${SPLIT_PREFIX}${hostKey}:${sessionKey}`
+  return hostScopedKey(hostKey, `${SPLIT_PREFIX}${sessionKey}`)
 }
 
 export function parseSplitPaneView(raw: unknown, fallback: SplitPaneView): SplitPaneView {

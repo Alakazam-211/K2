@@ -3,7 +3,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { activateProject, useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { SectionManageCog } from './SectionManageCog'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey } from '@/kessel/server-scope'
 
 /** One row from GET `/cli/connections?action=list` — present edges only. */
 type ConnListRow = {
@@ -33,7 +33,7 @@ function parseConnectionRows(body: unknown): ConnListRow[] {
 
 /** Collapsible Connected Agents — only workspaces with a present connection. */
 export function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element {
-  const collapseKey = `connected-agents.section-collapsed.${projectId}`
+  const collapseKey = scopedKey(primaryScope(), `connected-agents.section-collapsed.${projectId}`)
   const [open, setOpen] = useState<boolean>(() => localStorage.getItem(collapseKey) !== 'closed')
   const [rows, setRows] = useState<ConnListRow[]>([])
   const [loaded, setLoaded] = useState(false)

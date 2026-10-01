@@ -9,16 +9,20 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { ensureOneCli, installableCliProgram } from '@/lib/ensure-cli'
 import { parseCommand } from '@/lib/agent-resolve'
-import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
+import { onActiveHostChange } from '@/stores/connect-host'
 import { useTabsStore, registerPresetsStore } from './tabs'
 import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
 import { primaryScope } from '@/kessel/server-scope'
+import { hostScopedKey } from '@/lib/host-scoped-storage'
 
 /** One boolean per connected host. Missing key means the launch strip is shown. */
 export const SHOW_LAUNCH_BAR_STORAGE_PREFIX = 'k2.showLaunchBar.'
 
+/** `<hostKey>|k2.showLaunchBar` — keyed by the server's host key
+ *  (`lib/host-key.ts`), not the client-made host id (Home M1, MS6). The old
+ *  `k2.showLaunchBar.<id:host:port>` keys are migrated once. */
 export function showLaunchBarStorageKey(hostKey: string): string {
-  return `${SHOW_LAUNCH_BAR_STORAGE_PREFIX}${hostKey}`
+  return hostScopedKey(hostKey, SHOW_LAUNCH_BAR_STORAGE_PREFIX.slice(0, -1))
 }
 
 export function readShowLaunchBar(hostKey: string): boolean {
@@ -42,7 +46,7 @@ function writeShowLaunchBar(hostKey: string, shown: boolean): void {
 }
 
 function currentHostKey(): string {
-  return activeHostKey(useConnectHostStore.getState().activeHost)
+  return primaryScope().hostKey
 }
 
 /**
@@ -329,7 +333,7 @@ registerPresetsStore(() => usePresetsStore.getState())
 // Session mint fires with the same key and must not rewrite the flag.
 onActiveHostChange((nextKey, prevKey) => {
   if (nextKey === prevKey) return
-  usePresetsStore.setState({ showPresetsBar: readShowLaunchBar(nextKey) })
+  usePresetsStore.setState({ showPresetsBar: readShowLaunchBar(primaryScope().hostKey) })
 })
 
 // ── Tree helpers ─────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore, openApiHostSessionTab } from '@/stores/tabs'
-import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import {
   mapMsgResponseToStatus,
   type MsgResponse,
@@ -103,7 +103,7 @@ function getPresetArgsForProvider(provider: string): string[] {
 const PTY_WAIT_MS = 10_000
 
 function readPinnedPty(paneGroupId: string): string | undefined {
-  const id = usePinnedSizeStore.getState().sessions[paneGroupId]
+  const id = sessionsOf(usePinnedSizeStore.getState().sessions, primaryScope())[paneGroupId]
   return id && id.length > 0 ? id : undefined
 }
 
@@ -386,7 +386,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // once conversationId is already on the restored layout.
       if (showLoading && Array.isArray(result)) {
         const tabsStore = useTabsStore.getState()
-        restampListedChatTabs(
+        restampListedChatTabs(primaryScope(), 
           collectStoreTabs(tabsStore),
           result,
           tabsStore.setTabTitle,
@@ -456,7 +456,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     try {
       const names = await daemonCliGet<Record<string, string>>(primaryScope(), 'chat/custom-names')
       setCustomNames(names)
-      rememberChatCustomNames(names)
+      rememberChatCustomNames(primaryScope(), names)
     } catch {
       // ignore
     }

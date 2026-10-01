@@ -53,7 +53,10 @@ const hostState: { activeHost: 'local' | { label: string; hostname: string } } =
 }
 
 vi.mock('@/stores/connect-host', () => ({
-  useConnectHostStore: (sel: (s: typeof hostState) => unknown) => sel(hostState),
+  // `getState` backs primaryScope()'s call-time getters (Home M1).
+  useConnectHostStore: Object.assign((sel: (s: typeof hostState) => unknown) => sel(hostState), {
+    getState: () => hostState,
+  }),
 }))
 
 import { UrlsPortsSection } from './UrlsPortsSection'

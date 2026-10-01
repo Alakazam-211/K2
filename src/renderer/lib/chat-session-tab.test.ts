@@ -26,6 +26,7 @@ import {
 } from './chat-session-tab'
 import type { Tab, TerminalItemData, FileViewerItemData } from '@/stores/tabs'
 
+import { primaryScope } from '@/kessel/server-scope'
 const SID = '01920000-aaaa-7000-8000-000000000001'
 const PTY = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
 
@@ -191,7 +192,7 @@ describe('persistChatRenameIfSessionTab', () => {
   })
 
   it('POSTs chat/rename for a session tab', async () => {
-    const ok = await persistChatRenameIfSessionTab(terminalTab({}), 'Renamed', '/tmp/proj')
+    const ok = await persistChatRenameIfSessionTab(primaryScope(), terminalTab({}), 'Renamed', '/tmp/proj')
     expect(ok).toBe(true)
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledTimes(1)
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
@@ -211,7 +212,7 @@ describe('persistChatRenameIfSessionTab', () => {
         command: 'claude',
       },
     })
-    const ok = await persistChatRenameIfSessionTab(tab, 'Code Review', '/tmp/proj')
+    const ok = await persistChatRenameIfSessionTab(primaryScope(), tab, 'Code Review', '/tmp/proj')
     expect(ok).toBe(true)
     expect(daemonMocks.daemonCliGet).not.toHaveBeenCalled()
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
@@ -223,7 +224,7 @@ describe('persistChatRenameIfSessionTab', () => {
 
   it('POSTs for a split-column extra tab the same way', async () => {
     const extra = terminalTab({ id: 'extra-1', data: { conversationId: SID, args: ['--dangerously-skip-permissions'] } })
-    const ok = await persistChatRenameIfSessionTab(extra, 'Reviewer', '/tmp/proj')
+    const ok = await persistChatRenameIfSessionTab(primaryScope(), extra, 'Reviewer', '/tmp/proj')
     expect(ok).toBe(true)
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
       provider: 'claude',
@@ -233,9 +234,9 @@ describe('persistChatRenameIfSessionTab', () => {
   })
 
   it('does not POST chat/rename for file or heartbeat tabs', async () => {
-    expect(await persistChatRenameIfSessionTab(fileTab(), 'Name', '/tmp/proj')).toBe(false)
+    expect(await persistChatRenameIfSessionTab(primaryScope(), fileTab(), 'Name', '/tmp/proj')).toBe(false)
     expect(
-      await persistChatRenameIfSessionTab(
+      await persistChatRenameIfSessionTab(primaryScope(), 
         terminalTab({ data: { heartbeatName: 'nightly' } }),
         'Name',
         '/tmp/proj',
@@ -249,7 +250,7 @@ describe('persistChatRenameIfSessionTab', () => {
       data: { args: ['--dangerously-skip-permissions'], command: 'claude' },
     })
     expect(tabLooksLikeChatSession(tab)).toBe(true)
-    expect(await persistChatRenameIfSessionTab(tab, 'Name', '/tmp/proj')).toBe(false)
+    expect(await persistChatRenameIfSessionTab(primaryScope(), tab, 'Name', '/tmp/proj')).toBe(false)
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledTimes(0)
   })
 
@@ -306,7 +307,7 @@ describe('findTabByPaneGroupId / restampSessionTabs', () => {
       title: 'claude',
       data: { command: undefined, args: undefined, conversationId: SID },
     })
-    restampListedChatTabs(
+    restampListedChatTabs(primaryScope(), 
       [restored, fileTab()],
       [{ sessionId: SID, customName: 'Code Review', title: 'Transcript' }],
       setTabTitle,
@@ -369,21 +370,21 @@ describe('adoptRestoredTab (T10/T11)', () => {
   })
 
   it('restamps grok from the custom-name map before paint', () => {
-    rememberChatCustomName(SID, 'Hi Test')
+    rememberChatCustomName(primaryScope(), SID, 'Hi Test')
     const built = terminalTab({ id: 'sess', title: 'grok', data: { conversationId: SID, commandHint: 'grok' } })
-    const adopted = adoptRestoredTab(built)
+    const adopted = adoptRestoredTab(primaryScope(), built)
     expect(adopted.title).toBe('Hi Test')
     expect(adopted.locked).toBe(true)
   })
 
   it('restamps grok from a tab_titles snapshot when conversationId is null', () => {
-    rememberTabTitleSnapshot('extra-1', 'Hi Test', true)
+    rememberTabTitleSnapshot(primaryScope(), 'extra-1', 'Hi Test', true)
     const built = terminalTab({
       id: 'extra-1',
       title: 'grok',
       data: { commandHint: 'grok', conversationId: undefined, args: undefined },
     })
-    const adopted = adoptRestoredTab(built)
+    const adopted = adoptRestoredTab(primaryScope(), built)
     expect(adopted.title).toBe('Hi Test')
     expect(adopted.locked).toBe(true)
   })

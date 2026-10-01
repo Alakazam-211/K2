@@ -14,19 +14,26 @@
 // is no per-client view to restore there anyway.
 
 import { create } from 'zustand'
+import { scopedKey, type ServerScope } from '@/kessel/server-scope'
+import {
+  SELECTED_TABS_STORAGE_KEY,
+  ensureHostScopedKeysMigrated,
+} from '@/lib/host-scoped-storage'
 
 /** localStorage key for the persisted selection map. */
-const STORAGE_KEY = 'k2so:selected-tabs'
+const STORAGE_KEY = SELECTED_TABS_STORAGE_KEY
 
-/** Build the per-(client, workspace) selection key. Mirrors the
- *  `activeWorkspaceKey` shape (`${projectId}:${workspaceId}`) the tabs store
- *  already uses, so the two stay aligned. */
-function keyFor(projectId: string, workspaceId: string): string {
-  return `${projectId}:${workspaceId}`
+/** Build the per-(server, workspace) selection key:
+ *  `<hostKey>|${projectId}:${workspaceId}` (Home M1, MS6). The part after
+ *  the host key mirrors the `activeWorkspaceKey` shape the tabs store uses.
+ *  Older unprefixed entries are migrated once to `local|…`. */
+function keyFor(scope: ServerScope, projectId: string, workspaceId: string): string {
+  return scopedKey(scope, `${projectId}:${workspaceId}`)
 }
 
 /** Read the persisted map from localStorage (best-effort; empty in node). */
 function hydrateFromStorage(): Record<string, string> {
+  ensureHostScopedKeysMigrated()
   try {
     if (typeof localStorage === 'undefined') return {}
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -57,12 +64,12 @@ function persistToStorage(map: Record<string, string>): void {
 }
 
 interface SelectedTabsState {
-  /** `${projectId}:${workspaceId}` -> selected tabId. */
+  /** `<hostKey>|${projectId}:${workspaceId}` -> selected tabId. */
   selected: Record<string, string>
   /** Persist the user's selected tab for a workspace (local only). */
-  setSelected: (projectId: string, workspaceId: string, tabId: string) => void
+  setSelected: (scope: ServerScope, projectId: string, workspaceId: string, tabId: string) => void
   /** Read the saved selection (or null if none). */
-  getSelected: (projectId: string, workspaceId: string) => string | null
+  getSelected: (scope: ServerScope, projectId: string, workspaceId: string) => string | null
   /** Clear all selections (host switch — selection is per-machine). */
   reset: () => void
 }
@@ -72,8 +79,8 @@ export const useSelectedTabsStore = create<SelectedTabsState>((set, get) => ({
   // selection before the first render reads it.
   selected: hydrateFromStorage(),
 
-  setSelected: (projectId, workspaceId, tabId) => {
-    const key = keyFor(projectId, workspaceId)
+  setSelected: (scope, projectId, workspaceId, tabId) => {
+    const key = keyFor(scope, projectId, workspaceId)
     const prev = get().selected
     if (prev[key] === tabId) return
     const next = { ...prev, [key]: tabId }
@@ -81,8 +88,8 @@ export const useSelectedTabsStore = create<SelectedTabsState>((set, get) => ({
     persistToStorage(next)
   },
 
-  getSelected: (projectId, workspaceId) => {
-    return get().selected[keyFor(projectId, workspaceId)] ?? null
+  getSelected: (scope, projectId, workspaceId) => {
+    return get().selected[keyFor(scope, projectId, workspaceId)] ?? null
   },
 
   reset: () => {
@@ -94,12 +101,17 @@ export const useSelectedTabsStore = create<SelectedTabsState>((set, get) => ({
 
 /** Non-hook accessors so the tabs store (plain module, not a React component)
  *  can read/write without a `useStore` subscription. */
-export function getSelectedTab(projectId: string, workspaceId: string): string | null {
-  return useSelectedTabsStore.getState().getSelected(projectId, workspaceId)
+export function getSelectedTab(scope: ServerScope, projectId: string, workspaceId: string): string | null {
+  return useSelectedTabsStore.getState().getSelected(scope, projectId, workspaceId)
 }
 
-export function setSelectedTab(projectId: string, workspaceId: string, tabId: string): void {
-  useSelectedTabsStore.getState().setSelected(projectId, workspaceId, tabId)
+export function setSelectedTab(
+  scope: ServerScope,
+  projectId: string,
+  workspaceId: string,
+  tabId: string,
+): void {
+  useSelectedTabsStore.getState().setSelected(scope, projectId, workspaceId, tabId)
 }
 
 export function resetSelectedTabs(): void {

@@ -351,7 +351,7 @@ export default function HomeSidebar(): React.JSX.Element {
 
       {/* Beta notice, above the Home picker and the command palette button. */}
       <div
-        className="px-3 pt-3 no-drag flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
+        className="px-3 pt-3 no-drag flex items-center justify-center gap-2.5 text-[11px] text-[var(--color-text-muted)]"
         data-testid="home-beta-notice"
       >
         <span>Home is in</span>
@@ -363,7 +363,7 @@ export default function HomeSidebar(): React.JSX.Element {
             letterSpacing: '0.04em',
             lineHeight: 1.2,
             padding: '2px 5px',
-            borderRadius: 3,
+            borderRadius: 0,
             color: 'var(--color-on-accent, #ffffff)',
             background: 'var(--color-accent, #3b82f6)',
             border: '1px solid var(--color-accent, #3b82f6)',

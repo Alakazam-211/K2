@@ -2,7 +2,25 @@
 # The packaged files ARE the install (O22). Do not run `k2 daemon install`.
 # Never wipe ~/.k2 — that directory is user data, not package state.
 
+# Heartbeat S2 (W5): let the daemon set a wake alarm (timerfd
+# CLOCK_BOOTTIME_ALARM) so "Wake this computer for heartbeats" can wake a
+# suspended machine. pacman runs these hooks as root. A file capability
+# is dropped whenever pacman replaces the binary, so post_upgrade applies
+# it again. Children of the daemon (agents) do not inherit it.
+_k2_wake_cap() {
+    if command -v setcap >/dev/null 2>&1; then
+        if setcap cap_wake_alarm+ep /usr/bin/k2-daemon; then
+            echo "K2: wake alarm capability set on /usr/bin/k2-daemon (heartbeats can wake this computer)."
+        else
+            echo "K2: could not set cap_wake_alarm on /usr/bin/k2-daemon; heartbeats will not wake this computer."
+        fi
+    else
+        echo "K2: setcap not found (package libcap); heartbeats will not wake this computer."
+    fi
+}
+
 post_install() {
+    _k2_wake_cap
     echo "K2: /usr/bin/k2 is the CLI; the GUI is /usr/bin/k2-gui (desktop launcher)."
     echo "    Enable the systemd USER unit (do not run 'k2 daemon install'):"
     echo "      systemctl --user daemon-reload"
@@ -12,6 +30,7 @@ post_install() {
 }
 
 post_upgrade() {
+    _k2_wake_cap
     echo "K2: reload the user unit after upgrade:"
     echo "      systemctl --user daemon-reload"
     echo "      systemctl --user restart k2-daemon"

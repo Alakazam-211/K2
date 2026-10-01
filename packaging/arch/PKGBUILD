@@ -29,6 +29,7 @@ depends=(
     'librsvg'
     'libsecret'
     'openssl'
+    'libcap'
 )
 makedepends=(
     'cargo'

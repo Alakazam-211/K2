@@ -65,6 +65,12 @@ cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2
 assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
 cp "target/release/k2-daemon" "$APP/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into the bundle."
+# Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
+# daemon copies it to /Library/PrivilegedHelperTools only after the user
+# approves the one admin dialog.
+[ -x "target/release/k2-power-helper" ] || { echo "FATAL: k2-power-helper missing after build" >&2; exit 1; }
+cp "target/release/k2-power-helper" "$APP/Contents/MacOS/k2-power-helper"
+echo "  k2-power-helper copied into the bundle."
 
 echo ""; echo "Step 2b: bundling k2-menubar helper..."
 cargo build --release -p k2-menubar || { echo "FATAL: k2-menubar build failed" >&2; exit 1; }
@@ -76,6 +82,7 @@ echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-daemon"
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 FRPC_BIN="$APP/Contents/MacOS/frpc"
 if [ -x "$FRPC_BIN" ]; then
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"

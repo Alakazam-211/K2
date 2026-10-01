@@ -292,6 +292,17 @@ assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
 cp "$DAEMON_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into K2.app/Contents/MacOS/"
+# Heartbeat S2 (D11): the macOS wake helper, built by the same cargo
+# build. The daemon copies it to /Library/PrivilegedHelperTools only
+# after the user approves the one admin dialog.
+POWER_HELPER_SRC="target/release/k2-power-helper"
+if [ ! -x "$POWER_HELPER_SRC" ]; then
+    echo "  FATAL: k2-power-helper not at $POWER_HELPER_SRC after cargo build" >&2
+    exit 1
+fi
+cp "$POWER_HELPER_SRC" \
+    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-power-helper"
+echo "  k2-power-helper copied into K2.app/Contents/MacOS/"
 
 # Menu-bar helper. Staged out of the bundle to ~/.k2/bin on first GUI
 # open (same shape as frpc). Not executed from Contents/MacOS.
@@ -334,6 +345,9 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-menubar"
+codesign --force --options runtime --timestamp \
+    --sign "$SIGNING_IDENTITY" \
+    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-power-helper"
 # frpc tunnel sidecar (Tauri externalBin → Contents/MacOS/frpc). Re-sign
 # with hardened runtime so the binary the app stages to ~/.k2/bin/frpc
 # is notarization-covered and runs without a Gatekeeper quarantine block.

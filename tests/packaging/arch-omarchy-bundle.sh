@@ -172,6 +172,16 @@ absent ".install does not rm ~/.k2" "$ARCH/k2.install" "rm -rf"
 contains ".install leaves ~/.k2 on remove" "$ARCH/k2.install" "~/.k2"
 contains "README pacman -R leaves ~/.k2" "$ARCH/README.md" "pacman -R"
 
+# Heartbeat S2 (W5) — the root hooks grant the wake alarm capability on
+# install AND upgrade (pacman drops file caps when it replaces the binary).
+contains ".install sets cap_wake_alarm" "$ARCH/k2.install" "setcap cap_wake_alarm+ep /usr/bin/k2-daemon"
+if [ "$(grep -c '^    _k2_wake_cap$' "$ARCH/k2.install")" = "2" ]; then
+    pass ".install applies the wake cap in post_install and post_upgrade"
+else
+    fail ".install applies the wake cap in post_install and post_upgrade" "expected two _k2_wake_cap calls"
+fi
+contains "PKGBUILD depends on libcap (setcap)" "$ARCH/PKGBUILD" "'libcap'"
+
 # O25 — OAuth bake, no secrets in git
 contains "PKGBUILD sources require-mail-oauth-build-env.sh" "$ARCH/PKGBUILD" "require-mail-oauth-build-env.sh"
 contains "PKGBUILD comments k2-bin pre-baked daemon" "$ARCH/PKGBUILD" "k2-bin"

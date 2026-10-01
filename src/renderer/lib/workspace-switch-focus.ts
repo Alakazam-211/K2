@@ -8,7 +8,7 @@
 // must NOT fall back to the terminal until we have given the bar time
 // to appear, and the idle/click steal paths must honor the same pref.
 
-import { usePageViewStore } from '@/stores/page-view'
+import { usePageViewStore, isRoomPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 
 let applyGen = 0
@@ -95,7 +95,7 @@ function focusVisibleTerminal(): boolean {
 
 function shouldApply(): boolean {
   if (useSettingsStore.getState().settingsOpen) return false
-  if (usePageViewStore.getState().page !== 'agents') return false
+  if (!isRoomPage(usePageViewStore.getState().page)) return false
   return true
 }
 

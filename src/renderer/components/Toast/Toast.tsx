@@ -96,8 +96,9 @@ function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
 
 type ToastAnchor = HTMLElement | 'settings'
 
+// Home is the Agents room shell (same panes + workspace host), so it is
+// not listed: its toasts land where Agents' do.
 const PAGE_HOST: Partial<Record<AppPage, string>> = {
-  home: 'home',
   projects: 'projects',
   feedback: 'feedback',
   wiki: 'wiki',

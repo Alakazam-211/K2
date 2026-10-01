@@ -13,8 +13,8 @@ import PresenceAvatar, { presenceDisplayName } from './PresenceAvatar'
 import {
   usePresenceStore,
   usersForWorkspace,
-  rosterDisplay,
   MAX_WORKSPACE_AVATARS,
+  type RosterUser,
 } from '@/stores/presence'
 
 export default function PresenceWorkspaceAvatars({
@@ -28,9 +28,23 @@ export default function PresenceWorkspaceAvatars({
 
   const users = useMemo(() => usersForWorkspace(roster, path), [roster, path])
 
-  if (!supported || users.length === 0) return null
+  if (!supported) return null
+  return <PresenceAvatarCluster users={users} />
+}
 
-  const { visible, overflow } = rosterDisplay(users, MAX_WORKSPACE_AVATARS)
+/** The overlapping chip cluster itself, for a list that does not come from
+ *  the connected roster (a Home row on another server reads that server's
+ *  presence summary). Renders nothing for an empty list. */
+export function PresenceAvatarCluster({
+  users,
+}: {
+  users: { user: string; role: RosterUser['role'] }[]
+}): React.JSX.Element | null {
+  if (users.length === 0) return null
+
+  // Same split as `rosterDisplay` (that helper is typed to full roster rows).
+  const visible = users.slice(0, MAX_WORKSPACE_AVATARS)
+  const overflow = users.length - visible.length
   const title = users.map((u) => presenceDisplayName(u.user)).join(', ')
 
   return (

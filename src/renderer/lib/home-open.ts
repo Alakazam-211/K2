@@ -1,12 +1,14 @@
 // Home P1 (vs-live H15, Rosson go 2026-09-30) — opening a Home row.
 //
-//   - Row on the connected server: select that workspace, go to Agents.
+//   - Row on the connected server: select that workspace. The page stays
+//     Home — Home is the Agents shell, so the room opens right there.
 //     No switch.
 //   - Row on another saved server (or `local` while on a remote): switch
 //     THIS window's server through the existing switcher path (`pickHost`:
 //     silent with a token, auto-login with a remembered password, else the
 //     normal full-screen sign-in), and select the workspace once that
-//     server's list lands (lib/home-pending-select). Homes never change.
+//     server's list lands (lib/home-pending-select), then land on Home.
+//     Homes never change.
 //   - Web: there is no switcher, so another server's row has no Open.
 
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
@@ -46,7 +48,6 @@ export function openHomeRow(row: HomeRow): OpenResult {
       return 'not-found'
     }
     useProjectsStore.getState().setActiveProject(ws.id)
-    usePageViewStore.getState().setPage('agents')
     return 'selected'
   }
 
@@ -60,7 +61,7 @@ export function openHomeRow(row: HomeRow): OpenResult {
     return 'unknown-server'
   }
   requestHostSelect(target === 'local' ? 'local' : target.id, row, () =>
-    usePageViewStore.getState().setPage('agents'),
+    usePageViewStore.getState().setPage('home'),
   )
   hostState.pickHost(target)
   return 'switching'

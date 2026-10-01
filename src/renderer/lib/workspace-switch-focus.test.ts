@@ -10,11 +10,15 @@ vi.mock('@/stores/settings', () => ({
 }))
 
 let page = 'agents'
-vi.mock('@/stores/page-view', () => ({
-  usePageViewStore: {
-    getState: () => ({ page }),
-  },
-}))
+vi.mock('@/stores/page-view', async () => {
+  const real = await vi.importActual<typeof import('@/stores/page-view')>('@/stores/page-view')
+  return {
+    isRoomPage: real.isRoomPage,
+    usePageViewStore: {
+      getState: () => ({ page }),
+    },
+  }
+})
 
 import {
   applyWorkspaceSwitchFocus,
@@ -217,6 +221,16 @@ describe('applyWorkspaceSwitchFocus', () => {
 
     expect(document.activeElement).toBe(terminal)
     expect(document.activeElement).not.toBe(textarea)
+  })
+
+  it('applies on Home (the Agents room shell)', () => {
+    const { textarea } = mountPair({ compose: true })
+    workspaceSwitchFocus = 'composer'
+    page = 'home'
+
+    applyWorkspaceSwitchFocus()
+
+    expect(document.activeElement).toBe(textarea)
   })
 })
 

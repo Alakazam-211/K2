@@ -1,9 +1,9 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — which top-level PAGE the app
 // shows. The top bar's switcher (⚙ | Home | Agents | Projects | Tickets)
-// selects one of the page views: 'home' is the Home roster (Home P1 —
-// agents picked from any saved server, full-page overlay like Projects);
-// 'agents' is today's default workspace
-// view (Sidebar + tabs + terminal); 'projects' and 'feedback' render as
+// selects one of the page views: 'agents' is today's default workspace
+// view (Sidebar + tabs + terminal); 'home' is the SAME shell with the Home
+// roster in the sidebar (agents picked from any saved server — Home P1,
+// prd-home-v1 H2: "reuses the Agents page shell"); 'projects' and 'feedback' render as
 // full-page overlays gated on this store. Settings is a store overlay
 // (settingsOpen), not an AppPage — the cog is a fourth tab that opens
 // it. Wiki is opened only from the workspace drawer (no permanent
@@ -17,6 +17,13 @@
 import { create } from 'zustand'
 
 export type AppPage = 'home' | 'agents' | 'projects' | 'feedback' | 'wiki'
+
+/** Pages that show the workspace room shell (top bar, sidebar, tab strip,
+ *  panes, drawers). Home and Agents share it; only the sidebar's list
+ *  differs. Everything that asks "is the room on screen?" uses this. */
+export function isRoomPage(page: AppPage): boolean {
+  return page === 'agents' || page === 'home'
+}
 
 interface PageViewState {
   page: AppPage

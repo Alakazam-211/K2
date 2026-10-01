@@ -1,20 +1,37 @@
 // @vitest-environment jsdom
 //
-// Home P1 — the page wired end to end in jsdom: a connected-server row
-// shows its activity, a row on another saved server polls that server's
-// public /boot-status and its signed-in presence summary (with THAT
-// server's token) and shows Live + who is there, a server with no login
-// shows "Sign in" without being asked, and clicking a remote row switches
-// through pickHost with a pending select. Top-bar chrome is stubbed; the
-// homes, page-view, connect-host stores and the status code are real.
+// Home on the Agents shell (prd-home-v1 H2, Rosson 2026-09-30: "the Home
+// UI should match the agents page UI"). The page is rendered through the
+// real `AgentsShell` + `Layout` + `TopBar` + drawers; only the leaf
+// surfaces are stubbed (the room's TerminalArea, the drawer bodies, the
+// server switcher / page tabs, and the Agents `Sidebar` default export so
+// the test can tell which sidebar is mounted).
+//
+// Asserted:
+//   - Home uses the Agents shell: the same row shell (`AgentRowButton`,
+//     `data-agent-row`), the same top bar with its drawer toggles, the
+//     same drawers, and the same room area as Agents.
+//   - A row on the connected server selects that workspace and the page
+//     stays Home; the room then shows in the main area.
+//   - A row on another server switches through `pickHost` and the pending
+//     select lands on Home (not Agents). Homes do not change.
+//   - Nothing selected / empty Home shows the Agents empty state with Home
+//     wording; Add Agent is one button that opens one picker with This
+//     server + From a server.
+//   - Status: connected row shows Agents' working glyph; another server
+//     polls /boot-status + presence and shows live + its people; a server
+//     with no login shows "sign in" and is never asked.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
+}))
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ label: 'main' }),
 }))
 vi.mock('@/components/TopBar/ServerSwitcher', () => ({
   default: () => null,
@@ -23,12 +40,54 @@ vi.mock('@/components/TopBar/ServerSwitcher', () => ({
 }))
 vi.mock('@/components/TopBar/PageTabs', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/DesktopChromeLeft', () => ({ default: () => null }))
-vi.mock('@/components/TopBar/DesktopChromeRight', () => ({ default: () => null }))
+vi.mock('@/components/TopBar/DesktopChromeRight', () => ({
+  default: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+}))
+vi.mock('@/components/TopBar/TopBarUtilities', () => ({
+  default: ({ leading, children }: { leading?: React.ReactNode; children?: React.ReactNode }) => (
+    <>
+      {leading}
+      {children}
+    </>
+  ),
+}))
 vi.mock('@/components/TopBar/K2MarkButton', () => ({ default: () => null }))
 vi.mock('@/lib/titlebar-drag', () => ({
   titleBarDragOnMouseDown: () => undefined,
   titleBarOnDoubleClick: () => undefined,
 }))
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: vi.fn(async () => ({ found: false, dataUrl: null })),
+  daemonCliPost: vi.fn(async () => ({})),
+}))
+vi.mock('@/lib/daemon-settings', () => ({
+  settingsGet: vi.fn(async () => ({})),
+  settingsUpdate: vi.fn(async () => undefined),
+}))
+// The room + drawer bodies: the shell decides they mount; their insides
+// have their own tests.
+vi.mock('@/components/Terminal/TerminalArea', () => ({
+  TerminalArea: ({ cwd }: { cwd: string }) => <div data-testid="terminal-area" data-cwd={cwd} />,
+}))
+vi.mock('@/components/FileTree/FileTree', () => ({
+  default: ({ rootPath }: { rootPath: string }) => <div data-testid="drawer-files" data-root={rootPath} />,
+}))
+vi.mock('@/components/ChangesPanel/ChangesPanel', () => ({ default: () => <div data-testid="drawer-changes" /> }))
+vi.mock('@/components/ChatHistory/ChatHistory', () => ({
+  default: ({ projectPath }: { projectPath: string }) => <div data-testid="drawer-history" data-root={projectPath} />,
+}))
+vi.mock('@/components/WorkspacePanel/WorkspacePanel', () => ({ default: () => <div data-testid="drawer-workspace" /> }))
+const menu = vi.hoisted(() => ({ next: null as string | null, items: [] as { id: string; label: string }[][] }))
+vi.mock('@/lib/context-menu', () => ({
+  showContextMenu: vi.fn(async (items: { id: string; label: string }[]) => {
+    menu.items.push(items)
+    return menu.next
+  }),
+}))
+vi.mock('@/components/Sidebar/Sidebar', async () => {
+  const real = await vi.importActual<typeof import('@/components/Sidebar/Sidebar')>('@/components/Sidebar/Sidebar')
+  return { ...real, default: () => <div data-testid="agents-sidebar" /> }
+})
 
 const h = vi.hoisted(() => {
   function hookOf<T extends object>(state: T) {
@@ -40,31 +99,73 @@ const h = vi.hoisted(() => {
     hook.setState = (p) => Object.assign(state, p)
     return hook
   }
-  const projects = hookOf({
-    projects: [{ id: 'pl', name: 'Cortana', path: '/w/cortana', handle: 'cortana', workspaces: [] }],
-    setActiveProject: (() => undefined) as (id: string) => void,
-  })
   const activity = hookOf({ getProjectStatus: (id: string) => (id === 'pl' ? 'working' : 'idle') })
   const presence = hookOf({ roster: [] as unknown[], supported: true })
-  return { hookOf, projects, activity, presence }
+  return { hookOf, activity, presence }
 })
-vi.mock('@/stores/projects', () => ({ useProjectsStore: h.projects }))
+
+vi.mock('@/stores/projects', async () => {
+  const { create } = await import('zustand')
+  interface Ws {
+    id: string
+    name: string
+    type: string
+    navVisible: number
+    worktreePath: string | null
+  }
+  interface Proj {
+    id: string
+    name: string
+    path: string
+    handle: string
+    color: string
+    iconUrl: string | null
+    workspaces: Ws[]
+  }
+  const ws = (id: string, name: string): Ws => ({ id, name, type: 'main', navVisible: 0, worktreePath: null })
+  const projects: Proj[] = [
+    { id: 'pl', name: 'Cortana', path: '/w/cortana', handle: 'cortana', color: '#e06c75', iconUrl: null, workspaces: [ws('wl', 'main')] },
+    { id: 'pn', name: 'Nova', path: '/w/nova', handle: 'nova', color: '#61afef', iconUrl: null, workspaces: [ws('wn', 'main')] },
+  ]
+  const useProjectsStore = create<{
+    projects: Proj[]
+    activeProjectId: string | null
+    activeWorkspaceId: string | null
+    setActiveProject: (id: string) => void
+    setActiveWorkspace: (projectId: string, workspaceId: string) => void
+  }>((set, get) => ({
+    projects,
+    activeProjectId: null,
+    activeWorkspaceId: null,
+    setActiveProject: (id) => {
+      const p = get().projects.find((x) => x.id === id)
+      if (!p) throw new Error(`setActiveProject: no project ${id}`)
+      set({ activeProjectId: id, activeWorkspaceId: p.workspaces[0].id })
+    },
+    setActiveWorkspace: (projectId, workspaceId) => set({ activeProjectId: projectId, activeWorkspaceId: workspaceId }),
+  }))
+  return { useProjectsStore, __initialProjects: projects }
+})
 vi.mock('@/stores/active-agents', () => ({ useActiveAgentsStore: h.activity }))
 vi.mock('@/stores/presence', async () => {
   const real = await vi.importActual<typeof import('@/stores/presence')>('@/stores/presence')
-  return { usePresenceStore: h.presence, usersForWorkspace: real.usersForWorkspace }
+  return { ...real, usePresenceStore: h.presence }
 })
 vi.mock('@/stores/session-events', () => ({
   onAppHello: vi.fn(),
   onPresenceChanged: vi.fn(),
 }))
 
-import HomePage from './HomePage'
+import AgentsShell from '@/components/Layout/AgentsShell'
+import { HomeShellEffects } from './home-room'
 import { useHomesStore } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
+import { usePanelsStore } from '@/stores/panels'
+import { useSidebarStore } from '@/stores/sidebar'
+import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { useHomeProbeStore } from '@/lib/home-status'
-import { peekHostSelect, clearHostSelect } from '@/lib/home-pending-select'
+import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 
 const boxB: ConnectHost = {
   id: 'b',
@@ -107,12 +208,40 @@ const fetchMock = vi.fn(async (url: string) => {
   throw new Error(`unexpected fetch ${url}`)
 })
 
+/** The App's Home wiring: the shell, plus the status loop App mounts
+ *  only while Home is on screen. */
+function Shell(): React.JSX.Element {
+  const page = usePageViewStore((s) => s.page)
+  const projects = useProjectsStore((s) => s.projects)
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
+  const activeProject = projects.find((p) => p.id === activeProjectId)
+  const activeWorkspace = activeProject?.workspaces.find((w) => w.id === activeWorkspaceId)
+  const cwd = activeWorkspace?.worktreePath ?? activeProject?.path ?? '~'
+  return (
+    <>
+      <AgentsShell activeProject={activeProject} activeWorkspace={activeWorkspace} cwd={cwd} />
+      {page === 'home' && <HomeShellEffects />}
+    </>
+  )
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   __resetConnectHostStoreForTests()
   useConnectHostStore.setState({ hosts: [boxB, boxC], connectionStatus: 'connected' })
   clearHostSelect()
   useHomeProbeStore.setState({ probes: {} })
+  useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
+  useSidebarStore.setState({ isCollapsed: false })
+  usePanelsStore.setState({
+    leftPanelOpen: true,
+    leftPanelTabs: ['files', 'workspace'],
+    leftPanelActiveTab: 'files',
+    rightPanelOpen: true,
+    rightPanelTabs: ['history', 'changes'],
+    rightPanelActiveTab: 'history',
+  })
   const home = useHomesStore.getState().homes[0]
   for (const r of home.rows) useHomesStore.getState().removeRow(home.id, r.address)
   useHomesStore.getState().selectHome(home.id)
@@ -125,44 +254,109 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   fetchMock.mockClear()
+})
+
+// A probe still in flight when a test ends keeps using the stub (a later
+// request would otherwise reach the real network).
+afterAll(() => {
   vi.unstubAllGlobals()
 })
 
-function rowOf(label: string): HTMLElement {
-  const el = screen.getByText(label).closest('li')
-  if (!el) throw new Error(`no row for ${label}`)
+function homeSidebar(): HTMLElement {
+  const el = document.querySelector('[data-home-sidebar]')
+  if (!(el instanceof HTMLElement)) throw new Error('Home sidebar is not mounted')
   return el
 }
 
-describe('HomePage', () => {
-  it('renders nothing unless the Home page is selected', () => {
+function rowOf(label: string): HTMLElement {
+  const el = within(homeSidebar()).getByText(label).closest('[data-agent-row]')
+  if (!(el instanceof HTMLElement)) throw new Error(`no Agents row shell for ${label}`)
+  return el
+}
+
+function roomArea(): HTMLElement {
+  const el = document.querySelector('[data-room-area]')
+  if (!(el instanceof HTMLElement)) throw new Error('room area is not mounted')
+  return el
+}
+
+describe('Home — the Agents page shell', () => {
+  it('Agents and Home mount the same shell; only the sidebar differs', () => {
     usePageViewStore.getState().setPage('agents')
-    const { container } = render(<HomePage />)
-    expect(container.innerHTML).toBe('')
+    useProjectsStore.getState().setActiveProject('pl')
+    const { rerender } = render(<Shell />)
+    expect(screen.getByTestId('agents-sidebar')).toBeTruthy()
+    expect(document.querySelector('[data-home-sidebar]')).toBeNull()
+    expect(within(roomArea()).getByTestId('terminal-area')).toBeTruthy()
+
+    act(() => usePageViewStore.getState().setPage('home'))
+    rerender(<Shell />)
+    expect(screen.queryByTestId('agents-sidebar')).toBeNull()
+    expect(homeSidebar()).toBeTruthy()
+    // Every Home row is the Agents row shell.
+    const rows = homeSidebar().querySelectorAll('[data-agent-row]')
+    expect(rows.length).toBe(3)
+    // Same room, still mounted, and shown: Cortana is on this Home.
+    expect(roomArea().style.display).toBe('')
+    expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')
   })
 
-  it('connected row = activity; other server = Live + presence; no login = Sign in', async () => {
-    render(<HomePage />)
-    expect(rowOf('Cortana').textContent).toContain('Working')
-    expect(rowOf('Cortana').textContent).toContain('This computer')
-    expect(rowOf('Cee').textContent).toContain('Sign in')
+  it('a selected local agent has the Agents drawers and drawer toggles on Home', () => {
+    useProjectsStore.getState().setActiveProject('pl')
+    render(<Shell />)
+    // Top bar drawer toggles (the Agents TopBar).
+    const left = screen.getByTitle('Toggle left panel')
+    const right = screen.getByTitle('Toggle right panel')
+    // Drawer bodies for the selected agent.
+    expect(screen.getByTestId('drawer-files').getAttribute('data-root')).toBe('/w/cortana')
+    expect(screen.getByTestId('drawer-history').getAttribute('data-root')).toBe('/w/cortana')
+    expect(screen.getByText('Cortana', { selector: 'span.text-\\[var\\(--color-text-secondary\\)\\]' })).toBeTruthy()
 
-    await waitFor(() => expect(rowOf('Bee').textContent).toContain('Live'))
-    // Presence: anna is there; you (rosson on B) are not shown.
-    expect(screen.getByLabelText('Here now: anna')).toBeTruthy()
-    expect(screen.queryByLabelText(/rosson/)).toBeNull()
-
-    const urls = fetchMock.mock.calls.map((c) => c[0])
-    expect(urls).toContain('https://b.k2.dev/boot-status')
-    expect(urls).toContain('https://b.k2.dev/cli/presence/summary?token=tok-b')
-    // A server with no login is never asked.
-    expect(urls.some((u) => u.includes('c.k2.dev'))).toBe(false)
+    fireEvent.click(left)
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(screen.queryByTestId('drawer-files')).toBeNull()
+    fireEvent.click(right)
+    expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
+    expect(screen.queryByTestId('drawer-history')).toBeNull()
   })
 
-  it('clicking a row on another server switches through pickHost with a pending select', async () => {
+  it('clicking a row on the connected server selects it and stays on Home', () => {
+    render(<Shell />)
+    // Nothing selected yet: Agents empty state, Home wording, no drawers.
+    expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
+    expect(screen.queryByTestId('drawer-files')).toBeNull()
+
+    fireEvent.click(rowOf('Cortana'))
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(useProjectsStore.getState().activeWorkspaceId).toBe('wl')
+    expect(usePageViewStore.getState().page).toBe('home')
+    // The room opens in the main area; the sidebar still shows the Home roster.
+    expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')
+    expect(screen.queryByText('Pick an agent on this Home')).toBeNull()
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+    expect(homeSidebar().querySelectorAll('[data-agent-row]').length).toBe(3)
+  })
+
+  it('the active workspace not on this Home shows the empty state, room hidden', () => {
+    useProjectsStore.getState().setActiveProject('pn')
+    render(<Shell />)
+    expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
+    expect(roomArea().style.display).toBe('none')
+    expect(screen.getByText('No workspace selected')).toBeTruthy()
+  })
+
+  it('an empty Home shows the empty state with Add Agent wording', () => {
+    const home = useHomesStore.getState().homes[0]
+    for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
+    render(<Shell />)
+    expect(screen.getByText('Add an agent to get started', { selector: '[data-room-empty] p' })).toBeTruthy()
+    expect(within(homeSidebar()).getByText('No agents on this Home yet')).toBeTruthy()
+  })
+
+  it('clicking a row on another server switches through pickHost and lands on Home', async () => {
     const pickHost = vi.fn()
     useConnectHostStore.setState({ pickHost })
-    render(<HomePage />)
+    render(<Shell />)
     await act(async () => {
       fireEvent.click(rowOf('Bee'))
     })
@@ -175,37 +369,88 @@ describe('HomePage', () => {
       'bee::b.k2.dev',
       'cee::c.k2.dev',
     ])
+
+    // B's list lands: the restore takes the requested workspace, and the
+    // follow-up lands on Home (never Agents).
+    usePageViewStore.getState().setPage('agents')
+    const pick = takeHostSelect(boxB, [{ id: 'pb', name: 'Bee', handle: 'bee' }])
+    if (!pick) throw new Error('pending select did not match box B')
+    expect(pick.workspace.id).toBe('pb')
+    if (!pick.onSelected) throw new Error('pending select has no follow-up')
+    pick.onSelected()
+    expect(usePageViewStore.getState().page).toBe('home')
   })
 
-  it('clicking a row on the connected server selects it and goes to Agents', () => {
-    const setActiveProject = vi.fn()
-    h.projects.setState({ setActiveProject })
-    render(<HomePage />)
-    fireEvent.click(rowOf('Cortana'))
-    expect(setActiveProject).toHaveBeenCalledWith('pl')
-    expect(usePageViewStore.getState().page).toBe('agents')
+  it('row states: working glyph (connected), live + presence (other), sign in (no login)', async () => {
+    render(<Shell />)
+    // Connected row = the Agents row: working braille spinner.
+    expect(rowOf('Cortana').querySelector('.braille-spinner')).not.toBeNull()
+    expect(rowOf('Cortana').querySelector('[data-machine-chip]')).toBeNull()
+    // Other servers carry a machine chip.
+    expect(rowOf('Bee').querySelector('[data-machine-chip]')?.textContent).toBe('Box B')
+    expect(rowOf('Cee').querySelector('[data-machine-chip]')?.textContent).toBe('Box C')
+    expect(rowOf('Cee').querySelector('[data-row-status]')?.getAttribute('data-row-status')).toBe('sign-in')
+
+    await waitFor(() =>
+      expect(rowOf('Bee').querySelector('[data-row-status]')?.getAttribute('data-row-status')).toBe('live'),
+    )
+    // Presence: anna is there; you (rosson on B) are not shown.
+    expect(within(rowOf('Bee')).getByTitle('anna')).toBeTruthy()
+    expect(within(rowOf('Bee')).queryByTitle(/rosson/)).toBeNull()
+
+    const urls = fetchMock.mock.calls.map((c) => c[0])
+    expect(urls).toContain('https://b.k2.dev/boot-status')
+    expect(urls).toContain('https://b.k2.dev/cli/presence/summary?token=tok-b')
+    expect(urls.some((u) => u.includes('c.k2.dev'))).toBe(false)
   })
 
-  it('remove drops the row only', () => {
-    render(<HomePage />)
-    fireEvent.click(screen.getByLabelText('Remove Cee from Home'))
-    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual(['cortana::local', 'bee::b.k2.dev'])
-  })
+  it('Add Agent is the one bottom button; its picker has This server and From a server', () => {
+    render(<Shell />)
+    const bar = screen.getByText('Add Agent').closest('div')
+    if (!bar) throw new Error('no bottom bar')
+    // The bar: Add Agent + the collapse button, like Add Workspace.
+    expect(Array.from(bar.querySelectorAll(':scope > button')).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([
+      'Add Agent',
+      'Collapse workspaces sidebar',
+    ])
 
-  it('Add Agent lists only this server’s agents not already on the Home', () => {
-    h.projects.setState({
-      projects: [
-        { id: 'pl', name: 'Cortana', path: '/w/cortana', handle: 'cortana', workspaces: [] },
-        { id: 'pn', name: 'Nova', path: '/w/nova', handle: 'nova', workspaces: [] },
-      ],
-    })
-    render(<HomePage />)
     fireEvent.click(screen.getByText('Add Agent'))
-    const menu = screen.getByRole('menu')
-    expect(menu.textContent).toContain('Agents on This computer')
-    expect(menu.textContent).toContain('Nova')
-    expect(menu.textContent).not.toContain('Cortana')
-    fireEvent.click(screen.getByText('Nova'))
+    const picker = screen.getByRole('menu', { name: 'Add Agent' })
+    expect(within(picker).getByText('This server')).toBeTruthy()
+    expect(within(picker).getByText('From a server')).toBeTruthy()
+
+    fireEvent.click(within(picker).getByText('This server'))
+    expect(picker.textContent).toContain('Agents on This computer')
+    expect(picker.textContent).toContain('Nova')
+    expect(picker.textContent).not.toContain('Cortana')
+    fireEvent.click(within(picker).getByText('Nova'))
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
+  })
+
+  it('right-click Remove from Home drops the row only', async () => {
+    menu.next = 'home-remove'
+    menu.items = []
+    render(<Shell />)
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Cee'))
+    })
+    expect(menu.items[0].map((i) => i.label)).toContain('Remove from Home')
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual(['cortana::local', 'bee::b.k2.dev'])
+    // The connected row's menu is the workspace menu + remove.
+    menu.next = null
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Cortana'))
+    })
+    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-remove'])
+  })
+
+  it('From a server lists saved servers, minus the connected one', () => {
+    render(<Shell />)
+    fireEvent.click(screen.getByText('Add Agent'))
+    const picker = screen.getByRole('menu', { name: 'Add Agent' })
+    fireEvent.click(within(picker).getByText('From a server'))
+    expect(within(picker).getByText('Box B')).toBeTruthy()
+    expect(within(picker).getByText('Box C')).toBeTruthy()
+    expect(within(picker).queryByText('This computer')).toBeNull()
   })
 })

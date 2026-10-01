@@ -1,6 +1,8 @@
-// Home P1 (vs-live H16/H17) — the two ways to put an agent on a Home.
+// Home P1 (vs-live H16/H17) — the Add Agent picker.
 //
-// Add Agent: the CONNECTED server's workspaces (already in the projects
+// One button, in the Agents sidebar's Add Workspace spot, opens one
+// picker with two choices inside it:
+// This server: the CONNECTED server's workspaces (already in the projects
 // store — no new fetch) that are not on this Home yet.
 // From a server: this client's saved servers (the switcher list, plus
 // This computer when the window is on a remote), minus the connected one;
@@ -28,6 +30,7 @@ import {
   workspaceHandle,
 } from '@/lib/home-address'
 import { hostDisplayAddress } from '@/components/TopBar/ServerSwitcher'
+import { isWebClient } from '@/lib/is-web'
 
 interface ListedWorkspace {
   id: string
@@ -69,11 +72,13 @@ export function repairFromList(hostKey: string, workspaces: ListedWorkspace[]): 
   })
 }
 
+// The Agents sidebar's dropdown look (FocusGroupDropdown), opening upward
+// from the bottom bar.
 const panelClass =
-  'absolute bottom-full left-0 right-0 z-30 mb-2 max-h-[60vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-lg'
+  'absolute bottom-full left-3 right-3 z-50 mb-0.5 max-h-[60vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl py-0.5'
 const itemClass =
-  'no-drag w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] cursor-pointer flex items-center gap-2'
-const headClass = 'px-3 pt-1.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]'
+  'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+const headClass = 'px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]'
 
 function WorkspaceList({
   home,
@@ -107,19 +112,59 @@ export function connectedServerLabel(active: 'local' | ConnectHost): string {
   return active === 'local' ? 'This computer' : active.label
 }
 
-export function AddAgentPanel({ home }: { home: Home }): React.JSX.Element {
+function BackHead({ label, onBack }: { label: string; onBack: () => void }): React.JSX.Element {
+  return (
+    <button type="button" className={`${itemClass} ${headClass} normal-case`} onClick={onBack}>
+      ‹ {label}
+    </button>
+  )
+}
+
+function ThisServerList({ home, onBack }: { home: Home; onBack: () => void }): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const projects = useProjectsStore((s) => s.projects)
   const hostKey = activeHomeHostKey(activeHost)
   return (
-    <div className={panelClass} role="menu">
-      <div className={headClass}>Agents on {connectedServerLabel(activeHost)}</div>
+    <>
+      <BackHead label={`Agents on ${connectedServerLabel(activeHost)}`} onBack={onBack} />
       <WorkspaceList
         home={home}
         hostKey={hostKey}
         workspaces={projects}
         emptyText="Every agent on this server is already on this Home."
       />
+    </>
+  )
+}
+
+type PickerMode = 'menu' | 'this' | 'server'
+
+/** The one Add Agent picker: This server, or From a server (desktop). */
+export function AddAgentPicker({ home }: { home: Home }): React.JSX.Element {
+  const activeHost = useConnectHostStore((s) => s.activeHost)
+  const [mode, setMode] = useState<PickerMode>('menu')
+  const web = isWebClient()
+  return (
+    <div className={panelClass} role="menu" aria-label="Add Agent">
+      {mode === 'menu' && (
+        <>
+          <div className={headClass}>Add an agent to {home.name}</div>
+          <button type="button" role="menuitem" className={itemClass} onClick={() => setMode('this')}>
+            <span className="truncate flex-1">This server</span>
+            <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">{connectedServerLabel(activeHost)}</span>
+            <span className="flex-shrink-0 text-[var(--color-text-muted)]">›</span>
+          </button>
+          {!web && (
+            <button type="button" role="menuitem" className={itemClass} onClick={() => setMode('server')}>
+              <span className="truncate flex-1">From a server</span>
+              <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">saved servers</span>
+              <span className="flex-shrink-0 text-[var(--color-text-muted)]">›</span>
+            </button>
+          )}
+        </>
+      )}
+      {mode === 'this' && <ThisServerList home={home} onBack={() => setMode('menu')} />}
+      {mode === 'server' && <FromServerList home={home} onBack={() => setMode('menu')} />}
     </div>
   )
 }
@@ -131,7 +176,7 @@ type Listing =
   | { kind: 'ok'; workspaces: ListedWorkspace[] }
   | { kind: 'error'; message: string }
 
-export function FromServerPanel({ home }: { home: Home }): React.JSX.Element {
+function FromServerList({ home, onBack }: { home: Home; onBack: () => void }): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
   const connectedKey = activeHomeHostKey(activeHost)
@@ -199,8 +244,8 @@ export function FromServerPanel({ home }: { home: Home }): React.JSX.Element {
 
   if (!picked) {
     return (
-      <div className={panelClass} role="menu">
-        <div className={headClass}>Saved servers</div>
+      <>
+        <BackHead label="Saved servers" onBack={onBack} />
         {servers.length === 0 ? (
           <p className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
             No other saved servers. Add one in Settings → Connections.
@@ -213,16 +258,14 @@ export function FromServerPanel({ home }: { home: Home }): React.JSX.Element {
             </button>
           ))
         )}
-      </div>
+      </>
     )
   }
 
   const server = servers.find((s) => s.key === picked)
   return (
-    <div className={panelClass} role="menu">
-      <button type="button" className={`${itemClass} ${headClass} normal-case`} onClick={() => setPicked(null)}>
-        ‹ {server?.label ?? picked}
-      </button>
+    <>
+      <BackHead label={server?.label ?? picked} onBack={() => setPicked(null)} />
       {listing.kind === 'loading' || listing.kind === 'idle' ? (
         <p className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">Loading agents…</p>
       ) : listing.kind === 'signin' ? (
@@ -250,6 +293,6 @@ export function FromServerPanel({ home }: { home: Home }): React.JSX.Element {
           emptyText="Every agent on that server is already on this Home."
         />
       )}
-    </div>
+    </>
   )
 }

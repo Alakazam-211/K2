@@ -19,7 +19,7 @@ export interface PendingHostSelect {
   hostId: string
   row: HomeRowRef
   expiresAt: number
-  /** Runs after the workspace is selected (Home goes to Agents). */
+  /** Runs after the workspace is selected (lands the window on Home). */
   onSelected?: () => void
 }
 

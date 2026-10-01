@@ -59,6 +59,12 @@ describe('browserPaneVisible', () => {
     ).toBe(true)
   })
 
+  it('is visible on Home too: Home is the Agents room shell (tab visibility still gates it)', () => {
+    const base = { standalone: false, settingsOpen: false, page: 'home' as AppPage, windowFocused: true }
+    expect(browserPaneVisible({ ...base, tabVisible: true })).toBe(true)
+    expect(browserPaneVisible({ ...base, tabVisible: false })).toBe(false)
+  })
+
   it('stays visible when that same pane is focused', () => {
     expect(
       browserPaneVisible({

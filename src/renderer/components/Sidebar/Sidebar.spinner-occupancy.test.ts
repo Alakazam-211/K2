@@ -22,6 +22,8 @@ function sliceFn(src: string, name: string, until: string): string {
 
 const agentSpinner = sliceFn(sidebarSrc, 'AgentSpinner', 'function NavWorktreeRow')
 const singleProjectItem = sliceFn(sidebarSrc, 'SingleProjectItem', 'function WorkspaceButton')
+// The two-row template lives in the shared row shell (Agents + Home rows).
+const agentRowButton = sliceFn(sidebarSrc, 'AgentRowButton', 'function SingleProjectItem')
 
 describe('AgentSpinner occupancy', () => {
   it('always renders a 14px slot — never unmounts idle', () => {
@@ -42,14 +44,16 @@ describe('AgentSpinner occupancy', () => {
 
 describe('SingleProjectItem reserved two-row template', () => {
   it('status row is always 14px even when empty — pin and unpin share this', () => {
-    expect(singleProjectItem).toContain('h-3.5 min-h-3.5 leading-none')
+    expect(agentRowButton).toContain('h-3.5 min-h-3.5 leading-none')
+    expect(agentRowButton).not.toContain('-mt-px')
     expect(singleProjectItem).not.toContain('-mt-px')
+    expect(singleProjectItem).toContain('<AgentRowButton')
     expect(singleProjectItem).toContain('<AgentSpinner projectId={project.id} />')
   })
 
   it('name row uses leading-4 so it does not reflow when the spinner appears', () => {
-    expect(singleProjectItem).toContain('w-full leading-4')
-    expect(singleProjectItem).toContain('truncate flex-1 leading-4')
+    expect(agentRowButton).toContain('w-full leading-4')
+    expect(agentRowButton).toContain('truncate flex-1 leading-4')
   })
 })
 

@@ -14,6 +14,9 @@ interface ProjectAvatarProps {
   projectId?: string
   iconUrl?: string | null
   size?: number
+  /** False skips the connected daemon's icon lookup — for an agent that
+   *  lives on another server (Home rows), whose path means nothing here. */
+  fetchIcon?: boolean
 }
 
 export default function ProjectAvatar({
@@ -22,7 +25,8 @@ export default function ProjectAvatar({
   projectColor,
   projectId,
   iconUrl: iconUrlProp,
-  size = 28
+  size = 28,
+  fetchIcon = true
 }: ProjectAvatarProps): React.JSX.Element {
   const [iconUrl, setIconUrl] = useState<string | null>(() => {
     if (iconUrlProp) return iconUrlProp
@@ -31,7 +35,7 @@ export default function ProjectAvatar({
     return cached?.found && cached.dataUrl ? cached.dataUrl : null
   })
   const [loaded, setLoaded] = useState(() => {
-    return !!iconUrlProp || iconCache.has(projectPath)
+    return !fetchIcon || !!iconUrlProp || iconCache.has(projectPath)
   })
 
   // Sync prop changes
@@ -44,7 +48,7 @@ export default function ProjectAvatar({
 
   useEffect(() => {
     // If iconUrl was provided via prop, skip the query
-    if (iconUrlProp) return
+    if (iconUrlProp || !fetchIcon) return
 
     // Check cache first
     const cached = iconCache.get(projectPath)
@@ -73,7 +77,7 @@ export default function ProjectAvatar({
     return () => {
       cancelled = true
     }
-  }, [projectPath, iconUrlProp, projectId])
+  }, [projectPath, iconUrlProp, projectId, fetchIcon])
 
   const firstLetter = projectName.charAt(0).toUpperCase()
 

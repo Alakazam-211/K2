@@ -22,7 +22,7 @@ import { SidebarCollapseButton } from './SidebarCollapseButton'
 
 const RAIL_WIDTH = 48
 
-function ProjectIcon({
+export function ProjectIcon({
   project,
   isActive,
   onClick,

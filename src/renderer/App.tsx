@@ -2,14 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow as getCurrentTauriWindow } from '@tauri-apps/api/window'
 import { useWindowFocusStore } from './stores/window-focus'
-import Layout from './components/Layout/Layout'
 import FocusLayout from './components/Layout/FocusLayout'
-import Sidebar from './components/Sidebar/Sidebar'
-import FileTree from './components/FileTree/FileTree'
-import ChangesPanel from './components/ChangesPanel/ChangesPanel'
-import ChatHistory from './components/ChatHistory/ChatHistory'
-import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel'
-import TabbedPanel from './components/TabbedPanel/TabbedPanel'
+import { LeftPanelContent, RightPanelContent } from './components/Layout/WorkspaceDrawers'
 import { TerminalArea } from './components/Terminal/TerminalArea'
 import Settings from './components/Settings/Settings'
 import GitInitDialog from './components/GitInitDialog/GitInitDialog'
@@ -48,10 +42,11 @@ import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import FeedbackPage from './components/Feedback/FeedbackPage'
-import HomePage from './components/Home/HomePage'
+import AgentsShell from './components/Layout/AgentsShell'
+import { HomeShellEffects, useHomeRoomSelected } from './components/Home/home-room'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
-import { usePageViewStore } from './stores/page-view'
+import { usePageViewStore, isRoomPage } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
 import { initProjectGroupEvents } from './stores/project-groups'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
@@ -111,65 +106,6 @@ function parseFocusProjectId(): string | null {
     // ignore — we'll just have no focus id, regular window behavior
   }
   return null
-}
-
-function LeftPanelContent({ rootPath, header }: { rootPath?: string; header?: React.ReactNode }): React.JSX.Element {
-  const tabs = usePanelsStore((s) => s.leftPanelTabs)
-  const activeTab = usePanelsStore((s) => s.leftPanelActiveTab)
-  const setActiveTab = usePanelsStore((s) => s.setLeftPanelActiveTab)
-  const width = usePanelsStore((s) => s.leftPanelWidth)
-  const setWidth = usePanelsStore((s) => s.setLeftPanelWidth)
-
-  if (tabs.length === 0) return <></>
-
-  return (
-    <TabbedPanel
-      tabs={tabs}
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-      width={width}
-      onWidthChange={setWidth}
-      resizeSide="right"
-      header={header}
-    >
-      {activeTab === 'files' && rootPath && <FileTree rootPath={rootPath} />}
-      {activeTab === 'changes' && <ChangesPanel />}
-      {/* #7: bind ChatHistory to THIS panel's host workspace (rootPath),
-          not the globally-active workspace. Without the prop it would
-          resolve from global pointers and show another workspace's chats. */}
-      {activeTab === 'history' && <ChatHistory projectPath={rootPath} />}
-      {activeTab === 'workspace' && <WorkspacePanel />}
-    </TabbedPanel>
-  )
-}
-
-function RightPanelContent({ rootPath, header }: { rootPath?: string; header?: React.ReactNode }): React.JSX.Element {
-  const tabs = usePanelsStore((s) => s.rightPanelTabs)
-  const activeTab = usePanelsStore((s) => s.rightPanelActiveTab)
-  const setActiveTab = usePanelsStore((s) => s.setRightPanelActiveTab)
-  const width = usePanelsStore((s) => s.rightPanelWidth)
-  const setWidth = usePanelsStore((s) => s.setRightPanelWidth)
-
-  if (tabs.length === 0) return <></>
-
-  return (
-    <TabbedPanel
-      tabs={tabs}
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-      width={width}
-      onWidthChange={setWidth}
-      resizeSide="left"
-      header={header}
-    >
-      {activeTab === 'files' && rootPath && <FileTree rootPath={rootPath} />}
-      {activeTab === 'changes' && <ChangesPanel />}
-      {/* #7: bind ChatHistory to THIS panel's host workspace (rootPath),
-          not the globally-active workspace. See LeftPanelContent. */}
-      {activeTab === 'history' && <ChatHistory projectPath={rootPath} />}
-      {activeTab === 'workspace' && <WorkspacePanel />}
-    </TabbedPanel>
-  )
 }
 
 class FocusErrorBoundary extends React.Component<
@@ -368,6 +304,7 @@ export default function App(): React.JSX.Element {
 function AppRoot(): React.JSX.Element {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const page = usePageViewStore((s) => s.page)
+  const homeRoomShown = useHomeRoomSelected()
   const focusProjectId = useMemo(() => parseFocusProjectId(), [])
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
@@ -656,7 +593,8 @@ function AppRoot(): React.JSX.Element {
       if (useRunningAgentsStore.getState().isOpen) return
       // Full-page overlays (Tickets / Projects / Wiki) sit above terminals;
       // stealing focus under them collapses in-overlay text selection.
-      if (usePageViewStore.getState().page !== 'agents') return
+      // Home is the Agents shell, so its room refocuses the same way.
+      if (!isRoomPage(usePageViewStore.getState().page)) return
       // Composer pref: recover the message box, never steal to the grid.
       if (preferredWorkspaceSwitchFocus() === 'composer') {
         tryFocusPreferredWorkspaceInput()
@@ -1020,7 +958,7 @@ function AppRoot(): React.JSX.Element {
   // Settings is a full-viewport overlay on top; terminals keep their
   // WebGL contexts and re-paint when style-store.textGamma changes.
   return (
-    <PageLiveContext.Provider value={page === 'agents'}>
+    <PageLiveContext.Provider value={page === 'agents' || (page === 'home' && homeRoomShown)}>
       <PinnedChatRetainer />
 
       {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
@@ -1038,29 +976,9 @@ function AppRoot(): React.JSX.Element {
           style={settingsOpen ? { display: 'none' } : undefined}
           aria-hidden={settingsOpen || undefined}
         >
-          <Layout
-            sidebar={<Sidebar />}
-            leftPanel={<LeftPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
-            rightPanel={<RightPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
-            projectName={activeProject?.name}
-            workspaceName={activeWorkspace?.name}
-          >
-            {activeProject && activeWorkspace ? (
-              <TerminalArea cwd={cwd} />
-            ) : (
-              <div
-                className="relative flex h-full w-full flex-1 items-center justify-center overflow-hidden"
-                data-toast-host="workspace"
-              >
-                <div className="text-center">
-                  <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">
-                    Add a workspace to get started
-                  </p>
-                </div>
-              </div>
-            )}
-          </Layout>
+          {/* Agents and Home share this one shell (Home = Home roster in
+              the sidebar; same top bar, drawers, and room). */}
+          <AgentsShell activeProject={activeProject} activeWorkspace={activeWorkspace} cwd={cwd} />
         </div>
       )}
 
@@ -1082,7 +1000,7 @@ function AppRoot(): React.JSX.Element {
       <CloneToDialog />
       <CommandPalette />
       {!settingsOpen && <RunningAgentsPanel />}
-      {!settingsOpen && <HomePage />}
+      {!settingsOpen && page === 'home' && <HomeShellEffects />}
       {!settingsOpen && <FeedbackPage />}
       {!settingsOpen && <ProjectsPage />}
       {!settingsOpen && <WikiPage />}

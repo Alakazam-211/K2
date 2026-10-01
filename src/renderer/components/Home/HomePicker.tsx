@@ -1,4 +1,6 @@
-// Home P1 (vs-live H12/H13) — the Home picker in the page header.
+// Home P1 (vs-live H12/H13) — the Home picker at the top of the Home
+// sidebar, in the spot (and the look) of the Agents sidebar's focus-group
+// dropdown (`Sidebar/FocusGroupDropdown`).
 //
 // One Home tab on the top switcher; which Home is showing is picked here
 // (a user-named tab per Home would have no width limit). Create, rename,
@@ -64,52 +66,70 @@ export default function HomePicker(): React.JSX.Element {
     if (confirmed) useHomesStore.getState().deleteHome(current.id)
   }
 
+  // Same classes as FocusGroupDropdown's options.
   const itemClass =
-    'no-drag w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent'
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    <div ref={rootRef} className="relative no-drag">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="no-drag flex max-w-full items-center gap-1.5 px-2 py-1 text-sm font-medium text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer"
+        className="w-full flex items-center gap-2 px-2 py-1.5 text-left bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
         title="Pick a Home"
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="truncate">{current.name}</span>
-        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0 text-[var(--color-text-muted)]">
-          <path d="M2 3.5l3 3 3-3" />
+        <span className="text-[11px] font-semibold text-[var(--color-text-primary)] uppercase tracking-wide truncate flex-1">
+          {current.name}
+        </span>
+        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono flex-shrink-0">
+          {current.rows.length}
+        </span>
+        <svg
+          className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
 
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-30 mt-1 w-64 max-w-[calc(100vw-32px)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-lg"
+          className="absolute top-full left-0 right-0 z-50 mt-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {mode === 'menu' ? (
             <>
-              <div className="max-h-64 overflow-y-auto">
-                {homes.map((h) => (
-                  <button
-                    key={h.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={h.id === current.id}
-                    className={`${itemClass} flex items-center gap-2`}
-                    onClick={() => {
-                      useHomesStore.getState().selectHome(h.id)
-                      setOpen(false)
-                    }}
-                  >
-                    <span className="w-3 flex-shrink-0 text-[var(--color-accent)]">{h.id === current.id ? '✓' : ''}</span>
-                    <span className="truncate flex-1">{h.name}</span>
-                    <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">{h.rows.length}</span>
-                  </button>
-                ))}
+              <div className="max-h-48 overflow-y-auto py-0.5">
+                {homes.map((h) => {
+                  const isCurrent = h.id === current.id
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={isCurrent}
+                      className={`${itemClass} ${isCurrent ? '!text-[var(--color-accent)]' : ''}`}
+                      onClick={() => {
+                        useHomesStore.getState().selectHome(h.id)
+                        setOpen(false)
+                      }}
+                    >
+                      <span className="w-2 flex-shrink-0" />
+                      <span className="truncate flex-1">{h.name}</span>
+                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)] tabular-nums">{h.rows.length}</span>
+                      {isCurrent && (
+                        <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
-              <div className="my-1 border-t border-[var(--color-border)]" />
+              <div className="border-t border-[var(--color-border)]" />
+              <div className="py-0.5">
               <button type="button" role="menuitem" className={itemClass} onClick={startCreate}>
                 New Home…
               </button>
@@ -126,6 +146,7 @@ export default function HomePicker(): React.JSX.Element {
               >
                 Delete “{current.name}”
               </button>
+              </div>
             </>
           ) : (
             <form

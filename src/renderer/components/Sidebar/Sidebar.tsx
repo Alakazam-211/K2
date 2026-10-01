@@ -96,7 +96,7 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
 // ── Agent status (shows spinner when agent is working) ───────────────────────
 
 /** 14px slot always — glyph only (braille / "done" / empty). Never unmount. */
-function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element {
+export function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element {
   const projectStatus = useActiveAgentsStore((s) => s.getProjectStatus(projectId))
   const working = projectStatus === 'working' || projectStatus === 'permission'
   const review = projectStatus === 'review'
@@ -178,7 +178,65 @@ const NavWorktreeRow = React.memo(function NavWorktreeRow({
   )
 })
 
-function SingleProjectItem({
+// ── Agent row shell (one workspace / agent in the nav) ──────────────────────
+
+/** The nav row every agent list paints: 32px avatar, name + presence on
+ *  the first line, a 14px second line (tags, working glyph, shortcut).
+ *  Agents' `SingleProjectItem` and the Home roster both render through it
+ *  so the two sidebars stay one look. */
+export function AgentRowButton({
+  isActive,
+  color,
+  avatar,
+  name,
+  nameAside,
+  subline,
+  onClick,
+  onContextMenu,
+  title,
+  dimmed = false,
+}: {
+  isActive: boolean
+  color: string
+  avatar: React.ReactNode
+  name: string
+  nameAside?: React.ReactNode
+  subline?: React.ReactNode
+  onClick: () => void
+  onContextMenu: (e: React.MouseEvent) => void
+  title?: string
+  /** Paint the row muted (an agent whose server is offline). */
+  dimmed?: boolean
+}): React.JSX.Element {
+  return (
+    <button
+      className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
+        isActive
+          ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
+          : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+      }${dimmed ? ' opacity-60' : ''}`}
+      style={{
+        borderLeft: isActive ? `2px solid ${color}` : '2px solid transparent'
+      }}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      title={title}
+      aria-current={isActive ? 'true' : undefined}
+      data-agent-row=""
+    >
+      <div className="flex items-center flex-shrink-0">{avatar}</div>
+      <div className="flex flex-col justify-center min-w-0 flex-1">
+        <div className="flex items-center gap-2 w-full leading-4">
+          <span className="truncate flex-1 leading-4">{name}</span>
+          <span className="-mr-1 flex items-center">{nameAside}</span>
+        </div>
+        <div className="h-3.5 min-h-3.5 leading-none flex items-center gap-1">{subline}</div>
+      </div>
+    </button>
+  )
+}
+
+export function SingleProjectItem({
   project,
   isActive,
   onContextMenu,
@@ -209,19 +267,12 @@ function SingleProjectItem({
 
   return (
     <div className="no-drag">
-      <button
-        className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-          isItemActive
-            ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-            : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
-        }`}
-        style={{
-          borderLeft: isItemActive ? `2px solid ${project.color}` : '2px solid transparent'
-        }}
+      <AgentRowButton
+        isActive={!!isItemActive}
+        color={project.color}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, project.id)}
-      >
-        <div className="flex items-center flex-shrink-0">
+        avatar={
           <ProjectAvatar
             projectPath={project.path}
             projectName={project.name}
@@ -230,15 +281,11 @@ function SingleProjectItem({
             iconUrl={project.iconUrl}
             size={32}
           />
-        </div>
-        <div className="flex flex-col justify-center min-w-0 flex-1">
-          <div className="flex items-center gap-2 w-full leading-4">
-            <span className="truncate flex-1 leading-4">{project.name}</span>
-            <span className="-mr-1 flex items-center">
-              <PresenceWorkspaceAvatars path={project.path} />
-            </span>
-          </div>
-          <div className="h-3.5 min-h-3.5 leading-none flex items-center gap-1">
+        }
+        name={project.name}
+        nameAside={<PresenceWorkspaceAvatars path={project.path} />}
+        subline={
+          <>
             <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
             {shortcutIndex !== undefined && shortcutIndex < 9 && (
@@ -246,9 +293,9 @@ function SingleProjectItem({
                 {shortcutIndex + 1}
               </span>
             )}
-          </div>
-        </div>
-      </button>
+          </>
+        }
+      />
       {visibleWorktrees.map((ws) => (
         <NavWorktreeRow
           key={ws.id}

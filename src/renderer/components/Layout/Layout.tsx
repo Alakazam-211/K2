@@ -8,6 +8,9 @@ import { usePanelsStore } from '../../stores/panels'
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
   sidebar?: ReactNode
+  /** Collapsed-sidebar rail. Defaults to the workspaces IconRail; Home
+   *  passes its roster rail (same chrome, Home rows). */
+  rail?: ReactNode
   /** Content for the left auxiliary panel */
   leftPanel?: ReactNode
   /** Content for the right auxiliary panel */
@@ -22,6 +25,7 @@ interface LayoutProps {
 
 export default function Layout({
   sidebar,
+  rail,
   leftPanel,
   rightPanel,
   children,
@@ -53,7 +57,7 @@ export default function Layout({
       <div className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {/* Primary sidebar: icon rail (always) + expanded panel (when not collapsed) */}
         {isCollapsed ? (
-          <IconRail />
+          rail ?? <IconRail />
         ) : (
           <>
             {/* The Sidebar's painted surface — Sidebar.tsx's own root is

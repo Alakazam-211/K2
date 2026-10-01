@@ -47,7 +47,7 @@ vi.mock('@/stores/projects', () => ({
 }))
 
 import PageTabs from './PageTabs'
-import { usePageViewStore } from '@/stores/page-view'
+import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
 afterEach(() => {
   cleanup()
@@ -86,5 +86,27 @@ describe('PageTabs — Home tab', () => {
     fireEvent.click(tabs(container)[1])
     expect(h.settings.closeSettings).toHaveBeenCalledTimes(1)
     expect(usePageViewStore.getState().page).toBe('home')
+  })
+
+  it('Home and Agents are the two room pages (one shell); the overlays are not', () => {
+    const all: AppPage[] = ['home', 'agents', 'projects', 'feedback', 'wiki']
+    expect(all.filter(isRoomPage)).toEqual(['home', 'agents'])
+  })
+
+  it('Agents → Home → Agents keeps the room shell on screen the whole way', () => {
+    const { container } = render(<PageTabs />)
+    const seen: boolean[] = []
+    fireEvent.click(tabs(container)[2])
+    seen.push(isRoomPage(usePageViewStore.getState().page))
+    fireEvent.click(tabs(container)[1])
+    expect(usePageViewStore.getState().page).toBe('home')
+    seen.push(isRoomPage(usePageViewStore.getState().page))
+    fireEvent.click(tabs(container)[2])
+    expect(usePageViewStore.getState().page).toBe('agents')
+    seen.push(isRoomPage(usePageViewStore.getState().page))
+    fireEvent.click(tabs(container)[3])
+    expect(usePageViewStore.getState().page).toBe('projects')
+    seen.push(isRoomPage(usePageViewStore.getState().page))
+    expect(seen).toEqual([true, true, true, false])
   })
 })

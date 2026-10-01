@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
-import { usePageViewStore, type AppPage } from '@/stores/page-view'
+import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useContextMenuStore } from '@/stores/context-menu'
@@ -115,7 +115,7 @@ export function browserPaneVisible(input: {
   windowFocused: boolean
 }): boolean {
   if (input.standalone) return true
-  const workspaceCovered = input.settingsOpen || input.page !== 'agents'
+  const workspaceCovered = input.settingsOpen || !isRoomPage(input.page)
   return input.tabVisible && !workspaceCovered
 }
 

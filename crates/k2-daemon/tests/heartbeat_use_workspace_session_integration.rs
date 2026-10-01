@@ -508,3 +508,87 @@ async fn chat_tab_and_heartbeat_register_under_separate_canonical_keys() {
     drop(conn);
     v2_session_map::clear_for_tests();
 }
+
+/// Heartbeat S3 T7 (HB23): the pinned-chat `deliver_live` fire — the
+/// default for new rows — used to emit nothing, so the drawer kept a
+/// stale `lastFired` and showed "now" one interval later. It now emits
+/// `heartbeat_roster_changed` for the workspace, and a refetched list
+/// carries the new `lastFired` and the next fire after it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pinned_fire_emits_roster_changed_and_list_carries_next_fire() {
+    use k2_daemon::session_events::{subscribe, SessionEvent};
+
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _cmd_guard = TestCommandGuard::set("cat");
+
+    let workspace_id = "hb-uws-ws-s3";
+    let project = setup_project(workspace_id);
+    write_primary_agent(&project, "manager");
+    let project_path = project.to_string_lossy().into_owned();
+    let wakeup_rel = write_wakeup(&project, "pinned-hb", "the wakeup body\n");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // AgentHeartbeat::insert defaults use_workspace_session = 1 (D22).
+        AgentHeartbeat::insert(
+            &conn,
+            "pinned-hb-id",
+            workspace_id,
+            "pinned-hb",
+            "hourly",
+            r#"{"every_seconds":900}"#,
+            &wakeup_rel,
+            true,
+        )
+        .expect("seed heartbeat");
+    }
+
+    let mut rx = subscribe();
+    let result = k2_daemon::heartbeat_launch::smart_launch(&project_path, "pinned-hb");
+    assert_eq!(
+        result.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "pinned fire should succeed; got {result}"
+    );
+    let branch = result.get("branch").and_then(|v| v.as_str()).expect("branch");
+    assert!(branch.starts_with("workspace_session:"), "pinned path: {branch}");
+
+    // The guard emits synchronously when smart_launch returns; drain
+    // what is buffered and look for this workspace's roster nudge.
+    let mut saw = false;
+    loop {
+        match rx.try_recv() {
+            Ok(SessionEvent::HeartbeatRosterChanged { workspace_path, project_id }) => {
+                if workspace_path == project_path {
+                    assert_eq!(project_id, workspace_id);
+                    saw = true;
+                }
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(saw, "a pinned-chat fire must emit heartbeat_roster_changed for its workspace");
+
+    let rows = k2_core::heartbeats::k2so_heartbeat_list(project_path.clone())
+        .expect("refetch the list");
+    let hb = rows.iter().find(|r| r.name == "pinned-hb").expect("row listed");
+    let last = chrono::DateTime::parse_from_rfc3339(hb.last_fired.as_deref().expect("lastFired"))
+        .expect("lastFired RFC3339")
+        .with_timezone(&chrono::Utc);
+    assert_eq!(
+        hb.next_fire_at.as_deref(),
+        Some(
+            (last + chrono::Duration::seconds(900))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                .as_str()
+        ),
+        "refetched list carries nextFireAt = lastFired + every_seconds"
+    );
+    assert_eq!(hb.wait_reason.as_deref(), Some("scheduled"));
+
+    v2_session_map::clear_for_tests();
+}

@@ -381,13 +381,15 @@ pub enum SessionEvent {
         live: bool,
     },
 
-    /// Heartbeat-drawer live-update fix — a project's heartbeat ROSTER
-    /// mutated (a row was added / removed / archived / unarchived /
-    /// enabled / disabled / edited / renamed / delivery re-targeted).
-    /// WORKSPACE-SCOPED. Emitted after every SUCCESSFUL heartbeat CRUD
-    /// mutation in `heartbeat_routes::dispatch_get` so a list rendered in
-    /// another client (sidebar drawer, Settings) converges without a
-    /// revisit. Deliberately carries NO row data (the ProjectsChanged
+    /// "Re-fetch your heartbeat list" for one workspace. WORKSPACE-SCOPED.
+    /// Emitted after every SUCCESSFUL heartbeat CRUD mutation in
+    /// `heartbeat_routes::dispatch_get`, AND (heartbeat S3, HB23) after
+    /// any write that changes a row's `last_fired`, `next_fire_at`,
+    /// `wait_reason` or `enabled`: every fire outcome including the
+    /// pinned-chat `deliver_live` success, every failure / backoff, every
+    /// auto-disable, the tick, and the daemon's wait pass
+    /// (`heartbeat_wait`). A list rendered in another client (sidebar
+    /// drawer, Settings) converges without a revisit. Deliberately carries NO row data (the ProjectsChanged
     /// convention): it's a "re-fetch your list" nudge that stays honest
     /// for any mutation source. Live (PTY) flips are NOT roster changes —
     /// those keep riding [`SessionEvent::HeartbeatStateChanged`].

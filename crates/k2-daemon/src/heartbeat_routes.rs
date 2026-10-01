@@ -293,6 +293,67 @@ mod fire_disabled_gate_tests {
             .collect()
     }
 
+    /// Heartbeat S3 T-S3d (HB21, HB24): `heartbeat/list` returns the
+    /// stored `nextFireAt` / `waitReason`, and overlays `no_ticks` at
+    /// read time when the row is overdue and the daemon ticker (S2,
+    /// `last_daemon_tick_at`) has not ticked for over 180 s. The stored
+    /// `wait_reason` is not rewritten.
+    #[test]
+    fn list_returns_next_fire_and_overlays_no_ticks_at_read_time() {
+        use k2_core::db::schema::SchedulerMeta;
+        let path = seed("s3-no-ticks", true, false);
+        let now = chrono::Utc::now();
+        let next = (now - chrono::Duration::minutes(5))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let tick = (now - chrono::Duration::minutes(10))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let project_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let pid = k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+                .expect("seeded project resolves");
+            AgentHeartbeat::set_wait_state(
+                &conn, &pid, "hb", Some(&next), "overdue", Some("not_fired"), &tick,
+            )
+            .expect("store wait state");
+            SchedulerMeta::set(&conn, SchedulerMeta::LAST_DAEMON_TICK_AT, &tick).unwrap();
+            pid
+        };
+
+        let body = dispatch_get("/cli/heartbeat/list", &path, &params(&[]))
+            .expect("list succeeds");
+        let rows: serde_json::Value = serde_json::from_str(&body).expect("list is JSON");
+        let row = rows
+            .as_array()
+            .expect("list is an array")
+            .iter()
+            .find(|r| r["name"] == "hb")
+            .expect("seeded row listed");
+        assert_eq!(row["nextFireAt"], serde_json::json!(next));
+        assert_eq!(row["waitReason"], "no_ticks", "row: {row}");
+        assert_eq!(row["waitSince"], serde_json::json!(tick));
+        assert!(
+            row["waitDetail"].as_str().expect("waitDetail").contains(&tick),
+            "detail names the last tick: {row}"
+        );
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let stored = AgentHeartbeat::get_by_name(&conn, &project_id, "hb")
+            .unwrap()
+            .expect("row");
+        assert_eq!(stored.wait_reason.as_deref(), Some("overdue"), "no_ticks is never stored");
+
+        // A fresh daemon tick: the overlay goes away and the stored reason shows.
+        let fresh = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        SchedulerMeta::set(&conn, SchedulerMeta::LAST_DAEMON_TICK_AT, &fresh).unwrap();
+        drop(conn);
+        let body = dispatch_get("/cli/heartbeat/list", &path, &params(&[])).expect("list");
+        let rows: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        let row = rows.as_array().unwrap().iter().find(|r| r["name"] == "hb").unwrap();
+        assert_eq!(row["waitReason"], "overdue");
+    }
+
     #[test]
     fn fire_refuses_disabled_heartbeat_without_force() {
         let path = seed("disabled", false, false);

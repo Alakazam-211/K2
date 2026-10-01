@@ -135,7 +135,11 @@ fn add_route_writes_instructions_on_the_daemon_disk() {
     let abs = out["wakeupAbs"].as_str().expect("wakeupAbs").to_string();
     assert_eq!(body_of(&abs), "check inbox");
     assert_eq!(out["instructionsWritten"], serde_json::json!(true));
-    assert_eq!(listed(&ws, "with-body")["waitReason"], serde_json::Value::Null);
+    // S3: the stored reason is the single source — a row with a body in
+    // a workspace with an agent is simply `scheduled`, with a next fire.
+    let with_body = listed(&ws, "with-body");
+    assert_eq!(with_body["waitReason"], serde_json::json!("scheduled"), "{with_body}");
+    assert!(with_body["nextFireAt"].is_string(), "{with_body}");
 
     let (status, out) = dispatch(
         "/cli/heartbeat/add",

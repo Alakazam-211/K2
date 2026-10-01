@@ -59,6 +59,7 @@ pub mod git_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
 pub mod heartbeat_routes;
+pub mod heartbeat_wait;
 pub mod power;
 pub mod inbox_routes;
 pub mod wiki_routes;

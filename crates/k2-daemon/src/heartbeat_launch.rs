@@ -103,6 +103,9 @@ fn smart_launch_checked(
     catchup_of: Option<&str>,
     check: LeaseCheck<'_>,
 ) -> serde_json::Value {
+    // Heartbeat S3 (HB19/HB23): on every return below, re-derive the
+    // stored next_fire_at / wait_reason and emit heartbeat_roster_changed.
+    let _s3_outcome = crate::heartbeat_wait::FireOutcomeGuard::new(project_path, name);
     if name.is_empty() {
         return error_value("error", "missing 'name' parameter", name);
     }
@@ -1049,6 +1052,8 @@ pub(crate) fn force_release_hung_lease(
              in-flight lease force-released by the watchdog"
         ),
     );
+    // Heartbeat S3 (HB19/HB23): this failure runs outside smart_launch.
+    crate::heartbeat_wait::refresh_and_emit(project_path);
     true
 }
 
@@ -1086,6 +1091,8 @@ pub fn release_after_panic(project_path: &str, hb_name: &str, panic_text: &str) 
         &hb,
         &format!("launch panicked: {panic_text}"),
     );
+    // Heartbeat S3 (HB19/HB23): this failure runs outside smart_launch.
+    crate::heartbeat_wait::refresh_and_emit(project_path);
     true
 }
 

@@ -78,6 +78,7 @@ mod git_routes;
 mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;
+mod heartbeat_wait;
 mod power;
 mod inbox_routes;
 mod wiki_routes;
@@ -1272,6 +1273,12 @@ async fn async_main() {
     // silently-missing dev.k2.heartbeat agent). Spawned after the
     // readiness gate so the scan runs against fully-migrated state.
     let _heartbeat_monitor_handle = heartbeat_monitor::spawn();
+
+    // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored
+    // next_fire_at + wait_reason at boot, then runs the overdue
+    // watchdog every 60 s. Its own task — it must keep reporting even
+    // when the tick it watches has stopped.
+    let _heartbeat_wait_handle = heartbeat_wait::spawn();
 
     // Federation outbox drain (audit finding #5 — the retry loop the durable
     // outbox promised). Sweeps queued cross-server messages to reachable

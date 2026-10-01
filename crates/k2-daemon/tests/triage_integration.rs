@@ -320,3 +320,161 @@ async fn tick_stamps_name_their_source() {
     assert_eq!(meta(SchedulerMeta::LAST_OS_TICK_AT).as_deref(), Some(old));
     assert_eq!(meta(SchedulerMeta::LAST_DAEMON_TICK_AT).as_deref(), Some(old));
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Heartbeat S3 — stored wait reasons + the overdue watchdog (T5, HB19, HB22)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Seed one hourly heartbeat (every 60 s) with a real WAKEUP.md body.
+/// `created_ago_secs` back-dates `created_at`, which (never fired) is
+/// the reference its first slot counts from.
+fn seed_heartbeat(project: &Path, project_id: &str, name: &str, created_ago_secs: i64) {
+    let rel = format!(".k2/heartbeats/{name}/WAKEUP.md");
+    let abs = project.join(&rel);
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    std::fs::write(&abs, "---\ndescription:\n---\n\ncheck the inbox\n").unwrap();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::AgentHeartbeat::insert(
+        &conn,
+        &uuid::Uuid::new_v4().to_string(),
+        project_id,
+        name,
+        "hourly",
+        r#"{"every_seconds":60}"#,
+        &rel,
+        true,
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workspace_heartbeats SET created_at = unixepoch() - ?1 \
+         WHERE project_id = ?2 AND name = ?3",
+        rusqlite::params![created_ago_secs, project_id, name],
+    )
+    .unwrap();
+}
+
+fn hb_row(project_id: &str, name: &str) -> k2_core::db::schema::AgentHeartbeat {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::AgentHeartbeat::get_by_name(&conn, project_id, name)
+        .unwrap()
+        .expect("heartbeat row")
+}
+
+fn overdue_rows(project_id: &str, name: &str) -> Vec<k2_core::db::schema::HeartbeatFire> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::HeartbeatFire::list_by_schedule_name(&conn, project_id, name, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.decision == "overdue")
+        .collect()
+}
+
+/// T5 — a workspace with no resolvable agent name. Pre-S3 the due scan
+/// skipped every heartbeat there silently, with no audit (research S4).
+/// Now one tick stores `no_agent`; once the slot is >120 s past, two
+/// passes write exactly ONE `overdue` row, naming the `no_agent` gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_agent_is_named_and_overdue_audits_once_per_episode() {
+    let _g = lock();
+    init_for_tests();
+    clear_projects();
+    drain_session_map();
+
+    let proj = tmp_project_dir("s3-no-agent");
+    let proj_str = proj.to_string_lossy().into_owned();
+    // agent_enabled = 0 and no AGENT.md → resolve_agent_name is None.
+    let pid = seed_project(&proj_str, "on");
+    seed_heartbeat(&proj, &pid, "nag", 10);
+
+    let body = triage::handle_scheduler_fire(&proj_str);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["heartbeats"], serde_json::json!([]), "no agent → nothing fires");
+    let hb = hb_row(&pid, "nag");
+    assert_eq!(hb.wait_reason.as_deref(), Some("no_agent"), "one tick names the gate");
+    assert!(hb.next_fire_at.is_some(), "the slot is still stored");
+    assert!(overdue_rows(&pid, "nag").is_empty(), "not overdue yet");
+
+    // The slot is now 340 s past.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE workspace_heartbeats SET created_at = unixepoch() - 400 \
+             WHERE project_id = ?1 AND name = 'nag'",
+            rusqlite::params![pid],
+        )
+        .unwrap();
+    }
+    k2_daemon::heartbeat_wait::run_pass();
+    k2_daemon::heartbeat_wait::run_pass();
+    let _ = triage::handle_scheduler_fire(&proj_str);
+
+    let rows = overdue_rows(&pid, "nag");
+    assert_eq!(rows.len(), 1, "exactly one overdue row per episode: {rows:?}");
+    let reason = rows[0].reason.as_deref().expect("overdue row carries a reason");
+    assert!(reason.contains("no_agent"), "the audit names the gate: {reason}");
+    let hb = hb_row(&pid, "nag");
+    assert_eq!(
+        hb.wait_reason.as_deref(),
+        Some("no_agent"),
+        "a more specific reason is kept, not replaced by overdue"
+    );
+    assert!(hb.overdue_noted_at.is_some(), "the episode is open");
+
+    clear_projects();
+}
+
+/// HB22 + HB4 — an agent-ready row whose slot passed while nothing
+/// ticked: the wait pass stores `overdue`, its detail and the one audit
+/// row name the `no_ticks` gate; a fire closes the episode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overdue_without_ticks_names_no_ticks_and_a_fire_closes_the_episode() {
+    use k2_core::db::schema::SchedulerMeta;
+    let _g = lock();
+    init_for_tests();
+    clear_projects();
+    drain_session_map();
+
+    let proj = tmp_project_dir("s3-no-ticks");
+    let proj_str = proj.to_string_lossy().into_owned();
+    let pid = seed_project(&proj_str, "on");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agent_enabled = 1 WHERE id = ?1", rusqlite::params![pid])
+            .unwrap();
+    }
+    seed_heartbeat(&proj, &pid, "late", 400);
+    let old = "2000-01-01T00:00:00+00:00";
+    set_meta(SchedulerMeta::LAST_OS_TICK_AT, old);
+    set_meta(SchedulerMeta::LAST_DAEMON_TICK_AT, old);
+
+    k2_daemon::heartbeat_wait::run_pass();
+    k2_daemon::heartbeat_wait::run_pass();
+
+    let hb = hb_row(&pid, "late");
+    assert_eq!(hb.wait_reason.as_deref(), Some("overdue"), "row: {hb:?}");
+    let detail = hb.wait_detail.as_deref().expect("overdue detail");
+    assert!(detail.starts_with("no_ticks"), "detail names the gate: {detail}");
+    let rows = overdue_rows(&pid, "late");
+    assert_eq!(rows.len(), 1, "one overdue row: {rows:?}");
+    assert!(rows[0].reason.as_deref().expect("reason").contains("no_ticks"));
+
+    // The heartbeat fires (stamp as the launcher does on success).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::AgentHeartbeat::stamp_fired_and_release(&conn, &pid, "late")
+            .unwrap();
+    }
+    k2_daemon::heartbeat_wait::run_pass();
+    let hb = hb_row(&pid, "late");
+    assert_eq!(hb.wait_reason.as_deref(), Some("scheduled"));
+    assert_eq!(hb.overdue_noted_at, None, "a fire closes the episode");
+    assert_eq!(overdue_rows(&pid, "late").len(), 1, "no new overdue row");
+
+    clear_projects();
+}

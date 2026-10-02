@@ -2731,13 +2731,13 @@ agent now carries its own identity.
   server or per workspace, in Settings → K2 Connect. Creating or deleting
   whole zones stays a human-only action.
 
-- **Every agent gets its own secure identity.** Under the hood, each agent
-  session now carries an unforgeable credential that K2 issues the moment
-  the session starts — so a capability you grant one agent can't be
-  borrowed by another, even on the same machine. This is what makes
-  handing an agent real power like DNS safe, and it's the foundation the
-  rest of the permission system now builds on. Nothing to configure; it
-  just works.
+- **Every agent gets its own identity.** Under the hood, each agent
+  session now carries its own credential that K2 issues the moment the
+  session starts, so the daemon knows which agent is asking and applies
+  that agent's grants, like DNS, to that session only. Agents on one
+  machine still run as the same OS user, so this is identity and
+  attribution, not isolation between agents. It's the foundation the rest
+  of the permission system builds on. Nothing to configure.
 
 - **A cleaner CLI contract for agents.** `k2 publish` now speaks `--json`
   like `k2 dns`, `k2 mail`, and `k2 tunnel` do, and help text, error

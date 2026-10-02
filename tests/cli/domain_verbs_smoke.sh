@@ -25,7 +25,7 @@ assert_eq() {
 }
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else
@@ -108,7 +108,7 @@ assert_eq "cert issue missing hostname exit" "$rc" "2"
 assert_contains "cert issue usage" "$out" "usage"
 
 echo "== schema =="
-schema="$("$K2_CLI" --schema 2>/dev/null || true)"
+schema="$("$K2_CLI" --schema)"
 assert_contains "schema has domain add" "$schema" '"name": "domain add"'
 assert_contains "schema has cert list" "$schema" '"name": "cert list"'
 

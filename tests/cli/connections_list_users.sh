@@ -56,7 +56,7 @@ rm -f /tmp/k2-conn-users-out.$$ /tmp/k2-conn-users-err.$$
 
 echo "== schema =="
 schema_file="$(mktemp -t k2-conn-schema-XXXXXX)"
-"$K2_CLI" --schema >"$schema_file" 2>/dev/null || true
+"$K2_CLI" --schema >"$schema_file"
 if grep -Fq -- '"name": "connections list"' "$schema_file"; then
     echo "  PASS: schema has connections list"
     pass=$((pass + 1))

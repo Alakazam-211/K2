@@ -35,7 +35,7 @@ assert_eq() {
 }
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else
@@ -91,7 +91,7 @@ echo "1" >"$HOME/.k2/heartbeat.port"
 echo "owner-token" >"$HOME/.k2/heartbeat.token"
 chmod 600 "$HOME/.k2/heartbeat.token"
 
-schema_out="$("$K2_CLI" --schema 2>/dev/null || true)"
+schema_out="$("$K2_CLI" --schema)"
 assert_contains "schema has dns access" "$schema_out" '"name": "dns access"'
 assert_contains "schema has dns record add" "$schema_out" '"name": "dns record add"'
 assert_contains "schema mentions exit 3 / Settings" "$schema_out" 'Settings'

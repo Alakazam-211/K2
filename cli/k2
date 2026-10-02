@@ -13011,13 +13011,19 @@ EOF
 #   every internal/deprecated arm. See the report note re: a generated
 #   approach (feasible later via a router+help introspection pass).
 cmd_schema() {
-    # Unquoted heredoc so $K2_CLI_VERSION expands; the JSON below
-    # deliberately avoids other `$` and backticks so nothing else is
-    # interpolated. Validate with: k2 --schema | python3 -m json.tool
-    cat <<EOF
-{
-  "tool": "k2",
-  "version": "$K2_CLI_VERSION",
+    # The manifest body is a QUOTED heredoc (<<'EOF'), so nothing in it is
+    # interpolated: backticks, `$`, and `\\` are literal bytes and the body
+    # is exactly the JSON written here. Write `\\` for one JSON backslash;
+    # never write `\$`. The only dynamic value (the version) is printed by
+    # printf, JSON-escaped, before the body. This was once an unquoted
+    # heredoc: backtick spans ran as commands and `\\` collapsed into
+    # invalid JSON escapes.
+    # Test: tests/cli/schema_json.sh (parses the full output; stderr empty).
+    local _v="$K2_CLI_VERSION"
+    _v="${_v//\\/\\\\}"
+    _v="${_v//\"/\\\"}"
+    printf '{\n  "tool": "k2",\n  "version": "%s",\n' "$_v"
+    cat <<'EOF'
   "description": "Agent interface to K2 workspace orchestration (talks to the local K2 daemon over HTTP).",
   "schema_note": "Static hand-maintained manifest of the agent-facing command surface. Run 'k2 help <verb>' for full prose.",
   "addressing": "Most verbs take a <workspace> as a NAME (preferred; see 'k2 connections list'), an absolute path, or a project UUID.",
@@ -13388,7 +13394,7 @@ cmd_schema() {
         {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
         {"name": "--assign", "arg": "users", "description": "Comma-separated usernames to assign at create (owner and/or connect-user names). Alias: --to. Prefer this when you know who should handle the ticket."},
-        {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for \$(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
+        {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
         {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -14930,7 +14936,7 @@ cmd_schema() {
       "description": "Owner/admin Remote Session surface: Layer 0 master switch, shell grants (k2rs_ token shown once), grant-bound shell PTY spawn, terminal write/read. Defaults OFF. Locked id tool.",
       "args": [],
       "flags": [
-        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token / \$K2_REMOTE_TOKEN)."},
+        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token / $K2_REMOTE_TOKEN)."},
         {"name": "--token", "arg": "TOK", "description": "Owner/connect token (admin) or k2rs_ grant token (drive)."},
         {"name": "--json", "arg": null, "description": "JSON output for status/grants."}
       ]

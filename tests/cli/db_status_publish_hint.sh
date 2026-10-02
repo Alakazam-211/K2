@@ -15,9 +15,11 @@ echo "$help_out" | grep -qi 'static ip' && fail "k2 db --help must not mention s
 # No expose subcommand (help may say there isn't one).
 echo "$help_out" | grep -E '^  expose' && fail "k2 db --help must not list an expose verb"
 
-schema="$("$K2" --schema 2>/dev/null || true)"
-if [ -n "$schema" ]; then
-    echo "$schema" | grep -q 'publish subdomain' || fail "k2 --schema db status must mention publish subdomain"
-fi
+schema="$("$K2" --schema)"
+[ -n "$schema" ] || fail "k2 --schema printed nothing"
+case "$schema" in
+    *'publish subdomain'*) ;;
+    *) fail "k2 --schema db status must mention publish subdomain" ;;
+esac
 
 echo "PASS: db status publish hint"

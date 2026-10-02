@@ -14,7 +14,7 @@ pass=0
 fail=0
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else
@@ -24,7 +24,7 @@ assert_contains() {
 }
 assert_absent() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  FAIL: $label (unexpected $(printf %q "$needle"))" >&2
         fail=$((fail + 1))
     else
@@ -64,12 +64,12 @@ assert_contains "daily --inbox-wake is send file + knock" "$daily" "Send file + 
 assert_contains "daily inbox is receive" "$daily" "YOUR tray — receive/triage"
 assert_absent "daily inbox is not email-like" "$daily" "email-like"
 
-echo "== k2 --schema msg (source) =="
-# Grep the CLI source: `k2 --schema` JSON currently contains a pre-existing
-# unescaped newline elsewhere, so dumping it is a brittle way to pin copy.
-assert_contains "schema files use --inbox-wake" "$(grep -F 'For files use --inbox-wake' "$K2_CLI" || true)" "For files use --inbox-wake"
-assert_contains "schema live text is SHORT" "$(grep -F 'Live text is SHORT' "$K2_CLI" || true)" "Live text is SHORT"
-assert_contains "schema not k2 mail" "$(grep -F 'Not k2 mail' "$K2_CLI" || true)" "Not k2 mail"
+echo "== k2 --schema msg =="
+# Real output (valid JSON is pinned by schema_json.sh).
+schema="$("$K2_CLI" --schema)"
+assert_contains "schema files use --inbox-wake" "$schema" "For files use --inbox-wake"
+assert_contains "schema live text is SHORT" "$schema" "Live text is SHORT"
+assert_contains "schema not k2 mail" "$schema" "Not k2 mail"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

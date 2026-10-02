@@ -142,7 +142,7 @@ assert_eq "k2 app-token is unknown" "$app_token_hyphen_rc" "1"
 assert_contains "app-token unknown command" "$app_token_hyphen" "Unknown command: app-token"
 
 echo "== schema family app + leftover skin / skin-token; no app-token =="
-schema="$("$K2_CLI" --schema 2>/dev/null || true)"
+schema="$("$K2_CLI" --schema)"
 assert_contains "schema name app" "$schema" '"name": "app"'
 assert_contains "schema name app token" "$schema" '"name": "app token"'
 assert_contains "schema leftover skin" "$schema" '"name": "skin"'

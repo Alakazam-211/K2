@@ -94,7 +94,7 @@ chmod 600 "$HOME/.k2/heartbeat.token"
 
 # ── 2. Schema ────────────────────────────────────────────────────────
 echo "== schema =="
-schema_out="$("$K2_CLI" --schema 2>/dev/null || true)"
+schema_out="$("$K2_CLI" --schema)"
 assert_contains "schema has agent context" "$schema_out" '"name": "agent context"'
 assert_contains "schema has agent context list" "$schema_out" '"name": "agent context list"'
 assert_contains "schema has agent context add" "$schema_out" '"name": "agent context add"'

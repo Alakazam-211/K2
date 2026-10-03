@@ -6,33 +6,40 @@ import { primaryScope } from '@/kessel/server-scope'
 // Heartbeat S6 — Keep awake is a setting of the window's server (the
 // machine that should stay awake), like Settings. The daemon owns the
 // mode and the truth; this store only reads and sends gestures.
+//
+// Power-helper S1: the mode and "Also with the lid closed" never show the
+// admin dialog. Only Set up does, and the daemon allows it only for an
+// Admin or Owner at the host itself.
 
 interface KeepAwakeStore {
   /** `null` until the server answers (an older server never does). */
   status: KeepAwakeStatus | null
   error: string | null
-  /** A POST is in flight. On a Mac without the helper it can wait up to
-   *  2 minutes for the admin dialog. */
+  /** A POST is in flight. */
   busy: boolean
+  /** Set up is in flight: the admin dialog is open on the host (up to 2
+   *  minutes). Nothing else opens it. */
+  settingUp: boolean
   load: () => Promise<void>
+  /** Never shows a dialog. */
   setMode: (mode: KeepAwakeMode) => Promise<void>
-  /** Show the one admin dialog again after a decline. */
-  approveLid: () => Promise<void>
+  /** "Also with the lid closed". Never shows a dialog. */
+  setLidClosed: (on: boolean) => Promise<void>
+  /** Set up lid closed on the host: the one admin dialog. */
+  setUp: () => Promise<void>
   setOnBattery: (on: boolean) => Promise<void>
 }
 
 export function resetKeepAwakeForTests(): void {
-  useKeepAwakeStore.setState({ status: null, error: null, busy: false })
+  useKeepAwakeStore.setState({ status: null, error: null, busy: false, settingUp: false })
 }
 
 export const useKeepAwakeStore = create<KeepAwakeStore>((set, get) => {
-  async function post(body: Record<string, unknown>): Promise<void> {
+  async function send(route: string, body: Record<string, unknown>): Promise<void> {
     set({ busy: true })
     try {
-      const status = parseKeepAwakeBody(
-        await daemonCliPost<unknown>(primaryScope(), 'power/keep-awake', body),
-      )
-      if (!status) throw new Error('power/keep-awake: response has no keepAwake')
+      const status = parseKeepAwakeBody(await daemonCliPost<unknown>(primaryScope(), route, body))
+      if (!status) throw new Error(`${route}: response has no keepAwake`)
       set({ status, error: null })
     } catch (e) {
       set({ error: String(e) })
@@ -45,6 +52,7 @@ export const useKeepAwakeStore = create<KeepAwakeStore>((set, get) => {
     status: null,
     error: null,
     busy: false,
+    settingUp: false,
 
     load: async () => {
       if (get().busy) return
@@ -57,8 +65,16 @@ export const useKeepAwakeStore = create<KeepAwakeStore>((set, get) => {
       }
     },
 
-    setMode: (mode) => post({ mode }),
-    approveLid: () => post({ approveLid: true }),
-    setOnBattery: (on) => post({ onBattery: on }),
+    setMode: (mode) => send('power/keep-awake', { mode }),
+    setLidClosed: (on) => send('power/keep-awake', { lidClosed: on }),
+    setUp: async () => {
+      set({ settingUp: true })
+      try {
+        await send('power/helper', { action: 'setup' })
+      } finally {
+        set({ settingUp: false })
+      }
+    },
+    setOnBattery: (on) => send('power/keep-awake', { onBattery: on }),
   }
 })

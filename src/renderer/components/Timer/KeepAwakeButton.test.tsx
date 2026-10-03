@@ -61,12 +61,21 @@ function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
     powerSource: { onAc: true, batteryPercent: 90 },
     batteryFloorPercent: 20,
     alsoOnBattery: false,
+    lidClosed: true,
+    lidSwitch: true,
+    lidSetup: 'ready',
+    lidSetupDetail: '',
+    canSetUp: false,
     canApproveLid: false,
     lidDialogDeclined: false,
     platform: 'macos',
     ...over,
   }
 }
+
+const NOT_SET_UP = 'Lid closed will still sleep: the power helper is not set up on this Mac'
+const SET_UP_HINT = 'Set up installs a small helper. macOS asks once for an admin password.'
+const ASK_AN_ADMIN = 'An admin sets up the power helper, in K2 on the host Mac.'
 
 /** One fixture per daemon state, with the daemon's own words. */
 const STATES: { name: string; s: KeepAwakeStatus; tone: string }[] = [
@@ -99,14 +108,43 @@ const STATES: { name: string; s: KeepAwakeStatus; tone: string }[] = [
     tone: 'held',
   },
   {
-    name: 'lid open only (declined)',
+    name: 'lid open only (not set up, local admin)',
     s: status({
       state: 'lid_open_only',
       label: 'Awake (lid open only)',
-      detail: 'Lid closed will still sleep: it needs a one-time admin approval to install a small helper',
+      detail: NOT_SET_UP,
       lidHeld: false,
+      lidSetup: 'needs_setup',
+      lidSetupDetail: SET_UP_HINT,
+      canSetUp: true,
       canApproveLid: true,
-      lidDialogDeclined: true,
+    }),
+    tone: 'held',
+  },
+  {
+    name: 'lid open only (not set up, member or remote)',
+    s: status({
+      state: 'lid_open_only',
+      label: 'Awake (lid open only)',
+      detail: NOT_SET_UP,
+      lidHeld: false,
+      lidSetup: 'needs_setup',
+      lidSetupDetail: ASK_AN_ADMIN,
+    }),
+    tone: 'held',
+  },
+  {
+    name: 'lid open only (switch off)',
+    s: status({
+      state: 'lid_open_only',
+      label: 'Awake (lid open only)',
+      detail: 'Lid closed will still sleep: "Also with the lid closed" is off',
+      lidHeld: false,
+      lidClosed: false,
+      lidSetup: 'needs_setup',
+      lidSetupDetail: SET_UP_HINT,
+      canSetUp: true,
+      canApproveLid: true,
     }),
     tone: 'held',
   },
@@ -142,6 +180,8 @@ const STATES: { name: string; s: KeepAwakeStatus; tone: string }[] = [
       detail:
         "Lid closed will still sleep: the power plan's lid action is Sleep. Control Panel → Hardware and Sound → Power Options → Choose what closing the lid does → When I close the lid → set \"Plugged in\" (and \"On battery\" if you want) to Do nothing → Save changes.",
       lidHeld: false,
+      lidSwitch: false,
+      lidClosed: false,
       platform: 'windows',
     }),
     tone: 'held',
@@ -194,7 +234,19 @@ describe('KeepAwakeButton', () => {
       expect(screen.getByTestId('keep-awake-detail').textContent).toBe(s.detail)
       const checked = Array.from(menu.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter((el) => el.checked)
       expect(checked.map((el) => el.getAttribute('data-testid'))).toEqual([`keep-awake-mode-${s.mode}`])
-      expect(screen.queryByTestId('keep-awake-approve') !== null).toBe(s.canApproveLid)
+      const lid = screen.queryByTestId('keep-awake-lid') as HTMLInputElement | null
+      expect(lid !== null).toBe(s.lidSwitch)
+      if (lid) expect(lid.checked).toBe(s.lidClosed)
+      const needsSetup = s.lidClosed && s.lidSetup === 'needs_setup'
+      expect(screen.queryByTestId('keep-awake-setup') !== null).toBe(needsSetup && s.canSetUp)
+      if (needsSetup) {
+        const note = screen.getByTestId('keep-awake-lid-note').textContent ?? ''
+        expect(note).toContain('lid closed will still sleep')
+        expect(note).toContain(s.lidSetupDetail)
+      }
+      // The old dialog button and its words are gone from the menu.
+      expect(screen.queryByTestId('keep-awake-approve')).toBeNull()
+      expect(menu.textContent).not.toMatch(/admin dialog/i)
       expect(screen.queryByTestId('keep-awake-battery') !== null).toBe(s.platform === 'macos')
     })
   }
@@ -298,37 +350,95 @@ describe('KeepAwakeButton', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('sends the chosen mode and shows the daemon answer', async () => {
+  it('sends the chosen mode and shows the daemon answer, never Set up', async () => {
     const button = await renderWith(STATES[0].s)
     const after = status({
       state: 'lid_open_only',
       label: 'Awake (lid open only)',
-      detail: 'Lid closed will still sleep: it needs a one-time admin approval to install a small helper',
+      detail: NOT_SET_UP,
       lidHeld: false,
+      lidSetup: 'needs_setup',
+      lidSetupDetail: SET_UP_HINT,
+      canSetUp: true,
       canApproveLid: true,
-      message: 'Keep awake holds with the lid open only; lid closed will still sleep. The admin dialog was declined.',
+      message: NOT_SET_UP,
     })
     h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: after })
     fireEvent.click(button)
     await act(async () => {
       fireEvent.click(await screen.findByTestId('keep-awake-mode-always'))
     })
+    expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
     expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { mode: 'always' })
     await waitFor(() => expect(screen.getByTestId('keep-awake-label').textContent).toBe('Awake (lid open only)'))
-    expect(screen.getByTestId('keep-awake-message').textContent).toBe(after.message)
     expect(screen.getByTestId('keep-awake').getAttribute('aria-label')).toBe('Keep awake: Awake (lid open only)')
+    // Not set up is offered, not run.
+    expect(screen.getByTestId('keep-awake-setup')).not.toBeNull()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('power/helper', expect.anything())
   })
 
-  it('Allow lid closed asks the daemon to show the dialog again', async () => {
-    const button = await renderWith(STATES[4].s)
-    h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: STATES[2].s })
+  it('a mode change in flight never says an admin dialog is open', async () => {
+    const button = await renderWith(STATES[0].s)
+    let resolve: (v: unknown) => void = () => {}
+    h.daemonCliPost.mockReturnValue(new Promise((r) => (resolve = r)))
     fireEvent.click(button)
     await act(async () => {
-      fireEvent.click(await screen.findByTestId('keep-awake-approve'))
+      fireEvent.click(await screen.findByTestId('keep-awake-mode-working'))
     })
-    expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { approveLid: true })
+    expect(useKeepAwakeStore.getState().busy).toBe(true)
+    const menu = screen.getByTestId('keep-awake-menu')
+    expect(menu.textContent).not.toMatch(/admin|password/i)
+    expect(screen.queryByTestId('keep-awake-setting-up')).toBeNull()
+    await act(async () => resolve({ success: true, keepAwake: STATES[1].s }))
+  })
+
+  it('Also with the lid closed goes to the daemon as a setting, never Set up', async () => {
+    const off = STATES.find((x) => x.name === 'lid open only (switch off)')
+    if (!off) throw new Error('fixture missing')
+    const button = await renderWith(off.s)
+    h.daemonCliPost.mockResolvedValue({ success: true, keepAwake: STATES[2].s })
+    fireEvent.click(button)
+    const lid = (await screen.findByTestId('keep-awake-lid')) as HTMLInputElement
+    expect(lid.type).toBe('checkbox')
+    expect(lid.classList.contains(SQUARE_CHECK_CLASS)).toBe(true)
+    expect(lid.style.borderRadius).toBe('0px')
+    expect(lid.checked).toBe(false)
+    expect(screen.getByTestId('keep-awake-lid-note').textContent).toBe(
+      'Off: Keep awake holds with the lid open only. Lid closed will still sleep.',
+    )
+    expect(screen.queryByTestId('keep-awake-setup')).toBeNull()
+    await act(async () => {
+      fireEvent.click(lid)
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
+    expect(h.daemonCliPost).toHaveBeenCalledWith('power/keep-awake', { lidClosed: true })
+    await waitFor(() => expect((screen.getByTestId('keep-awake-lid') as HTMLInputElement).checked).toBe(true))
+  })
+
+  it('Set up posts power/helper and shows the answer', async () => {
+    const button = await renderWith(STATES[4].s)
+    h.daemonCliPost.mockResolvedValue({ success: true, message: 'Power helper set up.', keepAwake: STATES[2].s })
+    fireEvent.click(button)
+    expect(screen.getByTestId('keep-awake-lid-note').textContent).toBe(
+      `Not set up: lid closed will still sleep. ${SET_UP_HINT}`,
+    )
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('keep-awake-setup'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('power/helper', { action: 'setup' })
     await waitFor(() =>
       expect(screen.getByTestId('keep-awake-label').textContent).toBe('Awake, lid closed OK (on power)'),
+    )
+    expect(useKeepAwakeStore.getState().settingUp).toBe(false)
+  })
+
+  it('a Member or a remote client sees who can set it up, and no Set up button', async () => {
+    h.remote = true
+    const button = await renderWith(STATES[5].s)
+    fireEvent.click(button)
+    expect(screen.queryByTestId('keep-awake-setup')).toBeNull()
+    expect(screen.getByTestId('keep-awake-lid-note').textContent).toBe(
+      `Not set up: lid closed will still sleep. ${ASK_AN_ADMIN}`,
     )
   })
 

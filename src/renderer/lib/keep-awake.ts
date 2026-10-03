@@ -15,6 +15,12 @@ export type KeepAwakeState =
   | 'limited'
   | 'error'
 
+export type KeepAwakeLidSetup = 'ready' | 'needs_setup' | 'unavailable' | 'unknown'
+
+function lidSetupOf(v: unknown): KeepAwakeLidSetup {
+  return v === 'ready' || v === 'needs_setup' || v === 'unavailable' ? v : 'unknown'
+}
+
 export interface KeepAwakeStatus {
   mode: KeepAwakeMode
   state: KeepAwakeState
@@ -29,7 +35,17 @@ export interface KeepAwakeStatus {
   batteryFloorPercent: number
   /** "Also on battery", shared with Wake this computer (D12). */
   alsoOnBattery: boolean
-  /** macOS without the helper: "Allow lid closed" can show the dialog. */
+  /** "Also with the lid closed", the saved switch. Off by default. */
+  lidClosed: boolean
+  /** This OS has the switch (false on Windows: the power plan decides). */
+  lidSwitch: boolean
+  /** Is lid closed set up on the host (macOS: the power helper)? */
+  lidSetup: KeepAwakeLidSetup
+  /** Why it is not ready, or who can set it up, in the daemon's words. */
+  lidSetupDetail: string
+  /** This client may run Set up: an Admin or Owner at the host itself. */
+  canSetUp: boolean
+  /** 0.43.0/0.43.1 wire; the daemon keeps it equal to `canSetUp`. */
   canApproveLid: boolean
   lidDialogDeclined: boolean
   platform: string
@@ -68,6 +84,11 @@ export function parseKeepAwakeBody(raw: unknown): KeepAwakeStatus | null {
     },
     batteryFloorPercent: typeof s.batteryFloorPercent === 'number' ? s.batteryFloorPercent : 0,
     alsoOnBattery: s.alsoOnBattery === true,
+    lidClosed: s.lidClosed === true,
+    lidSwitch: s.lidSwitch === true,
+    lidSetup: lidSetupOf(s.lidSetup),
+    lidSetupDetail: typeof s.lidSetupDetail === 'string' ? s.lidSetupDetail : '',
+    canSetUp: s.canSetUp === true,
     canApproveLid: s.canApproveLid === true,
     lidDialogDeclined: s.lidDialogDeclined === true,
     platform: typeof s.platform === 'string' ? s.platform : '',

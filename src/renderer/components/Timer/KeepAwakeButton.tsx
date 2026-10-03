@@ -1,7 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useKeepAwakeStore } from '@/stores/keep-awake'
-import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeMode, type KeepAwakeTone } from '@/lib/keep-awake'
+import {
+  KEEP_AWAKE_MODES,
+  keepAwakeTone,
+  type KeepAwakeMode,
+  type KeepAwakeStatus,
+  type KeepAwakeTone,
+} from '@/lib/keep-awake'
 import { SquareCheckbox, SquareRadio } from '@/components/ui'
 import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
 
@@ -37,6 +43,15 @@ const SURFACE_DROP: Record<Exclude<MugFill, 'none'>, number> = {
   full: 0,
 }
 
+/** The line under "Also with the lid closed": plainly what holds and what
+ *  does not. Setup words come from the daemon. */
+function lidClosedNote(s: KeepAwakeStatus, needsSetup: boolean): string {
+  if (!s.lidClosed) return 'Off: Keep awake holds with the lid open only. Lid closed will still sleep.'
+  if (needsSetup) return `Not set up: lid closed will still sleep. ${s.lidSetupDetail}`.trim()
+  if (s.lidSetup === 'unavailable') return `Lid closed will still sleep: ${s.lidSetupDetail}`
+  return 'On: stays awake with the lid closed while Keep awake holds.'
+}
+
 /**
  * Heartbeat S6 — Keep awake, next to the timer. The daemon owns the mode
  * (Off / While agents are working / Always) and reports what it really
@@ -49,7 +64,9 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const error = useKeepAwakeStore((s) => s.error)
   const load = useKeepAwakeStore((s) => s.load)
   const setMode = useKeepAwakeStore((s) => s.setMode)
-  const approveLid = useKeepAwakeStore((s) => s.approveLid)
+  const settingUp = useKeepAwakeStore((s) => s.settingUp)
+  const setLidClosed = useKeepAwakeStore((s) => s.setLidClosed)
+  const setUp = useKeepAwakeStore((s) => s.setUp)
   const setOnBattery = useKeepAwakeStore((s) => s.setOnBattery)
   const remote = useConnectHostStore((s) => s.activeHost !== 'local')
   const [open, setOpen] = useState(false)
@@ -90,6 +107,8 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const tone = keepAwakeTone(status)
   const title = `Keep awake: ${status.label}`
   const fill = MUG_FILL[status.mode]
+  const lidNeedsSetup = status.lidClosed && status.lidSetup === 'needs_setup'
+  const lidNote = lidClosedNote(status, lidNeedsSetup)
 
   return (
     <div className="relative flex items-center no-drag" ref={rootRef}>
@@ -191,9 +210,9 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
                 {status.message}
               </p>
             ) : null}
-            {busy ? (
-              <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
-                Working… an admin dialog may be open on {remote ? 'the host' : 'this Mac'}.
+            {settingUp ? (
+              <p data-testid="keep-awake-setting-up" className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
+                Waiting for the admin password on {remote ? 'the host Mac' : 'this Mac'}…
               </p>
             ) : null}
             {error ? (
@@ -202,20 +221,31 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
               </p>
             ) : null}
           </div>
-          {status.canApproveLid ? (
+          {status.lidSwitch ? (
             <div className="mt-2">
-              <button
-                type="button"
-                data-testid="keep-awake-approve"
-                disabled={busy}
-                className="text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
-                onClick={() => void approveLid()}
-              >
-                Allow lid closed
-              </button>
-              <p className="text-[11px] text-[var(--color-text-muted)]">
-                Asks once for an admin password, the same helper as Wake this computer.
+              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                <SquareCheckbox
+                  data-testid="keep-awake-lid"
+                  checked={status.lidClosed}
+                  disabled={busy}
+                  onChange={(e) => void setLidClosed(e.currentTarget.checked)}
+                />
+                Also with the lid closed
+              </label>
+              <p data-testid="keep-awake-lid-note" className="mt-0.5 pl-[22px] text-[11px] text-[var(--color-text-muted)]">
+                {lidNote}
               </p>
+              {lidNeedsSetup && status.canSetUp ? (
+                <button
+                  type="button"
+                  data-testid="keep-awake-setup"
+                  disabled={busy}
+                  className="mt-1 ml-[22px] text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
+                  onClick={() => void setUp()}
+                >
+                  Set up
+                </button>
+              ) : null}
             </div>
           ) : null}
           {status.platform === 'macos' ? (

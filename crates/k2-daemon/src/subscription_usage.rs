@@ -1068,7 +1068,20 @@ fn grok_from_result(result: &Value) -> GrokParsed {
         .get("config")
         .filter(|v| v.is_object())
         .unwrap_or(result);
-    let credit = util_number(config.get("creditUsagePercent"));
+    // The billing reply is protobuf-style JSON, which leaves out zero
+    // values: right after a reset `creditUsagePercent` is simply absent.
+    // A missing percent with a real current period (an object with `type`
+    // or `end`) is 0% used. A missing percent with no current period is
+    // "no window", not a made-up 0%.
+    let has_period = config
+        .get("currentPeriod")
+        .and_then(|v| v.as_object())
+        .is_some_and(|p| p.contains_key("type") || p.contains_key("end"));
+    let credit = match util_number(config.get("creditUsagePercent")) {
+        Some(n) => Some(n),
+        None if has_period => Some(0.0),
+        None => None,
+    };
     let build = grok_build_percent(result);
     let percent_scale = [credit, build].into_iter().flatten().any(|n| n >= 1.0);
     let resets_at = config
@@ -1082,7 +1095,7 @@ fn grok_from_result(result: &Value) -> GrokParsed {
             .unwrap_or(""),
     );
     let mut windows = Vec::new();
-    // A missing credit percent is "no window", not a made-up 0%.
+    // `credit` is None only when there is no percent and no period.
     if let Some(used) = normalize_used(credit, percent_scale) {
         windows.push(UsageWindow {
             label,
@@ -1127,11 +1140,18 @@ fn json_string(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Grok Build percent. `GrokBuild` present without `usagePercent` is 0%,
+/// because protobuf-style JSON leaves out zero values. No `GrokBuild` at
+/// all is no Build window: we can't tell whether the plan has Build.
 fn grok_build_percent(result: &Value) -> Option<f64> {
-    let value = result
-        .pointer("/config/productUsage/GrokBuild/usagePercent")
-        .or_else(|| result.pointer("/productUsage/GrokBuild/usagePercent"));
-    util_number(value)
+    let build = result
+        .pointer("/config/productUsage/GrokBuild")
+        .or_else(|| result.pointer("/productUsage/GrokBuild"))
+        .filter(|v| v.is_object())?;
+    match build.get("usagePercent") {
+        Some(value) => util_number(Some(value)),
+        None => Some(0.0),
+    }
 }
 
 fn grok_period_label(kind: &str) -> String {
@@ -2322,9 +2342,52 @@ mod tests {
         assert_eq!(build.resets_at, "2026-09-26T00:00:00Z");
     }
 
+    /// Live `_x.ai/billing` result on grok 1.0.46 just after the weekly
+    /// reset. Protobuf JSON leaves out the zero `creditUsagePercent`.
+    const GROK_ZERO_AFTER_RESET: &str = r#"{"jsonrpc":"2.0","id":2,"result":{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-02T22:47:50.098695+00:00","end":"2026-10-09T22:47:50.098695+00:00"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0},"isUnifiedBillingUser":true,"billingPeriodStart":"2026-10-02T22:47:50.098695+00:00","billingPeriodEnd":"2026-10-09T22:47:50.098695+00:00"},"subscription_tier":"SuperGrok Heavy"}}"#;
+
     #[test]
-    fn grok_missing_percent_is_no_usage_window() {
-        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-19T00:00:00Z","end":"2026-09-26T00:00:00Z"},"productUsage":{"GrokBuild":{"usagePercent":4.0}}},"subscription_tier":"SuperGrok"}}"#;
+    fn grok_omitted_zero_with_period_is_weekly_window_at_0() {
+        let parsed = parse_grok_billing(&grok_value(GROK_ZERO_AFTER_RESET)).expect("zero");
+        assert_eq!(parsed.plan, "SuperGrok Heavy");
+        assert_eq!(parsed.windows.len(), 1);
+        assert_eq!(parsed.windows[0].label, "Weekly");
+        assert_eq!(parsed.windows[0].used, 0.0);
+        assert_eq!(
+            parsed.windows[0].resets_at,
+            "2026-10-09T22:47:50.098695+00:00"
+        );
+        let got = probe_grok(
+            GrokOutcome::Ready {
+                plan: parsed.plan,
+                windows: parsed.windows,
+            },
+            None,
+            Utc::now(),
+        );
+        assert_eq!(got.status, "");
+        assert_eq!(got.windows.len(), 1);
+    }
+
+    #[test]
+    fn grok_empty_grok_build_is_build_window_at_0() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":22.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-26T00:00:00Z"},"productUsage":{"GrokBuild":{}}},"subscription_tier":"SuperGrok"}}"#;
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("empty build");
+        assert_eq!(parsed.windows.len(), 2);
+        assert_eq!(parsed.windows[0].label, "Weekly");
+        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+        let build = parsed
+            .windows
+            .iter()
+            .find(|w| w.label == "Grok Build")
+            .expect("grok build");
+        assert_eq!(build.used, 0.0);
+        assert_eq!(build.resets_at, "2026-09-26T00:00:00Z");
+    }
+
+    #[test]
+    fn grok_missing_percent_and_period_is_no_usage_window() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"productUsage":{"GrokBuild":{"usagePercent":4.0}}},"subscription_tier":"SuperGrok"}}"#;
         let parsed = parse_grok_billing(&grok_value(raw)).expect("no percent");
         assert!(parsed.windows.is_empty());
         assert_eq!(parsed.plan, "SuperGrok");

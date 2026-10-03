@@ -16,6 +16,16 @@ import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — re-init timer settings against the NEW host on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+import { focusedRoom } from '@/stores/window-room'
+
+/** The project a timer entry is filed under. 0.43.2 Z18: the timer stays
+ *  on the window's server, so while a remote Home room is focused an entry
+ *  records no project, never another server's project id written here. */
+export function timerEntryProjectId(): string | null {
+  const room = focusedRoom()
+  if (room && !room.isPrimary) return null
+  return useProjectsStore.getState().activeProjectId ?? null
+}
 
 /** Phase 2.5 fix (finding #547) — persist gate. See panels.ts. */
 let hasLoadedFromDaemon = false
@@ -273,12 +283,12 @@ export const useTimerStore = create<TimerState>((set, get) => ({
     const durationSeconds = Math.round(elapsed / 1000)
     const startTimeSec = Math.floor(startMs / 1000)
     const endTimeSec = startTimeSec + durationSeconds
-    const projectId = useProjectsStore.getState().activeProjectId ?? undefined
+    const projectId = timerEntryProjectId()
 
     try {
       await daemonCliPost(primaryScope(), 'timer/create', {
         id: generateId(),
-        projectId: projectId ?? null,
+        projectId,
         startTime: startTimeSec,
         endTime: endTimeSec,
         durationSeconds,
@@ -306,13 +316,13 @@ export const useTimerStore = create<TimerState>((set, get) => ({
     const durationSeconds = Math.round(elapsed / 1000)
     const startTimeSec = Math.floor(startMs / 1000)
     const endTimeSec = startTimeSec + durationSeconds
-    const projectId = useProjectsStore.getState().activeProjectId ?? undefined
+    const projectId = timerEntryProjectId()
 
     const id = generateId()
     try {
       await daemonCliPost(primaryScope(), 'timer/create', {
         id,
-        projectId: projectId ?? null,
+        projectId,
         startTime: startTimeSec,
         endTime: endTimeSec,
         durationSeconds,

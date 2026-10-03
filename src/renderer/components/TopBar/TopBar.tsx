@@ -90,7 +90,7 @@ export default function TopBar({
         <DesktopChromeLeft />
         <K2MarkButton />
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
-        <ServerSwitcher />
+        <ServerSwitcher followRoom />
         {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
         <PageTabs />
       </div>
@@ -116,7 +116,10 @@ export default function TopBar({
 
       {/* Right: run button + panel toggles + window controls */}
       <DesktopChromeRight>
+        {/* 0.43.2 Z14/Z36: only this bar (Agents and Home) follows a
+            focused remote Home room. */}
         <TopBarUtilities
+          followRoom
           leading={
             hasRun ? (
               <button

@@ -40,3 +40,33 @@ export function setPoolSocketCloseSink(fn: SocketCloseSink | null): void {
 export function notePoolSocketClose(hostKey: string, code: number): void {
   if (socketCloseSink) socketCloseSink(hostKey, code)
 }
+
+/** What the top bar reads about one server from the pool (0.43.2 Z19, Q3):
+ *  whether it answers, whether its login is good, and the login's role. */
+export interface PoolHostStatus {
+  readonly reach: string
+  readonly auth: string
+  readonly role: string | null
+  readonly checkedAt: number | null
+}
+
+/** The pool's entries as a store the top bar subscribes to. */
+export interface PoolStatusSource {
+  getState(): { entries: Readonly<Record<string, PoolHostStatus>> }
+  subscribe(listener: () => void): () => void
+}
+
+let poolStatusSource: PoolStatusSource | null = null
+
+/** 0.43.2 Z19: the pool's entries, for the top bar of a focused Home room
+ *  (offline, sign in, role). Returns the unregister. */
+export function setPoolStatusSource(src: PoolStatusSource | null): () => void {
+  poolStatusSource = src
+  return () => {
+    if (poolStatusSource === src) poolStatusSource = null
+  }
+}
+
+export function getPoolStatusSource(): PoolStatusSource | null {
+  return poolStatusSource
+}

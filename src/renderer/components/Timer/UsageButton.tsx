@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
+import { scopeMayWrite } from '@/kessel/server-scope'
+import { roomServerState, usePoolHostStatus, useTopBarScope } from '@/components/TopBar/top-bar-scope'
 import {
   buttonChips,
   formatResetsIn,
@@ -14,21 +16,37 @@ import {
 /**
  * Subscription allowance. Sibling of TimerButton — not inside it, so the
  * clock hiding itself does not take this button with it.
+ *
+ * 0.43.2 Z16/Z19: with a remote Home room focused, it shows THAT server's
+ * numbers (its CLI logins run the room's agents), read through the room's
+ * scope, as "{server} · 42%". An offline room or one that needs a sign-in
+ * says so; it never shows the window server's numbers instead.
  */
 export default function UsageButton(): React.JSX.Element {
-  const doc = useSubscriptionUsageStore((s) => s.doc)
+  const target = useTopBarScope()
+  const entry = useSubscriptionUsageStore((s) => s.entries[target.key])
+  const doc = entry?.doc ?? null
+  const hasEntry = entry !== undefined
   const load = useSubscriptionUsageStore((s) => s.load)
   const refreshIfStale = useSubscriptionUsageStore((s) => s.refreshIfStale)
   const refresh = useSubscriptionUsageStore((s) => s.refresh)
-  const remote = useConnectHostStore((s) => s.activeHost !== 'local')
+  const windowRemoteName = useConnectHostStore((s) =>
+    s.activeHost === 'local' ? null : (s.activeHost.label || s.activeHost.hostname || 'this server'),
+  )
+  const roomStatus = usePoolHostStatus(target.room ? target.key : null)
+  const serverState = target.room ? roomServerState(roomStatus) : 'ok'
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const rootRef = useRef<HTMLDivElement>(null)
 
+  // Load the shown server's entry when it has none: on mount, when the
+  // focused room changes, after a top-switcher change dropped the window's
+  // entry (Z11), and when a room's server comes back.
   useEffect(() => {
-    void load()
-  }, [load])
+    if (hasEntry || serverState !== 'ok') return
+    void load(target)
+  }, [hasEntry, serverState, target, load])
 
   useEffect(() => {
     if (!open) return
@@ -47,9 +65,14 @@ export default function UsageButton(): React.JSX.Element {
     }
   }, [open])
 
-  const chips = buttonChips(doc)
-  const rows = doc ? visibleHarnesses(doc).filter(isSignedIn) : []
+  const roomLabel = target.label
+  const chips = serverState === 'ok' ? buttonChips(doc) : []
+  const rows = doc && serverState === 'ok' ? visibleHarnesses(doc).filter(isSignedIn) : []
   const anySignedIn = rows.length > 0
+  // A view-only room (an older server) only reads (Z16).
+  const mayRefresh = serverState === 'ok' && scopeMayWrite(target.scope, 'usage/subscriptions/refresh')
+  // Whose logins these are, when they aren't this computer's.
+  const whose = target.room ? (target.scope.isRemote ? roomLabel : null) : windowRemoteName
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -66,12 +89,23 @@ export default function UsageButton(): React.JSX.Element {
         style={noDrag}
         onClick={() => {
           setOpen((was) => {
-            if (!was) void refreshIfStale()
+            if (!was && serverState === 'ok') void refreshIfStale(target)
             return !was
           })
         }}
+        title={roomLabel ? `${roomLabel}'s subscription usage` : undefined}
       >
-        {chips.length > 0 ? (
+        {roomLabel ? (
+          <span className="flex items-center gap-1" data-testid="usage-server">
+            <span className="max-w-[120px] truncate">{roomLabel}</span>
+            <span aria-hidden="true">·</span>
+          </span>
+        ) : null}
+        {serverState === 'offline' ? (
+          <span data-testid="usage-server-state">offline</span>
+        ) : serverState === 'signin' ? (
+          <span data-testid="usage-server-state">Sign in</span>
+        ) : chips.length > 0 ? (
           chips.map((chip) => (
             <span key={chip.harness} className="flex items-center gap-1" data-testid={`usage-chip-${chip.harness}`}>
               <AgentIcon agent={chip.harness} size={14} />
@@ -89,12 +123,16 @@ export default function UsageButton(): React.JSX.Element {
           className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
         >
-          {remote && (
-            <p className="mb-2 text-[11px] text-[var(--color-text-muted)]">
-              These numbers are this host&apos;s, not this laptop&apos;s.
+          {whose !== null && (
+            <p data-testid="subscription-usage-whose" className="mb-2 text-[11px] text-[var(--color-text-muted)]">
+              These numbers are {whose}&apos;s logins, not this computer&apos;s.
             </p>
           )}
-          {rows.length === 0 || !anySignedIn ? (
+          {serverState === 'offline' ? (
+            <p className="text-[12px] text-[var(--color-text-secondary)]">{roomLabel} is offline.</p>
+          ) : serverState === 'signin' ? (
+            <p className="text-[12px] text-[var(--color-text-secondary)]">Sign in to {roomLabel} to see its usage.</p>
+          ) : rows.length === 0 || !anySignedIn ? (
             <p className="text-[12px] text-[var(--color-text-secondary)]">
               Nothing is signed in
             </p>
@@ -147,10 +185,17 @@ export default function UsageButton(): React.JSX.Element {
               type="button"
               data-testid="subscription-usage-refresh"
               className="text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
-              disabled={refreshing}
+              disabled={refreshing || !mayRefresh}
+              title={
+                mayRefresh
+                  ? undefined
+                  : serverState === 'ok'
+                    ? `View only: ${roomLabel ?? 'this server'} runs an older K2`
+                    : undefined
+              }
               onClick={() => {
                 setRefreshing(true)
-                void refresh().finally(() => setRefreshing(false))
+                void refresh(target).finally(() => setRefreshing(false))
               }}
             >
               {refreshing ? 'Refreshing…' : 'Refresh'}

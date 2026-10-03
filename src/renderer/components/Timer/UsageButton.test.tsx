@@ -20,8 +20,10 @@ vi.mock('@/lib/daemon-cli', async () => {
 })
 
 vi.mock('@/stores/connect-host', () => ({
-  useConnectHostStore: (sel: (s: { activeHost: 'local' | { id: string } }) => unknown) =>
-    sel({ activeHost: h.remote ? { id: 'remote-box' } : 'local' }),
+  useConnectHostStore: (sel: (s: { activeHost: 'local' | { id: string; label: string; hostname: string } }) => unknown) =>
+    sel({ activeHost: h.remote ? { id: 'remote-box', label: 'Remote box', hostname: 'box.k2.dev' } : 'local' }),
+  // The stores drop the window server's entry on a top-switcher change.
+  onActiveHostChange: () => () => {},
 }))
 
 import UsageButton from './UsageButton'
@@ -243,7 +245,7 @@ describe('UsageButton', () => {
     })
   })
 
-  it('says the numbers are the remote host’s, not this laptop’s', async () => {
+  it('names the window’s remote server as the owner of the numbers (Z16)', async () => {
     h.remote = true
     const checkedAt = new Date().toISOString()
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
@@ -254,7 +256,7 @@ describe('UsageButton', () => {
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')
-    expect(menu.textContent).toContain("this host's")
-    expect(menu.textContent).toContain("not this laptop's")
+    expect(screen.getByTestId('subscription-usage-whose').textContent).toBe("These numbers are Remote box's logins, not this computer's.")
+    expect(menu.textContent).not.toContain('laptop')
   })
 })

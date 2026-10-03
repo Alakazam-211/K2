@@ -14,7 +14,7 @@ import { emit, listen } from '@tauri-apps/api/event'
 import { daemonHttpBase, getLocalDaemonWs } from '@/kessel/daemon-ws'
 import { noteServerVersion, scopeForHost } from '@/kessel/server-scope'
 import { daemonCliPost, withHostCliSlot } from '@/lib/daemon-cli'
-import { setPinnedAuthRecovery, setPoolSocketCloseSink } from '@/lib/pool-hooks'
+import { setPinnedAuthRecovery, setPoolSocketCloseSink, setPoolStatusSource } from '@/lib/pool-hooks'
 import { homeHostKey } from '@/lib/host-key'
 import { createHostPool, type BootBody, type HostPool } from '@/lib/host-pool'
 import { loginCoordinator, WINDOW_INSTANCE_ID } from '@/lib/host-login-coord'
@@ -91,6 +91,10 @@ export const hostPool: HostPool = createHostPool({
 setPinnedAuthRecovery(async (scope) =>
   (await hostPool.revive(scope.hostKey)) === 'revived' ? 'revived' : 'not-revived',
 )
+
+// 0.43.2 Z19: the top bar of a focused Home room reads that server's reach,
+// login and role from here.
+setPoolStatusSource(hostPool.store)
 
 // MS61: a re-keyed server starts over under its new key.
 onSavedHostRekey((oldKey) => hostPool.forget(oldKey))

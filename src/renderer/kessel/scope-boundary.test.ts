@@ -138,6 +138,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Sidebar/Sidebar.tsx',
   'components/Sidebar/WorktreeDialog.tsx',
   'components/TopBar/TopBar.tsx',
+  // 0.43.2 Z14: the top bar's window-server target (a focused room uses
+  // the room's scope).
+  'components/TopBar/top-bar-scope.ts',
   'components/WhatsNewModal/WhatsNewModal.tsx',
   'components/Wiki/wiki-api.ts',
   'components/WorkspaceAssistant/AssistantBar.tsx',
@@ -161,7 +164,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/feedback.ts',
   'stores/focus-groups.ts',
   'stores/heartbeat-sessions.ts',
-  // Heartbeat S6: Keep awake is the window server's machine, like Settings.
+  // Heartbeat S6: Keep awake is a server's machine. 0.43.2 Z17: the
+  // window's own entry; a focused room's entry uses the room's scope.
   'stores/keep-awake.ts',
   'stores/presence.ts',
   'stores/presets.ts',

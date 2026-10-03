@@ -19,6 +19,11 @@ import PresenceKickButton from './PresenceKickButton'
 
 interface PresenceModalProps {
   onClose: () => void
+  /** 0.43.2 Z34: another server's roster (a focused Home room). Given, the
+   *  modal lists it and shows no Kick: Kick acts on the window's server. */
+  roster?: RosterUser[]
+  /** That server's label, for the header. */
+  serverLabel?: string | null
 }
 
 /** Compact relative time for "connected since" (unix seconds). */
@@ -35,10 +40,12 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-export default function PresenceModal({ onClose }: PresenceModalProps): React.JSX.Element {
+export default function PresenceModal({ onClose, roster: otherRoster, serverLabel }: PresenceModalProps): React.JSX.Element {
   // Live subscription — a presence_changed whole-set replace re-renders
   // the open modal (rows appear/disappear as users connect/disconnect).
-  const roster = usePresenceStore((s) => s.roster)
+  const windowRoster = usePresenceStore((s) => s.roster)
+  const readOnly = otherRoster !== undefined
+  const roster = otherRoster ?? windowRoster
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
@@ -75,7 +82,7 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <div className="text-sm font-semibold text-[var(--color-text-primary)]">
-            Connected users
+            {readOnly && serverLabel ? `Connected to ${serverLabel}` : 'Connected users'}
             <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">
               {roster.length}
             </span>
@@ -95,7 +102,7 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
         {/* Rows */}
         <div className="flex-1 overflow-y-auto py-1">
           {roster.map((u) => (
-            <PresenceRow key={u.user} user={u} />
+            <PresenceRow key={u.user} user={u} readOnly={readOnly} />
           ))}
           {roster.length === 0 && (
             <div className="px-4 py-6 text-center text-xs text-[var(--color-text-muted)]">
@@ -108,7 +115,7 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
   )
 }
 
-function PresenceRow({ user }: { user: RosterUser }): React.JSX.Element {
+function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }): React.JSX.Element {
   const displayName = presenceDisplayName(user.user)
   const roleColor = ROLE_COLORS[user.role] ?? ROLE_COLORS.member
 
@@ -157,10 +164,13 @@ function PresenceRow({ user }: { user: RosterUser }): React.JSX.Element {
       </div>
 
       {/* Right-aligned actions area — the kick control self-gates (the
-          onlooker's role may kick this row). */}
-      <div className="flex flex-shrink-0 items-center gap-1.5">
-        <PresenceKickButton user={user} />
-      </div>
+          onlooker's role may kick this row). Another server's roster has
+          no actions (Z34). */}
+      {readOnly ? null : (
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          <PresenceKickButton user={user} />
+        </div>
+      )}
     </div>
   )
 }

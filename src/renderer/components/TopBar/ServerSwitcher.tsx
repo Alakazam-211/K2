@@ -2,7 +2,8 @@
 // K2 daemon the app talks to (K2 Connect client UX, build order step #2).
 //
 // Dropdown contents (PRD §1):
-//   - "Local" (local bundled daemon) — always first, never needs auth.
+//   - "This computer" (local bundled daemon; "Local" before 0.43.2, Z20) —
+//     always first, never needs auth.
 //   - every saved ConnectHost, alphabetical by label (case-insensitive;
 //     hostname as tiebreaker so the list is stable).
 //   - "Add a server…" — routes to Settings → Connections (the address
@@ -32,6 +33,8 @@ import { useServerSwitcherStore } from '@/stores/server-switcher'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { webFeatures } from '@/web/features'
+import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
+import { useTopBarScope } from './top-bar-scope'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -170,7 +173,23 @@ function retainServerSwitcherOutsideClick(): () => void {
   }
 }
 
-export default function ServerSwitcher(): React.JSX.Element {
+/** What the switcher calls this computer's daemon, everywhere (Z20). */
+export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
+
+/** Z20: the trigger's words while a remote Home room is focused. */
+export function followedRoomTitle(roomServer: string, windowServer: string): string {
+  return `Looking at ${roomServer} on Home. This window is on ${windowServer}.`
+}
+
+/**
+ * `followRoom` (the Agents/Home bar only, Z36): while a remote Home room is
+ * focused, the trigger names THAT room's server in an outlined pill (Z20,
+ * Q4). The dropdown still checks the window's own server and starts with
+ * "Looking at {server} (Home room)". Picking a server still switches the
+ * window; picking the room's own server promotes the room (Z7).
+ */
+export default function ServerSwitcher({ followRoom = false }: { followRoom?: boolean } = {}): React.JSX.Element {
+  const followed = useTopBarScope(followRoom)
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
@@ -216,7 +235,9 @@ export default function ServerSwitcher(): React.JSX.Element {
     el.select()
   }, [open])
 
-  const activeLabel = activeHost === 'local' ? 'Local' : activeHost.label
+  const activeLabel = activeHost === 'local' ? THIS_COMPUTER_LABEL : activeHost.label
+  // Z20: a focused remote room's server, or null (the window's own server).
+  const roomServer = followed.room ? followed.label : null
 
   // Saved remotes only — Local stays pinned first below. Sort by display
   // label so a long address book is scannable; hostname breaks ties.
@@ -242,7 +263,7 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   const showLocal = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return !q || 'local'.includes(q)
+    return !q || 'local'.includes(q) || THIS_COMPUTER_LABEL.toLowerCase().includes(q)
   }, [query])
 
   const options = useMemo(
@@ -382,8 +403,16 @@ export default function ServerSwitcher(): React.JSX.Element {
     >
       <button
         onClick={() => toggle()}
-        className="flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-        title={`${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`}
+        data-testid="server-switcher-trigger"
+        data-follows-room={roomServer !== null ? 'true' : undefined}
+        className={`flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag ${
+          roomServer !== null ? 'border border-[var(--color-border)]' : ''
+        }`}
+        title={
+          roomServer !== null
+            ? `${followedRoomTitle(roomServer, activeLabel)} (⌘L)`
+            : `${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`
+        }
         aria-keyshortcuts="Meta+L"
       >
         {/* Recovery-aware dot: amber while restarting/re-authenticating,
@@ -404,7 +433,9 @@ export default function ServerSwitcher(): React.JSX.Element {
             />
           )
         })()}
-        <span className="max-w-[140px] truncate">{activeLabel}</span>
+        <span className="max-w-[140px] truncate" data-testid="server-switcher-label">
+          {roomServer ?? activeLabel}
+        </span>
         <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="2 4 5 7 8 4" />
         </svg>
@@ -414,6 +445,14 @@ export default function ServerSwitcher(): React.JSX.Element {
         <div
           className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
         >
+          {roomServer !== null && (
+            <div
+              data-testid="server-switcher-looking-at"
+              className="px-3 pt-1 pb-1.5 text-[11px] text-[var(--color-text-muted)] truncate"
+            >
+              Looking at {roomServer} (Home room)
+            </div>
+          )}
           <div className="px-2 pb-1">
             <input
               ref={searchRef}
@@ -444,7 +483,7 @@ export default function ServerSwitcher(): React.JSX.Element {
             {showLocal && (
               <SwitcherRow
                 id="server-switcher-opt-local"
-                label="Local"
+                label={THIS_COMPUTER_LABEL}
                 active={activeHost === 'local'}
                 highlighted={options[highlighted] === 'local'}
                 statusDot={activeHost === 'local' ? connectionStatus : null}

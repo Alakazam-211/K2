@@ -95,6 +95,13 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'workspaces/delete': 'Close Worktree on B',
   'git/remove-worktree': 'Recycle Worktree on B',
 
+  // The top bar while the room is focused (0.43.2 Z16, Z17). Both go to
+  // the room's server only; the window's server is never asked instead.
+  'usage/subscriptions/refresh':
+    'the usage menu re-probes B’s own CLI logins (the client keeps the 15 s stale gate, Z41)',
+  'power/keep-awake':
+    'Keep awake on B, the machine running the room’s agent; the top bar sends it only for an Admin or Owner on B (Q3)',
+
   // Thread overlay.
   'thread/post': 'post a Thread message to the agent on B',
   'thread/answer': 'answer a Thread ask on B',

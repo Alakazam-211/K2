@@ -2,7 +2,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetKeepAwakeForTests, useKeepAwakeStore } from '@/stores/keep-awake'
+import { keepAwakeEntryFor, resetKeepAwakeForTests } from '@/stores/keep-awake'
+import { primaryScope } from '@/kessel/server-scope'
 import { KEEP_AWAKE_MODES, keepAwakeTone, parseKeepAwakeBody, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
 import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
@@ -24,6 +25,8 @@ vi.mock('@/lib/daemon-cli', async () => {
 vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: (sel: (s: { activeHost: 'local' | { id: string } }) => unknown) =>
     sel({ activeHost: h.remote ? { id: 'remote-box' } : 'local' }),
+  // The stores drop the window server's entry on a top-switcher change.
+  onActiveHostChange: () => () => {},
 }))
 
 // The real TimerButton, idle, so its clock glyph can be compared to the mug.
@@ -385,7 +388,7 @@ describe('KeepAwakeButton', () => {
     await act(async () => {
       fireEvent.click(await screen.findByTestId('keep-awake-mode-working'))
     })
-    expect(useKeepAwakeStore.getState().busy).toBe(true)
+    expect(keepAwakeEntryFor(primaryScope().id).busy).toBe(true)
     const menu = screen.getByTestId('keep-awake-menu')
     expect(menu.textContent).not.toMatch(/admin|password/i)
     expect(screen.queryByTestId('keep-awake-setting-up')).toBeNull()
@@ -429,7 +432,7 @@ describe('KeepAwakeButton', () => {
     await waitFor(() =>
       expect(screen.getByTestId('keep-awake-label').textContent).toBe('Awake, lid closed OK (on power)'),
     )
-    expect(useKeepAwakeStore.getState().settingUp).toBe(false)
+    expect(keepAwakeEntryFor(primaryScope().id).settingUp).toBe(false)
   })
 
   it('a Member or a remote client sees who can set it up, and no Set up button', async () => {
@@ -476,9 +479,9 @@ describe('KeepAwakeButton', () => {
       render(<KeepAwakeButton />)
       await waitFor(() => {
         expect(h.daemonCliGet).toHaveBeenCalledWith('power/status')
-        expect(useKeepAwakeStore.getState().error).toBe('Error: power/status: response has no keepAwake')
+        expect(keepAwakeEntryFor(primaryScope().id).error).toBe('Error: power/status: response has no keepAwake')
       })
-      expect(useKeepAwakeStore.getState().status).toBeNull()
+      expect(keepAwakeEntryFor(primaryScope().id).status).toBeNull()
       expect(screen.queryByTestId('keep-awake')).toBeNull()
     })
   }

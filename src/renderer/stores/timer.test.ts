@@ -63,6 +63,8 @@ vi.mock('@/stores/projects', () => ({
 }))
 
 import { useTimerStore, type TimeEntry } from './timer'
+import { useWindowRoomStore, __resetWindowRoomForTests } from './window-room'
+import type { Room } from './room'
 
 function resetStore(): void {
   useTimerStore.setState({
@@ -144,6 +146,38 @@ describe('timer store — Plan B host-aware migration', () => {
 
     // Timer reset after save.
     expect(useTimerStore.getState().status).toBe('idle')
+  })
+
+  // 0.43.2 Z18 (T3.4): the timer stays on the window's server. With a
+  // remote Home room focused, an entry has no project: never another
+  // server's project id written on this one. The `primaryOnly` mock fails
+  // the call if it goes anywhere but `primaryScope()`.
+  it('an entry stopped with a remote room focused records projectId null on the window server', async () => {
+    const pinned = { key: 'b.k2.dev|p9:w9', isPrimary: false } as unknown as Room
+    const primary = { key: 'primary', isPrimary: true } as unknown as Room
+    try {
+      useWindowRoomStore.setState({ shown: [pinned], focused: pinned })
+      daemonCliPost.mockResolvedValue({ success: true })
+      useTimerStore.setState({ startTime: 1_000_000, stoppedElapsed: 30_000 })
+      await useTimerStore.getState().saveEntry('in a room')
+      useTimerStore.setState({ status: 'running', startTime: Date.now() - 5_000, pausedElapsed: 0, resumeTime: null })
+      await useTimerStore.getState().stopTimerSilently()
+      expect(daemonCliPost).toHaveBeenCalledTimes(2)
+      for (const [route, body] of daemonCliPost.mock.calls) {
+        expect(route).toBe('timer/create')
+        expect((body as { projectId: unknown }).projectId).toBe(null)
+      }
+
+      // The window's own room focused again: the window's project.
+      daemonCliPost.mockClear()
+      useWindowRoomStore.setState({ shown: [primary], focused: primary })
+      useTimerStore.setState({ startTime: 1_000_000, stoppedElapsed: 30_000 })
+      await useTimerStore.getState().saveEntry('back home')
+      expect(daemonCliPost).toHaveBeenCalledTimes(1)
+      expect((daemonCliPost.mock.calls[0][1] as { projectId: unknown }).projectId).toBe('proj-1')
+    } finally {
+      __resetWindowRoomForTests()
+    }
   })
 
   it('saveEntry failure raises an error toast and does NOT emit sync', async () => {

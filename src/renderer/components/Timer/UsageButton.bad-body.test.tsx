@@ -10,8 +10,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   resetSubscriptionUsageForTests,
-  useSubscriptionUsageStore,
+  usageEntryFor,
+  type UsageEntry,
 } from '@/stores/subscription-usage'
+import { primaryScope } from '@/kessel/server-scope'
+
+/** The window server's usage entry; throws until it exists. */
+function windowEntry(): UsageEntry {
+  const entry = usageEntryFor(primaryScope().id)
+  if (!entry) throw new Error('no usage entry for the window server yet')
+  return entry
+}
 
 const h = vi.hoisted(() => ({
   daemonCliGet: vi.fn(),
@@ -28,6 +37,8 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
+  // The stores drop the window server's entry on a top-switcher change.
+  onActiveHostChange: () => () => {},
 }))
 
 import UsageButton from './UsageButton'
@@ -62,9 +73,9 @@ describe('UsageButton with a body that is not a SubscriptionDoc', () => {
       render(<UsageButton />)
       await waitFor(() => {
         expect(h.daemonCliGet).toHaveBeenCalledWith('usage/subscriptions')
-        expect(useSubscriptionUsageStore.getState().doc).not.toBeNull()
+        expect(windowEntry().doc).not.toBeNull()
       })
-      const doc = useSubscriptionUsageStore.getState().doc
+      const doc = windowEntry().doc
       expect(doc).not.toBeNull()
       expect(Array.isArray(doc?.harnesses)).toBe(true)
       for (const row of doc?.harnesses ?? []) {
@@ -78,9 +89,9 @@ describe('UsageButton with a body that is not a SubscriptionDoc', () => {
         expect(h.daemonCliPost).toHaveBeenCalledWith('usage/subscriptions/refresh', {})
       })
       await waitFor(() => {
-        expect(useSubscriptionUsageStore.getState().error).toBeNull()
+        expect(windowEntry().error).toBeNull()
       })
-      expect(Array.isArray(useSubscriptionUsageStore.getState().doc?.harnesses)).toBe(true)
+      expect(Array.isArray(windowEntry().doc?.harnesses)).toBe(true)
       expect(screen.getByTestId('subscription-usage').textContent).toBe('Usage')
     })
   }

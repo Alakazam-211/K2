@@ -7,10 +7,28 @@ import {
   useWindowModeStore,
   initWindowModeDefault,
 } from '@/stores/window-mode'
+import { useTopBarScope } from '@/components/TopBar/top-bar-scope'
 
 const noDrag = {
   WebkitAppRegion: 'no-drag',
 } as React.CSSProperties
+
+function EyeIcon(): React.JSX.Element {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function PencilIcon(): React.JSX.Element {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+    </svg>
+  )
+}
 
 function ModeOption({
   selected,
@@ -47,14 +65,44 @@ function ModeOption({
 }
 
 export default function ModeToggle(): React.JSX.Element {
-  const mode = useWindowModeStore((s) => s.mode)
+  const windowMode = useWindowModeStore((s) => s.mode)
   const capable = useWindowModeStore((s) => s.capable)
   const setMode = useWindowModeStore((s) => s.setMode)
+  const target = useTopBarScope()
 
   useEffect(() => {
     initWindowModeDefault()
   }, [])
 
+  // 0.43.2 Z15: a focused remote room's mode comes from the room (view-only
+  // → viewer; usable → claimer), not from this window's eye/pencil, which
+  // never applied to a room. Shown, disabled. Same rule as the room's panes
+  // (`paneRoomMode` in stores/room.ts; not imported here, so the top bar
+  // does not load the tabs store).
+  if (target.room) {
+    const roomMode = target.room.readOnly ? 'viewer' : 'claimer'
+    const setBy = `Set by ${target.label}`
+    return (
+      <div
+        role="group"
+        aria-label="Room input mode"
+        data-mode-toggle={roomMode}
+        data-mode-source="room"
+        title={setBy}
+        className="flex items-center no-drag border border-[var(--color-border)] rounded-none"
+        style={noDrag}
+      >
+        <ModeOption selected={roomMode === 'viewer'} disabled title={setBy} onClick={() => {}}>
+          <EyeIcon />
+        </ModeOption>
+        <ModeOption selected={roomMode === 'claimer'} disabled title={setBy} onClick={() => {}}>
+          <PencilIcon />
+        </ModeOption>
+      </div>
+    )
+  }
+
+  const mode = windowMode
   const isViewer = mode === 'viewer'
   const claimerBlocked = !capable
 
@@ -71,10 +119,7 @@ export default function ModeToggle(): React.JSX.Element {
         title="Viewer — watch only"
         onClick={() => setMode('viewer')}
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
+        <EyeIcon />
       </ModeOption>
       <ModeOption
         selected={!isViewer}
@@ -89,9 +134,7 @@ export default function ModeToggle(): React.JSX.Element {
           setMode('claimer')
         }}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-        </svg>
+        <PencilIcon />
       </ModeOption>
     </div>
   )

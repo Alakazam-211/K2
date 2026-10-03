@@ -3,7 +3,7 @@
 // Run with `bun run test:multiserver`.
 //
 // The window is on A (`local` = daemon A). B is a saved server, signed in as
-// the Member `anna`. "Remote rooms (preview)" is on. Opening B's Home row:
+// the Member `anna`. "Open agents from other servers here" is on. Opening B's Home row:
 //   - opens B's room without switching the window (usable since M5; what
 //     it writes is `home-rooms-use.mstest.ts`);
 //   - shows B's tabs from B's layout;

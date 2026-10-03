@@ -31,8 +31,8 @@ describe('roomFailure', () => {
     expect(roomFailure({ ...base, entry: entry({ role: 'admin' }) })).toBeNull()
   })
 
-  it('the read floor is 0.40.39 (MS30)', () => {
-    expect(HOME_ROOM_MIN_VERSION).toBe('0.40.39')
+  it('the floor is 0.41.0 (MS30; 0.43.2 Z5, Rosson Q5)', () => {
+    expect(HOME_ROOM_MIN_VERSION).toBe('0.41.0')
   })
 
   it('B offline: says so, Retry, with the next try time; input off', () => {
@@ -92,7 +92,7 @@ describe('roomFailure', () => {
     })
     expect(f).toEqual({
       kind: 'version-too-old',
-      title: 'dtl is on v0.40.30. This room needs v0.40.39 or newer.',
+      title: 'dtl is on v0.40.30. This room needs v0.41.0 or newer.',
       detail: 'Update dtl, or open its server in this window.',
       action: 'open-server',
       actionLabel: 'Open dtl’s server',
@@ -102,16 +102,23 @@ describe('roomFailure', () => {
     expect(
       roomFailure({
         ...base,
-        entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.39', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
+        entry: entry({ boot: { phase: 'ready', ready: true, version: '0.41.0', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
       }),
     ).toBeNull()
+    // The last 0.40 release is below it.
+    expect(
+      roomFailure({
+        ...base,
+        entry: entry({ boot: { phase: 'ready', ready: true, version: '0.40.150', protocol: 1, instanceId: 'i', features: [], at: 1 } }),
+      })?.kind,
+    ).toBe('version-too-old')
     // Unknown version is too old (MS11: unknown means no).
     expect(
       roomFailure({
         ...base,
         entry: entry({ boot: { phase: 'ready', ready: true, version: null, protocol: 1, instanceId: 'i', features: [], at: 1 } }),
       })?.title,
-    ).toBe('dtl is on an unknown version. This room needs v0.40.39 or newer.')
+    ).toBe('dtl is on an unknown version. This room needs v0.41.0 or newer.')
   })
 
   it('too old wins over a login state: the room cannot open either way', () => {

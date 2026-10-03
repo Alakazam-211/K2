@@ -1,4 +1,4 @@
-// Home M4 — a view-only (preview) room is strictly non-mutating on its
+// Home M4 — a view-only room is strictly non-mutating on its
 // server: the request layer refuses every POST on its scope except the
 // keep-alive, before any request leaves; the twin is the same server
 // (same id, host key and creds); the primary room on a remote window loses

@@ -1125,7 +1125,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
             {room.readOnly
-              ? 'View only (preview): this room does not start the chat. Retry looks again.'
+              ? 'View only: this room does not start the chat. Retry looks again.'
               : 'The chat process exited. Click Retry to start a fresh session.'}
           </div>
           <RetryButton onClick={room.readOnly ? () => void ensure(false) : handleRefresh} refreshing={refreshing} />

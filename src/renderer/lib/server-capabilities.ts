@@ -98,13 +98,15 @@ export const FEATURES = {
    *  remote hides the panel instead of hammering 404s. Local is always
    *  true via serverSupports. */
   'usage-turns': '0.40.150',
-  /** Home M4 (MS30): the read floor for a remote room on Home — the newest
-   *  floor a read-only room depends on (`session-activity` 0.40.39,
-   *  `viewer-role` 0.40.27, `daemon-pinned-chat` 0.39.39, `canonical-active`
-   *  0.39.38). Below it the room does not open and says which version it
-   *  needs (`lib/room-failure.ts`). `home-room-write` (the P0 layout
-   *  revision release) is added when that release is cut. */
-  'home-room': '0.40.39',
+  /** Home M4 (MS30) and 0.43.2 Z5 (Rosson Q5, 2026-10-03): the oldest K2
+   *  that opens in place on Home. Below it a Home row switches the window
+   *  instead (`lib/home-room-floor.ts`), and a room already open says which
+   *  version it needs (`lib/room-failure.ts`). It sits above the read-only
+   *  room's own needs (`session-activity` 0.40.39, `viewer-role` 0.40.27,
+   *  `daemon-pinned-chat` 0.39.39, `canonical-active` 0.39.38). Rooms are
+   *  usable from 0.43.0 (the layout revision check, `HOME_ROOM_USABLE_FROM`);
+   *  from the floor up to that they are view only. */
+  'home-room': '0.41.0',
   /** Heartbeat S3 (prd-heartbeat-firing-v1 HB24/HB25): heartbeat list /
    *  list-all rows carry daemon-stored `nextFireAt`, `waitReason`,
    *  `waitDetail`, `waitSince` (the single source; S5's `wakeup_empty` /

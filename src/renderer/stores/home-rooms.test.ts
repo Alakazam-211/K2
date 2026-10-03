@@ -71,6 +71,11 @@ function harness() {
   const scopes = new Map<string, ServerScope>()
   /** Rows promoted to the primary room (Z7). */
   const promoted: HomeRow[] = []
+  /** Z42: host key → what the pool knows once `knowServer` resolved
+   *  (absent = not read: the room goes on). */
+  const floors = new Map<string, { belowFloor: boolean; version: string | null }>()
+  /** Z5/Z42: below-floor fallbacks (row address, host, version, switched). */
+  const belowFloor: Array<[string, string, string | null, boolean]> = []
   const scopeFor = (hostKey: string): ServerScope => {
     let s = scopes.get(hostKey)
     if (!s) {
@@ -136,6 +141,10 @@ function harness() {
     promote: (r) => {
       promoted.push(r)
     },
+    floorCheck: (hostKey) => floors.get(hostKey) ?? null,
+    belowFloor: (r, hostKey, version, switchWindow) => {
+      belowFloor.push([r.address, hostKey, version, switchWindow])
+    },
     now: () => now,
     setInterval: (fn, ms) => {
       const id = nextId++
@@ -173,6 +182,8 @@ function harness() {
     knownServers,
     projectsChanged,
     promoted,
+    floors,
+    belowFloor,
     advance,
     intervals: () => timers.filter((t) => t.every !== null).length,
   }
@@ -227,6 +238,39 @@ describe('Home rooms (M4, M5)', () => {
     expect(h.intervals()).toBe(1)
     await h.advance(KEEP_ALIVE_HOT_INTERVAL_MS)
     expect(h.keepAlives.filter(([k]) => k === 'b.test').length).toBe(3)
+  })
+
+  it('Z42: a server found below the floor once the pool knows it: no room, the entry is gone, and the shown row switches', async () => {
+    h.floors.set('b.test', { belowFloor: true, version: '0.40.150' })
+    const entry = await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    expect(entry.phase).toBe('switched')
+    expect(h.knownServers).toEqual(['b.test'])
+    expect(h.rooms.length).toBe(0)
+    expect(h.revisionProbes).toEqual([])
+    expect(h.keepAlives).toEqual([])
+    expect(h.homeRooms.store.getState().entries['anna::b.test']).toBe(undefined)
+    expect(h.homeRooms.store.getState().shown).toBe(null)
+    expect(h.belowFloor).toEqual([['anna::b.test', 'b.test', '0.40.150', true]])
+  })
+
+  it('Z42: no version counts as below the floor too; a row the user already left only tears down (no switch)', async () => {
+    h.floors.set('b.test', { belowFloor: true, version: null })
+    const pending = h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    // The user moves on to C before B's check lands.
+    const c = h.homeRooms.open(row('appa', 'c.test'), 'c.test')
+    expect((await pending).phase).toBe('switched')
+    expect((await c).phase).toBe('open')
+    expect(h.belowFloor).toEqual([['anna::b.test', 'b.test', null, false]])
+    expect(h.homeRooms.store.getState().shown).toBe('appa::c.test')
+    expect(Object.keys(h.homeRooms.store.getState().entries)).toEqual(['appa::c.test'])
+  })
+
+  it('Z42: a server at or above the floor opens as before; an unread one (no boot) is not refused', async () => {
+    h.floors.set('b.test', { belowFloor: false, version: '0.41.6' })
+    expect((await h.homeRooms.open(row('anna', 'b.test'), 'b.test')).phase).toBe('open')
+    expect((await h.homeRooms.open(row('appa', 'c.test'), 'c.test')).phase).toBe('open')
+    expect(h.belowFloor).toEqual([])
+    expect(h.rooms.length).toBe(2)
   })
 
   it('opening it again shows the same room (no second instance, no second open)', async () => {

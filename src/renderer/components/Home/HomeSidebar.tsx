@@ -14,9 +14,11 @@
 //   - A row on another server paints through the same row shell
 //     (`AgentRowButton`) with a small machine chip and its live / offline /
 //     sign-in state on the second line, plus that server's presence.
-//     Clicking it switches this window's server (H15) and lands on Home.
-//     With "Remote rooms (preview)" on (Home M4), it instead opens that
-//     server's room in the main area, view-only, without switching.
+//     With "Open agents from other servers here" on (the default on macOS
+//     and Linux from 0.43.2), clicking it opens that server's room in the
+//     main area without switching (usable from K2 0.43.0, view only from
+//     the floor up to that). Off, or below the floor, it switches this
+//     window's server (H15) and lands on Home.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
@@ -28,8 +30,11 @@ import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
-import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress, savedHostForKey } from '@/lib/home-address'
-import { requestHostSelect } from '@/lib/home-pending-select'
+import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
+import { switchWindowToRow } from '@/lib/home-switch'
+import { homeRoomVerdict, type HomeRoomVerdict } from '@/lib/home-room-floor'
+import { hostPool } from '@/lib/host-pool-instance'
+import { useStore } from 'zustand'
 import type { RowStatus } from '@/lib/home-status'
 import { openHomeRow } from '@/lib/home-open'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
@@ -145,17 +150,24 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   }
 }
 
-/** "Switch to its server and open": today's switch, even with the preview
- *  on (the explicit gesture). */
+/** "Switch to its server and open": the window switch, even with rooms on
+ *  (the explicit gesture). */
 function switchToRowServer(row: HomeRow): void {
-  const parsed = parseHomeAddress(row.address)
-  if (!parsed) return
-  const state = useConnectHostStore.getState()
-  const target = parsed.host === 'local' ? 'local' : savedHostForKey(state.hosts, parsed.host)
-  if (!target) return
   homeRooms.showPrimary()
-  requestHostSelect(target === 'local' ? 'local' : target.id, row, () => usePageViewStore.getState().setPage('home'))
-  state.pickHost(target)
+  switchWindowToRow(row)
+}
+
+/** What clicking a row on another server does, for its tooltip. */
+export function otherRowOpenTitle(
+  rooms: boolean,
+  verdict: HomeRoomVerdict,
+  label: string,
+  place: string | null,
+): string {
+  const where = place ?? 'its server'
+  if (!rooms || verdict === 'switch') return `Switch this window to ${where} and open ${label}`
+  if (verdict === 'view-only') return `Open ${label} from ${where} here, view only`
+  return `Open ${label} from ${where} here`
 }
 
 /** A row that does not paint as a live Agents row. */
@@ -163,6 +175,8 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
   const { status, place, onConnected } = useRowStatus(row)
   const preview = useRemoteRoomsPreview()
   const shownRoom = useShownHomeRoom()
+  const rowHost = parseHomeAddress(row.address)?.host ?? ''
+  const verdict = homeRoomVerdict(useStore(hostPool.store, (s) => s.entries[rowHost]?.boot ?? null))
   const remoteOnWeb = isWebClient() && !onConnected
   // MS83: "No access" rows never open a room.
   const canOpen = !remoteOnWeb && status.kind !== 'not-found' && status.kind !== 'no-access'
@@ -173,9 +187,7 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
       : status.kind === 'sign-in'
         ? `${status.detail ? `${status.detail} ` : ''}Sign in to ${place} and open ${row.label}`
         : !onConnected
-          ? preview
-            ? `Open ${row.label} from ${place} here, view only (preview)`
-            : `Switch this window to ${place} and open ${row.label}`
+          ? otherRowOpenTitle(preview, verdict, row.label, place)
           : status.kind === 'not-found'
             ? `${row.label} is not on this server any more`
             : `Open ${row.label}`

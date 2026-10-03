@@ -10,11 +10,15 @@
 //     server's list lands (lib/home-pending-select), then land on Home.
 //     Homes never change.
 //   - Web: there is no switcher, so another server's row has no Open.
-//   - Home M4, "Remote rooms (preview)" on: a row on another server opens
-//     that server's room in Home's main area, view-only, without switching
-//     (`stores/home-rooms.ts`).
+//   - "Open agents from other servers here" on (the default on macOS and
+//     Linux from 0.43.2, `lib/remote-rooms-preview.ts`): a row on another
+//     server opens that server's room in Home's main area without switching
+//     (`stores/home-rooms.ts`). A server below the floor
+//     (`lib/home-room-floor.ts`, Z5) still switches the window, with one
+//     toast per server per session. A server the pool has not checked yet
+//     opens a room; the floor is applied when the check lands (Z42).
 
-import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
 import { useToastStore } from '@/stores/toast'
@@ -26,18 +30,20 @@ import {
   parseHomeAddress,
   savedHostForKey,
 } from '@/lib/home-address'
-import { requestHostSelect } from '@/lib/home-pending-select'
 import { remoteRoomsPreviewEnabled } from '@/lib/remote-rooms-preview'
+import { homeRoomVerdict } from '@/lib/home-room-floor'
+import { switchWindowToRow, toastOldServerOnce } from '@/lib/home-switch'
+import { hostPool } from '@/lib/host-pool-instance'
 import { homeRooms } from '@/stores/home-rooms'
 import type { HomeRow } from '@/stores/homes'
 
+export { switchTargetForHost } from '@/lib/home-switch'
+
 export type OpenResult = 'selected' | 'room' | 'switching' | 'not-found' | 'unknown-server' | 'web-remote'
 
-/** The switcher target for a row host key: `'local'`, a saved host, or
- *  null when the server is not saved on this client. */
-export function switchTargetForHost(hostKey: string, hosts: ConnectHost[]): 'local' | ConnectHost | null {
-  if (hostKey === LOCAL_HOME_HOST) return 'local'
-  return savedHostForKey(hosts, hostKey)
+function unknownServer(host: string): OpenResult {
+  useToastStore.getState().addToast(`${host} is not a saved server. Add it in Settings → Connections.`, 'warning')
+  return 'unknown-server'
 }
 
 export function openHomeRow(row: HomeRow): OpenResult {
@@ -60,31 +66,25 @@ export function openHomeRow(row: HomeRow): OpenResult {
 
   if (isWebClient()) return 'web-remote'
 
-  // Home M4 (MS55): with "Remote rooms (preview)" on, the row opens as a
-  // pinned room on ITS server in Home's main area. The window's server does
-  // not change. Off: today's switch below.
+  if (parsed.host !== LOCAL_HOME_HOST && !savedHostForKey(hostState.hosts, parsed.host)) {
+    return unknownServer(parsed.host)
+  }
+
+  // MS55 / Z1: with the setting on, the row opens as a pinned room on ITS
+  // server in Home's main area. The window's server does not change.
   if (remoteRoomsPreviewEnabled()) {
-    if (parsed.host !== LOCAL_HOME_HOST && !savedHostForKey(hostState.hosts, parsed.host)) {
-      useToastStore
-        .getState()
-        .addToast(`${parsed.host} is not a saved server. Add it in Settings → Connections.`, 'warning')
-      return 'unknown-server'
+    const boot = hostPool.entry(parsed.host)?.boot ?? null
+    if (homeRoomVerdict(boot) === 'switch') {
+      // Z5: below the floor (or no version) — switch, as with it off.
+      homeRooms.showPrimary()
+      toastOldServerOnce(parsed.host, boot?.version ?? null)
+      return switchWindowToRow(row)
     }
     usePageViewStore.getState().setPage('home')
     void homeRooms.open(row, parsed.host)
     return 'room'
   }
 
-  const target = switchTargetForHost(parsed.host, hostState.hosts)
-  if (!target) {
-    useToastStore
-      .getState()
-      .addToast(`${parsed.host} is not a saved server. Add it in Settings → Connections.`, 'warning')
-    return 'unknown-server'
-  }
-  requestHostSelect(target === 'local' ? 'local' : target.id, row, () =>
-    usePageViewStore.getState().setPage('home'),
-  )
-  hostState.pickHost(target)
-  return 'switching'
+  // Off: switch this window's server.
+  return switchWindowToRow(row)
 }

@@ -3,7 +3,7 @@
 // split view D1–D4). Run with `bun run test:multiserver`.
 //
 // The window is on A (`local` = daemon A). B is a saved server, signed in as
-// the Member `anna`. "Remote rooms (preview)" is on. A and B hold the SAME
+// the Member `anna`. "Open agents from other servers here" is on. A and B hold the SAME
 // checkout path (MS3). Opening B's Home row gives a usable room on B:
 //   - typing into a terminal in B's room reaches B's PTY (claimer mode, as a
 //     Member) — the session was really spawned on B, not attached;

@@ -2225,7 +2225,7 @@ export type TabsStore = UseBoundStore<StoreApi<TabsState>> & { readonly room: Ta
 export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   const { scope, deps } = binding
   const isPrimary = binding.workspace === null
-  /** Home M4: a view-only (preview) pinned room — no layout save, no close,
+  /** Home M4: a view-only pinned room — no layout save, no close,
    *  no tab-title write on its server. Its scope's request layer refuses
    *  every other write too (`viewOnlyScope`). */
   const readOnly = scope.viewOnly === true

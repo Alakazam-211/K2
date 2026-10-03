@@ -25,27 +25,34 @@ import { useRoomTier } from '@/lib/room-tiers'
 import { usersForWorkspace } from '@/stores/presence'
 import { homeRooms, useHomeRoomsStore, type HomeRoomAccess, type HomeRoomEntry } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
-import { RoomFailureGate, useRoomFailure } from './RoomFailure'
+import { RoomFailureGate, roomFailureActions, useRoomFailure } from './RoomFailure'
+import { hostPool } from '@/lib/host-pool-instance'
 import type { PinnedRoom } from '@/stores/room'
 
-/** What the room bar's chip says (Home M5). */
+/** What the room bar's chip says (Home M5), and, for an older server, the
+ *  label of its "Switch to {server}" button (0.43.2 Z5: with the old
+ *  default this row would have switched the window and been usable). */
 export function roomAccessCopy(
   access: HomeRoomAccess | null,
   serverLabel: string,
-): { chip: string; title: string } {
+  version: string | null = null,
+): { chip: string; title: string; switchLabel: string | null } {
   if (access === 'use') {
     return {
-      chip: 'Remote room (preview)',
+      chip: 'Remote room',
       title: `Everything you do here happens on ${serverLabel}: typing, tabs, files and chats.`,
+      switchLabel: null,
     }
   }
   if (access === 'view-older-server') {
+    const runs = version === null ? 'an older K2' : `K2 ${version}`
     return {
       chip: 'View only',
-      title: `${serverLabel} runs an older K2 that can’t save this room’s tabs safely. Update ${serverLabel} to type and change tabs here.`,
+      title: `${serverLabel} runs ${runs}, which can’t save this room’s tabs safely.`,
+      switchLabel: `Switch to ${serverLabel}`,
     }
   }
-  return { chip: 'View only', title: 'Nothing is sent to that server from this room.' }
+  return { chip: 'View only', title: 'Nothing is sent to that server from this room.', switchLabel: null }
 }
 
 /** The room's chip (usable, or view only and why), the room's server, and
@@ -66,7 +73,8 @@ export function RoomBar({
     () => (supported ? usersForWorkspace(roster, path).map((u) => ({ user: u.user, role: u.role })) : []),
     [roster, supported, path],
   )
-  const copy = roomAccessCopy(access, room.scope.label)
+  const version = useStore(hostPool.store, (s) => s.entries[room.scope.hostKey]?.boot?.version ?? null)
+  const copy = roomAccessCopy(access, room.scope.label, version)
   return (
     <div
       className="flex h-6 flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 text-[10px] text-[var(--color-text-muted)]"
@@ -87,6 +95,17 @@ export function RoomBar({
         <span className="truncate" data-room-note="">
           {copy.title}
         </span>
+      )}
+      {copy.switchLabel !== null && (
+        <button
+          type="button"
+          className="flex-shrink-0 border border-[var(--color-border)] px-1.5 py-px text-[var(--color-text-secondary)] hover:bg-white/[0.05] no-drag cursor-pointer"
+          data-room-switch=""
+          title={`Switch this window to ${room.scope.label} to type and change tabs`}
+          onClick={() => roomFailureActions(room.scope.hostKey).openServer()}
+        >
+          {copy.switchLabel}
+        </button>
       )}
       <span className="ml-auto flex items-center" data-room-people={people.map((p) => p.user).join(',')}>
         <PresenceAvatarCluster users={people} />

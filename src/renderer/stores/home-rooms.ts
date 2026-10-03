@@ -1,8 +1,9 @@
 // Home M4 — remote rooms on Home (prd-home-multi-server-client MS24, MS39,
 // MS40, MS45, MS55; prd-home-v1 R6–R9, R11).
 //
-// With "Remote rooms (preview)" on, a Home row on another server opens THAT
-// server's room in Home's main area. The window's server does not change.
+// With "Open agents from other servers here" on (the default on macOS and
+// Linux from 0.43.2), a Home row on another server opens THAT server's room
+// in Home's main area. The window's server does not change.
 // The room is the same components the Agents page mounts (R8/R9), bound to
 // a pinned room (`createPinnedRoom`) on the row's server.
 //
@@ -43,6 +44,8 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { fetchServerProjects, primaryWorkspaceOf } from '@/lib/server-projects'
 import { activeHomeHostKey, findWorkspaceForRow } from '@/lib/home-address'
 import { requestHostSelect } from '@/lib/home-pending-select'
+import { homeRoomVerdict } from '@/lib/home-room-floor'
+import { switchWindowToRow, toastOldServerOnce } from '@/lib/home-switch'
 import { createStore } from 'zustand/vanilla'
 import type { HomeRow } from '@/stores/homes'
 import { onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
@@ -60,6 +63,10 @@ export type HomeRoomPhase =
   | 'not-found'
   /** The list could not be read (the failure gate shows why). */
   | 'error'
+  /** Only ever RETURNED by `open` / `retry`, never stored: the server turned
+   *  out to be below the floor once the pool knew its version (Z42). The
+   *  entry is gone; the row switched the window if it was on screen. */
+  | 'switched'
 
 /** Home M5: what the user can do in an open room. */
 export type HomeRoomAccess =
@@ -106,6 +113,14 @@ export interface HomeRoomsDeps {
   /** Home M5: that server's `projects_changed` (a worktree created or closed
    *  in the room), so the room's project list follows its server. */
   onProjectsChanged(scope: ServerScope, fn: () => void): () => void
+  /** Z5/Z42: the server's version once `knowServer` resolved: null while
+   *  the pool has not read its `/boot-status` (the room goes on and fails
+   *  on its own), else whether it is below the floor and its version. */
+  floorCheck(hostKey: string): { belowFloor: boolean; version: string | null } | null
+  /** Z5/Z42: a room's server is below the floor. Switch the window to the
+   *  row's server (only when `switchWindow`: the room was on screen) and
+   *  say why once per server. */
+  belowFloor(row: HomeRow, hostKey: string, version: string | null, switchWindow: boolean): void
   /** Z7/Z29: the window just switched to the shown room's server. Ask the
    *  primary room to select that row's workspace once the new server's
    *  list lands (`requestHostSelect`, keyed by the switcher id). Called
@@ -207,6 +222,16 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
     let projects: ProjectWithWorkspaces[]
     try {
       await deps.knowServer(entry.hostKey)
+      if (!store.getState().entries[address]) return entry
+      // Z42: a row opened before the pool knew this server's version. Below
+      // the floor, the room gives way to today's switch (Z5).
+      const floor = deps.floorCheck(entry.hostKey)
+      if (floor?.belowFloor) {
+        const wasShown = store.getState().shown === address
+        await teardown(address)
+        deps.belowFloor(row, entry.hostKey, floor.version, wasShown)
+        return { ...entry, phase: 'switched' }
+      }
       projects = await deps.listProjects(scope)
     } catch (err) {
       if (!store.getState().entries[address]) return entry
@@ -396,6 +421,15 @@ export const homeRooms: HomeRooms = createHomeRooms({
   knowServer: async (hostKey) => {
     if (hostPool.entry(hostKey)?.boot?.version) return
     await hostPool.check(hostKey)
+  },
+  floorCheck: (hostKey) => {
+    const boot = hostPool.entry(hostKey)?.boot ?? null
+    if (!boot) return null
+    return { belowFloor: homeRoomVerdict(boot) === 'switch', version: boot.version }
+  },
+  belowFloor: (row, hostKey, version, switchWindow) => {
+    toastOldServerOnce(hostKey, version)
+    if (switchWindow) switchWindowToRow(row)
   },
   keepAlive: (hostKey, projectId) => hostPool.keepRoomAlive(hostKey, projectId),
   scopeFor: (hostKey) => scopeForHost(hostKey),

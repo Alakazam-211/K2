@@ -13,8 +13,11 @@
 //     same drawers, and the same room area as Agents.
 //   - A row on the connected server selects that workspace and the page
 //     stays Home; the room then shows in the main area.
-//   - A row on another server switches through `pickHost` and the pending
-//     select lands on Home (not Agents). Homes do not change.
+//   - With "Open agents from other servers here" off, a row on another
+//     server switches through `pickHost` and the pending select lands on
+//     Home (not Agents). Homes do not change. With the default on a mac
+//     (nothing stored) it opens that server's room instead; on Windows the
+//     default still switches (0.43.2 Z28, Q2).
 //   - Nothing selected / empty Home shows the Agents empty state with Home
 //     wording; Add Agent is one button that opens one picker with This
 //     server + From a server.
@@ -168,6 +171,9 @@ import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { __resetHostPoolForTests } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
+import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
+import { homeRooms } from '@/stores/home-rooms'
+import { otherRowOpenTitle } from './HomeSidebar'
 
 const boxB: ConnectHost = {
   id: 'b',
@@ -364,7 +370,8 @@ describe('Home — the Agents page shell', () => {
     expect(within(homeSidebar()).getByText('No agents on this Home yet')).toBeTruthy()
   })
 
-  it('clicking a row on another server switches through pickHost and lands on Home', async () => {
+  it('with the setting off, clicking a row on another server switches through pickHost and lands on Home', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: false })
     const pickHost = vi.fn()
     useConnectHostStore.setState({ pickHost })
     render(<Shell />)
@@ -390,6 +397,51 @@ describe('Home — the Agents page shell', () => {
     if (!pick.onSelected) throw new Error('pending select has no follow-up')
     pick.onSelected()
     expect(usePageViewStore.getState().page).toBe('home')
+  })
+
+  it('the default on a mac (nothing stored): clicking a row on another server opens its room, no switch (Z1, Z28)', async () => {
+    localStorage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      useRemoteRoomsPreviewStore.setState({ enabled: readRemoteRoomsPreview() })
+      expect(useRemoteRoomsPreviewStore.getState().enabled).toBe(true)
+      const pickHost = vi.fn()
+      useConnectHostStore.setState({ pickHost })
+      render(<Shell />)
+      await act(async () => {
+        fireEvent.click(rowOf('Bee'))
+      })
+      expect(pickHost).not.toHaveBeenCalled()
+      expect(peekHostSelect()).toBe(null)
+      expect(useConnectHostStore.getState().activeHost).toBe('local')
+      expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+      expect(homeRooms.store.getState().entries['bee::b.k2.dev']?.hostKey).toBe('b.k2.dev')
+      expect(usePageViewStore.getState().page).toBe('home')
+    } finally {
+      platform.mockRestore()
+      await act(async () => {
+        await homeRooms.closeAll()
+      })
+    }
+  })
+
+  it('the default on Windows (nothing stored) still switches the window (Q2, until G-Win)', async () => {
+    localStorage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    try {
+      useRemoteRoomsPreviewStore.setState({ enabled: readRemoteRoomsPreview() })
+      expect(useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
+      const pickHost = vi.fn()
+      useConnectHostStore.setState({ pickHost })
+      render(<Shell />)
+      await act(async () => {
+        fireEvent.click(rowOf('Bee'))
+      })
+      expect(pickHost).toHaveBeenCalledTimes(1)
+      expect(homeRooms.store.getState().entries['bee::b.k2.dev']).toBe(undefined)
+    } finally {
+      platform.mockRestore()
+    }
   })
 
   it('row states: working glyph (connected), live + presence (other), sign in (no login)', async () => {
@@ -467,5 +519,15 @@ describe('Home — the Agents page shell', () => {
     expect(within(picker).getByText('Box B')).toBeTruthy()
     expect(within(picker).getByText('Box C')).toBeTruthy()
     expect(within(picker).queryByText('This computer')).toBeNull()
+  })
+})
+
+describe('the tooltip of a row on another server (Z3, Z5)', () => {
+  it('says what the click does: here, here view only, or switch', () => {
+    expect(otherRowOpenTitle(true, 'use', 'Bee', 'Box B')).toBe('Open Bee from Box B here')
+    expect(otherRowOpenTitle(true, 'unknown', 'Bee', 'Box B')).toBe('Open Bee from Box B here')
+    expect(otherRowOpenTitle(true, 'view-only', 'Bee', 'Box B')).toBe('Open Bee from Box B here, view only')
+    expect(otherRowOpenTitle(true, 'switch', 'Bee', 'Box B')).toBe('Switch this window to Box B and open Bee')
+    expect(otherRowOpenTitle(false, 'use', 'Bee', 'Box B')).toBe('Switch this window to Box B and open Bee')
   })
 })

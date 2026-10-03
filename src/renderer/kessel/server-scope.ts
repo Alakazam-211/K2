@@ -284,7 +284,7 @@ export class ViewOnlyWriteError extends Error {
   readonly hostKey: string
   readonly route: string
   constructor(hostKey: string, route: string) {
-    super(`View only (preview): ${route} is not sent to ${hostKey} from a remote room`)
+    super(`View only: ${route} is not sent to ${hostKey} from a remote room`)
     this.name = 'ViewOnlyWriteError'
     this.hostKey = hostKey
     this.route = route

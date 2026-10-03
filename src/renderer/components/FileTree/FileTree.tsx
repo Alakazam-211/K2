@@ -1631,7 +1631,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // on `room.scope`.
     const isRemote = isWebClient() || isRemoteScope(room.scope)
 
-    // Home M4: a view-only (preview) room writes nothing to its server —
+    // Home M4: a view-only room writes nothing to its server —
     // only Download and Copy Path.
     const viewOnlyItems = [
       ...(!isDir && isSingle && isRemote ? [{ id: 'download', label: 'Download' }] : []),

@@ -76,7 +76,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.download-model', section: 'general', group: 'Local LLM', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
   { id: 'general.custom-model', section: 'general', group: 'Local LLM', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
   ...(webFeatures.multiHost
-    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Experimental', label: 'Remote rooms (preview)', description: 'Open a Home agent on another server in place, without switching this window’s server', keywords: ['home', 'remote', 'room', 'server', 'preview', 'experimental', 'multi', 'switch'] }]
+    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Experimental', label: 'Open agents from other servers here', description: 'Off: clicking an agent that lives on another server switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'other', 'experimental', 'multi', 'switch'] }]
     : []),
 ]
 

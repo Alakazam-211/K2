@@ -386,7 +386,7 @@ export async function daemonCliPost<T = unknown>(
   body?: unknown,
 ): Promise<T> {
   assertServerScope(scope, 'daemonCliPost')
-  // Home M4: a view-only (preview) room never writes to its server.
+  // Home M4: a view-only room never writes to its server.
   assertScopeMayPost(scope, route)
   const { res, text } = await cliFetch(scope, (creds) => ({
     url: getUrl(creds, route),

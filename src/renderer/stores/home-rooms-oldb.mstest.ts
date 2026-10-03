@@ -16,8 +16,21 @@
 //     pane's spawn plan is `not-live`: no spawn request reaches old B and no
 //     session appears there;
 //   - a tab whose session IS live on old B attaches to it (reused, nothing new).
+//
+// 0.43.2 floor (prd-home-seamless-0432 Z5, Z42; T1.3), against the same real
+// old B, with the setting on:
+//   - the view-only room's bar offers "Switch to Old B", with B's real
+//     version in the copy;
+//   - old B reporting a version below the floor (its `/boot-status` version
+//     rewritten below) makes `openHomeRow` return `switching` and call
+//     `pickHost` once, with one toast; no room and no request for a room
+//     reach old B;
+//   - old B reporting no version does the same;
+//   - a row opened before the pool knew old B's version opens a pending
+//     room; when the read lands below the floor the room is gone and the
+//     window switches once (Z42).
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,8 +49,10 @@ const h = vi.hoisted(() => {
   }
   return {
     requests: [] as Array<{ url: string; method: string; body: string | null; status: number | null }>,
-    /** Old B's port: its layout reads lose `with_revision`. */
-    oldB: { port: 0 },
+    /** Old B's port: its layout reads lose `with_revision`. `bootVersion`
+     *  rewrites its `/boot-status` version (a string, or null = no version);
+     *  undefined = old B's own answer. */
+    oldB: { port: 0, bootVersion: undefined as string | null | undefined },
   }
 })
 
@@ -71,6 +86,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   h.requests.push(rec)
   const res = await realFetch(url, init)
   rec.status = res.status
+  if (h.oldB.port !== 0 && h.oldB.bootVersion !== undefined && url.endsWith(`:${h.oldB.port}/boot-status`)) {
+    const body = (await res.json()) as Record<string, unknown>
+    if (h.oldB.bootVersion === null) delete body.version
+    else body.version = h.oldB.bootVersion
+    return new Response(JSON.stringify(body), { status: res.status, headers: { 'Content-Type': 'application/json' } })
+  }
   return res
 }) as typeof fetch
 
@@ -83,6 +104,11 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { scopeForHost } from '@/kessel/server-scope'
 import { hostPool } from '@/lib/host-pool-instance'
 import { planRoomSpawn } from '@/lib/room-spawn'
+import { roomAccessCopy } from '@/components/Home/room/HomeRemoteRooms'
+import { HOME_ROOM_FLOOR } from '@/lib/home-room-floor'
+import { __resetOldServerToastsForTests } from '@/lib/home-switch'
+import { clearHostSelect, peekHostSelect } from '@/lib/home-pending-select'
+import { useToastStore } from '@/stores/toast'
 import type { PinnedRoom } from '@/stores/room'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { HomeRow } from '@/stores/homes'
@@ -313,5 +339,98 @@ describe('a view-only room on a released B (no spawn-attach-only) never starts a
     expect(spawnsToOldB().length).toBe(1)
     expect(await sessionsOnOldB()).not.toContain(other)
     await daemon(oldB.port, oldB.owner, 'sessions/v2/close', { body: { agent_name: agent, force: true, reason: 'tab_close' } })
+  })
+})
+
+describe('the 0.43.2 floor against a real old B (Z5, Z42; T1.3)', () => {
+  let pickHost: ReturnType<typeof vi.fn>
+
+  function requestsForRoomOnOldB(mark: number): typeof h.requests {
+    return h.requests
+      .slice(mark)
+      .filter((r) => r.url.includes(`:${oldB.port}/cli/`) && !r.url.includes('/cli/auth/') && !r.url.includes('/cli/presence/'))
+  }
+
+  function toasts(): string[] {
+    return useToastStore.getState().toasts.map((t) => t.message)
+  }
+
+  afterEach(async () => {
+    h.oldB.bootVersion = undefined
+    clearHostSelect()
+    await homeRooms.closeAll()
+  })
+
+  it('the view-only room on old B offers "Switch to Old B", naming its real version', async () => {
+    const entry = homeRooms.store.getState().entries[row.address]
+    if (!entry) throw new Error('no entry for the row')
+    const version = hostPool.entry(OLD_KEY)?.boot?.version
+    if (!version) throw new Error('the pool has no version for old B')
+    const copy = roomAccessCopy(entry.access, room.scope.label, version)
+    expect(copy.chip).toBe('View only')
+    expect(copy.switchLabel).toBe('Switch to Old B')
+    expect(copy.title).toBe(`Old B runs K2 ${version}, which can’t save this room’s tabs safely.`)
+  })
+
+  it('old B below the floor: the row switches the window once, with one toast, and no room reaches old B', async () => {
+    await homeRooms.closeAll()
+    __resetOldServerToastsForTests()
+    useToastStore.setState({ toasts: [] })
+    pickHost = vi.fn()
+    useConnectHostStore.setState({ pickHost } as never)
+    h.oldB.bootVersion = '0.40.150'
+    await hostPool.check(OLD_KEY)
+    expect(hostPool.entry(OLD_KEY)?.boot?.version).toBe('0.40.150')
+    expect(HOME_ROOM_FLOOR).toBe('0.41.0')
+
+    const mark = h.requests.length
+    expect(openHomeRow(row)).toBe('switching')
+    expect(pickHost).toHaveBeenCalledTimes(1)
+    expect((pickHost.mock.calls[0][0] as ConnectHost).port).toBe(oldB.port)
+    expect(peekHostSelect()).toMatchObject({ hostId: 'id-oldb', row: { address: row.address } })
+    expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
+    expect(toasts()).toEqual(['Old B runs K2 0.40.150. It opens by switching this window. Update it to open it here.'])
+    await new Promise((r) => setTimeout(r, 200))
+    expect(requestsForRoomOnOldB(mark)).toEqual([])
+    expect(useConnectHostStore.getState().activeHost).toBe('local')
+  })
+
+  it('old B with no version: the same switch', async () => {
+    __resetOldServerToastsForTests()
+    useToastStore.setState({ toasts: [] })
+    pickHost = vi.fn()
+    useConnectHostStore.setState({ pickHost } as never)
+    h.oldB.bootVersion = null
+    await hostPool.check(OLD_KEY)
+    expect(hostPool.entry(OLD_KEY)?.boot?.version).toBe(null)
+    const mark = h.requests.length
+    expect(openHomeRow(row)).toBe('switching')
+    expect(pickHost).toHaveBeenCalledTimes(1)
+    expect(toasts()).toEqual(['Old B runs an older K2. It opens by switching this window. Update it to open it here.'])
+    expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
+    expect(requestsForRoomOnOldB(mark)).toEqual([])
+  })
+
+  it('Z42: opened before the pool knew old B, then the read lands below the floor: the room is gone and the window switches once', async () => {
+    __resetOldServerToastsForTests()
+    useToastStore.setState({ toasts: [] })
+    pickHost = vi.fn()
+    useConnectHostStore.setState({ pickHost } as never)
+    h.oldB.bootVersion = '0.40.150'
+    hostPool.forget(OLD_KEY)
+    expect(hostPool.entry(OLD_KEY)?.boot ?? null).toBe(null)
+
+    const mark = h.requests.length
+    expect(openHomeRow(row)).toBe('room')
+    expect(pickHost).not.toHaveBeenCalled()
+    await until(() => pickHost.mock.calls.length === 1, 'the floor fallback to switch the window')
+    expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
+    expect(homeRooms.store.getState().shown).toBe(null)
+    expect(peekHostSelect()).toMatchObject({ hostId: 'id-oldb', row: { address: row.address } })
+    expect(toasts()).toEqual(['Old B runs K2 0.40.150. It opens by switching this window. Update it to open it here.'])
+    // Old B answered its boot-status read only: no list, no layout, no socket.
+    const toOldB = requestsForRoomOnOldB(mark)
+    expect(toOldB).toEqual([])
+    expect(h.requests.slice(mark).some((r) => r.url.endsWith(`:${oldB.port}/boot-status`))).toBe(true)
   })
 })

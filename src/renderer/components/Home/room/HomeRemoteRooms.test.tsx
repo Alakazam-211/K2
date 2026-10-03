@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Home M4 — remote rooms inside Home's main area: the failure gate's states
-// render over the room (MS45), a live room shows the View only (preview)
-// bar with its server and that server's people (R7), and only hot rooms are
-// mounted (MS24).
+// render over the room (MS45), a live room shows its bar ("Remote room",
+// or View only with a Switch to {server} button on an older server, 0.43.2
+// Z3/Z5) with its server and that server's people (R7), and only hot rooms
+// are mounted (MS24).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -136,22 +137,29 @@ describe('remote rooms in Home (M4)', () => {
     showRoom(fakeRoom())
     render()
     expect(q(`[data-home-room="anna::${KEY}"] [data-room-bar]`).getAttribute('data-room-access')).toBe('use')
-    expect(q('[data-room-chip]').textContent).toBe('Remote room (preview)')
+    expect(q('[data-room-chip]').textContent).toBe('Remote room')
     expect(q('[data-room-server]').textContent).toBe('Anna on Box B')
     expect(container.querySelector('[data-room-note]')).toBe(null)
+    expect(container.querySelector('[data-room-switch]')).toBe(null)
     expect(q('[data-stub-terminal-area]').getAttribute('data-stub-terminal-area')).toBe('/srv/anna')
     expect(container.querySelector('[data-room-failure]')).toBe(null)
   })
 
-  it('an older server: the room says View only and why (MS43)', () => {
+  it('an older server: the room says View only and why, with a Switch to button that switches this window to B (MS43, Z5)', () => {
     hostPool.store.setState({ entries: { [KEY]: poolEntry({}) } })
+    const pickHost = vi.fn()
+    useConnectHostStore.setState({ pickHost } as never)
     showRoom(fakeRoom(true))
     render()
     expect(q('[data-room-bar]').getAttribute('data-room-access')).toBe('view-older-server')
     expect(q('[data-room-chip]').textContent).toBe('View only')
-    expect(q('[data-room-note]').textContent).toBe(
-      'Box B runs an older K2 that can\u2019t save this room\u2019s tabs safely. Update Box B to type and change tabs here.',
-    )
+    expect(q('[data-room-note]').textContent).toBe('Box B runs K2 0.41.6, which can\u2019t save this room\u2019s tabs safely.')
+    const button = q('[data-room-switch]') as HTMLButtonElement
+    expect(button.textContent).toBe('Switch to Box B')
+    expect(pickHost).not.toHaveBeenCalled()
+    act(() => button.click())
+    expect(pickHost).toHaveBeenCalledTimes(1)
+    expect(pickHost.mock.calls[0][0]).toBe(B)
   })
 
   it('shows that server’s people on this agent (R7)', () => {

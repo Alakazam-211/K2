@@ -1512,7 +1512,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (plan.kind === 'not-live') {
         setPhase({
           kind: 'error',
-          message: `Not running on ${room.scope.label}. View only (preview): this room does not start sessions.`,
+          message: `Not running on ${room.scope.label}. View only: this room does not start sessions.`,
         })
         return
       }
@@ -1613,7 +1613,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               if (!cancelled) {
                 setPhase({
                   kind: 'error',
-                  message: `Not running on ${room.scope.label}. View only (preview): this room does not start sessions.`,
+                  message: `Not running on ${room.scope.label}. View only: this room does not start sessions.`,
                 })
               }
               return

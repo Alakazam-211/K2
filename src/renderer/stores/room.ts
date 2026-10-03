@@ -84,7 +84,7 @@ export interface Room {
    *  The primary room keeps today's behaviour (true) until M4 decides the
    *  remote-window case; a pinned room only when its scope is `local`. */
   readonly localCommands: boolean
-  /** Home M4 — a view-only (preview) room: it shows its server's tabs,
+  /** Home M4 — a view-only room: it shows its server's tabs,
    *  drawers and terminals and changes nothing there (no typing, no layout
    *  save, attach-only terminals, no file writes). Its `scope` is the
    *  view-only twin, so the request layer refuses writes too. */

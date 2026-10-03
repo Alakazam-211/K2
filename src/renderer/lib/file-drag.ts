@@ -193,7 +193,7 @@ export function fileDropRefusal(
   if (target.scope.hostKey !== source.scope.hostKey) {
     return `These files are on ${source.scope.label}. They can't be dropped into a room on ${target.scope.label}.`
   }
-  if (target.readOnly) return 'View only (preview): nothing is dropped into this room.'
+  if (target.readOnly) return 'View only: nothing is dropped into this room.'
   return null
 }
 

@@ -12,7 +12,7 @@
 // but hidden (like under a full-page overlay: PageLive is false then, so
 // its sockets wind down the same way).
 //
-// Home M4: with "Remote rooms (preview)" on, a Home row on another server
+// Home M4: with "Open agents from other servers here" on, a Home row on another server
 // opens THAT server's room in this same main area (`HomeRemoteRooms`), with
 // the same drawers bound to it. The window's own room is then hidden, as
 // for the empty state above.

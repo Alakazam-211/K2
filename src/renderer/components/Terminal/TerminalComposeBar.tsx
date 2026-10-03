@@ -140,7 +140,7 @@ export function TerminalComposeBar({
     const active = projects.find((p) => p.id === roomProjectId)
     return (active?.allowRemoteInstruct ?? 0) === 1
   })
-  // A view-only (preview) room sends nothing to its server: no composer.
+  // A view-only room sends nothing to its server: no composer.
   const permitted =
     !room.readOnly && composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
   // Match Code Editor → Appearance → Font Size (default 12).

@@ -486,6 +486,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
     get("/cli/overlay/events", Member),
+    // Power-helper S1: Set up shows the admin dialog on the host, so
+    // Admin (and the handler refuses anything but loopback).
+    post("/cli/power/helper", Admin),
     post("/cli/power/keep-awake", Member),
     get("/cli/power/status", Member),
     post("/cli/presence/kick", Admin),

@@ -143,6 +143,47 @@ pub trait PowerOs: Send + Sync {
     /// (macOS `disablesleep` survives a reboot; the helper's watcher
     /// does not).
     fn clear_stale_lid_hold(&self) {}
+    /// Power-helper S1 — does K2 take the lid-closed hold itself, so the
+    /// "Also with the lid closed" switch decides? macOS (helper) and
+    /// Linux (logind) yes. Windows no: the power plan's lid action
+    /// decides and K2 only reports it (D14).
+    fn lid_switch_applies(&self) -> bool {
+        true
+    }
+    /// Power-helper S1 — the 0.43.0 helper is already installed (the
+    /// user approved its admin dialog once). Read once at boot to carry
+    /// the old "lid closed follows the mode" behaviour into the new
+    /// switch. A file check, never a prompt.
+    fn lid_helper_approved(&self) -> bool {
+        false
+    }
+}
+
+/// Power-helper S1 — who is asking for the one admin dialog. Only an
+/// Admin or Owner at the host itself (loopback ingress) may cause it:
+/// never a Member, never a remote client (Connect tunnel or LAN), never
+/// an agent passport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelperCaller {
+    /// The request came in on the loopback listener.
+    pub local: bool,
+    /// The owner token, or an Admin/Owner login.
+    pub admin: bool,
+}
+
+impl HelperCaller {
+    pub fn may_set_up(self) -> bool {
+        self.local && self.admin
+    }
+
+    /// What to tell a caller who may not set it up.
+    pub fn refusal(self) -> &'static str {
+        match (self.local, self.admin) {
+            (_, false) => "An admin sets up the power helper, in K2 on the host Mac.",
+            (false, true) => "Set up runs on the host Mac. Open K2 on that Mac to set it up.",
+            (true, true) => "",
+        }
+    }
 }
 
 /// A backend that touches nothing (test daemons, opted-out daemons).
@@ -468,11 +509,12 @@ pub fn power() -> Arc<Power> {
     Arc::clone(w.get_or_insert_with(|| Arc::new(Power::new(default_os()))))
 }
 
-/// Swap the OS layer (tests).
+/// Swap the OS layer (tests). Keep awake is rebuilt on the new layer.
 #[allow(dead_code)]
 pub fn install_os(os: Arc<dyn PowerOs>) -> Arc<Power> {
     let p = Arc::new(Power::new(os));
     *POWER.write() = Some(Arc::clone(&p));
+    keep_awake::reset_for_tests();
     p
 }
 
@@ -521,12 +563,16 @@ pub async fn boot() {
 }
 
 /// D11 — the approval step of turning wake on. Shows the one admin
-/// dialog only when the OS layer needs it (macOS, helper missing). A
-/// decline keeps the switch off and says why. Returns
+/// dialog only when the OS layer needs it (macOS, helper missing) AND the
+/// caller may cause it (power-helper S1: a local Admin or Owner). A
+/// decline or a refused caller keeps the switch off and says why. Returns
 /// `(switch_on, message)`; the message is empty when nothing happened.
-pub fn approve_wake(os: &dyn PowerOs, enabled: bool) -> (bool, String) {
+pub fn approve_wake(os: &dyn PowerOs, enabled: bool, caller: HelperCaller) -> (bool, String) {
     if !enabled || !os.wake_needs_approval() {
         return (enabled, String::new());
+    }
+    if !caller.may_set_up() {
+        return (false, format!("Wake stays off: it needs the power helper. {}", caller.refusal()));
     }
     match os.install_wake_helper() {
         Ok(()) => (true, "Helper installed.".to_string()),
@@ -539,11 +585,12 @@ pub fn approve_wake(os: &dyn PowerOs, enabled: bool) -> (bool, String) {
 
 /// D8 / D11 — turn "Wake this computer for heartbeats" on or off.
 /// On macOS without the helper, turning it ON shows the one admin
-/// dialog; if the user declines, the switch stays off and the result
+/// dialog, but only for a local Admin or Owner; if the user declines (or
+/// the caller may not set it up), the switch stays off and the result
 /// says why. Returns `(saved_on, message)`.
-pub fn set_wake_enabled(enabled: bool, on_battery: Option<bool>) -> Result<(bool, String), String> {
+pub fn set_wake_enabled(enabled: bool, on_battery: Option<bool>, caller: HelperCaller) -> Result<(bool, String), String> {
     let p = power();
-    let (effective, mut message) = approve_wake(p.os.as_ref(), enabled);
+    let (effective, mut message) = approve_wake(p.os.as_ref(), enabled, caller);
     let mut partial = serde_json::json!({ "wakeScheduler": { "wakeForHeartbeats": effective } });
     if let Some(b) = on_battery {
         partial["wakeScheduler"]["wakeOnBattery"] = serde_json::Value::Bool(b);
@@ -663,25 +710,50 @@ mod tests {
         assert_eq!(fake.wake_calls(), vec![None]);
     }
 
+    const LOCAL_ADMIN: HelperCaller = HelperCaller { local: true, admin: true };
+
     /// D11 — one dialog, only when turning wake ON and only when the
     /// helper is missing. A decline keeps the switch off with a reason.
     #[test]
     fn approval_dialog_only_on_first_switch_on() {
         let fake = FakePowerOs::needs_approval(false);
-        assert_eq!(approve_wake(&fake, false), (false, String::new()));
+        assert_eq!(approve_wake(&fake, false, LOCAL_ADMIN), (false, String::new()));
         assert_eq!(fake.approval_prompts(), 0, "turning wake off never prompts");
-        let (on, why) = approve_wake(&fake, true);
+        let (on, why) = approve_wake(&fake, true, LOCAL_ADMIN);
         assert!(!on, "a declined dialog keeps the switch off");
         assert!(why.contains("one-time admin approval"), "{why}");
         assert_eq!(fake.approval_prompts(), 1);
 
         let accepting = FakePowerOs::needs_approval(true);
-        assert_eq!(approve_wake(&accepting, true).0, true);
+        assert_eq!(approve_wake(&accepting, true, LOCAL_ADMIN).0, true);
         assert_eq!(accepting.approval_prompts(), 1);
 
         let installed = FakePowerOs::ready();
-        assert_eq!(approve_wake(&installed, true), (true, String::new()));
+        assert_eq!(approve_wake(&installed, true, LOCAL_ADMIN), (true, String::new()));
         assert_eq!(installed.approval_prompts(), 0, "no dialog once the helper is in");
+    }
+
+    /// Power-helper S1 — a Member, a remote client, or both never cause
+    /// the dialog from the wake switch: the switch stays off and says who
+    /// can set it up.
+    #[test]
+    fn wake_switch_never_prompts_for_a_member_or_a_remote_client() {
+        for caller in [
+            HelperCaller { local: true, admin: false },
+            HelperCaller { local: false, admin: true },
+            HelperCaller { local: false, admin: false },
+        ] {
+            let fake = FakePowerOs::needs_approval(true);
+            let (on, why) = approve_wake(&fake, true, caller);
+            assert!(!on, "{caller:?}: the switch stays off");
+            assert_eq!(fake.approval_prompts(), 0, "{caller:?} must never cause the admin dialog");
+            assert!(why.starts_with("Wake stays off: it needs the power helper."), "{caller:?}: {why}");
+            assert!(why.contains("host Mac"), "{caller:?}: {why}");
+        }
+        // The helper already in: nothing to approve, so anyone may turn it on.
+        let installed = FakePowerOs::ready();
+        assert_eq!(approve_wake(&installed, true, HelperCaller { local: false, admin: false }), (true, String::new()));
+        assert_eq!(installed.approval_prompts(), 0);
     }
 
     /// Without support nothing is called at all (no sudo every minute).

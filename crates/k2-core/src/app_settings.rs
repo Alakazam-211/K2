@@ -571,11 +571,17 @@ pub struct KeepAwakeSettings {
     /// `off` | `working` | `always`. [`update`] refuses anything else.
     #[serde(default = "default_keep_awake_mode")]
     pub mode: String,
-    /// macOS: the one admin dialog for the lid-closed part was declined.
-    /// Changing the mode then does not ask again; only an explicit
-    /// "Allow lid closed" does.
+    /// 0.43.0 only: the admin dialog for the lid-closed part was
+    /// declined. Kept so old files still read (vs-live V14); since the
+    /// power-helper PRD S1 a mode change never shows a dialog, so nothing
+    /// reads it and status always reports `false`.
     #[serde(default)]
     pub lid_dialog_declined: bool,
+    /// "Also with the lid closed" (power-helper PRD S1). `None` = never
+    /// set: the daemon resolves it once at boot (on when a 0.43.0 user was
+    /// already holding the lid, else off) and saves the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lid_closed: Option<bool>,
 }
 
 impl KeepAwakeSettings {
@@ -591,7 +597,7 @@ fn default_keep_awake_mode() -> String {
 
 impl Default for KeepAwakeSettings {
     fn default() -> Self {
-        Self { mode: default_keep_awake_mode(), lid_dialog_declined: false }
+        Self { mode: default_keep_awake_mode(), lid_dialog_declined: false, lid_closed: None }
     }
 }
 
@@ -1598,7 +1604,7 @@ mod tests {
         assert_eq!(merged.keep_awake.mode(), KeepAwakeMode::Off, "a partial update keeps the mode");
 
         // A hand-edited unknown mode reads as Off, never as a hold.
-        let odd = KeepAwakeSettings { mode: "maybe".into(), lid_dialog_declined: false };
+        let odd = KeepAwakeSettings { mode: "maybe".into(), lid_dialog_declined: false, lid_closed: None };
         assert_eq!(odd.mode(), KeepAwakeMode::Off);
     }
 

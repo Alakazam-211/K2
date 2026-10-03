@@ -30,6 +30,9 @@ pub struct FakePowerOs {
     /// `Some(e)` = `hold_awake` fails with `e`.
     assertion_error: Option<String>,
     power_reads: AtomicUsize,
+    /// Power-helper S1: K2 takes the lid hold itself (false = Windows,
+    /// where the power plan decides).
+    lid_switch_applies: bool,
 }
 
 /// The fake assertion: counts its own release.
@@ -65,6 +68,7 @@ impl FakePowerOs {
             lid_released: Arc::new(AtomicUsize::new(0)),
             assertion_error: None,
             power_reads: AtomicUsize::new(0),
+            lid_switch_applies: true,
         }
     }
 
@@ -98,13 +102,15 @@ impl FakePowerOs {
 
     /// S6: Windows whose lid action is Sleep (D14).
     pub fn windows_lid_sleeps() -> Self {
-        Self::with(WakeSupport::Ready, false, true).with_lid(
+        let mut f = Self::with(WakeSupport::Ready, false, true).with_lid(
             LidAccess::Unavailable(
                 "the power plan's lid action is Sleep. To keep running with the lid closed, set \"When I close the lid\" to Do nothing.".into(),
             ),
             false,
             None,
-        )
+        );
+        f.lid_switch_applies = false;
+        f
     }
 
     /// The OS refuses the sleep assertion.
@@ -212,6 +218,17 @@ impl PowerOs for FakePowerOs {
 
     fn lid_facts(&self, _src: PowerSource) -> LidFacts {
         self.lid.lock().clone()
+    }
+
+    fn lid_switch_applies(&self) -> bool {
+        self.lid_switch_applies
+    }
+
+    /// The fake "0.43.0 helper is installed": a Mac whose lid access is
+    /// Ready (its helper is in). Never true on the Linux/Windows fakes.
+    fn lid_helper_approved(&self) -> bool {
+        let lid = self.lid.lock();
+        lid.ac_only_unless_allowed && lid.access == LidAccess::Ready
     }
 
     fn hold_lid_closed(&self, _reason: &str) -> Result<Box<dyn Send>, LidRefusal> {

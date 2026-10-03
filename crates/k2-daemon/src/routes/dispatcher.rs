@@ -67,6 +67,17 @@ impl Ingress {
     }
 }
 
+/// Power-helper S1 — may this request cause the admin dialog on the
+/// host? Local = the loopback listener (never LAN, never the Connect
+/// tunnel). Admin = the owner token or an Admin/Owner login (an agent
+/// passport or a Member login is neither).
+fn helper_caller(ingress: Ingress, query: &str, owner_token: &str) -> crate::power::HelperCaller {
+    crate::power::HelperCaller {
+        local: ingress == Ingress::Loopback,
+        admin: super::http::token_is_owner_or_admin(query, owner_token),
+    }
+}
+
 /// #67 — resolve the EFFECTIVE remote-instruct opt-in for the workspace
 /// that owns the live PTY `session_id`.
 ///
@@ -3526,7 +3537,8 @@ async fn handle_one_request(
         // Heartbeat S2 (D8, D11): the one switch, "Wake this computer for
         // heartbeats". On a Mac without the helper, turning it on shows
         // ONE admin dialog on that Mac (up to 2 minutes), so it runs on
-        // the blocking pool.
+        // the blocking pool. Power-helper S1: only for a local Admin or
+        // Owner; anyone else gets the switch kept off and no dialog.
         "/cli/heartbeat/wake" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {
@@ -3540,9 +3552,10 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let caller = helper_caller(ingress, &query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = tokio::task::spawn_blocking(move || {
-                crate::heartbeat_routes::handle_set_wake(&body_bytes)
+                crate::heartbeat_routes::handle_set_wake(&body_bytes, caller)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -3554,10 +3567,11 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Heartbeat S6: Keep awake. GET reports what is really held;
-        // POST sets Off / While agents are working / Always. Turning it on
-        // on a Mac without the helper shows the one admin dialog (up to 2
-        // minutes), and the macOS lid hold runs `sudo -n`, so both run on
-        // the blocking pool.
+        // POST sets Off / While agents are working / Always and "Also with
+        // the lid closed". Power-helper S1: neither ever shows the admin
+        // dialog. The macOS lid hold runs `sudo -n`, so both run on the
+        // blocking pool. Only `/cli/power/helper` (Set up) can show the
+        // dialog, for a local Admin or Owner.
         "/cli/power/status" => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;
@@ -3575,7 +3589,8 @@ async fn handle_one_request(
             // every later request on the socket then reads a power/status
             // body (0.43.0 crash: `e.harnesses`, `{} is not iterable`).
             let _ = stream.read(&mut buf).await;
-            let r = tokio::task::spawn_blocking(crate::power::keep_awake::handle_status)
+            let caller = helper_caller(ingress, &query, state.token.as_str());
+            let r = tokio::task::spawn_blocking(move || crate::power::keep_awake::handle_status(caller))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse {
                     status: "500 Internal Server Error",
@@ -3597,8 +3612,37 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let caller = helper_caller(ingress, &query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = tokio::task::spawn_blocking(move || crate::power::keep_awake::handle_set(&body_bytes))
+            let r = tokio::task::spawn_blocking(move || crate::power::keep_awake::handle_set(&body_bytes, caller))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                    status: "500 Internal Server Error",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Power-helper S1: Set up, the one gesture that may show the admin
+        // dialog (up to 2 minutes, blocking pool). Admin floor in
+        // route_policy; the handler also refuses anything but the host's
+        // own loopback, because the dialog shows on the host's screen.
+        "/cli/power/helper" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let caller = helper_caller(ingress, &query, state.token.as_str());
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || crate::power::keep_awake::handle_helper(&body_bytes, caller))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse {
                     status: "500 Internal Server Error",

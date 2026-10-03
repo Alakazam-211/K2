@@ -153,15 +153,17 @@ struct SetWakeBody {
 /// Handler for `POST /cli/heartbeat/wake` — the one wake switch (D8).
 ///
 /// Turning it on, on a Mac without the helper, shows ONE admin dialog
-/// (D11). If the user declines, the switch is saved OFF and `message`
-/// says why. Returns `{ success, wakeForHeartbeats, message, wake,
-/// awake }` — the same `wake` / `awake` objects as `scheduler-status`.
-pub fn handle_set_wake(body: &[u8]) -> CliResponse {
+/// (D11), but only for a local Admin or Owner (power-helper S1; a Member
+/// or a remote client gets no dialog). If the user declines, or may not
+/// set it up, the switch is saved OFF and `message` says why. Returns
+/// `{ success, wakeForHeartbeats, message, wake, awake }` — the same
+/// `wake` / `awake` objects as `scheduler-status`.
+pub fn handle_set_wake(body: &[u8], caller: crate::power::HelperCaller) -> CliResponse {
     let parsed: SetWakeBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
     };
-    match crate::power::set_wake_enabled(parsed.enabled, parsed.on_battery) {
+    match crate::power::set_wake_enabled(parsed.enabled, parsed.on_battery, caller) {
         Ok((on, message)) => {
             let status = crate::power::power().status_json();
             CliResponse::ok_json(

@@ -168,6 +168,10 @@ impl PowerOs for MacPowerOs {
         !helper::installed()
     }
 
+    fn lid_helper_approved(&self) -> bool {
+        helper::installed()
+    }
+
     /// D11 — the one admin dialog. Copies the bundled `k2-power-helper`
     /// to `/Library/PrivilegedHelperTools` and writes the sudoers rule.
     /// Gives up after 2 minutes (nobody at the screen).

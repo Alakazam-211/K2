@@ -10,14 +10,21 @@
 //! - **Lid open, every OS, no admin.** The shared S2 assertion
 //!   ([`super::Power::hold`]): IOKit on macOS, a logind inhibitor on
 //!   Linux, `PowerSetRequest` on Windows.
-//! - **Lid closed.** macOS: the S2 `k2-power-helper` runs `pmset
+//! - **Lid closed, only with "Also with the lid closed" on**
+//!   (`prd-power-helper-smappservice-v1.md` S1; research §5.4). Its own
+//!   switch, off by default. macOS: the S2 `k2-power-helper` runs `pmset
 //!   disablesleep 1` while the mode holds, renewed every minute; its
-//!   watcher puts sleep back if the daemon dies or stops renewing. One
-//!   admin dialog the first time, the same one as wake (D11). AC only
+//!   watcher puts sleep back if the daemon dies or stops renewing. AC only
 //!   unless "Also on battery" is on, never below 20 % (D12). Linux: a
 //!   logind `handle-lid-switch` lock; headless reports
-//!   `limited (no session)` (D13). Windows: OK only when the power plan's
-//!   lid action is "Do nothing"; otherwise K2 shows the steps (D14).
+//!   `limited (no session)` (D13). Windows: no switch; OK only when the
+//!   power plan's lid action is "Do nothing"; otherwise K2 shows the
+//!   steps (D14).
+//! - **No surprise dialog.** Changing the mode or the switch never
+//!   installs anything and never shows the admin dialog. Only **Set up**
+//!   (`POST /cli/power/helper {action:"setup"}`, or an old client's
+//!   `approveLid`) does, and only for an Admin or Owner on the host
+//!   itself (loopback), never a Member or a remote client.
 //! - **Battery floor.** On battery below 20 % everything pauses.
 //!
 //! "While agents are working" follows `session_activity_changed`: any
@@ -34,7 +41,7 @@ use std::time::{Duration, Instant};
 use k2_core::app_settings::{KeepAwakeMode, KeepAwakeSettings, WAKE_BATTERY_FLOOR_PERCENT};
 use parking_lot::Mutex;
 
-use super::{AwakeHold, LidAccess, LidFacts, LidRefusal, Power, PowerOs, PowerSource, NO_SESSION_PREFIX};
+use super::{AwakeHold, HelperCaller, LidAccess, LidFacts, LidRefusal, Power, PowerOs, PowerSource, NO_SESSION_PREFIX};
 
 /// Hold this long after the last working session goes idle.
 pub const WORKING_GRACE: Duration = Duration::from_secs(60);
@@ -119,8 +126,22 @@ fn on_battery(src: PowerSource) -> bool {
     src.on_ac == Some(false)
 }
 
-/// The decision, pure. `allow_battery` is "Also on battery" (D12).
-pub fn plan(mode: KeepAwakeMode, busy: bool, src: PowerSource, allow_battery: bool, lid: &LidFacts) -> Plan {
+/// Why lid closed sleeps when the switch is off.
+pub const LID_SWITCH_OFF: &str = "\"Also with the lid closed\" is off";
+/// Why lid closed sleeps on a Mac without the helper.
+pub const LID_NOT_SET_UP: &str = "the power helper is not set up on this Mac";
+
+/// The decision, pure. `allow_battery` is "Also on battery" (D12);
+/// `lid_switch` is "Also with the lid closed" (always true where the OS,
+/// not K2, decides: Windows).
+pub fn plan(
+    mode: KeepAwakeMode,
+    busy: bool,
+    src: PowerSource,
+    allow_battery: bool,
+    lid_switch: bool,
+    lid: &LidFacts,
+) -> Plan {
     let active = match mode {
         KeepAwakeMode::Off => false,
         KeepAwakeMode::Working => busy,
@@ -132,11 +153,11 @@ pub fn plan(mode: KeepAwakeMode, busy: bool, src: PowerSource, allow_battery: bo
     let hold_open = active && !paused_battery;
     let lid_block = if !hold_open {
         None
+    } else if !lid_switch {
+        Some(LID_SWITCH_OFF.to_string())
     } else {
         match &lid.access {
-            LidAccess::NeedsApproval => Some(
-                "it needs a one-time admin approval to install a small helper".to_string(),
-            ),
+            LidAccess::NeedsApproval => Some(LID_NOT_SET_UP.to_string()),
             LidAccess::Unavailable(why) => Some(why.clone()),
             LidAccess::Ready if lid.ac_only_unless_allowed && on_battery(src) && !allow_battery => Some(
                 "on battery, lid closed needs power (or turn on \"Also on battery\")".to_string(),
@@ -295,10 +316,11 @@ impl KeepAwake {
 
     /// Apply the mode: take or drop the holds so the OS matches the
     /// policy, and return what is really held. Blocking (the macOS lid
-    /// hold runs `sudo -n`).
+    /// hold runs `sudo -n`). Never installs anything or shows a dialog.
     pub fn reconcile(&self, settings: &KeepAwakeSettings, allow_battery: bool, now: Instant) -> Shown {
         let mode = settings.mode();
         let os = self.os();
+        let lid_switch = lid_switch_on(settings, os.as_ref());
         let mut g = self.inner.lock();
         let busy = g.tracker.busy(now);
         // Off: no OS reads at all, just drop anything held.
@@ -308,7 +330,7 @@ impl KeepAwake {
             let src = os.power_source();
             (src, os.lid_facts(src))
         };
-        let p = plan(mode, busy, src, allow_battery, &facts);
+        let p = plan(mode, busy, src, allow_battery, lid_switch, &facts);
 
         // Lid first on the way down, open first on the way up.
         if !p.want_lid {
@@ -352,15 +374,37 @@ impl KeepAwake {
         shown
     }
 
-    /// The last reconcile, as the route returns it.
-    pub fn status_json(&self, settings: &KeepAwakeSettings, allow_battery: bool) -> serde_json::Value {
+    /// The last reconcile, as the route returns it. `caller` decides
+    /// whether this client is offered **Set up**.
+    pub fn status_json(&self, settings: &KeepAwakeSettings, allow_battery: bool, caller: HelperCaller) -> serde_json::Value {
+        let os = self.os();
+        let switch_applies = os.lid_switch_applies();
+        let last_access = self.inner.lock().last.as_ref().and_then(|l| l.3.clone());
+        // Off reconciles read nothing; the menu still shows whether lid
+        // closed is set up. A file check on macOS, no power read.
+        let access = match last_access {
+            Some(a) => Some(a),
+            None if switch_applies => Some(os.lid_facts(PowerSource::default()).access),
+            None => None,
+        };
+        let (setup, setup_detail) = match &access {
+            Some(LidAccess::Ready) => ("ready", String::new()),
+            Some(LidAccess::NeedsApproval) if caller.may_set_up() => (
+                "needs_setup",
+                "Set up installs a small helper. macOS asks once for an admin password.".to_string(),
+            ),
+            Some(LidAccess::NeedsApproval) => ("needs_setup", caller.refusal().to_string()),
+            Some(LidAccess::Unavailable(why)) => ("unavailable", why.clone()),
+            None => ("unknown", String::new()),
+        };
+        let can_set_up = setup == "needs_setup" && caller.may_set_up();
         let g = self.inner.lock();
-        let (shown, src, access) = match &g.last {
-            Some((s, _, src, access)) => (s.clone(), *src, access.clone()),
+        let (shown, src) = match &g.last {
+            Some((s, _, src, _)) => (s.clone(), *src),
             None => (
                 describe(
                     KeepAwakeMode::Off,
-                    &plan(KeepAwakeMode::Off, false, PowerSource::default(), false, &LidFacts {
+                    &plan(KeepAwakeMode::Off, false, PowerSource::default(), false, false, &LidFacts {
                         access: LidAccess::Ready,
                         ac_only_unless_allowed: false,
                     }),
@@ -368,7 +412,6 @@ impl KeepAwake {
                     PowerSource::default(),
                 ),
                 PowerSource::default(),
-                None,
             ),
         };
         serde_json::json!({
@@ -382,34 +425,99 @@ impl KeepAwake {
             "powerSource": src,
             "batteryFloorPercent": WAKE_BATTERY_FLOOR_PERCENT,
             "alsoOnBattery": allow_battery,
-            "canApproveLid": access == Some(LidAccess::NeedsApproval),
-            "lidDialogDeclined": settings.lid_dialog_declined,
+            // "Also with the lid closed": the saved switch, whether this
+            // OS has it at all, and whether it is set up.
+            "lidClosed": settings.lid_closed.unwrap_or(false),
+            "lidSwitch": switch_applies,
+            "lidSetup": setup,
+            "lidSetupDetail": setup_detail,
+            "canSetUp": can_set_up,
+            // 0.43.0/0.43.1 clients (P19): their "Allow lid closed" button
+            // shows only for a caller who may set it up.
+            "canApproveLid": can_set_up,
+            "lidDialogDeclined": false,
             "platform": std::env::consts::OS,
         })
     }
 }
 
-/// D11 — the approval step when Keep awake turns on. macOS without the
-/// helper shows the one admin dialog (the same one as wake), unless the
-/// user already declined it and did not ask again. Returns
-/// `Some(declined)` when a dialog ran, `None` when none was needed, plus
-/// a message.
-pub fn approve_lid(os: &dyn PowerOs, mode: KeepAwakeMode, already_declined: bool, ask_again: bool) -> (Option<bool>, String) {
-    if mode == KeepAwakeMode::Off || os.lid_facts(os.power_source()).access != LidAccess::NeedsApproval {
-        return (None, String::new());
+/// "Also with the lid closed", effective. Where the OS decides (Windows)
+/// there is no switch, so the plan reports the OS setting as before.
+pub fn lid_switch_on(settings: &KeepAwakeSettings, os: &dyn PowerOs) -> bool {
+    !os.lid_switch_applies() || settings.lid_closed.unwrap_or(false)
+}
+
+/// The switch for a settings file that never had one. A 0.43.0 Mac that
+/// approved the helper's admin dialog held the lid closed in every mode,
+/// so it keeps doing that (switch on). Linux held it in every mode with
+/// no approval, so a user who had a mode on keeps it. Everyone else
+/// starts off. Off reads no lid facts.
+pub fn migrated_lid_switch(mode: KeepAwakeMode, os: &dyn PowerOs) -> bool {
+    if !os.lid_switch_applies() {
+        return false;
     }
-    if already_declined && !ask_again {
-        return (None, String::new());
+    if os.lid_helper_approved() {
+        return true;
+    }
+    mode != KeepAwakeMode::Off && os.lid_facts(PowerSource::default()).access == LidAccess::Ready
+}
+
+/// Boot: save [`migrated_lid_switch`] once, when the file has no switch.
+fn resolve_lid_switch_once(os: &dyn PowerOs) {
+    let current = k2_core::app_settings::load().keep_awake;
+    if current.lid_closed.is_some() {
+        return;
+    }
+    let on = migrated_lid_switch(current.mode(), os);
+    match k2_core::app_settings::update(serde_json::json!({ "keepAwake": { "lidClosed": on } })) {
+        Ok(_) => k2_core::log_debug!("[keep-awake] \"Also with the lid closed\" set {on} from the old behaviour"),
+        Err(e) => k2_core::log_debug!("[keep-awake] could not save the lid-closed switch: {e}"),
+    }
+}
+
+/// What **Set up** did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetUp {
+    /// The helper is in (or nothing was needed).
+    pub ok: bool,
+    /// The admin dialog ran.
+    pub dialog: bool,
+    pub message: String,
+}
+
+/// Power-helper S1 — the ONLY way Keep awake reaches the installer. Until
+/// S3 this is still the 0.43.0 `osascript` dialog; it runs only when the
+/// helper is missing and only for a caller who may set it up (a local
+/// Admin or Owner). A mode change never comes here.
+pub fn set_up(os: &dyn PowerOs, caller: HelperCaller) -> SetUp {
+    let needed = os.wake_needs_approval()
+        || (os.lid_switch_applies() && os.lid_facts(PowerSource::default()).access == LidAccess::NeedsApproval);
+    if !needed {
+        let message = if os.lid_helper_approved() {
+            "The power helper is already set up."
+        } else {
+            "Nothing to set up on this machine."
+        };
+        return SetUp { ok: true, dialog: false, message: message.into() };
+    }
+    if !caller.may_set_up() {
+        return SetUp { ok: false, dialog: false, message: caller.refusal().into() };
     }
     match os.install_wake_helper() {
-        Ok(()) => (Some(false), "Helper installed. Lid closed is covered on power.".into()),
-        Err(e) => (Some(true), format!("Keep awake holds with the lid open only; lid closed will still sleep. {e}")),
+        Ok(()) => SetUp { ok: true, dialog: true, message: "Power helper set up.".into() },
+        Err(e) => SetUp { ok: false, dialog: true, message: format!("Lid closed will still sleep. {e}") },
     }
 }
 
 // ── Daemon wiring ──────────────────────────────────────────────────────
 
 static KEEP_AWAKE: parking_lot::RwLock<Option<Arc<KeepAwake>>> = parking_lot::RwLock::new(None);
+
+/// Drop the Keep awake controller so the next use builds it on the
+/// current power layer ([`super::install_os`], tests).
+pub fn reset_for_tests() {
+    *KEEP_AWAKE.write() = None;
+}
 
 pub fn keep_awake() -> Arc<KeepAwake> {
     if let Some(k) = KEEP_AWAKE.read().as_ref() {
@@ -441,7 +549,11 @@ async fn reconcile_async(context: &'static str) {
 pub fn spawn() {
     tokio::spawn(async move {
         let os = super::power().os();
-        let _ = tokio::task::spawn_blocking(move || os.clear_stale_lid_hold()).await;
+        let _ = tokio::task::spawn_blocking(move || {
+            os.clear_stale_lid_hold();
+            resolve_lid_switch_once(os.as_ref());
+        })
+        .await;
         reconcile_async("boot").await;
         let mut events = crate::session_events::subscribe();
         let mut tick = tokio::time::interval(RECONCILE_INTERVAL);
@@ -476,30 +588,34 @@ pub fn spawn() {
 struct SetBody {
     /// `off` | `working` | `always`. Omitted = unchanged.
     mode: Option<String>,
-    /// macOS: show the admin dialog again after a decline.
+    /// 0.43.0/0.43.1 clients' "Allow lid closed" (P19): turns the lid
+    /// switch on and runs [`set_up`] (a local Admin or Owner only).
     #[serde(default)]
     approve_lid: bool,
     /// "Also on battery" (shared with wake, D12). Omitted = unchanged.
     on_battery: Option<bool>,
+    /// "Also with the lid closed". Omitted = unchanged. Never prompts.
+    lid_closed: Option<bool>,
 }
 
 /// `GET /cli/power/status` — what Keep awake really holds, plus the S2
 /// wake/awake objects.
-pub fn handle_status() -> crate::cli_response::CliResponse {
+pub fn handle_status(caller: HelperCaller) -> crate::cli_response::CliResponse {
     reconcile_now();
     let (settings, battery) = saved();
-    let mut v = keep_awake().status_json(&settings, battery);
+    let mut v = keep_awake().status_json(&settings, battery, caller);
     let power = super::power().status_json();
     v["awake"] = power["awake"].clone();
     v["wake"] = power["wake"].clone();
     crate::cli_response::CliResponse::ok_json(serde_json::json!({ "keepAwake": v }).to_string())
 }
 
-/// `POST /cli/power/keep-awake` — set the mode. Turning it on, on a Mac
-/// without the helper, shows the one admin dialog (up to 2 minutes). A
-/// decline is saved, Keep awake still holds with the lid open, and the
-/// status says lid closed will still sleep.
-pub fn handle_set(body: &[u8]) -> crate::cli_response::CliResponse {
+/// `POST /cli/power/keep-awake` — set the mode, "Also on battery" and
+/// "Also with the lid closed". None of them installs anything or shows a
+/// dialog: without the helper the status says lid closed will still
+/// sleep and offers **Set up**. Only an old client's `approveLid` reaches
+/// [`set_up`], which itself refuses a Member or a remote client.
+pub fn handle_set(body: &[u8], caller: HelperCaller) -> crate::cli_response::CliResponse {
     use crate::cli_response::CliResponse;
     let parsed: SetBody = match serde_json::from_slice(body) {
         Ok(b) => b,
@@ -513,11 +629,11 @@ pub fn handle_set(body: &[u8]) -> crate::cli_response::CliResponse {
         },
         None => current.mode(),
     };
-    let os = super::power().os();
-    let (dialog, message) = approve_lid(os.as_ref(), mode, current.lid_dialog_declined, parsed.approve_lid);
     let mut partial = serde_json::json!({ "keepAwake": { "mode": mode.as_wire() } });
-    if let Some(declined) = dialog {
-        partial["keepAwake"]["lidDialogDeclined"] = serde_json::Value::Bool(declined);
+    match (parsed.lid_closed, parsed.approve_lid) {
+        (_, true) => partial["keepAwake"]["lidClosed"] = serde_json::Value::Bool(true),
+        (Some(b), false) => partial["keepAwake"]["lidClosed"] = serde_json::Value::Bool(b),
+        (None, false) => {}
     }
     if let Some(b) = parsed.on_battery {
         partial["wakeScheduler"] = serde_json::json!({ "wakeOnBattery": b });
@@ -525,15 +641,66 @@ pub fn handle_set(body: &[u8]) -> crate::cli_response::CliResponse {
     if let Err(e) = k2_core::app_settings::update(partial) {
         return CliResponse::bad_request(e);
     }
+    let setup = if parsed.approve_lid { Some(set_up(super::power().os().as_ref(), caller)) } else { None };
     let shown = reconcile_now();
-    // Wake re-plans too: "Also on battery" is shared.
-    if parsed.on_battery.is_some() {
+    // Wake re-plans too: "Also on battery" is shared, and a new helper
+    // lets wake schedule.
+    if parsed.on_battery.is_some() || setup.as_ref().is_some_and(|s| s.dialog && s.ok) {
         super::replan_wake_now();
     }
     let (settings, battery) = saved();
-    let mut v = keep_awake().status_json(&settings, battery);
-    v["message"] = serde_json::Value::String(if message.is_empty() { shown.detail } else { message });
+    let mut v = keep_awake().status_json(&settings, battery, caller);
+    v["message"] = serde_json::Value::String(match setup {
+        Some(s) => s.message,
+        None => shown.detail,
+    });
     CliResponse::ok_json(serde_json::json!({ "success": true, "keepAwake": v }).to_string())
+}
+
+/// Body for `POST /cli/power/helper`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelperBody {
+    /// `setup` in S1. `open-settings` and `remove` come with the
+    /// SMAppService helper (S3).
+    action: String,
+}
+
+/// `POST /cli/power/helper {action:"setup"}` — **Set up** for lid closed
+/// (and wake). Admin floor in `route_policy.rs`; here it also refuses a
+/// caller that is not at the host itself, because the dialog shows on
+/// the host's screen. 403 before the body is looked at.
+pub fn handle_helper(body: &[u8], caller: HelperCaller) -> crate::cli_response::CliResponse {
+    use crate::cli_response::CliResponse;
+    let forbidden = |error: &str, message: &str| CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": error, "message": message }).to_string(),
+    };
+    if !caller.admin {
+        return forbidden("role_required", caller.refusal());
+    }
+    if !caller.local {
+        return forbidden("host_only", caller.refusal());
+    }
+    let parsed: HelperBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
+    };
+    if parsed.action != "setup" {
+        return CliResponse::bad_request(format!("action must be \"setup\" (got {:?})", parsed.action));
+    }
+    let r = set_up(super::power().os().as_ref(), caller);
+    reconcile_now();
+    if r.dialog && r.ok {
+        super::replan_wake_now();
+    }
+    let (settings, battery) = saved();
+    let mut v = keep_awake().status_json(&settings, battery, caller);
+    v["message"] = serde_json::Value::String(r.message.clone());
+    CliResponse::ok_json(
+        serde_json::json!({ "success": r.ok, "message": r.message, "keepAwake": v }).to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -547,9 +714,21 @@ mod tests {
         PowerSource { on_ac: Some(false), battery_percent: Some(p) }
     }
 
+    /// A mode with "Also with the lid closed" on.
     fn settings(mode: &str) -> KeepAwakeSettings {
-        KeepAwakeSettings { mode: mode.into(), lid_dialog_declined: false }
+        settings_lid(mode, Some(true))
     }
+
+    fn settings_lid(mode: &str, lid_closed: Option<bool>) -> KeepAwakeSettings {
+        KeepAwakeSettings { mode: mode.into(), lid_dialog_declined: false, lid_closed }
+    }
+
+    const LOCAL_ADMIN: HelperCaller = HelperCaller { local: true, admin: true };
+    const NOT_ALLOWED: [HelperCaller; 3] = [
+        HelperCaller { local: true, admin: false },
+        HelperCaller { local: false, admin: true },
+        HelperCaller { local: false, admin: false },
+    ];
 
     fn mac_ready() -> LidFacts {
         LidFacts { access: LidAccess::Ready, ac_only_unless_allowed: true }
@@ -650,32 +829,32 @@ mod tests {
     #[test]
     fn battery_floor_and_ac_only() {
         let lid = mac_ready();
-        let p = plan(KeepAwakeMode::Always, false, AC, false, &lid);
+        let p = plan(KeepAwakeMode::Always, false, AC, false, true, &lid);
         assert_eq!((p.hold_open, p.want_lid, p.paused_battery), (true, true, false));
 
-        let p = plan(KeepAwakeMode::Always, false, batt(60), false, &lid);
+        let p = plan(KeepAwakeMode::Always, false, batt(60), false, true, &lid);
         assert_eq!((p.hold_open, p.want_lid), (true, false), "battery without the checkbox: lid open only");
         let why = p.lid_block.clone().expect("a reason");
         assert!(why.contains("Also on battery"), "{why}");
 
-        let p = plan(KeepAwakeMode::Always, false, batt(60), true, &lid);
+        let p = plan(KeepAwakeMode::Always, false, batt(60), true, true, &lid);
         assert_eq!((p.hold_open, p.want_lid), (true, true), "checkbox on, above the floor");
 
-        let p = plan(KeepAwakeMode::Always, false, batt(20), true, &lid);
+        let p = plan(KeepAwakeMode::Always, false, batt(20), true, true, &lid);
         assert_eq!((p.hold_open, p.want_lid, p.paused_battery), (true, true, false), "20% is at the floor, not below");
 
         for allowed in [false, true] {
-            let p = plan(KeepAwakeMode::Always, false, batt(19), allowed, &lid);
+            let p = plan(KeepAwakeMode::Always, false, batt(19), allowed, true, &lid);
             assert_eq!((p.hold_open, p.want_lid, p.paused_battery), (false, false, true));
         }
 
         // A desktop with no battery counts as power.
-        let p = plan(KeepAwakeMode::Always, false, PowerSource::default(), false, &lid);
+        let p = plan(KeepAwakeMode::Always, false, PowerSource::default(), false, true, &lid);
         assert_eq!((p.hold_open, p.want_lid), (true, true));
 
         // Linux/Windows lid holds are not the Mac's battery-blind one.
         let other = LidFacts { access: LidAccess::Ready, ac_only_unless_allowed: false };
-        let p = plan(KeepAwakeMode::Always, false, batt(60), false, &other);
+        let p = plan(KeepAwakeMode::Always, false, batt(60), false, true, &other);
         assert_eq!(p.want_lid, true);
     }
 
@@ -705,44 +884,169 @@ mod tests {
         assert_eq!((fake.lid_released(), fake.holds_released()), (2, 1));
     }
 
-    /// D11 — a declined dialog falls back to lid open only, and is not
-    /// asked again until the user asks; an installed helper never asks.
+    /// Power-helper S1 T1 — on a Mac without the helper, no mode, no
+    /// switch position and no caller ever reaches the installer through
+    /// the policy: Keep awake holds with the lid open and says lid closed
+    /// is not set up.
     #[test]
-    fn declined_helper_falls_back_to_lid_open_only() {
-        let (fake, ka) = rig(FakePowerOs::needs_approval(false));
-        let (dialog, msg) = approve_lid(fake.as_ref(), KeepAwakeMode::Always, false, false);
-        assert_eq!(dialog, Some(true), "the dialog ran and was declined");
-        assert!(msg.contains("lid closed will still sleep"), "{msg}");
-        assert_eq!(fake.approval_prompts(), 1);
+    fn a_mode_change_never_installs_the_helper() {
+        let (fake, ka) = rig(FakePowerOs::needs_approval(true));
+        let t0 = Instant::now();
+        ka.note_activity(&WorkTracker::key("/w/k2", "k2-chat"), "working", t0);
+        for lid in [None, Some(false), Some(true)] {
+            for mode in ["off", "working", "always", "working", "off"] {
+                let s = settings_lid(mode, lid);
+                let shown = ka.reconcile(&s, false, t0);
+                for caller in [LOCAL_ADMIN, NOT_ALLOWED[0], NOT_ALLOWED[1], NOT_ALLOWED[2]] {
+                    let _ = ka.status_json(&s, false, caller);
+                }
+                assert_eq!(fake.approval_prompts(), 0, "mode {mode} lid {lid:?} prompted");
+                if mode != "off" {
+                    assert_eq!(shown.state, "lid_open_only", "{mode} {lid:?}: {shown:?}");
+                    assert_eq!(shown.label, "Awake (lid open only)");
+                    let why = if lid == Some(true) { LID_NOT_SET_UP } else { LID_SWITCH_OFF };
+                    assert_eq!(shown.detail, format!("Lid closed will still sleep: {why}"));
+                }
+            }
+        }
+        assert_eq!(fake.lid_taken(), 0, "no lid hold without the helper");
+        assert!(fake.holds_taken() >= 1, "the lid-open hold needs no helper");
+    }
 
-        let shown = ka.reconcile(&settings("always"), false, Instant::now());
-        assert_eq!(shown.state, "lid_open_only");
-        assert_eq!(shown.label, "Awake (lid open only)");
-        assert!(shown.detail.contains("Lid closed will still sleep"), "{}", shown.detail);
-        assert!(shown.detail.contains("admin approval"), "{}", shown.detail);
+    /// T2 — `plan()` without the helper on AC: lid open holds, lid closed
+    /// is not wanted, and the reason names the helper.
+    #[test]
+    fn plan_without_the_helper_holds_lid_open_only() {
+        let lid = LidFacts { access: LidAccess::NeedsApproval, ac_only_unless_allowed: true };
+        let p = plan(KeepAwakeMode::Always, false, AC, false, true, &lid);
+        assert_eq!((p.hold_open, p.want_lid), (true, false));
+        assert_eq!(p.lid_block.as_deref(), Some(LID_NOT_SET_UP));
+    }
+
+    /// The switch: off holds lid open only on every OS where K2 holds the
+    /// lid; on holds lid closed; Windows has no switch (the plan decides).
+    #[test]
+    fn the_lid_switch_decides_the_lid_hold() {
+        let ready = mac_ready();
+        let p = plan(KeepAwakeMode::Always, false, AC, false, false, &ready);
+        assert_eq!((p.hold_open, p.want_lid), (true, false));
+        assert_eq!(p.lid_block.as_deref(), Some(LID_SWITCH_OFF));
+        let p = plan(KeepAwakeMode::Always, false, AC, false, true, &ready);
+        assert_eq!((p.hold_open, p.want_lid, p.lid_block), (true, true, None));
+        // Not holding at all: the switch adds nothing.
+        let p = plan(KeepAwakeMode::Working, false, AC, false, true, &ready);
+        assert_eq!((p.hold_open, p.want_lid, p.lid_block), (false, false, None));
+
+        let (fake, ka) = rig(FakePowerOs::mac_with_helper());
+        let t0 = Instant::now();
+        let shown = ka.reconcile(&settings_lid("always", Some(false)), false, t0);
+        assert_eq!((shown.state, shown.lid_held), ("lid_open_only", false));
+        assert_eq!(shown.detail, format!("Lid closed will still sleep: {LID_SWITCH_OFF}"));
         assert_eq!((fake.holds_taken(), fake.lid_taken()), (1, 0));
-        let v = ka.status_json(&settings("always"), false);
+        // Turning it on takes the lid hold; off again drops it, keeps open.
+        assert_eq!(ka.reconcile(&settings_lid("always", Some(true)), false, t0).state, "lid_closed_ok");
+        assert_eq!(fake.lid_taken(), 1);
+        let shown = ka.reconcile(&settings_lid("always", None), false, t0);
+        assert_eq!(shown.state, "lid_open_only", "unset reads as off");
+        assert_eq!((fake.lid_released(), fake.holds_released()), (1, 0));
+
+        // Windows: no switch, the power plan decides as before.
+        let (_w, ka) = rig(FakePowerOs::windows_lid_sleeps());
+        let shown = ka.reconcile(&settings_lid("always", None), false, t0);
+        assert!(shown.detail.contains("Do nothing"), "{}", shown.detail);
+        assert_eq!(ka.status_json(&settings_lid("always", None), false, LOCAL_ADMIN)["lidSwitch"], false);
+    }
+
+    /// The status offers Set up only to a local Admin or Owner, and the
+    /// old clients' `canApproveLid` follows it.
+    #[test]
+    fn status_offers_set_up_only_to_a_local_admin() {
+        let (_fake, ka) = rig(FakePowerOs::needs_approval(true));
+        let s = settings_lid("always", Some(true));
+        ka.reconcile(&s, false, Instant::now());
+        let v = ka.status_json(&s, false, LOCAL_ADMIN);
+        assert_eq!(v["lidClosed"], true);
+        assert_eq!(v["lidSwitch"], true);
+        assert_eq!(v["lidSetup"], "needs_setup");
+        assert_eq!(v["canSetUp"], true);
         assert_eq!(v["canApproveLid"], true);
+        assert_eq!(v["lidDialogDeclined"], false);
+        assert!(v["lidSetupDetail"].as_str().expect("detail").contains("admin password"), "{v}");
+        for caller in NOT_ALLOWED {
+            let v = ka.status_json(&s, false, caller);
+            assert_eq!(v["lidSetup"], "needs_setup", "{caller:?}");
+            assert_eq!(v["canSetUp"], false, "{caller:?}");
+            assert_eq!(v["canApproveLid"], false, "{caller:?}");
+            let d = v["lidSetupDetail"].as_str().expect("detail");
+            assert!(d.contains("host Mac"), "{caller:?}: {d}");
+            assert!(!d.contains("password"), "{caller:?}: {d}");
+        }
+        // Off reads no power source, but still says whether it is set up.
+        let (fake, ka) = rig(FakePowerOs::needs_approval(true));
+        let off = settings_lid("off", Some(true));
+        ka.reconcile(&off, false, Instant::now());
+        assert_eq!(ka.status_json(&off, false, LOCAL_ADMIN)["lidSetup"], "needs_setup");
+        assert_eq!(fake.power_reads(), 0);
+        // With the helper in there is nothing to set up.
+        let (_f, ka) = rig(FakePowerOs::mac_with_helper());
+        let v = ka.status_json(&settings("working"), false, LOCAL_ADMIN);
+        assert_eq!((v["lidSetup"].as_str(), v["canSetUp"].as_bool()), (Some("ready"), Some(false)));
+    }
 
-        // Switching modes after a decline does not prompt again…
-        assert_eq!(approve_lid(fake.as_ref(), KeepAwakeMode::Working, true, false), (None, String::new()));
+    /// Set up: the only path to the dialog. A Member or a remote client
+    /// never reaches it; a local admin does, once; an installed helper
+    /// needs nothing; a decline says lid closed will still sleep.
+    #[test]
+    fn set_up_runs_the_dialog_only_for_a_local_admin() {
+        for caller in NOT_ALLOWED {
+            let fake = FakePowerOs::needs_approval(true);
+            let r = set_up(&fake, caller);
+            assert_eq!((r.ok, r.dialog), (false, false), "{caller:?}");
+            assert_eq!(fake.approval_prompts(), 0, "{caller:?} must never cause the dialog");
+            assert!(r.message.contains("host Mac"), "{caller:?}: {}", r.message);
+        }
+        let (fake, ka) = rig(FakePowerOs::needs_approval(true));
+        let r = set_up(fake.as_ref(), LOCAL_ADMIN);
+        assert_eq!((r.ok, r.dialog), (true, true));
         assert_eq!(fake.approval_prompts(), 1);
-        // …Off never prompts…
-        assert_eq!(approve_lid(fake.as_ref(), KeepAwakeMode::Off, false, true).0, None);
+        assert_eq!(ka.reconcile(&settings("always"), false, Instant::now()).state, "lid_closed_ok");
+        // Now in: Set up again shows nothing.
+        let r = set_up(fake.as_ref(), LOCAL_ADMIN);
+        assert_eq!((r.ok, r.dialog, r.message.as_str()), (true, false, "The power helper is already set up."));
         assert_eq!(fake.approval_prompts(), 1);
-        // …"Allow lid closed" does.
-        assert_eq!(approve_lid(fake.as_ref(), KeepAwakeMode::Always, true, true).0, Some(true));
-        assert_eq!(fake.approval_prompts(), 2);
 
-        // Accepting installs the helper; the lid hold follows.
-        let (accepting, ka2) = rig(FakePowerOs::needs_approval(true));
-        assert_eq!(approve_lid(accepting.as_ref(), KeepAwakeMode::Always, false, false).0, Some(false));
-        assert_eq!(ka2.reconcile(&settings("always"), false, Instant::now()).state, "lid_closed_ok");
+        let declining = FakePowerOs::needs_approval(false);
+        let r = set_up(&declining, LOCAL_ADMIN);
+        assert_eq!((r.ok, r.dialog), (false, true));
+        assert!(r.message.starts_with("Lid closed will still sleep."), "{}", r.message);
 
-        // Helper already in (wake turned it on): no second dialog.
-        let installed = FakePowerOs::mac_with_helper();
-        assert_eq!(approve_lid(&installed, KeepAwakeMode::Always, false, false), (None, String::new()));
-        assert_eq!(installed.approval_prompts(), 0);
+        let linux = FakePowerOs::linux_session();
+        let r = set_up(&linux, LOCAL_ADMIN);
+        assert_eq!((r.ok, r.dialog, r.message.as_str()), (true, false, "Nothing to set up on this machine."));
+        assert_eq!(linux.approval_prompts(), 0);
+    }
+
+    /// The first boot after the upgrade: a Mac that approved the 0.43.0
+    /// helper keeps lid closed (switch on, in any mode); a Mac without it
+    /// starts off; Linux keeps it only if a mode was on; Windows has no
+    /// switch. Off reads no power source.
+    #[test]
+    fn the_switch_starts_from_the_old_behaviour() {
+        use KeepAwakeMode::{Always, Off, Working};
+        let mac = FakePowerOs::mac_with_helper();
+        for mode in [Off, Working, Always] {
+            assert!(migrated_lid_switch(mode, &mac), "{mode:?}: an approved 0.43.0 helper keeps lid closed");
+        }
+        let fresh = FakePowerOs::needs_approval(true);
+        for mode in [Off, Working, Always] {
+            assert!(!migrated_lid_switch(mode, &fresh), "{mode:?}: no helper, the switch starts off");
+        }
+        assert_eq!(fresh.approval_prompts(), 0);
+        let linux = FakePowerOs::linux_session();
+        assert!(!migrated_lid_switch(Off, &linux));
+        assert!(migrated_lid_switch(Working, &linux));
+        assert!(!migrated_lid_switch(Always, &FakePowerOs::windows_lid_sleeps()));
+        assert_eq!((mac.power_reads(), linux.power_reads()), (0, 0));
     }
 
     /// D13 / D14 — Linux headless and the Windows lid action are honest.

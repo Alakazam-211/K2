@@ -217,6 +217,11 @@ impl PowerOs for WindowsPowerOs {
         LidFacts { access, ac_only_unless_allowed: false }
     }
 
+    /// The power plan's lid action decides; K2 only reports it (D14).
+    fn lid_switch_applies(&self) -> bool {
+        false
+    }
+
     /// Nothing to take: with the lid action "Do nothing", the system
     /// request from the lid-open hold keeps it running.
     fn hold_lid_closed(&self, _reason: &str) -> Result<Box<dyn Send>, LidRefusal> {

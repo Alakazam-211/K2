@@ -3001,6 +3001,57 @@ mod tests {
         }
     }
 
+    /// Private `$HOME` for tests that exec a non-system stub.
+    ///
+    /// The temp-HOME belt (`k2_core::terminal::agent_spawn_guard`,
+    /// 20dc5d7f) refuses every program outside `/bin` `/usr/bin` … while the
+    /// PROCESS `$HOME` sits under the OS temp dir — which it does whenever
+    /// another lib test holds `test_support::TempHome`. These tests exec a
+    /// `#!/bin/sh exec cat` stub, so they take the crate-wide HOME lock and
+    /// point `$HOME` at a fresh dir next to the test binary (outside the
+    /// temp roots). They neither race the HOME swappers nor read the real
+    /// home dir. Restores `$HOME` and removes the dir on drop.
+    struct StubHome {
+        prev: Option<std::ffi::OsString>,
+        home: std::path::PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl StubHome {
+        fn new() -> Self {
+            let lock = crate::test_support::lock_home();
+            let exe = std::env::current_exe().expect("test binary path");
+            let home = exe
+                .parent()
+                .expect("test binary dir")
+                .join(format!(
+                    "k2-v2spawn-home-{}-{}",
+                    std::process::id(),
+                    NEXT_ID.fetch_add(1, Ordering::SeqCst)
+                ));
+            std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME");
+            let prev = std::env::var_os("HOME");
+            std::env::set_var("HOME", &home);
+            assert!(
+                !k2_core::terminal::agent_spawn_guard::GuardEnv::from_process().home_is_temp(),
+                "stub HOME {} is under the OS temp dir; the spawn guard would refuse the stub \
+                 (build with a target dir outside $TMPDIR)",
+                home.display()
+            );
+            Self { prev, home, _lock: lock }
+        }
+    }
+
+    impl Drop for StubHome {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(p) => std::env::set_var("HOME", p),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
     struct ReapAgent(String);
     impl Drop for ReapAgent {
         fn drop(&mut self) {
@@ -3035,6 +3086,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_respawns_same_provider_session_and_later_spawn_attaches() {
         k2_core::db::init_for_tests();
+        // Declared first so it drops last: the stub is killed (ReapAgent)
+        // before $HOME is restored.
+        let _home = StubHome::new();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let pid = format!("refresh-live-{n}");
         let cwd = format!("/tmp/{pid}");
@@ -3145,6 +3199,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_self_minting_codex_does_not_mint_and_old_argv_attaches() {
         k2_core::db::init_for_tests();
+        // Declared first so it drops last: the stub is killed (ReapAgent)
+        // before $HOME is restored.
+        let _home = StubHome::new();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let pid = format!("refresh-codex-{n}");
         let cwd = format!("/tmp/{pid}");

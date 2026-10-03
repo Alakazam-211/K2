@@ -525,6 +525,30 @@ async fn the_door_comes_from_the_token() {
     });
 }
 
+/// `k2 tickets template` (static, no daemon) passes the cleaner with no
+/// warnings: nothing stripped, and it has the `.k2-need` section.
+#[test]
+fn the_cli_template_cleans_without_warnings() {
+    let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+    let empty_home = std::env::temp_dir().join(format!("tb-tpl-home-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&empty_home).expect("empty HOME");
+    let out = std::process::Command::new("bash")
+        .arg(&cli)
+        .args(["tickets", "template"])
+        .env_clear()
+        .env("HOME", &empty_home)
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .output()
+        .expect("run cli/k2 tickets template");
+    std::fs::remove_dir_all(&empty_home).expect("cleanup");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let tpl = String::from_utf8(out.stdout).expect("utf-8 template");
+    let c = brief::clean(&tpl).expect("the template is a valid brief");
+    assert!(!c.removed, "the cleaner removed something from the template:\n{tpl}");
+    assert!(c.has_need, "the template has a k2-need section");
+    assert!(c.warnings().is_empty(), "{:?}", c.warnings());
+}
+
 // ── T12: teaching ───────────────────────────────────────────────────────
 
 /// Every generator that teaches `tickets ask` also teaches the brief,

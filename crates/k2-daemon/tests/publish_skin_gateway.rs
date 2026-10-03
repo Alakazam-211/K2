@@ -2690,6 +2690,16 @@ async fn publish_run_skin_gateway_password_reset_and_change() {
         add_user(dport, "guest");
         set_rooms(dport, "guest", &handle);
         set_password(dport, "guest", "s3cret-horse");
+        // d19889de (prd-skin-guest-email-v1, LIVE 0.40.139): forgot mints
+        // a reset token only for a guest with a password AND an email;
+        // otherwise it answers the uniform `{"ok":true}` miss.
+        let email = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/users/email?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest","email":"guest@clinic.example"}"#),
+        );
+        assert_eq!(email.status, 200, "set email; {}", email.body);
 
         let gport = free_port();
         publish_skin(dport, &path, gport, None);

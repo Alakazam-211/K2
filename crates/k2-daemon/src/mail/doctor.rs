@@ -214,10 +214,27 @@ const POSTMASTER_COACHING: &str =
      Microsoft SNDS/JMRP — the sender-reputation dashboards for the two biggest \
      inbox providers.";
 
-/// Run the full check table. PURE over the injected seams — every
-/// branch unit-tests with canned answers; nothing here touches the DB.
+/// [`run_checks_with_ptr_resolver`] with one resolver for every lookup —
+/// the unit-test form (one canned DNS fake answers PTR too).
+#[cfg(test)]
 pub fn run_checks(
     resolver: &dyn DnsResolver,
+    env: &dyn DoctorEnv,
+    ctx: &ServerCtx,
+    domain: Option<&mut DomainCtx>,
+    now: i64,
+) -> DoctorReport {
+    run_checks_with_ptr_resolver(resolver, resolver, env, ctx, domain, now)
+}
+
+/// Run the full check table. PURE over the injected seams — every
+/// branch unit-tests with canned answers; nothing here touches the DB
+/// or the network. `ptr_resolver` answers PTR + FCrDNS only: production
+/// passes the public 8.8.8.8 / 1.1.1.1 resolver, not the box stub cache
+/// (3972ba77).
+pub fn run_checks_with_ptr_resolver(
+    resolver: &dyn DnsResolver,
+    ptr_resolver: &dyn DnsResolver,
     env: &dyn DoctorEnv,
     ctx: &ServerCtx,
     domain: Option<&mut DomainCtx>,
@@ -260,11 +277,8 @@ pub fn run_checks(
         },
     });
 
-    // PTR + FCrDNS — 8.8.8.8 / 1.1.1.1, not the box stub cache.
-    checks.extend(match dns_verify::SystemResolver::public() {
-        Ok(pub_r) => ptr_checks(&pub_r, &ctx.hostname, ip.as_deref()),
-        Err(_) => ptr_checks(resolver, &ctx.hostname, ip.as_deref()),
-    });
+    // PTR + FCrDNS — the caller's public resolver, not the box stub cache.
+    checks.extend(ptr_checks(ptr_resolver, &ctx.hostname, ip.as_deref()));
 
     // SMTP banner vs hostname (loopback EHLO — also feeds STARTTLS).
     let ehlo25 = env.smtp_ehlo("127.0.0.1", 25);
@@ -1073,13 +1087,21 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
     }
 
     let resolver = dns_verify::SystemResolver::new().map_err(DocError::Engine)?;
+    // PTR + FCrDNS ask 8.8.8.8 / 1.1.1.1, not the box stub cache (3972ba77).
+    // Falls back to the system resolver when the public one cannot build.
+    let public_resolver = dns_verify::SystemResolver::public().ok();
+    let ptr_resolver: &dyn DnsResolver = match public_resolver.as_ref() {
+        Some(p) => p,
+        None => &resolver,
+    };
     let env = RealDoctorEnv;
     let now = now_secs();
     let (domain_id, mut dctx) = match domain_ctx {
         Some((id, d)) => (Some(id), Some(d)),
         None => (None, None),
     };
-    let mut report = run_checks(&resolver, &env, &ctx, dctx.as_mut(), now);
+    let mut report =
+        run_checks_with_ptr_resolver(&resolver, ptr_resolver, &env, &ctx, dctx.as_mut(), now);
     // Auth-ban + migrate-overdue (prd-hostmail-bans-v1 B7/B17/B29).
     // Soft only — never gates_direct.
     report

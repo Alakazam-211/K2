@@ -2368,9 +2368,13 @@ mod tests {
         let conn = db.lock();
         let pid = uuid::Uuid::new_v4().to_string();
         let path = format!("/tmp/msg-target-sales-{pid}");
+        // Unique name: the lib-test DB is shared, and other tests seed a
+        // "Sales" workspace (cell_server's `/tmp/k2-cell-sales-claim`),
+        // which won the bare-name lookup when it ran first.
+        let ws = format!("sales{}", &pid[..8]);
         conn.execute(
-            "INSERT INTO projects (id, name, path) VALUES (?1, 'sales', ?2)",
-            rusqlite::params![pid, path],
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![pid, ws, path],
         )
         .expect("seed sales");
         let sid = uuid::Uuid::new_v4().to_string();
@@ -2384,11 +2388,11 @@ mod tests {
         k2_core::workspace_session_handles::allocate_ordinal(&conn, &pid, &sid).expect("ord");
         drop(conn);
 
-        match resolve_msg_target("sales").expect("canonical") {
+        match resolve_msg_target(&ws).expect("canonical") {
             MsgTarget::WorkspaceCanonical { path: p } => assert_eq!(p, path),
             other => panic!("expected canonical, got {other:?}"),
         }
-        match resolve_msg_target("sales/1").expect("sidecar 1") {
+        match resolve_msg_target(&format!("{ws}/1")).expect("sidecar 1") {
             MsgTarget::Sidecar {
                 handle,
                 conversation_key,
@@ -2409,7 +2413,7 @@ mod tests {
             )
             .expect("rename");
         }
-        match resolve_msg_target("sales/reviewer").expect("sidecar reviewer") {
+        match resolve_msg_target(&format!("{ws}/reviewer")).expect("sidecar reviewer") {
             MsgTarget::Sidecar {
                 handle,
                 conversation_key,
@@ -2421,18 +2425,18 @@ mod tests {
             other => panic!("expected sidecar reviewer, got {other:?}"),
         }
         assert!(
-            resolve_msg_target("sales/1").is_none(),
+            resolve_msg_target(&format!("{ws}/1")).is_none(),
             "old ordinal must fail after rename"
         );
         assert!(
-            resolve_msg_target("sales-reviewer").is_none()
+            resolve_msg_target(&format!("{ws}-reviewer")).is_none()
                 || matches!(
-                    resolve_msg_target("sales-reviewer"),
+                    resolve_msg_target(&format!("{ws}-reviewer")),
                     Some(MsgTarget::WorkspaceCanonical { .. })
                 ),
             "hyphen must not parse as sidecar"
         );
-        if let Some(t) = resolve_msg_target("sales-reviewer") {
+        if let Some(t) = resolve_msg_target(&format!("{ws}-reviewer")) {
             assert!(
                 matches!(t, MsgTarget::WorkspaceCanonical { .. }),
                 "sales-reviewer is workspace-or-fail, not sidecar: {t:?}"

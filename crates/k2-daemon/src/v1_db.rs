@@ -356,6 +356,15 @@ mod tests {
         let (dir, _path, handle) = seed_ws("v1-restore-ok");
         std::fs::create_dir_all(dir.join(".k2/db/dumps")).unwrap();
         std::fs::write(dir.join(".k2/db/dumps/x.dump"), b"FAKE-PG-DUMP").unwrap();
+        // 4ccb4318 (restore replays grant LOGINs, Lock - Workspace Role
+        // Two Actors): a fresh workspace has no catalog grants, so restore
+        // needs the dump's `.grants.json` sidecar. Same shape as
+        // sql::tests::restore_jail_rejects_dotdot_and_abs_happy_path_ok.
+        std::fs::write(
+            dir.join(".k2/db/dumps/x.dump.grants.json"),
+            br#"{"databaseId":"","databaseName":"","grants":[]}"#,
+        )
+        .unwrap();
         let fake = Box::leak(Box::new(crate::sql::sysops::FakeSystemOps::baked()));
         crate::sql::routes::with_fake_ops(fake, || {
             let body = serde_json::json!({ "file": ".k2/db/dumps/x.dump" });

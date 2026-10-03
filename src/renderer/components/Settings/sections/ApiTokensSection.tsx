@@ -14,6 +14,7 @@ import {
   type ApiKeyRow,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { SquareCheckbox } from '@/components/ui'
 
 export const API_TOKENS_MANIFEST: SettingEntry[] = [
   {
@@ -314,7 +315,7 @@ function CreateKeyModal({
         <div className="space-y-1">
           <p className="text-[11px] text-[var(--color-text-muted)]">Workspace grant</p>
           <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-            <input type="checkbox" checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
+            <SquareCheckbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
             All workspaces (*)
           </label>
           {!allWs && (
@@ -327,8 +328,7 @@ function CreateKeyModal({
                     key={slug}
                     className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
                   >
-                    <input
-                      type="checkbox"
+                    <SquareCheckbox
                       checked={selected.has(slug)}
                       onChange={(e) => {
                         setSelected((prev) => {
@@ -365,7 +365,7 @@ function CreateKeyModal({
               key={key}
               className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
             >
-              <input type="checkbox" checked={val} onChange={(e) => set(e.target.checked)} />
+              <SquareCheckbox checked={val} onChange={(e) => set(e.target.checked)} />
               {lab}
             </label>
           ))}

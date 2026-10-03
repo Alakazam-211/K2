@@ -58,6 +58,7 @@ import { normalizeHexColor } from '@/components/Projects/projects-api'
 import { setSqlDbAgentAccess } from './data-api'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { primaryScope } from '@/kessel/server-scope'
+import { SquareCheckbox } from '@/components/ui'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -2674,8 +2675,7 @@ function DefaultModelControls({
         }`}
         data-settings-id="projects.force-model-on-resume"
       >
-        <input
-          type="checkbox"
+        <SquareCheckbox
           checked={force && !empty}
           disabled={empty}
           onChange={(e) => handleForce(e.target.checked)}

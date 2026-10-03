@@ -20,6 +20,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { spanLabel } from '@/lib/heartbeat-wait'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
+import { SquareCheckbox } from '@/components/ui'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -603,8 +604,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 data-settings-id="wake-scheduler.battery"
                 className="flex items-start gap-2 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag"
               >
-                <input
-                  type="checkbox"
+                <SquareCheckbox
                   checked={onBattery}
                   disabled={wakeSaving}
                   onChange={(e) => void handleSetWake(true, e.target.checked)}

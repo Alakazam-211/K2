@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { Toggle } from '@/components/ui'
+import { SquareCheckbox, Toggle } from '@/components/ui'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
@@ -1034,8 +1034,7 @@ export function SkinAccessSection(): React.JSX.Element {
                     return (
                       <div key={`role-mint-${ws.id}`} className="space-y-1">
                         <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                          <input
-                            type="checkbox"
+                          <SquareCheckbox
                             aria-label={`Role agent ${ws.handle}`}
                             checked={included}
                             onChange={(e) => {
@@ -1071,8 +1070,7 @@ export function SkinAccessSection(): React.JSX.Element {
                                 title={SKIN_CAP_LABELS[cap]}
                                 className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                               >
-                                <input
-                                  type="checkbox"
+                                <SquareCheckbox
                                   aria-label={`Role ${ws.handle} ${cap}`}
                                   checked={caps.has(cap)}
                                   onChange={(e) => {
@@ -1184,8 +1182,7 @@ export function SkinAccessSection(): React.JSX.Element {
                               return (
                                 <div key={`edit-role-${r.id}-${ws.id}`} className="space-y-1">
                                   <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                                    <input
-                                      type="checkbox"
+                                    <SquareCheckbox
                                       aria-label={`Edit role ${r.name} agent ${ws.handle}`}
                                       checked={included}
                                       onChange={(e) => {
@@ -1221,8 +1218,7 @@ export function SkinAccessSection(): React.JSX.Element {
                                           title={SKIN_CAP_LABELS[cap]}
                                           className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                                         >
-                                          <input
-                                            type="checkbox"
+                                          <SquareCheckbox
                                             aria-label={`Edit role ${r.name} ${ws.handle} ${cap}`}
                                             checked={caps.has(cap)}
                                             onChange={(ev) => {
@@ -1444,8 +1440,7 @@ export function SkinAccessSection(): React.JSX.Element {
                     title={SKIN_CAP_LABELS[cap]}
                     className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                   >
-                    <input
-                      type="checkbox"
+                    <SquareCheckbox
                       aria-label={`Mint cap ${cap}`}
                       checked={mintCaps.has(cap)}
                       onChange={(e) => {
@@ -1470,8 +1465,7 @@ export function SkinAccessSection(): React.JSX.Element {
                       key={`mint-${ws.id}`}
                       className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                     >
-                      <input
-                        type="checkbox"
+                      <SquareCheckbox
                         aria-label={`Mint agent ${ws.handle}`}
                         checked={mintRooms.has(ws.handle) || mintRooms.has(ws.id)}
                         onChange={(e) => {
@@ -1599,8 +1593,7 @@ export function SkinAccessSection(): React.JSX.Element {
                                   key={`edit-${k.id}-${ws.id}`}
                                   className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                                 >
-                                  <input
-                                    type="checkbox"
+                                  <SquareCheckbox
                                     aria-label={`Key ${k.id} agent ${ws.handle}`}
                                     checked={editKeyRooms.has(ws.handle) || editKeyRooms.has(ws.id)}
                                     onChange={(e) => {

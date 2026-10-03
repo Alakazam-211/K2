@@ -22,6 +22,9 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 const OWNER_TOKEN: &str = "owner-token-deadbeef-publish-skin-gw";
+/// A JSON-safe ticket brief for owner-door creates (prd-ticket-html-brief
+/// H36: these keep passing when the brief policy flips to Require).
+const OWNER_BRIEF: &str = "<p>Owner ask.</p><section class='k2-need'><p>Yes or no.</p></section>";
 const TERMINAL_403: &str = r#"{"error":"skin tokens cannot use the terminal"}"#;
 
 struct Resp {
@@ -1755,7 +1758,9 @@ async fn publish_run_skin_gateway_tickets_per_room() {
             dport,
             "POST",
             &format!("/cli/feedback/create?token={OWNER_TOKEN}"),
-            Some(&format!(r#"{{"project":"{anna}","title":"Anna ask"}}"#)),
+            Some(&format!(
+                r#"{{"project":"{anna}","title":"Anna ask","briefHtml":"{OWNER_BRIEF}"}}"#
+            )),
         );
         assert_eq!(
             anna_ticket.status, 200,
@@ -1770,7 +1775,9 @@ async fn publish_run_skin_gateway_tickets_per_room() {
             dport,
             "POST",
             &format!("/cli/feedback/create?token={OWNER_TOKEN}"),
-            Some(&format!(r#"{{"project":"{other}","title":"Other ask"}}"#)),
+            Some(&format!(
+                r#"{{"project":"{other}","title":"Other ask","briefHtml":"{OWNER_BRIEF}"}}"#
+            )),
         );
         assert_eq!(
             other_ticket.status, 200,
@@ -1957,10 +1964,56 @@ async fn publish_run_skin_gateway_tickets_per_room() {
             &cookie,
         );
         assert_eq!(create_docs.status, 200, "create docs; {}", create_docs.body);
-        let docs_id = json(&create_docs.body)["id"]
-            .as_str()
-            .expect("docs id")
-            .to_string();
+        // Ticket brief H1: an app guest is a person. No brief needed,
+        // and no `brief_missing` warning either.
+        let cd = json(&create_docs.body);
+        assert_eq!(cd["hasBrief"], false, "{}", create_docs.body);
+        assert_eq!(cd["warnings"], serde_json::json!([]), "{}", create_docs.body);
+        let docs_id = cd["id"].as_str().expect("docs id").to_string();
+
+        // Ticket brief T6: a guest MAY attach one; it is cleaned and stored.
+        let guest_brief = serde_json::json!({
+            "project": docs,
+            "title": "Guest brief",
+            "briefHtml": "<p>Hi<script>alert(1)</script></p><a href=\"javascript:x()\">x</a>",
+        });
+        let create_brief = http_ex(
+            gport,
+            "POST",
+            "/cli/feedback/create",
+            Some(&guest_brief.to_string()),
+            &cookie,
+        );
+        assert_eq!(create_brief.status, 200, "guest brief; {}", create_brief.body);
+        let cb = json(&create_brief.body);
+        assert_eq!(cb["hasBrief"], true, "{}", create_brief.body);
+        let brief_id = cb["id"].as_str().expect("brief id").to_string();
+        let show_brief = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/feedback/show?id={brief_id}&brief=1"),
+            None,
+            &cookie,
+        );
+        assert_eq!(show_brief.status, 200, "guest show brief; {}", show_brief.body);
+        let sb = json(&show_brief.body);
+        assert_eq!(
+            sb["brief"]["html"], "<p>Hi</p><a rel=\"noopener noreferrer\">x</a>",
+            "{}",
+            show_brief.body
+        );
+        assert!(sb["brief"].get("projectPath").is_none(), "H40: {}", show_brief.body);
+        // Room check unchanged: another room's brief is a 403, no oracle.
+        let show_other_brief = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/feedback/show?id={other_id}&brief=1"),
+            None,
+            &cookie,
+        );
+        assert_eq!(show_other_brief.status, 403, "{}", show_other_brief.body);
+        assert!(show_other_brief.body.contains("skin_room"), "{}", show_other_brief.body);
+        assert!(!show_other_brief.body.contains("Owner ask"), "{}", show_other_brief.body);
 
         let comment_docs = http_ex(
             gport,

@@ -1478,6 +1478,82 @@ pub(crate) async fn read_post_body(stream: &mut TcpStream, buf: &mut [u8]) -> Ve
     Vec::new()
 }
 
+/// A POST body refused by [`read_post_body_capped`] before it was read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BodyTooLarge {
+    /// The `Content-Length` the client declared, when it sent one.
+    pub declared: Option<usize>,
+    /// Bytes actually read off the socket (head + any body bytes that
+    /// arrived with it). Never more than `max` + one read past the head.
+    pub read: usize,
+}
+
+/// Like [`read_post_body`], but refuses a body over `max` bytes WITHOUT
+/// buffering it (prd-ticket-html-brief-v1 H30). Checks `Content-Length`
+/// as soon as the head ends; with no `Content-Length` it stops once the
+/// bytes past the head exceed `max`. The caller answers 413 and closes
+/// the socket (`DispatchOutcome::Done`): the unread rest of the body
+/// must never be parsed as the next keep-alive request.
+pub(crate) async fn read_post_body_capped<R>(
+    stream: &mut R,
+    buf: &mut [u8],
+    max: usize,
+) -> Result<Vec<u8>, BodyTooLarge>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut accumulated: Vec<u8> = Vec::new();
+    let mut header_end: Option<usize> = None;
+    let mut content_length: Option<usize> = None;
+    // The request head is capped at 16 KiB by the dispatcher; allow
+    // that much before the body cap starts counting.
+    const HEAD_SLACK: usize = 16 * 1024;
+    loop {
+        let n = match stream.read(buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => return Ok(Vec::new()),
+        };
+        accumulated.extend_from_slice(&buf[..n]);
+        if header_end.is_none() {
+            if let Some(pos) = accumulated.windows(4).position(|w| w == b"\r\n\r\n") {
+                header_end = Some(pos + 4);
+                let headers_str = std::str::from_utf8(&accumulated[..pos]).unwrap_or("");
+                content_length = headers_str.lines().find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                });
+                if let Some(clen) = content_length {
+                    if clen > max {
+                        return Err(BodyTooLarge { declared: Some(clen), read: accumulated.len() });
+                    }
+                }
+            } else if accumulated.len() > HEAD_SLACK + max {
+                return Err(BodyTooLarge { declared: None, read: accumulated.len() });
+            }
+        }
+        if let Some(body_start) = header_end {
+            match content_length {
+                Some(clen) if accumulated.len() >= body_start + clen => {
+                    return Ok(accumulated[body_start..body_start + clen].to_vec());
+                }
+                Some(_) => {}
+                None => {
+                    if accumulated.len() - body_start > max {
+                        return Err(BodyTooLarge { declared: None, read: accumulated.len() });
+                    }
+                    return Ok(accumulated[body_start..].to_vec());
+                }
+            }
+        }
+    }
+    match header_end {
+        Some(body_start) if accumulated.len() > body_start => Ok(accumulated[body_start..].to_vec()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Inline unit tests — pure-logic helpers that gate every connection
 // ─────────────────────────────────────────────────────────────────────
@@ -1485,6 +1561,84 @@ pub(crate) async fn read_post_body(stream: &mut TcpStream, buf: &mut [u8]) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── read_post_body_capped (ticket brief H30) ────────────────────
+
+    /// A reader that serves `data` in `chunk`-byte reads and counts how
+    /// much was handed out, so the test can prove the body was never
+    /// buffered.
+    struct CountingReader {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+
+    impl tokio::io::AsyncRead for CountingReader {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            out: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let n = self.chunk.min(out.remaining()).min(self.data.len() - self.pos);
+            let start = self.pos;
+            out.put_slice(&self.data[start..start + n]);
+            self.pos += n;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    fn request_with_body(declared: usize, body: &[u8]) -> Vec<u8> {
+        let mut r = format!(
+            "POST /cli/feedback/create?token=t HTTP/1.1\r\nHost: x\r\nContent-Length: {declared}\r\n\r\n"
+        )
+        .into_bytes();
+        r.extend_from_slice(body);
+        r
+    }
+
+    #[tokio::test]
+    async fn capped_reader_refuses_3_mib_before_reading_it() {
+        let body = vec![b'x'; 3 * 1024 * 1024];
+        let mut reader = CountingReader {
+            data: request_with_body(body.len(), &body),
+            pos: 0,
+            chunk: 4096,
+        };
+        let mut buf = [0u8; 4096];
+        let err = read_post_body_capped(&mut reader, &mut buf, 2 * 1024 * 1024)
+            .await
+            .expect_err("a 3 MiB body must be refused");
+        assert_eq!(err.declared, Some(3 * 1024 * 1024));
+        assert!(err.read <= 4096, "read {} bytes; must stop at the head", err.read);
+        assert!(reader.pos <= 4096, "reader handed out {} bytes", reader.pos);
+    }
+
+    #[tokio::test]
+    async fn capped_reader_returns_a_body_under_the_cap() {
+        let body = br#"{"title":"x"}"#;
+        let mut reader = CountingReader {
+            data: request_with_body(body.len(), body),
+            pos: 0,
+            chunk: 7,
+        };
+        let mut buf = [0u8; 4096];
+        let got = read_post_body_capped(&mut reader, &mut buf, 2 * 1024 * 1024)
+            .await
+            .expect("small body is read");
+        assert_eq!(got, body.to_vec());
+    }
+
+    #[tokio::test]
+    async fn capped_reader_refuses_a_body_with_no_length_over_the_cap() {
+        let mut data = b"POST /x HTTP/1.1\r\nHost: x\r\n\r\n".to_vec();
+        data.extend(vec![b'y'; 200]);
+        let mut reader = CountingReader { data, pos: 0, chunk: 1 << 20 };
+        let mut buf = [0u8; 1 << 20];
+        let err = read_post_body_capped(&mut reader, &mut buf, 100)
+            .await
+            .expect_err("no Content-Length + over the cap is refused");
+        assert_eq!(err.declared, None);
+    }
 
     // ── ct_eq_token: constant-time owner-token compare ──────────────
 

@@ -107,8 +107,26 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
     dispatch_post_as(path, body, "owner")
 }
 
+/// Glob-arm / test entry. `create` never reaches the glob arm (the exact
+/// arm claims it and decides the door, H29); if it ever did, the
+/// strictest door (`Owner`, brief policy applies) is the safe default.
 pub fn dispatch_post_as(path: &str, body: &[u8], session_author: &str) -> CliResponse {
-    dispatch_post_as_gated(path, body, session_author, None)
+    dispatch_post_as_gated(path, body, session_author, None, CreateDoor::Owner)
+}
+
+/// Which door a `create` came through (prd-ticket-html-brief-v1 H1/H29).
+/// Decided by the dispatcher from the authenticating token, never from
+/// self-declared body fields (`sessionId`/`sessionKind`/`agentName`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateDoor {
+    /// App guest pass (`k2skn_`): a person. Brief optional.
+    App,
+    /// Connect-user session: a person. Brief optional.
+    Connect,
+    /// The owner token: `k2 tickets ask` from an agent (in-cell agents
+    /// carry the owner token for this verb) or a human at the box
+    /// (Rosson default 1). The brief policy applies.
+    Owner,
 }
 
 pub fn dispatch_post_as_gated(
@@ -116,9 +134,10 @@ pub fn dispatch_post_as_gated(
     body: &[u8],
     session_author: &str,
     skin: Option<SkinPass>,
+    door: CreateDoor,
 ) -> CliResponse {
     match path {
-        "/cli/feedback/create" => handle_create_gated(body, skin.as_ref()),
+        "/cli/feedback/create" => handle_create_gated(body, skin.as_ref(), door),
         "/cli/feedback/comment" => handle_comment_gated(body, session_author, skin.as_ref()),
         "/cli/feedback/answer" => handle_answer_gated(body, session_author, skin.as_ref()),
         "/cli/feedback/resolve" => handle_resolve_gated(body, skin.as_ref()),
@@ -247,9 +266,18 @@ fn handle_show(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return prefix_error_response(&id, e),
     };
     match feedback::get_with_comments(&full_id) {
-        Some((item, comments)) => CliResponse::ok_json(show_json(&item, &comments)),
+        Some((item, comments)) => {
+            CliResponse::ok_json(show_json(&item, &comments, wants_brief(params)))
+        }
         None => prefix_error_response(&id, PrefixError::NotFound),
     }
+}
+
+/// `show?brief=1` (H17): add the stored brief (`{html, text, bytes,
+/// sha256, sanitizer, createdAt}`, or null). Plain `show` never carries
+/// the HTML, so the 300 ms event refetch stays small (H39).
+fn wants_brief(params: &HashMap<String, String>) -> bool {
+    crate::cli::bool_param(params, "brief")
 }
 
 fn list_items(project_id: &str, params: &HashMap<String, String>) -> CliResponse {
@@ -333,7 +361,9 @@ fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
         Err(e) => return e,
     };
     match feedback::get_with_comments(&item.id) {
-        Some((item, comments)) => CliResponse::ok_json(show_json(&item, &comments)),
+        Some((item, comments)) => {
+            CliResponse::ok_json(show_json(&item, &comments, wants_brief(params)))
+        }
         None => crate::skin_routes::skin_room_response(),
     }
 }
@@ -392,7 +422,14 @@ fn emit_commented(feedback_id: &str, author: &str) {
 /// The `show` wire shape (mockup contract): the item's fields flat at
 /// the top level + `workspace` (project name) + `comments` (each with
 /// the mockup's `at` alias alongside `createdAt`).
-fn show_json(item: &feedback::FeedbackItem, comments: &[feedback::FeedbackComment]) -> String {
+///
+/// `with_brief` adds `brief` (the stored brief only: no path or session
+/// fields ride inside it, H40).
+fn show_json(
+    item: &feedback::FeedbackItem,
+    comments: &[feedback::FeedbackComment],
+    with_brief: bool,
+) -> String {
     let (name, path) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(item).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(map) = v.as_object_mut() {
@@ -414,6 +451,12 @@ fn show_json(item: &feedback::FeedbackItem, comments: &[feedback::FeedbackCommen
                 }))
                 .collect::<Vec<_>>()),
         );
+        if with_brief {
+            map.insert(
+                "brief".to_string(),
+                serde_json::json!(k2_core::feedback_brief::get(&item.id)),
+            );
+        }
     }
     v.to_string()
 }
@@ -504,6 +547,9 @@ struct CreateBody {
     /// connect-user names). Applied after insert so push targeting and
     /// the create response both see them. Empty/omitted = unassigned.
     assignees: Option<Vec<String>>,
+    /// Ticket brief (prd-ticket-html-brief-v1): raw HTML. Cleaned and
+    /// capped here; required on the owner door per the brief policy.
+    brief_html: Option<String>,
 }
 
 /// Handler for `POST /cli/feedback/create`. Validates, inserts, and
@@ -512,10 +558,50 @@ struct CreateBody {
 /// options/workspace/sessionId`) plus the full item fields.
 #[cfg(test)]
 pub fn handle_create(body: &[u8]) -> CliResponse {
-    handle_create_gated(body, None)
+    handle_create_gated(body, None, CreateDoor::Owner)
 }
 
-fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
+/// 400 with a `brief_*` code (H3). The CLI maps every `brief_*` code to
+/// exit 2 and prints the hint.
+fn brief_error(code: &str, hint: impl std::fmt::Display) -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": code, "hint": hint.to_string() },
+        })
+        .to_string(),
+    }
+}
+
+/// 413 for a `create` body over [`k2_core::feedback_brief::MAX_CREATE_BODY_BYTES`],
+/// answered by the dispatcher before the body is read (H30).
+pub fn create_body_too_large(declared: Option<usize>) -> CliResponse {
+    let size = match declared {
+        Some(n) => format!("{n} bytes"),
+        None => "a body with no Content-Length".to_string(),
+    };
+    CliResponse {
+        status: "413 Payload Too Large",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "brief_too_large",
+                "hint": format!(
+                    "the request is {size}; a ticket (brief included) must fit in {} bytes. \
+                     The brief cap is {} bytes. See `k2 study ticket-brief`.",
+                    k2_core::feedback_brief::MAX_CREATE_BODY_BYTES,
+                    k2_core::feedback_brief::MAX_BRIEF_BYTES,
+                ),
+            },
+        })
+        .to_string(),
+    }
+}
+
+fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -> CliResponse {
     let b: CreateBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -542,6 +628,39 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
         Ok(pair) => pair,
         Err(e) => return e,
     };
+
+    // Ticket brief (H1/H11/H25/H27). Clean BEFORE the DB lock (H33c).
+    // An empty string counts as absent. The policy only binds the owner
+    // door; people (app guests, Connect users) may attach one.
+    let kind_for_policy = b.kind.clone().unwrap_or_else(|| "question".to_string());
+    let mut warnings: Vec<k2_core::feedback_brief::BriefWarning> = Vec::new();
+    let brief = match b.brief_html.as_deref().filter(|h| !h.trim().is_empty()) {
+        Some(raw) => match k2_core::feedback_brief::clean(raw) {
+            Ok(clean) => {
+                warnings.extend(clean.warnings());
+                Some(clean)
+            }
+            Err(e) => return brief_error(e.code(), e.hint()),
+        },
+        None => {
+            if door == CreateDoor::Owner
+                && k2_core::feedback_brief::brief_required(&kind_for_policy)
+            {
+                match k2_core::feedback_brief::brief_policy() {
+                    k2_core::feedback_brief::BriefPolicy::Require => {
+                        return brief_error(
+                            "brief_required",
+                            k2_core::feedback_brief::BRIEF_REQUIRED_HINT,
+                        );
+                    }
+                    k2_core::feedback_brief::BriefPolicy::Warn => {
+                        warnings.push(k2_core::feedback_brief::missing_warning());
+                    }
+                }
+            }
+            None
+        }
+    };
     // Asker attribution: explicit agentName wins; otherwise the
     // workspace's agent display name (always returns a string).
     let agent_name = b
@@ -561,17 +680,20 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
         _ => None,
     };
 
-    let mut item = match feedback::create(feedback::NewFeedback {
-        project_id,
-        session_id,
-        session_kind,
-        agent_name,
-        kind: b.kind.unwrap_or_default(),
-        title: b.title,
-        body: b.body,
-        options: b.options,
-        priority: b.priority.unwrap_or(0),
-    }) {
+    let mut item = match feedback::create_with_brief(
+        feedback::NewFeedback {
+            project_id,
+            session_id,
+            session_kind,
+            agent_name,
+            kind: b.kind.unwrap_or_default(),
+            title: b.title,
+            body: b.body,
+            options: b.options,
+            priority: b.priority.unwrap_or(0),
+        },
+        brief,
+    ) {
         Ok(item) => item,
         Err(e) => return usage_error(e),
     };
@@ -612,6 +734,9 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     if let Some(map) = v.as_object_mut() {
         map.insert("ok".to_string(), serde_json::json!(true));
         map.insert("workspace".to_string(), serde_json::json!(name));
+        // H17/H25: `hasBrief`/`briefBytes` ride on the item; warnings are
+        // always an array so the CLI (H28 skew check) can rely on it.
+        map.insert("warnings".to_string(), serde_json::json!(warnings));
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -1087,8 +1212,15 @@ mod tests {
         id
     }
 
+    /// A minimal brief that passes every check with no warnings.
+    pub(super) const TEST_BRIEF: &str =
+        "<h2>Problem</h2><p>Test ask.</p><section class=\"k2-need\"><p>A yes or no.</p></section>";
+
+    /// Owner-door create. Attaches [`TEST_BRIEF`] unless `extra` sets
+    /// `briefHtml` itself (H36), so the suite keeps passing when the
+    /// brief policy flips to Require.
     fn create_via_route(path: &str, title: &str, extra: serde_json::Value) -> serde_json::Value {
-        let mut body = serde_json::json!({ "project": path, "title": title });
+        let mut body = serde_json::json!({ "project": path, "title": title, "briefHtml": TEST_BRIEF });
         if let (Some(dst), Some(src)) = (body.as_object_mut(), extra.as_object()) {
             for (k, v) in src {
                 dst.insert(k.clone(), v.clone());
@@ -1326,6 +1458,7 @@ mod tests {
                 "project": path,
                 "title": "Need a human",
                 "assignees": ["owner", "julie", "owner", "  "],
+                "briefHtml": TEST_BRIEF,
             })
             .to_string()
             .as_bytes(),
@@ -2290,6 +2423,7 @@ mod tests {
                 .to_string()
                 .as_bytes(),
             Some(&pass),
+            CreateDoor::App,
         );
         assert_eq!(created.status, "200 OK", "{}", created.body);
         let docs_ticket = serde_json::from_str::<serde_json::Value>(&created.body).expect("json")
@@ -2363,6 +2497,7 @@ mod tests {
                 .to_string()
                 .as_bytes(),
             Some(&pass),
+            CreateDoor::App,
         );
         assert_eq!(create_anna.status, "403 Forbidden", "{}", create_anna.body);
         assert!(
@@ -2370,5 +2505,244 @@ mod tests {
             "{}",
             create_anna.body
         );
+    }
+
+    // ── Ticket HTML brief (prd-ticket-html-brief-v1 T4/T5) ─────────────
+
+    use k2_core::feedback_brief::{with_policy_override, BriefPolicy};
+
+    fn create_at(path: &str, door: CreateDoor, extra: serde_json::Value) -> CliResponse {
+        let mut body = serde_json::json!({ "project": path, "title": "Brief door" });
+        if let (Some(dst), Some(src)) = (body.as_object_mut(), extra.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        handle_create_gated(body.to_string().as_bytes(), None, door)
+    }
+
+    fn parse(resp: &CliResponse) -> serde_json::Value {
+        serde_json::from_str(&resp.body).expect("valid JSON")
+    }
+
+    fn warning_codes(v: &serde_json::Value) -> Vec<String> {
+        v["warnings"]
+            .as_array()
+            .expect("warnings is always an array")
+            .iter()
+            .map(|w| w["code"].as_str().expect("warning code").to_string())
+            .collect()
+    }
+
+    /// T4, Require column: only the owner door must attach a brief.
+    #[test]
+    fn brief_door_matrix_require() {
+        let (name, path) = unique("brief-require");
+        insert_project(&name, &path);
+        with_policy_override(BriefPolicy::Require, || {
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({}));
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            let v = parse(&r);
+            assert_eq!(v["error"]["code"], "brief_required", "{}", r.body);
+            assert!(
+                v["error"]["hint"].as_str().expect("hint").contains("k2 tickets template"),
+                "{}",
+                r.body
+            );
+            // An empty string is the same as no brief.
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({ "briefHtml": "  " }));
+            assert_eq!(parse(&r)["error"]["code"], "brief_required", "{}", r.body);
+
+            for door in [CreateDoor::App, CreateDoor::Connect] {
+                let r = create_at(&path, door, serde_json::json!({}));
+                assert_eq!(r.status, "200 OK", "{door:?}: {}", r.body);
+                let v = parse(&r);
+                assert_eq!(v["hasBrief"], false, "{door:?}: {}", r.body);
+                assert!(warning_codes(&v).is_empty(), "{door:?}: {}", r.body);
+            }
+
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({ "briefHtml": TEST_BRIEF }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v = parse(&r);
+            assert_eq!(v["hasBrief"], true, "{}", r.body);
+            assert_eq!(v["briefBytes"], TEST_BRIEF.len() as i64, "{}", r.body);
+            assert!(warning_codes(&v).is_empty(), "{}", r.body);
+
+            // Rosson default 2: fyi is exempt even in Require.
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({ "kind": "fyi" }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(warning_codes(&parse(&r)).is_empty(), "{}", r.body);
+        });
+    }
+
+    /// T4, Warn column (the 0.43.2 default): the owner door still files,
+    /// and the response says a brief is missing.
+    #[test]
+    fn brief_door_matrix_warn() {
+        let (name, path) = unique("brief-warn");
+        insert_project(&name, &path);
+        with_policy_override(BriefPolicy::Warn, || {
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({ "kind": "approval" }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v = parse(&r);
+            assert_eq!(v["hasBrief"], false, "{}", r.body);
+            assert!(v["briefBytes"].is_null(), "{}", r.body);
+            assert_eq!(warning_codes(&v), vec!["brief_missing"], "{}", r.body);
+            let hint = v["warnings"][0]["hint"].as_str().expect("hint");
+            assert!(hint.contains("only warns"), "the response says it is a grace period: {hint}");
+            assert!(feedback::get_item(v["id"].as_str().expect("id")).is_some());
+
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({ "kind": "fyi" }));
+            assert!(warning_codes(&parse(&r)).is_empty(), "fyi is exempt: {}", r.body);
+            let r = create_at(&path, CreateDoor::Connect, serde_json::json!({}));
+            assert!(warning_codes(&parse(&r)).is_empty(), "people never warn: {}", r.body);
+        });
+    }
+
+    /// The shipped constant is Warn for 0.43.2. 0.43.3 flips it (S8);
+    /// this assertion flips with it.
+    #[test]
+    fn brief_policy_ships_warn_in_0_43_2() {
+        assert_eq!(k2_core::feedback_brief::BRIEF_POLICY, BriefPolicy::Warn);
+        assert_eq!(k2_core::feedback_brief::brief_policy(), BriefPolicy::Warn);
+    }
+
+    /// Bad briefs are refused with stable `brief_*` codes on every door,
+    /// and nothing is stored.
+    #[test]
+    fn brief_refusals_have_stable_codes() {
+        let (name, path) = unique("brief-refuse");
+        let pid = insert_project(&name, &path);
+        let big = format!("<p>{}</p>", "x".repeat(k2_core::feedback_brief::MAX_BRIEF_BYTES));
+        for (brief, code) in [
+            (big.as_str(), "brief_too_large"),
+            ("<div> <br> </div><script>x()</script>", "brief_empty"),
+        ] {
+            for door in [CreateDoor::Owner, CreateDoor::App, CreateDoor::Connect] {
+                let r = create_at(&path, door, serde_json::json!({ "briefHtml": brief }));
+                assert_eq!(r.status, "400 Bad Request", "{door:?} {code}: {}", &r.body[..200.min(r.body.len())]);
+                assert_eq!(parse(&r)["error"]["code"], code, "{door:?}");
+            }
+        }
+        let n = feedback::list_for_project(&pid, &feedback::ListFilter::All).expect("list");
+        assert!(n.is_empty(), "a refused brief stores no ticket: {n:?}");
+    }
+
+    /// Warnings: removed markup and a missing `.k2-need` section.
+    #[test]
+    fn brief_warnings_sanitized_and_no_need() {
+        let (name, path) = unique("brief-warnings");
+        insert_project(&name, &path);
+        let r = create_at(
+            &path,
+            CreateDoor::Owner,
+            serde_json::json!({ "briefHtml": "<p onclick=\"x()\">Problem</p>" }),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            warning_codes(&parse(&r)),
+            vec!["brief_sanitized", "brief_no_need"],
+            "{}",
+            r.body
+        );
+    }
+
+    /// T5: plain `show` reports the brief but never carries it;
+    /// `show?brief=1` returns the cleaned HTML and the text copy; list
+    /// items carry `hasBrief`/`briefBytes` and never the HTML.
+    #[test]
+    fn brief_show_and_list_wire() {
+        let (name, path) = unique("brief-wire");
+        let pid = insert_project(&name, &path);
+        let raw = "<h2>Problem</h2><p>Deploy is <b>blocked</b>.<script>evil()</script></p>\
+                   <section class=\"k2-need\"><p>Pick one.</p></section>";
+        let created = create_via_route(&path, "Wire", serde_json::json!({ "briefHtml": raw }));
+        let id = created["id"].as_str().expect("id").to_string();
+        let clean = "<h2>Problem</h2><p>Deploy is <b>blocked</b>.</p>\
+                     <section class=\"k2-need\"><p>Pick one.</p></section>";
+
+        let plain = handle_show(&HashMap::from([("id".to_string(), id.clone())]));
+        assert_eq!(plain.status, "200 OK", "{}", plain.body);
+        let pv = parse(&plain);
+        assert_eq!(pv["hasBrief"], true, "{}", plain.body);
+        assert_eq!(pv["briefBytes"], clean.len() as i64, "{}", plain.body);
+        assert!(pv.get("brief").is_none(), "plain show has no brief key: {}", plain.body);
+        assert!(!plain.body.contains("k2-need"), "{}", plain.body);
+
+        let full = handle_show(&HashMap::from([
+            ("id".to_string(), id.clone()),
+            ("brief".to_string(), "1".to_string()),
+        ]));
+        assert_eq!(full.status, "200 OK", "{}", full.body);
+        let fv = parse(&full);
+        assert_eq!(fv["brief"]["html"], clean, "{}", full.body);
+        assert_eq!(fv["brief"]["text"], "Problem\nDeploy is blocked.\nPick one.", "{}", full.body);
+        assert_eq!(fv["brief"]["bytes"], clean.len() as i64);
+        assert_eq!(fv["brief"]["sanitizer"], "k2-brief-v1");
+        assert_eq!(fv["brief"]["sha256"].as_str().expect("sha").len(), 64);
+        assert!(fv["brief"]["createdAt"].as_i64().expect("createdAt") > 0);
+
+        // A ticket without a brief: `brief: null` on brief=1.
+        let bare = create_at(&path, CreateDoor::Connect, serde_json::json!({}));
+        let bare_id = parse(&bare)["id"].as_str().expect("id").to_string();
+        let bv = parse(&handle_show(&HashMap::from([
+            ("id".to_string(), bare_id),
+            ("brief".to_string(), "1".to_string()),
+        ])));
+        assert!(bv["brief"].is_null(), "{bv}");
+        assert_eq!(bv["hasBrief"], false);
+
+        let list = list_items(&pid, &list_params(&path, &[("all", "1")]));
+        assert_eq!(list.status, "200 OK", "{}", list.body);
+        assert!(!list.body.contains("k2-need"), "list never carries HTML: {}", list.body);
+        let lv = parse(&list);
+        let row = lv["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["id"] == id.as_str())
+            .expect("the brief ticket is listed")
+            .clone();
+        assert_eq!(row["hasBrief"], true, "{row}");
+        assert_eq!(row["briefBytes"], clean.len() as i64, "{row}");
+
+        let host = handle_list_all(&HashMap::from([("all".to_string(), "1".to_string())]));
+        assert!(!host.body.contains("k2-need"), "list-all never carries HTML");
+        let hv = parse(&host);
+        let hrow = hv["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["id"] == id.as_str())
+            .expect("list-all has it")
+            .clone();
+        assert_eq!(hrow["hasBrief"], true, "{hrow}");
+        assert_eq!(hrow["linked"], true, "{hrow}");
+    }
+
+    /// H29: the glob/test entry treats `create` as the owner door, so a
+    /// path that skipped the exact arm is never more permissive.
+    #[test]
+    fn dispatch_post_as_create_is_the_owner_door() {
+        let (name, path) = unique("brief-glob");
+        insert_project(&name, &path);
+        with_policy_override(BriefPolicy::Require, || {
+            let r = dispatch_post_as(
+                "/cli/feedback/create",
+                serde_json::json!({ "project": path, "title": "glob" }).to_string().as_bytes(),
+                "julie",
+            );
+            assert_eq!(parse(&r)["error"]["code"], "brief_required", "{}", r.body);
+        });
+    }
+
+    /// H30: the 413 the dispatcher sends for an oversize create body.
+    #[test]
+    fn create_body_too_large_is_413_brief_too_large() {
+        let r = create_body_too_large(Some(3 * 1024 * 1024));
+        assert_eq!(r.status, "413 Payload Too Large");
+        let v = parse(&r);
+        assert_eq!(v["error"]["code"], "brief_too_large");
+        assert!(v["error"]["hint"].as_str().expect("hint").contains("3145728 bytes"));
     }
 }

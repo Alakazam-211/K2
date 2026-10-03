@@ -4867,7 +4867,39 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             };
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Ticket brief H29: the door is decided HERE, from the token
+            // that authenticated, never from body fields or from the
+            // `session_author` string (its `unwrap_or_else("owner")`
+            // fallback would label an odd Connect session as an agent).
+            let door = if skin_pass.is_some() {
+                crate::feedback_routes::CreateDoor::App
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                crate::feedback_routes::CreateDoor::Owner
+            } else {
+                crate::feedback_routes::CreateDoor::Connect
+            };
+            // Ticket brief H30: `create` may carry a 1 MiB brief; refuse a
+            // larger body BEFORE buffering it. 413 + close (Done): the
+            // unread rest must never be parsed as the next request.
+            let body_bytes = if p == "/cli/feedback/create" {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    k2_core::feedback_brief::MAX_CREATE_BODY_BYTES,
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(too_large) => {
+                        let r = crate::feedback_routes::create_body_too_large(too_large.declared);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            };
             let p_owned = p.to_string();
             let session_author = if let Some(ref pass) = skin_pass {
                 pass.username.clone()
@@ -4884,6 +4916,7 @@ async fn handle_one_request(
                     &body_bytes,
                     &session_author,
                     skin_pass,
+                    door,
                 )
             })
             .await
@@ -4896,6 +4929,10 @@ async fn handle_one_request(
                 .await;
         }
         p if is_post && post_allowed && p.starts_with("/cli/feedback/") => {
+            // Ticket brief H29: `create` is claimed by the exact arm above
+            // (same `is_post && post_allowed` guard), which decides the
+            // door. This glob must never see it.
+            debug_assert_ne!(p, "/cli/feedback/create", "create belongs to the exact arm");
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }

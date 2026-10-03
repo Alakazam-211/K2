@@ -1312,15 +1312,12 @@ mod tests {
         .expect("resolve workspace session");
 
         assert_eq!(spawn.command.as_deref(), Some("codex"));
+        // 83810345: the built-in Codex preset is now `codex --yolo`
+        // (`--yolo` is Codex's alias for
+        // `--dangerously-bypass-approvals-and-sandbox`).
         assert_eq!(
             spawn.args.as_deref(),
-            Some(
-                &[
-                    "-c".to_string(),
-                    "model_reasoning_effort=high".to_string(),
-                    "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                ][..]
-            ),
+            Some(&["--yolo".to_string()][..]),
             "codex cell runs the preset's own argv — auto-approve KEPT, no claude flags",
         );
         // The prompt is still ENV-staged (never argv), same as claude cells.

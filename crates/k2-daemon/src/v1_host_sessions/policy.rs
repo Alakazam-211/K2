@@ -1275,12 +1275,20 @@ mod tests {
         assert!(plan.attached, "codex supports launch-param");
         let identity = spawn.args.as_deref().expect("identity");
         let exec = spawn.exec_args.as_deref().expect("exec");
+        // api_skip_permissions defaults ON for /v1 (2ca85159,
+        // prd-api-skip-permissions-default-on-v1), so ensure_danger_flags
+        // prepends Codex's auto-approve flag. It is a ROOT flag and must
+        // come before the `resume` subcommand (same shape as 83810345's
+        // `codex --yolo resume <id>`).
         assert_eq!(
-            identity.get(0).map(String::as_str),
-            Some("resume"),
+            identity,
+            &[
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "resume".to_string(),
+                sid.to_string(),
+            ][..],
             "codex identity={identity:?}"
         );
-        assert_eq!(identity.get(1).map(String::as_str), Some(sid.to_string().as_str()));
         assert!(
             !identity.iter().any(|a| a.contains(marker)),
             "identity fire-once"

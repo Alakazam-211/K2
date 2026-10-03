@@ -190,14 +190,17 @@ function guardedRanges(region: string, e: string): Array<[number, number]> {
   return out
 }
 
-/** Unguarded sinks of `expr` (a variable or `var.field`) in `region`. */
-function sinks(region: string, expr: string): number[] {
+/** Unguarded sinks of `expr` (a variable or `var.field`) in `region`.
+ *  `spread: false` checks setters only (a whole body may be spread when
+ *  its list fields are then replaced with asArray, as fetchProjectGroupShow does). */
+function sinks(region: string, expr: string, spread = true): number[] {
   const e = esc(expr).replace('\\.', '\\??\\.')
   const guarded = guardedRanges(region, e)
   const patterns = [
     new RegExp(`\\bset[A-Z]\\w*\\(\\s*${e}\\s*(?:\\?\\?[^,)]*)?[,)]`, 'g'),
-    new RegExp(`\\bset\\(\\s*\\{[^}]*?(?::\\s*${e}|[{,]\\s*${e})\\s*(?:\\?\\?[^,}]*)?[,}]`, 'g'),
-    new RegExp(`\\.\\.\\.\\s*${e}\\b(?!\\s*\\??\\.)`, 'g'),
+    // `set({ a: x })`, `set({ a, x })`, and shorthand first: `set({ x, a })`.
+    new RegExp(`\\bset\\(\\s*\\{(?:[^}]*?:\\s*${e}|(?:[^}]*?,)?\\s*${e})\\s*(?:\\?\\?[^,}]*)?[,}]`, 'g'),
+    ...(spread ? [new RegExp(`\\.\\.\\.\\s*${e}\\b(?!\\s*\\??\\.)`, 'g')] : []),
   ]
   const hits: number[] = []
   for (const re of patterns) {
@@ -215,7 +218,10 @@ function lineOf(src: string, at: number): number {
 }
 
 function scan(file: string): string[] {
-  const src = read(file)
+  return scanSource(file, read(file))
+}
+
+function scanSource(file: string, src: string): string[] {
   const found = new Set<string>()
   const report = (at: number, what: string): void => {
     found.add(`${file}:${lineOf(src, at)}: ${what}`)
@@ -235,7 +241,7 @@ function scan(file: string): string[] {
     if (direct && list) report(m.index, `setter fed straight from a ${type} fetch`)
 
     const bound = /\b(?:const|let)\s+(\w+|\{[^}]*\})\s*(?::[^=]+)?=\s*await\s+$/.exec(before)
-    const names: Array<{ expr: string; at: number }> = []
+    const names: Array<{ expr: string; at: number; whole?: boolean }> = []
     let regionStart = m.index
     let regionEnd = 0
     if (bound) {
@@ -246,9 +252,12 @@ function scan(file: string): string[] {
           if (field && fields.includes(field)) names.push({ expr: alias || field, at: m.index })
         }
       } else if (list) {
-        names.push({ expr: bound[1], at: m.index })
+        names.push({ expr: bound[1], at: m.index, whole: true })
       } else {
         for (const f of fields) names.push({ expr: `${bound[1]}.${f}`, at: m.index })
+        // The whole body into state carries its list fields in unchecked
+        // (0.43.0: `set({ doc })` with `SubscriptionDoc.harnesses`).
+        names.push({ expr: bound[1], at: m.index, whole: true })
       }
     } else {
       // `fetch<…>(…).then((x) => …)`: the callback is the region.
@@ -264,7 +273,7 @@ function scan(file: string): string[] {
     }
     const region = src.slice(regionStart, regionEnd)
     for (const n of names) {
-      for (const hit of sinks(region, n.expr)) {
+      for (const hit of sinks(region, n.expr, !n.whole)) {
         report(regionStart + hit, `\`${n.expr}\` from a \`${type.replace(/\s+/g, ' ')}\` fetch reaches state or a spread without asArray / Array.isArray`)
       }
     }
@@ -310,5 +319,14 @@ describe('daemon list bodies never reach state or a spread unchecked', () => {
     expect(sinks('{ if (Array.isArray(list) || x) setRows(list) }', 'list')).toHaveLength(1)
     expect(sinks('{ setRows(Array.isArray(list) ? list : []) }', 'list')).toHaveLength(0)
     expect(sinks('{ setCount(list.length) }', 'list')).toHaveLength(0)
+    // A whole body with list fields into state (0.43.0 `set({ doc })`).
+    expect(sinks('{ set({ doc, error: null }) }', 'doc', false)).toHaveLength(1)
+    expect(sinks('{ setReport(report) }', 'report', false)).toHaveLength(1)
+    expect(sinks('{ return { ...show, members: asArray(show.members) } }', 'show', false)).toHaveLength(0)
+    const old0430 = [
+      "const doc = await daemonCliGet<SubscriptionDoc>(primaryScope(), 'usage/subscriptions')",
+      'if (epoch === loadEpoch) set({ doc, error: null })',
+    ].join('\n')
+    expect(scanSource('stores/subscription-usage.ts', `{ ${old0430} }`)).toHaveLength(1)
   })
 })

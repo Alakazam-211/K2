@@ -37,6 +37,44 @@ export interface KeepAwakeStatus {
   message?: string
 }
 
+/**
+ * `{ keepAwake }` from GET /cli/power/status or POST /cli/power/keep-awake,
+ * or null when the body is not that shape (an error envelope, `{}`, or
+ * another route's body). Null keeps the button hidden instead of crashing
+ * on `status.mode`.
+ */
+export function parseKeepAwakeBody(raw: unknown): KeepAwakeStatus | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const k = (raw as { keepAwake?: unknown }).keepAwake
+  if (k === null || typeof k !== 'object' || Array.isArray(k)) return null
+  const s = k as Record<string, unknown>
+  if (s.mode !== 'off' && s.mode !== 'working' && s.mode !== 'always') return null
+  if (typeof s.state !== 'string' || typeof s.label !== 'string') return null
+  const ps =
+    s.powerSource !== null && typeof s.powerSource === 'object'
+      ? (s.powerSource as Record<string, unknown>)
+      : {}
+  return {
+    mode: s.mode,
+    state: s.state as KeepAwakeState,
+    label: s.label,
+    detail: typeof s.detail === 'string' ? s.detail : '',
+    held: s.held === true,
+    lidHeld: s.lidHeld === true,
+    workingSessions: typeof s.workingSessions === 'number' ? s.workingSessions : 0,
+    powerSource: {
+      onAc: typeof ps.onAc === 'boolean' ? ps.onAc : null,
+      batteryPercent: typeof ps.batteryPercent === 'number' ? ps.batteryPercent : null,
+    },
+    batteryFloorPercent: typeof s.batteryFloorPercent === 'number' ? s.batteryFloorPercent : 0,
+    alsoOnBattery: s.alsoOnBattery === true,
+    canApproveLid: s.canApproveLid === true,
+    lidDialogDeclined: s.lidDialogDeclined === true,
+    platform: typeof s.platform === 'string' ? s.platform : '',
+    ...(typeof s.message === 'string' ? { message: s.message } : {}),
+  }
+}
+
 export const KEEP_AWAKE_MODES: { mode: KeepAwakeMode; label: string }[] = [
   { mode: 'off', label: 'Off' },
   { mode: 'working', label: 'While agents are working' },

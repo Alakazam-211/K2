@@ -1,5 +1,7 @@
 /** Subscription windows the daemon cached. No provider tokens. */
 
+import { asArray } from '@/lib/as-array'
+
 export interface UsageWindow {
   label: string
   /** 0–1 used. Percent left is `1 - used`. */
@@ -26,7 +28,56 @@ export const PROBED_HARNESSES = ['claude', 'codex', 'grok'] as const
 const STALE_MS = 15_000
 const PROBED = new Set<string>(PROBED_HARNESSES)
 
-export function visibleHarnesses(doc: SubscriptionDoc): HarnessUsage[] {
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+}
+
+function str(raw: unknown): string {
+  return typeof raw === 'string' ? raw : ''
+}
+
+function parseWindow(raw: unknown): UsageWindow | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.label !== 'string') return null
+  if (typeof raw.used !== 'number' || !Number.isFinite(raw.used)) return null
+  return { label: raw.label, used: raw.used, resetsAt: str(raw.resetsAt) }
+}
+
+function parseHarness(raw: unknown): HarnessUsage | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.harness !== 'string' || raw.harness === '') return null
+  const windows: UsageWindow[] = []
+  for (const w of asArray(raw.windows)) {
+    const window = parseWindow(w)
+    if (window) windows.push(window)
+  }
+  return {
+    harness: raw.harness,
+    plan: str(raw.plan),
+    windows,
+    checkedAt: str(raw.checkedAt),
+    status: str(raw.status),
+  }
+}
+
+/**
+ * The `usage/subscriptions` body as a real `SubscriptionDoc`. Anything that
+ * is not the daemon's shape (an error envelope, `{}`, `null`, a string, or
+ * another route's body) becomes `{ harnesses: [] }`; rows and windows that
+ * are not well-formed are dropped. Use it wherever a body enters state.
+ */
+export function parseSubscriptionDoc(raw: unknown): SubscriptionDoc {
+  if (!isRecord(raw)) return { harnesses: [] }
+  const harnesses: HarnessUsage[] = []
+  for (const h of asArray(raw.harnesses)) {
+    const row = parseHarness(h)
+    if (row) harnesses.push(row)
+  }
+  return { harnesses }
+}
+
+export function visibleHarnesses(doc: SubscriptionDoc | null | undefined): HarnessUsage[] {
+  if (!doc || !Array.isArray(doc.harnesses)) return []
   return doc.harnesses.filter((h) => PROBED.has(h.harness))
 }
 
@@ -41,7 +92,7 @@ export function harnessName(id: string): string {
  * A blank status with no windows is a failed probe, not a signed-in account. */
 export function isSignedIn(row: HarnessUsage): boolean {
   if (row.status === 'Not signed in' || row.status === 'Sign-in expired') return false
-  if (row.windows.length === 0 && row.status === '') return false
+  if ((row.windows?.length ?? 0) === 0 && row.status === '') return false
   return true
 }
 
@@ -73,7 +124,7 @@ export function buttonChips(
   const chips: { harness: ProbedHarness; used: number }[] = []
   for (const row of visibleHarnesses(doc)) {
     if (!isProbedHarness(row.harness)) continue
-    if (!isSignedIn(row) || row.windows.length === 0) continue
+    if (!isSignedIn(row) || !Array.isArray(row.windows) || row.windows.length === 0) continue
     let used = 0
     for (const window of chipWindows(row.harness, row.windows)) {
       used = Math.max(used, percentUsed(window.used))
@@ -109,9 +160,10 @@ export function buttonLabel(doc: SubscriptionDoc | null): string {
 
 /** True when the menu should POST a refresh instead of only reading. */
 export function isStale(doc: SubscriptionDoc | null, now: number): boolean {
-  if (!doc) return true
+  const rows = visibleHarnesses(doc)
+  if (rows.length === 0) return true
   for (const name of PROBED_HARNESSES) {
-    const row = doc.harnesses.find((h) => h.harness === name)
+    const row = rows.find((h) => h.harness === name)
     if (!row) return true
     const checked = Date.parse(row.checkedAt)
     if (Number.isNaN(checked)) return true

@@ -12,6 +12,7 @@ import type { SettingEntry } from '../searchManifest'
 import { dailyTokenChart, type DailySeries, type UsageDay } from './dailyTokenChart'
 import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
 import { parseUsageTurnsPage } from './usageTurnsPage'
+import { parseUsageReport, type TokenTotals, type UsageReport } from './usageReport'
 import { SettingDropdown } from '../controls/SettingControls'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -24,26 +25,6 @@ export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
     keywords: ['tokens', 'usage', 'claude', 'codex', 'grok', 'cache', 'input', 'output'],
   },
 ]
-
-interface TokenTotals {
-  input_tokens: number
-  output_tokens: number
-  cache_read_tokens: number
-  cache_write_tokens: number
-  turns: number
-}
-
-interface UsageReport {
-  scope: string
-  workspace: string | null
-  total: TokenTotals
-  harnesses: Array<TokenTotals & { harness: string }>
-  models: Array<TokenTotals & { harness: string; model: string }>
-  workspaces: Array<TokenTotals & { path: string; outside: boolean }>
-  outside: TokenTotals
-  /** Absent on an older daemon. Treated as no days, not an error. */
-  days?: UsageDay[] | null
-}
 
 const EMPTY: TokenTotals = {
   input_tokens: 0,
@@ -488,11 +469,13 @@ export function TokenUsageSection(): React.JSX.Element {
     setOpenReport(null)
     void (async () => {
       try {
-        const total = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens')
+        const total = parseUsageReport(await daemonCliGet<unknown>(primaryScope(), 'usage/tokens'))
         if (ac.signal.aborted) return
         setMachine(total)
         if (openCwd) {
-          const one = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens', { workspace: openCwd })
+          const one = parseUsageReport(
+            await daemonCliGet<unknown>(primaryScope(), 'usage/tokens', { workspace: openCwd }),
+          )
           if (ac.signal.aborted) return
           setOpenReport(one)
         }
@@ -521,7 +504,7 @@ export function TokenUsageSection(): React.JSX.Element {
     if (chartHarness !== 'all') params.harness = chartHarness
     void (async () => {
       try {
-        const report = await daemonCliGet<UsageReport>(primaryScope(), 'usage/tokens', params)
+        const report = parseUsageReport(await daemonCliGet<unknown>(primaryScope(), 'usage/tokens', params))
         if (!ac.signal.aborted) setChartReport(report)
       } catch (err) {
         if (ac.signal.aborted) return

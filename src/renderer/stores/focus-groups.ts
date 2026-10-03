@@ -241,13 +241,16 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
   initFromSettings: async () => {
     try {
       const settings = await settingsGet()
-      const enabled = settings.focusGroupsEnabled ?? false
+      // `=== true`: a body that is not the settings object (an error
+      // envelope, another route's body) must not turn focus groups on.
+      const enabled = settings?.focusGroupsEnabled === true
       set({ focusGroupsEnabled: enabled })
       await get().fetchFocusGroups()
 
       if (enabled) {
         const groups = get().focusGroups
-        const savedId = settings.activeFocusGroupId as string | undefined
+        const savedId =
+          typeof settings.activeFocusGroupId === 'string' ? settings.activeFocusGroupId : undefined
         // Restore saved group if it still exists, otherwise default to first group
         if (savedId && groups.some((g) => g.id === savedId)) {
           set({ activeFocusGroupId: savedId })

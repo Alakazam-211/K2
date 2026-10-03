@@ -2,8 +2,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetKeepAwakeForTests } from '@/stores/keep-awake'
-import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeStatus } from '@/lib/keep-awake'
+import { resetKeepAwakeForTests, useKeepAwakeStore } from '@/stores/keep-awake'
+import { KEEP_AWAKE_MODES, keepAwakeTone, parseKeepAwakeBody, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
 import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
 
@@ -349,5 +349,35 @@ describe('KeepAwakeButton', () => {
     expect((await screen.findByTestId('keep-awake-menu')).textContent).toContain(
       'This keeps the host awake, not this laptop.',
     )
+  })
+
+  // A body that is not `{ keepAwake }` (another route's body on a desynced
+  // socket, an error envelope) must leave the button hidden, not crash on
+  // `status.mode`.
+  for (const [name, body] of [
+    ['{}', {}],
+    ['null', null],
+    ['a usage body', { harnesses: [] }],
+    ['a list body', []],
+    ['keepAwake without a mode', { keepAwake: { label: 'x', state: 'off' } }],
+  ] as Array<[string, unknown]>) {
+    it(`stays hidden for ${name}`, async () => {
+      h.daemonCliGet.mockResolvedValue(body)
+      render(<KeepAwakeButton />)
+      await waitFor(() => {
+        expect(h.daemonCliGet).toHaveBeenCalledWith('power/status')
+        expect(useKeepAwakeStore.getState().error).toBe('Error: power/status: response has no keepAwake')
+      })
+      expect(useKeepAwakeStore.getState().status).toBeNull()
+      expect(screen.queryByTestId('keep-awake')).toBeNull()
+    })
+  }
+})
+
+describe('parseKeepAwakeBody', () => {
+  it('keeps a full status as it is', () => {
+    for (const { s } of STATES) {
+      expect(parseKeepAwakeBody(JSON.parse(JSON.stringify({ success: true, keepAwake: s })))).toEqual(s)
+    }
   })
 })

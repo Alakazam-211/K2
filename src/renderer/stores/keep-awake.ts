@@ -1,15 +1,11 @@
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import type { KeepAwakeMode, KeepAwakeStatus } from '@/lib/keep-awake'
+import { parseKeepAwakeBody, type KeepAwakeMode, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { primaryScope } from '@/kessel/server-scope'
 
 // Heartbeat S6 — Keep awake is a setting of the window's server (the
 // machine that should stay awake), like Settings. The daemon owns the
 // mode and the truth; this store only reads and sends gestures.
-
-interface KeepAwakeResponse {
-  keepAwake: KeepAwakeStatus
-}
 
 interface KeepAwakeStore {
   /** `null` until the server answers (an older server never does). */
@@ -33,8 +29,11 @@ export const useKeepAwakeStore = create<KeepAwakeStore>((set, get) => {
   async function post(body: Record<string, unknown>): Promise<void> {
     set({ busy: true })
     try {
-      const r = await daemonCliPost<KeepAwakeResponse>(primaryScope(), 'power/keep-awake', body)
-      set({ status: r.keepAwake, error: null })
+      const status = parseKeepAwakeBody(
+        await daemonCliPost<unknown>(primaryScope(), 'power/keep-awake', body),
+      )
+      if (!status) throw new Error('power/keep-awake: response has no keepAwake')
+      set({ status, error: null })
     } catch (e) {
       set({ error: String(e) })
     } finally {
@@ -50,8 +49,9 @@ export const useKeepAwakeStore = create<KeepAwakeStore>((set, get) => {
     load: async () => {
       if (get().busy) return
       try {
-        const r = await daemonCliGet<KeepAwakeResponse>(primaryScope(), 'power/status')
-        set({ status: r.keepAwake, error: null })
+        const status = parseKeepAwakeBody(await daemonCliGet<unknown>(primaryScope(), 'power/status'))
+        if (!status) throw new Error('power/status: response has no keepAwake')
+        set({ status, error: null })
       } catch (e) {
         set({ error: String(e) })
       }

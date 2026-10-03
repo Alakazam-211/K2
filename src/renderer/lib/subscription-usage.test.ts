@@ -9,6 +9,7 @@ import {
   harnessName,
   isSignedIn,
   isStale,
+  parseSubscriptionDoc,
   percentUsed,
   PROBED_HARNESSES,
   visibleHarnesses,
@@ -276,5 +277,78 @@ describe('UsageButton mounts', () => {
     expect(gate.includes('UsageButton')).toBe(false)
     expect(gate.includes('TimerButton')).toBe(false)
     expect(gate.includes('subscription-usage')).toBe(false)
+  })
+})
+
+describe('parseSubscriptionDoc', () => {
+  const EMPTY: SubscriptionDoc = { harnesses: [] }
+
+  it('turns anything that is not the daemon shape into no harnesses', () => {
+    for (const raw of [
+      undefined,
+      null,
+      '',
+      'not json',
+      42,
+      [],
+      [{ harness: 'claude' }],
+      {},
+      { error: 'role_required', required: 'member', role: 'viewer' },
+      { harnesses: {} },
+      { harnesses: null },
+      { harnesses: 'claude' },
+      { keepAwake: { mode: 'off' } },
+    ]) {
+      expect(parseSubscriptionDoc(raw)).toEqual(EMPTY)
+    }
+  })
+
+  it('keeps a well-formed doc as it is', () => {
+    const doc: SubscriptionDoc = {
+      harnesses: [
+        {
+          harness: 'claude',
+          plan: 'Max',
+          windows: [{ label: 'Weekly', used: 0.31, resetsAt: '2026-10-05T16:00:00Z' }],
+          checkedAt: '2026-10-03T21:05:27Z',
+          status: '',
+        },
+        { harness: 'codex', plan: '', windows: [], checkedAt: '2026-10-03T21:05:27Z', status: 'Not signed in' },
+      ],
+    }
+    expect(parseSubscriptionDoc(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+  })
+
+  it('coerces each row: windows to a list, missing strings to empty, bad rows and windows dropped', () => {
+    const got = parseSubscriptionDoc({
+      harnesses: [
+        { harness: 'claude', windows: {}, plan: 7 },
+        { harness: 'codex', windows: [null, { label: 'Week' }, { label: 'Weekly', used: 0.5 }] },
+        { plan: 'no harness name' },
+        null,
+        'grok',
+      ],
+    })
+    expect(got).toEqual({
+      harnesses: [
+        { harness: 'claude', plan: '', windows: [], checkedAt: '', status: '' },
+        {
+          harness: 'codex',
+          plan: '',
+          windows: [{ label: 'Weekly', used: 0.5, resetsAt: '' }],
+          checkedAt: '',
+          status: '',
+        },
+      ],
+    })
+  })
+
+  it('helpers tolerate a doc without a harness list', () => {
+    const broken = {} as unknown as SubscriptionDoc
+    expect(visibleHarnesses(broken)).toEqual([])
+    expect(visibleHarnesses(null)).toEqual([])
+    expect(buttonChips(broken)).toEqual([])
+    expect(buttonLabel(broken)).toBe('Usage')
+    expect(isStale(broken, Date.now())).toBe(true)
   })
 })

@@ -10,6 +10,7 @@ import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 // daemon `/cli/timer/*` HTTP layer (local OR remote) instead of the
 // localhost-pinned Tauri `timer_*` invoke proxy.
 import { daemonCliGet, daemonCliGetText, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 // Phase 2.5 fix (finding #547) — daemon-reconnect retry bus.
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — re-init timer settings against the NEW host on a host switch.
@@ -345,11 +346,11 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase TimeEntry response shape matches the Rust struct's
       // `#[serde(rename_all = "camelCase")]`.
-      const entries = await daemonCliGet<TimeEntry[]>(primaryScope(), 'timer/entries-list', {
+      const entries = asArray<TimeEntry>(await daemonCliGet<unknown>(primaryScope(), 'timer/entries-list', {
         start,
         end,
         project_id: projectId,
-      })
+      }))
       set({ entries })
     } catch (err) {
       console.error('[timer] Failed to fetch entries:', err)

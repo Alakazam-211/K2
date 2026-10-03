@@ -3,6 +3,17 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.43.1 — Connecting to another server works again
+
+- **Remote servers.** A 0.43.0 window connected to another 0.43.0 server could fall into "Something went wrong" right after connecting. Replies from the other server now arrive as real data, or fail with a clear error.
+- **Crash guards.** A list that comes back in the wrong shape no longer takes down the window. This covers the usage chip, presets, the chat list, Heartbeats, token usage, Projects, saved split layouts, and ten more places.
+- **Crash panel.** "Something went wrong" has a Details section with Copy details, so a report names the part of the app that broke.
+- **Grok usage.** At 0% used, the menu shows Weekly 0% with its reset time instead of "No usage window".
+- **Thread.** An empty Thread says "No Thread messages yet" in the middle of the pane and names the agent you can message.
+- **HTML safety.** HTML files, dashboard HTML, and HTML email can no longer reach the local K2 server or plain-http sites. Scripts and styles still work where they did.
+- **Keep awake.** The menu uses square controls like the rest of Settings, and the mug is redrawn at full size. It fills up to show the mode.
+- **Settings.** The last round checkboxes are now square.
+
 ## 0.43.0 — Home, heartbeats that fire on their own, and apps
 
 - **Home (Beta).** A Home tab sits between the gear and Agents. It looks like Agents, but the list is yours: agents from any server you have saved, in named Homes, and switching servers doesn't change it. Add Agent offers This server or From a server. Rows show live, offline, or Sign in, and the initials of whoever else is on that agent.

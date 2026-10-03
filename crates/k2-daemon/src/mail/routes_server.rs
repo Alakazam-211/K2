@@ -972,7 +972,6 @@ mod tests {
         let _unit = supervisor::with_test_unit_state("active");
         supervisor::set_test_store_ready(Some(true));
         clean_row();
-        supervisor::mark_step_for_test("restart");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -983,6 +982,11 @@ mod tests {
             )
             .expect("seed row");
         }
+        // The restart mark lives in the row's enable_progress_json, so
+        // it must be written AFTER the row exists (an UPDATE on no row
+        // is a silent no-op). fcc320d9 made `restart` part of
+        // is_already_enabled().
+        supervisor::mark_step_for_test("restart");
         let resp = handle_server_enable(br#"{"hostname":"mail.acme.dev"}"#);
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
@@ -1008,7 +1012,6 @@ mod tests {
         let _unit = supervisor::with_test_unit_state("active");
         supervisor::set_test_store_ready(Some(true));
         clean_row();
-        supervisor::mark_step_for_test("restart");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -1019,6 +1022,8 @@ mod tests {
             )
             .expect("seed row");
         }
+        // After the row exists — see enable_is_idempotent_when_already_running.
+        supervisor::mark_step_for_test("restart");
         let resp = handle_server_enable(br#"{"hostname":"mail.new.dev"}"#);
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");

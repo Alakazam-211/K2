@@ -198,11 +198,33 @@ fn ensure_danger_flags(mut args: Vec<String>, declared: &[String], command: &str
         v
     };
     for flag in needed.into_iter().rev() {
-        if !args.iter().any(|a| a == &flag) {
+        if !danger_flag_present(&args, &flag, &cmd) {
             args.insert(0, flag);
         }
     }
     args
+}
+
+/// Codex spells one auto-approve switch two ways: `--yolo` is clap's alias
+/// for `--dangerously-bypass-approvals-and-sandbox`. Passing both is fatal
+/// (`error: the argument '--dangerously-bypass-approvals-and-sandbox'
+/// cannot be used multiple times`). The built-in Codex preset is
+/// `codex --yolo` since 83810345, while its declared `danger_flags`
+/// metadata still names the long spelling.
+const CODEX_AUTO_APPROVE_SPELLINGS: &[&str] =
+    &["--dangerously-bypass-approvals-and-sandbox", "--yolo"];
+
+/// Is `flag` (or, for Codex, one of its alias spellings) already on `args`?
+/// `cmd` is the lowercased binary basename.
+fn danger_flag_present(args: &[String], flag: &str, cmd: &str) -> bool {
+    if args.iter().any(|a| a == flag) {
+        return true;
+    }
+    cmd.contains("codex")
+        && CODEX_AUTO_APPROVE_SPELLINGS.contains(&flag)
+        && args
+            .iter()
+            .any(|a| CODEX_AUTO_APPROVE_SPELLINGS.contains(&a.as_str()))
 }
 
 /// W4 (0.40.30) — resolve the READINESS dialect of the workspace's
@@ -1295,6 +1317,67 @@ mod tests {
         );
         assert!(exec.last().map(|s| s.contains(marker)).unwrap_or(false));
         assert!(!exec.iter().any(|a| a == "exec"));
+    }
+
+    /// The BUILT-IN Codex preset (`codex --yolo`, declared danger flag
+    /// `--dangerously-bypass-approvals-and-sandbox`) must spawn with ONE
+    /// auto-approve spelling. Both together make codex exit at argv parse.
+    #[test]
+    fn builtin_codex_preset_keeps_one_auto_approve_spelling() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-codex-builtin-yolo";
+        insert_project("v1host-codex-builtin-yolo", ws_path);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let rows = conn
+                .execute(
+                    "UPDATE projects SET default_agent = 'b0a1c2d3-e4f5-6789-abcd-ef0123456002' \
+                     WHERE path = ?1",
+                    rusqlite::params![ws_path],
+                )
+                .expect("set built-in codex");
+            assert_eq!(rows, 1, "project row must exist");
+        }
+        let sid = SessionId::new();
+        let (spawn, _, _) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        assert_eq!(spawn.command.as_deref(), Some("codex"));
+        let args = spawn.args.as_deref().expect("args");
+        assert_eq!(
+            args,
+            &["--yolo".to_string()][..],
+            "built-in codex keeps its own --yolo and gains no duplicate alias"
+        );
+    }
+
+    #[test]
+    fn ensure_danger_flags_treats_codex_yolo_as_the_bypass_flag() {
+        let declared = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        assert_eq!(
+            ensure_danger_flags(vec!["--yolo".into()], &declared, "codex"),
+            vec!["--yolo".to_string()]
+        );
+        assert_eq!(
+            ensure_danger_flags(vec!["--yolo".into()], &[], "/opt/homebrew/bin/codex"),
+            vec!["--yolo".to_string()]
+        );
+        // Bare codex still gains the flag.
+        assert_eq!(
+            ensure_danger_flags(vec![], &declared, "codex"),
+            vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]
+        );
+        // The alias is Codex-only: a gemini `--yolo` never satisfies a
+        // different binary's flag.
+        assert_eq!(
+            ensure_danger_flags(vec!["--yolo".into()], &[], "claude"),
+            vec!["--dangerously-skip-permissions".to_string(), "--yolo".to_string()]
+        );
     }
 
     /// A6 / Pi: dead resume uses `--session`, never `--continue`.

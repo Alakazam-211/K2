@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetKeepAwakeForTests } from '@/stores/keep-awake'
 import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
+import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
 
 const h = vi.hoisted(() => ({
   remote: false,
@@ -25,7 +26,28 @@ vi.mock('@/stores/connect-host', () => ({
     sel({ activeHost: h.remote ? { id: 'remote-box' } : 'local' }),
 }))
 
+// The real TimerButton, idle, so its clock glyph can be compared to the mug.
+vi.mock('@/stores/timer', () => {
+  const idle = {
+    status: 'idle',
+    visible: true,
+    pausedElapsed: 0,
+    resumeTime: null,
+    startTimer: () => {},
+    pauseTimer: () => {},
+    resumeTimer: () => {},
+    stopTimer: () => {},
+    showMemoDialog: false,
+  }
+  return {
+    useTimerStore: (sel: (s: typeof idle) => unknown) => sel(idle),
+    getElapsedMs: () => 0,
+    formatElapsed: () => '0:00',
+  }
+})
+
 import KeepAwakeButton from './KeepAwakeButton'
+import TimerButton from './TimerButton'
 
 function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
   return {
@@ -200,6 +222,73 @@ describe('KeepAwakeButton', () => {
     expect(battery.classList.contains(SQUARE_CHECK_CLASS)).toBe(true)
     expect(battery.style.borderRadius).toBe('0px')
     expect(menu.querySelector('.rounded-full')).toBeNull()
+  })
+
+  describe('mug icon', () => {
+    const FILLS: { mode: KeepAwakeStatus['mode']; s: KeepAwakeStatus; fill: string }[] = [
+      { mode: 'off', s: STATES[0].s, fill: 'none' },
+      { mode: 'working', s: STATES[1].s, fill: 'half' },
+      { mode: 'always', s: STATES[2].s, fill: 'full' },
+    ]
+
+    for (const { mode, s, fill } of FILLS) {
+      it(`${mode} draws the mug ${fill === 'none' ? 'empty' : fill}`, async () => {
+        expect(s.mode).toBe(mode)
+        await renderWith(s)
+        const icon = screen.getByTestId('keep-awake-icon')
+        expect(icon.getAttribute('data-fill')).toBe(fill)
+        const rim = icon.querySelector('[data-testid="keep-awake-rim"]') as Element
+        expect(rim).not.toBeNull()
+        const liquid = icon.querySelector('[data-testid="keep-awake-liquid"]')
+        if (fill === 'none') {
+          expect(liquid).toBeNull()
+          return
+        }
+        expect(liquid).not.toBeNull()
+        const surface = liquid as Element
+        // Primary theme token, never a hex.
+        expect(surface.getAttribute('fill')).toBe('var(--color-accent)')
+        // Shown only through the rim.
+        const clipRef = surface.getAttribute('clip-path')
+        expect(clipRef).toMatch(/^url\(#.+\)$/)
+        const clipId = (clipRef as string).slice(5, -1)
+        const clip = icon.querySelector('[data-testid="keep-awake-rim-clip"]')
+        expect(clip).not.toBeNull()
+        expect((clip as Element).getAttribute('id')).toBe(clipId)
+        const rimCy = Number(rim.getAttribute('cy'))
+        const ry = Number(rim.getAttribute('ry'))
+        const drop = Number(surface.getAttribute('cy')) - rimCy
+        // Full: surface at the rim. Half: dropped one rim radius, so half shows.
+        expect(drop).toBe(fill === 'full' ? 0 : ry)
+        expect(surface.getAttribute('rx')).toBe(rim.getAttribute('rx'))
+        expect(surface.getAttribute('ry')).toBe(rim.getAttribute('ry'))
+      })
+    }
+
+    it('uses the timer icon stroke, caps, joins and box', async () => {
+      render(<TimerButton />)
+      const timer = screen.getByTestId('timer-icon')
+      await renderWith(STATES[2].s)
+      const mug = screen.getByTestId('keep-awake-icon')
+      expect(timer.getAttribute('stroke-width')).toBe(String(TOP_BAR_ICON_STROKE_WIDTH))
+      for (const attr of ['stroke-width', 'stroke-linecap', 'stroke-linejoin', 'viewBox', 'class']) {
+        expect(mug.getAttribute(attr)).toBe(timer.getAttribute(attr))
+      }
+    })
+
+    it('two mugs on screen get their own rim clip', async () => {
+      h.daemonCliGet.mockResolvedValue({ keepAwake: STATES[2].s })
+      render(
+        <>
+          <KeepAwakeButton />
+          <KeepAwakeButton />
+        </>,
+      )
+      const icons = await screen.findAllByTestId('keep-awake-icon')
+      expect(icons.length).toBe(2)
+      const ids = icons.map((i) => (i.querySelector('[data-testid="keep-awake-rim-clip"]') as Element).getAttribute('id'))
+      expect(new Set(ids).size).toBe(2)
+    })
   })
 
   it('renders nothing until the server answers (an older server)', async () => {

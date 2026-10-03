@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTimerStore, getElapsedMs, formatElapsed } from '@/stores/timer'
+import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
 
 export default function TimerButton(): React.JSX.Element | null {
   const status = useTimerStore((s) => s.status)
@@ -47,9 +48,10 @@ export default function TimerButton(): React.JSX.Element | null {
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="1.8"
+            strokeWidth={TOP_BAR_ICON_STROKE_WIDTH}
             strokeLinecap="round"
             strokeLinejoin="round"
+            data-testid="timer-icon"
           >
             <circle cx="12" cy="12" r="10" />
             <polyline points="12 6 12 12 16 14" />

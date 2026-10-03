@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useKeepAwakeStore } from '@/stores/keep-awake'
-import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeTone } from '@/lib/keep-awake'
+import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeMode, type KeepAwakeTone } from '@/lib/keep-awake'
 import { SquareCheckbox, SquareRadio } from '@/components/ui'
+import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
@@ -13,6 +14,27 @@ const TONE_CLASS: Record<KeepAwakeTone, string> = {
   armed: 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
   held: 'text-[var(--color-accent)]',
   warn: 'text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)]',
+}
+
+/** The mug, seen from a little above, in the timer's 24×24 box: the rim is
+ *  an ellipse (x 2.5–17.5, y 2.5–8.5) and the body runs down to y 21.5. */
+const RIM = { cx: 10, cy: 5.5, rx: 7.5, ry: 3 } as const
+
+type MugFill = 'none' | 'half' | 'full'
+
+/** Fill shows the mode: Off is empty, While agents are working is half
+ *  full, Always is full to the rim. */
+const MUG_FILL: Record<KeepAwakeMode, MugFill> = {
+  off: 'none',
+  working: 'half',
+  always: 'full',
+}
+
+/** How far below the rim the liquid surface sits. Half full drops it one
+ *  rim radius, so the rim shows half the surface (the back half). */
+const SURFACE_DROP: Record<Exclude<MugFill, 'none'>, number> = {
+  half: RIM.ry,
+  full: 0,
 }
 
 /**
@@ -32,6 +54,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const remote = useConnectHostStore((s) => s.activeHost !== 'local')
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const rimClipId = `keep-awake-rim-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 
   useEffect(() => {
     void load()
@@ -66,6 +89,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const noDrag = { WebkitAppRegion: 'no-drag' } as any
   const tone = keepAwakeTone(status)
   const title = `Keep awake: ${status.label}`
+  const fill = MUG_FILL[status.mode]
 
   return (
     <div className="relative flex items-center no-drag" ref={rootRef}>
@@ -87,25 +111,40 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           })
         }}
       >
-        {/* A cup: Keep awake. Filled steam while something is held. */}
+        {/* An angled mug the size of the timer's clock. The liquid, in the
+            primary color, is what shows through the rim. */}
         <svg
           className="w-3.5 h-3.5 flex-shrink-0"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth={TOP_BAR_ICON_STROKE_WIDTH}
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden="true"
+          data-testid="keep-awake-icon"
+          data-fill={fill}
         >
-          <path d="M4 10h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5v-5z" />
-          <path d="M16 12h1.5a2.5 2.5 0 0 1 0 5H16" />
-          {status.held ? (
-            <>
-              <path d="M8 3v3" />
-              <path d="M12 3v3" />
-            </>
+          <defs>
+            <clipPath id={rimClipId} data-testid="keep-awake-rim-clip">
+              <ellipse cx={RIM.cx} cy={RIM.cy} rx={RIM.rx} ry={RIM.ry} />
+            </clipPath>
+          </defs>
+          {fill !== 'none' ? (
+            <ellipse
+              data-testid="keep-awake-liquid"
+              cx={RIM.cx}
+              cy={RIM.cy + SURFACE_DROP[fill]}
+              rx={RIM.rx}
+              ry={RIM.ry}
+              fill="var(--color-accent)"
+              stroke="none"
+              clipPath={`url(#${rimClipId})`}
+            />
           ) : null}
+          <ellipse data-testid="keep-awake-rim" cx={RIM.cx} cy={RIM.cy} rx={RIM.rx} ry={RIM.ry} />
+          <path d="M2.5 5.5V18.5a7.5 3 0 0 0 15 0V5.5" />
+          <path d="M17.5 9.5h.5a3.5 3.5 0 0 1 0 7h-.5" />
         </svg>
       </button>
       {open && (

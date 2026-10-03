@@ -3570,6 +3570,11 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // Consume the peeked request head. Without this the keep-alive
+            // loop peeks the same GET again and answers it again, forever:
+            // every later request on the socket then reads a power/status
+            // body (0.43.0 crash: `e.harnesses`, `{} is not iterable`).
+            let _ = stream.read(&mut buf).await;
             let r = tokio::task::spawn_blocking(crate::power::keep_awake::handle_status)
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -9353,5 +9358,118 @@ mod tests {
         // routing collisions if a future handler uses mixed case.
         let resp = dispatch_unit6_post("/CLI/FS/CREATE", b"{}");
         assert_eq!(resp.status, "404 Not Found");
+    }
+}
+
+/// Keep-alive ratchet. The request head is only PEEKED before routing, so
+/// every arm that answers and keeps the socket open must consume it
+/// (`stream.read`, `read_post_body`, or `require_post`, which reads the
+/// head of a refused GET). An arm that forgets is answered again on the
+/// next loop pass, forever, and every later request on that socket reads
+/// the wrong body. That was the 0.43.0 `/cli/power/status` bug.
+///
+/// This walks the source: for each `"/path" => {` arm, it drops the `if`
+/// blocks that answer and `return DispatchOutcome::Done` (they close the
+/// socket, so a leftover head is harmless), and fails with the arm's line
+/// when what is left sends a response without consuming the request.
+#[cfg(test)]
+mod keep_alive_consume_ratchet {
+    const SOURCE: &str = include_str!("dispatcher.rs");
+    const CONSUMES: [&str; 4] = ["stream.read(", "read_post_body(", "read_exact(", "require_post("];
+
+    fn block_end(lines: &[&str], start: usize) -> usize {
+        let mut depth: i64 = 0;
+        for (j, line) in lines.iter().enumerate().skip(start) {
+            depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+            if depth <= 0 && j > start {
+                return j;
+            }
+        }
+        lines.len() - 1
+    }
+
+    fn is_arm_head(line: &str) -> bool {
+        let Some(rest) = line.strip_prefix("        ") else {
+            return false;
+        };
+        if rest.starts_with(' ') || !rest.trim_end().ends_with("=> {") {
+            return false;
+        }
+        rest.starts_with("\"/") || rest.starts_with("p if ") || rest.starts_with("p =>")
+    }
+
+    fn arms_that_never_consume(source: &str) -> Vec<String> {
+        let lines: Vec<&str> = source.lines().collect();
+        // Stop at the unit-test module so this ratchet never scans itself.
+        let end = lines
+            .windows(2)
+            .position(|w| w[0] == "#[cfg(test)]" && w[1] == "mod tests {")
+            .unwrap_or(lines.len());
+        let mut bad = Vec::new();
+        let mut i = 0;
+        while i < end {
+            if !is_arm_head(lines[i]) {
+                i += 1;
+                continue;
+            }
+            let arm_end = block_end(&lines, i);
+            let mut kept = String::new();
+            let mut j = i + 1;
+            while j <= arm_end {
+                let s = lines[j].trim();
+                let opens_branch = (s.starts_with("if ")
+                    || s.starts_with("} else")
+                    || s.starts_with("else"))
+                    && s.ends_with('{');
+                if opens_branch {
+                    let sub_end = block_end(&lines, j);
+                    let sub = lines[j..=sub_end].join("\n");
+                    if sub.contains("return DispatchOutcome::Done") && sub.contains("send_response") {
+                        j = sub_end + 1;
+                        continue;
+                    }
+                }
+                kept.push_str(lines[j]);
+                kept.push('\n');
+                j += 1;
+            }
+            if kept.contains("send_response") && !CONSUMES.iter().any(|k| kept.contains(k)) {
+                bad.push(format!("dispatcher.rs:{}: {}", i + 1, lines[i].trim()));
+            }
+            i = arm_end + 1;
+        }
+        bad
+    }
+
+    #[test]
+    fn every_keep_alive_arm_consumes_its_request() {
+        let bad = arms_that_never_consume(SOURCE);
+        assert!(
+            bad.is_empty(),
+            "these arms answer without consuming the peeked request, so the \
+             keep-alive loop answers it again forever:\n{}",
+            bad.join("\n")
+        );
+    }
+
+    /// The scan must catch the shape that shipped in 0.43.0.
+    #[test]
+    fn ratchet_catches_the_0_43_0_power_status_arm() {
+        let old = [
+            "        \"/cli/power/status\" => {",
+            "            if !super::http::token_ok(&query, state.token.as_str()) {",
+            "                let _ = stream.read(&mut buf).await;",
+            "                super::http::send_response(&mut *stream, \"403\", \"x\", \"{}\").await;",
+            "                return DispatchOutcome::Done;",
+            "            }",
+            "            let r = handle_status();",
+            "            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;",
+            "        }",
+        ]
+        .join("\n");
+        assert_eq!(
+            arms_that_never_consume(&old),
+            vec!["dispatcher.rs:1: \"/cli/power/status\" => {".to_string()]
+        );
     }
 }

@@ -104,15 +104,16 @@ export function roomServerState(status: PoolHostStatus | null): RoomServerState 
   return 'ok'
 }
 
-/** Q3 (Rosson's default, 2026-10-03): from a room, only an Admin or Owner
- *  on that server may change its Keep awake. A Member, or a role the pool
- *  has not read yet, sees it read-only. The window's own server is not
- *  gated here: the daemon's route floor decides there. */
+/** Q3 (Rosson's default, 2026-10-03): only an Admin or Owner may change
+ *  Keep awake. The daemon enforces it (route floor Admin) and says so per
+ *  login in the status (`canChange`). From a room, the pool's role must
+ *  also be Admin or Owner: a Member, or a role not read yet, is read-only. */
 export function roleMayChangeKeepAwake(role: string | null): boolean {
   return role === 'owner' || role === 'admin'
 }
 
-/** May the top bar send Keep awake changes for `target`? */
+/** May the top bar send Keep awake changes for `target`, before the
+ *  daemon's own `canChange` is applied? */
 export function keepAwakeMayChange(target: TopBarTarget, role: string | null): boolean {
   if (!target.room) return true
   if (target.room.readOnly) return false

@@ -134,6 +134,7 @@ function keepAwake(label: string, mode: 'off' | 'working' | 'always'): { keepAwa
       lidSetupDetail: 'x',
       canSetUp: true,
       canApproveLid: true,
+      canChange: true,
       lidDialogDeclined: false,
       platform: 'macos',
     },
@@ -432,6 +433,25 @@ describe('Keep awake follows the room (Z17, Z35, Q3)', () => {
     expect(keepAwakeEntryFor(B_KEY).status?.mode).toBe('always')
     expect(keepAwakeEntryFor(WINDOW_TOP_BAR_KEY).status).toBe(null)
     expect(h.posts.filter((c) => isWindow(c.scope))).toHaveLength(0)
+  })
+
+  it('B’s own canChange wins over a stale Admin role in the pool', async () => {
+    setPool({ role: 'admin' })
+    h.answer = (scope, route, body) =>
+      isB(scope) && route === 'power/status'
+        ? { keepAwake: { ...keepAwake('B awake', 'working').keepAwake, canChange: false } }
+        : defaultAnswer(scope, route, body)
+    focus(roomOnB())
+    bar()
+    await waitFor(() =>
+      expect(screen.getByTestId('keep-awake').getAttribute('title')).toBe('Keep awake on B: B awake'),
+    )
+    fireEvent.click(screen.getByTestId('keep-awake'))
+    expect((await screen.findByTestId('keep-awake-read-only')).textContent).toBe(
+      'Only an Admin or Owner of B can change this from here.',
+    )
+    expect((screen.getByTestId('keep-awake-mode-always') as HTMLInputElement).disabled).toBe(true)
+    expect(h.posts).toHaveLength(0)
   })
 
   it('a view-only room is read-only even for an Owner', async () => {

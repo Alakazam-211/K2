@@ -47,6 +47,10 @@ export interface KeepAwakeStatus {
   canSetUp: boolean
   /** 0.43.0/0.43.1 wire; the daemon keeps it equal to `canSetUp`. */
   canApproveLid: boolean
+  /** 0.43.2 Q3: may this caller change Keep awake (an Admin or Owner; the
+   *  route floor). A daemon before 0.43.2 leaves it out; its floor was
+   *  Member, so absent reads true. */
+  canChange: boolean
   lidDialogDeclined: boolean
   platform: string
   /** Set on a POST: what happened (for example a declined dialog). */
@@ -90,6 +94,7 @@ export function parseKeepAwakeBody(raw: unknown): KeepAwakeStatus | null {
     lidSetupDetail: typeof s.lidSetupDetail === 'string' ? s.lidSetupDetail : '',
     canSetUp: s.canSetUp === true,
     canApproveLid: s.canApproveLid === true,
+    canChange: s.canChange !== false,
     lidDialogDeclined: s.lidDialogDeclined === true,
     platform: typeof s.platform === 'string' ? s.platform : '',
     ...(typeof s.message === 'string' ? { message: s.message } : {}),

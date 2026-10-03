@@ -435,6 +435,10 @@ impl KeepAwake {
             // 0.43.0/0.43.1 clients (P19): their "Allow lid closed" button
             // shows only for a caller who may set it up.
             "canApproveLid": can_set_up,
+            // 0.43.2 Q3: may this caller change Keep awake? The route floor
+            // for POST /cli/power/keep-awake is Admin (the owner token or
+            // an Admin/Owner login); clients grey the controls otherwise.
+            "canChange": caller.admin,
             "lidDialogDeclined": false,
             "platform": std::env::consts::OS,
         })
@@ -991,6 +995,23 @@ mod tests {
         let (_f, ka) = rig(FakePowerOs::mac_with_helper());
         let v = ka.status_json(&settings("working"), false, LOCAL_ADMIN);
         assert_eq!((v["lidSetup"].as_str(), v["canSetUp"].as_bool()), (Some("ready"), Some(false)));
+    }
+
+    /// 0.43.2 Q3: the status tells each caller whether it may change Keep
+    /// awake, matching the Admin route floor: any Admin or Owner, local or
+    /// remote; never a Member.
+    #[test]
+    fn status_says_who_may_change_it() {
+        let (_fake, ka) = rig(FakePowerOs::needs_approval(true));
+        let s = settings("working");
+        for (caller, want) in [
+            (HelperCaller { local: true, admin: true }, true),
+            (HelperCaller { local: false, admin: true }, true),
+            (HelperCaller { local: true, admin: false }, false),
+            (HelperCaller { local: false, admin: false }, false),
+        ] {
+            assert_eq!(ka.status_json(&s, false, caller)["canChange"], want, "{caller:?}");
+        }
     }
 
     /// Set up: the only path to the dialog. A Member or a remote client

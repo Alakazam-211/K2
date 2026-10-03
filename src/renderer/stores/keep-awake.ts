@@ -11,8 +11,9 @@ import { onActiveHostChange } from '@/stores/connect-host'
 // 0.43.2 Z17: one entry per server. `primaryScope().id` is the window's own
 // server (reset on every top-switcher change, Z11); a focused Home room's
 // server is keyed by its Home host key and read through the room's scope.
-// From a room, only an Admin or Owner may change it (Q3): the caller says
-// so with `mayChange`, and a refused change never leaves this computer.
+// Only an Admin or Owner may change it (Q3, route floor Admin; the status
+// says `canChange` per login). The caller says so with `mayChange`, and
+// a refused change never leaves this computer.
 //
 // Power-helper S1: the mode and "Also with the lid closed" never show the
 // admin dialog. Only Set up does, and the daemon allows it only for an
@@ -59,7 +60,7 @@ const BLANK: KeepAwakeEntry = Object.freeze({
   unavailable: false,
 })
 
-/** A change refused on this computer (a Member in a room, a view-only room). */
+/** A change refused on this computer (a Member, a view-only room). */
 export class KeepAwakeChangeRefusedError extends Error {
   constructor(hostKey: string) {
     super(`Keep awake on ${hostKey} is read-only here: only an Admin or Owner there may change it from a room`)

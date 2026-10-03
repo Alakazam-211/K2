@@ -489,7 +489,9 @@ pub const ROUTES: &[Route] = &[
     // Power-helper S1: Set up shows the admin dialog on the host, so
     // Admin (and the handler refuses anything but loopback).
     post("/cli/power/helper", Admin),
-    post("/cli/power/keep-awake", Member),
+    // Keep awake changes the host machine's power (0.43.2 Q3): Admin and
+    // up, for a direct login and a Home room alike. Reading it stays Member.
+    post("/cli/power/keep-awake", Admin),
     get("/cli/power/status", Member),
     post("/cli/presence/kick", Admin),
     get("/cli/presence/roster", Member),
@@ -1122,6 +1124,20 @@ mod tests {
         assert!(floor.admits(Role::Owner));
         let archive = lookup("/cli/heartbeat/archive").expect("heartbeat archive is classified");
         assert_eq!(archive.post.expect("archive accepts POST").as_wire(), "member");
+    }
+
+    #[test]
+    fn keep_awake_changes_need_admin_and_reading_stays_member() {
+        // 0.43.2 Q3: Keep awake changes the host machine's power.
+        let set = lookup("/cli/power/keep-awake").expect("keep-awake is classified");
+        assert!(set.get.is_none(), "keep-awake is POST-only");
+        let floor = set.post.expect("keep-awake accepts POST");
+        assert_eq!(floor.as_wire(), "admin");
+        assert!(!floor.admits(Role::Member));
+        assert!(floor.admits(Role::Admin));
+        assert!(floor.admits(Role::Owner));
+        let status = lookup("/cli/power/status").expect("power status is classified");
+        assert_eq!(status.get.expect("power status is a GET route").as_wire(), "member");
     }
 
     #[test]

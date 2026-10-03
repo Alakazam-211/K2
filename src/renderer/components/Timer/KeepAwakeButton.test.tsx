@@ -70,6 +70,7 @@ function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
     lidSetupDetail: '',
     canSetUp: false,
     canApproveLid: false,
+    canChange: true,
     lidDialogDeclined: false,
     platform: 'macos',
     ...over,
@@ -487,10 +488,44 @@ describe('KeepAwakeButton', () => {
   }
 })
 
+describe('a Member on the window’s server (0.43.2 Q3: route floor Admin)', () => {
+  it('sees Keep awake read-only and sends nothing', async () => {
+    const button = await renderWith({ ...STATES[2].s, canChange: false })
+    fireEvent.click(button)
+    expect((await screen.findByTestId('keep-awake-read-only')).textContent).toBe(
+      'Only an Admin or Owner of this server can change Keep awake.',
+    )
+    for (const id of ['keep-awake-mode-off', 'keep-awake-mode-working', 'keep-awake-mode-always', 'keep-awake-lid', 'keep-awake-battery']) {
+      expect([id, (screen.getByTestId(id) as HTMLInputElement).disabled]).toEqual([id, true])
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('keep-awake-mode-off'))
+    })
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+  })
+
+  it('an Admin (canChange) gets live controls and no read-only line', async () => {
+    const button = await renderWith({ ...STATES[2].s, canChange: true })
+    fireEvent.click(button)
+    expect((await screen.findByTestId('keep-awake-mode-off') as HTMLInputElement).disabled).toBe(false)
+    expect(screen.queryByTestId('keep-awake-read-only')).toBeNull()
+  })
+})
+
 describe('parseKeepAwakeBody', () => {
   it('keeps a full status as it is', () => {
     for (const { s } of STATES) {
       expect(parseKeepAwakeBody(JSON.parse(JSON.stringify({ success: true, keepAwake: s })))).toEqual(s)
     }
+  })
+
+  it('reads canChange; a daemon before 0.43.2 (no field, Member floor) reads true', () => {
+    const { canChange: _drop, ...old } = STATES[0].s
+    const parsedOld = parseKeepAwakeBody({ keepAwake: old })
+    if (!parsedOld) throw new Error('old body did not parse')
+    expect(parsedOld.canChange).toBe(true)
+    const parsedMember = parseKeepAwakeBody({ keepAwake: { ...STATES[0].s, canChange: false } })
+    if (!parsedMember) throw new Error('member body did not parse')
+    expect(parsedMember.canChange).toBe(false)
   })
 })

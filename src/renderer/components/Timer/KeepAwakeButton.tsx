@@ -107,14 +107,18 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const roomLabel = target.label
   const roomStatus = usePoolHostStatus(target.room ? target.key : null)
   const serverState = target.room ? roomServerState(roomStatus) : 'ok'
-  const mayChange = keepAwakeMayChange(target, roomStatus?.role ?? null)
+  const entry = useKeepAwakeStore((s) => s.entries[target.key])
+  const hasEntry = entry !== undefined
+  const status = entry?.status ?? null
+  // Q3: the daemon's route floor is Admin, and its status says whether
+  // THIS login may change it (`canChange`). A room also needs an Admin or
+  // Owner role in the pool, and a usable (not view-only) room.
+  const daemonAllows = status === null || status.canChange
+  const mayChange = keepAwakeMayChange(target, roomStatus?.role ?? null) && daemonAllows
   const kaTarget = useMemo<KeepAwakeTarget>(
     () => ({ key: target.key, scope: target.scope, mayChange }),
     [target.key, target.scope, mayChange],
   )
-  const entry = useKeepAwakeStore((s) => s.entries[target.key])
-  const hasEntry = entry !== undefined
-  const status = entry?.status ?? null
   const busy = entry?.busy ?? false
   const error = entry?.error ?? null
   const settingUp = entry?.settingUp ?? false
@@ -214,9 +218,10 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const setUp = (): Promise<void> => setUpOf(kaTarget)
   const setOnBattery = (on: boolean): Promise<void> => setOnBatteryOf(kaTarget, on)
   const controlsDisabled = busy || !mayChange
-  const readOnlyNote =
-    target.room === null || mayChange
-      ? null
+  const readOnlyNote = mayChange
+    ? null
+    : target.room === null
+      ? 'Only an Admin or Owner of this server can change Keep awake.'
       : target.room.readOnly
         ? `View only: ${roomLabel} runs an older K2.`
         : `Only an Admin or Owner of ${roomLabel} can change this from here.`

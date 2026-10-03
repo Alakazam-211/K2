@@ -7,7 +7,8 @@
 //! in-process harness binds a loopback listener (`Ingress::Loopback`) and
 //! a tunnel-ingress listener (`Ingress::Tunnel`, a remote client). Pins:
 //!   - changing the mode or "Also with the lid closed" never runs the
-//!     installer, for any caller;
+//!     installer, for any caller; a Member may not change them at all
+//!     (403 `role_required`, route policy Admin since 0.43.2);
 //!   - `POST /cli/power/helper {action:"setup"}`: a Member login gets 403
 //!     `role_required` (route policy Admin); an Admin login or the owner
 //!     token over the tunnel gets 403 `host_only`; GET is 405; a local
@@ -125,8 +126,9 @@ async fn no_mode_change_or_remote_or_member_ever_shows_the_admin_dialog() {
         let d = futures_block(test_harness::start(OWNER));
         let (local, tunnel) = (d.port, d.tunnel_port);
 
-        // ── Mode and lid switch changes, every caller: never the installer.
-        for (port, token) in [(local, OWNER), (local, member.as_str()), (tunnel, OWNER), (tunnel, admin.as_str())] {
+        // ── Mode and lid switch changes, every caller allowed to change
+        // them (Admin and up, 0.43.2 Q3): never the installer.
+        for (port, token) in [(local, OWNER), (local, admin.as_str()), (tunnel, OWNER), (tunnel, admin.as_str())] {
             for body in [
                 serde_json::json!({ "mode": "working" }),
                 serde_json::json!({ "mode": "always" }),
@@ -139,6 +141,18 @@ async fn no_mode_change_or_remote_or_member_ever_shows_the_admin_dialog() {
                 assert_eq!(fake.approval_prompts(), 0, "{body} on :{port} ran the installer");
             }
         }
+
+        // A Member changes nothing: 403 role_required (route policy Admin),
+        // and nothing reaches the installer or the saved setting.
+        let before = saved_keep_awake();
+        for body in [serde_json::json!({ "mode": "always" }), serde_json::json!({ "lidClosed": true })] {
+            let r = post(local, "/cli/power/keep-awake", &member, body.clone());
+            assert_eq!(r.status, 403, "{body}: {}", r.body);
+            assert_eq!(r.json()["error"], "role_required", "{body}: {}", r.body);
+            assert_eq!(r.json()["required"], "admin", "{body}: {}", r.body);
+        }
+        assert_eq!(saved_keep_awake(), before, "a refused Member change saved something");
+        assert_eq!(fake.approval_prompts(), 0);
 
         // Always + the switch on, no helper: lid open only, needs set up.
         let r = post(local, "/cli/power/keep-awake", OWNER, serde_json::json!({ "mode": "always", "lidClosed": true }));
@@ -184,9 +198,13 @@ async fn no_mode_change_or_remote_or_member_ever_shows_the_admin_dialog() {
         assert_eq!(r.status, 405, "{}", r.body);
         assert_eq!(fake.approval_prompts(), 0, "no refused Set up may reach the installer");
 
-        // ── Old clients' approveLid: turns the switch on, never prompts
-        // for a Member or a remote client.
-        for (port, token, who) in [(local, member.as_str(), "local member"), (tunnel, OWNER, "remote owner"), (tunnel, admin.as_str(), "remote admin")] {
+        // ── Old clients' approveLid: a Member is refused by the route
+        // floor; a remote client turns the switch on and is never prompted.
+        let r = post(local, "/cli/power/keep-awake", &member, serde_json::json!({ "approveLid": true }));
+        assert_eq!(r.status, 403, "local member: {}", r.body);
+        assert_eq!(r.json()["error"], "role_required", "local member: {}", r.body);
+        assert_eq!(fake.approval_prompts(), 0, "local member: approveLid ran the installer");
+        for (port, token, who) in [(tunnel, OWNER, "remote owner"), (tunnel, admin.as_str(), "remote admin")] {
             let r = post(port, "/cli/power/keep-awake", token, serde_json::json!({ "approveLid": true }));
             assert_eq!(r.status, 200, "{who}: {}", r.body);
             let k = &r.json()["keepAwake"];

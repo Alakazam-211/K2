@@ -67,15 +67,24 @@ function routePolicy(): Map<string, { kind: string; floor: string }> {
 /** Writes the daemon takes as a GET (older verb routes). */
 const GET_SHAPED_WRITES = new Set(['heartbeat/launch', 'heartbeat/enable', 'workspace/set-chat-session', 'agents/lock'])
 
+/** Room writes whose daemon floor is above Member. The room lists them, and
+ *  the client sends them only for a login that clears the floor (0.43.2 Q3:
+ *  Keep awake changes the host's power, so Admin and up). */
+const ABOVE_MEMBER_ROOM_WRITES = new Map([['power/keep-awake', 'Admin']])
+
 describe('the room write allowlist', () => {
-  it('every route is a real daemon route a Member login may write (route_policy.rs)', () => {
+  it('every route is a real daemon route; all but the listed Admin ones are open to a Member (route_policy.rs)', () => {
     const policy = routePolicy()
     for (const route of ROOM_WRITE_ROUTES) {
       const p = policy.get(route)
       if (!p) throw new Error(`${route} is on the room allowlist but not in route_policy.rs`)
       const want = GET_SHAPED_WRITES.has(route) ? ['get', 'both'] : ['post', 'both']
       expect([route, want.includes(p.kind)]).toEqual([route, true])
-      expect([route, p.floor]).toEqual([route, 'Member'])
+      const floor = ABOVE_MEMBER_ROOM_WRITES.has(route) ? ABOVE_MEMBER_ROOM_WRITES.get(route) : 'Member'
+      expect([route, p.floor]).toEqual([route, floor])
+    }
+    for (const route of ABOVE_MEMBER_ROOM_WRITES.keys()) {
+      expect([route, ROOM_WRITE_ROUTES.has(route)]).toEqual([route, true])
     }
   })
 

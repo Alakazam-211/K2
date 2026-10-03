@@ -9,7 +9,9 @@
 //!     daemon's settings, and reports what is really held (the no-op
 //!     backend has no lid support, so Always is "lid open only");
 //!   - a bad mode is a 400 and changes nothing; GET on the POST route is
-//!     405; a Member login may use both (route_policy Member).
+//!     405; a Member login may read it but gets 403 `role_required` on a
+//!     change, and an Admin login may do both (route_policy: status
+//!     Member, keep-awake Admin since 0.43.2).
 
 #![cfg(unix)]
 
@@ -143,6 +145,7 @@ fn keep_awake_routes_on_a_headless_daemon() {
     assert_eq!(v["keepAwake"]["state"], "off");
     assert_eq!(v["keepAwake"]["held"], false);
     assert_eq!(v["keepAwake"]["batteryFloorPercent"], 20);
+    assert_eq!(v["keepAwake"]["canChange"], true, "the owner token may change it");
 
     // Always: the no-op backend takes the lid-open hold and has no lid
     // support, so the honest answer is "lid open only".
@@ -182,26 +185,56 @@ fn keep_awake_routes_on_a_headless_daemon() {
     let r = http(d.port, "GET", "/cli/power/status", None);
     assert_eq!(r.status, 403, "{}", r.body);
 
-    // A Member login may read and set it (route_policy Member).
+    // A Member login may read it but not change it: Keep awake changes the
+    // host machine's power, so the route floor is Admin (0.43.2 Q3).
+    let member = login_as(&d, "anna", None);
+    let r = http(d.port, "GET", &format!("/cli/power/status?token={member}"), None);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(json(&r)["keepAwake"]["mode"], "working");
+    assert_eq!(json(&r)["keepAwake"]["canChange"], false, "{}", r.body);
+    let r = set(&d, &member, serde_json::json!({ "mode": "off" }));
+    assert_eq!(r.status, 403, "{}", r.body);
+    let v = json(&r);
+    assert_eq!(v["error"], "role_required", "{v}");
+    assert_eq!(v["required"], "admin", "{v}");
+    assert_eq!(saved_mode(&d), "working", "a refused Member change saved the mode");
+
+    // An Admin login may read and set it.
+    let admin = login_as(&d, "bea", Some("admin"));
+    let r = http(d.port, "GET", &format!("/cli/power/status?token={admin}"), None);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(json(&r)["keepAwake"]["canChange"], true, "{}", r.body);
+    let r = set(&d, &admin, serde_json::json!({ "mode": "off" }));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(json(&r)["keepAwake"]["state"], "off");
+    assert_eq!(saved_mode(&d), "off");
+}
+
+/// Add `username` (a Member), give it `role` when set, and log in.
+fn login_as(d: &Daemon, username: &str, role: Option<&str>) -> String {
+    let owner = &d.owner;
     let r = http(
         d.port,
         "POST",
         &format!("/cli/users/add?token={owner}"),
-        Some(&serde_json::json!({ "username": "anna", "password": "correct horse 6" }).to_string()),
+        Some(&serde_json::json!({ "username": username, "password": "correct horse 6" }).to_string()),
     );
-    assert_eq!(r.status, 200, "users/add: {}", r.body);
+    assert_eq!(r.status, 200, "users/add {username}: {}", r.body);
+    if let Some(role) = role {
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/users/set-role?token={owner}"),
+            Some(&serde_json::json!({ "username": username, "role": role }).to_string()),
+        );
+        assert_eq!(r.status, 200, "users/set-role {username}: {}", r.body);
+    }
     let r = http(
         d.port,
         "POST",
         "/cli/auth/login",
-        Some(&serde_json::json!({ "username": "anna", "password": "correct horse 6" }).to_string()),
+        Some(&serde_json::json!({ "username": username, "password": "correct horse 6" }).to_string()),
     );
-    assert_eq!(r.status, 200, "login: {}", r.body);
-    let member = json(&r)["token"].as_str().expect("login token").to_string();
-    let r = http(d.port, "GET", &format!("/cli/power/status?token={member}"), None);
-    assert_eq!(r.status, 200, "{}", r.body);
-    let r = set(&d, &member, serde_json::json!({ "mode": "off" }));
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(json(&r)["keepAwake"]["state"], "off");
-    assert_eq!(saved_mode(&d), "off");
+    assert_eq!(r.status, 200, "login {username}: {}", r.body);
+    json(&r)["token"].as_str().expect("login token").to_string()
 }

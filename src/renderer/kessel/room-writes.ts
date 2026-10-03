@@ -100,7 +100,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'usage/subscriptions/refresh':
     'the usage menu re-probes B’s own CLI logins (the client keeps the 15 s stale gate, Z41)',
   'power/keep-awake':
-    'Keep awake on B, the machine running the room’s agent; the top bar sends it only for an Admin or Owner on B (Q3)',
+    'Keep awake on B, the machine running the room’s agent; Admin floor on B (Q3), so a Member’s room never sends it',
 
   // Thread overlay.
   'thread/post': 'post a Thread message to the agent on B',

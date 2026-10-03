@@ -1025,6 +1025,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0125_heartbeat_fires_actor",
             include_str!("../../drizzle_sql/0125_heartbeat_fires_actor.sql"),
         ),
+        // 0126 — ticket HTML brief (prd-ticket-html-brief-v1 H6): a NEW
+        // child table `feedback_briefs` (FK CASCADE). Never rebuild
+        // `feedback` (H10): a rebuild under foreign_keys=ON cascades into
+        // every child table (0090/0098 did exactly that to comments).
+        (
+            "0126_feedback_briefs",
+            include_str!("../../drizzle_sql/0126_feedback_briefs.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1685,7 +1693,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0125_heartbeat_fires_actor",
+            last_name, "0126_feedback_briefs",
             "unexpected last migration name: {last_name}"
         );
     }

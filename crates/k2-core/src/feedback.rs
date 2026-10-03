@@ -69,6 +69,11 @@ pub struct FeedbackItem {
     /// Assigned server users (username snapshots). Empty = unassigned
     /// (push fans out to all devices). Sorted for stable wire order.
     pub assignees: Vec<String>,
+    /// The ticket carries an HTML brief (`feedback_briefs`, 0126). List
+    /// and show reads report this and the size, never the HTML (H17).
+    pub has_brief: bool,
+    /// Byte length of the stored (cleaned) brief; `None` without one.
+    pub brief_bytes: Option<i64>,
 }
 
 /// One `feedback_comments` row. camelCase for the same wire reason;
@@ -125,6 +130,18 @@ fn now_secs() -> i64 {
 ///
 /// Returns the full item (status `waiting`, `comment_count` 1).
 pub fn create(new: NewFeedback) -> Result<FeedbackItem, String> {
+    create_with_brief(new, None)
+}
+
+/// [`create`] plus an optional, already-cleaned HTML brief
+/// ([`crate::feedback_brief::clean`] runs BEFORE this takes the shared
+/// lock, H33c). The ticket row, its seed comment, and the brief are
+/// written in ONE transaction (H8/H33a): a failed brief insert leaves
+/// no ticket behind.
+pub fn create_with_brief(
+    new: NewFeedback,
+    brief: Option<crate::feedback_brief::CleanBrief>,
+) -> Result<FeedbackItem, String> {
     let title = new.title.trim().to_string();
     if title.is_empty() {
         return Err("title must not be empty".to_string());
@@ -162,7 +179,12 @@ pub fn create(new: NewFeedback) -> Result<FeedbackItem, String> {
     };
     let db = crate::db::shared();
     let conn = db.lock();
-    conn.execute(
+    // `unchecked_transaction`: the shared handle is a ReentrantMutex
+    // guard (`&Connection`). Dropping `tx` without commit rolls back.
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("feedback transaction failed: {e}"))?;
+    tx.execute(
         "INSERT INTO feedback (id, project_id, session_id, session_kind, agent_name, \
          kind, title, body, options_json, priority, status, answer, \
          created_at, updated_at, answered_at) \
@@ -182,12 +204,16 @@ pub fn create(new: NewFeedback) -> Result<FeedbackItem, String> {
         ],
     )
     .map_err(|e| format!("feedback insert failed: {e}"))?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![uuid::Uuid::new_v4().to_string(), id, new.agent_name.trim(), seed, now],
     )
     .map_err(|e| format!("feedback seed comment insert failed: {e}"))?;
+    if let Some(brief) = &brief {
+        crate::feedback_brief::insert_with(&tx, &id, brief, now)?;
+    }
+    tx.commit().map_err(|e| format!("feedback commit failed: {e}"))?;
     drop(conn);
     get_item(&id).ok_or_else(|| "feedback row vanished after insert".to_string())
 }
@@ -206,12 +232,14 @@ pub enum ListFilter {
 const ITEM_SELECT: &str = "SELECT f.id, f.project_id, f.session_id, f.session_kind, \
     f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
     f.answer, f.created_at, f.updated_at, f.answered_at, \
-    (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id) \
+    (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
+    (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id) \
     FROM feedback f";
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
     let options_json: Option<String> = row.get(8)?;
     let id: String = row.get(0)?;
+    let brief_bytes: Option<i64> = row.get(16)?;
     Ok(FeedbackItem {
         id: id.clone(),
         project_id: row.get(1)?,
@@ -232,6 +260,8 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
         // Assignees loaded in a second query — row_to_item has no conn.
         // Callers that need them use [`attach_assignees`] / get_item.
         assignees: Vec::new(),
+        has_brief: brief_bytes.is_some(),
+        brief_bytes,
     })
 }
 
@@ -438,12 +468,13 @@ pub fn list_host_with(
         ListFilter::All => ("", None),
         ListFilter::Status(s) => (" WHERE f.status = ?1", Some(s.as_str())),
     };
-    // Same first 16 columns as ITEM_SELECT, so row_to_item reads them.
+    // Same first 17 columns as ITEM_SELECT, so row_to_item reads them.
     let sql = format!(
         "SELECT f.id, f.project_id, f.session_id, f.session_kind, \
          f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
          f.answer, f.created_at, f.updated_at, f.answered_at, \
          (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
+         (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id), \
          p.name, p.path, \
          (p.id IS NOT NULL AND p.id NOT IN ({sentinels})) \
          FROM feedback f LEFT JOIN projects p ON p.id = f.project_id\
@@ -453,9 +484,9 @@ pub fn list_host_with(
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
     let map = |row: &rusqlite::Row| -> rusqlite::Result<HostFeedbackItem> {
         let item = row_to_item(row)?;
-        let linked: bool = row.get(18)?;
+        let linked: bool = row.get(19)?;
         let (project_name, project_path) = if linked {
-            (row.get::<_, Option<String>>(16)?, row.get::<_, Option<String>>(17)?)
+            (row.get::<_, Option<String>>(17)?, row.get::<_, Option<String>>(18)?)
         } else {
             (None, None)
         };

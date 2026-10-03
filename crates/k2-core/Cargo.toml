@@ -178,6 +178,12 @@ subtle = "2.6"
 # only needed for low-entropy passwords). Already in the lock tree via
 # rcgen/argon2; pinned here as a direct dep.
 sha2 = "0.10"
+# Ticket HTML brief (prd-ticket-html-brief-v1 H11/H34): the daemon cleans
+# an agent's brief on write. ammonia is MIT/Apache, built on html5ever.
+# html5ever is pinned to ammonia's major so the tokenizer the brief
+# text extract + removal check use is the same copy ammonia parses with.
+ammonia = "=4.2.1"
+html5ever = "0.40"
 tungstenite = "0.24"
 
 # Companion tunnel (ngrok) + its supporting async stack. Moved over

@@ -119,6 +119,9 @@ pub mod federation;
 // Feedback F1 (prd-agent-feedback-notifications) — durable agent→human
 // asks (`k2 feedback ask`) + per-item comment threads.
 pub mod feedback;
+// Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the
+// agent's HTML brief next to its ticket (`feedback_briefs`, 0126).
+pub mod feedback_brief;
 // Remote Session Layer 0 — master switch + denial audit (default OFF).
 pub mod remote_sessions;
 pub mod fs_abstract;

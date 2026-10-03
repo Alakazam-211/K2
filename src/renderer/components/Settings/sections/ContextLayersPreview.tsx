@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { primaryScope } from '@/kessel/server-scope'
@@ -112,7 +113,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
     if (!tier) { setCustomLayers([]); return }
     try {
       const list = await daemonCliGet<SkillLayer[]>(primaryScope(), 'skill-layers/list', { tier })
-      setCustomLayers(list)
+      setCustomLayers(asArray<SkillLayer>(list))
     } catch {
       setCustomLayers([])
     }

@@ -6,6 +6,7 @@ import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { CANONICAL_SETUP_SEED, CANONICAL_MANAGE_SEED } from './canonicalAgentSeeds'
 import type { HarnessProbe } from './canonicalState'
 import { harnessStateLabel } from './canonicalState'
@@ -85,7 +86,7 @@ export function CanonicalAgentModal({
   const refreshState = useCallback(async () => {
     try {
       const next = await daemonCliPost<HarnessProbe[]>(primaryScope(), 'canonical/detect-state', { project_path: projectPath })
-      setProbes(next)
+      setProbes(asArray<HarnessProbe>(next))
     } catch (err) {
       console.warn('[canonical-modal] detect_canonical_state failed:', err)
     }

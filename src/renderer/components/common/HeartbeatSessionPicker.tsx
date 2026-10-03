@@ -140,7 +140,7 @@ export function HeartbeatSessionPicker({
     void daemonCliGet<string[]>(primaryScope(), 'chat/pinned')
       .then((ids) => {
         if (cancelled) return
-        setPinnedIds(ids)
+        setPinnedIds(asArray<string>(ids))
         setPinnedResolved(true)
       })
       .catch((err) => {

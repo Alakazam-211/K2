@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 // Tauri `git_*` invoke proxy. GET params are snake_case (`path`,
 // `file_path`); the JSON DiffHunk[] response matches the Rust struct as-is.
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useProjectsStore } from '@/stores/projects'
 
@@ -54,7 +55,7 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
 
     daemonCliGet<DiffHunk[]>(scope, 'git/diff-file', { path: repoPath, file_path: filePath })
       .then((result) => {
-        setHunks(result)
+        setHunks(asArray<DiffHunk>(result))
         setLoading(false)
       })
       .catch((e) => {

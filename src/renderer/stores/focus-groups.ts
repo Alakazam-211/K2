@@ -7,6 +7,7 @@ import { emit } from '@tauri-apps/api/event'
 // path) from Rust on each mutation; we re-emit those from the renderer
 // after each successful mutation (see `emitFocusGroupsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 // Phase 2 Unit 7a — settings live in the daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 // Phase 2.5 fix (finding #547) — daemon-reconnect retry bus.
@@ -89,7 +90,7 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
     try {
       // camelCase FocusGroup response matches the Rust struct's
       // `#[serde(rename_all = "camelCase")]`; no params on this GET.
-      const groups = await daemonCliGet<FocusGroup[]>(primaryScope(), 'focus-groups/list')
+      const groups = asArray<FocusGroup>(await daemonCliGet<unknown>(primaryScope(), 'focus-groups/list'))
       set({ focusGroups: groups })
     } catch (err) {
       console.error('[focus-groups] fetchFocusGroups failed:', err)

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import {
   addRemoteConnection,
@@ -854,7 +855,7 @@ function WorktreeFoldersOnDisk({
     daemonCliGet<any[]>(primaryScope(), 'git/worktrees', { path: project.path })
       .then((wts) => {
         if (!cancelled) {
-          setDiskWorktrees(wts)
+          setDiskWorktrees(asArray(wts))
           setLoading(false)
         }
       })
@@ -1106,7 +1107,7 @@ function ProjectDetail({
   useEffect(() => {
     let cancelled = false
     daemonCliPost<HarnessProbe[]>(primaryScope(), 'canonical/detect-state', { project_path: project.path })
-      .then((p) => { if (!cancelled) setCanonicalProbes(p) })
+      .then((p) => { if (!cancelled) setCanonicalProbes(asArray<HarnessProbe>(p)) })
       .catch((err) => { if (!cancelled) console.warn('[canonical-state] detect failed:', err) })
     return () => { cancelled = true }
   }, [project.path, canonicalModalMode])
@@ -4246,7 +4247,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
   const fetchIdeSessions = useCallback(async () => {
     try {
       const result = await daemonCliGet<CursorIdeSession[]>(primaryScope(), 'chat/discover-ide', { project_path: projectPath })
-      setSessions(result)
+      setSessions(asArray<CursorIdeSession>(result))
     } catch {
       setSessions([])
     } finally {

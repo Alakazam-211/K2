@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react'
 // old Tauri git commands emitted NO cross-window sync, so the explicit
 // `fetchProjects()` after cleanup is the full contract.
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { DialogScrim } from '@/components/ui'
 import { useProjectsStore } from '@/stores/projects'
 
@@ -132,7 +133,7 @@ export default function MergeDialog(): React.JSX.Element | null {
         }
         setStep('success')
       } else {
-        setConflicts(result.conflicts)
+        setConflicts(asArray(result.conflicts))
         setStep('conflicts')
       }
     } catch (e) {

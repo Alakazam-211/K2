@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 // localhost-pinned Tauri `git_*` invoke proxy. GET params are snake_case
 // (`path`); the JSON response shapes match the Rust structs as-is.
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { GIT_POLL_INTERVAL } from '@shared/constants'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -96,7 +97,7 @@ export function useGitChanges(scope: ServerScope, projectPath?: string): UseGitC
 
     try {
       setLoading((prev) => (prev ? prev : true))
-      const result = await daemonCliGet<ChangedFile[]>(scope, 'git/changes', { path: projectPath })
+      const result = asArray<ChangedFile>(await daemonCliGet<unknown>(scope, 'git/changes', { path: projectPath }))
       setData(result)
       setError(null)
     } catch (e) {

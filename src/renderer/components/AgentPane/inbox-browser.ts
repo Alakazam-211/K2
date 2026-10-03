@@ -190,7 +190,7 @@ export function stripExternalEmailMarkers(body: string): { inner: string; hadMar
   return { inner: kept.join('\n'), hadMarkers }
 }
 
-/** Empty sandbox HTML only — do not copy FileViewer script-allowing iframe. */
+/** Body for HtmlFrame `inert` (empty sandbox + no-script CSP). Never `scripted`. */
 export function mailHtmlSrcDoc(html: string): string {
   const { inner } = stripExternalEmailMarkers(html)
   return inner.replace(/javascript:/gi, '')

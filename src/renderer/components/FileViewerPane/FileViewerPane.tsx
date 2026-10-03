@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
+import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
 // DocxViewer pulls in mammoth (~200KB), CodeEditor pulls in
 // @codemirror/* (~100KB). Lazy-load heavy viewers so they only enter
@@ -860,18 +861,17 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       ) : category === 'html' && viewMode === 'rendered' ? (
         // Render HTML in a sandboxed <iframe> — NOT via
-        // dangerouslySetInnerHTML. `srcDoc` puts the document in a
-        // null-origin sandbox: with `allow-scripts` (and crucially
-        // WITHOUT `allow-same-origin`) the page's scripts can run so a
-        // dashboard stays interactive, but they cannot reach the K2
-        // app, its cookies/localStorage, or the filesystem. White
-        // background so dark-themed app chrome doesn't bleed into
-        // light HTML documents.
+        // dangerouslySetInnerHTML. HtmlFrame `scripted`: null-origin
+        // sandbox (`allow-scripts`, never `allow-same-origin`) plus a
+        // per-frame CSP meta, so the page's inline scripts run but it
+        // cannot reach the K2 app, the daemon on loopback, or any
+        // plain-http host (prd-html-frame-csp-v1.md). White background
+        // so dark-themed app chrome doesn't bleed into light HTML.
         <div className="flex-1 overflow-hidden bg-white" ref={contentRef}>
-          <iframe
+          <HtmlFrame
             title={fileName}
-            srcDoc={content}
-            sandbox="allow-scripts"
+            html={content}
+            profile="scripted"
             className="w-full h-full border-0 bg-white"
           />
         </div>

@@ -4,6 +4,7 @@ import { agentDisplayName } from '@/lib/workspace-agent'
 import { daemonCliGet, isHostSwitchedError } from '@/lib/daemon-cli'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import Markdown from '@/components/Markdown/Markdown'
+import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import remarkGfm from 'remark-gfm'
 import { InboxChatAboutDialog } from './InboxChatAboutDialog'
 import {
@@ -662,13 +663,12 @@ function MailBodyView({
       )}
       {useHtml ? (
         <div className="flex-1 min-h-0 bg-white mx-3 mb-3 border border-[var(--color-border)]">
-          <iframe
+          <HtmlFrame
             title={message.subject || 'Mail'}
-            srcDoc={htmlSrc}
-            sandbox=""
-            referrerPolicy="no-referrer"
+            html={htmlSrc}
+            profile="inert"
             className="w-full h-full border-0 bg-white"
-            data-testid="inbox-mail-html"
+            testId="inbox-mail-html"
           />
         </div>
       ) : (

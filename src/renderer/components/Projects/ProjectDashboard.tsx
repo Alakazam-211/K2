@@ -12,7 +12,7 @@
 //      attaches (PRD §4.3.1; without activate active_reaper reaps ~15s).
 //   2. `htmlDoc` — a pinned HTML document (#587), rendered with the
 //      FileViewerPane html-category machinery: host-aware fs/read-file,
-//      sandboxed <iframe srcDoc> (allow-scripts, NO allow-same-origin),
+//      sandboxed <iframe srcDoc> via HtmlFrame (allow-scripts + frame CSP, NO allow-same-origin),
 //      2s poll guarded by hasSelectionWithin. A vanished file shows a
 //      plain missing-doc state — it never breaks the layout.
 //   Unknown kinds render an inert placeholder and survive saves (§6.3).
@@ -59,6 +59,7 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { tryFocusPreferredInputInDashboardPane } from '@/lib/workspace-switch-focus'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
+import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
@@ -479,14 +480,15 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
     )
   }
 
-  // Sandboxed <iframe srcDoc> — NEVER dangerouslySetInnerHTML. With
-  // `allow-scripts` and crucially WITHOUT `allow-same-origin`, the
-  // document's scripts run (interactive dashboards) but can't reach
-  // the K2 app, its storage, or the filesystem. White background so
-  // light HTML docs don't bleed dark chrome (FileViewerPane parity).
+  // Sandboxed <iframe srcDoc> via HtmlFrame `scripted` — NEVER
+  // dangerouslySetInnerHTML. Scripts run (interactive dashboards); the
+  // per-frame CSP + null-origin sandbox keep them off the K2 app, the
+  // daemon on loopback, and plain-http hosts (prd-html-frame-csp-v1.md).
+  // White background so light HTML docs don't bleed dark chrome
+  // (FileViewerPane parity).
   return (
     <div ref={rootRef} className="h-full overflow-hidden bg-white">
-      <iframe title={fileName} srcDoc={phase.content} sandbox="allow-scripts" className="w-full h-full border-0 bg-white" />
+      <HtmlFrame title={fileName} html={phase.content} profile="scripted" className="w-full h-full border-0 bg-white" />
     </div>
   )
 }

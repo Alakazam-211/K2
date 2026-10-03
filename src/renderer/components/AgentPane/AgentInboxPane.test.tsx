@@ -212,7 +212,10 @@ describe('AgentInboxPane module locks', () => {
       expect(src).not.toMatch(/from '@\/stores\/feedback/)
     }
     expect(pane).not.toMatch(/invoke\(/)
-    expect(pane).toMatch(/sandbox=""/)
+    // Mail HTML goes through HtmlFrame `inert` (empty sandbox + no-script
+    // CSP; prd-html-frame-csp-v1.md). Never the `scripted` profile.
+    expect(pane).toMatch(/<HtmlFrame[\s\S]*?profile="inert"/)
+    expect(pane).not.toMatch(/profile="scripted"/)
     expect(pane).not.toMatch(/setActiveTab/)
     expect(dialog).not.toMatch(/from '\.\/AgentChatPane'/)
     expect(dialog).not.toMatch(/composerPermitted/)

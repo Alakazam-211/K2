@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useKeepAwakeStore } from '@/stores/keep-awake'
 import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeTone } from '@/lib/keep-awake'
+import { SquareCheckbox, SquareRadio } from '@/components/ui'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
@@ -73,7 +74,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
         aria-label={title}
         title={title}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         data-testid="keep-awake"
         data-state={status.state}
         data-tone={tone}
@@ -109,7 +110,8 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
       </button>
       {open && (
         <div
-          role="menu"
+          role="dialog"
+          aria-label="Keep awake"
           data-testid="keep-awake-menu"
           className="absolute right-0 top-full z-50 mt-1 w-[280px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
@@ -120,25 +122,22 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
               This keeps the host awake, not this laptop.
             </p>
           )}
-          <div className="mt-2 flex flex-col">
+          <div role="radiogroup" aria-label="Keep awake mode" className="mt-2 flex flex-col">
             {KEEP_AWAKE_MODES.map((m) => (
-              <button
+              <label
                 key={m.mode}
-                type="button"
-                role="menuitemradio"
-                aria-checked={status.mode === m.mode}
-                data-testid={`keep-awake-mode-${m.mode}`}
-                disabled={busy}
-                className="flex items-center gap-2 py-0.5 text-left text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
-                onClick={() => void setMode(m.mode)}
+                className="flex cursor-pointer items-center gap-2 py-0.5 text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
               >
-                <span
-                  className={`inline-block h-2 w-2 rounded-full border border-[var(--color-border)] ${
-                    status.mode === m.mode ? 'bg-[var(--color-accent)]' : ''
-                  }`}
+                <SquareRadio
+                  name="keep-awake-mode"
+                  value={m.mode}
+                  data-testid={`keep-awake-mode-${m.mode}`}
+                  checked={status.mode === m.mode}
+                  disabled={busy}
+                  onChange={() => void setMode(m.mode)}
                 />
                 {m.label}
-              </button>
+              </label>
             ))}
           </div>
           <div className="mt-2 border-t border-[var(--color-border)] -mx-3 px-3 pt-2">
@@ -182,8 +181,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           ) : null}
           {status.platform === 'macos' ? (
             <label className="mt-2 flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-              <input
-                type="checkbox"
+              <SquareCheckbox
                 data-testid="keep-awake-battery"
                 checked={status.alsoOnBattery}
                 disabled={busy}

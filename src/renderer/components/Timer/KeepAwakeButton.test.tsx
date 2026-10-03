@@ -3,7 +3,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetKeepAwakeForTests } from '@/stores/keep-awake'
-import { keepAwakeTone, type KeepAwakeStatus } from '@/lib/keep-awake'
+import { KEEP_AWAKE_MODES, keepAwakeTone, type KeepAwakeStatus } from '@/lib/keep-awake'
+import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
 
 const h = vi.hoisted(() => ({
   remote: false,
@@ -169,12 +170,37 @@ describe('KeepAwakeButton', () => {
       const menu = await screen.findByTestId('keep-awake-menu')
       expect(screen.getByTestId('keep-awake-label').textContent).toBe(s.label)
       expect(screen.getByTestId('keep-awake-detail').textContent).toBe(s.detail)
-      const checked = Array.from(menu.querySelectorAll('[role="menuitemradio"][aria-checked="true"]'))
+      const checked = Array.from(menu.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter((el) => el.checked)
       expect(checked.map((el) => el.getAttribute('data-testid'))).toEqual([`keep-awake-mode-${s.mode}`])
       expect(screen.queryByTestId('keep-awake-approve') !== null).toBe(s.canApproveLid)
       expect(screen.queryByTestId('keep-awake-battery') !== null).toBe(s.platform === 'macos')
     })
   }
+
+  it('uses the square radio and checkbox, not native rounded controls', async () => {
+    const button = await renderWith(STATES[2].s)
+    fireEvent.click(button)
+    const menu = await screen.findByTestId('keep-awake-menu')
+    expect(menu.getAttribute('role')).toBe('dialog')
+    const group = screen.getByRole('radiogroup', { name: 'Keep awake mode' })
+    const radios = screen.getAllByRole('radio')
+    expect(radios.length).toBe(KEEP_AWAKE_MODES.length)
+    for (const m of KEEP_AWAKE_MODES) {
+      const radio = screen.getByTestId(`keep-awake-mode-${m.mode}`) as HTMLInputElement
+      expect(group.contains(radio)).toBe(true)
+      expect(radio.type).toBe('radio')
+      expect(radio.name).toBe('keep-awake-mode')
+      expect(radio.classList.contains(SQUARE_RADIO_CLASS)).toBe(true)
+      expect(radio.style.borderRadius).toBe('0px')
+      expect(screen.getByRole('radio', { name: m.label })).toBe(radio)
+    }
+    expect(screen.getByRole('radio', { checked: true })).toBe(screen.getByTestId('keep-awake-mode-always'))
+    const battery = screen.getByTestId('keep-awake-battery') as HTMLInputElement
+    expect(battery.type).toBe('checkbox')
+    expect(battery.classList.contains(SQUARE_CHECK_CLASS)).toBe(true)
+    expect(battery.style.borderRadius).toBe('0px')
+    expect(menu.querySelector('.rounded-full')).toBeNull()
+  })
 
   it('renders nothing until the server answers (an older server)', async () => {
     h.daemonCliGet.mockRejectedValue(new Error('404 Not Found'))

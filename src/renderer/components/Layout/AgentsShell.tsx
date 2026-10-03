@@ -16,6 +16,10 @@
 // opens THAT server's room in this same main area (`HomeRemoteRooms`), with
 // the same drawers bound to it. The window's own room is then hidden, as
 // for the empty state above.
+//
+// 0.43.2 (prd-home-seamless-0432 Z8): the remote rooms render outside the
+// keyed App (`HomeRoomsHost.tsx`), so a top-switcher change keeps them. This
+// shell holds only their slot; the drawers stay here (Z10).
 
 import Layout from './Layout'
 import Sidebar from '@/components/Sidebar/Sidebar'
@@ -28,7 +32,8 @@ import { usePageViewStore } from '@/stores/page-view'
 import { LeftPanelContent, RightPanelContent } from './WorkspaceDrawers'
 import { RoomProvider } from '@/components/Room/RoomContext'
 import { primaryRoom } from '@/stores/room'
-import { HomeRemoteRooms, RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
+import { RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
+import { RoomSlot } from '@/components/Home/room/HomeRoomsHost'
 
 interface ShellProject {
   name: string
@@ -111,7 +116,7 @@ export default function AgentsShell({
       projectName={remote ? remote.entry.label : roomShown ? activeProject?.name : undefined}
       workspaceName={remote ? undefined : roomShown ? activeWorkspace?.name : undefined}
     >
-      <HomeRemoteRooms />
+      <RoomSlot visible={remote !== null} />
       <RoomProvider room={room} shown={remote === null}>
         {hasRoom ? (
           <>

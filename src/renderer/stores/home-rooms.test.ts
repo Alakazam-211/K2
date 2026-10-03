@@ -13,7 +13,15 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-import { createHomeRooms, type HomeRooms } from '@/stores/home-rooms'
+// The switch tests flip the real window server: the primary stores reload
+// against it. Nothing here may reach a network.
+globalThis.fetch = (async (input: RequestInfo | URL) => {
+  throw new Error(`no network in this test: ${String(input)}`)
+}) as typeof fetch
+
+import { createHomeRooms, installWindowHostSwitch, promoteToPrimary, type HomeRooms } from '@/stores/home-rooms'
+import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { clearHostSelect, peekHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 import { createRoomTierManager, type RoomTierManager } from '@/lib/room-tiers'
 import { KEEP_ALIVE_HOT_INTERVAL_MS } from '@/lib/room-keep-alive'
 import type { PinnedRoom, PinnedRoomInput } from '@/stores/room'
@@ -61,6 +69,8 @@ function harness() {
   /** host key → its projects_changed handlers. */
   const projectsChanged = new Map<string, Set<() => void>>()
   const scopes = new Map<string, ServerScope>()
+  /** Rows promoted to the primary room (Z7). */
+  const promoted: HomeRow[] = []
   const scopeFor = (hostKey: string): ServerScope => {
     let s = scopes.get(hostKey)
     if (!s) {
@@ -123,6 +133,9 @@ function harness() {
       projectsChanged.set(scope.hostKey, set)
       return () => set.delete(fn)
     },
+    promote: (r) => {
+      promoted.push(r)
+    },
     now: () => now,
     setInterval: (fn, ms) => {
       const id = nextId++
@@ -159,6 +172,7 @@ function harness() {
     revisionProbes,
     knownServers,
     projectsChanged,
+    promoted,
     advance,
     intervals: () => timers.filter((t) => t.every !== null).length,
   }
@@ -339,7 +353,7 @@ describe('Home rooms (M4, M5)', () => {
     expect(h.rooms.length).toBe(0)
   })
 
-  it('closeAll (a server switch) disposes every room and shows the window’s own room', async () => {
+  it('closeAll disposes every room and shows the window’s own room', async () => {
     await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
     await h.homeRooms.open(row('appa', 'c.test'), 'c.test')
     await h.homeRooms.closeAll()
@@ -347,5 +361,155 @@ describe('Home rooms (M4, M5)', () => {
     expect(h.rooms.map((r) => r.sockets)).toEqual([0, 0])
     expect(h.homeRooms.store.getState()).toEqual({ entries: {}, shown: null })
     expect(Object.keys(h.tiers.store.getState().rooms)).toEqual([])
+  })
+})
+
+// prd-home-seamless-0432 item 2 (Z6, Z7, Z29; T2.1): a top-switcher change
+// keeps the rooms. Only the destination's rooms close; a shown one is
+// promoted to the primary room.
+describe('a window server switch keeps Home rooms (Z6/Z7)', () => {
+  let h: ReturnType<typeof harness>
+  beforeEach(async () => {
+    h = harness()
+    h.lists.set('b.test', [project('pb', 'anna', '/srv/anna')])
+    h.lists.set('c.test', [project('pc', 'appa', '/srv/appa')])
+    await h.homeRooms.open(row('appa', 'c.test'), 'c.test')
+    await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+  })
+
+  it('a same Home key (a session mint, an id-only re-key) disposes nothing and keeps `shown`', async () => {
+    await h.homeRooms.onWindowHostChanged('local', 'local')
+    await h.homeRooms.onWindowHostChanged('b.test', 'b.test')
+    expect(h.rooms.map((r) => r.disposed)).toEqual([0, 0])
+    expect(h.rooms.map((r) => r.sockets)).toEqual([1, 1])
+    expect(h.homeRooms.store.getState().shown).toBe('anna::b.test')
+    expect(Object.keys(h.homeRooms.store.getState().entries).sort()).toEqual(['anna::b.test', 'appa::c.test'])
+    expect(h.promoted).toEqual([])
+  })
+
+  it('a switch to a third server keeps every room: same objects, same generation, same tier, same keep-alive', async () => {
+    const before = h.homeRooms.store.getState()
+    const keepAlivesBefore = h.intervals()
+    await h.homeRooms.onWindowHostChanged('local', 'd.test')
+    const after = h.homeRooms.store.getState()
+    expect(after.shown).toBe('anna::b.test')
+    expect(after.entries['anna::b.test']).toBe(before.entries['anna::b.test'])
+    expect(after.entries['appa::c.test']).toBe(before.entries['appa::c.test'])
+    expect(h.rooms.map((r) => [r.opened, r.disposed, r.sockets])).toEqual([
+      [1, 0, 1],
+      [1, 0, 1],
+    ])
+    expect(h.tiers.tier(h.rooms[1].room.key)).toBe('hot')
+    expect(h.intervals()).toBe(keepAlivesBefore)
+    expect(h.promoted).toEqual([])
+  })
+
+  it('a switch to C disposes only C’s room; the shown B room stays shown', async () => {
+    await h.homeRooms.onWindowHostChanged('local', 'c.test')
+    expect(h.rooms.map((r) => r.disposed)).toEqual([1, 0])
+    expect(h.rooms.map((r) => r.sockets)).toEqual([0, 1])
+    const s = h.homeRooms.store.getState()
+    expect(Object.keys(s.entries)).toEqual(['anna::b.test'])
+    expect(s.shown).toBe('anna::b.test')
+    expect(Object.keys(h.tiers.store.getState().rooms)).toEqual([h.rooms[1].room.key])
+    // C's room was hidden: nothing to promote.
+    expect(h.promoted).toEqual([])
+  })
+
+  it('a switch to the shown room’s server promotes it (a pending primary select), then disposes it', async () => {
+    await h.homeRooms.onWindowHostChanged('local', 'b.test')
+    expect(h.promoted).toEqual([row('anna', 'b.test')])
+    expect(h.rooms.map((r) => r.disposed)).toEqual([0, 1])
+    const s = h.homeRooms.store.getState()
+    expect(s.shown).toBe(null)
+    expect(Object.keys(s.entries)).toEqual(['appa::c.test'])
+  })
+
+  it('a room still resolving on the destination is dropped too (the build stops)', async () => {
+    h.lists.set('e.test', [project('pe', 'eve', '/srv/eve')])
+    const pending = h.homeRooms.open(row('eve', 'e.test'), 'e.test')
+    expect(h.homeRooms.store.getState().entries['eve::e.test']?.phase).toBe('resolving')
+    await h.homeRooms.onWindowHostChanged('local', 'e.test')
+    await pending
+    expect(h.homeRooms.store.getState().entries['eve::e.test']).toBe(undefined)
+    expect(h.rooms.length).toBe(2)
+    expect(h.promoted).toEqual([row('eve', 'e.test')])
+  })
+})
+
+describe('installWindowHostSwitch compares Home host keys (Z29)', () => {
+  const d: ConnectHost = {
+    id: 'id-d', label: 'D', hostname: 'd.test', port: 443, secure: true,
+    username: 'anna', token: '', remember: false, lastConnectedAt: null,
+  } as ConnectHost
+
+  beforeEach(() => {
+    useConnectHostStore.setState({ hosts: [d], activeHost: 'local' } as never)
+    clearHostSelect()
+  })
+
+  it('fires the rooms with (prev, next) Home keys; a session mint and an id-only re-key pass the same key', () => {
+    const calls: Array<[string, string]> = []
+    const off = installWindowHostSwitch({
+      onWindowHostChanged: async (prev, next) => {
+        calls.push([prev, next])
+      },
+    })
+    try {
+      useConnectHostStore.getState().selectHost(d)
+      expect(calls).toEqual([['local', 'd.test']])
+      // Same server, session minted (tokenless → token).
+      useConnectHostStore.setState({ activeHost: { ...d, token: 'tok' } } as never)
+      expect(calls).toEqual([
+        ['local', 'd.test'],
+        ['d.test', 'd.test'],
+      ])
+      // The same saved server re-added under a new client id.
+      useConnectHostStore.setState({ activeHost: { ...d, id: 'id-d2', token: 'tok' } } as never)
+      expect(calls).toEqual([
+        ['local', 'd.test'],
+        ['d.test', 'd.test'],
+        ['d.test', 'd.test'],
+      ])
+    } finally {
+      off()
+    }
+  })
+
+  it('with the real manager: a mint on the window server keeps a room on that server’s alias; promotion carries the switcher id', async () => {
+    const h = harness()
+    h.lists.set('d.test', [project('pd', 'dora', '/srv/dora')])
+    h.lists.set('b.test', [project('pb', 'anna', '/srv/anna')])
+    await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    const off = installWindowHostSwitch(h.homeRooms)
+    try {
+      useConnectHostStore.getState().selectHost(d)
+      useConnectHostStore.setState({ activeHost: { ...d, token: 'tok' } } as never)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(h.rooms.map((r) => r.disposed)).toEqual([0])
+      expect(h.homeRooms.store.getState().shown).toBe('anna::b.test')
+    } finally {
+      off()
+    }
+  })
+})
+
+describe('the production promote dep (Z29): requestHostSelect keyed by the switcher id', () => {
+  it('names the server the window is on now; the projects restore takes it for that host only', () => {
+    clearHostSelect()
+    const b: ConnectHost = {
+      id: 'id-b', label: 'B', hostname: 'b.test', port: 443, secure: true,
+      username: 'anna', token: 'tok', remember: false, lastConnectedAt: null,
+    } as ConnectHost
+    useConnectHostStore.setState({ hosts: [b], activeHost: b } as never)
+    promoteToPrimary(row('anna', 'b.test'))
+    const pending = peekHostSelect()
+    if (!pending) throw new Error('no pending select')
+    expect(pending.hostId).toBe('id-b')
+    expect(pending.row).toEqual(row('anna', 'b.test'))
+    const list = [{ id: 'pb', handle: 'anna', name: 'anna' }]
+    expect(takeHostSelect('local', list)).toBe(null)
+    expect(takeHostSelect(b, list)?.workspace).toEqual(list[0])
+    expect(peekHostSelect()).toBe(null)
   })
 })

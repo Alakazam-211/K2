@@ -9,6 +9,10 @@
 // Hot rooms stay mounted (shown or hidden); warm and
 // cold rooms are not rendered (their grids close; `stores/home-rooms.ts`
 // keeps or drops the tabs store). The window's server never changes.
+//
+// 0.43.2 (prd-home-seamless-0432 Z8): these rooms render outside the keyed
+// App, through `HomeRoomsHost.tsx`'s portal, so a top-switcher change keeps
+// them mounted. The Agents shell only holds the slot they appear in.
 
 import { useEffect, useMemo } from 'react'
 import { useStore } from 'zustand'
@@ -168,15 +172,14 @@ function PendingRoom({ entry }: { entry: HomeRoomEntry }): React.JSX.Element {
   )
 }
 
-/** Every remote room this window holds, for Home's main area. `visible`
- *  is false while the window's own room is on screen. */
+/** Every remote room this window holds, for Home's main area. Rendered by
+ *  `HomeRoomsPortal` (outside the keyed App), shown in the shell's slot. */
 export function HomeRemoteRooms(): React.JSX.Element {
   const entries = useHomeRoomsStore((s) => s.entries)
   const shown = useHomeRoomsStore((s) => s.shown)
   const onHome = usePageViewStore((s) => s.page === 'home')
-  useEffect(() => {
-    homeRooms.setPageVisible(onHome)
-  }, [onHome])
+  // Home's page visibility (the tier clock) is driven by the portal host,
+  // which also knows when the rooms are parked.
   const shownEntry = shown ? entries[shown] : undefined
   return (
     <>

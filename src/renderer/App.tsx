@@ -42,6 +42,7 @@ import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import FeedbackPage from './components/Feedback/FeedbackPage'
+import { HomeRoomsPortal } from '@/components/Home/room/HomeRoomsHost'
 import AgentsShell from './components/Layout/AgentsShell'
 import { HomeShellEffects, useHomeRoomSelected } from './components/Home/home-room'
 import ProjectsPage from './components/Projects/ProjectsPage'
@@ -315,6 +316,20 @@ export default function App(): React.JSX.Element {
   return (
     <StyledKesselProvider>
       <AppRoot />
+    </StyledKesselProvider>
+  )
+}
+
+/** prd-home-seamless-0432 Z8/Z32 — Home's remote rooms, mounted by
+ *  ConnectionGate OUTSIDE the keyed App (first child of every gate branch),
+ *  so a top-switcher change keeps them. It lives in the App chunk so its
+ *  stores evaluate only after the gate accepted a daemon. KesselConfig is
+ *  the only App-level context a room reads; the error boundary is inside
+ *  the portal, so a crashing room fails in its own area. */
+export function HomeRoomsHost(): React.JSX.Element {
+  return (
+    <StyledKesselProvider>
+      <HomeRoomsPortal />
     </StyledKesselProvider>
   )
 }

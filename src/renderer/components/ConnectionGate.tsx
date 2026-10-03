@@ -671,6 +671,14 @@ async function probeRemoteSession(): Promise<SessionProbe> {
 
 type AppComponent = React.ComponentType
 
+/** The App chunk, kept whole (vs-live Z32): its default export is the keyed
+ *  App; `HomeRoomsHost` is Home's remote rooms, which the gate mounts beside
+ *  App so a host switch never unmounts them. */
+interface AppChunk {
+  default: AppComponent
+  HomeRoomsHost: AppComponent
+}
+
 // `activeHostKey` — the stable host identity that keys the <App> remount —
 // now lives in the connect-host store so the per-machine session stores
 // can reuse it without importing this React component (#625). Imported
@@ -679,7 +687,7 @@ type AppComponent = React.ComponentType
 export function ConnectionGate(): React.ReactElement {
   const [decision, setDecision] = useState<GateDecision>({ kind: 'wait', reason: 'starting' })
   const [attempts, setAttempts] = useState(0)
-  const [AppModule, setAppModule] = useState<AppComponent | null>(null)
+  const [AppModule, setAppModule] = useState<AppChunk | null>(null)
   // Fix C: the Phase-2 dynamic import of App exhausted its retries. On a
   // LOCAL accept the poll loop has stopped (attempts frozen), so without
   // this flag the overlay's Reload button could never appear — a failed
@@ -1283,7 +1291,7 @@ export function ConnectionGate(): React.ReactElement {
       void import('../App').then((mod) => {
         if (cancelled) return
         setImportFailed(false)
-        setAppModule(() => mod.default)
+        setAppModule(() => ({ default: mod.default, HomeRoomsHost: mod.HomeRoomsHost }))
       }).catch((err: unknown) => {
         console.error(
           `[ConnectionGate] dynamic import of App failed (attempt ${attempt + 1}/${APP_IMPORT_RETRY_DELAYS_MS.length + 1}):`,
@@ -1326,11 +1334,20 @@ export function ConnectionGate(): React.ReactElement {
   // user's place is preserved while they re-auth a single server.
   const signInOverlay = pendingSignIn ? <RemoteSignIn host={pendingSignIn} /> : null
 
+  // prd-home-seamless-0432 Z8/Z32 — Home's remote rooms: the FIRST child of
+  // every branch below, under one key, so React keeps the same instance
+  // while the gate moves wait → overlay → accept and `<App key>` remounts.
+  // Nothing renders in this slot until the App chunk is loaded (its stores
+  // must evaluate against an accepted daemon).
+  const RoomsHost = AppModule?.HomeRoomsHost ?? null
+  const roomsHost = RoomsHost ? <RoomsHost key="home-rooms-host" /> : null
+
   if (keepRemoteMounted) {
-    const App = AppModule
+    const App = AppModule.default
     return (
       <>
-        <AppErrorBoundary><App key={hostKey} /></AppErrorBoundary>
+        {roomsHost}
+        <AppErrorBoundary key="app"><App key={hostKey} /></AppErrorBoundary>
         {recovery.kind !== 'connected' && (
           <RecoveryBanner host={activeHost} recovery={recovery} />
         )}
@@ -1342,6 +1359,7 @@ export function ConnectionGate(): React.ReactElement {
   if (decision.kind !== 'accept' || AppModule === null) {
     return (
       <>
+        {roomsHost}
         <ConnectingOverlay decision={decision} attempts={attempts} importFailed={importFailed} />
         {/* 0.40.48: a wedge that survived the step-1 auto-reload latches
             BEFORE the app can mount (the poisoned pool blocks the accept),
@@ -1356,13 +1374,16 @@ export function ConnectionGate(): React.ReactElement {
     )
   }
 
-  const App = AppModule
+  const App = AppModule.default
   // Key by the active host so switching daemons unmounts + remounts App
   // wholesale — every store, WS, and terminal pane re-initializes against
-  // the new host's creds rather than clinging to the old socket.
+  // the new host's creds rather than clinging to the old socket. Home's
+  // remote rooms (`roomsHost`) are the exception: they are pinned to their
+  // own servers and stay mounted (Z6).
   return (
     <>
-      <AppErrorBoundary><App key={hostKey} /></AppErrorBoundary>
+      {roomsHost}
+      <AppErrorBoundary key="app"><App key={hostKey} /></AppErrorBoundary>
       {signInOverlay}
     </>
   )

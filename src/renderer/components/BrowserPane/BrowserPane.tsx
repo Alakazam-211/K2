@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
+import { useRoomParked } from '@/contexts/RoomParkedContext'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
@@ -99,6 +100,11 @@ function currentParentWindow(): string {
  * page is not covering the workspace. `windowFocused` is not a term:
  * another app or another window must not hide the page. Do not AND it
  * back in to clip paint-over. A context menu is applied by the caller.
+ *
+ * `parked` (prd-home-seamless-0432 Z33): a Home remote room parked while
+ * the window switches servers keeps its tab visible (PageLive), but its
+ * DOM is hidden; the native page must hide too, or it draws over the
+ * connecting overlay.
  */
 export function browserPaneVisible(input: {
   standalone: boolean
@@ -106,7 +112,9 @@ export function browserPaneVisible(input: {
   settingsOpen: boolean
   page: AppPage
   windowFocused: boolean
+  parked: boolean
 }): boolean {
+  if (input.parked) return false
   if (input.standalone) return true
   const workspaceCovered = input.settingsOpen || !isRoomPage(input.page)
   return input.tabVisible && !workspaceCovered
@@ -163,12 +171,14 @@ export function BrowserPane({
   // The + menu and other context menus are DOM. The native page paints
   // over them, so hide the page while a menu is open. OS focus does not.
   const menuOpen = useContextMenuStore((s) => s.isOpen)
+  const parked = useRoomParked()
   const visible = browserPaneVisible({
     standalone,
     tabVisible,
     settingsOpen,
     page: appPage,
     windowFocused,
+    parked,
   }) && !menuOpen
   const setBrowserItemState = useStore(room.tabs, (s) => s.setBrowserItemState)
 

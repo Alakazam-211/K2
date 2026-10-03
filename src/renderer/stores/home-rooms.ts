@@ -25,8 +25,14 @@
 //     through the pool on open, on focus, after an idle hour, and hourly
 //     while hot (MS39).
 //
-// A server switch (Q1) closes every pinned room: the window's server is now
-// different, and a row on it opens as the window's own room.
+// A top-switcher change (prd-home-seamless-0432 Z6/Z7, superseding Q1)
+// keeps every pinned room on a server other than the switch's destination:
+// its tabs store, workspace socket and carrier, server view, heartbeats,
+// keep-alive, tier and `shown`. Only the destination's rooms close (a row
+// on the window's server is the window's own room, MS13), and a shown one
+// is promoted: the primary room selects the same workspace once the
+// destination's list lands. The compare is on Home host keys, so a session
+// mint or an id-only re-key of the window's server closes nothing.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
@@ -35,10 +41,11 @@ import { roomTiers, type RoomTierChange, type RoomTierManager } from '@/lib/room
 import { createRoomKeepAlive, type RoomKeepAlive } from '@/lib/room-keep-alive'
 import { hostPool } from '@/lib/host-pool-instance'
 import { fetchServerProjects, primaryWorkspaceOf } from '@/lib/server-projects'
-import { findWorkspaceForRow } from '@/lib/home-address'
+import { activeHomeHostKey, findWorkspaceForRow } from '@/lib/home-address'
+import { requestHostSelect } from '@/lib/home-pending-select'
 import { createStore } from 'zustand/vanilla'
 import type { HomeRow } from '@/stores/homes'
-import { onActiveHostChange } from '@/stores/connect-host'
+import { onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import type { KeepAliveResult } from '@/lib/host-pool'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -99,6 +106,11 @@ export interface HomeRoomsDeps {
   /** Home M5: that server's `projects_changed` (a worktree created or closed
    *  in the room), so the room's project list follows its server. */
   onProjectsChanged(scope: ServerScope, fn: () => void): () => void
+  /** Z7/Z29: the window just switched to the shown room's server. Ask the
+   *  primary room to select that row's workspace once the new server's
+   *  list lands (`requestHostSelect`, keyed by the switcher id). Called
+   *  synchronously inside the host-change subscriber pass. */
+  promote(row: HomeRow): void
   now(): number
   setInterval(fn: () => void, ms: number): unknown
   clearInterval(handle: unknown): void
@@ -117,8 +129,13 @@ export interface HomeRooms {
   input(address: string): void
   /** Close one room now (dispose, forget). */
   close(address: string): Promise<void>
-  /** Close every room (server switch, tests). */
+  /** Close every room (tests). */
   closeAll(): Promise<void>
+  /** Z7: the window's server changed from `prevHomeKey` to `nextHomeKey`
+   *  (Home host keys). Same key: nothing. Otherwise only the rooms on
+   *  `nextHomeKey` close (the shown one is promoted first); every other
+   *  room is kept as it is. Resolves when those rooms are disposed. */
+  onWindowHostChanged(prevHomeKey: string, nextHomeKey: string): Promise<void>
   /** Retry a room that failed to resolve. */
   retry(address: string): Promise<HomeRoomEntry | null>
   /** Home itself left / came back on screen (another page, Settings): the
@@ -309,6 +326,22 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
       await Promise.all(addresses.map((a) => teardown(a)))
       store.setState({ shown: null })
     },
+    async onWindowHostChanged(prevHomeKey, nextHomeKey) {
+      if (prevHomeKey === nextHomeKey) return
+      const { entries, shown } = store.getState()
+      const onDestination = Object.values(entries).filter((e) => e.hostKey === nextHomeKey)
+      if (onDestination.length === 0) return
+      // Promote before anything async: the primary room's restore reads
+      // the request when the destination's list lands (Z29).
+      const shownEntry = shown ? entries[shown] : undefined
+      if (shownEntry && shownEntry.hostKey === nextHomeKey) {
+        const row = rows.get(shownEntry.address)
+        if (row) deps.promote(row)
+      }
+      // Each room is disposed through its own scope (Z12): its based save
+      // flushes to that server, then its sockets close.
+      await Promise.all(onDestination.map((e) => teardown(e.address)))
+    },
     setPageVisible(visible) {
       pageVisible = visible
       const shown = store.getState().shown
@@ -346,6 +379,15 @@ export async function layoutRevisionSupported(
   )
 }
 
+/** Z7/Z29: hand a Home row to the window's primary room. The request is
+ *  keyed by the switcher id of the server the window is on NOW (`'local'`
+ *  or `ConnectHost.id`), which is what the projects restore matches
+ *  (`takeHostSelect`). */
+export function promoteToPrimary(row: HomeRow): void {
+  const active = useConnectHostStore.getState().activeHost
+  requestHostSelect(active === 'local' ? 'local' : active.id, row)
+}
+
 /** This window's Home rooms. */
 export const homeRooms: HomeRooms = createHomeRooms({
   tiers: roomTiers,
@@ -359,16 +401,26 @@ export const homeRooms: HomeRooms = createHomeRooms({
   scopeFor: (hostKey) => scopeForHost(hostKey),
   layoutRevisionSupported,
   onProjectsChanged: (scope, fn) => onProjectsChanged(scope, () => fn()),
+  promote: promoteToPrimary,
   now: () => Date.now(),
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
 })
 
-// Q1: a server switch reloads Home and its rooms. A row on the new
-// server opens as the window's own room; every pinned room closes.
-onActiveHostChange(() => {
-  void homeRooms.closeAll()
-})
+// Z6/Z7 (supersedes Q1): a top-switcher change keeps the rooms. The
+// subscriber fires on an `activeHostKey` change AND on a same-host session
+// mint, so it compares Home host keys itself (Z29): a mint or a saved host
+// re-keyed by id is the same server and closes nothing.
+export function installWindowHostSwitch(rooms: Pick<HomeRooms, 'onWindowHostChanged'>): () => void {
+  let lastHomeKey = activeHomeHostKey(useConnectHostStore.getState().activeHost)
+  return onActiveHostChange(() => {
+    const next = activeHomeHostKey(useConnectHostStore.getState().activeHost)
+    const prev = lastHomeKey
+    lastHomeKey = next
+    void rooms.onWindowHostChanged(prev, next)
+  })
+}
+installWindowHostSwitch(homeRooms)
 
 /** React: the Home rooms state. */
 export const useHomeRoomsStore = homeRooms.store

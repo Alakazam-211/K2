@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
+import { RoomParkedContext } from '@/contexts/RoomParkedContext'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useWindowFocusStore } from '@/stores/window-focus'
@@ -52,6 +53,7 @@ describe('browserPaneVisible', () => {
     expect(
       browserPaneVisible({
         standalone: false,
+        parked: false,
         tabVisible: true,
         settingsOpen: false,
         page: 'agents',
@@ -61,7 +63,7 @@ describe('browserPaneVisible', () => {
   })
 
   it('is visible on Home too: Home is the Agents room shell (tab visibility still gates it)', () => {
-    const base = { standalone: false, settingsOpen: false, page: 'home' as AppPage, windowFocused: true }
+    const base = { standalone: false, parked: false, settingsOpen: false, page: 'home' as AppPage, windowFocused: true }
     expect(browserPaneVisible({ ...base, tabVisible: true })).toBe(true)
     expect(browserPaneVisible({ ...base, tabVisible: false })).toBe(false)
   })
@@ -70,6 +72,7 @@ describe('browserPaneVisible', () => {
     expect(
       browserPaneVisible({
         standalone: false,
+        parked: false,
         tabVisible: true,
         settingsOpen: false,
         page: 'agents',
@@ -84,6 +87,7 @@ describe('browserPaneVisible', () => {
       expect(
         browserPaneVisible({
           standalone: false,
+          parked: false,
           tabVisible: false,
           settingsOpen: false,
           page: 'agents',
@@ -99,6 +103,7 @@ describe('browserPaneVisible', () => {
       expect(
         browserPaneVisible({
           standalone: false,
+          parked: false,
           tabVisible: true,
           settingsOpen: true,
           page: 'agents',
@@ -118,6 +123,7 @@ describe('browserPaneVisible', () => {
       expect(
         browserPaneVisible({
           standalone: false,
+          parked: false,
           tabVisible: true,
           settingsOpen: false,
           page,
@@ -127,10 +133,18 @@ describe('browserPaneVisible', () => {
     },
   )
 
+  it('is hidden while its Home room is parked (Z33), even a standalone embed; un-parking shows it again', () => {
+    const base = { tabVisible: true, settingsOpen: false, page: 'home' as AppPage, windowFocused: true }
+    expect(browserPaneVisible({ ...base, standalone: false, parked: true })).toBe(false)
+    expect(browserPaneVisible({ ...base, standalone: true, parked: true })).toBe(false)
+    expect(browserPaneVisible({ ...base, standalone: false, parked: false })).toBe(true)
+  })
+
   it('leaves standalone embeds visible when covered and unfocused', () => {
     expect(
       browserPaneVisible({
         standalone: true,
+        parked: false,
         tabVisible: false,
         settingsOpen: true,
         page: 'projects',
@@ -271,6 +285,40 @@ describe('browser show and hide commands', () => {
       }
     },
   )
+
+  it('hides the native page while its Home room is parked, and shows it on un-park (Z33)', async () => {
+    usePageViewStore.setState({ page: 'home' })
+    const view = renderInPrimaryRoom(
+      <RoomParkedContext.Provider value={false}>
+        <BrowserPane itemId="rp" tabId="tab-rp" paneGroupId="pg-rp" url="https://example.com" />
+      </RoomParkedContext.Provider>,
+    )
+    await flush()
+    expect(commandNames()).toContain('browser_create')
+    const beforePark = vi.mocked(invoke).mock.calls.length
+    view.rerender(
+      <RoomParkedContext.Provider value={true}>
+        <BrowserPane itemId="rp" tabId="tab-rp" paneGroupId="pg-rp" url="https://example.com" />
+      </RoomParkedContext.Provider>,
+    )
+    await flush()
+    expect(namesSince(beforePark)).not.toContain('browser_close')
+    expect(vi.mocked(invoke).mock.calls.slice(beforePark)).toContainEqual([
+      'browser_set_visible',
+      { itemId: 'rp', visible: false, parentWindow: 'main' },
+    ])
+    const beforeUnpark = vi.mocked(invoke).mock.calls.length
+    view.rerender(
+      <RoomParkedContext.Provider value={false}>
+        <BrowserPane itemId="rp" tabId="tab-rp" paneGroupId="pg-rp" url="https://example.com" />
+      </RoomParkedContext.Provider>,
+    )
+    await flush()
+    expect(vi.mocked(invoke).mock.calls.slice(beforeUnpark)).toContainEqual([
+      'browser_set_visible',
+      { itemId: 'rp', visible: true, parentWindow: 'main' },
+    ])
+  })
 })
 
 // V21 / D3 — with the same Browser tab open in two windows, one window's

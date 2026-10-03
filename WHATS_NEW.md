@@ -3,9 +3,9 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.43.1 — Connecting to another server works again
+## 0.43.1 — No more "Something went wrong" after 0.43.0
 
-- **Remote servers.** A 0.43.0 window connected to another 0.43.0 server could fall into "Something went wrong" right after connecting. Replies from the other server now arrive as real data, or fail with a clear error.
+- **The 0.43.0 crash.** On 0.43.0, the window could fall into "Something went wrong" soon after opening, on your own server or another one. After the Keep awake button checked its status, other requests on the same connection could get that status back instead of their own reply. Every reply now matches its request.
 - **Crash guards.** A list that comes back in the wrong shape no longer takes down the window. This covers the usage chip, presets, the chat list, Heartbeats, token usage, Projects, saved split layouts, and ten more places.
 - **Crash panel.** "Something went wrong" has a Details section with Copy details, so a report names the part of the app that broke.
 - **Grok usage.** At 0% used, the menu shows Weekly 0% with its reset time instead of "No usage window".

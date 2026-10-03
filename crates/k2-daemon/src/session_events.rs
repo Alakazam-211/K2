@@ -191,9 +191,11 @@ pub enum SessionEvent {
     /// "tabId": string, "status": "start"|"stop"|"permission",
     /// "workspacePath"?: string }`.
     ///
-    /// `paneId` is the `K2SO_PANE_ID` (== terminal id) the PTY was
-    /// spawned with — the same key `agent:lifecycle` carries today and
-    /// the renderer already correlates spinners against.
+    /// `paneId` is the `K2_PANE_ID` the PTY was spawned with — the same
+    /// key `agent:lifecycle` carries. For a v2 session that is the v2
+    /// **session id** (`v2_spawn.rs`, `pane_id = session_id_for_response`),
+    /// not the renderer's terminal id: a client maps it to a pane through
+    /// the tab's `sessionId`.
     /// `workspacePath` is the daemon-authoritative project path for
     /// Active-bar / toast attribution (remote-safe; optional for older
     /// emitters).
@@ -516,7 +518,9 @@ pub enum SessionEvent {
     /// `reason` = the legacy hook name minus its `mail:` prefix —
     /// one of `server-state-changed` | `domain-status-changed` |
     /// `send-approval-requested` | `send-decided`. Refetch signal
-    /// only, no payload (never message content on the bus).
+    /// only, no payload (never message content on the bus). Consumer:
+    /// `EmailHostingSection.tsx` through `onMailChanged` (0.43.2; before
+    /// that no client listened).
     MailChanged { reason: String },
 
     /// Remote Session Layer 0 — a drive attempt was denied (master switch
@@ -552,6 +556,50 @@ pub enum SessionEvent {
         workspace_path: String,
         paths: Vec<String>,
     },
+}
+
+impl SessionEvent {
+    /// The wire `kind` tag serde writes for this variant.
+    ///
+    /// Home 0.43.2 (Z24): the shared registry
+    /// `src/shared/session-event-kinds.json` lists every kind the client
+    /// must handle or ignore on purpose. This match is exhaustive, so a new
+    /// variant does not compile until it has a name here, and
+    /// `session_events_ws::tests::session_event_kinds_match_shared_registry`
+    /// fails until the name is in the registry too.
+    // Read by the registry test only; the bin target compiles it unused.
+    #[allow(dead_code)]
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            SessionEvent::SessionAdded { .. } => "session_added",
+            SessionEvent::SessionRemoved { .. } => "session_removed",
+            SessionEvent::ActiveChanged { .. } => "active_changed",
+            SessionEvent::SessionRenamed { .. } => "session_renamed",
+            SessionEvent::LlmStatusChanged { .. } => "llm_status_changed",
+            SessionEvent::AgentStatusChanged { .. } => "agent_status_changed",
+            SessionEvent::SessionActivityChanged { .. } => "session_activity_changed",
+            SessionEvent::ReviewQueueChanged { .. } => "review_queue_changed",
+            SessionEvent::ReviewChanged { .. } => "review_changed",
+            SessionEvent::TunnelStatusChanged { .. } => "tunnel_status_changed",
+            SessionEvent::TunnelSubdomainsChanged { .. } => "tunnel_subdomains_changed",
+            SessionEvent::PublishServicesChanged { .. } => "publish_services_changed",
+            SessionEvent::WorkspaceResourcesChanged { .. } => "workspace_resources_changed",
+            SessionEvent::TabTitleChanged { .. } => "tab_title_changed",
+            SessionEvent::TabOrderChanged { .. } => "tab_order_changed",
+            SessionEvent::HeartbeatStateChanged { .. } => "heartbeat_state_changed",
+            SessionEvent::HeartbeatRosterChanged { .. } => "heartbeat_roster_changed",
+            SessionEvent::ProjectsChanged {} => "projects_changed",
+            SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
+            SessionEvent::TokenUsageChanged {} => "token_usage_changed",
+            SessionEvent::PresenceChanged { .. } => "presence_changed",
+            SessionEvent::OpenUrl { .. } => "open_url",
+            SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
+            SessionEvent::FeedbackChanged { .. } => "feedback_changed",
+            SessionEvent::MailChanged { .. } => "mail_changed",
+            SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
+            SessionEvent::FsChanged { .. } => "fs_changed",
+        }
+    }
 }
 
 /// One nested-subdomain target on the wire (0074): the internal endpoint
@@ -667,6 +715,104 @@ pub fn clear_agent_status_for_tests() {
     }
 }
 
+// ── Home 0.43.2 (Z23 / Z31) — what each live session is doing ─────────────
+//
+// `GET /cli/presence/summary` tells a Home row on another server whether an
+// agent there is working. Two daemon sources say so, and both pass through
+// [`emit`]:
+//   - `SessionActivityChanged` (title/bell, keyed by the v2 map key the
+//     observer runs under, `session_activity.rs`), memoized here and dropped
+//     on `SessionRemoved`;
+//   - `AgentStatusChanged` (hooks, keyed by the v2 session id). `AGENT_STATUS`
+//     above keeps its shape for `/cli/ops/overview`; this side map holds the
+//     same status in activity words plus an order stamp.
+// For one session the newer of the two wins. The order stamp is a process
+// counter, not a clock, so two writes in the same second still order.
+
+static MEMO_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// One memo entry: (`working` | `idle` | `permission`, order stamp).
+type OrderedStatus = (String, u64);
+
+/// v2 map key → latest title/bell activity.
+static SESSION_ACTIVITY: OnceLock<Mutex<HashMap<String, OrderedStatus>>> = OnceLock::new();
+
+/// Hook pane id (v2 session id) → latest hook status, in activity words.
+static HOOK_ACTIVITY: OnceLock<Mutex<HashMap<String, OrderedStatus>>> = OnceLock::new();
+
+fn session_activity_map() -> &'static Mutex<HashMap<String, OrderedStatus>> {
+    SESSION_ACTIVITY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn hook_activity_map() -> &'static Mutex<HashMap<String, OrderedStatus>> {
+    HOOK_ACTIVITY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn next_memo_seq() -> u64 {
+    MEMO_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Write the memos for one event. Called only from [`emit`].
+fn record_memos(event: &SessionEvent) {
+    match event {
+        SessionEvent::AgentStatusChanged { pane_id, status, .. } => {
+            if pane_id.is_empty() {
+                return;
+            }
+            record_agent_status(pane_id, status);
+            if let Ok(mut map) = hook_activity_map().lock() {
+                let word = hook_status_as_activity(status).to_string();
+                map.insert(pane_id.clone(), (word, next_memo_seq()));
+            }
+        }
+        SessionEvent::SessionActivityChanged { agent_name, status, .. } => {
+            if agent_name.is_empty() {
+                return;
+            }
+            if let Ok(mut map) = session_activity_map().lock() {
+                map.insert(agent_name.clone(), (status.clone(), next_memo_seq()));
+            }
+        }
+        SessionEvent::SessionRemoved { agent_name, .. } => {
+            if let Ok(mut map) = session_activity_map().lock() {
+                map.remove(agent_name);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The hook bucket (`start` | `stop` | `permission`) in the activity
+/// vocabulary (`working` | `idle` | `permission`).
+pub fn hook_status_as_activity(raw: &str) -> &str {
+    match raw {
+        "start" => "working",
+        "stop" => "idle",
+        other => other,
+    }
+}
+
+/// What one live session is doing, from the newer of its two memos:
+/// `working`, `idle` or `permission`. `None` when neither source has said
+/// anything since boot. `agent_name` is the v2 map key; `session_id` is the
+/// hook's pane id.
+pub fn live_session_status(agent_name: &str, session_id: &str) -> Option<String> {
+    let activity = session_activity_map()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(agent_name).cloned());
+    let hook = hook_activity_map()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(session_id).cloned());
+    match (activity, hook) {
+        (Some((a, a_seq)), Some((h, h_seq))) => Some(if h_seq > a_seq { h } else { a }),
+        (Some((a, _)), None) => Some(a),
+        (None, Some((h, _))) => Some(h),
+        (None, None) => None,
+    }
+}
+
 /// Lazy accessor for the broadcast sender. First caller creates the
 /// channel. Cheap — the OnceLock is a single atomic load on the hot
 /// path.
@@ -689,10 +835,9 @@ pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<Se
     // Observability (Phase B): memoize the latest agent status off the SAME
     // event that's about to hit the bus, so `/cli/ops/overview` and a
     // `/cli/sessions/events` subscriber read one truth. This is the only
-    // writer of AGENT_STATUS.
-    if let SessionEvent::AgentStatusChanged { pane_id, status, .. } = &event {
-        record_agent_status(pane_id, status);
-    }
+    // writer of AGENT_STATUS. Home 0.43.2: the session-activity memo is
+    // written here too, for `/cli/presence/summary`.
+    record_memos(&event);
     sender().send(event)
 }
 
@@ -1687,5 +1832,64 @@ mod tests {
     fn resolve_workspace_for_path_empty_input() {
         assert_eq!(resolve_workspace_for_path(""), "");
         assert_eq!(resolve_workspace_for_path("/"), "/");
+    }
+
+    // Home 0.43.2 (Z31) — the per-session activity memo. Unique keys per
+    // case, so the process-wide maps never collide with another test.
+
+    fn activity(agent: &str, status: &str) -> SessionEvent {
+        SessionEvent::SessionActivityChanged {
+            workspace_path: "/x/memo".into(),
+            agent_name: agent.into(),
+            pane_group_id: None,
+            status: status.into(),
+        }
+    }
+
+    fn hook(session_id: &str, status: &str) -> SessionEvent {
+        SessionEvent::AgentStatusChanged {
+            pane_id: session_id.into(),
+            tab_id: "tab".into(),
+            status: status.into(),
+            workspace_path: None,
+        }
+    }
+
+    #[test]
+    fn live_session_status_takes_the_newer_of_hook_and_activity() {
+        let agent = format!("tab-memo-{}", uuid::Uuid::new_v4());
+        let sid = uuid::Uuid::new_v4().to_string();
+        assert_eq!(live_session_status(&agent, &sid), None, "nothing said yet");
+
+        let _ = emit(activity(&agent, "working"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
+
+        // A newer hook wins over the older title activity.
+        let _ = emit(hook(&sid, "permission"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("permission"));
+
+        // A newer title activity wins over the older hook.
+        let _ = emit(activity(&agent, "idle"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("idle"));
+
+        // The hook bucket is mapped into the activity words.
+        let _ = emit(hook(&sid, "start"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
+        let _ = emit(hook(&sid, "stop"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn session_removed_drops_the_activity_memo() {
+        let agent = format!("tab-memo-{}", uuid::Uuid::new_v4());
+        let sid = uuid::Uuid::new_v4().to_string();
+        let _ = emit(activity(&agent, "working"));
+        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
+        let _ = emit(SessionEvent::SessionRemoved {
+            workspace_path: "/x/memo".into(),
+            pane_group_id: None,
+            agent_name: agent.clone(),
+        });
+        assert_eq!(live_session_status(&agent, &sid), None, "a removed session has no activity");
     }
 }

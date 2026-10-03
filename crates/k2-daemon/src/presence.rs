@@ -440,8 +440,61 @@ pub fn summarize(
     out
 }
 
+/// One registered workspace with a busy agent (Home 0.43.2, Z23). Idle
+/// workspaces are left out.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SummaryActivity {
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
+    /// `working` | `permission`.
+    pub status: String,
+}
+
+/// Pure fold of live-session statuses onto registered workspaces: each
+/// `(cwd, status)` counts on the registered workspace that owns the cwd
+/// (longest registered prefix, the rule `summarize` uses). Only `working`
+/// and `permission` count; `permission` beats `working` within a
+/// workspace. A cwd under no registered workspace is dropped (a Home row
+/// always names a registered one). Sorted by workspace id.
+pub fn fold_agent_activity(
+    sessions: &[(String, String)],
+    workspaces: &[SummaryWorkspaceRef],
+) -> Vec<SummaryActivity> {
+    let paths: Vec<String> = workspaces.iter().map(|w| w.path.clone()).collect();
+    let mut by_ws: std::collections::BTreeMap<String, &'static str> = std::collections::BTreeMap::new();
+    for (cwd, status) in sessions {
+        let busy: &'static str = match status.as_str() {
+            "working" => "working",
+            "permission" => "permission",
+            _ => continue,
+        };
+        if cwd.is_empty() {
+            continue;
+        }
+        let Some(idx) = crate::session_events::longest_registered_project_index(cwd, &paths) else {
+            continue;
+        };
+        let slot = by_ws.entry(workspaces[idx].id.clone()).or_insert(busy);
+        if busy == "permission" {
+            *slot = "permission";
+        }
+    }
+    by_ws
+        .into_iter()
+        .map(|(workspace_id, status)| SummaryActivity { workspace_id, status: status.to_string() })
+        .collect()
+}
+
 /// `GET /cli/presence/summary` →
-/// `{ "online": <distinct people connected>, "workspaces": [SummaryWorkspace] }`.
+/// `{ "online": <distinct people connected>, "workspaces": [SummaryWorkspace],
+///    "agentActivity": [SummaryActivity], "activeProjectIds": [string] }`.
+///
+/// Home 0.43.2 (Z23 / Z31): `agentActivity` folds what each live session is
+/// doing (`session_events::live_session_status`, the newer of the hook and
+/// the title activity) over the same live-session list `/cli/ops/overview`
+/// walks; `activeProjectIds` is the canonical Active set, from the same
+/// function the `active_changed` broadcast calls. Older clients read only
+/// `online` and `workspaces`.
 /// Auth (owner token OR live connect session; app/skin passes and agent
 /// passports refused) is gated in the dispatcher, same gate as the roster.
 pub fn handle_summary() -> crate::cli_response::CliResponse {
@@ -459,11 +512,28 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
             handle: p.handle,
         })
         .collect();
+    let window = k2_core::app_settings::load().active_window_hours;
+    let mut active_ids =
+        match k2_core::projects_ops::compute_active_project_ids(crate::ops_routes::unix_now_ms(), window) {
+            Ok(ids) => ids,
+            Err(e) => return CliResponse::internal_error(format!("compute active set: {e}")),
+        };
+    active_ids.sort();
+    active_ids.dedup();
+    let statuses: Vec<(String, String)> = crate::ops_routes::live_sessions()
+        .into_iter()
+        .filter_map(|s| {
+            session_events::live_session_status(&s.agent_address, &s.session_id)
+                .map(|status| (s.workspace_path, status))
+        })
+        .collect();
     let owner_name = crate::workspace_msg::resolve_owner_from();
     let live = roster();
     let body = serde_json::json!({
         "online": live.len(),
         "workspaces": summarize(&live, &refs, &owner_name),
+        "agentActivity": fold_agent_activity(&statuses, &refs),
+        "activeProjectIds": active_ids,
     });
     match serde_json::to_string(&body) {
         Ok(s) => CliResponse::ok_json(s),
@@ -780,5 +850,40 @@ mod tests {
     fn summarize_empty_roster_is_empty() {
         let refs = vec![wref("id-c", "Cortana", "/w/cortana", "cortana")];
         assert!(summarize(&[], &refs, "owner").is_empty());
+    }
+
+    /// Home 0.43.2 (Z23) — busy sessions fold onto the workspace that owns
+    /// their cwd (longest prefix), permission beats working, idle and
+    /// unregistered cwds drop out.
+    #[test]
+    fn fold_agent_activity_uses_longest_prefix_and_permission_wins() {
+        let refs = vec![
+            wref("id-w", "Work", "/w", "work"),
+            wref("id-app", "App", "/w/app", "app"),
+            wref("id-idle", "Idle", "/i", "idle"),
+        ];
+        let s = |cwd: &str, st: &str| (cwd.to_string(), st.to_string());
+        let out = fold_agent_activity(
+            &[
+                s("/w/app/src", "working"),
+                s("/w/docs", "working"),
+                s("/w", "permission"),
+                s("/i", "idle"),
+                s("/elsewhere", "working"),
+                s("", "working"),
+            ],
+            &refs,
+        );
+        assert_eq!(
+            out,
+            vec![
+                SummaryActivity { workspace_id: "id-app".into(), status: "working".into() },
+                SummaryActivity { workspace_id: "id-w".into(), status: "permission".into() },
+            ]
+        );
+        // Order of the sessions doesn't change the answer.
+        let out2 = fold_agent_activity(&[s("/w", "permission"), s("/w/docs", "working")], &refs);
+        assert_eq!(out2, vec![SummaryActivity { workspace_id: "id-w".into(), status: "permission".into() }]);
+        assert!(fold_agent_activity(&[], &refs).is_empty());
     }
 }

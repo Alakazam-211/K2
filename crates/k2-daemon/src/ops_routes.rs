@@ -147,11 +147,37 @@ fn normalize_status(raw: &str) -> String {
     }
 }
 
-fn unix_now_ms() -> i64 {
+pub(crate) fn unix_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// One live v2 session: its map key (the agent address), its session id
+/// (the hook's `paneId`) and its cwd (empty when it has none).
+#[derive(Debug, Clone)]
+pub(crate) struct LiveSession {
+    pub agent_address: String,
+    pub session_id: String,
+    pub workspace_path: String,
+}
+
+/// Every live session in the v2 map. Shared by `/cli/ops/overview` and
+/// `/cli/presence/summary` (Home 0.43.2, Z31) so both walk the same list.
+pub(crate) fn live_sessions() -> Vec<LiveSession> {
+    crate::v2_session_map::snapshot()
+        .into_iter()
+        .map(|(agent_address, session)| LiveSession {
+            agent_address,
+            session_id: session.session_id.to_string(),
+            workspace_path: session
+                .cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// `GET /cli/ops/overview` — one JSON snapshot of every live session on this
@@ -170,18 +196,12 @@ fn handle_overview() -> CliResponse {
             Err(e) => return CliResponse::internal_error(format!("compute active set: {e}")),
         };
 
-    let sessions = crate::v2_session_map::snapshot();
+    let sessions = live_sessions();
 
     let db = k2_core::db::shared();
     let conn = db.lock();
     let mut out: Vec<OverviewSession> = Vec::with_capacity(sessions.len());
-    for (agent_address, session) in sessions {
-        let session_id = session.session_id.to_string();
-        let workspace_path = session
-            .cwd
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    for LiveSession { agent_address, session_id, workspace_path } in sessions {
 
         // active: is this session's project in the canonical Active set?
         let active = if workspace_path.is_empty() {

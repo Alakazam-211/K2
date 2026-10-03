@@ -143,7 +143,7 @@ pub async fn serve_session_events_connection(
     // Send the hello immediately so the renderer can mark itself
     // subscribed before any session events arrive.
     let hello = HelloEvent {
-        kind: "hello",
+        kind: HELLO_KIND,
         workspace_path: workspace_path.clone(),
         subscriber_id,
         instance_id: crate::boot_status::instance_id(),
@@ -304,21 +304,26 @@ pub async fn serve_session_events_connection(
     );
 }
 
-/// Apply the same workspace filter as `list-for-workspace`. Documented
-/// and unit-tested in
-/// `session_events::tests::workspace_path_filter_rules_match_cli_endpoint`.
-fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
-    let cwd = match event {
-        SessionEvent::SessionAdded { workspace_path: cwd, .. } => cwd,
-        SessionEvent::SessionRemoved { workspace_path: cwd, .. } => cwd,
-        SessionEvent::SessionRenamed { workspace_path: cwd, .. } => cwd,
+/// The `kind` of the handshake frame. Not a `SessionEvent` variant; the
+/// shared registry (`src/shared/session-event-kinds.json`) lists it with
+/// class `handshake`.
+pub(crate) const HELLO_KIND: &str = "hello";
+
+/// The routing class of one event, as a pure function (no database):
+/// `None` = APP-LEVEL (forwarded to every subscriber whatever its
+/// `?path=`), `Some(path)` = WORKSPACE-SCOPED by the cwd rule against that
+/// path. The shared registry's `app` / `workspace` classes are checked
+/// against this in `session_event_kinds_match_shared_registry`.
+pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
+    match event {
+        SessionEvent::SessionAdded { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::SessionRemoved { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::SessionRenamed { workspace_path: cwd, .. } => Some(cwd),
         // task #672 — ActiveChanged is APP-LEVEL (the canonical Active
         // union for the whole daemon), not tied to one workspace path.
         // Forward it to EVERY subscriber so each client mirrors the
         // global set regardless of which `?path=` it subscribed under.
-        // The renderer's app-level `subscribeToActiveState` consumer
-        // filters for `kind === "active_changed"`.
-        SessionEvent::ActiveChanged { .. } => return true,
+        SessionEvent::ActiveChanged { .. } => None,
 
         // 0.39.39 (#675) APP-LEVEL events — daemon-global state with no
         // single workspace. Forward to EVERY subscriber so each client
@@ -328,80 +333,85 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         //   - TunnelStatusChanged — one tunnel per daemon.
         //   - TunnelSubdomainsChanged — same: the nested-subdomain map
         //     belongs to the daemon's ONE tunnel, not any workspace.
-        //   - AgentStatusChanged  — keyed by paneId (terminal id), not a
-        //     workspace path; the renderer correlates by paneId (same as
-        //     the existing `agent:lifecycle` consumer).
+        //   - AgentStatusChanged  — keyed by paneId (the v2 session id),
+        //     not a workspace path; `workspacePath` rides along for
+        //     attribution only.
         SessionEvent::LlmStatusChanged { .. }
         | SessionEvent::TunnelStatusChanged { .. }
         | SessionEvent::TunnelSubdomainsChanged { .. }
         | SessionEvent::PublishServicesChanged { .. }
         | SessionEvent::WorkspaceResourcesChanged { .. }
-        | SessionEvent::AgentStatusChanged { .. } => return true,
+        | SessionEvent::AgentStatusChanged { .. } => None,
 
         // 0.39.45 (GH #18/#26) APP-LEVEL — the registered project set
         // changed. Every client re-fetches its project list; there is
         // no single workspace to scope to (the new project isn't in
         // any subscriber's `?path=` yet, by definition).
-        SessionEvent::ProjectsChanged {} => return true,
+        SessionEvent::ProjectsChanged {} => None,
         // 0.40.38 — chat-history refetch signal: app-level, all subscribers.
-        SessionEvent::ChatHistoryChanged {} => return true,
+        SessionEvent::ChatHistoryChanged {} => None,
         // 0.40.150 — token-usage ledger grew: app-level refetch signal
         // (no workspace scope; the live log is machine-wide).
-        SessionEvent::TokenUsageChanged {} => return true,
+        SessionEvent::TokenUsageChanged {} => None,
         // 0.40.39 — daemon-side activity: app-level (the store maps
         // agent/pane keys itself; spinners exist on every host's UI).
-        SessionEvent::SessionActivityChanged { .. } => return true,
+        SessionEvent::SessionActivityChanged { .. } => None,
 
         // S1 presence — APP-LEVEL (the ActiveChanged convention): the
-        // connected-users roster is daemon-global truth, forwarded to
-        // EVERY subscriber regardless of `?path=` so each window's
-        // presence chips mirror the whole set.
-        SessionEvent::PresenceChanged { .. } => return true,
+        // connected-users roster is daemon-global truth.
+        SessionEvent::PresenceChanged { .. } => None,
 
         // 0.40.34 — APP-LEVEL: a URL-open request has no workspace; it
         // must reach every connected app (local AND across the K2
         // Connect tunnel) so SOME viewer opens it in a browser tab.
-        SessionEvent::OpenUrl { .. } => return true,
+        SessionEvent::OpenUrl { .. } => None,
 
         // Remote live-update fix — APP-LEVEL: project groups + feedback
         // are daemon-global sets (a group spans workspaces; the feedback
-        // badge counts across all of them). Forward to EVERY subscriber
-        // regardless of `?path=` so a K2 Connect client's Projects page /
-        // feedback badge refetches live — the legacy `project-group:*` /
+        // badge counts across all of them). The legacy `project-group:*` /
         // `feedback:*` HookEvents ride the loopback-only /events bus and
         // never cross the tunnel.
-        SessionEvent::ProjectGroupsChanged { .. } => return true,
-        SessionEvent::FeedbackChanged { .. } => return true,
+        SessionEvent::ProjectGroupsChanged { .. } => None,
+        SessionEvent::FeedbackChanged { .. } => None,
 
         // K2 Mail — APP-LEVEL: the mail server / domains / approvals
         // queue are daemon-global owner surface, not tied to one
         // workspace. Same routing class as FeedbackChanged so a
         // remote Settings→Email page refetches live.
-        SessionEvent::MailChanged { .. } => return true,
+        SessionEvent::MailChanged { .. } => None,
 
         // Remote Session Layer 0 — APP-LEVEL: denial audit is
         // daemon-global owner visibility (no workspace scope).
-        SessionEvent::RemoteSessionAccessDenied { .. } => return true,
+        SessionEvent::RemoteSessionAccessDenied { .. } => None,
 
         // Files-drawer multi-writer live refresh — APP-LEVEL (the
         // ChatHistory / ProjectsChanged convention): every thin client
         // must learn about agent writes + other-client FS mutations.
         // Carries workspacePath+paths; FileTree filters against its own
-        // rootPath. Prefer APP-LEVEL over workspace-scoped because the
-        // app-level empty-`?path=` socket is always live, while a
-        // per-workspace subscription is not guaranteed for the Files
-        // drawer.
-        SessionEvent::FsChanged { .. } => return true,
+        // rootPath. APP-LEVEL because the empty-`?path=` app socket is
+        // always live, while a per-workspace subscription is not
+        // guaranteed for the Files drawer.
+        SessionEvent::FsChanged { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
-        // in `workspace_path`; the cwd-prefix filter below routes them to
-        // the matching subscriber exactly like SessionAdded/Removed.
-        SessionEvent::ReviewQueueChanged { workspace_path: cwd } => cwd,
-        SessionEvent::ReviewChanged { workspace_path: cwd, .. } => cwd,
-        SessionEvent::TabTitleChanged { workspace_path: cwd, .. } => cwd,
-        SessionEvent::TabOrderChanged { workspace_path: cwd, .. } => cwd,
-        SessionEvent::HeartbeatStateChanged { workspace_path: cwd, .. } => cwd,
-        SessionEvent::HeartbeatRosterChanged { workspace_path: cwd, .. } => cwd,
+        // in `workspace_path`; the cwd-prefix filter routes them to the
+        // matching subscriber exactly like SessionAdded/Removed.
+        SessionEvent::ReviewQueueChanged { workspace_path: cwd } => Some(cwd),
+        SessionEvent::ReviewChanged { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::TabTitleChanged { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::TabOrderChanged { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::HeartbeatStateChanged { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::HeartbeatRosterChanged { workspace_path: cwd, .. } => Some(cwd),
+    }
+}
+
+/// Apply the same workspace filter as `list-for-workspace`. Documented
+/// and unit-tested in
+/// `session_events::tests::workspace_path_filter_rules_match_cli_endpoint`.
+fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
+    let cwd = match event_scope_path(event) {
+        None => return true,
+        Some(cwd) => cwd,
     };
     // A failed load is not an empty registry. An empty list makes every
     // longest-prefix match, so a nested project would show up here again.
@@ -623,6 +633,208 @@ mod tests {
             assert!(!event_matches_workspace(ev, "/x/foobar"));
             // Unrelated workspace must NOT match.
             assert!(!event_matches_workspace(ev, "/y/bar"));
+        }
+    }
+
+    // ── Home 0.43.2 (Z24, T4.1) — the shared kind registry ──────────
+
+    /// The registry both sides read: wire `kind` → `app` | `workspace` |
+    /// `handshake`.
+    const REGISTRY_JSON: &str = include_str!("../../../src/shared/session-event-kinds.json");
+
+    /// This crate's own source, read so a NEW enum variant fails the test
+    /// even before anyone writes a sample for it.
+    const SESSION_EVENTS_SRC: &str = include_str!("session_events.rs");
+
+    /// One sample of every `SessionEvent` variant. A workspace-scoped
+    /// sample carries `/x/foo`.
+    fn one_of_every_variant() -> Vec<SessionEvent> {
+        vec![
+            added("/x/foo"),
+            removed("/x/foo"),
+            SessionEvent::SessionRenamed {
+                workspace_path: "/x/foo".into(),
+                pane_group_id: None,
+                title: "t".into(),
+            },
+            SessionEvent::ActiveChanged { active_project_ids: vec![], active_window_hours: 24 },
+            SessionEvent::LlmStatusChanged {
+                loaded: false,
+                model_path: None,
+                downloading: false,
+                download_percent: None,
+            },
+            SessionEvent::AgentStatusChanged {
+                pane_id: "sid".into(),
+                tab_id: "tab".into(),
+                status: "start".into(),
+                workspace_path: Some("/x/foo".into()),
+            },
+            SessionEvent::SessionActivityChanged {
+                workspace_path: "/x/foo".into(),
+                agent_name: "tab-pg".into(),
+                pane_group_id: Some("pg".into()),
+                status: "working".into(),
+            },
+            SessionEvent::ReviewQueueChanged { workspace_path: "/x/foo".into() },
+            SessionEvent::ReviewChanged { workspace_path: "/x/foo".into(), agent: None },
+            SessionEvent::TunnelStatusChanged { running: false, public_url: None },
+            SessionEvent::TunnelSubdomainsChanged {
+                primary: String::new(),
+                targets: std::collections::HashMap::new(),
+            },
+            SessionEvent::PublishServicesChanged { project_id: "p".into() },
+            SessionEvent::WorkspaceResourcesChanged { workspace_id: "p".into() },
+            SessionEvent::TabTitleChanged {
+                workspace_path: "/x/foo".into(),
+                project: "p".into(),
+                tab_id: "t".into(),
+                title: "T".into(),
+                locked: false,
+            },
+            SessionEvent::TabOrderChanged {
+                workspace_path: "/x/foo".into(),
+                project: "p".into(),
+                workspace: "w".into(),
+                revision: 1,
+            },
+            SessionEvent::HeartbeatStateChanged {
+                workspace_path: "/x/foo".into(),
+                project: "p".into(),
+                agent: "a".into(),
+                live: true,
+            },
+            SessionEvent::HeartbeatRosterChanged {
+                workspace_path: "/x/foo".into(),
+                project_id: "p".into(),
+            },
+            SessionEvent::ProjectsChanged {},
+            SessionEvent::ChatHistoryChanged {},
+            SessionEvent::TokenUsageChanged {},
+            SessionEvent::PresenceChanged { roster: vec![] },
+            SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
+            SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },
+            SessionEvent::FeedbackChanged { reason: "created".into() },
+            SessionEvent::MailChanged { reason: "send-decided".into() },
+            SessionEvent::RemoteSessionAccessDenied {
+                principal_label: "owner".into(),
+                reason: "off".into(),
+                code: "NO_GRANT".into(),
+                ts: 0,
+            },
+            SessionEvent::FsChanged { workspace_path: "/x/foo".into(), paths: vec!["/x/foo/a".into()] },
+        ]
+    }
+
+    /// `SessionAdded` → `session_added` (serde's `rename_all = "snake_case"`).
+    fn snake_case(name: &str) -> String {
+        let mut out = String::new();
+        for (i, ch) in name.chars().enumerate() {
+            if ch.is_ascii_uppercase() {
+                if i > 0 {
+                    out.push('_');
+                }
+                out.push(ch.to_ascii_lowercase());
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    /// Variant names declared in `pub enum SessionEvent { … }`, read from
+    /// the source: a line indented exactly four spaces that starts with an
+    /// upper-case identifier.
+    fn declared_variant_kinds() -> std::collections::BTreeSet<String> {
+        let start = SESSION_EVENTS_SRC
+            .find("pub enum SessionEvent {")
+            .expect("session_events.rs declares `pub enum SessionEvent {`");
+        let body = &SESSION_EVENTS_SRC[start..];
+        let mut out = std::collections::BTreeSet::new();
+        for line in body.lines().skip(1) {
+            if line == "}" {
+                break;
+            }
+            let Some(rest) = line.strip_prefix("    ") else { continue };
+            if rest.starts_with(' ') {
+                continue;
+            }
+            let ident: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            if ident.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                out.insert(snake_case(&ident));
+            }
+        }
+        assert!(!out.is_empty(), "found no SessionEvent variants in session_events.rs");
+        out
+    }
+
+    #[test]
+    fn session_event_kinds_match_shared_registry() {
+        let registry: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(REGISTRY_JSON).expect("session-event-kinds.json is a flat object");
+
+        // The handshake frame is the one non-variant kind.
+        assert_eq!(
+            registry.get(HELLO_KIND).map(String::as_str),
+            Some("handshake"),
+            "the registry lists `{HELLO_KIND}` as `handshake`"
+        );
+        for (kind, class) in &registry {
+            assert!(
+                matches!(class.as_str(), "app" | "workspace" | "handshake"),
+                "{kind}: unknown class {class:?}"
+            );
+            if kind != HELLO_KIND {
+                assert_ne!(class, "handshake", "{kind}: only `hello` is a handshake");
+            }
+        }
+
+        // 1. Every variant in the source is in the registry, and nothing
+        //    else is. A new daemon kind fails here until the registry, and
+        //    through it the client, knows it.
+        let declared = declared_variant_kinds();
+        let registered: std::collections::BTreeSet<String> =
+            registry.keys().filter(|k| k.as_str() != HELLO_KIND).cloned().collect();
+        assert_eq!(
+            declared, registered,
+            "SessionEvent variants and src/shared/session-event-kinds.json differ \
+             (add the new kind to the registry, then route or ignore it in \
+             src/renderer/stores/session-event-kinds.ts)"
+        );
+
+        // 2. The samples cover every variant, and each sample's serde tag
+        //    is its `kind_name()`.
+        let samples = one_of_every_variant();
+        let mut sampled = std::collections::BTreeSet::new();
+        for ev in &samples {
+            let json: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(ev).expect("serialize")).expect("parse");
+            assert_eq!(json["kind"], ev.kind_name(), "serde tag vs kind_name(): {json}");
+            assert!(sampled.insert(ev.kind_name().to_string()), "duplicate sample {}", ev.kind_name());
+        }
+        assert_eq!(sampled, declared, "one sample per variant");
+
+        // 3. The class matches the daemon's routing: an `app` kind reaches
+        //    an unrelated `?path=`, a `workspace` kind does not.
+        for ev in &samples {
+            let kind = ev.kind_name();
+            let class = registry[kind].as_str();
+            let scoped = event_scope_path(ev).is_some();
+            match class {
+                "app" => {
+                    assert!(!scoped, "{kind}: registry says app, routing scopes it");
+                    assert!(event_matches_workspace(ev, "/totally/unrelated"), "{kind}: app must reach any path");
+                }
+                "workspace" => {
+                    assert!(scoped, "{kind}: registry says workspace, routing is app-level");
+                    assert!(
+                        !event_matches_workspace(ev, "/totally/unrelated"),
+                        "{kind}: workspace kind must not reach an unrelated path"
+                    );
+                    assert!(event_matches_workspace(ev, "/x/foo"), "{kind}: workspace kind reaches its own path");
+                }
+                other => panic!("{kind}: class {other} for a SessionEvent"),
+            }
         }
     }
 }

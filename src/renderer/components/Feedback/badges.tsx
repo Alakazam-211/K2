@@ -39,6 +39,19 @@ export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.E
   )
 }
 
+/** The ticket carries an HTML brief (prd-ticket-html-brief-v1 H19). */
+export function HtmlBriefBadge(): React.JSX.Element {
+  return (
+    <span
+      data-testid="html-badge"
+      title="This ticket has an HTML brief"
+      className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide align-middle bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
+    >
+      HTML
+    </span>
+  )
+}
+
 export function PriorityBadge({ priority }: { priority: number }): React.JSX.Element {
   const cls =
     priority <= 1

@@ -59,7 +59,7 @@ import {
 } from './WorkspaceFilterDropdown'
 import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { KindBadge, PriorityBadge } from './badges'
+import { HtmlBriefBadge, KindBadge, PriorityBadge } from './badges'
 import { primaryScope } from '@/kessel/server-scope'
 
 const TOPBAR_HEIGHT = 38
@@ -431,6 +431,12 @@ export function FeedbackCard({
       {/* No title= tooltip — selectable body text is the source of truth. */}
       <p className="mt-2 text-sm text-[var(--color-text-primary)] break-words selectable-copy cursor-text">
         {row.title}
+        {row.hasBrief === true && (
+          <>
+            {' '}
+            <HtmlBriefBadge />
+          </>
+        )}
       </p>
       <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
         <KindBadge kind={row.kind} />

@@ -25,6 +25,7 @@ const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' }> =
   { file: 'components/FileViewerPane/FileViewerPane.tsx', profile: 'scripted' },
   { file: 'components/Projects/ProjectDashboard.tsx', profile: 'scripted' },
   { file: 'components/AgentPane/AgentInboxPane.tsx', profile: 'inert' },
+  { file: 'components/Feedback/BriefFrame.tsx', profile: 'inert' },
 ]
 
 const FRAME_PATTERNS: ReadonlyArray<[string, RegExp]> = [

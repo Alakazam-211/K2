@@ -43,6 +43,23 @@ export interface FeedbackItem {
   commentCount: number
   /** Username snapshots for push targeting. */
   assignees: string[]
+  /** The agent attached an HTML brief (prd-ticket-html-brief-v1 H17).
+   *  Older daemons omit it: treat missing as false. */
+  hasBrief?: boolean
+  /** Stored (cleaned) brief size in bytes; null/missing when no brief. */
+  briefBytes?: number | null
+}
+
+/** `show?brief=1` → `brief`: the daemon-CLEANED brief HTML (H11) plus its
+ *  plain-text extract. The renderer only presents it (H27). Immutable per
+ *  ticket (H8), so `sha256` is a stable cache key. */
+export interface FeedbackBrief {
+  html: string
+  text: string
+  bytes: number
+  sha256: string
+  sanitizer: string
+  createdAt: number
 }
 
 /** A list row tagged with the workspace it lives on. `linked: false` =
@@ -171,6 +188,45 @@ export async function fetchWaitingCount(): Promise<number> {
 /** GET /cli/feedback/show?id=<id> — one item + its full thread. */
 export async function fetchFeedbackShow(id: string): Promise<FeedbackShow> {
   return daemonCliGet<FeedbackShow>(primaryScope(), 'feedback/show', { id })
+}
+
+/** Validate a `brief` wire value. `null`/missing = the ticket has no brief
+ *  (or an older daemon ignored `brief=1`). Anything else malformed THROWS,
+ *  so a bad body never reaches React state. */
+export function parseFeedbackBrief(raw: unknown): FeedbackBrief | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('feedback/show?brief=1: brief is not an object')
+  }
+  const b = raw as Record<string, unknown>
+  if (typeof b.html !== 'string') throw new Error('feedback/show?brief=1: brief.html is not a string')
+  if (typeof b.text !== 'string') throw new Error('feedback/show?brief=1: brief.text is not a string')
+  if (typeof b.sha256 !== 'string' || b.sha256.length === 0) {
+    throw new Error('feedback/show?brief=1: brief.sha256 is missing')
+  }
+  if (typeof b.bytes !== 'number') throw new Error('feedback/show?brief=1: brief.bytes is not a number')
+  return {
+    html: b.html,
+    text: b.text,
+    bytes: b.bytes,
+    sha256: b.sha256,
+    sanitizer: typeof b.sanitizer === 'string' ? b.sanitizer : '',
+    createdAt: typeof b.createdAt === 'number' ? b.createdAt : 0,
+  }
+}
+
+/** GET /cli/feedback/show?id=<id>&brief=1 — the ticket's HTML brief. Called
+ *  ONCE per ticket (H39); the event-driven thread refetch stays on plain
+ *  `show` so it never re-downloads the brief. */
+export async function fetchFeedbackBrief(id: string): Promise<FeedbackBrief | null> {
+  const res = await daemonCliGet<{ ok?: boolean; brief?: unknown }>(primaryScope(), 'feedback/show', {
+    id,
+    brief: 1,
+  })
+  if (typeof res !== 'object' || res === null) {
+    throw new Error('feedback/show?brief=1: response is not an object')
+  }
+  return parseFeedbackBrief(res.brief)
 }
 
 /** POST /cli/feedback/comment — it's just a comment thread. The

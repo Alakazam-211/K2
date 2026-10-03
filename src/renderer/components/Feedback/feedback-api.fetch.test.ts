@@ -28,7 +28,7 @@ vi.mock('@/kessel/server-scope', () => {
   return { primaryScope: () => scope }
 })
 
-import { fetchAllFeedback, fetchWaitingCount } from './feedback-api'
+import { fetchAllFeedback, fetchFeedbackBrief, fetchWaitingCount, parseFeedbackBrief } from './feedback-api'
 
 function item(id: string, projectId: string, createdAt: number): Record<string, unknown> {
   return {
@@ -113,5 +113,42 @@ describe('fetchAllFeedback (TB4/TB14)', () => {
     expect(cli.get.mock.calls[0][1]).toBe('feedback/list')
     expect(cli.get.mock.calls[0][2]).toEqual({ project: '/ws/alpha', all: 1 })
     expect(rows.map((r) => [r.id, r.linked, r.projectName])).toEqual([['a', true, 'Alpha']])
+  })
+})
+
+// prd-ticket-html-brief-v1 H17/H39: the brief rides `show?brief=1`, and a
+// malformed brief throws instead of reaching state.
+describe('fetchFeedbackBrief', () => {
+  const good = {
+    html: '<p>hi</p>',
+    text: 'hi',
+    bytes: 9,
+    sha256: 'abc',
+    sanitizer: 'k2-brief-v1',
+    createdAt: 1,
+  }
+
+  it('GETs feedback/show with brief=1 and returns the parsed brief', async () => {
+    cli.get.mockResolvedValue({ ok: true, id: 'x', brief: good })
+    await expect(fetchFeedbackBrief('x')).resolves.toEqual(good)
+    expect(cli.get).toHaveBeenCalledTimes(1)
+    expect(cli.get.mock.calls[0][1]).toBe('feedback/show')
+    expect(cli.get.mock.calls[0][2]).toEqual({ id: 'x', brief: 1 })
+  })
+
+  it('null or missing brief → null (no brief, or an older daemon)', async () => {
+    cli.get.mockResolvedValue({ ok: true, id: 'x', brief: null })
+    await expect(fetchFeedbackBrief('x')).resolves.toBeNull()
+    cli.get.mockResolvedValue({ ok: true, id: 'x' })
+    await expect(fetchFeedbackBrief('x')).resolves.toBeNull()
+  })
+
+  it('a malformed brief throws', () => {
+    expect(() => parseFeedbackBrief('<p>hi</p>')).toThrow(/not an object/)
+    expect(() => parseFeedbackBrief([good])).toThrow(/not an object/)
+    expect(() => parseFeedbackBrief({ ...good, html: 5 })).toThrow(/brief.html/)
+    expect(() => parseFeedbackBrief({ ...good, text: null })).toThrow(/brief.text/)
+    expect(() => parseFeedbackBrief({ ...good, sha256: '' })).toThrow(/sha256/)
+    expect(() => parseFeedbackBrief({ ...good, bytes: '9' })).toThrow(/bytes/)
   })
 })

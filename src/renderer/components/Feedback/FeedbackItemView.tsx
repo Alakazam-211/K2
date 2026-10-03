@@ -36,17 +36,20 @@ import {
   askingSessionWakeAction,
   assignFeedback,
   commentFeedback,
+  fetchFeedbackBrief,
   fetchFeedbackShow,
   formatFiledDate,
   isUnlinked,
   optionsActionable,
   resolveFeedback,
   UNLINKED_WORKSPACE_LABEL,
+  type FeedbackBrief,
   type FeedbackListRow,
   type FeedbackSessionKind,
   type FeedbackShow,
 } from './feedback-api'
-import { KindBadge, PriorityBadge, StatusBadge } from './badges'
+import { HtmlBriefBadge, KindBadge, PriorityBadge, StatusBadge } from './badges'
+import { BriefFrame } from './BriefFrame'
 import {
   SelectableRegion,
   clearStuckBodyUserSelect,
@@ -74,6 +77,10 @@ interface FeedbackItemViewProps {
 }
 
 type ItemTab = 'thread' | 'terminal'
+
+/** Ticket id → its HTML brief. Briefs never change after filing (H8), so
+ *  one fetch per ticket per window is enough (H39). Exported for tests. */
+export const briefCache = new Map<string, FeedbackBrief>()
 
 export function FeedbackItemView({
   id,
@@ -124,6 +131,44 @@ export function FeedbackItemView({
     return () => clearTimeout(timer)
   }, [revision, load, id])
 
+  // Ticket HTML brief (prd-ticket-html-brief-v1 H39): fetched ONCE per
+  // ticket, when `hasBrief` first appears, via `show?brief=1`. The 300ms
+  // event refetch above stays on plain `show`, so a busy thread never
+  // re-downloads the brief or reloads its frame. Briefs are immutable (H8),
+  // so the module cache (id → brief, sha256 inside) survives reselects.
+  const hasBrief = item?.hasBrief === true || listRow.hasBrief === true
+  const [brief, setBrief] = useState<FeedbackBrief | null>(() => briefCache.get(id) ?? null)
+  const [briefError, setBriefError] = useState<string | null>(null)
+  const briefRequested = useRef<string | null>(null)
+  useEffect(() => {
+    if (!hasBrief) return
+    const cached = briefCache.get(id)
+    if (cached) {
+      setBrief(cached)
+      return
+    }
+    if (briefRequested.current === id) return
+    briefRequested.current = id
+    // No cancel flag: the parent keys this view by id, and a StrictMode
+    // effect re-run must still receive the one in-flight result.
+    fetchFeedbackBrief(id).then(
+      (b) => {
+        if (b) briefCache.set(id, b)
+        if (b) {
+          setBrief(b)
+          setBriefError(null)
+        } else {
+          setBriefError('the server returned no brief for this ticket')
+        }
+      },
+      (e: unknown) => {
+        // Allow a retry on the next ticket open (not on every event).
+        briefRequested.current = null
+        setBriefError(e instanceof Error ? e.message : String(e))
+      },
+    )
+  }, [hasBrief, id])
+
   // TB18: a ticket whose workspace is gone has no agent left to receive a
   // reply. Thread only (read-only), Resolve and Dismiss; no Agent tab.
   const unlinked = isUnlinked(listRow)
@@ -143,6 +188,7 @@ export function FeedbackItemView({
             {view.title}
           </span>
           <PriorityBadge priority={view.priority} />
+          {hasBrief && <HtmlBriefBadge />}
           <KindBadge kind={view.kind} />
           <StatusBadge status={view.status} />
         </div>
@@ -179,6 +225,9 @@ export function FeedbackItemView({
           nowSec={nowSec}
           ticketId={id}
           unlinked={unlinked}
+          hasBrief={hasBrief}
+          brief={brief}
+          briefError={briefError}
           onChanged={() => {
             void load()
             onMutated()
@@ -206,6 +255,9 @@ export function ThreadTab({
   nowSec,
   ticketId,
   unlinked = false,
+  hasBrief = false,
+  brief = null,
+  briefError = null,
   onChanged,
 }: {
   item: FeedbackShow | null
@@ -214,6 +266,10 @@ export function ThreadTab({
   ticketId: string
   /** Workspace removed: read-only thread, Resolve and Dismiss only. */
   unlinked?: boolean
+  /** The ticket has an HTML brief (H18): shown above the thread. */
+  hasBrief?: boolean
+  brief?: FeedbackBrief | null
+  briefError?: string | null
   onChanged: () => void
 }): React.JSX.Element {
   // Drafts survive unmount (leave ticket / switch pages).
@@ -284,10 +340,15 @@ export function ThreadTab({
   // the user is drag-selecting (scroll jump + DOM churn kill the range).
   const commentCount = item?.comments.length ?? 0
   const prevCommentCountRef = useRef(commentCount)
+  const firstLoadSeenRef = useRef(false)
   useEffect(() => {
     if (!item) return
+    const firstLoad = !firstLoadSeenRef.current
+    firstLoadSeenRef.current = true
     const grew = commentCount > prevCommentCountRef.current
     prevCommentCountRef.current = commentCount
+    // A ticket with a brief opens on the brief (H18), not the newest reply.
+    if (firstLoad && hasBrief) return
     if (!grew && prevCommentCountRef.current !== 0) return
     if (hasSelectionWithin(scrollRef.current)) return
     requestAnimationFrame(() => {
@@ -295,7 +356,7 @@ export function ThreadTab({
       const el = scrollRef.current
       if (el) el.scrollTop = el.scrollHeight
     })
-  }, [item, commentCount])
+  }, [item, commentCount, hasBrief])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -363,6 +424,22 @@ export function ThreadTab({
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
             </div>
           )}
+
+          {hasBrief &&
+            (brief ? (
+              <BriefFrame brief={brief} title={item.title} />
+            ) : briefError ? (
+              <div
+                data-testid="brief-error"
+                className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy"
+              >
+                Failed to load the brief: {briefError}
+              </div>
+            ) : (
+              <div data-testid="brief-loading" className="mb-3 text-[11px] text-[var(--color-text-muted)]">
+                Loading brief…
+              </div>
+            ))}
 
           {!unlinked && (
             <AssigneePicker

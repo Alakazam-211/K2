@@ -15,6 +15,14 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { onMailChanged } from '@/stores/session-events'
+
+/** Home 0.43.2 (Q7) — call `fn` whenever the window's server says its mail
+ *  state changed (`mail_changed`: server state, a domain, an approval asked
+ *  for or decided). Local and remote alike. Returns the unsubscribe. */
+export function onWindowServerMailChanged(fn: () => void): () => void {
+  return onMailChanged(primaryScope(), () => fn())
+}
 
 // ── Wire types ───────────────────────────────────────────────────────────
 

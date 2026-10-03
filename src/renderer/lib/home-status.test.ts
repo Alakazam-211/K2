@@ -5,13 +5,16 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  activityForRow,
   bootIsReady,
   personInitials,
   presenceForRow,
   resolveRowStatus,
+  roomRowActivity,
   type PresenceWorkspace,
 } from './home-status'
 import type { HostEntry } from './host-pool'
+import { mergePaneStatus, type PaneStatus } from '@/stores/active-agents'
 import type { RosterUser } from '@/stores/presence'
 
 const row = { address: 'bee::b.k2.dev', workspaceId: 'pb' }
@@ -173,6 +176,65 @@ describe('resolveRowStatus — the connected server', () => {
 
   it('presence unsupported → nobody shown', () => {
     expect(resolveRowStatus({ ...base, rosterSupported: false, activity: 'idle' }).people).toEqual([])
+  })
+})
+
+describe('Home 0.43.2 (Z23): what an agent on another server is doing', () => {
+  const other = {
+    where: 'other' as const,
+    row,
+    saved: true,
+    hasLogin: true,
+    self: 'me',
+    serverLabel: 'B',
+  }
+
+  it('a closed row reads the server’s folded summary: Working, Needs you, else Live', () => {
+    const working = resolveRowStatus({ ...other, entry: probe({ presence: summary, activity: [{ workspaceId: 'pb', status: 'working' }] }) })
+    expect([working.kind, working.label]).toEqual(['working', 'Working'])
+    expect(working.people.map((p) => p.user)).toEqual(['owner', 'anna'])
+    const waiting = resolveRowStatus({ ...other, entry: probe({ activity: [{ workspaceId: 'pb', status: 'permission' }] }) })
+    expect([waiting.kind, waiting.label]).toEqual(['permission', 'Needs you'])
+    // Another workspace busy on the same server: this row stays Live.
+    expect(resolveRowStatus({ ...other, entry: probe({ activity: [{ workspaceId: 'pz', status: 'working' }] }) }).kind).toBe('live')
+    // An older server sends no activity.
+    expect(resolveRowStatus({ ...other, entry: probe({}) }).kind).toBe('live')
+    expect(resolveRowStatus({ ...other, entry: probe({ activity: null }) }).kind).toBe('live')
+  })
+
+  it('an open room’s live slice wins over a stale summary, both ways', () => {
+    const stale = probe({ activity: [{ workspaceId: 'pb', status: 'working' }] })
+    expect(resolveRowStatus({ ...other, entry: stale, roomActivity: 'idle' }).kind).toBe('live')
+    expect(resolveRowStatus({ ...other, entry: probe({}), roomActivity: 'permission' }).kind).toBe('permission')
+    expect(resolveRowStatus({ ...other, entry: probe({}), roomActivity: 'working' }).kind).toBe('working')
+    expect(resolveRowStatus({ ...other, entry: stale, roomActivity: null }).kind).toBe('working')
+  })
+
+  it('activity never paints over offline, sign-in or no access', () => {
+    const busy = [{ workspaceId: 'pb', status: 'working' as const }]
+    expect(resolveRowStatus({ ...other, entry: probe({ reach: 'offline', activity: busy }) }).kind).toBe('offline')
+    expect(resolveRowStatus({ ...other, entry: probe({ auth: 'kicked', activity: busy }) }).kind).toBe('sign-in')
+    expect(resolveRowStatus({ ...other, entry: probe({ role: 'viewer', activity: busy }), roomActivity: 'working' }).kind).toBe(
+      'no-access',
+    )
+  })
+
+  it('activityForRow matches by workspace id only', () => {
+    expect(activityForRow([{ workspaceId: 'pb', status: 'permission' }], row)).toBe('permission')
+    expect(activityForRow([{ workspaceId: 'pb', status: 'permission' }], { address: 'bee::b.k2.dev', workspaceId: null })).toBe(null)
+    expect(activityForRow(null, row)).toBe(null)
+  })
+
+  it('roomRowActivity: permission beats working; the daemon’s word merges per pane like the tab dots', () => {
+    const view = (client: Array<[string, PaneStatus]>, daemon: Array<[string, PaneStatus]>) => ({
+      paneStatuses: new Map(client),
+      daemonPaneStatuses: new Map(daemon),
+    })
+    expect(roomRowActivity(view([], []), mergePaneStatus)).toBe('idle')
+    expect(roomRowActivity(view([['t1', 'working']], []), mergePaneStatus)).toBe('working')
+    expect(roomRowActivity(view([['t1', 'working'], ['t2', 'permission']], []), mergePaneStatus)).toBe('permission')
+    // A hidden pane's false client idle loses to the daemon's working.
+    expect(roomRowActivity(view([['t1', 'idle']], [['t1', 'working']]), mergePaneStatus)).toBe('working')
   })
 })
 

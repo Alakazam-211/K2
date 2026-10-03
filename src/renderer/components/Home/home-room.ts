@@ -15,7 +15,7 @@
 // (`HomeShellEffects` is mounted only then). The connected server gets the
 // public `/boot-status` read only, for its `instanceId` (MS81).
 
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { create, useStore } from 'zustand'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -31,7 +31,15 @@ import {
   savedHostForKey,
   workspaceHandle,
 } from '@/lib/home-address'
-import { HOME_POLL_MS, resolveRowStatus, type RowStatus } from '@/lib/home-status'
+import {
+  HOME_POLL_MS,
+  resolveRowStatus,
+  roomRowActivity,
+  type RoomRowActivity,
+  type RowStatus,
+} from '@/lib/home-status'
+import { mergePaneStatus } from '@/stores/active-agents'
+import type { Room } from '@/stores/room'
 import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useHomeRoomsStore } from '@/stores/home-rooms'
@@ -109,7 +117,23 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
   const hostKey = parsed?.host ?? ''
   const entry = useStore(hostPool.store, (s) => s.entries[hostKey])
   const sameServerAs = useSameServerAs(hostKey)
-  return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs })
+  const room = useHomeRoomsStore((s) => s.entries[row.address]?.room ?? null)
+  const roomActivity = useRoomRowActivity(room)
+  return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity })
+}
+
+/** Home 0.43.2 (Z23): an open room's activity, live from its own slice
+ *  (no poll); null when no room is open for the row. */
+function useRoomRowActivity(room: Pick<Room, 'activityView'> | null): RoomRowActivity | null {
+  const subscribe = useCallback(
+    (onChange: () => void) => (room ? room.activityView.subscribe(onChange) : () => {}),
+    [room],
+  )
+  const read = useCallback(
+    () => (room ? roomRowActivity(room.activityView.getState(), mergePaneStatus) : null),
+    [room],
+  )
+  return useSyncExternalStore(subscribe, read, read)
 }
 
 type RowStatusInputs = {
@@ -119,13 +143,15 @@ type RowStatusInputs = {
   projects: ReturnType<typeof useProjectsStore.getState>['projects']
   entry: Extract<Parameters<typeof resolveRowStatus>[0], { where: 'other' }>['entry']
   sameServerAs: string | null
+  /** An open room's live activity for the row (Z23), or null. */
+  roomActivity?: RoomRowActivity | null
 }
 
 /** The status a row paints, from plain store values (shared by the row's
  *  hook and the Cmd+1–9 shortcut). */
 function computeRowStatus(
   row: HomeRow,
-  { activeHost, hosts, connectionStatus, projects, entry, sameServerAs }: RowStatusInputs,
+  { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity }: RowStatusInputs,
 ): { status: RowStatus; place: string | null; onConnected: boolean } {
   const parsed = parseHomeAddress(row.address)
   const hostKey = parsed?.host ?? ''
@@ -159,6 +185,7 @@ function computeRowStatus(
       self: isLocal ? 'owner' : saved?.username || 'owner',
       sameServerAs,
       serverLabel: place ?? hostKey,
+      roomActivity: roomActivity ?? null,
     }),
     place,
     onConnected,

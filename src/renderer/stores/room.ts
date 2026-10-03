@@ -21,14 +21,27 @@ import { create, type StoreApi } from 'zustand'
 import { LOCAL_HOME_HOST } from '@/lib/host-key'
 import { playCompletionSound } from '@/lib/completion-sound'
 import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
-import { createTabsStore, useTabsStore, type TabsStore, type TabsRoomWorkspace, type ProjectPathEntry } from '@/stores/tabs'
+import {
+  createTabsStore,
+  useTabsStore,
+  type Tab,
+  type TabsStore,
+  type TabsRoomWorkspace,
+  type ProjectPathEntry,
+  type TerminalItemData,
+} from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { PaneStatus } from '@/stores/active-agents'
 import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
 import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
 import { remoteRoomScope, viewOnlyScope } from '@/kessel/server-scope'
-import { onSessionActivityChanged, type SessionActivityChangedEvent } from '@/stores/session-events'
+import {
+  onAgentStatusChanged,
+  onSessionActivityChanged,
+  type AgentStatusChangedEvent,
+  type SessionActivityChangedEvent,
+} from '@/stores/session-events'
 
 /** Where a terminal pane reports what its agent is doing (MS68). The pane
  *  never reaches for a global store: the primary room's sink is the window's
@@ -270,7 +283,59 @@ export type RoomActivityStore = StoreApi<RoomActivityState> &
     /** Home M5 tab dots: the room's server's own word on a session
      *  (`session_activity_changed`, visibility-independent). */
     applyDaemonActivity(e: Pick<SessionActivityChangedEvent, 'agentName' | 'paneGroupId' | 'status'>): void
+    /** Home 0.43.2 (Z22): a lifecycle hook (`agent_status_changed`) for
+     *  pane `paneId` (already mapped to the room's terminal id).
+     *  `start` → working, `permission` → permission, `stop` → idle with
+     *  unseen-done and one chime. The hook wins over title activity: a
+     *  title can't clear a hook's permission. */
+    applyHookStatus(paneId: string, status: AgentStatusChangedEvent['status']): void
   }
+
+/** The terminal id in `tabs` whose daemon session is `sessionId`, or null.
+ *  A hook's `paneId` is the v2 session id (vs-live Z30), and a room's tab
+ *  carries it as `TerminalItemData.sessionId`. */
+export function terminalForSession(
+  state: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[] }> },
+  sessionId: string,
+): string | null {
+  if (!sessionId) return null
+  const groups = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
+  for (const tabs of groups) {
+    for (const tab of tabs) {
+      for (const pg of tab.paneGroups.values()) {
+        for (const item of pg.items) {
+          if (item.type !== 'terminal') continue
+          const data = item.data as TerminalItemData
+          if (data.sessionId === sessionId || data.terminalId === sessionId) return data.terminalId
+        }
+      }
+    }
+  }
+  return null
+}
+
+/** Which pane of a room an `agent_status_changed` frame is about, or null
+ *  when the frame isn't this room's (Z22, Z30):
+ *   - a frame whose `workspacePath` is outside the room root is dropped
+ *     before any lookup;
+ *   - the pane is the tab whose `sessionId` is the frame's `paneId`, then
+ *     the slice's agent-name aliases;
+ *   - with a path under the root but no tab (the pinned Chat, a hidden
+ *     session), the session id itself keys the slice, so the room — and
+ *     its Home row — still knows the agent is busy;
+ *   - with no path, only a tab of this room claims it. */
+export function roomPaneForHook(
+  e: Pick<AgentStatusChangedEvent, 'paneId' | 'workspacePath'>,
+  root: string,
+  tabsState: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[] }> },
+  aliases: ReadonlyMap<string, string>,
+): string | null {
+  const path = typeof e.workspacePath === 'string' && e.workspacePath.length > 0 ? e.workspacePath : null
+  if (path !== null && !pathUnderRoot(path, root)) return null
+  const pane = terminalForSession(tabsState, e.paneId) ?? aliases.get(e.paneId) ?? null
+  if (pane) return pane
+  return path !== null && e.paneId ? e.paneId : null
+}
 
 /** `/w/app` is under `/w`; `/w-other` is not (the daemon's own rule,
  *  `activity_events_ws.rs` boundary). */
@@ -352,7 +417,30 @@ export function createRoomActivity(
     store.setState({ unseenDone: unseen })
     playCompletionSound(projectId, projects.getState().projects)
   }
-  return Object.assign(store, sink, { applyDaemonActivity })
+  const applyHookStatus: RoomActivityStore['applyHookStatus'] = (paneId, status) => {
+    const prev = store.getState().paneStatuses.get(paneId)
+    if (status === 'start') {
+      if (prev !== 'working') setStatus(paneId, 'working')
+      return
+    }
+    if (status === 'permission') {
+      if (prev !== 'permission') setStatus(paneId, 'permission')
+      return
+    }
+    if (status !== 'stop') return
+    if (prev !== 'working' && prev !== 'permission') {
+      // Already done (a title idle got here first, which chimed) or never
+      // seen busy: record idle, no second chime.
+      if (prev === undefined) setStatus(paneId, 'idle')
+      return
+    }
+    setStatus(paneId, 'idle')
+    const unseen = new Map(store.getState().unseenDone)
+    unseen.set(paneId, Date.now())
+    store.setState({ unseenDone: unseen })
+    playCompletionSound(projectId, projects.getState().projects)
+  }
+  return Object.assign(store, sink, { applyDaemonActivity, applyHookStatus })
 }
 
 export interface PinnedRoomInput {
@@ -430,6 +518,15 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     if (!pathUnderRoot(e.workspacePath, workspace.path)) return
     activity.applyDaemonActivity(e)
   })
+  // Home 0.43.2 (Z22, Z30): the server's lifecycle hooks (permission, a
+  // clean stop). Same carrier, on THIS room's own server's bus — never the
+  // window's. `paneId` is the v2 session id; it maps to a pane through the
+  // room's tabs.
+  const hookUnsub = onAgentStatusChanged(scope, (e) => {
+    const pane = roomPaneForHook(e, workspace.path, tabs.getState(), activity.getState().aliases)
+    if (pane === null) return
+    activity.applyHookStatus(pane, e.status)
+  })
   let disposed: Promise<void> | null = null
   return {
     key: scopedKey(scope, `${workspace.projectId}:${workspace.workspaceId}`),
@@ -448,6 +545,7 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
       if (!disposed) {
         disposed = (async () => {
           activityUnsub()
+          hookUnsub()
           heartbeats.unsubscribeLive()
           try {
             await tabs.room.dispose()

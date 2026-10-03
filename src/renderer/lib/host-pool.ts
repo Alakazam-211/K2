@@ -38,7 +38,22 @@ import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { ConnectHost, LoginResult } from '@/stores/connect-host'
 import { LOCAL_HOME_HOST, savedHostForKey } from '@/lib/host-key'
 import type { LoginCoordinator, LoginBlock } from '@/lib/host-login-coord'
-import type { PresenceWorkspace } from '@/lib/home-status'
+import type { PresenceActivity, PresenceWorkspace } from '@/lib/home-status'
+
+/** Home 0.43.2 (Z23): the summary's `agentActivity`, keeping only rows the
+ *  client understands. Absent (a server before 0.43.2) → null. */
+export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: PresenceActivity[] = []
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue
+    const { workspaceId, status } = r as { workspaceId?: unknown; status?: unknown }
+    if (typeof workspaceId !== 'string' || workspaceId.length === 0) continue
+    if (status !== 'working' && status !== 'permission') continue
+    out.push({ workspaceId, status })
+  }
+  return out
+}
 
 export type PoolAuth = 'ok' | 'signing-in' | 'signin-required' | 'rotate-required' | 'kicked'
 export type PoolReach = 'unknown' | 'live' | 'starting' | 'offline'
@@ -68,6 +83,13 @@ export interface HostEntry {
   /** The login's role on that server, as whoami says it. Null = not read. */
   role: string | null
   presence: PresenceWorkspace[] | null
+  /** Home 0.43.2 (Z23): the summary's `agentActivity` — that server's busy
+   *  workspaces (working / permission). Null (or absent) when unread or the
+   *  server is older than 0.43.2; cleared whenever `presence` is. */
+  activity?: PresenceActivity[] | null
+  /** Home 0.43.2 (Z23): the summary's `activeProjectIds` — that server's
+   *  canonical Active set. Same lifetime as `activity`. */
+  activeProjectIds?: string[] | null
   /** Offline checks in a row, for the 5 s / 15 s / 30 s probe backoff. */
   offlineStreak: number
   checkedAt: number | null
@@ -287,6 +309,12 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
   const write = (hostKey: string, patch: Partial<HostEntry>): HostEntry => {
     const prev = read(hostKey)
     const next: HostEntry = { ...prev, ...patch, hostKey }
+    // Home 0.43.2: the summary's activity fields live and die with
+    // `presence` (every "no summary" write clears presence only).
+    if (patch.presence === null) {
+      if (!('activity' in patch)) next.activity = null
+      if (!('activeProjectIds' in patch)) next.activeProjectIds = null
+    }
     store.setState((s) => ({ entries: { ...s.entries, [hostKey]: next } }))
     if (prev.auth !== next.auth) {
       for (const fn of [...authListeners]) fn(hostKey, next.auth)
@@ -491,15 +519,19 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       write(hostKey, { presence: null })
       return
     }
-    let body: { workspaces?: unknown }
+    let body: { workspaces?: unknown; agentActivity?: unknown; activeProjectIds?: unknown }
     try {
-      body = (await res.json()) as { workspaces?: unknown }
+      body = (await res.json()) as { workspaces?: unknown; agentActivity?: unknown; activeProjectIds?: unknown }
     } catch {
       write(hostKey, { presence: null })
       return
     }
     write(hostKey, {
       presence: Array.isArray(body.workspaces) ? (body.workspaces as PresenceWorkspace[]) : null,
+      activity: parsePresenceActivity(body.agentActivity),
+      activeProjectIds: Array.isArray(body.activeProjectIds)
+        ? body.activeProjectIds.filter((id): id is string => typeof id === 'string')
+        : null,
     })
   }
 

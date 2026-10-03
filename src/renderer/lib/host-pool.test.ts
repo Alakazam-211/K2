@@ -43,6 +43,9 @@ interface FakeDaemon {
   nextLoginStatus: number | null
   retryAfter: string | null
   minted: number
+  /** Extra `/cli/presence/summary` fields (0.43.2 `agentActivity`,
+   *  `activeProjectIds`); null = a server before 0.43.2. */
+  summaryExtra: Record<string, unknown> | null
 }
 
 function daemon(base: string): FakeDaemon {
@@ -61,6 +64,7 @@ function daemon(base: string): FakeDaemon {
     nextLoginStatus: null,
     retryAfter: null,
     minted: 0,
+    summaryExtra: null,
   }
 }
 
@@ -96,7 +100,7 @@ function serve(url: string, init?: RequestInit): Response {
   }
   if (u.pathname === '/cli/presence/summary') {
     if (!d.tokens.has(token)) return json(403, { error: 'Invalid or missing auth token' })
-    return json(200, { online: 1, workspaces: [] })
+    return json(200, { online: 1, workspaces: [], ...(d.summaryExtra ?? {}) })
   }
   throw new Error(`unexpected ${init?.method ?? 'GET'} ${url}`)
 }
@@ -237,6 +241,38 @@ describe('pool state transitions', () => {
     expect(e.boot?.instanceId).toBe(`inst-${B_BASE}`)
     expect(e.presence).toEqual([])
     expect(e.hostId).toBe('id-b.k2.dev')
+  })
+
+  it('Home 0.43.2 (Z23): reads agentActivity and activeProjectIds from the summary, and drops them with presence', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE), hostFor(C_BASE)])
+    B().summaryExtra = {
+      agentActivity: [
+        { workspaceId: 'pb', status: 'working' },
+        { workspaceId: 'pz', status: 'permission' },
+        { workspaceId: 'px', status: 'idle' },
+        { status: 'working' },
+        'junk',
+      ],
+      activeProjectIds: ['pb', 7],
+    }
+    const b = await w.pool.check('b.k2.dev')
+    expect(b.activity).toEqual([
+      { workspaceId: 'pb', status: 'working' },
+      { workspaceId: 'pz', status: 'permission' },
+    ])
+    expect(b.activeProjectIds).toEqual(['pb'])
+    // A server before 0.43.2 sends neither.
+    const c = await w.pool.check('c.k2.dev')
+    expect(c.presence).toEqual([])
+    expect(c.activity).toBe(null)
+    expect(c.activeProjectIds).toBe(null)
+    // B refuses the login: presence and the activity go together.
+    B().tokens.clear()
+    const gone = await w.pool.check('b.k2.dev')
+    expect(gone.auth).not.toBe('ok')
+    expect(gone.presence).toBe(null)
+    expect(gone.activity).toBe(null)
+    expect(gone.activeProjectIds).toBe(null)
   })
 
   it('the boot-status features list reaches noteVersion; an older daemon with none notes []', async () => {

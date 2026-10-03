@@ -34,6 +34,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { notePoolSocketClose } from '@/lib/pool-hooks'
+import { CARRIED_KINDS, dispatchFrom, type DispatchTable } from '@/stores/session-event-kinds'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -128,7 +129,9 @@ export interface LlmStatusChangedEvent {
  *  list-running + agent-status poll in `stores/active-agents.ts`. */
 export interface AgentStatusChangedEvent {
   kind: 'agent_status_changed'
-  /** The `K2SO_PANE_ID` (== terminal id) the PTY was spawned with. */
+  /** The `K2_PANE_ID` the PTY was spawned with. For a v2 session this is
+   *  the daemon **session id**, not the renderer's terminal id (vs-live
+   *  Z30): a room maps it through its tabs' `sessionId`. */
   paneId: string
   tabId: string
   /** Canonical bucket: `start` (working) | `stop` (idle) | `permission`. */
@@ -200,8 +203,41 @@ export interface WorkspaceResourcesChangedEvent {
 // NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,
 // `review_changed`) are still broadcast by the daemon (the `k2 review` system
 // lives on), but this app no longer consumes them — the Review Queue modal +
-// ReviewPanel surfaces were deleted with the 0.40.31 cleanup. Unknown kinds
-// fall through every subscriber's `default` arm, so no types are needed here.
+// ReviewPanel surfaces were deleted with the 0.40.31 cleanup. Home 0.43.2:
+// they are typed so the kind registry (`session-event-kinds.ts`) can mark
+// them ignored on purpose instead of letting them read as unknown.
+
+/** WORKSPACE-SCOPED — the review queue changed. Ignored (see above). */
+export interface ReviewQueueChangedEvent {
+  kind: 'review_queue_changed'
+  workspacePath: string
+}
+
+/** WORKSPACE-SCOPED — one review changed. Ignored (see above). */
+export interface ReviewChangedEvent {
+  kind: 'review_changed'
+  workspacePath: string
+  agent: string | null
+}
+
+/** APP-LEVEL — mail state changed (server, domain, an approval asked for or
+ *  decided). Refetch signal only. Consumer: Settings → Email
+ *  (`onMailChanged`). `reason` is `server-state-changed` |
+ *  `domain-status-changed` | `send-approval-requested` | `send-decided`. */
+export interface MailChangedEvent {
+  kind: 'mail_changed'
+  reason: string
+}
+
+/** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
+ *  no client surface shows it yet. Fields are snake_case on the wire. */
+export interface RemoteSessionAccessDeniedEvent {
+  kind: 'remote_session_access_denied'
+  principal_label: string
+  reason: string
+  code: string
+  ts: number
+}
 
 /** WORKSPACE-SCOPED — a tab's title changed (daemon-canonical, #676). A
  *  rename in one client/window broadcasts here so every other client
@@ -396,6 +432,10 @@ export type SessionEventMessage =
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
   | FsChangedEvent
+  | ReviewQueueChangedEvent
+  | ReviewChangedEvent
+  | MailChangedEvent
+  | RemoteSessionAccessDeniedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void
@@ -485,6 +525,18 @@ export function onceRecovered(scope: ServerScope, onRecovered: () => void): () =
     done = true
     unsub()
   }
+}
+
+// ── Dispatch tables (derived from the kind registry) ─────────────────────
+
+/** What `subscribeToWorkspaceSessionEvents` does per kind it owns. */
+const WORKSPACE_SOCKET_DISPATCH: DispatchTable<'workspace', SessionEventHandlers> = {
+  hello: (h, m) => h.onHello?.(m),
+  session_added: (h, m) => h.onAdded?.(m),
+  session_removed: (h, m) => h.onRemoved?.(m),
+  session_renamed: (h, m) => h.onRenamed?.(m),
+  tab_title_changed: (h, m) => h.onTabTitleChanged?.(m),
+  tab_order_changed: (h, m) => h.onTabOrderChanged?.(m),
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -656,65 +708,12 @@ export function subscribeToWorkspaceSessionEvents(
         return
       }
       if (carrier) carrier.frame(msg)
-      switch (msg.kind) {
-        case 'hello':
-          handlers.onHello?.(msg)
-          break
-        case 'session_added':
-          handlers.onAdded?.(msg)
-          break
-        case 'session_removed':
-          handlers.onRemoved?.(msg)
-          break
-        case 'session_renamed':
-          handlers.onRenamed?.(msg)
-          break
-        case 'active_changed':
-        case 'presence_changed':
-        case 'open_url':
-        case 'projects_changed':
-        case 'project_groups_changed':
-        case 'feedback_changed':
-        case 'chat_history_changed':
-        case 'token_usage_changed':
-        case 'session_activity_changed':
-        case 'publish_services_changed':
-        case 'workspace_resources_changed':
-          // App-level concerns (#672 / presence S2 / browser-pane 0.40.34
-          // / remote live-update fix / published services / workspace
-          // resources) — the per-workspace subscriber ignores them;
-          // `subscribeToActiveState` consumes them. Swallow here so they
-          // don't hit the unknown-kind warning (the daemon forwards every
-          // app-level event to every subscriber regardless of `?path=`).
-          break
-        case 'tab_title_changed':
-          handlers.onTabTitleChanged?.(msg)
-          break
-        case 'tab_order_changed':
-          handlers.onTabOrderChanged?.(msg)
-          break
-        case 'heartbeat_state_changed':
-        case 'heartbeat_roster_changed':
-          // 0.39.39 (#676/#677) — these workspace-scoped broadcasts share the
-          // `/cli/sessions/events` channel but are OWNED by
-          // `subscribeToWorkspaceTabEvents` (it adopts the reorder / applies the
-          // title). This session-events subscriber doesn't handle them; swallow
-          // here so it doesn't warn "unknown event kind" on every broadcast
-          // frame (the daemon emits `tab_order_changed` ~4×/sec during a remote
-          // reorder). No double-adoption: only the tab-events subscriber acts.
-          break
-        case 'fs_changed':
-          // APP-LEVEL multi-writer FS refresh — owned by the app-level
-          // Active-state socket (`subscribeToActiveState` → onFsChanged).
-          // Daemon still fans app-level frames to per-workspace sockets;
-          // swallow here so remote hosts don't spam "unknown event kind".
-          break
-        default: {
-          // Unknown kind — forward-compat, just log.
-          const unknown = (msg as { kind?: string }).kind ?? 'unknown'
-          console.warn('[session-events] unknown event kind:', unknown)
-        }
-      }
+      // Home 0.43.2 (Z24/Z25): the kinds this socket handles come from the
+      // shared registry. Every other registry kind (app-level frames the
+      // daemon fans to every `?path=`, heartbeat frames the tab-events
+      // socket owns, ignored kinds) is dropped silently; a kind the
+      // registry doesn't know warns once per page.
+      dispatchFrom(WORKSPACE_SOCKET_DISPATCH, 'workspace', handlers, msg)
     }
 
     ws.onerror = () => {
@@ -879,6 +878,9 @@ type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type FsChangedHandler = (e: FsChangedEvent) => void
+// Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
+// the onFeedbackChanged idiom).
+type MailChangedHandler = (reason: string) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -915,6 +917,7 @@ interface AppBusHandlers {
   chatHistoryChanged: Set<ChatHistoryChangedHandler>
   tokenUsageChanged: Set<TokenUsageChangedHandler>
   fsChanged: Set<FsChangedHandler>
+  mailChanged: Set<MailChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
 }
 
@@ -947,6 +950,7 @@ function createBusState(scopeId: string): BusState {
       chatHistoryChanged: new Set(),
       tokenUsageChanged: new Set(),
       fsChanged: new Set(),
+      mailChanged: new Set(),
       activeChanged: new Set(),
     },
   }
@@ -1117,6 +1121,14 @@ export function onFsChanged(scope: ServerScope, fn: FsChangedHandler): Unsubscri
   return addHandler(busFor(scope).handlers.fsChanged, fn)
 }
 
+/** Home 0.43.2 (Q7) — subscribe to APP-LEVEL `mail_changed` (mail server,
+ *  domain or approval queue changed on `scope`'s server). Refetch signal;
+ *  the handler gets the `reason`. Settings → Email is the consumer, so a
+ *  remote Email page refreshes live (before this nothing listened). */
+export function onMailChanged(scope: ServerScope, fn: MailChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.mailChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1141,19 +1153,11 @@ export function appBusHandlerCount(scope: ServerScope): number {
 // it closes, the next one takes over. A dedicated app socket
 // (`subscribeToActiveState`) on that server always wins.
 
-/** App-level frames a carrier forwards. Not `open_url` (a view-only room
- *  never opens tabs on B's say-so) and not session add/remove (the room's
- *  own workspace handlers own those). */
-const CARRIED_KINDS: ReadonlySet<string> = new Set([
-  'presence_changed',
-  'active_changed',
-  'projects_changed',
-  'chat_history_changed',
-  'fs_changed',
-  'session_activity_changed',
-  'workspace_resources_changed',
-  'publish_services_changed',
-])
+// App-level frames a carrier forwards: `CARRIED_KINDS`, derived from the
+// kind registry (`session-event-kinds.ts`, `carried: true`). Not `open_url`
+// (a view-only room never opens tabs on B's say-so) and not session
+// add/remove (the room's own workspace handlers own those). Home 0.43.2
+// (Z22): `agent_status_changed` is carried, so a room sees hook status.
 
 const _carriers = new Map<string, Array<symbol>>()
 
@@ -1190,66 +1194,77 @@ export function appBusCarrierCountForTests(scope: ServerScope): number {
   return _carriers.get(scope.id)?.length ?? 0
 }
 
-function dispatchAppEvent(bus: BusState, msg: SessionEventMessage): void {
-  const h = bus.handlers
-  switch (msg.kind) {
-    case 'active_changed':
-      for (const fn of h.activeChanged) fn(msg)
-      break
-    case 'llm_status_changed':
-      for (const fn of h.llmStatus) fn(msg)
-      break
-    case 'projects_changed':
-      for (const fn of h.projectsChanged) fn(msg)
-      break
-    case 'session_activity_changed':
-      for (const fn of h.sessionActivity) fn(msg)
-      break
-    case 'agent_status_changed':
-      for (const fn of h.agentStatus) fn(msg)
-      break
-    case 'tunnel_status_changed':
-      for (const fn of h.tunnelStatus) fn(msg)
-      break
-    case 'tunnel_subdomains_changed':
-      for (const fn of h.tunnelSubdomains) fn(msg)
-      break
-    case 'publish_services_changed':
-      for (const fn of h.publishServices) fn(msg)
-      break
-    case 'workspace_resources_changed':
-      for (const fn of h.workspaceResources) fn(msg)
-      break
-    case 'session_added':
-      for (const fn of h.sessionAdded) fn(msg)
-      break
-    case 'session_removed':
-      for (const fn of h.sessionRemoved) fn(msg)
-      break
-    case 'presence_changed':
-      for (const fn of h.presenceChanged) fn(msg)
-      break
-    case 'open_url':
-      for (const fn of h.openUrl) fn(msg.url, msg.source)
-      break
-    case 'project_groups_changed':
-      for (const fn of h.projectGroupsChanged) fn(msg.reason)
-      break
-    case 'feedback_changed':
-      for (const fn of h.feedbackChanged) fn(msg.reason)
-      break
-    case 'chat_history_changed':
-      for (const fn of h.chatHistoryChanged) fn()
-      break
-    case 'token_usage_changed':
-      for (const fn of h.tokenUsageChanged) fn()
-      break
-    case 'fs_changed':
-      for (const fn of h.fsChanged) fn(msg)
-      break
-    default:
-      break
-  }
+/** What the app socket (and a carrier) does per kind the registry marks
+ *  `app: true`. A kind that gains `app` without an entry here does not
+ *  compile. `hello` is handled before the table by both callers (it
+ *  re-snapshots); its entry fans out to `onAppHello`. */
+const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
+  hello: (h) => {
+    for (const fn of h.appHello) fn()
+  },
+  active_changed: (h, m) => {
+    for (const fn of h.activeChanged) fn(m)
+  },
+  llm_status_changed: (h, m) => {
+    for (const fn of h.llmStatus) fn(m)
+  },
+  projects_changed: (h, m) => {
+    for (const fn of h.projectsChanged) fn(m)
+  },
+  session_activity_changed: (h, m) => {
+    for (const fn of h.sessionActivity) fn(m)
+  },
+  agent_status_changed: (h, m) => {
+    for (const fn of h.agentStatus) fn(m)
+  },
+  tunnel_status_changed: (h, m) => {
+    for (const fn of h.tunnelStatus) fn(m)
+  },
+  tunnel_subdomains_changed: (h, m) => {
+    for (const fn of h.tunnelSubdomains) fn(m)
+  },
+  publish_services_changed: (h, m) => {
+    for (const fn of h.publishServices) fn(m)
+  },
+  workspace_resources_changed: (h, m) => {
+    for (const fn of h.workspaceResources) fn(m)
+  },
+  session_added: (h, m) => {
+    for (const fn of h.sessionAdded) fn(m)
+  },
+  session_removed: (h, m) => {
+    for (const fn of h.sessionRemoved) fn(m)
+  },
+  presence_changed: (h, m) => {
+    for (const fn of h.presenceChanged) fn(m)
+  },
+  open_url: (h, m) => {
+    for (const fn of h.openUrl) fn(m.url, m.source)
+  },
+  project_groups_changed: (h, m) => {
+    for (const fn of h.projectGroupsChanged) fn(m.reason)
+  },
+  feedback_changed: (h, m) => {
+    for (const fn of h.feedbackChanged) fn(m.reason)
+  },
+  chat_history_changed: (h) => {
+    for (const fn of h.chatHistoryChanged) fn()
+  },
+  token_usage_changed: (h) => {
+    for (const fn of h.tokenUsageChanged) fn()
+  },
+  fs_changed: (h, m) => {
+    for (const fn of h.fsChanged) fn(m)
+  },
+  mail_changed: (h, m) => {
+    for (const fn of h.mailChanged) fn(m.reason)
+  },
+}
+
+/** Dispatch one app-level frame on `bus`. `socket` names the caller for
+ *  the unknown-kind warning. */
+function dispatchAppEvent(bus: BusState, msg: SessionEventMessage, socket = 'app'): void {
+  dispatchFrom(APP_SOCKET_DISPATCH, socket, bus.handlers, msg)
 }
 
 /** One server's app-level event bus (MS16): the 18 `on*` subscriptions,
@@ -1280,6 +1295,7 @@ export interface AppBus {
   onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn
   onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
+  onMailChanged(fn: MailChangedHandler): UnsubscribeFn
 }
 
 const _facades = new Map<string, AppBus>()
@@ -1318,6 +1334,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onChatHistoryChanged: (fn) => onChatHistoryChanged(scope, fn),
     onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
+    onMailChanged: (fn) => onMailChanged(scope, fn),
   }
   _facades.set(scope.id, facade)
   return facade
@@ -1468,58 +1485,23 @@ export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
         for (const h of bus.handlers.appHello) h()
         return
       }
-      if (msg.kind === 'active_changed') {
+      if (msg.kind === 'active_changed' && scope.isPrimary) {
         // useActiveStore mirrors the window's server only (see
-        // refreshActiveSnapshot).
-        if (!scope.isPrimary) return
+        // refreshActiveSnapshot). The bus dispatch below still runs.
         useActiveStore.getState().applyActiveChanged({
           activeProjectIds: Array.isArray(msg.activeProjectIds) ? msg.activeProjectIds : [],
           activeWindowHours:
             typeof msg.activeWindowHours === 'number' ? msg.activeWindowHours : 24,
         })
-        return
       }
-      // Wave B APP-LEVEL broadcasts (#675) — llm/agent/tunnel. Dispatch to
-      // the registries above; consumers subscribed via onLlmStatusChanged /
-      // onAgentStatusChanged / onTunnelStatusChanged.
-      if (
-        msg.kind === 'llm_status_changed' ||
-        msg.kind === 'agent_status_changed' ||
-        msg.kind === 'session_activity_changed' ||
-        msg.kind === 'tunnel_status_changed' ||
-        msg.kind === 'tunnel_subdomains_changed' ||
-        msg.kind === 'publish_services_changed' ||
-        msg.kind === 'workspace_resources_changed' ||
-        msg.kind === 'presence_changed' ||
-        msg.kind === 'open_url' ||
-        // Remote live-update fix — the project-group / feedback refetch
-        // signals, plus `projects_changed` (its `onProjectsChanged`
-        // registry + dispatchAppEvent case existed since 0.39.45 but the
-        // kind was never listed here, so registered callbacks never
-        // fired off this socket — same latent gap, fixed alongside).
-        msg.kind === 'projects_changed' ||
-        msg.kind === 'project_groups_changed' ||
-        msg.kind === 'feedback_changed' ||
-        msg.kind === 'chat_history_changed' ||
-        msg.kind === 'token_usage_changed' ||
-        // Files-drawer multi-writer live refresh — APP-LEVEL with paths.
-        msg.kind === 'fs_changed'
-      ) {
-        dispatchAppEvent(bus, msg)
-        return
-      }
-      // #688 — session_added / session_removed ALSO ride this app-level
-      // socket (the daemon forwards any absolute-cwd event to the empty-
-      // `?path=` subscriber). They drive the cross-workspace live-session
-      // dot in `stores/active-agents.ts`; dispatch to those app-level
-      // registries. The per-workspace subscriber still owns its own tab
-      // adoption — this is a SEPARATE, additive consumer.
-      if (msg.kind === 'session_added' || msg.kind === 'session_removed') {
-        dispatchAppEvent(bus, msg)
-        return
-      }
-      // session_renamed / review_* / tab_* / heartbeat_* — owned by the
-      // per-workspace subscriber; ignore on the app-level socket.
+      // Every kind the registry marks `app` (Wave B llm/agent/tunnel, the
+      // refetch signals, #688 session add/remove for the live-session dot,
+      // mail) dispatches on this server's bus. Workspace-owned kinds
+      // (session_renamed, tab_*, heartbeat_*) and ignored ones (review_*)
+      // drop silently; a kind the registry doesn't know warns once.
+      // Before 0.43.2 this was a hand-kept `if` chain that had already
+      // missed `projects_changed` once.
+      dispatchAppEvent(bus, msg)
     }
 
     ws.onerror = () => {
@@ -1590,6 +1572,16 @@ export interface WorkspaceTabHandlers {
   onHeartbeatRosterChanged?: (event: HeartbeatRosterChangedEvent) => void
   /** Fires after each successful (re)connect — re-snapshot here. */
   onHello?: (event: HelloEvent) => void
+}
+
+/** What `subscribeToWorkspaceTabEvents` does per kind it owns (registry
+ *  `tabs: true`). */
+const TAB_SOCKET_DISPATCH: DispatchTable<'tabs', WorkspaceTabHandlers> = {
+  hello: (h, m) => h.onHello?.(m),
+  tab_title_changed: (h, m) => h.onTabTitleChanged?.(m),
+  tab_order_changed: (h, m) => h.onTabOrderChanged?.(m),
+  heartbeat_state_changed: (h, m) => h.onHeartbeatStateChanged?.(m),
+  heartbeat_roster_changed: (h, m) => h.onHeartbeatRosterChanged?.(m),
 }
 
 /** Subscribe to WORKSPACE-SCOPED tab/heartbeat events for one workspace
@@ -1719,28 +1711,10 @@ export function subscribeToWorkspaceTabEvents(
         console.warn('[tab-events] failed to parse frame:', err, raw)
         return
       }
-      switch (msg.kind) {
-        case 'hello':
-          handlers.onHello?.(msg)
-          break
-        case 'tab_title_changed':
-          handlers.onTabTitleChanged?.(msg)
-          break
-        case 'tab_order_changed':
-          handlers.onTabOrderChanged?.(msg)
-          break
-        case 'heartbeat_state_changed':
-          handlers.onHeartbeatStateChanged?.(msg)
-          break
-        case 'heartbeat_roster_changed':
-          handlers.onHeartbeatRosterChanged?.(msg)
-          break
-        default:
-          // session_added/removed/renamed + app-level + review events
-          // arrive on this socket too; their dedicated subscribers own
-          // them — ignore here.
-          break
-      }
+      // session_added/removed/renamed, app-level and review frames arrive
+      // here too; their own subscribers own them, so they drop silently.
+      // A kind the registry doesn't know warns once (Z39).
+      dispatchFrom(TAB_SOCKET_DISPATCH, 'tab-events', handlers, msg)
     }
 
     ws.onerror = () => {

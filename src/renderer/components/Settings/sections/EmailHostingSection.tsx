@@ -12,15 +12,13 @@
 // static SAMPLE fixture (email-api.ts) under the D3 banner, with every
 // mutating control disabled and NO further network calls.
 //
-// LIVE UPDATES: the daemon emits mail:* hook events
+// LIVE UPDATES: the daemon mirrors its mail:* hook events
 // (server-state-changed / domain-status-changed /
-// send-approval-requested / send-decided) on the legacy /events WS,
-// which src-tauri re-emits as Tauri events — we listen and bump a
-// revision that refetches. NOTE: those hooks are not yet mirrored onto
-// the host-aware /cli/sessions/events bus (the feedback_changed
-// pattern), so against a REMOTE host live updates rely on the manual
-// refresh affordances ([Check now], panel switches) until a daemon
-// slice adds the mirror. While an enable run is in flight we
+// send-approval-requested / send-decided) onto the host-aware
+// /cli/sessions/events bus as `mail_changed` (the feedback_changed
+// pattern); we subscribe on the window's server's app bus
+// (`onMailChanged`) and bump a revision that refetches — local and
+// remote alike (Home 0.43.2). While an enable run is in flight we
 // additionally poll /cli/mail/status (the route's documented
 // enableProgress contract).
 //
@@ -30,7 +28,6 @@
 // plain text (<pre>), never HTML, never auto-shown.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -59,6 +56,7 @@ import {
   fetchInboxes,
   fetchMailConfig,
   fetchMailStatus,
+  onWindowServerMailChanged,
   fetchOutbox,
   fetchPreflight,
   isNotBuilt,
@@ -1799,32 +1797,13 @@ export function EmailHostingSection(): React.JSX.Element {
     }
   }, [supported, revision])
 
-  // ── Live updates: the daemon's mail:* hook events (Tauri-forwarded
-  //    from the legacy /events WS). Refetch signals only. ────────────
-  useEffect(() => {
-    let disposed = false
-    const unlisteners: UnlistenFn[] = []
-    void (async () => {
-      for (const ev of [
-        'mail:server-state-changed',
-        'mail:domain-status-changed',
-        'mail:send-approval-requested',
-        'mail:send-decided',
-      ]) {
-        try {
-          const un = await listen(ev, () => setRevision((r) => r + 1))
-          if (disposed) un()
-          else unlisteners.push(un)
-        } catch {
-          // Non-Tauri context (tests) — the poll/manual paths cover it.
-        }
-      }
-    })()
-    return () => {
-      disposed = true
-      for (const un of unlisteners) un()
-    }
-  }, [])
+  // ── Live updates: the daemon's `mail_changed` broadcast on the window's
+  //    server's app bus (Home 0.43.2, Q7). It mirrors every mail:* hook
+  //    (server-state-changed / domain-status-changed /
+  //    send-approval-requested / send-decided), so a REMOTE server's page
+  //    refreshes live too; the old Tauri listener only ever heard this
+  //    computer's daemon. Refetch signal only. ─────────────────────────
+  useEffect(() => onWindowServerMailChanged(() => setRevision((r) => r + 1)), [])
 
   // ── Enable-progress poll: only while an install is in flight (the
   //    route's documented contract — poll GET /cli/mail/status). ─────

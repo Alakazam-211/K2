@@ -7,6 +7,7 @@ import { emit } from '@tauri-apps/api/event'
 // other windows re-fetch; we now re-emit that event from the renderer after
 // each successful mutation (see `emitPresetsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { ensureOneCli, installableCliProgram } from '@/lib/ensure-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { onActiveHostChange } from '@/stores/connect-host'
@@ -221,7 +222,9 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
 
   fetchPresets: async () => {
     try {
-      const result = await daemonCliGet<AgentPreset[]>(primaryScope(), 'presets/list')
+      // asArray: an object body would land in `presets` and break every
+      // `.map`/spread over it.
+      const result = asArray<AgentPreset>(await daemonCliGet<unknown>(primaryScope(), 'presets/list'))
       set({ presets: result })
     } catch (err) {
       console.error('Failed to fetch presets:', err)

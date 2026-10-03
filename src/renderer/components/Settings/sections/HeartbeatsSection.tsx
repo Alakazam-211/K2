@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { primaryRoom } from '@/stores/room'
 import { serverSupports } from '@/lib/server-capabilities'
@@ -771,10 +772,12 @@ export function HistoryPanel({
       // 0.40.48 host-aware fix: same story as the roster — the fires audit
       // log must come from the ACTIVE host, not this Mac's in-process
       // k2_core. Same route the k2 CLI uses.
-      const list = await daemonCliGet<HeartbeatFire[]>(primaryScope(), 'heartbeat/fires-list', {
-        project: projectPath,
-        limit: 50,
-      })
+      const list = asArray<HeartbeatFire>(
+        await daemonCliGet<unknown>(primaryScope(), 'heartbeat/fires-list', {
+          project: projectPath,
+          limit: 50,
+        }),
+      )
       setFires(list)
       onEmptyChange?.(list.length === 0)
     } catch (e) {
@@ -974,9 +977,13 @@ export function HeartbeatsPanel({
       // wrong machine's heartbeats. Load from the ACTIVE host's route
       // instead — the same one this section's mutations (add/edit/archive/
       // enable/rename) already use.
-      const list = await daemonCliGet<HeartbeatRow[]>(primaryScope(), 'heartbeat/list', {
-        project: project.path,
-      })
+      // asArray: an object body (error envelope, odd server) would crash
+      // the `[...rows]` sort in render.
+      const list = asArray<HeartbeatRow>(
+        await daemonCliGet<unknown>(primaryScope(), 'heartbeat/list', {
+          project: project.path,
+        }),
+      )
       setRows(list)
     } catch (e) {
       console.error('[heartbeats] list failed', e)

@@ -83,6 +83,15 @@ describe('presets store — Plan B host-aware migration', () => {
     expect(usePresetsStore.getState().presets).toEqual([PRESET])
   })
 
+  it('fetchPresets stores [] for an object presets/list body', async () => {
+    for (const body of [{}, { error: 'x' }, { presets: {} }]) {
+      usePresetsStore.setState({ presets: [PRESET] })
+      daemonCliGet.mockResolvedValueOnce(body)
+      await usePresetsStore.getState().fetchPresets()
+      expect(usePresetsStore.getState().presets, JSON.stringify(body)).toEqual([])
+    }
+  })
+
   it('createPreset POSTs presets/create, emits sync:presets, then refetches', async () => {
     daemonCliPost.mockResolvedValueOnce({}) // create
     daemonCliGet.mockResolvedValueOnce([PRESET]) // refetch

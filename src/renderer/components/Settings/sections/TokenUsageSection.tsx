@@ -11,6 +11,7 @@ import { useProjectsStore } from '@/stores/projects'
 import type { SettingEntry } from '../searchManifest'
 import { dailyTokenChart, type DailySeries, type UsageDay } from './dailyTokenChart'
 import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
+import { parseUsageTurnsPage } from './usageTurnsPage'
 import { SettingDropdown } from '../controls/SettingControls'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -66,12 +67,6 @@ interface UsageTurn {
   recorded_at: string
   /** unix ms when the daemon could parse `recorded_at`, else null. */
   recorded_ms: number | null
-}
-
-interface UsageTurnsPage {
-  rows: UsageTurn[]
-  /** rowid to pass as `before` for the next (older) page; null at the end. */
-  next_cursor: number | null
 }
 
 const TURNS_PAGE = 50
@@ -331,7 +326,9 @@ function UsageLog({
     setCursor(null)
     void (async () => {
       try {
-        const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE })
+        const page = parseUsageTurnsPage<UsageTurn>(
+          await daemonCliGet<unknown>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE }),
+        )
         if (ac.signal.aborted) return
         setRows(page.rows)
         setCursor(page.next_cursor)
@@ -351,10 +348,12 @@ function UsageLog({
       setLoadingMore(true)
       void (async () => {
         try {
-          const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', {
-            limit: TURNS_PAGE,
-            before: cur,
-          })
+          const page = parseUsageTurnsPage<UsageTurn>(
+            await daemonCliGet<unknown>(primaryScope(), 'usage/turns', {
+              limit: TURNS_PAGE,
+              before: cur,
+            }),
+          )
           // Guard against overlap if a new row landed at the head meanwhile.
           setRows((prev) => {
             const seen = new Set(prev.map((r) => r.rowid))
@@ -376,7 +375,9 @@ function UsageLog({
     return onTokenUsageChanged(primaryScope(), () => {
       void (async () => {
         try {
-          const page = await daemonCliGet<UsageTurnsPage>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE })
+          const page = parseUsageTurnsPage<UsageTurn>(
+            await daemonCliGet<unknown>(primaryScope(), 'usage/turns', { limit: TURNS_PAGE }),
+          )
           const head = headRef.current
           setRows((prev) => {
             if (prev.length === 0) return page.rows

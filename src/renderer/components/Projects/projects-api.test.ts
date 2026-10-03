@@ -15,6 +15,8 @@ import {
   createProjectGroupDashboard,
   daemonErrorInfo,
   fetchProjectGroupIcon,
+  fetchProjectGroups,
+  fetchProjectGroupShow,
   normalizeHexColor,
   partitionPinned,
   reorderProjectGroupDashboards,
@@ -170,5 +172,36 @@ describe('partitionPinned', () => {
     const { pinned, unpinned } = partitionPinned(groups)
     expect(pinned.map((g) => g.id)).toEqual(['b', 'd'])
     expect(unpinned.map((g) => g.id)).toEqual(['a', 'c'])
+  })
+})
+
+// research-spread-not-iterable-crash-v1: an older or odd server can send
+// list fields as objects; the Projects page spreads `dashboards` in render.
+describe('show / list with object list fields', () => {
+  it('fetchProjectGroupShow coerces members and dashboards to arrays', async () => {
+    for (const body of [{}, { id: 'g1', members: {}, dashboards: {} }, { dashboards: { items: {} } }]) {
+      get.mockResolvedValueOnce(body)
+      const show = await fetchProjectGroupShow(primaryScope(), 'g1')
+      expect(show.dashboards, JSON.stringify(body)).toEqual([])
+      expect(show.members, JSON.stringify(body)).toEqual([])
+    }
+  })
+
+  it('fetchProjectGroupShow keeps real arrays and the flat group fields', async () => {
+    const dashboards = [{ id: 'd1' }]
+    const members = [{ workspaceId: 'w1' }]
+    get.mockResolvedValueOnce({ id: 'g1', name: 'Release', members, dashboards })
+    const show = await fetchProjectGroupShow(primaryScope(), 'g1')
+    expect(show.id).toBe('g1')
+    expect(show.name).toBe('Release')
+    expect(show.dashboards).toBe(dashboards)
+    expect(show.members).toBe(members)
+  })
+
+  it('fetchProjectGroups returns [] for an object groups field', async () => {
+    get.mockResolvedValueOnce({ ok: true, groups: {} })
+    await expect(fetchProjectGroups(primaryScope())).resolves.toEqual([])
+    get.mockResolvedValueOnce({})
+    await expect(fetchProjectGroups(primaryScope())).resolves.toEqual([])
   })
 })

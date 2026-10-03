@@ -9,6 +9,7 @@
 // into a server renders THAT server's projects.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import type { ServerScope } from '@/kessel/server-scope'
 
 /** One group row (`/cli/project-group/list` + the create/pin responses). */
@@ -94,13 +95,20 @@ export interface PostedProjectGroupMessage {
  *  sort_order then name (daemon-side ordering; the nav renders as-is). */
 export async function fetchProjectGroups(scope: ServerScope): Promise<ProjectGroup[]> {
   const res = await daemonCliGet<{ ok: boolean; groups: ProjectGroup[] }>(scope, 'project-group/list')
-  return res.groups ?? []
+  return asArray<ProjectGroup>(res?.groups)
 }
 
 /** GET /cli/project-group/show?group=<id|name> — one group with enriched
  *  members + its dashboards ('Main' only in V1). */
 export async function fetchProjectGroupShow(scope: ServerScope, group: string): Promise<ProjectGroupShow> {
-  return daemonCliGet<ProjectGroupShow>(scope, 'project-group/show', { group })
+  const show = await daemonCliGet<ProjectGroupShow>(scope, 'project-group/show', { group })
+  // asArray: an older or odd server can send `members`/`dashboards` as an
+  // object; the page spreads `dashboards` in render (orderedDashboards).
+  return {
+    ...show,
+    members: asArray<ProjectGroupMemberInfo>(show?.members),
+    dashboards: asArray<ProjectGroupDashboard>(show?.dashboards),
+  }
 }
 
 /** POST /cli/project-group/create — `{name}` → the new group (the daemon

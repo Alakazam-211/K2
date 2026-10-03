@@ -6,7 +6,9 @@ import type { SerializedLayout, SerializedTab } from '@/stores/tabs'
 import {
   canonicalLayoutJson,
   collapseEmptyLeadingColumns,
+  layoutColumns,
   mergeSerializedLayouts,
+  normalizeSerializedLayout,
 } from './layout-merge'
 
 function tab(id: string, pg = `pg-${id}`, extra: Partial<SerializedTab> = {}): SerializedTab {
@@ -43,6 +45,37 @@ function layout(...cols: SerializedTab[][]): SerializedLayout {
 function ids(l: SerializedLayout): string[][] {
   return [l.tabs.map((t) => t.id), ...(l.extraGroups ?? []).map((g) => g.tabs.map((t) => t.id))]
 }
+
+// research-spread-not-iterable-crash-v1: an old stored row can carry
+// `extraGroups: {}` (or `tabs: {}`); `for…of` / spread on it throws.
+describe('old split layouts with object list fields', () => {
+  const oldRow = (over: Record<string, unknown>): SerializedLayout =>
+    ({ version: 2, tabs: [tab('a')], ...over }) as unknown as SerializedLayout
+
+  it('layoutColumns treats extraGroups {} as no extra columns and tabs {} as empty', () => {
+    expect(layoutColumns(oldRow({ extraGroups: {} })).map((c) => c.map((t) => t.id))).toEqual([['a']])
+    expect(layoutColumns(oldRow({ tabs: {}, extraGroups: [{ tabs: {} }] }))).toEqual([[], []])
+  })
+
+  it('mergeSerializedLayouts merges against an old remote, base and local without throwing', () => {
+    const old = oldRow({ extraGroups: {}, splitCount: 2 })
+    const local = layout([tab('a'), tab('n')])
+    expect(ids(mergeSerializedLayouts(old, local, old))).toEqual([['a', 'n']])
+    expect(ids(mergeSerializedLayouts(layout([tab('a')]), old, layout([tab('a'), tab('r')])))).toEqual([['a', 'r']])
+  })
+
+  it('normalizeSerializedLayout coerces list fields and rejects non-objects', () => {
+    const fixed = normalizeSerializedLayout({ version: 2, tabs: {}, extraGroups: {}, splitCount: 2 })
+    expect(fixed).toEqual({ version: 2, tabs: [], extraGroups: undefined, splitCount: 2 })
+    expect(normalizeSerializedLayout({ tabs: [tab('a')], extraGroups: [{ tabs: {} }, null] })).toEqual({
+      tabs: [tab('a')],
+      extraGroups: [{ tabs: [] }, { tabs: [] }],
+    })
+    const good = layout([tab('a')], [tab('b')])
+    expect(normalizeSerializedLayout(good)).toEqual(good)
+    for (const bad of [null, [], 'x', 3]) expect(normalizeSerializedLayout(bad)).toBeNull()
+  })
+})
 
 describe('mergeSerializedLayouts', () => {
   it('keeps a local close and a remote open', () => {

@@ -25,6 +25,7 @@ import {
   type LayoutNode,
   type PaneEntry,
 } from './dashboard-layout'
+import { asArray } from '@/lib/as-array'
 
 /** The non-dashboard tab. Dashboard ids are UUIDs, so the sentinel can
  *  never collide with one. */
@@ -32,11 +33,12 @@ export const FEEDBACK_TAB = 'feedback'
 
 /** Tab order for the row: `position` ascending (the daemon's write
  *  order), tie-broken by createdAt then id so the row is stable even
- *  against duplicate positions from older rows. */
+ *  against duplicate positions from older rows. A non-array (an odd
+ *  server's object body) yields no dashboards instead of a render crash. */
 export function orderedDashboards<
   T extends { id: string; position: number; createdAt: number },
 >(dashboards: T[]): T[] {
-  return [...dashboards].sort(
+  return [...asArray<T>(dashboards)].sort(
     (a, b) => a.position - b.position || a.createdAt - b.createdAt || a.id.localeCompare(b.id),
   )
 }

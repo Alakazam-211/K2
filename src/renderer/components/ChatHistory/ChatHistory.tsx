@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { onChatHistoryChanged } from '@/stores/session-events'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import {
@@ -384,11 +385,15 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     setError(null)
 
     try {
-      const result = await daemonCliGet<ChatSession[]>(room.scope, 'chat/list', { project_path: projectPath })
+      // asArray: an older or odd server can answer chat/list with an object
+      // (error envelope, wrapped shape); the list memo spreads `sessions`.
+      const result = asArray<ChatSession>(
+        await daemonCliGet<unknown>(room.scope, 'chat/list', { project_path: projectPath }),
+      )
       setSessions(result)
       // N5 — first hydrate (not the 30s poll): restamp extras from custom_name
       // once conversationId is already on the restored layout.
-      if (showLoading && Array.isArray(result)) {
+      if (showLoading) {
         const tabsStore = room.tabs.getState()
         restampListedChatTabs(room.scope, 
           collectStoreTabs(tabsStore),

@@ -59,6 +59,7 @@ import {
   canonicalLayoutJson,
   collapseEmptyLeadingColumns,
   mergeSerializedLayouts,
+  normalizeSerializedLayout,
 } from '@/lib/layout-merge'
 import { assertScopeMayPost, primaryScope, type ServerScope } from '@/kessel/server-scope'
 
@@ -2529,7 +2530,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       revision = typeof obj.revision === 'number' ? obj.revision : undefined
     }
     if (!json) return { layout: null, revision }
-    return { layout: JSON.parse(json) as SerializedLayout, revision }
+    return { layout: normalizeSerializedLayout(JSON.parse(json)), revision }
   }
 
   /** True when this window holds a layout change the daemon has not confirmed:
@@ -5505,13 +5506,19 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
         // field-identical wrapper struct (also camelCase) — a pure rename
         // with no shape change — so the raw daemon response already matches
         // this type and needs NO post-fetch transform.
-        const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string, revision?: number }>>(scope, 'workspace-layouts/load-all')
+        const sessions = asArray<{ projectId: string, workspaceId: string, layoutJson: string, revision?: number }>(
+          await daemonCliGet<unknown>(scope, 'workspace-layouts/load-all'),
+        )
         if (scope.connectionKey !== loadConnectionKey) return
         const layouts: Record<string, SerializedLayout> = {}
         for (const session of sessions) {
           const rowKey = `${session.projectId}:${session.workspaceId}`
           try {
-            layouts[rowKey] = JSON.parse(session.layoutJson)
+            // Old rows can hold `extraGroups: {}`; normalize so restore and
+            // the split merge only ever see arrays.
+            const parsed = normalizeSerializedLayout(JSON.parse(session.layoutJson))
+            if (!parsed) continue
+            layouts[rowKey] = parsed
             // V14 — each row's revision is the base for the cached restore.
             if (typeof session.revision === 'number') cacheRevisions.set(rowKey, session.revision)
             else cacheRevisions.delete(rowKey)

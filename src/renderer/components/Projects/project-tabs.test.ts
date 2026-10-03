@@ -41,6 +41,16 @@ describe('orderedDashboards (§6.7.6 — tabs in position order)', () => {
     orderedDashboards(ds)
     expect(ds.map((d) => d.id)).toEqual(['b', 'a'])
   })
+
+  // research-spread-not-iterable-crash-v1: `show.dashboards = {}` from an
+  // odd server reached `[...dashboards]` in render.
+  it('an object (not an array) yields no dashboards, so the row falls back to Feedback', () => {
+    for (const bad of [{}, { items: {} }, null, undefined]) {
+      const ds = orderedDashboards(bad as unknown as ReturnType<typeof dash>[])
+      expect(ds, JSON.stringify(bad)).toEqual([])
+      expect(resolveActiveTab(null, ds.map((d) => d.id))).toBe(FEEDBACK_TAB)
+    }
+  })
 })
 
 describe('resolveActiveTab (§6.7.6 — selection healing)', () => {

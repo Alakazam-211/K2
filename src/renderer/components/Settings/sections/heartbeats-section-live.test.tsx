@@ -11,6 +11,8 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 
 const gets = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown]>,
+  /** route → body to answer with instead of `[]` (odd-server cases). */
+  bodies: {} as Record<string, unknown>,
 }))
 const tabSubs = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; handlers: Record<string, (event?: unknown) => void> }>,
@@ -33,7 +35,7 @@ vi.mock('@/lib/daemon-cli', async () => {
   return {
     daemonCliGet: primaryOnly(async (route: string, params?: unknown) => {
       gets.calls.push([route, params])
-      return []
+      return route in gets.bodies ? gets.bodies[route] : []
     }),
     daemonCliGetText: primaryOnly(async () => '{}'),
     daemonCliPost: primaryOnly(async () => ({})),
@@ -101,7 +103,7 @@ vi.mock('@/hooks/useResolvedAgentCommand', () => ({
   useResolvedAgentCommand: () => ({ command: 'claude', args: [] }),
 }))
 
-import { HeartbeatsPanel, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
+import { HeartbeatsPanel, HistoryPanel, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
 import { heartbeatStatusText } from '@/lib/heartbeat-wait'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../../../../')
@@ -113,7 +115,27 @@ function listCalls(): Array<[string, unknown]> {
 afterEach(() => {
   cleanup()
   gets.calls = []
+  gets.bodies = {}
   tabSubs.calls = []
+})
+
+// research-spread-not-iterable-crash-v1: an older or odd server answered a
+// list route with an object, and `[...rows]` in render took the window down.
+describe('an object body from heartbeat/list or heartbeat/fires-list', () => {
+  for (const body of [{}, { error: 'x' }, { rows: {} }]) {
+    it(`renders the empty states for ${JSON.stringify(body)}`, async () => {
+      gets.bodies['heartbeat/list'] = body
+      gets.bodies['heartbeat/fires-list'] = body
+      const view = render(<HeartbeatsPanel projectPath="/ws/proj" agentName="claude" />)
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0))
+      await waitFor(() => expect(view.getByText(/No heartbeats yet\./)).toBeTruthy())
+
+      const empties: boolean[] = []
+      const history = render(<HistoryPanel projectPath="/ws/proj" onEmptyChange={(e) => empties.push(e)} />)
+      await waitFor(() => expect(history.getByText('No fires recorded yet.')).toBeTruthy())
+      expect(empties).toContain(true)
+    })
+  }
 })
 
 describe('HeartbeatsSection refetches on heartbeat_state_changed', () => {

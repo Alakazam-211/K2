@@ -35,10 +35,28 @@ export const EMPTY_SERIALIZED_LAYOUT: SerializedLayout = Object.freeze({
 export function layoutColumns(layout: SerializedLayout | null | undefined): SerializedTab[][] {
   if (!layout) return [[]]
   const cols: SerializedTab[][] = [Array.isArray(layout.tabs) ? layout.tabs : []]
-  for (const g of layout.extraGroups ?? []) {
+  // An old or hand-edited row can carry `extraGroups: {}`; `for…of` on an
+  // object throws, so only a real array adds columns.
+  for (const g of Array.isArray(layout.extraGroups) ? layout.extraGroups : []) {
     cols.push(Array.isArray(g?.tabs) ? g.tabs : [])
   }
   return cols
+}
+
+/** Coerce a parsed stored layout so its list fields are real arrays
+ *  (`tabs: {}`, `extraGroups: {}` and group `tabs: {}` become empty). Not a
+ *  layout object at all → null. Run at every `JSON.parse` of a stored row so
+ *  restore and merge never iterate or spread an object. */
+export function normalizeSerializedLayout(raw: unknown): SerializedLayout | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const layout = raw as SerializedLayout
+  const out: SerializedLayout = { ...layout, tabs: Array.isArray(layout.tabs) ? layout.tabs : [] }
+  if (layout.extraGroups !== undefined) {
+    out.extraGroups = Array.isArray(layout.extraGroups)
+      ? layout.extraGroups.map((g) => ({ ...g, tabs: Array.isArray(g?.tabs) ? g.tabs : [] }))
+      : undefined
+  }
+  return out
 }
 
 /** Build a layout from columns. Drops per-window fields (D2) and moves tabs

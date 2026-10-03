@@ -1239,9 +1239,11 @@ mod unix_impl {
                 Some(ws_path),
                 "body `project_path` must be FORCED to the principal's own workspace"
             );
-            // Chat attribution uses display name (projects.name here), not
-            // the technical agent_address / passport key.
-            assert_eq!(params.get("from").map(String::as_str), Some("W"));
+            // Chat attribution is the workspace HANDLE (the street
+            // address), not the display name and not the technical
+            // agent_address / passport key. 3c8ed526 (D7/D18) split
+            // Agent Name (display "W") from Handle (slug "w").
+            assert_eq!(params.get("from").map(String::as_str), Some("w"));
 
             // Fail-closed: an unresolvable principal REMOVES both keys even
             // when the body supplied them.

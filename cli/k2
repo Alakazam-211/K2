@@ -397,6 +397,10 @@ unset _k2_cli_wants_help
 # `k2 study` prints static in-CLI pages (same skip as --schema). Live
 # unknown verbs never skip PORT/TOKEN. `k2 help` is not daemon-optional.
 [ "${1:-}" = "study" ] && _skip_conn_gate=1
+# `k2 tickets template` prints the static brief skeleton (H42).
+case "${1:-}" in
+    tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;
+esac
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2." >&2
@@ -13384,12 +13388,13 @@ cmd_schema() {
     },
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Prefer --assign <user> when you know who should handle it. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
-        {"name": "--body", "arg": "text", "description": "Longer context/details (the ask's body)."},
-        {"name": "--body-file", "arg": "file", "description": "Read the body from a file (long or formatted context)."},
+        {"name": "--html", "arg": "file|-", "description": "The HTML brief (Problem, What I tried, What I need from you, Options, Context). Agents must attach one; fyi is exempt. Start from k2 tickets template; - reads stdin. Max 1 MiB; cleaned by the daemon. brief_* errors exit 2. 0.43.2 warns when missing; 0.43.3 refuses. See k2 study ticket-brief."},
+        {"name": "--body", "arg": "text", "description": "Short plain summary text-only readers see first."},
+        {"name": "--body-file", "arg": "file", "description": "Read the summary from a file."},
         {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
         {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
@@ -13412,10 +13417,20 @@ cmd_schema() {
     },
     {
       "name": "feedback show",
-      "usage": "k2 tickets show <id> [--json]",
-      "description": "Show one feedback item: the ask, its status/answer, and the full discussion thread. <id> accepts a short unique prefix (ambiguous prefix = exit 4 with candidates in the hint).",
+      "usage": "k2 tickets show <id> [--html] [--json]",
+      "description": "Show one feedback item: the ask, its body, its HTML brief as text (first 40 lines), its status/answer, and the full discussion thread. <id> accepts a short unique prefix (ambiguous prefix = exit 4 with candidates in the hint).",
       "args": [{"name": "id", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output (includes the comments array)."}]
+      "flags": [
+        {"name": "--html", "arg": null, "description": "Print ONLY the cleaned HTML brief to stdout. No brief: exit 1 with code no_brief and empty stdout."},
+        {"name": "--json", "arg": null, "description": "JSON output (includes the comments array; the brief HTML only with --html)."}
+      ]
+    },
+    {
+      "name": "feedback template",
+      "usage": "k2 tickets template",
+      "description": "Print the HTML brief skeleton for k2 tickets ask --html. Static; works with no daemon.",
+      "args": [],
+      "flags": []
     },
     {
       "name": "feedback comment",
@@ -15142,7 +15157,7 @@ cmd_schema() {
       "name": "study",
       "usage": "k2 study [list|<topic>|--json]",
       "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. Fair Source, people lists, errors.",
-      "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop."}],
+      "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop, ticket-brief."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable: catalog {topics:[{id,title}]} or page {id,body}."}
       ]
@@ -15166,7 +15181,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop ticket-brief"
 
 _study_usage() {
     cat <<'EOF'
@@ -15183,7 +15198,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  skins
-  feedback-loop
+  feedback-loop  ticket-brief
 EOF
 }
 
@@ -15206,6 +15221,7 @@ _study_title() {
         app-heartbeats) echo "Heartbeats in an app" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
+        ticket-brief) echo "Ticket HTML brief" ;;
         *) echo "" ;;
     esac
 }
@@ -15222,7 +15238,7 @@ _study_catalog() {
     cat <<'EOF'
 k2 study — bounded teaching pages (not --help)
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 
   what                What this product is (agents as infrastructure)
   source              License + repo boundary (Fair Source, not MIT)
@@ -15241,6 +15257,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
+  ticket-brief        The HTML brief every agent ticket carries
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -15269,6 +15286,7 @@ _study_page() {
             _study_page_skins
             ;;
         feedback-loop) _study_page_feedback_loop ;;
+        ticket-brief) _study_page_ticket_brief ;;
         *) return 1 ;;
     esac
 }
@@ -15316,7 +15334,7 @@ WHEN SOMETHING IS REFUSED
 RELATED PAGES
   source · map · identity · send · people · errors · connect-boundary
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15366,7 +15384,7 @@ IF YOU WANT THIS BOX TO CHANGE
   You do not patch license policy from an agent session. File a
   durable ask: `k2 feedback ask`. To talk here: `k2 thread`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15415,7 +15433,7 @@ DAEMON-OPTIONAL
   `k2 study` and `k2 --schema` work with no heartbeat.port / token.
   Live unknown verbs do not. `k2 help` does not skip that gate.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15461,7 +15479,7 @@ FEDERATED SHAPE
   host token. Cover .md + small attachments; files stay out of the PTY.
   Wire form fp::ws::agent is `k2 fed send` only, not `k2 msg`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15512,7 +15530,7 @@ PEEK FIRST
   `k2 read <handle>` peeks their live terminal. Use it before injecting
   when you are not sure they are idle. `k2 talk` fuses read-then-send.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15547,10 +15565,11 @@ THREAD
   Do not answer in this terminal — they are not looking at the TUI.
 
 FEEDBACK
-  `k2 feedback ask "<title>" [--body] [--options a,b] [--wait]`
+  `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`
   Files a card your human answers later (or in-session). Use this for
-  decisions, approvals, and "please change this box". See
-  `k2 study feedback-loop`.
+  decisions, approvals, and "please change this box". Attach an HTML
+  brief (`k2 tickets template`). See `k2 study feedback-loop` and
+  `k2 study ticket-brief`.
 
 WHEN THEY SAY NO VIA THE GATE
   owner_only / gated / forbidden → exit 3. Stop looping. Ask with
@@ -15563,7 +15582,7 @@ THREAD VS FEEDBACK
   Do not `--wait` on thread ask/secret. Feedback `--wait` is the
   one that blocks on a durable item.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15610,7 +15629,7 @@ PROJECT NAMES
   workspace handle. `[project:<name>]` → `k2 project msg`. Msg'ing
   the project name looks up a workspace and fails.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15656,7 +15675,7 @@ PASSPORTS
   are a different surface (`/v1`). Remote-session grants are another.
   Do not mix them. Do not print secrets. See `k2 study apps`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15710,7 +15729,7 @@ JSON ERRORS
   `usage` is usually exit 2. Teaching codes above are exit 3.
   Stop looping on 3. Fix the flag on 2. Check the daemon on 1.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15756,7 +15775,7 @@ STUDY VS CONTEXT
   context layer and does not compose into AGENTS.md. Point at study
   from Tooling; keep ROLE.md / PROJECT.md for this workspace's job.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15839,7 +15858,7 @@ NO EXPOSE
   as a hosted process. Point a hostname at a port that is already
   listening if the human wants off-box reach.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15907,7 +15926,7 @@ CAPS
   Linked Gmail draft is always on; send from linked mail still needs
   send level AND Sending=on.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -15972,7 +15991,7 @@ PASSWORD SIGN-IN OVER THE TUNNEL
   Every attempt is audited: `k2 users audit` (~/.k2/auth-audit.jsonl).
   Sessions last 7 days; the desktop app re-signs in silently.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -16277,13 +16296,17 @@ TICKETS
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
     GET|HEAD /cli/feedback/list?project=<handle>
     GET|HEAD /cli/feedback/show?id=<id>
+    GET|HEAD /cli/feedback/show?id=<id>&brief=1   adds brief {html,text,…}
     POST     /cli/feedback/create   {"project":"<handle>","title":"…"}
+             optional "briefHtml":"…" (cleaned + capped; never required for guests)
     POST     /cli/feedback/comment  {"id":"<id>","body":"…"}
     POST     /cli/feedback/answer   {"id":"<id>","answer":"…"}
     POST     /cli/feedback/resolve  {"id":"<id>"}
   project= is handle or uuid only — never a folder basename or absolute path.
   Doors are has_cap_in_room: tickets on Documents does not grant tickets on Sales.
   waiting-count, list-all, assign, and unknown /cli/feedback/foo stay 404.
+  Render `brief.html` in `sandbox=""` with a `default-src 'none'; img-src data:` CSP.
+  Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
 
 WIKI
@@ -16358,7 +16381,7 @@ GUEST CARDS
     k2 thread ask / k2 thread secret
   Ask/secret create stay off the official origin (404).
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -16376,9 +16399,11 @@ THIS CHAT VS THE BOX
   terminal prompt for an approval you need to keep.
 
 ASK
-  k2 feedback ask "<title>" [--body "…"] [--options a,b,c] [--wait]
+  k2 tickets template > brief.html      fill in Problem / Tried / Need / Options
+  k2 feedback ask "<title>" --html brief.html [--body "…"] [--options a,b,c] [--wait]
   Returns an id immediately unless --wait. Options are choices for
-  the human; --wait blocks until answered or resolved.
+  the human; --wait blocks until answered or resolved. The brief is
+  how the human reads your problem — see `k2 study ticket-brief`.
 
 FOLLOW
   k2 feedback list
@@ -16403,7 +16428,66 @@ THE COPY LINE
   fact. Changing it is a human decision (`k2 feedback ask`), not a
   CLI flag. Talking in this chat is `k2 thread`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_ticket_brief() {
+    cat <<'EOF'
+k2 study ticket-brief — the HTML brief every agent ticket carries
+
+WHEN
+  Every `k2 tickets ask` you file as an agent carries a brief: a short
+  HTML page that explains the problem and what you need. The human reads
+  it as a formatted page above the thread, so the ticket reads in one
+  pass. `--kind fyi` is exempt (a brief is optional there).
+  0.43.2 warns when it is missing ({"warning":{"code":"brief_missing"}}
+  on stderr, exit 0). 0.43.3 refuses: brief_required, exit 2.
+
+HOW
+  k2 tickets template > brief.html        skeleton with the five sections
+  (edit it)
+  k2 tickets ask "<one-line title>" --html brief.html [--body "summary"]
+  k2 tickets ask "<title>" --html - < brief.html     stdin works too
+
+  <title> stays the one line for the list, push, and search.
+  --body is the plain one-or-two-sentence summary text-only readers see.
+
+FORMAT (sections; only "What I need from you" is highlighted)
+  Problem                 what is wrong, in plain words
+  What I tried            commands, results, why it did not work
+  What I need from you    <section class="k2-need"> — the decision or action
+  Options                 <ol class="k2-options"> — match --options when used
+  Context                 logs in <pre>, screenshots as data: images
+  A missing k2-need section is a warning (brief_no_need), not an error.
+
+CAPS
+  1 MiB of raw HTML, inline images included. Over → brief_too_large.
+  It must have visible text after cleaning (else brief_empty) and be
+  UTF-8 (else brief_invalid). Every brief_* error exits 2.
+
+WHAT GETS STRIPPED (the daemon cleans it when it is saved)
+  Kept tags: h1-h4 p br hr ul ol li dl dt dd strong em b i u s mark
+  small sub sup code pre kbd blockquote a img table caption thead tbody
+  tfoot tr th td section header footer div span details summary figure
+  figcaption. Classes: k2-need k2-options k2-callout k2-brief only.
+  Removed: script, style (and its contents), iframe, form, input, meta,
+  base, link, svg, comments, every on* attribute, style= attributes,
+  remote images, javascript: links. Only data:image/(png|jpeg|gif|webp)
+  images survive. A {"warning":{"code":"brief_sanitized"}} says so.
+
+LINKS
+  Links do not click inside the frame. The human sees them as a list
+  under the brief with the full URL, opened in their system browser.
+  Write the URL so it reads well in that list.
+
+AFTER FILING
+  The brief can't be edited. Correct it in a comment, or file a new
+  ticket. Comments stay plain text.
+  k2 tickets show <id>            body + brief text extract
+  k2 tickets show <id> --html     the cleaned HTML only
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -17979,9 +18063,10 @@ manager agent's name).
 - `k2 msg <agent> "message"` — direct delivery to a live peer.
 - `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
   (prefer over silent). `--inbox-silent` packages without notifying.
-- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
-  approval; the ask sits durably on their Feedback page (it does not
-  die like a terminal prompt) and the answer comes back to you.
+- `k2 tickets ask "<title>" --html brief.html` — ask your HUMAN for a
+  decision or an approval, with an HTML brief (`k2 tickets template`;
+  `k2 study ticket-brief`). The ask sits durably on their Feedback page
+  (it does not die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
   shared group chat. A message prefixed `[project:<name>]` came from
   there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
@@ -18034,9 +18119,10 @@ to: __ESCALATION_CONTACT__ (your operator/owner — replace this).
   live screen, then deliver. Use for delegation and follow-ups.
 - `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
   (prefer over silent). `--inbox-silent` packages without notifying.
-- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
-  approval; the ask sits durably on their Feedback page (it does not
-  die like a terminal prompt) and the answer comes back to you.
+- `k2 tickets ask "<title>" --html brief.html` — ask your HUMAN for a
+  decision or an approval, with an HTML brief (`k2 tickets template`;
+  `k2 study ticket-brief`). The ask sits durably on their Feedback page
+  (it does not die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
   shared group chat. A message prefixed `[project:<name>]` came from
   there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
@@ -18089,9 +18175,10 @@ your manager agent's name).
   discuss interactively.
 - `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
   (prefer over silent). `--inbox-silent` packages without notifying.
-- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
-  approval; the ask sits durably on their Feedback page (it does not
-  die like a terminal prompt) and the answer comes back to you.
+- `k2 tickets ask "<title>" --html brief.html` — ask your HUMAN for a
+  decision or an approval, with an HTML brief (`k2 tickets template`;
+  `k2 study ticket-brief`). The ask sits durably on their Feedback page
+  (it does not die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
   shared group chat. A message prefixed `[project:<name>]` came from
   there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
@@ -18144,9 +18231,10 @@ __MANAGER__ (replace with your manager agent's name).
   interactively.
 - `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
   (prefer over silent). `--inbox-silent` packages without notifying.
-- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
-  approval; the ask sits durably on their Feedback page (it does not
-  die like a terminal prompt) and the answer comes back to you.
+- `k2 tickets ask "<title>" --html brief.html` — ask your HUMAN for a
+  decision or an approval, with an HTML brief (`k2 tickets template`;
+  `k2 study ticket-brief`). The ask sits durably on their Feedback page
+  (it does not die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
   shared group chat. A message prefixed `[project:<name>]` came from
   there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
@@ -20847,7 +20935,9 @@ AGENTS
 
 ASK A HUMAN
   feedback ask "<title>"                File a durable ask for human input (survives
-                                        your session; supports --options/--wait)
+                                        your session; supports --options/--wait;
+                                        agents attach --html brief.html, from
+                                        `k2 tickets template`)
   feedback list                         This workspace's asks + their status
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
@@ -22438,10 +22528,13 @@ _feedback_detect_session() {
 
 cmd_feedback_ask() {
     if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
-    local title="" body="" body_file="" kind="" options="" priority="" assign=""
+    local title="" body="" body_file="" html_file="" kind="" options="" priority="" assign=""
     local wait=false timeout="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --html)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--html requires a file path (or - for stdin). Start from \`k2 tickets template\`."; exit 2; }
+                html_file="$2"; shift 2 ;;
             --body)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--body requires a value"; exit 2; }
                 body="$2"; shift 2 ;;
@@ -22466,7 +22559,7 @@ cmd_feedback_ask() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -22498,15 +22591,36 @@ cmd_feedback_ask() {
         _feedback_err "usage" "--body and --body-file are mutually exclusive"
         exit 2
     fi
+    # Files go to python by PATH, never through the environment: Linux caps
+    # one env string at 128 KiB (MAX_ARG_STRLEN) and a brief may be 1 MiB
+    # (prd-ticket-html-brief-v1 H31).
     if [ -n "$body_file" ]; then
-        if [ ! -f "$body_file" ]; then
-            _feedback_err "usage" "--body-file: no such file '$body_file'"
+        if [ ! -f "$body_file" ] || [ ! -r "$body_file" ]; then
+            _feedback_err "usage" "--body-file: no such readable file '$body_file'"
             exit 2
         fi
-        body="$(cat "$body_file")" || {
-            _feedback_err "usage" "--body-file: cannot read '$body_file'"
+    fi
+    local html_path=""
+    if [ -n "$html_file" ]; then
+        if [ "$html_file" = "-" ]; then
+            # python reads its program from a heredoc on stdin, so spool the
+            # brief to a private temp file first and pass that path.
+            html_path="$(mktemp -t k2-brief-XXXXXX)" || {
+                _feedback_err "error" "--html -: cannot create a temp file"
+                exit 1
+            }
+            # shellcheck disable=SC2064 # expand the path now, on purpose
+            trap "rm -f '$html_path'" EXIT
+            cat > "$html_path" || {
+                _feedback_err "usage" "--html -: cannot read stdin"
+                exit 2
+            }
+        elif [ ! -f "$html_file" ] || [ ! -r "$html_file" ]; then
+            _feedback_err "usage" "--html: no such readable file '$html_file'"
             exit 2
-        }
+        else
+            html_path="$html_file"
+        fi
     fi
     if [ -n "$timeout" ]; then
         if ! $wait; then
@@ -22524,7 +22638,8 @@ cmd_feedback_ask() {
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi
-    FB_TITLE="$title" FB_BODY="$body" FB_KIND="$kind" FB_OPTIONS="$options" \
+    FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
+    FB_KIND="$kind" FB_OPTIONS="$options" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" \
@@ -22544,9 +22659,27 @@ def die(err, exit_code=None):
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     if exit_code is None:
-        code = err.get("code")
-        exit_code = 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1
+        code = str(err.get("code") or "")
+        if code in ("not_found", "ambiguous_id"):
+            exit_code = 4
+        elif code == "usage" or code.startswith("brief_"):
+            # brief_required / brief_empty / brief_too_large / brief_invalid
+            # are bad usage: fix the brief and ask again (H3/H32).
+            exit_code = 2
+        else:
+            exit_code = 1
     sys.exit(exit_code)
+
+def warn(code, hint):
+    # Warnings are JSON on stderr too; they never change the exit code.
+    sys.stderr.write(json.dumps({"warning": {"code": code, "hint": hint}}) + "\n")
+
+def read_file(path, what):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError as e:
+        die({"code": "usage", "hint": "%s: cannot read '%s': %s" % (what, path, e.strerror)})
 
 def request(method, route, params=None, body=None):
     qs = urllib.parse.urlencode(dict(params or {}, token=token))
@@ -22569,8 +22702,28 @@ payload = {
     "project": os.environ["FB_PROJECT"],
     "title": os.environ["FB_TITLE"],
 }
-if os.environ.get("FB_BODY"):
+if os.environ.get("FB_BODY_PATH"):
+    raw_body = read_file(os.environ["FB_BODY_PATH"], "--body-file")
+    try:
+        body_text = raw_body.decode("utf-8")
+    except UnicodeDecodeError:
+        die({"code": "usage", "hint": "--body-file: '%s' is not UTF-8 text" % os.environ["FB_BODY_PATH"]})
+    body_text = body_text.rstrip("\n")
+    if body_text:
+        payload["body"] = body_text
+elif os.environ.get("FB_BODY"):
     payload["body"] = os.environ["FB_BODY"]
+sent_brief = False
+if os.environ.get("FB_HTML_PATH"):
+    raw_html = read_file(os.environ["FB_HTML_PATH"], "--html")
+    try:
+        payload["briefHtml"] = raw_html.decode("utf-8")
+    except UnicodeDecodeError:
+        # JSON can't carry raw non-UTF-8 bytes, so this one check happens
+        # here, with the daemon's own code and exit (H3).
+        die({"code": "brief_invalid",
+             "hint": "brief_invalid: the --html file is not UTF-8. Save it as UTF-8 and ask again. See `k2 study ticket-brief`."})
+    sent_brief = True
 if os.environ.get("FB_KIND"):
     payload["kind"] = os.environ["FB_KIND"]
 if os.environ.get("FB_PRIORITY"):
@@ -22600,6 +22753,13 @@ if d.get("error"):
     die(d["error"])
 if not d.get("ok"):
     die({"code": "error", "hint": "unexpected daemon response: %r" % json.dumps(d)[:200]})
+
+for w in d.get("warnings") or []:
+    if isinstance(w, dict):
+        warn(str(w.get("code") or "warning"), str(w.get("hint") or ""))
+if sent_brief and d.get("hasBrief") is not True:
+    # H28: an older daemon ignores the unknown briefHtml field.
+    warn("brief_not_stored", "this server is older than 0.43.2 and dropped the HTML brief")
 
 fid = d["id"]
 
@@ -22717,12 +22877,13 @@ PYEOF
 
 cmd_feedback_show() {
     if _wants_help "$@"; then cmd_help_feedback_show; exit 0; fi
-    local id="" as_json=false
+    local id="" as_json=false want_html=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --html) want_html=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets show <id> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets show <id> [--html] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -22736,29 +22897,61 @@ cmd_feedback_show() {
         _feedback_err "usage" "show requires an <id> (from ask/list; a short unique prefix works)"
         exit 2
     fi
-    local resp
-    resp=$(cli_request "/cli/feedback/show" "id=$(urlencode "$id")") || resp=""
-    if [ -z "$resp" ]; then
-        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
-        exit 1
-    fi
-    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+    # The reply can carry a 1 MiB brief, so python fetches it itself (like
+    # `ask`) instead of passing it through an env var, which Linux caps at
+    # 128 KiB per string (prd-ticket-html-brief-v1 H20/H31).
+    FB_ID="$id" AS_JSON="$as_json" WANT_HTML="$want_html" \
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys, time
-raw = os.environ["RESP"]
-try:
-    d = json.loads(raw)
-except Exception:
-    sys.stderr.write(json.dumps({"error": {"code": "bad_response",
-        "hint": "daemon returned an unparseable response: %r" % raw[:200]}}) + "\n")
-    sys.exit(1)
-err = d.get("error")
-if err is not None:
+import urllib.error, urllib.parse, urllib.request
+
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+as_json = os.environ.get("AS_JSON") == "true"
+want_html = os.environ.get("WANT_HTML") == "true"
+
+def die(err):
     if isinstance(err, str):
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
-if os.environ.get("AS_JSON") == "true":
+
+qs = urllib.parse.urlencode({"id": os.environ["FB_ID"], "brief": "1", "token": token})
+req = urllib.request.Request(base + "/cli/feedback/show?" + qs, method="GET")
+raw = None
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.read().decode("utf-8", "replace")
+except urllib.error.HTTPError as e:
+    raw = e.read().decode("utf-8", "replace")
+except Exception:
+    die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+try:
+    d = json.loads(raw)
+except Exception:
+    die({"code": "bad_response", "hint": "daemon returned an unparseable response: %r" % raw[:200]})
+if not isinstance(d, dict):
+    die({"code": "bad_response", "hint": "daemon returned an unexpected response: %r" % raw[:200]})
+err = d.get("error")
+if err is not None:
+    die(err)
+
+brief = d.get("brief") if isinstance(d.get("brief"), dict) else None
+
+if want_html:
+    # H41: stdout carries ONLY the cleaned HTML, so `> brief.html` is safe.
+    if brief is None or not isinstance(brief.get("html"), str):
+        die({"code": "no_brief", "hint": "ticket %s has no HTML brief" % str(d.get("id", ""))[:8]})
+    if as_json:
+        print(json.dumps(d))
+    else:
+        sys.stdout.write(brief["html"])
+    sys.exit(0)
+
+# Without --html the HTML never prints, --json included (H20).
+d.pop("brief", None)
+if as_json:
     print(json.dumps(d))
     sys.exit(0)
 
@@ -22768,6 +22961,11 @@ def ago(ts):
     if s < 3600: return "%dm ago" % (s // 60)
     if s < 172800: return "%dh ago" % (s // 3600)
     return "%dd ago" % (s // 86400)
+
+def size(n):
+    if n < 1024: return "%d B" % n
+    if n < 1024 * 1024: return "%.1f KB" % (n / 1024.0)
+    return "%.1f MB" % (n / (1024.0 * 1024.0))
 
 print("feedback : %s  (%s)" % (str(d.get("id", ""))[:8], d.get("status", "?")))
 print("title    : %s" % d.get("title", ""))
@@ -22783,6 +22981,23 @@ if d.get("options"):
     print("options  : %s" % " | ".join(d["options"]))
 if d.get("answer"):
     print("answer   : %s" % d["answer"])
+if d.get("body"):
+    body_lines = str(d["body"]).splitlines() or [""]
+    print("body     : %s" % body_lines[0])
+    for extra in body_lines[1:]:
+        print(" " * 11 + extra)
+if d.get("hasBrief"):
+    n = d.get("briefBytes")
+    if n is None and brief is not None:
+        n = brief.get("bytes")
+    print("brief    : HTML, %s  (k2 tickets show %s --html > brief.html)"
+          % (size(int(n)) if isinstance(n, (int, float)) else "?", str(d.get("id", ""))[:8]))
+    text = str((brief or {}).get("text") or "")
+    lines = text.splitlines()
+    for line in lines[:40]:
+        print("  " + line)
+    if len(lines) > 40:
+        print("  … %d more lines (open the ticket, or use --html)" % (len(lines) - 40))
 print()
 print("thread:")
 for c in d.get("comments", []):
@@ -22791,6 +23006,44 @@ for c in d.get("comments", []):
     for extra in lines[1:]:
         print(" " * 21 + extra)
 PYEOF
+}
+
+# `k2 tickets template` — the brief skeleton (prd-ticket-html-brief-v1 H15).
+# Static and daemon-optional (H42). Only tags and classes the daemon keeps.
+cmd_feedback_template() {
+    if _wants_help "$@"; then cmd_help_feedback_template; exit 0; fi
+    if [ $# -gt 0 ]; then
+        _feedback_err "usage" "template takes no arguments — usage: k2 tickets template > brief.html"
+        exit 2
+    fi
+    # No HTML comments in the skeleton: the daemon strips comments and would
+    # warn brief_sanitized on every ticket made from it.
+    cat <<'EOF'
+<h2>Problem</h2>
+<p>What is wrong, in plain words. One short paragraph.</p>
+
+<h2>What I tried</h2>
+<ul>
+  <li>The command or change, and what happened.</li>
+  <li>Why that did not solve it.</li>
+</ul>
+
+<section class="k2-need">
+  <h2>What I need from you</h2>
+  <p>The one decision or action you need, stated so it can be answered in a line.</p>
+</section>
+
+<h2>Options</h2>
+<ol class="k2-options">
+  <li><strong>Option A</strong> — what happens, and the cost.</li>
+  <li><strong>Option B</strong> — what happens, and the cost.</li>
+</ol>
+
+<h2>Context</h2>
+<p class="k2-callout">Anything the human must know before answering.</p>
+<pre><code>Relevant log lines or command output.</code></pre>
+<p>Screenshots go inline as &lt;img alt="what it shows" src="data:image/png;base64,…"&gt;. Delete this line if you have none.</p>
+EOF
 }
 
 cmd_feedback_comment() {
@@ -22978,6 +23231,8 @@ USAGE
 
 COMMANDS
   ask <title>            File a new feedback item asking for human input
+                         (agents attach an HTML brief: --html brief.html)
+  template               Print the HTML brief skeleton (no daemon needed)
   list                   List this workspace's feedback items (newest first)
   show <id>              Show one item: the ask, its status, and the full thread
   comment <id> <text>    Add a message to an item's discussion thread (bumps the
@@ -23020,8 +23275,15 @@ ARGUMENTS
   <title>                One-line summary of what you need (the notification text)
 
 FLAGS
-  --body <text>          Longer context/details (the ask's body)
-  --body-file <file>     Read the body from a file (for long or formatted context)
+  --html <file|->        The HTML brief: Problem, What I tried, What I need
+                         from you, Options, Context. Agents must attach one
+                         (fyi is exempt). Start from `k2 tickets template`;
+                         `-` reads stdin. Max 1 MiB; the daemon cleans it.
+                         0.43.2 warns when it is missing; 0.43.3 refuses.
+                         See `k2 study ticket-brief`.
+  --body <text>          Short plain summary (one or two sentences) that
+                         text-only readers see first
+  --body-file <file>     Read the summary from a file
   --kind <kind>          question | approval | fyi   (default: question).
                          fyi = no answer expected: it sits on the human's page
                          until THEY dismiss/resolve it (or you resolve it
@@ -23047,9 +23309,15 @@ FLAGS
                          captured answer.
   --json                 JSON output
 
+BRIEF ERRORS (exit 2, JSON on stderr)
+  brief_required · brief_empty · brief_too_large · brief_invalid
+  Warnings print as {"warning":{"code","hint"}} on stderr and keep exit 0
+  (brief_missing, brief_sanitized, brief_no_need, brief_not_stored).
+
 EXAMPLES
-  k2 tickets ask "Deploy to prod now?" --kind approval --options "Yes,No,Wait for me" --priority 1
-  k2 tickets ask "Which color for the CTA?" --body-file ./context.md --assign owner
+  k2 tickets template > brief.html
+  k2 tickets ask "Deploy to prod now?" --html brief.html --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
   k2 tickets ask "Review the sales pricing" --assign julie --priority 2
   ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
 EOF
@@ -23115,7 +23383,32 @@ ARGUMENTS
                          matching candidates in the hint.
 
 FLAGS
-  --json                 JSON output (includes the comments array)
+  --html                 Print ONLY the ticket's cleaned HTML brief to stdout
+                         (k2 tickets show <id> --html > brief.html). No brief:
+                         exit 1, {"error":{"code":"no_brief"}}, empty stdout.
+  --json                 JSON output (includes the comments array; the brief
+                         HTML only with --html)
+
+Without --html, show prints the body, a "brief : HTML, <size>" line, and the
+brief's plain-text extract (first 40 lines).
+EOF
+}
+
+cmd_help_feedback_template() {
+    cat <<'EOF'
+Print the HTML brief skeleton every agent ticket carries. Static: works with
+no daemon running.
+
+USAGE
+  k2 tickets template > brief.html
+  (fill in the sections)
+  k2 tickets ask "<one-line title>" --html brief.html
+
+SECTIONS
+  Problem · What I tried · What I need from you (section.k2-need) ·
+  Options (ol.k2-options) · Context
+
+See `k2 study ticket-brief` for the caps and what gets stripped.
 EOF
 }
 
@@ -32927,6 +33220,7 @@ case "${1:-help}" in
             ask)     shift 2; cmd_feedback_ask "$@" ;;
             list)    shift 2; cmd_feedback_list "$@" ;;
             show)    shift 2; cmd_feedback_show "$@" ;;
+            template) shift 2; cmd_feedback_template "$@" ;;
             comment) shift 2; cmd_feedback_comment "$@" ;;
             assign)  shift 2; cmd_feedback_assign "$@" ;;
             resolve) shift 2; cmd_feedback_resolve "$@" ;;

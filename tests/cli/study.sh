@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop ticket-brief"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -237,6 +237,32 @@ else
 fi
 assert_contains "apps keeps k2skn_" "$apps_out" "k2skn_"
 assert_contains "apps keeps /cli/skin/login" "$apps_out" "/cli/skin/login"
+
+echo "== k2 study ticket-brief (prd-ticket-html-brief-v1 T13) =="
+tb_out="$("$K2" study ticket-brief)"
+assert_contains "ticket-brief title" "$tb_out" "k2 study ticket-brief"
+assert_contains "template verb" "$tb_out" "k2 tickets template > brief.html"
+assert_contains "ask --html" "$tb_out" "--html brief.html"
+assert_contains "stdin form" "$tb_out" "--html - < brief.html"
+assert_contains "k2-need section" "$tb_out" 'class="k2-need"'
+assert_contains "k2-options list" "$tb_out" 'class="k2-options"'
+assert_contains "1 MiB cap" "$tb_out" "1 MiB"
+assert_contains "fyi exempt" "$tb_out" "fyi"
+assert_contains "warn this release" "$tb_out" "brief_missing"
+assert_contains "require next release" "$tb_out" "brief_required"
+assert_contains "script stripped" "$tb_out" "script"
+assert_contains "links listed" "$tb_out" "system browser"
+assert_contains "show --html" "$tb_out" "k2 tickets show <id> --html"
+assert_contains "skins brief read" "$skins_out" "/cli/feedback/show?id=<id>&brief=1"
+assert_contains "skins brief create optional" "$skins_out" '"briefHtml"'
+assert_contains "skins brief sandbox" "$skins_out" 'sandbox=""'
+assert_contains "skins brief csp" "$skins_out" "default-src 'none'; img-src data:"
+fl_out="$("$K2" study feedback-loop)"
+assert_contains "feedback-loop teaches the brief" "$fl_out" "k2 study ticket-brief"
+tb_json="$("$K2" study ticket-brief --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="ticket-brief" and "k2-need" in d["body"], d["id"]' "$tb_json"
+echo "  PASS: ticket-brief --json id+body"
+pass=$((pass + 1))
 
 echo "== k2 study people =="
 people_out="$("$K2" study people)"

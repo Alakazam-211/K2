@@ -105,7 +105,8 @@ skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
 side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
 PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
 with `k2 thread <addr> \"...\"`, do not answer in this terminal; Thread text is markdown), `feedback` to \
-ask your human a durable question, `project` for your project group's shared \
+ask your human a durable question with an HTML brief (`k2 study ticket-brief`), \
+`project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
 mint/read/wait, send under your human's governance). \
@@ -398,13 +399,17 @@ k2 inbox compose --title "Fix login bug" --body "Users can't log in after reset"
 
 ## Ask a human
 ```
-k2 feedback ask "<title>" [--body "..."] [--options "a,b,c"] [--wait]
-k2 feedback list                               # your asks + their status
-k2 feedback show <id>                          # one ask: status, answer, thread
+k2 tickets template > brief.html               # HTML brief skeleton; fill it in
+k2 tickets ask "<title>" --html brief.html [--body "..."] [--options "a,b,c"] [--wait]
+k2 tickets list                                # your asks + their status
+k2 tickets show <id>                           # one ask: status, answer, thread
 ```
-`feedback ask` files a durable question on your human's Feedback page — it
+`tickets ask` files a durable question on your human's Tickets page — it
 survives your session and the answer comes back to you. Use it instead of a
-dead terminal prompt when you need a decision or approval.
+dead terminal prompt when you need a decision or approval. Attach an HTML
+brief (Problem, What I tried, What I need from you, Options): K2 0.43.2 warns
+without one, the next release refuses. `fyi` needs none. Format, caps, and
+what gets stripped: `k2 study ticket-brief`. (`k2 feedback` is an alias.)
 
 ## Respond to your API caller
 ```
@@ -563,7 +568,8 @@ K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `k2 connections list --users` humans. Never `k2 msg` usernames.
 
-To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
+To change this box, `k2 feedback ask` with an HTML brief (`k2 study ticket-brief`).
+To talk in this chat, `k2 thread`.
 "#
     .to_string()
 }

@@ -681,7 +681,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "feedback",
         summary: "Durable agent→human question on the Feedback page",
-        definition: "A durable question an agent files for its human: `k2 feedback ask \"<title>\"` (supports `--options` for tappable choices and `--wait` to block for the answer). The ask lands on the human's Feedback page, survives the agent's session, and the answer is delivered back to the agent — use it instead of a terminal prompt when you need a decision or approval.\n\nTrack with `k2 feedback list` / `k2 feedback show <id>`; full surface in `k2 feedback --help`.",
+        definition: "A durable question an agent files for its human: `k2 tickets ask \"<title>\" --html brief.html` (an HTML brief: Problem, What I tried, What I need from you, Options; start from `k2 tickets template`, details in `k2 study ticket-brief`; supports `--options` for tappable choices and `--wait` to block for the answer). The ask lands on the human's Feedback page, survives the agent's session, and the answer is delivered back to the agent — use it instead of a terminal prompt when you need a decision or approval.\n\nTrack with `k2 feedback list` / `k2 feedback show <id>`; full surface in `k2 feedback --help`.",
     },
     GlossaryEntry {
         term: "harness",

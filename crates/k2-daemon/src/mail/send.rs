@@ -1146,7 +1146,7 @@ pub fn check_reply_guardrails(
     if verdicts["dmarc"].as_str() == Some("fail") && gate != Gate::Approval {
         return Err(SendError::Guardrail(
             "the original message FAILED DMARC — replying is blocked unless send gating \
-             is 'approval' (your human reviews it). Ask your human via 'k2 feedback ask'"
+             is 'approval' (your human reviews it). Ask your human via 'k2 tickets ask' with an HTML brief (k2 study ticket-brief)"
                 .to_string(),
         ));
     }

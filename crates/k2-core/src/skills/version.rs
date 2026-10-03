@@ -75,9 +75,11 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// Bumped to 10: restore + publish-subdomain off-box hint (D30).
 /// Bumped to 11: `db_agent_access` is create-only; list/dsn/store use
 /// ownership or sql_grants.
-pub const SKILL_VERSION_MANAGER: u32 = 11;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 11;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 11;
+/// Bumped to 12 (0.43.2, ticket HTML brief): "Ask a human" teaches
+/// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
+pub const SKILL_VERSION_MANAGER: u32 = 12;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 12;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 12;
 pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -122,7 +124,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 27: thread bodies render markdown (CLI nudge + skill).
 /// Bumped to 28: human word app (`k2 app` / `k2 study apps` / `apps:roster`);
 /// leftover `k2 skin` / `k2 skin-token` / `skin:roster`; pass prefix still `k2skn_`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 28;
+/// Bumped to 29 (0.43.2, ticket HTML brief): "Ask a human" teaches
+/// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 29;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

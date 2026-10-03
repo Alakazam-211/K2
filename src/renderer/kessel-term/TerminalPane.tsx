@@ -5898,6 +5898,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               conversationId={sessionChrome.conversationId}
               active
               composeBar={composeThread()}
+              agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
             />
           )
         }
@@ -5936,6 +5937,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               conversationId={sessionChrome.conversationId}
               active={showThreadOverlay}
               composeBar={composeThread()}
+              agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
             />
           )}
           {sessionChrome && showChat && (

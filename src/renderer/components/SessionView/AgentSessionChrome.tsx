@@ -135,6 +135,7 @@ export function AgentSessionChrome({
         chatConversationId: conversationId,
         chatProvider,
         agentName,
+        displayName: title,
       }}
     >
       <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
@@ -258,6 +259,7 @@ export function PinnedSessionBody({
   chatConversationId,
   chatProvider,
   agentName,
+  displayName,
   children,
 }: {
   viewTab: SessionViewTab
@@ -268,6 +270,8 @@ export function PinnedSessionBody({
   chatConversationId?: string | null
   chatProvider?: string | null
   agentName?: string
+  /** AGENT.md display name — the Thread empty state names the agent. */
+  displayName?: string
   children: ReactNode
 }): JSX.Element {
   return (
@@ -281,6 +285,7 @@ export function PinnedSessionBody({
         chatConversationId: chatConversationId ?? conversationId,
         chatProvider: chatProvider ?? null,
         agentName: agentName ?? '',
+        displayName,
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">

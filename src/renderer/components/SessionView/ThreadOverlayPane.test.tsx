@@ -26,6 +26,7 @@ const threadHook = vi.hoisted(() => ({
   voidCard: async () => {},
   hasMore: false,
   loadingOlder: false,
+  loaded: true,
   loadOlder: async () => {},
 }))
 
@@ -46,6 +47,7 @@ describe('Thread overlay pane', () => {
     threadHook.hasMore = false
     threadHook.loadingOlder = false
     threadHook.loadOlder = async () => {}
+    threadHook.loaded = true
   })
 
   it('has no compose box — Message-the-agent stays on the terminal bar', () => {
@@ -84,6 +86,51 @@ describe('Thread overlay pane', () => {
   it('hides Load older when hasMore is false', () => {
     renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(screen.queryByTestId('overlay-load-older')).toBeNull()
+  })
+
+  it('empty list shows the centered title and names the agent', () => {
+    renderInRoom(
+      overlayRoom,
+      <ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales Bot" />,
+    )
+    const empty = screen.getByTestId('thread-overlay-empty')
+    expect(empty.className).toContain('items-center')
+    expect(empty.className).toContain('justify-center')
+    expect(screen.getByText('No Thread messages yet')).not.toBeNull()
+    expect(empty.textContent).toContain('Send a message to Sales Bot in the box below.')
+    expect(empty.textContent).not.toContain('the agent')
+  })
+
+  it('empty list with no name falls back to "the agent"', () => {
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+    const empty = screen.getByTestId('thread-overlay-empty')
+    expect(empty.textContent).toContain('Send a message to the agent in the box below.')
+  })
+
+  it('blank name also falls back to "the agent"', () => {
+    renderInRoom(
+      overlayRoom,
+      <ThreadOverlayPane addr="sales" conversationId="c" agentName="   " />,
+    )
+    const empty = screen.getByTestId('thread-overlay-empty')
+    expect(empty.textContent).toContain('Send a message to the agent in the box below.')
+  })
+
+  it('shows nothing before the first load finishes', () => {
+    threadHook.loaded = false
+    renderInRoom(
+      overlayRoom,
+      <ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales Bot" />,
+    )
+    expect(screen.queryByTestId('thread-overlay-empty')).toBeNull()
+    expect(screen.queryByText('No Thread messages yet')).toBeNull()
+  })
+
+  it('error replaces the empty state', () => {
+    threadHook.error = 'boom'
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+    expect(screen.getByText('boom')).not.toBeNull()
+    expect(screen.queryByTestId('thread-overlay-empty')).toBeNull()
   })
 })
 

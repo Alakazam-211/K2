@@ -1096,7 +1096,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -1118,7 +1118,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             {room.readOnly ? `Not running on ${room.scope.label}` : 'Chat session ended'}
@@ -1162,6 +1162,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         chatConversationId={chatConversationId}
         chatProvider={chatProvider}
         agentName={projectId}
+        displayName={displayName}
       >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -1200,17 +1201,23 @@ function OverlayTabBody({
   viewTab,
   overlayAddr,
   overlayConv,
+  displayName,
   children,
 }: {
   viewTab: SessionViewTab
   overlayAddr: string
   overlayConv: string | null
+  displayName?: string
   children: React.ReactNode
 }): React.JSX.Element {
   if (viewTab === 'thread') {
     return (
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+        <ThreadOverlayPane
+          addr={overlayAddr}
+          conversationId={overlayConv}
+          agentName={displayName || overlayAddr}
+        />
       </div>
     )
   }
@@ -1644,7 +1651,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -1686,6 +1693,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         chatConversationId={currentSessionId}
         chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
         agentName={projectId}
+        displayName={displayName}
       >
         <TerminalPane
           key={refreshNonce}

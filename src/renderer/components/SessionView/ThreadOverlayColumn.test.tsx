@@ -18,6 +18,7 @@ const threadHook = vi.hoisted(() => ({
   voidCard: async () => {},
   hasMore: false,
   loadingOlder: false,
+  loaded: true,
   loadOlder: async () => {},
 }))
 

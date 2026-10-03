@@ -100,6 +100,29 @@ describe('useOverlayThread paging', () => {
     expect(result.current.hasMore).toBe(false)
   })
 
+  it('loaded stays false until the first snapshot lands, then true on an empty list', async () => {
+    let resolve!: (v: unknown) => void
+    daemonCliGet.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    const { result } = renderHook(() =>
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    expect(result.current.loaded).toBe(false)
+    await act(async () => {
+      resolve({ conversation_id: '', has_more: false, items: [] })
+    })
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+    expect(result.current.items).toHaveLength(0)
+  })
+
+  it('loaded is true after a failed first load (error line shows instead)', async () => {
+    daemonCliGet.mockRejectedValueOnce(new Error('down'))
+    const { result } = renderHook(() =>
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+    expect(result.current.error).toBe('down')
+  })
+
   it('loadOlder is a no-op when hasMore is false', async () => {
     daemonCliGet.mockResolvedValueOnce({
       conversation_id: '',

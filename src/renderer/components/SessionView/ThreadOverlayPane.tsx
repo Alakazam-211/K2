@@ -17,6 +17,8 @@ interface ThreadOverlayPaneProps {
   conversationId: string | null
   /** Pause GET/WS and the relative-time interval when the pane is hidden. */
   active?: boolean
+  /** Agent display name for the empty state. Falls back to "the agent". */
+  agentName?: string
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
@@ -24,8 +26,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   addr,
   conversationId,
   active = true,
+  agentName,
 }: ThreadOverlayPaneProps): JSX.Element {
-  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder } = useOverlayThread({
+  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: useRoom().scope,
     addr,
@@ -148,7 +151,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       <div
         ref={listRef}
         data-testid="thread-overlay-list"
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2"
+        className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2"
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return
@@ -183,10 +186,19 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         {error && (
           <div className="text-[11px] text-[var(--color-text-muted)] px-2.5">{error}</div>
         )}
-        {!error && visible.length === 0 && (
-          <div className="text-[11px] text-[var(--color-text-muted)] px-2.5">
-            No overlay posts yet. Message the agent below — Thread vs Terminal
-            chooses where it is sent.
+        {loaded && !error && visible.length === 0 && (
+          // Absolute over the list so it centers without adding scroll
+          // height; pointer-events-none keeps Load older clickable.
+          <div
+            data-testid="thread-overlay-empty"
+            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center"
+          >
+            <div className="text-[13px] font-medium text-[var(--color-text-primary)]">
+              No Thread messages yet
+            </div>
+            <div className="text-[12px] text-[var(--color-text-muted)] max-w-[40ch]">
+              Send a message to {agentName?.trim() || 'the agent'} in the box below.
+            </div>
           </div>
         )}
         <div className="flex flex-col gap-2.5">

@@ -18,12 +18,15 @@ export function ThreadOverlayColumn({
   active,
   composeBar,
   split,
+  agentName,
 }: {
   addr: string
   conversationId: string | null
   active: boolean
   composeBar: ReactNode | null
   split?: boolean
+  /** Shown in the empty state ("Send a message to <name>…"). */
+  agentName?: string
 }): React.JSX.Element {
   const composeRef = useRef<HTMLDivElement>(null)
   const [bottom, setBottom] = useState(0)
@@ -61,7 +64,12 @@ export function ThreadOverlayColumn({
         data-testid="agent-session-thread-list-slot"
       >
         <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
-          <ThreadOverlayPane addr={addr} conversationId={conversationId} active={active} />
+          <ThreadOverlayPane
+            addr={addr}
+            conversationId={conversationId}
+            active={active}
+            agentName={agentName}
+          />
         </SelectableRegion>
       </div>
       {hasCompose ? (

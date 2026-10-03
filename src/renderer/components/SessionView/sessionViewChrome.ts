@@ -14,6 +14,8 @@ export interface SessionViewChromeValue {
   chatProvider: string | null
   /** v2 agent name. The daemon resolves cwd. Not a transcript path. */
   agentName: string
+  /** Human name for the agent (AGENT.md display name or sidecar handle). */
+  displayName?: string
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

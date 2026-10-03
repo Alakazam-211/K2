@@ -31,6 +31,8 @@ export function useOverlayThread(opts: {
   hasMore: boolean
   loadOlder: () => Promise<void>
   loadingOlder: boolean
+  /** True once the first snapshot for this addr has landed (or failed). */
+  loaded: boolean
 } {
   const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
@@ -39,6 +41,7 @@ export function useOverlayThread(opts: {
   const [posting, setPosting] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   const snapshotSeqRef = useRef(0)
   const itemsRef = useRef(items)
   const hasMoreRef = useRef(false)
@@ -55,8 +58,10 @@ export function useOverlayThread(opts: {
       setError(null)
       setHasMore(false)
       setLoadingOlder(false)
+      setLoaded(false)
       return
     }
+    setLoaded(false)
     let cancelled = false
     let ws: WebSocket | null = null
 
@@ -72,6 +77,7 @@ export function useOverlayThread(opts: {
         setHasMore(snap.has_more)
         setResolvedConv(conv)
         setError(null)
+        setLoaded(true)
         if (!conv) return
 
         const creds = await getDaemonWs(scope)
@@ -101,6 +107,7 @@ export function useOverlayThread(opts: {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : String(e))
+          setLoaded(true)
         }
       }
     }
@@ -286,5 +293,6 @@ export function useOverlayThread(opts: {
     hasMore,
     loadOlder,
     loadingOlder,
+    loaded,
   }
 }

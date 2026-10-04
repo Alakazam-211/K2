@@ -26,6 +26,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# shellcheck source=scripts/macos-daemon-helper-app.sh
+source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
 # Gmail required OOTB; MS optional (K2_REQUIRE_MICROSOFT_OAUTH=1 to enforce).
 require_mail_oauth_build_env
 
@@ -60,8 +62,10 @@ echo ""; echo "Step 2: bundling k2-daemon sidecar..."
 cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
 [ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
-cp "target/release/k2-daemon" "$APP/Contents/MacOS/k2-daemon"
-echo "  k2-daemon copied into the bundle."
+# macOS: the daemon lives in a nested background-only helper app so
+# Activity Monitor shows the K2 icon + "K2 Daemon".
+k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" || exit 1
+k2_daemon_helper_verify "$APP" || exit 1
 # Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
 # daemon copies it to /Library/PrivilegedHelperTools only after the user
 # approves the one admin dialog.
@@ -78,7 +82,7 @@ echo "  k2-menubar copied into the bundle."
 # ── Step 3: Sign (inner binaries first, then the bundle) ──
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-daemon"
+k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 FRPC_BIN="$APP/Contents/MacOS/frpc"
@@ -87,7 +91,9 @@ if [ -x "$FRPC_BIN" ]; then
     echo "  Signed frpc sidecar."
 fi
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
-echo "  Signed (main + daemon + frpc + bundle)."
+echo "  Signed (main + K2 Daemon.app + frpc + bundle)."
+k2_daemon_helper_verify "$APP" || exit 1
+k2_daemon_helper_verify_signed "$APP" || exit 1
 
 # ── Step 4: Launch smoke-test (AMFI exec check) ──
 # A GUI app ignores SIGTERM and runs an event loop, so SIGKILL it + children and

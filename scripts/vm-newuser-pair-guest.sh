@@ -81,6 +81,7 @@ log "installed=/Applications/K2.app"
 
 DAEMON=""
 for c in \
+  "/Applications/K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon" \
   /Applications/K2.app/Contents/MacOS/k2-daemon \
   /Applications/K2.app/Contents/MacOS/k2so-daemon
 do

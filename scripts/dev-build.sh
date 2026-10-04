@@ -42,6 +42,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# shellcheck source=scripts/macos-daemon-helper-app.sh
+source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
 export K2_REQUIRE_MICROSOFT_OAUTH="${K2_REQUIRE_MICROSOFT_OAUTH:-0}"
 require_mail_oauth_build_env
 
@@ -63,8 +65,10 @@ echo ""; echo "Step 2: bundling k2-daemon sidecar..."
 cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
 [ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
-cp "target/release/k2-daemon" "$APP/Contents/MacOS/k2-daemon"
-echo "  k2-daemon copied into the bundle."
+# macOS: the daemon lives in a nested background-only helper app so
+# Activity Monitor shows the K2 icon + "K2 Daemon".
+k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" || exit 1
+k2_daemon_helper_verify "$APP" || exit 1
 # Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
 # daemon copies it to /Library/PrivilegedHelperTools only after the user
 # approves the one admin dialog.
@@ -80,7 +84,7 @@ echo "  k2-menubar copied into the bundle."
 
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-daemon"
+k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 FRPC_BIN="$APP/Contents/MacOS/frpc"
@@ -89,7 +93,9 @@ if [ -x "$FRPC_BIN" ]; then
     echo "  Signed frpc sidecar."
 fi
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
-echo "  Signed (main + daemon + frpc + bundle)."
+echo "  Signed (main + K2 Daemon.app + frpc + bundle)."
+k2_daemon_helper_verify "$APP" || exit 1
+k2_daemon_helper_verify_signed "$APP" || exit 1
 
 echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
 "$APP/Contents/MacOS/k2" --version >/tmp/k2-dev-smoke.out 2>&1 &
@@ -118,8 +124,26 @@ if [ "$INSTALL" -eq 1 ]; then
         killall k2 2>/dev/null || true
     fi
     ditto "$APP" /Applications/K2.app
+    # ditto merges: drop the pre-0.43.2 daemon an older install left behind.
+    rm -f /Applications/K2.app/Contents/MacOS/k2-daemon
     codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" /Applications/K2.app
+    k2_daemon_helper_verify /Applications/K2.app || exit 1
     UID_NUM="$(id -u)"
+    # Point an old LaunchAgent at the nested helper (the app does the same
+    # on its next start; doing it here makes the kickstart below use it).
+    DAEMON_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_LABEL}.plist"
+    NEW_DAEMON="$(k2_daemon_helper_exe /Applications/K2.app)"
+    if [ -f "$DAEMON_PLIST" ]; then
+        OLD_DAEMON="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$DAEMON_PLIST" 2>/dev/null || true)"
+        if [ "$OLD_DAEMON" = "/Applications/K2.app/Contents/MacOS/k2-daemon" ]; then
+            /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $NEW_DAEMON" "$DAEMON_PLIST"
+            launchctl bootout "gui/${UID_NUM}" "$DAEMON_PLIST" 2>/dev/null || true
+            launchctl bootstrap "gui/${UID_NUM}" "$DAEMON_PLIST" || {
+                echo "  WARNING: launchctl bootstrap failed for $DAEMON_PLIST" >&2
+            }
+            echo "  LaunchAgent moved to $NEW_DAEMON"
+        fi
+    fi
     launchctl kickstart -k "gui/${UID_NUM}/${LAUNCH_LABEL}" || {
         echo "  WARNING: launchctl kickstart failed — start K2 once or run:" >&2
         echo "    launchctl kickstart -k gui/${UID_NUM}/${LAUNCH_LABEL}" >&2

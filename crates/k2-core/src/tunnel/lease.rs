@@ -357,10 +357,10 @@ impl LeaseTarget {
 ///    the keychain sees `/usr/bin/security` as the requesting application on
 ///    every daemon read. This is the load-bearing entry.
 /// 2. the running daemon executable (`std::env::current_exe()`, i.e.
-///    `K2.app/Contents/MacOS/k2-daemon`) — covers any future direct
+///    `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`) — covers any future direct
 ///    Security-framework read from the daemon and the daemon's own
 ///    rotation/migration re-writes, so they never re-prompt.
-/// 3. BOTH sibling binaries in `Contents/MacOS/` — the app/renderer `k2`
+/// 3. BOTH bundle peers ([`bundle_peer_binaries`]) — the app/renderer `k2`
 ///    (created the item via `keyring`, reads it back through `k2_secret_get`)
 ///    and the `k2-daemon` (reads via the `security` CLI and any future direct
 ///    Security-framework read, plus its own rotation/migration re-writes).
@@ -371,7 +371,7 @@ impl LeaseTarget {
 ///    via the renderer command), so `current_exe` may be EITHER binary — we
 ///    therefore add both siblings unconditionally rather than deriving "the
 ///    other one" from whichever process happens to be running. Paths are the
-///    exe's siblings, so they stay correct across versions and install
+///    resolved from the host app's `Contents/MacOS`, so they stay correct across versions and install
 ///    locations without hard-coding `/Applications`.
 ///
 /// The CLI (`@alakazamlabs/k2`, an npm-installed bash script) does NOT read
@@ -392,16 +392,34 @@ fn acl_trusted_apps() -> Vec<String> {
         // process wrote it. Only add a sibling that exists on disk (a bare
         // dev/CI build has no bundle siblings; a phantom path is inert) and
         // never duplicate `current_exe`.
-        if let Some(dir) = exe.parent() {
-            for sibling in ["k2", "k2-daemon"] {
-                let p = dir.join(sibling);
-                if p != exe && p.exists() {
-                    apps.push(p.to_string_lossy().to_string());
-                }
+        for p in bundle_peer_binaries(&exe) {
+            if p != exe && p.exists() {
+                apps.push(p.to_string_lossy().to_string());
             }
         }
     }
     apps
+}
+
+/// The app binary `k2` and the bundled `k2-daemon` that share a keychain
+/// ACL with the process at `exe`, as pure paths (no FS check).
+///
+/// macOS 0.43.2+: `k2` is in `K2.app/Contents/MacOS/` and the daemon is in
+/// `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/`, so they are no
+/// longer siblings. Resolve both from the host app's `Contents/MacOS`
+/// whichever of the two is running. A dev/CI build keeps both side by side.
+pub fn bundle_peer_binaries(exe: &std::path::Path) -> Vec<std::path::PathBuf> {
+    use crate::daemon_lifecycle as dl;
+    let Some(host_dir) = dl::bundle_sidecar_dir(exe) else {
+        return Vec::new();
+    };
+    let app = host_dir.join("k2");
+    let mut out = Vec::with_capacity(2);
+    if let Some(daemon) = dl::bundled_daemon_path(&app) {
+        out.push(app);
+        out.push(daemon);
+    }
+    out
 }
 
 /// 0.40.0 rebrand — proactively copy a pre-rename K2 Connect session

@@ -158,9 +158,10 @@ if [ ! -x "$DAEMON_SRC" ]; then
     exit 1
 fi
 assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
-cp "$DAEMON_SRC" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
-echo "  k2-daemon copied into K2.app/Contents/MacOS/"
+# shellcheck source=scripts/macos-daemon-helper-app.sh
+source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC"
+k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 
 echo ""
 echo "Step 2.6: Bundling k2-menubar helper..."
@@ -203,10 +204,8 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
-codesign --force --options runtime --timestamp \
-    --entitlements "$ENTITLEMENTS" \
-    --sign "$SIGNING_IDENTITY" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
+# Nested K2 Daemon.app (signs its k2-daemon with the same entitlements).
+k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "$ENTITLEMENTS"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
@@ -225,7 +224,9 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + daemon + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + frpc + bundle) with entitlements."
+k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
+k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 
 # ── Step 3.5: Launch smoke-test (AMFI exec check) ──
 echo ""

@@ -76,8 +76,10 @@ fn common_frpc_locations() -> Vec<PathBuf> {
     }
     // Bundled install: next to the running k2 / k2-daemon binary
     // (`%LOCALAPPDATA%\K2\frpc.exe` on Windows, Contents/MacOS/frpc on macOS).
+    // On macOS the daemon runs from `Contents/Helpers/K2 Daemon.app`, so
+    // resolve the HOST app's `Contents/MacOS`, not the helper's.
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+        if let Some(dir) = crate::daemon_lifecycle::bundle_sidecar_dir(&exe) {
             for name in frpc_basenames() {
                 v.push(dir.join(name));
             }

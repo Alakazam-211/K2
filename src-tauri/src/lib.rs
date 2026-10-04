@@ -495,6 +495,12 @@ mod daemon_stale_binary_tests {
 ///   - We only rewrite for transient/missing recorded paths, never just
 ///     because a different *stable + existing* path is recorded (the
 ///     dev-box `…/target/release/k2so-daemon` case).
+///   - 0.43.2 migration: a plist that still records this app's old
+///     `K2.app/Contents/MacOS/k2-daemon` is moved to the nested
+///     `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`
+///     and the agent is reloaded (bootout + bootstrap), which restarts the
+///     daemon from the helper app. Runs at every app start and before the
+///     version-mismatch kickstart.
 ///
 /// Best-effort: every failure is logged and swallowed so this never
 /// blocks startup or the kickstart that follows. Returns `true` when it
@@ -555,6 +561,18 @@ fn heal_daemon_plist_program() -> bool {
     if !dl::should_rewrite_plist(&recorded, &desired, recorded_exists, current_is_transient) {
         // Recorded path is fine (matches us, or is a different stable
         // existing dev path we must not churn).
+        return false;
+    }
+    // 0.43.2 legacy-layout migration only makes sense when the nested
+    // `K2 Daemon.app` is really in this bundle. Never swap a working
+    // recorded binary for one that is not on disk (e.g. a bare
+    // `tauri build` that skipped the helper-app step).
+    if recorded_exists && !desired.exists() {
+        log_debug!(
+            "[plist-heal] recorded {} works and desired {} is missing; leaving the plist alone",
+            recorded.display(),
+            desired.display()
+        );
         return false;
     }
 
@@ -1223,7 +1241,7 @@ pub fn run() {
                     || std::env::var("K2SO_INSTALL_DAEMON").is_ok();
                 if needs_run && opted_in {
                     // Locate k2so-daemon next to the current Tauri binary
-                    // (inside K2SO.app/Contents/MacOS/). Skip install if
+                    // (macOS: K2.app/Contents/Helpers/K2 Daemon.app/…). Skip install if
                     // it isn't bundled yet — earlier 0.33.x dev builds
                     // may ship without it.
                     let maybe_daemon = std::env::current_exe()

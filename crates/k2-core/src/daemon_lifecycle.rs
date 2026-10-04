@@ -34,19 +34,103 @@ use std::path::{Path, PathBuf};
 /// just for the string.
 pub const DAEMON_LAUNCH_AGENT_LABEL: &str = "dev.k2.daemon";
 
-/// Filename of the daemon binary as bundled inside `K2SO.app`.
+/// Filename of the daemon binary.
 ///
-/// Used by `bundled_daemon_path` to resolve `K2SO.app/Contents/MacOS/k2so-daemon`
-/// from the current Tauri binary path. Centralized so the build script,
-/// the Tauri "Install daemon" command, and K2 Connect's "where's the
-/// daemon binary?" probe all agree.
+/// On macOS it is the `CFBundleExecutable` of the nested helper app
+/// ([`DAEMON_HELPER_APP_NAME`]); on Windows/Linux it sits next to the
+/// thin client. Centralized so the build scripts, the Tauri "Install
+/// daemon" command, and K2 Connect's "where's the daemon binary?" probe
+/// all agree.
 pub const DAEMON_BINARY_NAME: &str = "k2-daemon";
 
-/// Pure-logic resolution: given the path of a Tauri executable
-/// (typically `K2SO.app/Contents/MacOS/k2so`), return the expected
-/// path of the bundled `k2so-daemon` binary alongside it. This does
-/// **not** touch the filesystem — callers (Tauri `daemon_install` or
-/// K2 Connect's headless bootstrap) check `.exists()` themselves.
+/// macOS: the background-only helper app that wraps the daemon so
+/// Activity Monitor shows the K2 icon and "K2 Daemon" instead of a blank
+/// executable. Lives at `K2.app/Contents/Helpers/K2 Daemon.app`.
+/// Assembled by `scripts/macos-daemon-helper-app.sh`.
+pub const DAEMON_HELPER_APP_NAME: &str = "K2 Daemon.app";
+
+/// `CFBundleIdentifier` of [`DAEMON_HELPER_APP_NAME`]. A child of the
+/// app's `dev.k2.app`; deliberately NOT the launchd label
+/// [`DAEMON_LAUNCH_AGENT_LABEL`] (`dev.k2.daemon`) or any keychain
+/// service name. Must match `scripts/macos-daemon-helper-app.sh`.
+pub const DAEMON_HELPER_BUNDLE_ID: &str = "dev.k2.app.daemon";
+
+/// `Contents/` of the `.app` whose main executable is `exe`, i.e. `exe`
+/// is `<X>.app/Contents/MacOS/<bin>`. `None` for a bare binary (dev
+/// `target/debug/k2`, Linux, Windows). Pure path check, no FS.
+pub fn app_contents_of_bundle_exe(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    if macos.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let app = contents.parent()?;
+    if app.extension()? != "app" {
+        return None;
+    }
+    Some(contents)
+}
+
+/// The daemon binary inside the nested helper app, given the HOST app's
+/// `Contents/` dir: `Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`.
+pub fn nested_daemon_path(host_contents: &Path) -> PathBuf {
+    host_contents
+        .join("Helpers")
+        .join(DAEMON_HELPER_APP_NAME)
+        .join("Contents")
+        .join("MacOS")
+        .join(DAEMON_BINARY_NAME)
+}
+
+/// Host app's `Contents/MacOS` when `exe` runs from a helper app nested in
+/// `<X>.app/Contents/Helpers/<Y>.app/Contents/MacOS/<bin>`. `None` when
+/// `exe` is not in a nested helper bundle.
+fn host_macos_dir_of_nested_exe(exe: &Path) -> Option<PathBuf> {
+    let helper_contents = app_contents_of_bundle_exe(exe)?;
+    let helper_app = helper_contents.parent()?;
+    let helpers = helper_app.parent()?;
+    if helpers.file_name()? != "Helpers" {
+        return None;
+    }
+    let host_contents = helpers.parent()?;
+    if host_contents.file_name()? != "Contents" {
+        return None;
+    }
+    if host_contents.parent()?.extension()? != "app" {
+        return None;
+    }
+    Some(host_contents.join("MacOS"))
+}
+
+/// Directory that holds the bundle's sidecars (`frpc`, `k2-power-helper`,
+/// `k2-menubar`, the `k2` app binary) for a process running at `exe`.
+///
+/// - Daemon in the nested helper app (macOS release):
+///   `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`
+///   → `K2.app/Contents/MacOS`.
+/// - Anything else (the `k2` app binary, dev `target/…`, Linux, Windows):
+///   `exe.parent()`, exactly as before.
+///
+/// Pure path logic — callers check `.exists()`.
+pub fn bundle_sidecar_dir(exe: &Path) -> Option<PathBuf> {
+    if let Some(host) = host_macos_dir_of_nested_exe(exe) {
+        return Some(host);
+    }
+    exe.parent().map(Path::to_path_buf)
+}
+
+/// Pure-logic resolution: given the path of a Tauri executable, return
+/// the expected path of the bundled `k2-daemon`. This does **not** touch
+/// the filesystem — callers (Tauri `daemon_install` or K2 Connect's
+/// headless bootstrap) check `.exists()` themselves.
+///
+/// - macOS `.app` (`K2.app/Contents/MacOS/k2`):
+///   `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`.
+/// - Everything else (dev `target/debug/k2`, Linux, Windows): the
+///   sibling `k2-daemon` / `k2-daemon.exe` next to the exe.
 ///
 /// Returns `None` when `tauri_exe` has no parent directory (only
 /// happens for pathological inputs like `/` or relative-empty paths).
@@ -58,6 +142,12 @@ pub const DAEMON_BINARY_NAME: &str = "k2-daemon";
 ///   pointing at this Tauri install, this is the binary path it would
 ///   reference" without actually performing the install.
 pub fn bundled_daemon_path(tauri_exe: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(contents) = app_contents_of_bundle_exe(tauri_exe) {
+            return Some(nested_daemon_path(contents));
+        }
+    }
     tauri_exe.parent().map(|d| {
         // Windows executables require the `.exe` suffix for exists()/spawn.
         #[cfg(windows)]
@@ -69,6 +159,16 @@ pub fn bundled_daemon_path(tauri_exe: &Path) -> Option<PathBuf> {
             d.join(DAEMON_BINARY_NAME)
         }
     })
+}
+
+/// Pre-0.43.2 macOS location of the daemon inside the SAME app as
+/// `desired`: `<X>.app/Contents/MacOS/k2-daemon`, when `desired` is the
+/// nested `<X>.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`.
+/// `None` when `desired` is not in the nested layout (dev, Linux,
+/// Windows). Used by [`should_rewrite_plist`] to migrate old plists.
+pub fn legacy_bundled_daemon_path(desired: &Path) -> Option<PathBuf> {
+    let host_macos = host_macos_dir_of_nested_exe(desired)?;
+    Some(host_macos.join(DAEMON_BINARY_NAME))
 }
 
 /// Build the `launchctl kickstart -k <target>` argument vector that
@@ -169,6 +269,9 @@ pub fn is_transient_exe_location(p: &Path) -> bool {
 /// - Otherwise rewrite only when the recorded path is itself transient,
 ///   or the recorded plist program is missing on disk. Those are the
 ///   genuinely-broken states.
+/// - Also rewrite when the recorded path is the pre-0.43.2 macOS layout
+///   of the same app (`<X>.app/Contents/MacOS/k2-daemon`) and `desired`
+///   is the nested helper (`<X>.app/Contents/Helpers/K2 Daemon.app/…`).
 /// - A recorded path that is a *different but stable and existing* path
 ///   (e.g. a dev box that legitimately points at `…/target/release/…`)
 ///   is left alone — we do NOT rewrite merely because `recorded !=
@@ -195,6 +298,14 @@ pub fn should_rewrite_plist(
     }
     // Recorded binary is gone from disk → broken, rewrite.
     if !recorded_exists {
+        return true;
+    }
+    // 0.43.2 migration: the plist still points at the old in-bundle
+    // `<X>.app/Contents/MacOS/k2-daemon` of the SAME app whose daemon now
+    // lives in `Contents/Helpers/K2 Daemon.app`. A `ditto` over an old
+    // install can leave that file behind, so "exists" is not enough —
+    // move the plist to the nested helper.
+    if legacy_bundled_daemon_path(desired).as_deref() == Some(recorded) {
         return true;
     }
     // Already pointing at us → nothing to do.
@@ -302,12 +413,14 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            let path = bundled_daemon_path(Path::new(
-                "/Applications/K2.app/Contents/MacOS/k2",
-            ));
+            let path = bundled_daemon_path(Path::new("/Users/x/dev/K2/target/debug/k2"));
+            assert_eq!(path, Some(PathBuf::from("/Users/x/dev/K2/target/debug/k2-daemon")));
+            #[cfg(target_os = "macos")]
             assert_eq!(
-                path,
-                Some(PathBuf::from("/Applications/K2.app/Contents/MacOS/k2-daemon")),
+                bundled_daemon_path(Path::new("/Applications/K2.app/Contents/MacOS/k2")),
+                Some(PathBuf::from(
+                    "/Applications/K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon"
+                )),
             );
         }
     }

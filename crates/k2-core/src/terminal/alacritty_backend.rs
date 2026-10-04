@@ -420,7 +420,12 @@ impl TerminalManager {
         //   1. Bundled resources: K2SO.app/Contents/Resources/_up_/cli/ (production)
         //   2. Repo root: ../../cli/ relative to binary (development)
         if let Ok(exe_path) = std::env::current_exe() {
-            let cli_dir = if let Some(macos_dir) = exe_path.parent() {
+            // The daemon runs from `K2.app/Contents/Helpers/K2 Daemon.app`
+            // on macOS; resolve the HOST app's `Contents/MacOS` first.
+            let cli_dir = if let Some(macos_dir) =
+                crate::daemon_lifecycle::bundle_sidecar_dir(&exe_path)
+            {
+                let macos_dir = macos_dir.as_path();
                 // Production: K2SO.app/Contents/MacOS/k2so → Contents/Resources/_up_/cli/
                 // Tauri puts "../cli/*" resources under Resources/_up_/cli/
                 let resources_cli = macos_dir.parent()

@@ -160,7 +160,9 @@ pub fn classify_install_kind(exe: Option<&std::path::Path>) -> &'static str {
         return "unknown";
     };
     // A macOS app bundle nests the executable at
-    // `…/K2SO.app/Contents/MacOS/<bin>`. Detect the `.app/Contents/`
+    // `…/K2.app/Contents/MacOS/<bin>` (or, for the daemon since 0.43.2,
+    // `…/K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`).
+    // Detect the `.app/Contents/`
     // segment anywhere in the path — robust to the bundle name and to a
     // sidecar daemon binary placed elsewhere under Contents/.
     let s = exe.to_string_lossy();
@@ -284,6 +286,14 @@ mod tests {
         assert_eq!(
             classify_install_kind(Some(Path::new(
                 "/Users/x/Build/K2 by Alakazam Labs.app/Contents/Resources/k2so-daemon"
+            ))),
+            "bundled-app"
+        );
+        // 0.43.2: the daemon runs from the nested helper app. Still
+        // bundled-app, so updates stay on the app updater (Shape A).
+        assert_eq!(
+            classify_install_kind(Some(Path::new(
+                "/Applications/K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon"
             ))),
             "bundled-app"
         );

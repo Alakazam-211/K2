@@ -177,8 +177,9 @@ impl PowerOs for MacPowerOs {
     /// Gives up after 2 minutes (nobody at the screen).
     fn install_wake_helper(&self) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-        let src = exe
-            .parent()
+        // The daemon runs from `K2.app/Contents/Helpers/K2 Daemon.app`;
+        // the helper stays in the host app's `Contents/MacOS`.
+        let src = k2_core::daemon_lifecycle::bundle_sidecar_dir(&exe)
             .ok_or_else(|| "daemon has no parent dir".to_string())?
             .join(helper::BUNDLED_HELPER_NAME);
         if !src.exists() {

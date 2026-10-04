@@ -401,10 +401,11 @@ echo "  Build complete."
 #
 # k2-daemon is a peer binary to the main Tauri app that owns the
 # persistent-agent runtime (launched by launchd, outlives the Tauri
-# process). It needs to sit next to `k2` inside `Contents/MacOS/`
-# so `std::env::current_exe()?.parent()?.join("k2-daemon")` — used
-# by the `install_daemon_plist_v1` code migration — can find it on
-# first launch of a release build.
+# process). Since 0.43.2 it ships in a nested background-only helper
+# app, `Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`, so
+# Activity Monitor shows the K2 icon + "K2 Daemon". The app finds it
+# via `k2_core::daemon_lifecycle::bundled_daemon_path` (plist install
+# + heal); sidecars stay in `Contents/MacOS/`.
 #
 # We build it explicitly in release mode (cargo workspace builds it
 # alongside the Tauri crate, but `tauri build` copies only its own
@@ -424,9 +425,10 @@ if [ ! -x "$DAEMON_SRC" ]; then
     exit 1
 fi
 assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
-cp "$DAEMON_SRC" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
-echo "  k2-daemon copied into K2.app/Contents/MacOS/"
+# shellcheck source=scripts/macos-daemon-helper-app.sh
+source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC"
+k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 # Heartbeat S2 (D11): the macOS wake helper, built by the same cargo
 # build. The daemon copies it to /Library/PrivilegedHelperTools only
 # after the user approves the one admin dialog.
@@ -472,10 +474,8 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
-codesign --force --options runtime --timestamp \
-    --entitlements "$ENTITLEMENTS" \
-    --sign "$SIGNING_IDENTITY" \
-    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
+# Nested K2 Daemon.app (signs its k2-daemon with the same entitlements).
+k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "$ENTITLEMENTS"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
@@ -500,7 +500,9 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + daemon + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + frpc + bundle) with entitlements."
+k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
+k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 
 # ── Step 3.5: Launch smoke-test — catch AMFI exec rejections (0.40.6 regression) ──
 # A signed Developer-ID app carrying a RESTRICTED entitlement (e.g.

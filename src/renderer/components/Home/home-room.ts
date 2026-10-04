@@ -136,7 +136,7 @@ function useRoomRowActivity(room: Pick<Room, 'activityView'> | null): RoomRowAct
   return useSyncExternalStore(subscribe, read, read)
 }
 
-type RowStatusInputs = {
+export type RowStatusInputs = {
   activeHost: ReturnType<typeof useConnectHostStore.getState>['activeHost']
   hosts: ReturnType<typeof useConnectHostStore.getState>['hosts']
   connectionStatus: ReturnType<typeof useConnectHostStore.getState>['connectionStatus']
@@ -149,7 +149,7 @@ type RowStatusInputs = {
 
 /** The status a row paints, from plain store values (shared by the row's
  *  hook and the Cmd+1–9 shortcut). */
-function computeRowStatus(
+export function computeRowStatus(
   row: HomeRow,
   { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity }: RowStatusInputs,
 ): { status: RowStatus; place: string | null; onConnected: boolean } {

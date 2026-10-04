@@ -25,6 +25,10 @@ export const REPORTED_FEATURES = {
    *  list in one GET (with an Unlinked workspace group); a server without
    *  the key shows the badge as a dimmed `?` (prd-tickets-badge-orphans). */
   'tickets-list-all': 'tickets-list-all',
+  /** `GET /cli/thread/latest?addrs=` (prd-zen-mode-v1 Z41): the newest
+   *  Thread item per addr in one request, for Zen's list previews. A server
+   *  without the key gets one `GET /cli/thread?addr=&limit=1` per row. */
+  'thread-latest': 'thread-latest',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

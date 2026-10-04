@@ -25,6 +25,7 @@ import { currentDesktopOs, zenAvailable } from '@/lib/zen/zen-platform'
 import { installZenChordListener, ZEN_MENU_EVENT } from '@/lib/zen/zen-shortcut'
 import { toggleZenFromEscape, useZenShown, useZenViewStore } from '@/lib/zen/zen-view'
 import { ZenRoot } from './ZenRoot'
+import { ZenDataHost } from './ZenDataHost'
 
 /** The escape hatch's listeners (Z30). Never inside the Zen root, so no
  *  widget can swallow them. */
@@ -103,7 +104,13 @@ function ZenHostInner(): React.JSX.Element | null {
   useEffect(() => {
     if (!shown && useZenViewStore.getState().safe) useZenViewStore.setState({ safe: null })
   }, [shown])
-  return shown ? <ZenRoot /> : null
+  // S6: the bridge's Thread feeds live beside the root, never inside a widget.
+  return shown ? (
+    <>
+      <ZenRoot />
+      <ZenDataHost />
+    </>
+  ) : null
 }
 
 export function ZenHost(): React.JSX.Element | null {

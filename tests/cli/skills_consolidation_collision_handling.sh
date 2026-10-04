@@ -51,34 +51,34 @@ for i in $(seq 1 50); do
     sleep 0.2
 done
 
-if [ ! -f "$WS/.k2so/.skills-consolidation-v1-done" ]; then
+if [ ! -f "$WS/.k2/.skills-consolidation-v1-done" ]; then
     echo "FAIL: marker missing after sweep" >&2
     tail -60 "$SANDBOX_HOME/daemon-2.log" >&2 || true
     exit 1
 fi
 
-# Instance lands at `.k2so/skills/frontend-eng/` and its content wins.
-if [ ! -f "$WS/.k2so/skills/frontend-eng/SKILL.md" ]; then
-    echo "FAIL: instance did not land at .k2so/skills/frontend-eng/SKILL.md" >&2
-    ls -la "$WS/.k2so/skills/" >&2 || true
+# Instance lands at `.k2/skills/frontend-eng/` and its content wins.
+if [ ! -f "$WS/.k2/skills/frontend-eng/SKILL.md" ]; then
+    echo "FAIL: instance did not land at .k2/skills/frontend-eng/SKILL.md" >&2
+    ls -la "$WS/.k2/skills/" >&2 || true
     exit 1
 fi
-if ! grep -q "INSTANCE-WINS" "$WS/.k2so/skills/frontend-eng/SKILL.md"; then
+if ! grep -q "INSTANCE-WINS" "$WS/.k2/skills/frontend-eng/SKILL.md"; then
     echo "FAIL: instance content did not win — body is:" >&2
-    cat "$WS/.k2so/skills/frontend-eng/SKILL.md" >&2 || true
+    cat "$WS/.k2/skills/frontend-eng/SKILL.md" >&2 || true
     exit 1
 fi
 
 # Template gets `-template01` suffix and its AGENT.md is renamed to
 # SKILL.md.
-if [ ! -f "$WS/.k2so/skills/frontend-eng-template01/SKILL.md" ]; then
-    echo "FAIL: template did not land at .k2so/skills/frontend-eng-template01/SKILL.md" >&2
-    ls -la "$WS/.k2so/skills/" >&2 || true
+if [ ! -f "$WS/.k2/skills/frontend-eng-template01/SKILL.md" ]; then
+    echo "FAIL: template did not land at .k2/skills/frontend-eng-template01/SKILL.md" >&2
+    ls -la "$WS/.k2/skills/" >&2 || true
     exit 1
 fi
-if ! grep -q "TEMPLATE-GETS-SUFFIX" "$WS/.k2so/skills/frontend-eng-template01/SKILL.md"; then
+if ! grep -q "TEMPLATE-GETS-SUFFIX" "$WS/.k2/skills/frontend-eng-template01/SKILL.md"; then
     echo "FAIL: template content not preserved at suffixed path" >&2
-    cat "$WS/.k2so/skills/frontend-eng-template01/SKILL.md" >&2 || true
+    cat "$WS/.k2/skills/frontend-eng-template01/SKILL.md" >&2 || true
     exit 1
 fi
 

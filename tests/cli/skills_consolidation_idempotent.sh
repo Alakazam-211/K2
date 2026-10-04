@@ -49,13 +49,13 @@ for i in $(seq 1 50); do
     sleep 0.2
 done
 
-MARKER="$WS/.k2so/.skills-consolidation-v1-done"
+MARKER="$WS/.k2/.skills-consolidation-v1-done"
 if [ ! -f "$MARKER" ]; then
     echo "FAIL: marker missing after first migration boot" >&2
     tail -60 "$SANDBOX_HOME/daemon-2.log" >&2 || true
     exit 1
 fi
-if [ ! -f "$WS/.k2so/skills/foo/SKILL.md" ]; then
+if [ ! -f "$WS/.k2/skills/foo/SKILL.md" ]; then
     echo "FAIL: foo not consolidated on first migration boot" >&2
     exit 1
 fi

@@ -69,9 +69,9 @@ echo "  registered workspace OK"
 
 # ── Seed inbox items ─────────────────────────────────────────────────
 
-mkdir -p "$WS/.k2so/inbox"
+mkdir -p "$WS/.k2/inbox"
 for i in 1 2 3; do
-    cat >"$WS/.k2so/inbox/item-${i}.md" <<EOF
+    cat >"$WS/.k2/inbox/item-${i}.md" <<EOF
 ---
 title: Inbox Item ${i}
 priority: normal
@@ -96,13 +96,14 @@ echo "  pre-heartbeat inbox count: 3 ✓"
 
 # ── Add a heartbeat to the SAME workspace ────────────────────────────
 
-# /cli/heartbeat/add params: name + frequency + spec. We use
-# `frequency=heartbeat` (the legacy adaptive-backoff mode that doesn't
-# require a cron spec).
+# /cli/heartbeat/add params: name + frequency + spec. We use an hourly
+# heartbeat. (The legacy `frequency=heartbeat` mode is refused with a 400
+# since heartbeat S5 HB34, eca33082: frequency must be one of
+# hourly|daily|weekly|monthly|yearly|scheduled.)
 HB_NAME="test-coexistence-hb"
-HB_SPEC='{"interval_seconds":3600}'
+HB_SPEC='{"every_seconds":3600}'
 HB_SPEC_ENC="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$HB_SPEC")"
-ADD_URL="http://127.0.0.1:${K2SO_PORT}/cli/heartbeat/add?project=${WS_ENC}&name=${HB_NAME}&frequency=heartbeat&spec=${HB_SPEC_ENC}&token=${K2SO_TOKEN}"
+ADD_URL="http://127.0.0.1:${K2SO_PORT}/cli/heartbeat/add?project=${WS_ENC}&name=${HB_NAME}&frequency=hourly&spec=${HB_SPEC_ENC}&token=${K2SO_TOKEN}"
 # Heartbeat/add is GET-only (not POST-allowlisted). The mutation is
 # behind query params.
 ADD_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$ADD_URL" 2>&1)"

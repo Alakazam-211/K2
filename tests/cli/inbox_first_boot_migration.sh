@@ -4,6 +4,8 @@
 # items relocated to `.k2so/inbox/...` automatically the first time
 # the daemon boots after the 2.1b upgrade. The work root goes to the
 # Trash and a marker file is left so the next boot is a no-op.
+# Since the 0.40.4 dot-dir cutover the folder is renamed `.k2so/` →
+# `.k2/` first, so the items land in `.k2/inbox/...`.
 #
 # We seed the sandbox HOME with:
 #   - A fake workspace at $SANDBOX_HOME/test-workspace/
@@ -69,9 +71,25 @@ if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
     exit 1
 fi
 
+# Registration gives a legacy folder the 0.40.4 `.k2so/` → `.k2/` cutover
+# before it seeds anything, so the legacy work tree now sits under `.k2/`
+# and no `.k2so/` is left beside it. (Before, the add seeds created a
+# fresh `.k2/` next to `.k2so/`, boot refused the pair, and these items
+# were stranded.) Everything below checks `.k2/`.
+if [ -e "$WS/.k2so" ]; then
+    echo "FAIL: add-from-path left a legacy .k2so/ beside .k2/" >&2
+    ls -la "$WS" >&2 || true
+    exit 1
+fi
+if [ ! -f "$WS/.k2/work/inbox/test-inbox.md" ]; then
+    echo "FAIL: add-from-path did not carry .k2so/work/ over to .k2/work/" >&2
+    ls -laR "$WS/.k2" >&2 || true
+    exit 1
+fi
+
 # Sanity: marker shouldn't exist yet (we haven't booted with
 # migration logic against this populated DB).
-MARKER="$WS/.k2so/.work-to-inbox-migration-v1-done"
+MARKER="$WS/.k2/.work-to-inbox-migration-v1-done"
 if [ -f "$MARKER" ]; then
     echo "FAIL: migration marker exists before second boot (the first boot ran the sweep too?)" >&2
     echo "  marker: $MARKER" >&2
@@ -113,26 +131,26 @@ if [ ! -f "$MARKER" ]; then
 fi
 
 # Verify the inbox now contains the migrated items.
-if [ ! -f "$WS/.k2so/inbox/test-inbox.md" ]; then
-    echo "FAIL: top-level inbox item not migrated to .k2so/inbox/" >&2
-    ls -la "$WS/.k2so/" >&2 || true
+if [ ! -f "$WS/.k2/inbox/test-inbox.md" ]; then
+    echo "FAIL: top-level inbox item not migrated to .k2/inbox/" >&2
+    ls -la "$WS/.k2/" >&2 || true
     exit 1
 fi
-if [ ! -f "$WS/.k2so/inbox/active/test-active.md" ]; then
+if [ ! -f "$WS/.k2/inbox/active/test-active.md" ]; then
     echo "FAIL: active item not migrated" >&2
-    ls -la "$WS/.k2so/inbox/" >&2 || true
+    ls -la "$WS/.k2/inbox/" >&2 || true
     exit 1
 fi
-if [ ! -f "$WS/.k2so/inbox/done/test-done.md" ]; then
+if [ ! -f "$WS/.k2/inbox/done/test-done.md" ]; then
     echo "FAIL: done item not migrated" >&2
-    ls -la "$WS/.k2so/inbox/" >&2 || true
+    ls -la "$WS/.k2/inbox/" >&2 || true
     exit 1
 fi
 
-# Verify .k2so/work/ is gone (sent to Trash by safe_delete).
-if [ -d "$WS/.k2so/work" ]; then
-    echo "FAIL: .k2so/work/ still exists; should have been trashed" >&2
-    ls -la "$WS/.k2so/" >&2 || true
+# Verify .k2/work/ is gone (sent to Trash by safe_delete).
+if [ -d "$WS/.k2/work" ]; then
+    echo "FAIL: .k2/work/ still exists; should have been trashed" >&2
+    ls -la "$WS/.k2/" >&2 || true
     exit 1
 fi
 

@@ -56,20 +56,20 @@ for i in $(seq 1 50); do
     sleep 0.2
 done
 
-if [ ! -f "$WS/.k2so/.skills-consolidation-v1-done" ]; then
+if [ ! -f "$WS/.k2/.skills-consolidation-v1-done" ]; then
     echo "FAIL: marker missing after sweep" >&2
     tail -60 "$SANDBOX_HOME/daemon-2.log" >&2 || true
     exit 1
 fi
 
-if [ ! -f "$WS/.k2so/heartbeats/scout-daily/WAKEUP.md" ]; then
-    echo "FAIL: per-skill heartbeat not migrated to .k2so/heartbeats/scout-daily/WAKEUP.md" >&2
-    ls -la "$WS/.k2so/heartbeats/" >&2 || true
+if [ ! -f "$WS/.k2/heartbeats/scout-daily/WAKEUP.md" ]; then
+    echo "FAIL: per-skill heartbeat not migrated to .k2/heartbeats/scout-daily/WAKEUP.md" >&2
+    ls -la "$WS/.k2/heartbeats/" >&2 || true
     exit 1
 fi
 
-# Skill itself should land in `.k2so/skills/scout/SKILL.md`.
-if [ ! -f "$WS/.k2so/skills/scout/SKILL.md" ]; then
+# Skill itself should land in `.k2/skills/scout/SKILL.md`.
+if [ ! -f "$WS/.k2/skills/scout/SKILL.md" ]; then
     echo "FAIL: scout skill not consolidated" >&2
     exit 1
 fi

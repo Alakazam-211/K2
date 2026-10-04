@@ -64,7 +64,7 @@ if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
 fi
 
 # Sanity: marker must NOT exist yet.
-MARKER="$WS/.k2so/.skills-consolidation-v1-done"
+MARKER="$WS/.k2/.skills-consolidation-v1-done"
 if [ -f "$MARKER" ]; then
     echo "FAIL: consolidation marker exists before second boot" >&2
     exit 1
@@ -97,30 +97,30 @@ if [ ! -f "$MARKER" ]; then
     exit 1
 fi
 
-# Verify the three sources landed in `.k2so/skills/<name>/SKILL.md`.
+# Verify the three sources landed in `.k2/skills/<name>/SKILL.md`.
 for name in foo bar baz; do
-    if [ ! -f "$WS/.k2so/skills/$name/SKILL.md" ]; then
-        echo "FAIL: $name not consolidated into .k2so/skills/$name/SKILL.md" >&2
-        ls -la "$WS/.k2so/skills/" >&2 || true
+    if [ ! -f "$WS/.k2/skills/$name/SKILL.md" ]; then
+        echo "FAIL: $name not consolidated into .k2/skills/$name/SKILL.md" >&2
+        ls -la "$WS/.k2/skills/" >&2 || true
         exit 1
     fi
 done
 
 # Verify the template's AGENT.md was renamed to SKILL.md.
-if [ -f "$WS/.k2so/skills/bar/AGENT.md" ]; then
+if [ -f "$WS/.k2/skills/bar/AGENT.md" ]; then
     echo "FAIL: bar's AGENT.md was not renamed to SKILL.md" >&2
-    ls -la "$WS/.k2so/skills/bar/" >&2 || true
+    ls -la "$WS/.k2/skills/bar/" >&2 || true
     exit 1
 fi
 
 # Verify the source roots are gone (trash).
-if [ -d "$WS/.k2so/agents" ]; then
-    echo "FAIL: .k2so/agents/ still exists; should have been trashed" >&2
+if [ -d "$WS/.k2/agents" ]; then
+    echo "FAIL: .k2/agents/ still exists; should have been trashed" >&2
     exit 1
 fi
-if [ -d "$WS/.k2so/agent-templates" ]; then
-    echo "FAIL: .k2so/agent-templates/ still exists; should have been trashed" >&2
+if [ -d "$WS/.k2/agent-templates" ]; then
+    echo "FAIL: .k2/agent-templates/ still exists; should have been trashed" >&2
     exit 1
 fi
 
-echo "OK: first-boot consolidation moved 3 sources → .k2so/skills/ and trashed source roots"
+echo "OK: first-boot consolidation moved 3 sources → .k2/skills/ and trashed source roots"

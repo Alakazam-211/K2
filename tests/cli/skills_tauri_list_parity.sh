@@ -99,10 +99,10 @@ AGENTS_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$AGENTS_URL")"
 echo "  /cli/agents/list response: $AGENTS_RESP"
 
 # Filesystem-side view: what the Tauri `k2so_skills_list` will see
-# (it reads `.k2so/skills/<name>/` directly via
+# (it reads `.k2/skills/<name>/` directly via
 # `k2so_core::skills::crud::list`, skipping dotfile dirs).
-FS_NAMES="$(ls -1 "$WS/.k2so/skills" | grep -v '^\.' | sort | tr '\n' ',' | sed 's/,$//')"
-echo "  filesystem .k2so/skills/ basenames: $FS_NAMES"
+FS_NAMES="$(ls -1 "$WS/.k2/skills" | grep -v '^\.' | sort | tr '\n' ',' | sed 's/,$//')"
+echo "  filesystem .k2/skills/ basenames: $FS_NAMES"
 
 # Extract daemon names, sort, normalize.
 DAEMON_NAMES="$(echo "$AGENTS_RESP" | python3 -c "
@@ -120,8 +120,10 @@ if [ "$FS_NAMES" != "$DAEMON_NAMES" ]; then
     exit 1
 fi
 
-# Expected three skills, all present.
-EXPECTED="alpha,beta,gamma"
+# Expected: our three seeded skills plus the two built-ins every workspace
+# gets on add (`ensure_compose_sidecar_skills` in skill_regen.rs plants
+# k2-cli + k2-canonical-agents into `.k2/skills/`; c2252545).
+EXPECTED="alpha,beta,gamma,k2-canonical-agents,k2-cli"
 if [ "$FS_NAMES" != "$EXPECTED" ]; then
     echo "FAIL: expected '$EXPECTED', got '$FS_NAMES'" >&2
     exit 1
@@ -144,4 +146,4 @@ if [ "$ROLE_CHECK" != "ok" ]; then
     exit 1
 fi
 
-echo "OK: Tauri (filesystem) and daemon (/cli/agents/list) agree on 3 skills (alpha, beta, gamma)"
+echo "OK: Tauri (filesystem) and daemon (/cli/agents/list) agree on 3 seeded skills (alpha, beta, gamma) + 2 built-ins"

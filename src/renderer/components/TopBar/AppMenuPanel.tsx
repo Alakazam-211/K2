@@ -48,6 +48,8 @@ const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
       { kind: 'item', id: 'focus-window', label: 'Open in Focus Window' },
       // prd-zen-mode-v1 Z25/Z63: label follows this window's Zen state.
       { kind: 'item', id: 'zen-toggle', label: 'Enter Zen Mode' },
+      // Omarchy addition 4: shown only while this window shows Zen.
+      { kind: 'item', id: 'zen-shortcuts', label: 'Zen Shortcuts' },
     ],
   },
   {
@@ -89,7 +91,8 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
             {section.title}
           </div>
           {section.items.map((item, ii) =>
-            item.kind === 'item' && item.id === 'zen-toggle' && !showZen ? null : item.kind === 'sep' ? (
+            (item.kind === 'item' && item.id === 'zen-toggle' && !showZen) ||
+            (item.kind === 'item' && item.id === 'zen-shortcuts' && !zenShown) ? null : item.kind === 'sep' ? (
               <div key={`${section.title}-sep-${ii}`} className="my-1 border-t border-[var(--color-border)]" />
             ) : (
               <button

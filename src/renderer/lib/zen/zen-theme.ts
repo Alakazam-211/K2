@@ -1,85 +1,55 @@
-// prd-zen-mode-v1 Z20, Z21, Z26, Z44 — the Zen theme layer's seam.
+// prd-zen-mode-v1 Z20, Z21, Z22, Z26, Z44 — the Zen theme layer's seam.
 //
 // Zen is fully separate from Styles: its tokens are `--zen-*` custom
 // properties set on the Zen root only (never `<html>`), with
 // `data-zen-scheme` on that root. Zen never reads `--color-*`, `--radius-*`,
 // `--material-*`, `--motion-*` or `--inset-window`.
 //
-// S4 ships K2's default Zen theme (warm light, soft dark) and the seam. The
-// S5 theme engine (tokens from `zen.toml`, scheme, type, shape, bezier and
-// animation with reduced motion) plugs in with `registerZenThemeEngine`; the
-// root calls `zenThemeFor(...)` and applies whatever comes back. Safe mode
-// always uses the default (it never reads the user's files).
+// The default engine draws K2's default Zen template theme (`zen-tokens.ts`,
+// `zen-motion.ts`): it is what safe mode always uses (safe mode never reads
+// the user's files). The S5 engine (`zen-theme-engine.ts`: tokens from
+// `zen.toml`, scheme, type, shape, bezier and animation) plugs in with
+// `registerZenThemeEngine`; the root calls `zenThemeFor(...)` and applies
+// whatever comes back. Reduced motion and reduced transparency are inputs,
+// and both win over the theme.
 
+import { create } from 'zustand'
 import type { ZenResolvedPage } from './zen-page'
+import { buildZenTheme } from './zen-theme-engine'
+import type { ZenFont, ZenTerminalPalette } from './zen-tokens'
 
 export type ZenScheme = 'light' | 'dark'
 
 export interface ZenThemeResult {
   scheme: ZenScheme
   vars: Record<string, string>
+  /** Keys the engine refused (unknown token names), for the console and tests. */
+  rejected?: string[]
+  /** The active theme bundle's name, when the daemon names one. */
+  name?: string | null
+  /** The one font token (UI and terminals). */
+  font?: ZenFont
+  /** The terminal palette for terminals shown in Zen (CSS colours). */
+  terminal?: ZenTerminalPalette
+  /** The page background image under a canvas scrim (`dim` 0.5–0.95), or
+   *  null (none, or reduced transparency). Only `data:image` URLs. */
+  background?: { src: string; dim: number } | null
 }
 
-const SHARED: Record<string, string> = {
-  '--zen-font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-  '--zen-font-size': '14px',
-  '--zen-line-height': '1.45',
-  '--zen-radius': '14px',
-  '--zen-bubble-radius': '18px',
-  '--zen-gap': '12px',
-  '--zen-list-width': '320px',
+/** What a theme engine gets: the resolved page (null in safe mode), this
+ *  computer's `prefers-color-scheme` (Z26: independent of the Style), and
+ *  its reduced-motion / reduced-transparency preferences. */
+export interface ZenThemeInput {
+  page: ZenResolvedPage | null
+  systemScheme: ZenScheme
+  reducedMotion?: boolean
+  reducedTransparency?: boolean
 }
 
-/** K2's default Zen theme (Z44): solid surfaces, one accent, no glass. */
-export const ZEN_DEFAULT_THEME: Record<ZenScheme, Record<string, string>> = {
-  light: {
-    ...SHARED,
-    '--zen-canvas': '#f6f1ea',
-    '--zen-surface': '#fffaf4',
-    '--zen-surface-raised': '#ffffff',
-    '--zen-border': '#e6ddd1',
-    '--zen-text': '#2b2620',
-    '--zen-text-muted': '#7a6f62',
-    '--zen-accent': '#c2662d',
-    '--zen-accent-text': '#ffffff',
-    '--zen-bubble-me': '#c2662d',
-    '--zen-bubble-me-text': '#ffffff',
-    '--zen-bubble-agent': '#efe7dc',
-    '--zen-bubble-agent-text': '#2b2620',
-    '--zen-working': '#3f8f6b',
-    '--zen-unread': '#c2662d',
-    '--zen-needs-you': '#b8862b',
-    '--zen-danger': '#b3412f',
-  },
-  dark: {
-    ...SHARED,
-    '--zen-canvas': '#1c1a18',
-    '--zen-surface': '#242120',
-    '--zen-surface-raised': '#2d2a27',
-    '--zen-border': '#3a3632',
-    '--zen-text': '#eee7de',
-    '--zen-text-muted': '#a59a8d',
-    '--zen-accent': '#e08a52',
-    '--zen-accent-text': '#1c1a18',
-    '--zen-bubble-me': '#e08a52',
-    '--zen-bubble-me-text': '#1c1a18',
-    '--zen-bubble-agent': '#2f2b28',
-    '--zen-bubble-agent-text': '#eee7de',
-    '--zen-working': '#6cc49b',
-    '--zen-unread': '#e08a52',
-    '--zen-needs-you': '#e0b25a',
-    '--zen-danger': '#e0705c',
-  },
-}
+export type ZenThemeEngine = (input: ZenThemeInput) => ZenThemeResult
 
-/** What a theme engine gets: the resolved page (null in safe mode) and this
- *  computer's `prefers-color-scheme` (Z26: independent of the Style). */
-export type ZenThemeEngine = (input: { page: ZenResolvedPage | null; systemScheme: ZenScheme }) => ZenThemeResult
-
-export const defaultZenThemeEngine: ZenThemeEngine = ({ systemScheme }) => ({
-  scheme: systemScheme,
-  vars: { ...ZEN_DEFAULT_THEME[systemScheme] },
-})
+/** K2's default Zen theme, ignoring the page. Stateless. */
+export const defaultZenThemeEngine: ZenThemeEngine = (input) => buildZenTheme({ ...input, page: null })
 
 let engine: ZenThemeEngine = defaultZenThemeEngine
 
@@ -92,12 +62,42 @@ export function registerZenThemeEngine(next: ZenThemeEngine): () => void {
 }
 
 /** The theme for the Zen root. `safe` always gets K2's default. */
-export function zenThemeFor(page: ZenResolvedPage | null, systemScheme: ZenScheme, safe: boolean): ZenThemeResult {
-  if (safe) return defaultZenThemeEngine({ page: null, systemScheme })
-  return engine({ page, systemScheme })
+export function zenThemeFor(
+  page: ZenResolvedPage | null,
+  systemScheme: ZenScheme,
+  safe: boolean,
+  prefs: { reducedMotion?: boolean; reducedTransparency?: boolean } = {},
+): ZenThemeResult {
+  if (safe) return defaultZenThemeEngine({ page: null, systemScheme, ...prefs })
+  return engine({ page, systemScheme, ...prefs })
 }
 
 export function systemZenScheme(): ZenScheme {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light'
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
+
+/** `matchMedia(query).matches`, false where there is no matchMedia. */
+export function zenMediaMatches(query: string): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia(query).matches
+}
+
+export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
+export const REDUCED_TRANSPARENCY_QUERY = '(prefers-reduced-transparency: reduce)'
+
+/**
+ * The theme bundle this window's Zen root applied last (Omarchy 1 and 5),
+ * for anything in Zen that can't read CSS variables: a terminal shown in Zen
+ * takes `terminal` as its palette and `terminalFont` as its face. Null when
+ * Zen isn't shown. Set by the Zen root only.
+ */
+export interface ZenAppliedTheme {
+  name: string | null
+  scheme: ZenScheme
+  terminal: ZenTerminalPalette
+  /** CSS font stack for terminals (the one `font` token, kept fixed-width). */
+  terminalFont: string
+}
+
+export const useZenAppliedThemeStore = create<{ applied: ZenAppliedTheme | null }>(() => ({ applied: null }))

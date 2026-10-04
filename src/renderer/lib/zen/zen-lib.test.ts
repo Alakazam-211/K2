@@ -246,15 +246,20 @@ describe('the resolved page (Z10, Z13)', () => {
 })
 
 describe('the stoplight safe area (Z23)', () => {
-  it('rides the zoom-aware --k2-stoplight-spacer and matches its numbers at 100%', () => {
-    const a = macStoplightArea(0, 1)
-    expect(a.vars['--zen-stoplight-safe-left']).toBe('calc(26px + var(--k2-stoplight-spacer))')
+  it('matches the Styles spacer numbers at 100% and follows the zoom and Zen offset', () => {
+    const a = macStoplightArea([0, 0], 1)
     // 12 (bar pad) + spacer (57 at 100%) + 14 (gap): the same left edge the
     // top bar's first control has.
     expect(12 + TRAFFIC_LIGHT_SPACER_BASE_PX + 14).toBe(83)
-    expect(a.rect.width).toBeGreaterThanOrEqual(69)
+    expect(a.vars['--zen-stoplight-safe-left']).toBe('83px')
+    expect(a.rect.width).toBe(69)
     expect(a.vars['--zen-stoplight-safe-top']).toBe('31px')
     // Zoomed in, the native lights take fewer CSS px.
-    expect(macStoplightArea(0, 2).rect.width).toBeLessThan(a.rect.width)
+    expect(macStoplightArea([0, 0], 2).rect.width).toBeLessThan(a.rect.width)
+    // Zen's stoplight-offset moves the area right and down.
+    const moved = macStoplightArea([10, 6], 1)
+    expect(moved.rect.width).toBe(79)
+    expect(moved.vars['--zen-stoplight-safe-left']).toBe('93px')
+    expect(moved.vars['--zen-stoplight-safe-top']).toBe('37px')
   })
 })

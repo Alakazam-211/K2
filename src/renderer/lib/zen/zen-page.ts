@@ -46,6 +46,13 @@ export interface ZenWidgetDecl {
   source: string
 }
 
+/** One theme the daemon offers (Omarchy additions 1–3): K2's built-in
+ *  read-only themes and the user's own under `~/.k2/zen/themes/`. */
+export interface ZenThemeEntry {
+  name: string
+  builtin: boolean
+}
+
 export interface ZenResolvedPage {
   schema: 1
   /** Changes whenever the resolved result changes. */
@@ -57,6 +64,10 @@ export interface ZenResolvedPage {
   controls: string[]
   /** Raw theme tables; the S5 theme engine reads them. */
   theme: unknown
+  /** The active theme's name (`theme.name`), null when the daemon sends none. */
+  activeTheme: string | null
+  /** Themes to pick from, in the daemon's order (empty when it sends none). */
+  themes: ZenThemeEntry[]
   chrome: unknown
   motion: unknown
   errors: ZenIssue[]
@@ -93,6 +104,8 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
   ],
   controls: [...ZEN_REQUIRED_CONTROLS],
   theme: null,
+  activeTheme: null,
+  themes: [],
   chrome: null,
   motion: null,
   errors: [],
@@ -177,6 +190,19 @@ function parseControls(raw: unknown): string[] {
   return out
 }
 
+function parseThemes(raw: unknown): ZenThemeEntry[] {
+  if (!Array.isArray(raw)) return []
+  const out: ZenThemeEntry[] = []
+  const seen = new Set<string>()
+  for (const t of raw) {
+    const name = typeof t === 'string' ? t : isObj(t) && typeof t.name === 'string' ? t.name : null
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    out.push({ name, builtin: isObj(t) && t.builtin === true })
+  }
+  return out
+}
+
 /**
  * Parse a `GET /cli/zen/get` body. Throws `ZenPageParseError` when there is
  * no page to draw (not an object, `ok: false` without a page, no `page`).
@@ -202,6 +228,8 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
     widgets: parseWidgets(page.widgets, layout.split.length),
     controls: parseControls(page.controls),
     theme: raw.theme ?? null,
+    activeTheme: isObj(raw.theme) && typeof raw.theme.name === 'string' && raw.theme.name ? raw.theme.name : null,
+    themes: parseThemes(raw.themes),
     chrome: raw.chrome ?? null,
     motion: raw.motion ?? null,
     errors: parseIssues(raw.errors),

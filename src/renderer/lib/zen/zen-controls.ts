@@ -215,7 +215,24 @@ export function zenControlVisible(
   if (r.left < 0 || r.top < 0 || r.left + r.width > vp.width + 0.5 || r.top + r.height > vp.height + 0.5) return false
   if (reserved.some((z) => z.width > 0 && z.height > 0 && intersects(r, z))) return false
   const hit = geo.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-  return hit !== null && (hit === el || el.contains(hit))
+  return hit !== null && (hit === el || el.contains(hit) || isZenK2Overlay(hit))
+}
+
+// K2's own transient Zen overlays (the shortcut cheat sheet, the theme
+// picker) sit above the page while open. They are K2's, closed with Esc, and
+// never a page hiding its controls, so a control under one still counts as
+// visible. Only elements K2 registered count (a page can't claim it).
+const k2Overlays = new Set<Element>()
+
+/** Register a K2-drawn Zen overlay element. Returns the unregister. */
+export function registerZenK2Overlay(el: Element): () => void {
+  k2Overlays.add(el)
+  return () => void k2Overlays.delete(el)
+}
+
+function isZenK2Overlay(hit: Element): boolean {
+  for (const o of k2Overlays) if (o === hit || o.contains(hit)) return true
+  return false
 }
 
 export type ZenControlCheck = { ok: true } | { ok: false; control: ZenControlKind; problem: ZenControlProblem }

@@ -7,7 +7,7 @@
 import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
-import { dispatchZenMenuToggle } from '@/lib/zen/zen-shortcut'
+import { dispatchZenMenuToggle, dispatchZenShortcutsMenu } from '@/lib/zen/zen-shortcut'
 
 /** Action IDs that map 1:1 to Tauri menu item ids / event stems. */
 export const APP_MENU_ACTION_IDS = [
@@ -27,6 +27,7 @@ export const APP_MENU_ACTION_IDS = [
   'toggle-assistant',
   'focus-window',
   'zen-toggle',
+  'zen-shortcuts',
   'new-window',
   'minimize',
   'maximize',
@@ -67,6 +68,7 @@ export function appMenuActionHasHandler(id: AppMenuActionId): boolean {
   if (EVENT_ACTIONS.has(id)) return true
   return (
     id === 'zen-toggle' ||
+    id === 'zen-shortcuts' ||
     id === 'new-window' ||
     id === 'minimize' ||
     id === 'maximize' ||
@@ -86,6 +88,11 @@ export async function handleAppMenuAction(id: AppMenuActionId): Promise<void> {
   // broadcast would flip it once per window).
   if (id === 'zen-toggle') {
     dispatchZenMenuToggle()
+    return
+  }
+  // Omarchy addition 4: the Zen cheat sheet, this window only.
+  if (id === 'zen-shortcuts') {
+    dispatchZenShortcutsMenu()
     return
   }
 

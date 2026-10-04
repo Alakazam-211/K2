@@ -1,35 +1,62 @@
-// prd-zen-mode-v1 Z23, Z25 — where the window's own buttons sit while Zen
-// owns the whole window (no K2 top bar).
+// prd-zen-mode-v1 Z23, Z24, Z25, Z49–Z51 — the window's own chrome while
+// Zen owns the whole window (no K2 top bar).
 //
-// macOS: the system stoplights stay (they can't be hidden, Z24). The Zen
-// root publishes the area they take so the page keeps clear of them:
+// macOS: the system stoplights stay (they can't be hidden, Z24/Z50). Zen's
+// `[chrome]` table picks their shape (`round` / `square`), nudges them
+// (`stoplight-offset = [x, y]`, 0–24 px) and picks the window corners
+// (`system` / `square`, Z51). Those values reach AppKit through the same
+// native hooks the Styles use, via the one chrome owner in `stores/style.ts`
+// (`setChromeSource`): held while Zen is shown, the Style's restored on
+// leaving. The Zen root publishes the area the lights take so the page keeps
+// clear of them:
 //   --zen-stoplight-safe-left   CSS px from the left where the page may start
 //   --zen-stoplight-safe-top    CSS px from the top below the lights
 //   --zen-stoplight-rect        "left top width height" (CSS px)
-// The left edge reuses the zoom-aware `--k2-stoplight-spacer` the Styles
-// traffic-light controller already writes on every zoom change, so the safe
-// area follows ⌘= / ⌘- with no Zen code of its own. In S4 the lights still
-// sit where the Style put them (`inset`); S5 moves them to the Zen
-// `[chrome] stoplight-offset` through one chrome owner.
+// computed with the same math as `lib/traffic-lights.ts` (native buttons
+// don't scale with the app zoom; CSS px = points / zoom). The Styles'
+// zoom-aware `--k2-stoplight-spacer` keeps describing the Style (Z49).
 //
 // Linux / Windows: no native chrome; K2 draws its own cluster in Zen
 // (`ZenChromeCluster`) and measures it; its rect is published the same way.
+// The `[chrome]` table changes nothing there.
 
-import {
-  STOPLIGHT_SPACER_VAR,
-  TRAFFIC_LIGHT_Y_NUDGE_PX,
-  stoplightSpacerPx,
-  trafficLightZoom,
-} from '@/lib/traffic-lights'
-import {
-  TOP_BAR_PAD_X_PX,
-  TRAFFIC_LIGHT_CLUSTER_GAP_PX,
-  TRAFFIC_LIGHT_CLUSTER_RIGHT_PX,
-} from '@/lib/desktop-chrome'
+import { TRAFFIC_LIGHT_Y_NUDGE_PX, trafficLightZoom } from '@/lib/traffic-lights'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
+import type { ZenChromeSource } from '@/stores/style'
 import type { ZenRect } from './zen-controls'
 
 /** The macOS title-bar band the lights are centred in (points, unscaled). */
 export const MAC_TITLEBAR_BAND_PX = 28
+
+/** `[chrome] stoplight-offset` range, px (daemon `STOPLIGHT_OFFSET_MAX`). */
+export const ZEN_STOPLIGHT_OFFSET_MAX = 24
+
+/** K2's default Zen chrome (the daemon's `default-zen.toml` `[chrome]`). */
+export const ZEN_DEFAULT_CHROME: ZenChromeSource = Object.freeze({
+  corners: 'system',
+  stoplights: 'round',
+  offset: Object.freeze([0, 0]) as unknown as [number, number],
+}) as ZenChromeSource
+
+/**
+ * The `chrome` block of `/cli/zen/get` → the chrome owner's input. Only the
+ * known keys and values are read; anything else (an unknown corner style,
+ * `hidden` stoplights, an offset out of range) keeps the last good value for
+ * that key, else K2's default. The daemon reports the error.
+ */
+export function parseZenChrome(raw: unknown, lastGood: ZenChromeSource = ZEN_DEFAULT_CHROME): ZenChromeSource {
+  const o = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  const corners = o.corners === 'system' || o.corners === 'square' ? o.corners : lastGood.corners
+  const stoplights = o.stoplights === 'round' || o.stoplights === 'square' ? o.stoplights : lastGood.stoplights
+  const off = o['stoplight-offset']
+  const okNum = (n: unknown): n is number =>
+    typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= ZEN_STOPLIGHT_OFFSET_MAX
+  const offset: [number, number] =
+    Array.isArray(off) && off.length === 2 && okNum(off[0]) && okNum(off[1])
+      ? [off[0], off[1]]
+      : [lastGood.offset[0], lastGood.offset[1]]
+  return { corners, stoplights, offset }
+}
 
 export interface ZenStoplightArea {
   /** CSS custom properties for the Zen root. */
@@ -39,25 +66,28 @@ export interface ZenStoplightArea {
 }
 
 /**
- * macOS stoplight area at window inset `inset` (points) and app zoom
+ * macOS stoplight area with Zen's `stoplight-offset` (points) at app zoom
  * `zoom`. Native buttons don't scale with CSS zoom; CSS px = points / zoom.
+ * At offset [0, 0] and 100% the lights end at 69 px and the page may start
+ * at 83 px, the same left edge the top bar's first control has.
  */
-export function macStoplightArea(inset: number, zoom: number | null | undefined): ZenStoplightArea {
+export function macStoplightArea(
+  offset: readonly [number, number],
+  zoom: number | null | undefined,
+): ZenStoplightArea {
   const z = trafficLightZoom(zoom)
-  const i = Number.isFinite(inset) && inset > 0 ? inset : 0
-  const spacer = stoplightSpacerPx(z, i)
-  const lead = i + TOP_BAR_PAD_X_PX
-  const safeLeft = lead + spacer + TRAFFIC_LIGHT_CLUSTER_GAP_PX
-  const safeTop = (i + TRAFFIC_LIGHT_Y_NUDGE_PX + MAC_TITLEBAR_BAND_PX) / z
-  const width = (TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + i) / z
+  const x = Number.isFinite(offset[0]) && offset[0] > 0 ? offset[0] : 0
+  const y = Number.isFinite(offset[1]) && offset[1] > 0 ? offset[1] : 0
+  const width = (TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + x) / z
+  const safeLeft = width + TRAFFIC_LIGHT_CLUSTER_GAP_PX
+  const safeTop = (y + TRAFFIC_LIGHT_Y_NUDGE_PX + MAC_TITLEBAR_BAND_PX) / z
   return {
     vars: {
-      // Same sum as the number, but riding the live spacer variable.
-      '--zen-stoplight-safe-left': `calc(${lead + TRAFFIC_LIGHT_CLUSTER_GAP_PX}px + var(${STOPLIGHT_SPACER_VAR}))`,
+      '--zen-stoplight-safe-left': `${round(safeLeft)}px`,
       '--zen-stoplight-safe-top': `${round(safeTop)}px`,
       '--zen-stoplight-rect': `0px 0px ${round(width)}px ${round(safeTop)}px`,
     },
-    rect: { left: 0, top: 0, width: round(Math.max(width, safeLeft - TRAFFIC_LIGHT_CLUSTER_GAP_PX)), height: round(safeTop) },
+    rect: { left: 0, top: 0, width: round(width), height: round(safeTop) },
   }
 }
 
@@ -76,20 +106,10 @@ export function clusterArea(rect: ZenRect | null, side: 'left' | 'right', viewpo
   }
 }
 
-/**
- * macOS: the stoplight area right now. S4 reads where the Style put the
- * lights (the window inset) and the app zoom, the same inputs the Styles
- * traffic-light controller reads; S5 swaps the inset for Zen's own
- * `stoplight-offset` through the one chrome owner.
- */
-export function currentMacStoplightArea(): ZenStoplightArea {
-  let inset = 0
-  if (typeof document !== 'undefined') {
-    const raw = getComputedStyle(document.documentElement).getPropertyValue('--inset-window').trim()
-    inset = Number.parseFloat(raw) || 0
-  }
+/** macOS: the stoplight area right now for Zen chrome `chrome`. */
+export function currentMacStoplightArea(chrome: ZenChromeSource): ZenStoplightArea {
   const zoom = typeof window === 'undefined' ? 1 : (window as { __k2soZoom?: number }).__k2soZoom
-  return macStoplightArea(inset, zoom)
+  return macStoplightArea(chrome.offset, zoom)
 }
 
 function round(n: number): number {

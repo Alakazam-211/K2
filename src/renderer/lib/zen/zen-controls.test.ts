@@ -170,7 +170,7 @@ describe('the check', () => {
 
   it('a toggle under the macOS stoplights → invisible', () => {
     const { toggle } = goodPage()
-    const lights = macStoplightArea(0, 1).rect
+    const lights = macStoplightArea([0, 0], 1).rect
     rects.set(toggle, { left: 20, top: 4, width: 30, height: 24 })
     expect(check(undefined, [lights])).toEqual({ ok: false, control: 'zen-toggle', problem: 'invisible' })
     rects.set(toggle, { left: lights.width + 10, top: 4, width: 30, height: 24 })

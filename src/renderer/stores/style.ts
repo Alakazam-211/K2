@@ -153,6 +153,72 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 // App.tsx calls onAppZoomChange on every zoom change and at startup.
 // Fire-and-forget: in non-Tauri contexts (parity harness, plain browser)
 // the invoke rejects and the miss is purely cosmetic.
+// ── Native chrome owner: Style or Zen (prd-zen-mode-v1 Z23, Z49) ─────
+// One owner for the window's corners and stoplights. Normally the Style
+// drives them. While this window shows Zen, the Zen `[chrome]` table does:
+// every existing re-apply trigger below (resize, fullscreen, zoom, a title
+// change, a Style stamp or hover preview) reads the source first, so a
+// Style re-apply can never stomp Zen's values mid-Zen. Rust saves the last
+// values per window and re-applies those on its own AppKit observers, so
+// it follows whatever this owner sent last. Setting the source back to
+// 'style' re-applies the Style's values (and its stoplight spacer).
+// Per window (module state per webview); macOS only, like the controllers.
+
+export type ZenChromeSource = {
+  corners: 'system' | 'square'
+  stoplights: 'round' | 'square'
+  /** `[chrome] stoplight-offset`, px right and down, 0–24 each. */
+  offset: [number, number]
+}
+export type ChromeSource = 'style' | { zen: ZenChromeSource }
+
+let chromeSource: ChromeSource = 'style'
+const chromeAppliedListeners = new Set<() => void>()
+
+export function getChromeSource(): ChromeSource {
+  return chromeSource
+}
+
+function zenChromeKey(src: ChromeSource): string {
+  if (src === 'style') return 'style'
+  const z = src.zen
+  return `zen|${z.corners}|${z.stoplights}|${z.offset[0]}|${z.offset[1]}`
+}
+
+/**
+ * Hand the window's native chrome to Zen (`{zen}`) or back to the Style
+ * (`'style'`). A change re-applies at once; the same source again is a
+ * no-op (so a Zen re-render never re-sends).
+ */
+export function setChromeSource(next: ChromeSource): void {
+  if (zenChromeKey(next) === zenChromeKey(chromeSource)) return
+  chromeSource = next === 'style' ? 'style' : { zen: { ...next.zen, offset: [next.zen.offset[0], next.zen.offset[1]] } }
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  trafficLights.resetBaseline()
+  trafficLights.reapply()
+  windowCorners.reapply()
+  notifyChromeApplied()
+}
+
+/** Called after every stoplight apply (zoom included), so Zen can recompute
+ *  its stoplight safe area. Returns the unsubscribe. */
+export function onChromeApplied(fn: () => void): () => void {
+  chromeAppliedListeners.add(fn)
+  return () => {
+    chromeAppliedListeners.delete(fn)
+  }
+}
+
+function notifyChromeApplied(): void {
+  for (const fn of [...chromeAppliedListeners]) fn()
+}
+
+function zenTrafficLights(): { square: boolean; x: number; y: number } | null {
+  if (chromeSource === 'style') return null
+  const z = chromeSource.zen
+  return { square: z.stoplights === 'square', x: z.offset[0], y: z.offset[1] }
+}
+
 const trafficLights = createTrafficLightController({
   isMac: () =>
     typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac'),
@@ -164,10 +230,12 @@ const trafficLights = createTrafficLightController({
       inset: Number.parseFloat(raw) || 0,
       // App.tsx sets this with documentElement.style.zoom (Cmd+= / Cmd+-).
       zoom: (window as { __k2soZoom?: number }).__k2soZoom,
+      zen: zenTrafficLights(),
     }
   },
   apply: (cmd) => {
     void invoke('set_traffic_light_inset', cmd).catch(() => {})
+    notifyChromeApplied()
   },
   setSpacer: (px) => {
     document.documentElement.style.setProperty(STOPLIGHT_SPACER_VAR, `${px}px`)
@@ -211,6 +279,7 @@ const windowCorners = createWindowCornerController({
       scheme: el.getAttribute('data-scheme'),
       palette: el.getAttribute('data-palette'),
       gaps: el.getAttribute('data-gaps'),
+      zenCorners: chromeSource === 'style' ? null : chromeSource.zen.corners,
     }
   },
   apply: (radius) => {

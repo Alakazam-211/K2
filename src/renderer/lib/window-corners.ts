@@ -13,10 +13,17 @@ export type WindowCornerInput = {
   density?: string | null
   /** Ignored. Present so inset 0 cannot be mistaken for "skip". */
   inset?: number
+  /**
+   * Set while the window shows Zen (prd-zen-mode-v1 Z23, Z49, Z51): Zen's
+   * `[chrome] corners` wins over the Style. `square` is 0.5, `system` is 0.
+   */
+  zenCorners?: 'system' | 'square' | null
 }
 
-/** `square` is 0.5. Any other id, including unknown, is 0. */
+/** `square` is 0.5. Any other id, including unknown, is 0. Zen's corners
+ *  win while set. */
 export function windowCornerRadius(input: WindowCornerInput): number {
+  if (input.zenCorners) return input.zenCorners === 'square' ? 0.5 : 0
   return input.styleId === 'square' ? 0.5 : 0
 }
 

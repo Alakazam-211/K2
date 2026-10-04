@@ -78,3 +78,13 @@ export function dispatchZenMenuToggle(): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new Event(ZEN_MENU_EVENT))
 }
+
+/** Omarchy addition 4: the macOS View-menu "Zen Shortcuts" item and the
+ *  Linux / Windows app-menu item open the Zen cheat sheet. */
+export const ZEN_SHORTCUTS_MENU_EVENT = 'menu:zen-shortcuts'
+
+/** The Linux / Windows app menu's "Zen Shortcuts": this window only. */
+export function dispatchZenShortcutsMenu(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(ZEN_SHORTCUTS_MENU_EVENT))
+}

@@ -63,8 +63,17 @@ export function trafficLightOffsets(inset: number): { x: number; y: number } {
 }
 
 /**
+ * Zen's own stoplights (prd-zen-mode-v1 Z23, Z49): shape and offset from
+ * the Zen `[chrome]` table, not the Style. `x`/`y` are the 0–24 px nudge
+ * right and down; the 3px title-bar nudge is added like a Style inset.
+ */
+export type ZenTrafficLights = { square: boolean; x: number; y: number }
+
+/**
  * Shape ignores scheme, palette, and density (Square compact / regular /
  * spacious, Paper and Charcoal). Inset math does not change with shape.
+ * When `zen` is set (a window showing Zen), Zen's shape and offset win over
+ * the Style's: the style id and inset are ignored.
  */
 export function trafficLightCommand(input: {
   styleId: string | null | undefined
@@ -73,7 +82,18 @@ export function trafficLightCommand(input: {
   palette?: string | null
   density?: string | null
   zoom?: number | null
+  zen?: ZenTrafficLights | null
 }): TrafficLightCommand {
+  if (input.zen) {
+    const zx = Number.isFinite(input.zen.x) && input.zen.x > 0 ? input.zen.x : 0
+    const zy = Number.isFinite(input.zen.y) && input.zen.y > 0 ? input.zen.y : 0
+    return {
+      x: zx,
+      y: zy + TRAFFIC_LIGHT_Y_NUDGE_PX,
+      square: input.zen.square,
+      zoom: trafficLightZoom(input.zoom),
+    }
+  }
   const { x, y } = trafficLightOffsets(input.inset)
   return {
     x,
@@ -104,43 +124,51 @@ export type TrafficLightController = {
 
 export function createTrafficLightController(opts: {
   isMac: () => boolean
-  read: () => { styleId: string | null | undefined; inset: number; zoom?: number | null }
+  read: () => {
+    styleId: string | null | undefined
+    inset: number
+    zoom?: number | null
+    /** Set while the window shows Zen: Zen's lights win (Z49). */
+    zen?: ZenTrafficLights | null
+  }
   apply: (cmd: TrafficLightCommand) => void
-  /** Writes the spacer width (CSS px). Called with every apply. */
+  /**
+   * Writes the spacer width (CSS px). Called with every Style apply. The
+   * spacer keeps describing the Style while Zen holds the lights (Z49), so a
+   * Zen apply never writes it; leaving Zen re-applies the Style and does.
+   */
   setSpacer?: (px: number) => void
   schedule: (fn: () => void) => void
 }): TrafficLightController {
-  let insetSeen: number | null = null
-  let squareSeen: boolean | null = null
-  let zoomSeen: number | null = null
+  let seen: string | null = null
   let queued = false
 
-  function emit(cmd: TrafficLightCommand, inset: number): void {
-    insetSeen = inset
-    squareSeen = cmd.square
-    zoomSeen = cmd.zoom
-    opts.setSpacer?.(stoplightSpacerPx(cmd.zoom, inset))
+  function key(cmd: TrafficLightCommand, zen: boolean): string {
+    return `${zen ? 'zen' : 'style'}|${cmd.x}|${cmd.y}|${cmd.square}|${cmd.zoom}`
+  }
+
+  function emit(cmd: TrafficLightCommand, inset: number, zen: boolean): void {
+    seen = key(cmd, zen)
+    if (!zen) opts.setSpacer?.(stoplightSpacerPx(cmd.zoom, inset))
     opts.apply(cmd)
   }
 
   function reapply(): void {
     if (!opts.isMac()) return
     const ctx = opts.read()
-    emit(trafficLightCommand(ctx), ctx.inset)
+    emit(trafficLightCommand(ctx), ctx.inset, !!ctx.zen)
   }
 
   function syncIfChanged(): void {
     if (!opts.isMac()) return
     const ctx = opts.read()
     const cmd = trafficLightCommand(ctx)
-    if (ctx.inset === insetSeen && cmd.square === squareSeen && cmd.zoom === zoomSeen) return
-    emit(cmd, ctx.inset)
+    if (key(cmd, !!ctx.zen) === seen) return
+    emit(cmd, ctx.inset, !!ctx.zen)
   }
 
   function resetBaseline(): void {
-    insetSeen = null
-    squareSeen = null
-    zoomSeen = null
+    seen = null
   }
 
   function scheduleReapply(): void {

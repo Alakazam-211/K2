@@ -81,6 +81,50 @@ mode:
 - An answer that isn't a page: "K2 on this computer sent a Zen page this app
   can't read".
 
+## `theme`, `chrome`, `motion`: what the S5 engine reads
+
+Source: `src/renderer/lib/zen/zen-theme-engine.ts`, `zen-chrome.ts`,
+`zen-motion.ts`, `zen-tokens.ts`. Only the names below are read; any other
+key is ignored (logged once) and never reaches CSS. A value that is present
+but doesn't parse keeps the last good value for that key; a key left out is
+K2's default (`default-zen.toml`).
+
+```jsonc
+"theme": {
+  "name": "tokyo-night",                 // shown as the active theme
+  "tokens": {                            // or these four keys flat on `theme` (S1 today)
+    "scheme": "auto",                    // auto | light | dark
+    "colors": { "light": { "canvas": "#faf7f2", … }, "dark": { … } },   // 16 tokens each
+    "type":   { "family": "system", "size": 14, "line-height": 1.45 },
+    "shape":  { "radius": 14, "bubble-radius": 18, "gap": 12, "list-width": 300 }
+  },
+  "font": "JetBrains Mono",              // system | rounded | serif | mono | MesloLGM Nerd Font | JetBrains Mono
+  "terminal": { "palette": {             // flat, {light, dark}, or 16 ANSI colours as an array
+    "foreground": "#…", "background": "#…", "cursor": "#…", "cursorAccent": "#…", "selection": "#…",
+    "black": "#…", … "brightWhite": "#…" } },
+  "background": { "data": "data:image/png;base64,…", "dim": 0.8 }      // optional
+},
+"themes": [{ "name": "k2-light", "builtin": true }, { "name": "mine", "builtin": false }],
+"chrome": { "corners": "system", "stoplights": "round", "stoplight-offset": [0, 0] },
+"motion": { "animations": { "<name>": { "on": true, "speed": 3, "bezier": [0.22, 1, 0.36, 1], "style": "popin 92%" }, … } }
+```
+
+**Flag 5, background.** Only a base64 `data:image/(png|jpeg|webp|gif|avif)`
+URL is drawn, in `data` or `url`. The app CSP allows `data:` and `blob:`
+images only, and Zen loads nothing remote. A daemon-served URL would need a
+fetch-to-blob path; send `data` instead. `dim` (0.5–0.95, default 0.8) is the
+canvas scrim over the image for readability. Reduced transparency drops it.
+
+**Flag 6, `motion`.** The renderer rebuilds each curve from the four
+`bezier` numbers and the duration from `speed` (tenths of a second). The
+`ease`, `durationMs` and `curve` strings are not read.
+
+**Flag 7, theme switch route.** The picker and the cycle keys call
+`POST /cli/zen/theme/set {"name": "<theme>"}` on the local daemon, then
+re-read `get`. Next and previous are computed from the `themes` order, so
+the renderer needs no `next` or `prev` route. `zen_changed` should follow a
+switch like any other change.
+
 ## Event
 
 `zen_changed` is an app-class kind with no payload. The renderer adds it to

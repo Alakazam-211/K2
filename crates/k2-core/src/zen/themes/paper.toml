@@ -1,0 +1,36 @@
+# Zen theme "paper": always light, serif type, ink-blue accent.
+# Built into K2 (read-only). It sits on top of "default": anything not
+# set here comes from there. `k2 zen theme new paper` makes an override.
+schema = 1
+
+[theme]
+scheme = "light"
+
+[colors.light]
+canvas = "#f4f1ea"
+surface = "#fbf9f4"
+surface-raised = "#ffffff"
+border = "#dcd6ca"
+text = "#22201c"
+text-muted = "#666055"
+accent = "#2f5d8a"
+accent-text = "#ffffff"
+bubble-me = "#2f5d8a"
+bubble-me-text = "#ffffff"
+bubble-agent = "#ebe6dc"
+bubble-agent-text = "#22201c"
+
+[font]
+family = "serif"
+size = 15
+line-height = 1.55
+
+[shape]
+radius = 10
+bubble-radius = 14
+
+[terminal.light]
+foreground = "#22201c"
+background = "#f4f1ea"
+cursor = "#2f5d8a"
+selection = "#d9e2ec"

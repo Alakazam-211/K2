@@ -1,0 +1,39 @@
+# Zen theme "midnight": always dark, cool blue, JetBrains Mono everywhere.
+# Built into K2 (read-only). It sits on top of "default": anything not
+# set here comes from there. `k2 zen theme new midnight` makes an override.
+schema = 1
+
+[theme]
+scheme = "dark"
+
+[colors.dark]
+canvas = "#0f1419"
+surface = "#151b22"
+surface-raised = "#1b232c"
+border = "#26313d"
+text = "#d6dde6"
+text-muted = "#8a97a6"
+accent = "#5ab0f6"
+accent-text = "#0b1015"
+bubble-me = "#1f5f8f"
+bubble-me-text = "#eaf4ff"
+bubble-agent = "#1b232c"
+bubble-agent-text = "#d6dde6"
+idle = "#5d6b7a"
+
+[font]
+family = "jetbrains-mono"
+size = 13
+
+[shape]
+radius = 8
+bubble-radius = 10
+
+[terminal.dark]
+foreground = "#d6dde6"
+background = "#0f1419"
+cursor = "#5ab0f6"
+cursor-text = "#0b1015"
+selection = "#26313d"
+blue = "#5ab0f6"
+bright-blue = "#8cc8fa"

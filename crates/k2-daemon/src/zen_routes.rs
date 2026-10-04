@@ -32,6 +32,10 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/page/ensure",
     "/cli/zen/reload",
     "/cli/zen/reset",
+    "/cli/zen/theme/new",
+    "/cli/zen/theme/next",
+    "/cli/zen/theme/prev",
+    "/cli/zen/theme/set",
 ];
 
 /// The GET rows.
@@ -40,6 +44,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/get",
     "/cli/zen/history",
     "/cli/zen/status",
+    "/cli/zen/theme/list",
     "/cli/zen/validate",
 ];
 
@@ -79,6 +84,15 @@ fn err(e: ZenError) -> CliResponse {
         ),
         ZenError::BadRequest(m) => resp("400 Bad Request", json!({ "ok": false, "error": "bad_request", "message": m })),
         ZenError::NotFound(m) => resp("404 Not Found", json!({ "ok": false, "error": "not_found", "message": m })),
+        e @ ZenError::UnknownTheme { .. } => {
+            let message = e.to_string();
+            let ZenError::UnknownTheme { name, known } = e else { unreachable!("matched above") };
+            resp(
+                "404 Not Found",
+                json!({ "ok": false, "error": "unknown_theme", "theme": name, "themes": known, "message": message }),
+            )
+        }
+        ZenError::Conflict(m) => resp("409 Conflict", json!({ "ok": false, "error": "theme_exists", "message": m })),
         ZenError::Io(m) => resp("500 Internal Server Error", json!({ "ok": false, "error": "io", "message": m })),
     }
 }
@@ -122,18 +136,24 @@ fn param<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> 
     params.get(key).map(|s| s.trim()).filter(|s| !s.is_empty())
 }
 
-/// `file=` and/or `home=` (id or name) → the file they name.
-fn target(f: &ZenFiles, file: Option<&str>, home: Option<&str>) -> Result<Option<ZenFile>, ZenError> {
-    match (file, home) {
-        (Some(_), Some(_)) => Err(ZenError::BadRequest("pass file or home, not both".into())),
-        (Some(file), None) => ZenFile::parse(file).map(Some),
-        (None, Some(home)) => {
+/// `file=`, `home=` (id or name) or `theme=` → the file they name.
+fn target(f: &ZenFiles, file: Option<&str>, home: Option<&str>, theme: Option<&str>) -> Result<Option<ZenFile>, ZenError> {
+    match (file, home, theme) {
+        (Some(file), None, None) => ZenFile::parse(file).map(Some),
+        (None, Some(home), None) => {
             let id = f.find_home(home).ok_or_else(|| {
                 ZenError::NotFound(format!("no Home '{home}' on this computer; list them with k2 zen pages"))
             })?;
             Ok(Some(ZenFile::Page(id)))
         }
-        (None, None) => Ok(None),
+        (None, None, Some(theme)) => {
+            if !k2_core::zen::valid_theme_name(theme) {
+                return Err(ZenError::BadRequest(format!("'{theme}' is not a theme name")));
+            }
+            Ok(Some(ZenFile::Theme(theme.to_string())))
+        }
+        (None, None, None) => Ok(None),
+        _ => Err(ZenError::BadRequest("pass one of file, home or theme".into())),
     }
 }
 
@@ -261,6 +281,7 @@ fn handle_reload() -> Result<J, ZenError> {
 struct ResetBody {
     file: Option<String>,
     home: Option<String>,
+    theme: Option<String>,
     to: Option<String>,
 }
 
@@ -272,7 +293,7 @@ fn handle_reset(body: &[u8]) -> Result<J, ZenError> {
         return Err(ZenError::NotSetUp);
     }
     let nonempty = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    let file = target(&f, nonempty(&b.file).as_deref(), nonempty(&b.home).as_deref())?
+    let file = target(&f, nonempty(&b.file).as_deref(), nonempty(&b.home).as_deref(), nonempty(&b.theme).as_deref())?
         .unwrap_or(ZenFile::Zen);
     let out = f.reset(&file, nonempty(&b.to).as_deref())?;
     let changed = refresh_and_emit()?;
@@ -281,6 +302,81 @@ fn handle_reset(body: &[u8]) -> Result<J, ZenError> {
         "file": out.file,
         "restored": out.restored,
         "snapshot": out.snapshot,
+        "changed": changed,
+    }))
+}
+
+fn nonempty(s: &Option<String>) -> Option<String> {
+    s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// `{name?, home?, clear?}` for `theme/set`; `{home?}` for next/prev.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ThemeBody {
+    name: Option<String>,
+    home: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+fn switched(out: k2_core::zen::store::ThemeSwitch) -> Result<J, ZenError> {
+    let changed = refresh_and_emit()?;
+    Ok(json!({ "ok": true, "theme": out.theme, "scope": out.scope, "home": out.home, "changed": changed }))
+}
+
+/// POST `/cli/zen/theme/set|next|prev` (Omarchy addition 2). The daemon
+/// owns the active theme: one for the computer, plus an optional pick per
+/// Home (decision 8). A switch emits one `zen_changed`.
+fn handle_theme_switch(path: &str, body: &[u8]) -> Result<J, ZenError> {
+    let b: ThemeBody = serde_json::from_value(body_json(body)?)
+        .map_err(|e| ZenError::BadRequest(format!("theme routes take {{name?, home?, clear?}}: {e}")))?;
+    let f = files();
+    if !f.exists() {
+        return Err(ZenError::NotSetUp);
+    }
+    let (name, home) = (nonempty(&b.name), nonempty(&b.home));
+    match path {
+        "/cli/zen/theme/set" => {
+            if b.clear {
+                if name.is_some() || home.is_none() {
+                    return Err(ZenError::BadRequest("clear takes a home and no name".into()));
+                }
+                return switched(f.set_theme(None, home.as_deref())?);
+            }
+            let name = name.ok_or_else(|| ZenError::BadRequest("theme/set needs {name}".into()))?;
+            switched(f.set_theme(Some(&name), home.as_deref())?)
+        }
+        _ => {
+            if name.is_some() || b.clear {
+                return Err(ZenError::BadRequest("theme/next and theme/prev take only {home?}".into()));
+            }
+            let step = if path == "/cli/zen/theme/next" { 1 } else { -1 };
+            switched(f.cycle_theme(step, home.as_deref())?)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewThemeBody {
+    name: String,
+    from: Option<String>,
+}
+
+fn handle_theme_new(body: &[u8]) -> Result<J, ZenError> {
+    let b: NewThemeBody = serde_json::from_value(body_json(body)?)
+        .map_err(|e| ZenError::BadRequest(format!("theme/new needs {{name, from?}}: {e}")))?;
+    let f = files();
+    let out = f.new_theme(b.name.trim(), nonempty(&b.from).as_deref())?;
+    let changed = refresh_and_emit()?;
+    Ok(json!({
+        "ok": true,
+        "name": out.name,
+        "file": out.file,
+        "path": out.path,
+        "from": out.from,
+        "copiedImage": out.copied_image,
         "changed": changed,
     }))
 }
@@ -299,12 +395,17 @@ pub fn handle(path: &str, owner: bool, params: &HashMap<String, String>, body: &
         "/cli/zen/get" => handle_get(params),
         "/cli/zen/validate" => {
             let f = files();
-            target(&f, param(params, "file"), param(params, "home")).and_then(|t| f.validate(t.as_ref()))
+            target(&f, param(params, "file"), param(params, "home"), param(params, "theme"))
+                .and_then(|t| f.validate(t.as_ref()))
         }
         "/cli/zen/history" => {
             let f = files();
-            target(&f, param(params, "file"), param(params, "home")).and_then(|t| f.history(t.as_ref()))
+            target(&f, param(params, "file"), param(params, "home"), param(params, "theme"))
+                .and_then(|t| f.history(t.as_ref()))
         }
+        "/cli/zen/theme/list" => files().theme_list(param(params, "home")),
+        "/cli/zen/theme/set" | "/cli/zen/theme/next" | "/cli/zen/theme/prev" => handle_theme_switch(path, body),
+        "/cli/zen/theme/new" => handle_theme_new(body),
         "/cli/zen/status" => Ok(handle_status()),
         "/cli/zen/doctor" => Ok(handle_doctor()),
         "/cli/zen/page/ensure" => handle_ensure(body),

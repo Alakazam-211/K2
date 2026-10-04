@@ -789,6 +789,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/reload", Member),
     post("/cli/zen/reset", Member),
     get("/cli/zen/status", Member),
+    get("/cli/zen/theme/list", Member),
+    post("/cli/zen/theme/new", Member),
+    post("/cli/zen/theme/next", Member),
+    post("/cli/zen/theme/prev", Member),
+    post("/cli/zen/theme/set", Member),
     get("/cli/zen/validate", Member),
 ];
 

@@ -339,7 +339,7 @@ async fn t1_1_t1_2_headless_round_trip_last_good_and_events() {
     })
     .await
     .expect("join");
-    assert_eq!(g1["theme"]["colors"]["light"]["accent"], "#9a3412", "{g1}");
+    assert_eq!(g1["theme"]["tokens"]["colors"]["light"]["accent"], "#9a3412", "{g1}");
     wait_for("the second zen_changed", Duration::from_secs(2), || (events() >= 2).then_some(()));
     let version1 = g1["version"].as_str().expect("v1").to_string();
 
@@ -400,12 +400,21 @@ async fn t1_3_t1_4_policy_keep_alive_and_no_grant_route() {
         assert_eq!(s, 200, "{v}");
 
         // GET on every POST row → 405.
-        for p in ["/cli/zen/page/ensure", "/cli/zen/homes/sync", "/cli/zen/reload", "/cli/zen/reset"] {
+        for p in [
+            "/cli/zen/page/ensure",
+            "/cli/zen/homes/sync",
+            "/cli/zen/reload",
+            "/cli/zen/reset",
+            "/cli/zen/theme/set",
+            "/cli/zen/theme/next",
+            "/cli/zen/theme/prev",
+            "/cli/zen/theme/new",
+        ] {
             let (s, b) = Conn::open(port).request("GET", &format!("{p}?token={tok}"), None);
             assert_eq!(s, 405, "GET {p} must be 405: {b}");
         }
         // POST on a GET row → 405 (not on the POST allowlist).
-        for p in ["/cli/zen/get", "/cli/zen/validate", "/cli/zen/history", "/cli/zen/status", "/cli/zen/doctor"] {
+        for p in ["/cli/zen/get", "/cli/zen/validate", "/cli/zen/history", "/cli/zen/status", "/cli/zen/doctor", "/cli/zen/theme/list"] {
             let (s, b) = Conn::open(port).request("POST", &format!("{p}?token={tok}"), Some("{}"));
             assert_eq!(s, 405, "POST {p} must be 405: {b}");
         }
@@ -421,6 +430,10 @@ async fn t1_3_t1_4_policy_keep_alive_and_no_grant_route() {
                 ("GET", "/cli/zen/status", None),
                 ("POST", "/cli/zen/page/ensure", Some(r#"{"homeId":"evil","name":"Evil"}"#)),
                 ("POST", "/cli/zen/reset", Some("{}")),
+                ("GET", "/cli/zen/theme/list", None),
+                ("POST", "/cli/zen/theme/set", Some(r#"{"name":"paper"}"#)),
+                ("POST", "/cli/zen/theme/next", Some("{}")),
+                ("POST", "/cli/zen/theme/new", Some(r#"{"name":"evil"}"#)),
             ] {
                 let sep = if p.contains('?') { '&' } else { '?' };
                 let (s, b) = Conn::open(port).request(m, &format!("{p}{sep}token={session}"), body);
@@ -429,6 +442,8 @@ async fn t1_3_t1_4_policy_keep_alive_and_no_grant_route() {
             }
         }
         assert!(!zen_dir(&home.0).join("pages/evil.toml").exists(), "a refused ensure wrote nothing");
+        assert!(!zen_dir(&home.0).join("themes/evil").exists(), "a refused theme/new wrote nothing");
+        assert!(!zen_dir(&home.0).join("active.json").exists(), "a refused theme switch wrote nothing");
 
         // Oversize body → 413.
         let big = format!(r#"{{"homes":[],"pad":"{}"}}"#, "x".repeat(70 * 1024));
@@ -478,10 +493,213 @@ async fn t1_3_t1_4_policy_keep_alive_and_no_grant_route() {
         assert_eq!(s, 200);
         let doc = json(&b, "doctor");
         assert!(doc["checks"].as_array().is_some_and(|c| c.iter().any(|x| x["name"] == "watcher")), "{doc}");
+        let (s, b) = c.request("POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper"}"#));
+        assert_eq!(s, 200, "{b}");
+        assert_eq!(json(&b, "theme/set")["theme"], "paper", "{b}");
+        let (s, b) = c.request("GET", &format!("/cli/zen/theme/list?token={tok}"), None);
+        assert_eq!(s, 200, "{b}");
+        assert_eq!(json(&b, "theme/list")["active"], "paper", "the request after theme/set got the wrong body: {b}");
         let (s, b) = c.request("GET", &format!("/cli/feedback/waiting-count?token={tok}"), None);
         assert_eq!(s, 200, "{b}");
         assert!(json(&b, "waiting-count")["count"].is_number(), "a non-zen route after zen ones: {b}");
     })
     .await
     .expect("blocking body");
+}
+
+/// Omarchy additions 1–3, headless (no client): a theme switch through the
+/// routes alone shows in `get` and emits exactly one `zen_changed`; an
+/// unknown name is a clear 404 that changes nothing; next/prev cycle in
+/// order; a theme bundle made by hand (with a background image) is picked
+/// up by the watcher and served as a `data:` URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
+    let home = new_home();
+    let d = spawn_daemon(&home.0);
+    let tok = d.owner.clone();
+    let port = d.port;
+
+    // Before setup every theme route says so.
+    let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper"}"#));
+    assert_eq!(s, 404, "{v}");
+    assert_eq!(v["error"], "zen_not_set_up", "{v}");
+    assert!(!zen_dir(&home.0).exists(), "a theme route must never create ~/.k2/zen");
+
+    let (s, v) = call(port, "POST", &format!("/cli/zen/page/ensure?token={tok}"), Some(r#"{"homeId":"home-1","name":"Work"}"#));
+    assert_eq!(s, 200, "{v}");
+    let zen_toml = std::fs::read_to_string(zen_dir(&home.0).join("zen.toml")).expect("zen.toml");
+    assert!(
+        !zen_toml.lines().any(|l| l.trim_start().starts_with('[')),
+        "zen.toml holds only the user's changes (no tables), not the defaults: {zen_toml}"
+    );
+
+    let (s, g0) = call(port, "GET", &format!("/cli/zen/get?token={tok}&home=home-1"), None);
+    assert_eq!(s, 200, "{g0}");
+    let t0 = &g0["theme"];
+    assert_eq!(t0["name"], "default", "{g0}");
+    assert_eq!(t0["builtin"], true, "{g0}");
+    for k in ["tokens", "font", "terminal"] {
+        assert!(t0[k].is_object(), "theme.{k} must be an object: {t0}");
+    }
+    assert!(t0.get("background").is_none(), "the default theme has no background: {t0}");
+    assert_eq!(t0["tokens"]["colors"]["light"]["idle"], "#a39b90", "{t0}");
+    assert!(t0["tokens"]["colors"]["light"].get("unread").is_none(), "decision 9: no unread token: {t0}");
+    assert_eq!(t0["font"]["family"], "system", "{t0}");
+    assert_eq!(t0["font"]["terminal"]["family"], "meslo", "a proportional font pairs with meslo in terminals: {t0}");
+    assert_eq!(t0["terminal"]["palette"]["dark"]["blue"], "#7aa7d8", "{t0}");
+    let names: Vec<&str> = g0["themes"].as_array().expect("themes").iter().filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(names, vec!["default", "paper", "midnight"], "{g0}");
+    assert!(g0["themes"].as_array().expect("themes").iter().all(|t| t["builtin"].is_boolean()), "{g0}");
+
+    // Events socket.
+    let url = format!("ws://127.0.0.1:{port}/cli/sessions/events?token={tok}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("events WS");
+    let hello = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("hello in time");
+    assert!(matches!(hello, Some(Ok(Message::Text(_)))), "hello frame: {hello:?}");
+    let zen_events = Arc::new(AtomicUsize::new(0));
+    let collector = {
+        let n = zen_events.clone();
+        tokio::spawn(async move {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Text(t) = msg {
+                    let v: J = serde_json::from_str(&t).expect("frame JSON");
+                    if v["kind"] == "zen_changed" {
+                        n.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        })
+    };
+    let events = move || zen_events.load(Ordering::SeqCst);
+
+    let home_dir = home.0.clone();
+    let tok2 = tok.clone();
+    tokio::task::spawn_blocking(move || {
+        let tok = tok2;
+        // Switch globally: get shows it, one event.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper"}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["theme"], "paper", "{v}");
+        assert_eq!(v["scope"], "global", "{v}");
+        assert_eq!(v["changed"], true, "{v}");
+        wait_for("one zen_changed for the switch", Duration::from_secs(3), || (events() >= 1).then_some(()));
+        let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&home=home-1"), None);
+        assert_eq!(g["theme"]["name"], "paper", "{g}");
+        assert_eq!(g["theme"]["tokens"]["scheme"], "light", "{g}");
+        assert_eq!(g["theme"]["font"]["family"], "serif", "{g}");
+        assert_ne!(g["version"], g0["version"], "a switch changes the version");
+        let active: J = serde_json::from_str(&std::fs::read_to_string(zen_dir(&home_dir).join("active.json")).expect("active.json")).expect("active JSON");
+        assert_eq!(active["theme"], "paper", "{active}");
+
+        // The same switch again is not a change.
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper"}"#));
+        assert_eq!(v["changed"], false, "{v}");
+
+        // Unknown name: clear 404, nothing changes, no event.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"neon"}"#));
+        assert_eq!(s, 404, "{v}");
+        assert_eq!(v["error"], "unknown_theme", "{v}");
+        assert_eq!(v["theme"], "neon", "{v}");
+        assert!(v["message"].as_str().is_some_and(|m| m.contains("no theme 'neon'") && m.contains("paper")), "{v}");
+        assert!(v["themes"].as_array().is_some_and(|t| t.iter().any(|x| x == "default")), "{v}");
+        let (_, l) = call(port, "GET", &format!("/cli/zen/theme/list?token={tok}"), None);
+        assert_eq!(l["active"], "paper", "an unknown name changes nothing: {l}");
+        // Bad bodies.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some("{}"));
+        assert_eq!(s, 400, "{v}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"nmae":"paper"}"#));
+        assert_eq!(s, 400, "unknown body fields are refused: {v}");
+
+        // Cycle: paper -> midnight -> default (wraps) -> prev -> midnight.
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/next?token={tok}"), Some("{}"));
+        assert_eq!(v["theme"], "midnight", "{v}");
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/next?token={tok}"), Some(""));
+        assert_eq!(v["theme"], "default", "next wraps: {v}");
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/prev?token={tok}"), Some("{}"));
+        assert_eq!(v["theme"], "midnight", "prev wraps back: {v}");
+
+        // Per Home: the Home's pick beats the global one; clear drops it.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper","home":"Work"}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["scope"], "home", "{v}");
+        assert_eq!(v["home"], "home-1", "{v}");
+        let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&home=home-1"), None);
+        assert_eq!(g["theme"]["name"], "paper", "{g}");
+        assert_eq!(g["theme"]["scope"], "home", "{g}");
+        let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}"), None);
+        assert_eq!(g["theme"]["name"], "midnight", "global stays: {g}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"home":"Work","clear":true}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["theme"], "midnight", "{v}");
+        assert_eq!(v["scope"], "global", "{v}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper","home":"Nowhere"}"#));
+        assert_eq!(s, 404, "{v}");
+
+        // A bundle made by hand: theme.toml + background.png. The watcher
+        // picks it up; get serves the image as a data: URL.
+        let before = events();
+        let dir = zen_dir(&home_dir).join("themes/sunset");
+        std::fs::create_dir_all(&dir).expect("mkdir sunset");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0u8; 64]);
+        std::fs::write(dir.join("background.png"), &png).expect("png");
+        std::fs::write(
+            dir.join("theme.toml"),
+            "schema = 1\n[colors.dark]\naccent = \"#ff9e64\"\n[background]\nimage = \"background.png\"\nfit = \"tile\"\nopacity = 0.5\n",
+        )
+        .expect("theme.toml");
+        let l = wait_for("the watcher to list sunset", Duration::from_secs(5), || {
+            let (_, l) = call(port, "GET", &format!("/cli/zen/theme/list?token={tok}"), None);
+            l["themes"].as_array().is_some_and(|t| t.iter().any(|x| x["name"] == "sunset")).then_some(l)
+        });
+        let names: Vec<&str> = l["themes"].as_array().expect("themes").iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, vec!["default", "paper", "midnight", "sunset"], "user themes follow the built-ins: {l}");
+        // theme/list doesn't re-read; only the watcher can announce this.
+        wait_for("the watcher to announce the new bundle", Duration::from_secs(5), || {
+            (events() > before).then_some(())
+        });
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"sunset"}"#));
+        assert_eq!(s, 200, "{v}");
+        let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&home=home-1"), None);
+        let bg = &g["theme"]["background"];
+        assert!(bg["dataUrl"].as_str().is_some_and(|u| u.starts_with("data:image/png;base64,")), "{bg}");
+        assert_eq!(bg["mime"], "image/png", "{bg}");
+        assert_eq!(bg["fit"], "tile", "{bg}");
+        assert_eq!(bg["opacity"], 0.5, "{bg}");
+        assert_eq!(bg["lastGood"], false, "{bg}");
+        assert_eq!(g["theme"]["builtin"], false, "{g}");
+        assert_eq!(g["theme"]["tokens"]["colors"]["dark"]["accent"], "#ff9e64", "{g}");
+        assert_eq!(g["errors"], serde_json::json!([]), "{g}");
+
+        // An oversize image: error with file:line, the last good image stays.
+        let mut big = b"\x89PNG\r\n\x1a\n".to_vec();
+        big.resize(2 * 1024 * 1024 + 1, 0);
+        std::fs::write(dir.join("background.png"), &big).expect("big png");
+        let g2 = wait_for("the oversize image to be reported", Duration::from_secs(5), || {
+            let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&home=home-1"), None);
+            (g["errors"].as_array().is_some_and(|e| !e.is_empty())).then_some(g)
+        });
+        let e = &g2["errors"][0];
+        assert_eq!(e["file"], "themes/sunset/theme.toml", "{g2}");
+        assert_eq!(e["line"], 5, "the error sits on the image line: {g2}");
+        assert!(e["message"].as_str().is_some_and(|m| m.contains("the limit is 2097152 bytes")), "{g2}");
+        assert_eq!(g2["theme"]["background"]["lastGood"], true, "{g2}");
+        assert_eq!(g2["theme"]["background"]["dataUrl"], bg["dataUrl"], "the last good image stays: {g2}");
+        let (_, v) = call(port, "GET", &format!("/cli/zen/validate?token={tok}&theme=sunset"), None);
+        assert_eq!(v["ok"], false, "validate reports the image: {v}");
+
+        // theme/new: a copy of the default, never overwrites.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/new?token={tok}"), Some(r#"{"name":"mine"}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["from"], "default", "{v}");
+        assert!(zen_dir(&home_dir).join("themes/mine/theme.toml").is_file());
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/new?token={tok}"), Some(r#"{"name":"mine"}"#));
+        assert_eq!(s, 409, "{v}");
+        assert_eq!(v["error"], "theme_exists", "{v}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/new?token={tok}"), Some(r#"{"name":"Bad Name"}"#));
+        assert_eq!(s, 400, "{v}");
+    })
+    .await
+    .expect("blocking body");
+    collector.abort();
 }

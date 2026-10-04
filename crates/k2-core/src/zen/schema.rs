@@ -3,8 +3,9 @@
 //! A Zen file is parsed with spans (`toml_edit`) and walked by hand, so
 //! every error and warning carries `file:line:col`. A clean file becomes a
 //! flat [`Layer`] (`"colors.light.canvas" → "#fff"`); layers stack
-//! builtin → `zen.toml` → `pages/<home>.toml` and resolve into the JSON
-//! `/cli/zen/get` returns.
+//! built-in theme → `themes/<name>/theme.toml` → `zen.toml` →
+//! `pages/<home>.toml` and resolve into the JSON `/cli/zen/get` returns
+//! (tokens, font, terminal palette, background, chrome, motion).
 //!
 //! Every token, range and preset lives in the constants below. The `k2-zen`
 //! skill is generated from the same constants, so a token added here without
@@ -48,8 +49,77 @@ pub const COLOR_TOKENS: &[&str] = &[
     "danger",
 ];
 
+/// Terminal palette tokens, the same keys in `[terminal.light]` and
+/// `[terminal.dark]` (Omarchy addition 1: agent terminals in Zen match the
+/// theme). The 16 ANSI colours plus foreground, background, cursor and
+/// selection.
+pub const TERMINAL_TOKENS: &[&str] = &[
+    "foreground",
+    "background",
+    "cursor",
+    "cursor-text",
+    "selection",
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "bright-black",
+    "bright-red",
+    "bright-green",
+    "bright-yellow",
+    "bright-blue",
+    "bright-magenta",
+    "bright-cyan",
+    "bright-white",
+];
+
 pub const SCHEMES: &[&str] = &["auto", "light", "dark"];
-pub const FAMILIES: &[&str] = &["system", "rounded", "serif", "mono"];
+
+/// `[font] family` (Omarchy addition 5): one font for the whole Zen page,
+/// terminals included. `(name, css stack, monospace)`. System stacks and
+/// fonts the app already bundles only; no fonts from the network.
+/// Terminals need fixed-width glyphs, so a proportional family pairs with
+/// [`TERMINAL_PARTNER`] inside terminals; a monospace family is used there
+/// as is.
+pub const FONT_FAMILIES: &[(&str, &str, bool)] = &[
+    ("system", "-apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, sans-serif", false),
+    ("rounded", "ui-rounded, \"SF Pro Rounded\", -apple-system, BlinkMacSystemFont, system-ui, sans-serif", false),
+    ("serif", "ui-serif, \"New York\", Charter, Georgia, \"Times New Roman\", serif", false),
+    ("mono", "ui-monospace, \"SF Mono\", Menlo, Consolas, \"DejaVu Sans Mono\", monospace", true),
+    ("meslo", "\"MesloLGM Nerd Font\", \"MesloLGM Nerd Font Mono\", Menlo, Monaco, \"Courier New\", monospace", true),
+    ("jetbrains-mono", "\"JetBrains Mono\", ui-monospace, Menlo, Consolas, monospace", true),
+    ("fira-code", "\"Fira Code\", ui-monospace, Menlo, Consolas, monospace", true),
+    ("lilex", "\"Lilex\", ui-monospace, Menlo, Consolas, monospace", true),
+];
+/// The family terminals use when `[font] family` is proportional (K2's
+/// terminal default today).
+pub const TERMINAL_PARTNER: &str = "meslo";
+/// Names of [`FONT_FAMILIES`].
+pub const FAMILIES: &[&str] =
+    &["system", "rounded", "serif", "mono", "meslo", "jetbrains-mono", "fira-code", "lilex"];
+
+/// `(css stack, monospace)` of a family name.
+pub fn font_family(name: &str) -> Option<(&'static str, bool)> {
+    FONT_FAMILIES.iter().find(|(n, _, _)| *n == name).map(|(_, s, m)| (*s, *m))
+}
+
+/// `[background] fit` (theme bundles only).
+pub const BACKGROUND_FITS: &[&str] = &["cover", "contain", "tile", "center"];
+/// Background image types: `(extension, mime)`. No SVG (it can carry script).
+pub const BACKGROUND_TYPES: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+    ("gif", "image/gif"),
+];
+/// A background image is at most this many bytes (it travels to the
+/// renderer as a `data:` URL inside `/cli/zen/get`).
+pub const MAX_BACKGROUND_BYTES: u64 = 2 * 1024 * 1024;
 /// `[chrome] corners` (Z51: only the two values K2 has ever sent).
 pub const CORNERS: &[&str] = &["system", "square"];
 /// `[chrome] stoplights` (Z50: macOS does not let K2 hide them).
@@ -67,12 +137,13 @@ pub struct NumToken {
 }
 
 pub const NUM_TOKENS: &[NumToken] = &[
-    NumToken { table: "type", key: "size", min: 12.0, max: 20.0 },
-    NumToken { table: "type", key: "line-height", min: 1.2, max: 1.8 },
+    NumToken { table: "font", key: "size", min: 12.0, max: 20.0 },
+    NumToken { table: "font", key: "line-height", min: 1.2, max: 1.8 },
     NumToken { table: "shape", key: "radius", min: 0.0, max: 28.0 },
     NumToken { table: "shape", key: "bubble-radius", min: 0.0, max: 28.0 },
     NumToken { table: "shape", key: "gap", min: 4.0, max: 24.0 },
     NumToken { table: "shape", key: "list-width", min: 240.0, max: 420.0 },
+    NumToken { table: "background", key: "opacity", min: 0.0, max: 1.0 },
 ];
 
 /// The animation tree (Z22): `(name, parent)`. A child takes its parent's
@@ -110,9 +181,12 @@ pub const BUILTIN_BEZIERS: &[(&str, [f64; 4])] = &[
     ("overshot", [0.34, 1.56, 0.64, 1.0]),
 ];
 
-/// Top-level tables a theme may carry.
+/// Top-level tables every Zen file may carry (`zen.toml`, pages, themes).
 pub const THEME_TABLES: &[&str] =
-    &["theme", "colors", "type", "shape", "chrome", "bezier", "animation"];
+    &["theme", "colors", "font", "shape", "terminal", "chrome", "bezier", "animation"];
+/// Tables only a theme bundle (`themes/<name>/theme.toml`) may carry: the
+/// background image lives next to the bundle's own file.
+pub const BUNDLE_TABLES: &[&str] = &["background"];
 /// Top-level keys that open in Zen v2: warned and ignored in v1.
 pub const V2_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls"];
 /// The warning for [`V2_TABLES`] (Z9).
@@ -141,6 +215,9 @@ pub enum FileKind {
     Zen,
     /// `pages/<home>.toml`: the template line plus an optional theme override.
     Page,
+    /// `themes/<name>/theme.toml`: a theme bundle (or the user's override
+    /// of a built-in theme), plus `[background]`.
+    Theme,
 }
 
 /// A flat, validated theme layer: `"colors.light.canvas" → "#fff"`,
@@ -153,6 +230,9 @@ pub struct Checked {
     pub layer: Layer,
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
+    /// `(line, col)` of each layer key, for checks that need the disk
+    /// (the background image) to point at the line that named it.
+    pub positions: BTreeMap<String, (usize, usize)>,
 }
 
 impl Checked {
@@ -426,19 +506,20 @@ fn check_theme(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
     }
 }
 
-fn check_colors(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
+/// `[colors.*]` and `[terminal.*]`: a light and a dark table of colours.
+fn check_colors(ctx: &mut Ctx, table: &str, tokens: &[&str], t: &dyn TableLike, at: (usize, usize)) {
     for (scheme, item) in t.iter() {
         let pos = key_pos(ctx, t, scheme, item, at);
         if scheme != "light" && scheme != "dark" {
-            ctx.error(pos, unknown_key(scheme, "[colors]", &["light", "dark"]));
+            ctx.error(pos, unknown_key(scheme, &format!("[{table}]"), &["light", "dark"]));
             continue;
         }
-        let name = format!("colors.{scheme}");
+        let name = format!("{table}.{scheme}");
         let Some(sub) = require_table(ctx, item, pos, &name) else { continue };
         for (tok, v) in sub.iter() {
             let tpos = key_pos(ctx, sub, tok, v, pos);
-            if !COLOR_TOKENS.contains(&tok) {
-                ctx.error(tpos, unknown_key(tok, &format!("[{name}]"), COLOR_TOKENS));
+            if !tokens.contains(&tok) {
+                ctx.error(tpos, unknown_key(tok, &format!("[{name}]"), tokens));
                 continue;
             }
             match v.as_value().and_then(Value::as_str) {
@@ -478,12 +559,54 @@ fn check_numbers(ctx: &mut Ctx, table: &str, t: &dyn TableLike, at: (usize, usiz
                     ctx.error(p, format!("{table}.{k} must be a number from {} to {}", num_json(tok.min), num_json(tok.max)));
                 }
             }
-        } else if table == "type" && k == "family" {
-            check_scalar_enum(ctx, "type.family".into(), item, pos, FAMILIES, "family");
+        } else if table == "font" && k == "family" {
+            check_scalar_enum(ctx, "font.family".into(), item, pos, FAMILIES, "family");
+        } else if table == "background" && k == "fit" {
+            check_scalar_enum(ctx, "background.fit".into(), item, pos, BACKGROUND_FITS, "fit");
+        } else if table == "background" && k == "image" {
+            match item.as_value().and_then(Value::as_str).map(check_image_name) {
+                Some(Ok(name)) => ctx.set("background.image".into(), json!(name), pos),
+                Some(Err(msg)) => {
+                    let p = item_pos(ctx, item, pos);
+                    ctx.error(p, msg);
+                }
+                None => {
+                    let p = item_pos(ctx, item, pos);
+                    ctx.error(p, "background.image must be a file name in this theme's folder, like \"background.jpg\"");
+                }
+            }
         } else {
             ctx.error(pos, unknown_key(k, &format!("[{table}]"), &allowed));
         }
     }
+}
+
+/// The extension of an allowed background file name, lower case.
+pub fn image_ext(name: &str) -> Option<&'static str> {
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    BACKGROUND_TYPES.iter().find(|(e, _)| *e == ext).map(|(e, _)| *e)
+}
+
+/// `[background] image`: a plain file name inside the theme's own folder
+/// (no folders, no `..`, not hidden) with a raster image extension.
+pub fn check_image_name(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    let plain = !n.is_empty()
+        && n.len() <= 128
+        && !n.starts_with('.')
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    if !plain {
+        return Err(format!(
+            "background.image '{n}' must be a plain file name in this theme's folder (letters, digits, - _ .), like \"background.jpg\""
+        ));
+    }
+    if image_ext(n).is_none() {
+        return Err(format!(
+            "background.image '{n}' must be one of: {} (no SVG)",
+            BACKGROUND_TYPES.iter().map(|(e, _)| format!(".{e}")).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Ok(n.to_string())
 }
 
 fn check_chrome(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
@@ -671,7 +794,15 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
                     ctx.error(p, format!("template must be the string \"{TEMPLATE_ID}\""));
                 }
             },
+            "template" if kind == FileKind::Theme => {
+                ctx.error(pos, "unknown key 'template' in a theme; the template line belongs in pages/<home-id>.toml")
+            }
             "template" => ctx.error(pos, "unknown key 'template' in zen.toml; the template line belongs in pages/<home-id>.toml"),
+            "type" => ctx.error(pos, "[type] is now [font] (family, size, line-height): one font for Zen and its terminals"),
+            "background" if kind != FileKind::Theme => ctx.error(
+                pos,
+                "[background] belongs in a theme bundle (~/.k2/zen/themes/<name>/theme.toml), next to its image; make one with k2 zen theme new <name>",
+            ),
             k if V2_TABLES.contains(&k) => ctx.warn(pos, V2_WARNING),
             "theme" => {
                 if let Some(t) = require_table(&mut ctx, item, pos, "theme") {
@@ -680,12 +811,22 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
             }
             "colors" => {
                 if let Some(t) = require_table(&mut ctx, item, pos, "colors") {
-                    check_colors(&mut ctx, t, pos);
+                    check_colors(&mut ctx, "colors", COLOR_TOKENS, t, pos);
                 }
             }
-            "type" => {
-                if let Some(t) = require_table(&mut ctx, item, pos, "type") {
-                    check_numbers(&mut ctx, "type", t, pos, &["family"]);
+            "terminal" => {
+                if let Some(t) = require_table(&mut ctx, item, pos, "terminal") {
+                    check_colors(&mut ctx, "terminal", TERMINAL_TOKENS, t, pos);
+                }
+            }
+            "font" => {
+                if let Some(t) = require_table(&mut ctx, item, pos, "font") {
+                    check_numbers(&mut ctx, "font", t, pos, &["family"]);
+                }
+            }
+            "background" => {
+                if let Some(t) = require_table(&mut ctx, item, pos, "background") {
+                    check_numbers(&mut ctx, "background", t, pos, &["image", "fit"]);
                 }
             }
             "shape" => {
@@ -714,6 +855,9 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
                     allowed.push("template");
                 }
                 allowed.extend_from_slice(THEME_TABLES);
+                if kind == FileKind::Theme {
+                    allowed.extend_from_slice(BUNDLE_TABLES);
+                }
                 ctx.error(pos, unknown_key(other, "the top level", &allowed));
             }
         }
@@ -722,6 +866,7 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
         ctx.error((1, 1), "missing `schema = 1` (the first line of every Zen file)");
     }
     cross_check(&mut ctx, base);
+    ctx.out.positions = std::mem::take(&mut ctx.pos);
     ctx.out
 }
 
@@ -803,11 +948,38 @@ fn ease_css(b: &[f64]) -> String {
 }
 
 /// The resolved theme, chrome and motion for one Home.
+///
+/// `tokens` is `{scheme, colors: {light, dark}, shape}`; `font` is
+/// `{family, stack, monospace, size, lineHeight, terminal: {family, stack,
+/// monospace}}`; `terminal` is `{palette: {light, dark}}`; `background` is
+/// the bundle's `{image, fit, opacity}` (the store turns `image` into a
+/// `data:` URL) or `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTheme {
-    pub theme: J,
+    pub tokens: J,
+    pub font: J,
+    pub terminal: J,
+    pub background: Option<J>,
     pub chrome: J,
     pub motion: J,
+}
+
+/// The resolved `font` object for a family name, size and line height.
+pub fn font_json(family: &str, size: J, line_height: J) -> J {
+    let (stack, mono) = font_family(family).unwrap_or_else(|| {
+        font_family("system").unwrap_or_else(|| panic!("FONT_FAMILIES must carry 'system'"))
+    });
+    let term = if mono { family } else { TERMINAL_PARTNER };
+    let (term_stack, term_mono) = font_family(term)
+        .unwrap_or_else(|| panic!("TERMINAL_PARTNER '{TERMINAL_PARTNER}' must be in FONT_FAMILIES"));
+    json!({
+        "family": family,
+        "stack": stack,
+        "monospace": mono,
+        "size": size,
+        "lineHeight": line_height,
+        "terminal": { "family": term, "stack": term_stack, "monospace": term_mono },
+    })
 }
 
 /// Resolve `user` (zen.toml + page override, page winning) over `builtin`.
@@ -821,26 +993,35 @@ pub fn resolve(builtin: &Layer, user: &Layer) -> ResolvedTheme {
     let merged = merge(&[builtin, user]);
     let s = |k: &str| merged.get(k).cloned().unwrap_or(J::Null);
 
-    let mut colors = Map::new();
-    for scheme in ["light", "dark"] {
-        let mut m = Map::new();
-        for tok in COLOR_TOKENS {
-            m.insert((*tok).to_string(), s(&format!("colors.{scheme}.{tok}")));
+    let schemes = |table: &str, tokens: &[&str]| -> J {
+        let mut out = Map::new();
+        for scheme in ["light", "dark"] {
+            let mut m = Map::new();
+            for tok in tokens {
+                m.insert((*tok).to_string(), s(&format!("{table}.{scheme}.{tok}")));
+            }
+            out.insert(scheme.to_string(), J::Object(m));
         }
-        colors.insert(scheme.to_string(), J::Object(m));
-    }
-    let mut type_ = Map::new();
-    type_.insert("family".into(), s("type.family"));
+        J::Object(out)
+    };
     let mut shape = Map::new();
-    for n in NUM_TOKENS {
-        let target = if n.table == "type" { &mut type_ } else { &mut shape };
-        target.insert(n.key.to_string(), s(&format!("{}.{}", n.table, n.key)));
+    for n in NUM_TOKENS.iter().filter(|n| n.table == "shape") {
+        shape.insert(n.key.to_string(), s(&format!("shape.{}", n.key)));
     }
-    let theme = json!({
+    let tokens = json!({
         "scheme": s("theme.scheme"),
-        "colors": colors,
-        "type": type_,
+        "colors": schemes("colors", COLOR_TOKENS),
         "shape": shape,
+    });
+    let family = merged.get("font.family").and_then(J::as_str).unwrap_or("system").to_string();
+    let font = font_json(&family, s("font.size"), s("font.line-height"));
+    let terminal = json!({ "palette": schemes("terminal", TERMINAL_TOKENS) });
+    let background = merged.get("background.image").map(|image| {
+        json!({
+            "image": image,
+            "fit": merged.get("background.fit").cloned().unwrap_or_else(|| json!("cover")),
+            "opacity": merged.get("background.opacity").cloned().unwrap_or_else(|| json!(1)),
+        })
     });
     let chrome = json!({
         "corners": s("chrome.corners"),
@@ -907,7 +1088,7 @@ pub fn resolve(builtin: &Layer, user: &Layer) -> ResolvedTheme {
         // Z22: prefers-reduced-motion turns every Zen animation instant.
         "reducedMotion": "instant",
     });
-    ResolvedTheme { theme, chrome, motion }
+    ResolvedTheme { tokens, font, terminal, background, chrome, motion }
 }
 
 /// 64-bit FNV-1a, hex. Stable across Rust versions.

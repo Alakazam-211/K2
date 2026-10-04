@@ -1,18 +1,22 @@
 //! Watch `~/.k2/zen/` and announce changes (prd-zen-mode-v1 Z12, vs-live Z61).
 //!
 //! Shape follows `charter_compose_watch` and the 0.40.104 RSS lesson:
-//! - two DIRECTORIES, non-recursive (`zen/` and `zen/pages/`), so editor
-//!   rename-saves are seen and `.history/` is never walked;
+//! - DIRECTORIES, non-recursive (`zen/`, `zen/pages/`, `zen/themes/` and
+//!   each `zen/themes/<name>/`), so editor rename-saves are seen and
+//!   `.history/` is never walked;
 //! - the bounded `notify_bound` channel (`try_send`, drop on full), so a
 //!   burst can't grow memory;
 //! - `should_observe` drops Access/Other kinds before paths are touched;
-//! - a path filter that keeps only `zen.toml` and `pages/<id>.toml`
-//!   (never `.history/`, `homes.json`, `grants.json` or editor temp files);
+//! - a path filter that keeps only `zen.toml`, `pages/<id>.toml`,
+//!   `themes/<name>/theme.toml` and a theme's background images (never
+//!   `.history/`, `homes.json`, `active.json`, `grants.json` or editor temp
+//!   files);
 //! - a 250 ms trailing debounce: a burst of saves is one re-validate.
 //!
 //! Started lazily: at boot only when the folder exists, otherwise by the
 //! first `POST /cli/zen/page/ensure`. One watcher per process.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -21,11 +25,16 @@ use std::time::{Duration, Instant};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use k2_core::log_debug;
-use k2_core::zen::store::{valid_home_id, PAGES_DIR, ZEN_FILE};
+use k2_core::zen::schema::image_ext;
+use k2_core::zen::store::{valid_home_id, PAGES_DIR, THEMES_DIR, THEME_FILE, ZEN_FILE};
+use k2_core::zen::valid_theme_name;
 
 use crate::notify_bound::{should_observe, DroppingHandler, NOTIFY_CHANNEL_BOUND};
 
 pub const DEBOUNCE: Duration = Duration::from_millis(250);
+/// How often the list of `themes/<name>/` folders is re-read (also right
+/// after any change directly under `themes/`).
+const THEME_RESCAN: Duration = Duration::from_secs(1);
 const TICK: Duration = Duration::from_millis(50);
 
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -85,23 +94,45 @@ fn root_forms(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// True for `<root>/zen.toml`, `<root>/pages/<id>.toml` and `<root>/pages`
-/// itself. Everything else (`.history/…`, `homes.json`, `grants.json`,
-/// `zen.toml.swp`, `.#zen.toml`, atomic-write temp files) is ignored.
+/// True for `<root>/zen.toml`, `<root>/pages/<id>.toml`, `<root>/pages`,
+/// `<root>/themes`, `<root>/themes/<name>`, `<root>/themes/<name>/theme.toml`
+/// and a theme's image files. Everything else (`.history/…`, `homes.json`,
+/// `active.json`, `grants.json`, `zen.toml.swp`, `.#zen.toml`, atomic-write
+/// temp files) is ignored.
 pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
     let Some(parent) = path.parent() else { return false };
-    if roots.iter().any(|r| r == parent) {
-        return name == ZEN_FILE || name == PAGES_DIR;
+    let is_root = |p: &Path| roots.iter().any(|r| r == p);
+    if is_root(parent) {
+        return name == ZEN_FILE || name == PAGES_DIR || name == THEMES_DIR;
     }
-    let in_pages = parent.file_name().and_then(|n| n.to_str()) == Some(PAGES_DIR)
-        && parent.parent().is_some_and(|gp| roots.iter().any(|r| r == gp));
-    in_pages
-        && name
-            .strip_suffix(".toml")
-            .is_some_and(valid_home_id)
+    let parent_name = parent.file_name().and_then(|n| n.to_str());
+    let grand = parent.parent();
+    if parent_name == Some(PAGES_DIR) && grand.is_some_and(is_root) {
+        return name.strip_suffix(".toml").is_some_and(valid_home_id);
+    }
+    if parent_name == Some(THEMES_DIR) && grand.is_some_and(is_root) {
+        return valid_theme_name(name);
+    }
+    let in_theme = parent_name.is_some_and(valid_theme_name)
+        && grand.is_some_and(|g| {
+            g.file_name().and_then(|n| n.to_str()) == Some(THEMES_DIR) && g.parent().is_some_and(is_root)
+        });
+    in_theme && !name.starts_with('.') && (name == THEME_FILE || image_ext(name).is_some())
+}
+
+/// `themes/<name>/` folders to watch now.
+fn theme_dirs(root: &Path) -> BTreeSet<PathBuf> {
+    std::fs::read_dir(root.join(THEMES_DIR))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir() && valid_theme_name(&e.file_name().to_string_lossy()))
+                .map(|e| e.path())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The watch loop. Calls `on_change` once per debounced burst of real
@@ -118,7 +149,11 @@ pub(crate) fn watch_loop(
         .watch(root, RecursiveMode::NonRecursive)
         .map_err(|e| format!("watch {}: {e}", root.display()))?;
     let pages = root.join(PAGES_DIR);
+    let themes = root.join(THEMES_DIR);
     let mut pages_watched = false;
+    let mut themes_watched = false;
+    let mut theme_watched: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut last_scan = Instant::now() - THEME_RESCAN;
     let roots = root_forms(root);
     let mut pending: Option<Instant> = None;
     loop {
@@ -130,10 +165,33 @@ pub(crate) fn watch_loop(
         } else if pages_watched && !pages.is_dir() {
             pages_watched = false;
         }
+        if !themes_watched && themes.is_dir() {
+            themes_watched = watcher.watch(&themes, RecursiveMode::NonRecursive).is_ok();
+            last_scan = Instant::now() - THEME_RESCAN;
+        } else if themes_watched && !themes.is_dir() {
+            themes_watched = false;
+        }
+        // Theme folders come and go (`k2 zen theme new`, a hand mkdir): add
+        // a non-recursive watch for each new one, at most once a second.
+        if themes_watched && last_scan.elapsed() >= THEME_RESCAN {
+            last_scan = Instant::now();
+            let now = theme_dirs(root);
+            theme_watched.retain(|d| now.contains(d));
+            for d in now {
+                if !theme_watched.contains(&d) && watcher.watch(&d, RecursiveMode::NonRecursive).is_ok() {
+                    theme_watched.insert(d);
+                    // A folder made with its files already inside: re-read.
+                    pending = Some(Instant::now());
+                }
+            }
+        }
         match rx.recv_timeout(TICK) {
             Ok(Ok(ev)) => {
                 if should_observe(ev.kind) && ev.paths.iter().any(|p| is_zen_source(&roots, p)) {
                     pending = Some(Instant::now());
+                    if ev.paths.iter().any(|p| p.parent().is_some_and(|pp| pp.ends_with(THEMES_DIR))) {
+                        last_scan = Instant::now() - THEME_RESCAN;
+                    }
                 }
             }
             Ok(Err(e)) => log_debug!("[daemon/zen-watch] notify error: {e}"),
@@ -170,6 +228,11 @@ mod tests {
         assert!(is_zen_source(&roots, &root.join("zen.toml")));
         assert!(is_zen_source(&roots, &root.join("pages/abc-123.toml")));
         assert!(is_zen_source(&roots, &root.join("pages")));
+        assert!(is_zen_source(&roots, &root.join("themes")));
+        assert!(is_zen_source(&roots, &root.join("themes/sunset")));
+        assert!(is_zen_source(&roots, &root.join("themes/sunset/theme.toml")));
+        assert!(is_zen_source(&roots, &root.join("themes/sunset/background.jpg")));
+        assert!(is_zen_source(&roots, &root.join("themes/sunset/wall.PNG")));
         for no in [
             "homes.json",
             "grants.json",
@@ -182,6 +245,13 @@ mod tests {
             "pages/abc.toml.tmp",
             "pages/.hidden.toml",
             "pages/sub/x.toml",
+            "active.json",
+            "themes/Sunset/theme.toml",
+            "themes/sunset/notes.md",
+            "themes/sunset/.theme.toml.swp",
+            "themes/sunset/theme.toml.tmp",
+            "themes/sunset/sub/theme.toml",
+            ".history/themes/sunset/theme.toml/20261004T120000000Z-000.toml",
         ] {
             assert!(!is_zen_source(&roots, &root.join(no)), "{no} must be ignored");
         }

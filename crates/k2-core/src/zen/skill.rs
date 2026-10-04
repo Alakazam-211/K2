@@ -6,15 +6,16 @@
 //! `~/.k2/zen/` folder (Z68), so agents on headless servers never see it.
 
 use super::schema::{
-    ANIMATION_STYLES, ANIMATION_TREE, BEZIER_Y_MAX, BEZIER_Y_MIN, BUILTIN_BEZIERS, COLOR_TOKENS,
-    CORNERS, FAMILIES, MIN_CONTRAST, NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS,
-    STOPLIGHT_OFFSET_MAX, TEMPLATE_ID, V2_WARNING,
+    ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BEZIER_Y_MAX, BEZIER_Y_MIN,
+    BUILTIN_BEZIERS, COLOR_TOKENS, CORNERS, FONT_FAMILIES, MAX_BACKGROUND_BYTES, MIN_CONTRAST,
+    NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID,
+    TERMINAL_PARTNER, TERMINAL_TOKENS, V2_WARNING,
 };
-use super::{BRIDGE_CAPS, REQUIRED_CONTROLS};
+use super::{BRIDGE_CAPS, BUILTIN_THEMES, DEFAULT_THEME, REQUIRED_CONTROLS};
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
-    "Restyle Zen Mode (~/.k2/zen): tokens, motion, chrome, validate, reset; agents request, never grant";
+    "Restyle Zen Mode (~/.k2/zen): themes, tokens, font, terminal colours, backgrounds, motion, chrome, validate, reset; agents request, never grant";
 
 fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
@@ -33,13 +34,49 @@ Zen Mode is a second face for a Home in the K2 desktop app: the Home's agents\n\
 in a list, the conversation with one agent, and a box to message it. Its look\n\
 comes from files on THIS computer that you may edit when the human asks you\n\
 to restyle Zen.\n\n\
+## Themes, defaults and your changes\n\n\
+K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
+human's changes, layered on top. App updates never touch those files. For one\n\
+Home the stack is: K2's `default` theme, then K2's copy of the active theme,\n\
+then `themes/<active>/theme.toml`, then `zen.toml`, then `pages/<home-id>.toml`.\n\
+A later file wins key by key; anything a file leaves out comes from below.\n\n\
+One theme is active for the computer, and a Home may pick its own. K2 keeps\n\
+that pick; change it only with `k2 zen theme`.\n\n\
+Built-in themes: ",
+    );
+    s.push_str(
+        &BUILTIN_THEMES
+            .iter()
+            .map(|t| format!("`{}` ({})", t.name, t.summary))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    s.push_str(&format!(
+        ". Every other theme sits on top of `{DEFAULT_THEME}`.\n\n\
+- `k2 zen theme list` lists the themes (built in, and the human's own).\n\
+- `k2 zen theme next` / `k2 zen theme prev` cycle them; `k2 zen theme set <name>` picks one.\n\
+  Add `--home <name|id>` for one Home; `k2 zen theme set --home <name> --clear` drops a Home's pick.\n\
+- `k2 zen theme new <name> [--from <theme>]` starts a theme bundle in\n\
+  `~/.k2/zen/themes/<name>/` from a copy of a theme (default: K2's theme of that\n\
+  name, else `{DEFAULT_THEME}`). Using a built-in's name makes an override of it.\n\
+- `k2 zen reset --theme <name>` clears it: an override is removed (K2's theme\n\
+  shows again); a theme only the human has goes back to a copy of `{DEFAULT_THEME}`.\n\n"
+    ));
+    s.push_str(
+        "To make a theme for the human: `k2 zen theme new <name>`, edit\n\
+`~/.k2/zen/themes/<name>/theme.toml`, add a background image next to it if\n\
+asked, run `k2 zen validate`, then `k2 zen theme set <name>`.\n\n\
 ## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n\
-- `zen.toml`: the theme for every Home. Edit this.\n\
+- `themes/<name>/theme.toml`: a theme bundle (colours, font, terminal palette,\n\
+  optional background image next to it). Switching themes changes all of them.\n\
+- `zen.toml`: the human's changes for every Home, on top of whichever theme is\n\
+  active (empty at first). Keep theme-specific colours in the theme instead.\n\
 - `pages/<home-id>.toml`: one page per Home. `schema = 1`, `template = \"",
     );
     s.push_str(TEMPLATE_ID);
     s.push_str(
-        "\"`,\n  then any theme table below to override `zen.toml` for that Home only.\n\
+        "\"`,\n  then any theme table below to override for that Home only.\n\
+- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
 - `homes.json`: Home id to name. K2 writes it. **Never write homes.json.**\n\
 - `.history/`: the last 20 good versions of each file. K2 writes it. **Never write .history/.**\n\
 - `grants.json`: widget permissions (Zen v2). Only the K2 app writes it, when the\n\
@@ -62,7 +99,7 @@ their own computer). Zen isn't set up until the human turns it on from Home.\n\n
 - The first line is `schema = 1`. This K2 reads Zen schema 1 only.\n\
 - Unknown keys are errors, with the line and a \"did you mean\".\n\
 - No raw CSS, no selectors, no fonts from the network.\n\
-- Agents never write grants.json, homes.json or .history/: K2 owns them.\n",
+- Agents never write grants.json, homes.json, active.json or .history/: K2 owns them.\n",
     );
     s.push_str(&format!("- `[layout]` and `[[widget]]` are warned and ignored: \"{V2_WARNING}\".\n\n"));
 
@@ -79,16 +116,41 @@ their own computer). Zen isn't set up until the human turns it on from Home.\n\n
         fmt_num(MIN_CONTRAST)
     ));
 
-    s.push_str("### `[type]`\n\n");
-    s.push_str(&format!("- `family`: {} (system stacks and bundled fonts).\n", ticks(FAMILIES)));
-    for n in NUM_TOKENS.iter().filter(|n| n.table == "type") {
+    s.push_str("### `[font]` (one font for Zen and its terminals)\n\n");
+    s.push_str("- `family`: one of these (system stacks and fonts K2 already bundles; never fonts from the network):\n");
+    for (name, _, mono) in FONT_FAMILIES {
+        s.push_str(&format!("  - `{name}`{}\n", if *mono { " (monospace)" } else { "" }));
+    }
+    s.push_str(&format!(
+        "  The family applies to the whole Zen page and the agent terminals shown in it.\n  Terminals need fixed-width letters, so a proportional family uses `{TERMINAL_PARTNER}` inside terminals.\n"
+    ));
+    for n in NUM_TOKENS.iter().filter(|n| n.table == "font") {
         s.push_str(&format!("- `{}`: {} to {}\n", n.key, fmt_num(n.min), fmt_num(n.max)));
     }
+    s.push_str("- `[type]` is the old name of `[font]` and is an error.\n");
     s.push_str("\n### `[shape]` (px)\n\n");
     for n in NUM_TOKENS.iter().filter(|n| n.table == "shape") {
         s.push_str(&format!("- `{}`: {} to {}\n", n.key, fmt_num(n.min), fmt_num(n.max)));
     }
 
+    s.push_str("\n### `[terminal.light]` and `[terminal.dark]`\n\n");
+    s.push_str("The palette of the agent terminals shown in Zen. Each is a colour, like `[colors.*]`:\n\n");
+    for t in TERMINAL_TOKENS {
+        s.push_str(&format!("- `{t}`\n"));
+    }
+    s.push_str("\n### `[background]` (theme bundles only)\n\n");
+    s.push_str(&format!(
+        "Only in `themes/<name>/theme.toml`; anywhere else it is an error.\n\n\
+- `image`: a file name in the theme's own folder (no folders, not hidden), one of {}. No SVG.\n  At most {} bytes (2 MB); the bytes must match the extension; links are refused.\n\
+- `fit`: {}\n",
+        BACKGROUND_TYPES.iter().map(|(e, _)| format!("`.{e}`")).collect::<Vec<_>>().join(", "),
+        MAX_BACKGROUND_BYTES,
+        ticks(BACKGROUND_FITS),
+    ));
+    for n in NUM_TOKENS.iter().filter(|n| n.table == "background") {
+        s.push_str(&format!("- `{}`: {} to {}\n", n.key, fmt_num(n.min), fmt_num(n.max)));
+    }
+    s.push_str("\nA bad image is reported with its file and line, and Zen keeps the theme's last good image.\n");
     s.push_str("\n### `[chrome]` (the window itself)\n\n");
     s.push_str(&format!("- `corners`: {} (macOS window corners).\n", ticks(CORNERS)));
     s.push_str(&format!("- `stoplights`: {} (the macOS window buttons).\n", ticks(STOPLIGHTS)));

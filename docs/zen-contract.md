@@ -81,6 +81,88 @@ mode:
 - An answer that isn't a page: "K2 on this computer sent a Zen page this app
   can't read".
 
+## Themes (Omarchy additions, 2026-10-04)
+
+`theme` changed shape for theme bundles. It is no longer
+`{scheme, colors, type, shape}`. `chrome` and `motion` stay top level.
+
+```jsonc
+"theme": {
+  "name": "default",            // the active theme for this Home
+  "builtin": true,              // shipped inside K2 (read-only)
+  "user": false,                // ~/.k2/zen/themes/<name>/theme.toml exists (for a built-in: an override)
+  "scope": "global",            // "home" when the Home has its own pick
+  "tokens": {
+    "scheme": "auto",           // auto | light | dark
+    "colors": { "light": { "canvas": "#…", …, "idle": "#…", … }, "dark": { … } },  // `idle`, no `unread` (decision 9)
+    "shape": { "radius": 14, "bubble-radius": 18, "gap": 12, "list-width": 300 }
+  },
+  "font": {                     // one font for the whole Zen page AND its terminals
+    "family": "system", "stack": "-apple-system, …", "monospace": false,
+    "size": 14, "lineHeight": 1.45,
+    "terminal": { "family": "meslo", "stack": "\"MesloLGM Nerd Font\", …", "monospace": true }
+  },
+  "terminal": { "palette": { "light": { "foreground", "background", "cursor", "cursor-text",
+                "selection", "black" … "bright-white" }, "dark": { … } } },
+  "background": {               // only when the theme names an image
+    "dataUrl": "data:image/png;base64,…", "mime": "image/png", "bytes": 12345,
+    "file": "background.png", "fit": "cover", "opacity": 1, "lastGood": false
+  }
+},
+"themes": [ { "name": "default", "builtin": true, "user": false, "summary": "…", "active": true }, … ]
+```
+
+- **Font.** `font.stack` is the CSS `font-family` for the Zen root.
+  Terminals in Zen use `font.terminal.stack`. That is the same family when
+  `font.monospace` is true. A proportional family (system, rounded, serif)
+  pairs with `meslo` in terminals, because a terminal grid needs
+  fixed-width glyphs. Families are system stacks or fonts the app already
+  bundles: meslo, jetbrains-mono, fira-code and lilex. Nothing loads from
+  the network.
+- **Background: served as a `data:` URL.** The app CSP allows
+  `img-src 'self' asset: data: blob:` and has no `http://127.0.0.1`. A
+  daemon image route would therefore be blocked, and it would also need the
+  owner token in the URL. The locked frame CSP (`lib/frame-csp.ts`) allows
+  `img-src data: blob:`, so v2 widgets in a frame can use the same URL.
+  Images are capped:
+  - types: `.png`, `.jpg`/`.jpeg`, `.webp` and `.gif`. No SVG.
+  - size: 2 MB (2 097 152 bytes).
+  - content: the bytes must match the extension. Links are refused.
+
+  A bad image is reported in `errors` with the file and line of
+  `image =`. The theme's last good image is then served with
+  `lastGood: true`. The renderer should paint `dataUrl` under the Zen root
+  with `fit` (`cover|contain|tile|center`) and `opacity`.
+- **Layering.** For one Home the stack is, lowest first:
+  1. K2's built-in `default` theme;
+  2. K2's built-in copy of the active theme;
+  3. `themes/<active>/theme.toml`;
+  4. `zen.toml`;
+  5. `pages/<home>.toml`.
+
+  The built-ins are `default`, `paper` and `midnight`. They are embedded in
+  the daemon and read-only. `~/.k2/zen` holds only the user's changes, and
+  the `zen.toml` stub is empty. The page template is the same: the built-in
+  `k2.texting@1` is the default, and a page file holds only overrides.
+- **Errors.** A theme file with errors keeps its last good version, the
+  same way as `zen.toml`. The errors come back in `errors` with
+  `file: "themes/<name>/theme.toml"`. If a theme pick points to a deleted
+  theme, `default` is shown and a warning is added for `active.json`.
+
+| Call | Body | Answer |
+|---|---|---|
+| `GET /cli/zen/theme/list` | `?home=<id|name>` | `{active, scope, global, home, homeTheme, missing, themes}` |
+| `POST /cli/zen/theme/set` | `{name}`, or `{name, home}` for one Home, or `{home, clear: true}` to drop the Home's pick | `{ok, theme, scope, home, changed}` |
+| `POST /cli/zen/theme/next` and `/prev` | `{}` or `{home}` | same as set; cycles `themes` in order and wraps |
+| `POST /cli/zen/theme/new` | `{name, from?}` | `{ok, name, file, path, from, copiedImage, changed}`; 409 `theme_exists` when the theme is already there |
+| `POST /cli/zen/reset` | `{theme}` (as well as `file` and `home`) | removes an override of a built-in theme (`restored: "builtin"`) |
+
+An unknown name gets 404 `{error: "unknown_theme", theme, themes, message}`
+and changes nothing. Each switch emits one `zen_changed`, so the renderer
+re-`get`s. Cycle order: built-ins first in K2's order, then the user's
+themes by name. The renderer may cycle on the client over `themes`, or
+call next and prev.
+
 ## `theme`, `chrome`, `motion`: what the S5 engine reads
 
 Source: `src/renderer/lib/zen/zen-theme-engine.ts`, `zen-chrome.ts`,

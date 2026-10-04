@@ -7,7 +7,10 @@
 #   - zen.toml with `acent` at line 7 → `zen.toml:7:3: unknown key 'acent'`, exit 1;
 #   - clean → exit 0; history lists snapshots; reset --to restores one;
 #   - --home resolves a Home by name; doctor reports the watcher;
-#   - there is no grant verb, and nothing writes grants.json.
+#   - there is no grant verb, and nothing writes grants.json;
+#   - themes: list/next/prev/set/new, per-Home picks, an unknown name exits 1,
+#     reset --theme clears an override, and a curl-only switch (no CLI, no
+#     client) shows up in /cli/zen/get.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
 
 set -euo pipefail
@@ -91,6 +94,8 @@ assert_eq "k2 help zen exit" "$rc" "0"
 assert_contains "k2 help zen" "$out" "k2 zen reset"
 
 echo "== not set up =="
+capture zen theme list
+assert_eq "zen theme list before setup exits 3" "$rc" "3"
 for verb in validate path pages history reload; do
     capture zen "$verb"
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
@@ -133,10 +138,10 @@ capture zen reload
 assert_eq "clean reload exits 0" "$rc" "0"
 
 echo "== page by Home name =="
-printf 'schema = 1\ntemplate = "k2.texting@1"\n[type]\nsize = 40\n' >"$ZEN/pages/home-1.toml"
+printf 'schema = 1\ntemplate = "k2.texting@1"\n[font]\nsize = 40\n' >"$ZEN/pages/home-1.toml"
 capture zen validate --home Work
 assert_eq "--home Work validate exits 1" "$rc" "1"
-assert_contains "page error names the page file" "$out" "pages/home-1.toml:4:8: type.size = 40 is out of range"
+assert_contains "page error names the page file" "$out" "pages/home-1.toml:4:8: font.size = 40 is out of range"
 capture zen validate --home Nowhere
 assert_eq "unknown Home exits 1" "$rc" "1"
 assert_contains "unknown Home message" "$out" "no Home 'Nowhere'"
@@ -165,6 +170,85 @@ assert_eq "zen.toml is the snapshot" "$(cat "$ZEN/zen.toml")" "$want"
 capture zen reset --to 19990101T000000000Z-000
 assert_eq "unknown snapshot exits 1" "$rc" "1"
 assert_contains "unknown snapshot message" "$out" "no snapshot"
+
+echo "== themes =="
+capture zen theme list
+assert_eq "theme list exit" "$rc" "0"
+assert_contains "list marks the active default" "$out" "* default  (built in)"
+assert_contains "list shows paper" "$out" "  paper  (built in)"
+assert_contains "list shows midnight" "$out" "  midnight  (built in)"
+capture zen theme next
+assert_eq "theme next exit" "$rc" "0"
+assert_eq "next goes to paper" "$out" "theme paper for this computer"
+capture zen theme next
+assert_eq "next goes to midnight" "$out" "theme midnight for this computer"
+capture zen theme next
+assert_eq "next wraps to default" "$out" "theme default for this computer"
+capture zen theme prev
+assert_eq "prev wraps to midnight" "$out" "theme midnight for this computer"
+capture zen theme set neon
+assert_eq "unknown theme exits 1" "$rc" "1"
+assert_contains "unknown theme says so" "$out" "no theme 'neon' on this computer; themes: default, paper, midnight"
+capture zen theme list --json
+active="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["active"])')"
+assert_eq "an unknown name changes nothing" "$active" "midnight"
+capture zen theme set
+assert_eq "set with no name exits 2" "$rc" "2"
+capture zen theme set paper --home Work
+assert_eq "set --home exit" "$rc" "0"
+assert_eq "set --home says so" "$out" "theme paper for Home home-1"
+capture zen theme list --home Work
+assert_contains "list --home marks paper" "$out" "* paper"
+assert_contains "list --home notes the pick" "$out" "Home home-1: its own pick"
+capture zen theme set --home Work --clear
+assert_eq "clear exit" "$rc" "0"
+assert_eq "clear says so" "$out" "Home home-1 follows this computer: theme midnight"
+
+capture zen theme new sunset
+assert_eq "theme new exit" "$rc" "0"
+assert_contains "theme new names the file" "$out" "made $ZEN/themes/sunset/theme.toml from default"
+[ -f "$ZEN/themes/sunset/theme.toml" ] && ok "theme new wrote the bundle" || bad "no themes/sunset/theme.toml"
+capture zen theme new sunset
+assert_eq "theme new never overwrites" "$rc" "1"
+assert_contains "theme new conflict message" "$out" "already exists"
+capture zen theme new "Not OK"
+assert_eq "bad theme name exits 1" "$rc" "1"
+capture zen validate --theme sunset
+assert_eq "the starter validates" "$rc" "0"
+printf 'schema = 1\n[terminal.dark]\nbluee = "#00f"\n' >"$ZEN/themes/sunset/theme.toml"
+capture zen validate --theme sunset
+assert_eq "bad theme token exits 1" "$rc" "1"
+assert_contains "theme error has file:line:col" "$out" "themes/sunset/theme.toml:3:1: unknown key 'bluee'"
+printf 'schema = 1\n[colors.dark]\naccent = "#ff9e64"\n' >"$ZEN/themes/sunset/theme.toml"
+capture zen theme list
+assert_contains "list shows the user theme last" "$out" "  sunset  (yours)"
+
+echo "== headless switch via curl =="
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{"name":"sunset"}')"
+assert_contains "curl theme/set answers" "$resp" '"theme":"sunset"'
+got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&home=home-1" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+t = d["theme"]
+print(t["name"], t["builtin"], t["tokens"]["colors"]["dark"]["accent"], t["font"]["family"], "bg" if "background" in t else "nobg", ",".join(x["name"] for x in d["themes"]))')"
+assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg default,paper,midnight,sunset"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN")"
+assert_eq "GET theme/set is 405" "$code" "405"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" --data-raw '{"name":"neon"}')"
+assert_eq "curl unknown theme is 404" "$code" "404"
+
+echo "== reset --theme clears an override =="
+capture zen theme new paper
+assert_eq "override paper" "$rc" "0"
+assert_contains "override copies K2's paper" "$out" "from paper"
+capture zen theme list
+assert_contains "list marks the override" "$out" "paper  (built in, your override)"
+capture zen reset --theme paper
+assert_eq "reset --theme exit" "$rc" "0"
+assert_contains "reset drops the override" "$out" "reset themes/paper/theme.toml to builtin"
+[ ! -f "$ZEN/themes/paper/theme.toml" ] && ok "the override file is gone" || bad "override still there"
+capture zen reset --theme neon
+assert_eq "reset an unknown theme exits 1" "$rc" "1"
 
 echo "== doctor =="
 capture zen doctor

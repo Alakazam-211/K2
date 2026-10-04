@@ -84,14 +84,15 @@ if not data.get("ok"):
 print("OK: companion stop returns ok=true")
 '
 
-# ── 4. CLI surface — confirm `cmd_daemon_companion` exists in cli/k2so ──
+# ── 4. CLI surface — confirm `cmd_daemon_companion` exists in cli/k2 ──
+# (cli/k2so is only the 0.40.0 rename shim that execs cli/k2.)
 # We can't exec the CLI directly against the sandbox daemon (it reads
 # $HOME/.k2so/daemon.port), but we CAN confirm the dispatch arm is
 # present so a regression that drops it again is caught here.
 project_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cli_file="$project_root/cli/k2so"
+cli_file="$project_root/cli/k2"
 if ! grep -q "companion)" "$cli_file" || ! grep -q "cmd_daemon_companion" "$cli_file"; then
-    echo "FAIL: cli/k2so missing 'companion)' dispatch arm or cmd_daemon_companion() function" >&2
+    echo "FAIL: cli/k2 missing 'companion)' dispatch arm or cmd_daemon_companion() function" >&2
     exit 1
 fi
 # And the dispatch must route to cmd_daemon_companion (not fail_deprecated).

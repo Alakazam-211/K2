@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 K2_CLI="$PROJECT_ROOT/cli/k2"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
@@ -90,8 +92,10 @@ fi
 
 # ── 3. Help ──────────────────────────────────────────────────────────
 echo "== help =="
-# Connection gate needs PORT+TOKEN; help exits before any HTTP call.
-help_out="$(PORT=1 TOKEN=fake "$K2_CLI" remote-session --help 2>&1)" || true
+# Connection gate needs a port + token (K2_PORT/K2_HOOK_TOKEN from
+# _hermetic_cli.sh; the CLI never read PORT/TOKEN from the env); help
+# exits before any HTTP call.
+help_out="$("$K2_CLI" remote-session --help 2>&1)" || true
 for needle in \
     "remote-session status" \
     "remote-session enable" \

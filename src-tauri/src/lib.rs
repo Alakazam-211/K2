@@ -1792,6 +1792,8 @@ pub fn run() {
             menu::window_new,
             // Tickets "Open in window" — one window per ticket.
             menu::window_open_ticket,
+            // prd-zen-mode-v1 Z53: the View menu's Enter/Exit Zen Mode text.
+            menu::set_zen_menu_label,
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
             // 0.40.48 connection resilience — out-of-webview boot-status

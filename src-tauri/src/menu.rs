@@ -4,9 +4,24 @@
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, EventTarget, Manager};
 #[cfg(not(target_os = "macos"))]
 use tauri::{AppHandle, Manager};
+
+/// prd-zen-mode-v1 Z30/Z53 — the View menu's "Enter / Exit Zen Mode" item,
+/// kept so `set_zen_menu_label` can flip its text for the focused window.
+#[cfg(target_os = "macos")]
+pub struct ZenMenuItem(pub MenuItem<tauri::Wry>);
+
+/// Menu text for the Zen item.
+#[cfg(any(target_os = "macos", test))]
+pub fn zen_menu_label(in_zen: bool) -> &'static str {
+    if in_zen {
+        "Exit Zen Mode"
+    } else {
+        "Enter Zen Mode"
+    }
+}
 
 #[cfg(target_os = "macos")]
 pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {
@@ -87,6 +102,12 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
         ],
     )?;
 
+    // prd-zen-mode-v1 Z30/Z53: the escape hatch. The native accelerator
+    // (Ctrl+Cmd+Z) is the ONLY keyboard owner of the chord on macOS: there is
+    // no webview keydown for it (two owners double-toggle, the Cmd+L lesson).
+    let zen_item = MenuItem::with_id(handle, "zen-toggle", zen_menu_label(false), true, Some("Ctrl+Cmd+Z"))?;
+    handle.manage(ZenMenuItem(zen_item.clone()));
+
     // View submenu
     let view_menu = Submenu::with_items(
         handle,
@@ -106,6 +127,7 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             &MenuItem::with_id(handle, "server-switcher", "Switch Server", true, None::<&str>)?,
             &MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+Shift+L"))?,
             &MenuItem::with_id(handle, "focus-window", "Open in Focus Window", true, Some("CmdOrCtrl+Shift+F"))?,
+            &zen_item,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "app-zoom-in", "Zoom In", true, None::<&str>)?,
             &MenuItem::with_id(handle, "app-zoom-out", "Zoom Out", true, None::<&str>)?,
@@ -225,11 +247,34 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         "focus-window" => {
             emit_to_focused(app, "menu:focus-window");
         }
+        "zen-toggle" => {
+            emit_to_focused_window_only(app, "menu:zen-toggle");
+        }
         "new-window" => {
             let _ = open_new_window(app);
         }
         _ => {}
     }
+}
+
+/// prd-zen-mode-v1 Z53 — flip the View menu's Zen item between "Enter Zen
+/// Mode" and "Exit Zen Mode" for the focused window. The menu bar is
+/// app-wide on macOS, so the focused window calls this when it gains focus
+/// and when its Zen state changes. A no-op on Linux and Windows (their menu
+/// is the in-app panel, which reads the state itself).
+#[tauri::command]
+pub fn set_zen_menu_label(app: AppHandle, in_zen: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(item) = app.try_state::<ZenMenuItem>() {
+            item.0.set_text(zen_menu_label(in_zen)).map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, in_zen);
+    }
+    Ok(())
 }
 
 /// Open a secondary main-layout window (shared by menu + Win/Linux App Menu).
@@ -308,5 +353,31 @@ fn emit_to_focused(app: &AppHandle, event: &str) {
         let _ = win.emit(event, ());
     } else if let Some(win) = app.webview_windows().get("main") {
         let _ = win.emit(event, ());
+    }
+}
+
+/// Like `emit_to_focused`, but delivered ONLY to that window's listeners.
+/// `Emitter::emit` reaches every window's untargeted listener, so the Zen
+/// toggle (per Home, shared across windows) would flip once per window.
+/// The renderer listens with target `AnyLabel { label: <its own label> }`.
+#[cfg(target_os = "macos")]
+fn emit_to_focused_window_only(app: &AppHandle, event: &str) {
+    let label = app
+        .webview_windows()
+        .into_iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false))
+        .map(|(label, _)| label)
+        .unwrap_or_else(|| "main".to_string());
+    let _ = app.emit_to(EventTarget::AnyLabel { label }, event, ());
+}
+
+#[cfg(test)]
+mod zen_menu_tests {
+    use super::zen_menu_label;
+
+    #[test]
+    fn zen_menu_label_flips() {
+        assert_eq!(zen_menu_label(false), "Enter Zen Mode");
+        assert_eq!(zen_menu_label(true), "Exit Zen Mode");
     }
 }

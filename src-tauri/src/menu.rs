@@ -13,6 +13,13 @@ use tauri::{AppHandle, Manager};
 #[cfg(target_os = "macos")]
 pub struct ZenMenuItem(pub MenuItem<tauri::Wry>);
 
+/// The View-menu "Zen Shortcuts" item (Omarchy addition 4): opens the Zen
+/// cheat sheet in the focused window. Enabled only while that window shows
+/// Zen (flipped with the Zen label). No accelerator: the webview's `?` and
+/// Ctrl+Cmd+/ keydown are its only keyboard owners (the Cmd+L lesson).
+#[cfg(target_os = "macos")]
+pub struct ZenShortcutsMenuItem(pub MenuItem<tauri::Wry>);
+
 /// Menu text for the Zen item.
 #[cfg(any(target_os = "macos", test))]
 pub fn zen_menu_label(in_zen: bool) -> &'static str {
@@ -107,6 +114,8 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
     // no webview keydown for it (two owners double-toggle, the Cmd+L lesson).
     let zen_item = MenuItem::with_id(handle, "zen-toggle", zen_menu_label(false), true, Some("Ctrl+Cmd+Z"))?;
     handle.manage(ZenMenuItem(zen_item.clone()));
+    let zen_shortcuts_item = MenuItem::with_id(handle, "zen-shortcuts", "Zen Shortcuts", false, None::<&str>)?;
+    handle.manage(ZenShortcutsMenuItem(zen_shortcuts_item.clone()));
 
     // View submenu
     let view_menu = Submenu::with_items(
@@ -128,6 +137,7 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             &MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+Shift+L"))?,
             &MenuItem::with_id(handle, "focus-window", "Open in Focus Window", true, Some("CmdOrCtrl+Shift+F"))?,
             &zen_item,
+            &zen_shortcuts_item,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "app-zoom-in", "Zoom In", true, None::<&str>)?,
             &MenuItem::with_id(handle, "app-zoom-out", "Zoom Out", true, None::<&str>)?,
@@ -250,6 +260,9 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         "zen-toggle" => {
             emit_to_focused_window_only(app, "menu:zen-toggle");
         }
+        "zen-shortcuts" => {
+            emit_to_focused_window_only(app, "menu:zen-shortcuts");
+        }
         "new-window" => {
             let _ = open_new_window(app);
         }
@@ -268,6 +281,9 @@ pub fn set_zen_menu_label(app: AppHandle, in_zen: bool) -> Result<(), String> {
     {
         if let Some(item) = app.try_state::<ZenMenuItem>() {
             item.0.set_text(zen_menu_label(in_zen)).map_err(|e| e.to_string())?;
+        }
+        if let Some(item) = app.try_state::<ZenShortcutsMenuItem>() {
+            item.0.set_enabled(in_zen).map_err(|e| e.to_string())?;
         }
     }
     #[cfg(not(target_os = "macos"))]

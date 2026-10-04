@@ -8405,6 +8405,7 @@ async fn handle_one_request(
             || p == "/cli/terminal/read"
             || p.starts_with("/cli/inbox/")
             || p == "/cli/thread"
+            || p == "/cli/thread/latest"
             || p == "/cli/chatter"
             || p == "/cli/chatterlog" =>
         {
@@ -8413,6 +8414,18 @@ async fn handle_one_request(
                 .is_some_and(k2_core::remote_sessions::is_grant_token);
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
+            // Zen Z41/Z66: previews are a desktop read; app passes never
+            // reach `thread/latest` (not in the gateway allowlist either).
+            if skin_presented && p == "/cli/thread/latest" {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"app passes cannot use thread/latest"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
             if skin_presented && (p == "/cli/chatter" || p == "/cli/chatterlog") {
                 super::http::send_response(
                     &mut *stream,

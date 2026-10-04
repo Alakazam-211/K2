@@ -360,6 +360,112 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// Most addrs one `thread/latest` call may name (Zen Z41).
+pub const THREAD_LATEST_MAX_ADDRS: usize = 50;
+/// Server-side preview cut (chars, ellipsis included).
+pub const THREAD_PREVIEW_CHARS: usize = 140;
+
+/// One line of preview text for a Thread item (Zen Z41). A choice card is
+/// "Asked: <prompt>"; a secret card never shows anything but "Asked for a
+/// secret" (the value never lives in the Thread, T28). Whitespace is
+/// collapsed; the result is at most [`THREAD_PREVIEW_CHARS`] chars.
+pub fn thread_preview(doc: &k2_core::overlay::OverlayDoc) -> String {
+    let raw = match doc.kind.as_str() {
+        "choice" => {
+            let prompt = doc
+                .choice
+                .as_ref()
+                .map(|c| c.prompt.clone())
+                .or_else(|| doc.body.clone())
+                .unwrap_or_default();
+            format!("Asked: {prompt}")
+        }
+        "secret" => "Asked for a secret".to_string(),
+        _ => doc.body.clone().unwrap_or_default(),
+    };
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= THREAD_PREVIEW_CHARS {
+        collapsed
+    } else {
+        let mut cut: String = collapsed.chars().take(THREAD_PREVIEW_CHARS - 1).collect();
+        cut = cut.trim_end().to_string();
+        cut.push('…');
+        cut
+    }
+}
+
+/// `GET /cli/thread/latest?addrs=a,b,c` (Zen Z41, vs-live Z66): the newest
+/// Thread item per addr, one request per server for list previews. Each
+/// addr resolves and authorizes on its own; an addr that fails is an item
+/// with `error`, never a failure of the batch. Reads exactly one item per
+/// addr (never `limit=0`). App passes are refused by the dispatcher.
+fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
+    let raw = str_param(params, "addrs");
+    let mut addrs: Vec<String> = Vec::new();
+    for a in raw.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        if !addrs.iter().any(|x| x == a) {
+            addrs.push(a.to_string());
+        }
+    }
+    if addrs.is_empty() {
+        return usage("missing addrs (comma-separated Thread addresses)");
+    }
+    if addrs.len() > THREAD_LATEST_MAX_ADDRS {
+        return usage(format!(
+            "at most {THREAD_LATEST_MAX_ADDRS} addrs per request, got {}",
+            addrs.len()
+        ));
+    }
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let error_of = |r: CliResponse| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_default();
+        let code = v["error"]["code"].as_str().unwrap_or("error").to_string();
+        let hint = v["error"]["hint"].as_str().map(str::to_string).unwrap_or_else(|| r.body.clone());
+        serde_json::json!({ "code": code, "hint": hint })
+    };
+    let items: Vec<serde_json::Value> = addrs
+        .iter()
+        .map(|addr| {
+            let resolved = match resolve_thread_addr(addr) {
+                Ok(r) => r,
+                Err(e) => return serde_json::json!({ "addr": addr, "error": error_of(e) }),
+            };
+            if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
+                return serde_json::json!({ "addr": addr, "error": error_of(e) });
+            }
+            match overlay::read_thread_page(&resolved.conversation_id, None, None, 1) {
+                Ok(page) => match page.items.last() {
+                    Some(item) => serde_json::json!({
+                        "addr": addr,
+                        "conversationId": resolved.conversation_id,
+                        "seq": item.seq,
+                        "at": item.doc.created_at,
+                        "from": item.doc.from,
+                        "via": item.doc.via,
+                        "kind": item.doc.kind,
+                        "preview": thread_preview(&item.doc),
+                    }),
+                    None => serde_json::json!({
+                        "addr": addr,
+                        "conversationId": resolved.conversation_id,
+                        "seq": null,
+                        "at": null,
+                        "from": null,
+                        "via": null,
+                        "kind": null,
+                        "preview": null,
+                    }),
+                },
+                Err(e) => serde_json::json!({
+                    "addr": addr,
+                    "error": { "code": "store", "hint": e },
+                }),
+            }
+        })
+        .collect();
+    CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items }).to_string())
+}
+
 fn handle_get_chatter(params: &HashMap<String, String>) -> CliResponse {
     let addr = str_param(params, "addr");
     if addr.is_empty() {
@@ -985,6 +1091,7 @@ fn display_addr_for(
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     let resp = match path {
         "/cli/thread" => handle_get_thread(params),
+        "/cli/thread/latest" => handle_get_thread_latest(params),
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"

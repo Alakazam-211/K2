@@ -695,6 +695,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/thread", Member),
     both("/cli/thread/answer", Member),
     post("/cli/thread/ask", Member),
+    // Zen Z41: latest Thread item per addr, for previews. GET only.
+    get("/cli/thread/latest", Member),
     both("/cli/thread/post", Member),
     post("/cli/thread/secret", Member),
     both("/cli/thread/void", Member),

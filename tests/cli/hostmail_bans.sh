@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -37,9 +39,13 @@ printf '%s' "$add_help" | grep -q '65.130.10.89' || fail "allowlist add --help m
 printf '%s' "$add_help" | grep -q '65.130.229.9' || fail "allowlist add --help must print standing 65.130.229.9"
 printf '%s' "$add_help" | grep -q '172.56.0.0/16' || fail "allowlist add --help must refuse documenting 172.56"
 
-"$K2" --schema 2>/dev/null | grep -q '"name": "hostmail bans list"' \
+# Capture once, then grep the string: `--schema | grep -q` under
+# pipefail fails whenever grep exits on its match before --schema
+# finishes writing (SIGPIPE) — a flake, not a schema bug.
+schema="$("$K2" --schema)" || fail "k2 --schema exited non-zero"
+grep -qF '"name": "hostmail bans list"' <<<"$schema" \
   || fail "schema missing hostmail bans list"
-"$K2" --schema 2>/dev/null | grep -q '"name": "hostmail allowlist add"' \
+grep -qF '"name": "hostmail allowlist add"' <<<"$schema" \
   || fail "schema missing hostmail allowlist add"
 
 set +e

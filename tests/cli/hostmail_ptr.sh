@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -32,9 +34,13 @@ printf '%s' "$set_help" | grep -q '/cli/mail/ptr/set' \
   || fail "ptr set --help must name /cli/mail/ptr/set"
 
 # Schema JSON.
-"$K2" --schema 2>/dev/null | grep -q '"name": "hostmail ptr show"' \
+# Capture once, then grep the string: `--schema | grep -q` under
+# pipefail fails whenever grep exits on its match before --schema
+# finishes writing (SIGPIPE) — a flake, not a schema bug.
+schema="$("$K2" --schema)" || fail "k2 --schema exited non-zero"
+grep -qF '"name": "hostmail ptr show"' <<<"$schema" \
   || fail "schema missing hostmail ptr show"
-"$K2" --schema 2>/dev/null | grep -q '"name": "hostmail ptr set"' \
+grep -qF '"name": "hostmail ptr set"' <<<"$schema" \
   || fail "schema missing hostmail ptr set"
 
 # Usage without hostname exits 2.

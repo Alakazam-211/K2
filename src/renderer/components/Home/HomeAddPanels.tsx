@@ -51,6 +51,7 @@ import {
   type AgentListSection,
 } from '@/components/ui/SearchableAgentList'
 import { isWebClient } from '@/lib/is-web'
+import { putHomeAvatarOnAdd } from '@/lib/home-avatars'
 
 /** A workspace as a server's `projects/list` sends it (the fields the
  *  picker reads; the wire has more). */
@@ -80,11 +81,14 @@ export function listedIconUrl(v: unknown): string | null {
 function addTo(home: Home, hostKey: string, w: ListedWorkspace): void {
   const h = workspaceHandle(w)
   if (!h) return
+  const address = homeAddress(h, hostKey)
   useHomesStore.getState().addRow(home.id, {
-    address: homeAddress(h, hostKey),
+    address,
     workspaceId: w.id,
     label: w.name,
   })
+  // Cache the row's picture from this listing right away (picker-and-remote-avatars S4).
+  putHomeAvatarOnAdd(hostKey, address, w)
 }
 
 /** Rename repair from a freshly listed server: rows on `hostKey` whose

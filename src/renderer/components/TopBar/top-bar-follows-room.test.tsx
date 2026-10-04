@@ -289,7 +289,27 @@ describe('useTopBarScope (T3.1)', () => {
   })
 })
 
+/** "{server} | value": the server name, then the top bar's own vertical
+ *  divider (the same `TopBarPipe` the right cluster uses), no dot. */
+function expectServerDivider(): void {
+  const server = screen.getByTestId('usage-server')
+  expect(server.textContent).toBe('B')
+  const pipes = server.querySelectorAll('[data-top-bar-pipe]')
+  expect(pipes).toHaveLength(1)
+  expect(pipes[0].className).toBe('block w-px h-4 bg-[var(--color-border)] mx-1')
+  expect(screen.getByTestId('subscription-usage').textContent).not.toContain('·')
+}
+
 describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
+  it('the server divider is the same element the right cluster uses between items', () => {
+    bar()
+    const cluster = screen.getByTestId('subscription-usage').parentElement?.parentElement
+    if (!cluster) throw new Error('no right cluster around the usage chip')
+    const clusterPipe = Array.from(cluster.children).find((el) => el.hasAttribute('data-top-bar-pipe'))
+    if (!clusterPipe) throw new Error('the right cluster has no divider')
+    expect(clusterPipe.className).toBe('block w-px h-4 bg-[var(--color-border)] mx-1')
+  })
+
   it('shows B’s numbers through B’s scope, then the window’s again on Agents', async () => {
     bar()
     await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude10%'))
@@ -298,8 +318,8 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     expect(windowGets.map((c) => isWindow(c.scope))).toEqual([true])
 
     focus(roomOnB())
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·Claude42%'))
-    expect(screen.getByTestId('usage-server').textContent).toBe('B·')
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+    expectServerDivider()
     const bGets = h.gets.filter((c) => c.route === 'usage/subscriptions' && isB(c.scope))
     expect(bGets).toHaveLength(1)
     const creds = await bGets[0].scope.creds()
@@ -319,7 +339,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
   it('Refresh in a usable room POSTs to B; a view-only room only reads', async () => {
     focus(roomOnB())
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·Claude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const refresh = (await screen.findByTestId('subscription-usage-refresh')) as HTMLButtonElement
     expect(refresh.disabled).toBe(false)
@@ -342,7 +362,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     h.posts.length = 0
     focus(roomOnB({ readOnly: true }))
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·Claude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const ro = (await screen.findByTestId('subscription-usage-refresh')) as HTMLButtonElement
     expect(ro.disabled).toBe(true)
@@ -357,16 +377,18 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     setPool({ reach: 'offline' })
     focus(roomOnB())
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·offline'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Boffline'))
+    expectServerDivider()
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions')).toHaveLength(0)
 
     act(() => setPool({ auth: 'signin-required' }))
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·Sign in'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BSign in'))
+    expectServerDivider()
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions')).toHaveLength(0)
 
     // Back online: B is asked, the window still is not.
     act(() => setPool({ role: 'member' }))
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('B·Claude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions').map((c) => isB(c.scope))).toEqual([true])
   })
 

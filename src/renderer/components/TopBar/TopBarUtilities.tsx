@@ -6,14 +6,11 @@ import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { TopBarFollowRoomContext } from './top-bar-scope'
+import TopBarPipe from './TopBarPipe'
 
 /** True when this page passed drawer or close controls after the last pipe. */
 export function hasTopBarPageToggles(children: ReactNode): boolean {
   return Children.toArray(children).length > 0
-}
-
-function Pipe(): React.JSX.Element {
-  return <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
 }
 
 /**
@@ -42,13 +39,13 @@ export default function TopBarUtilities({
       {leading}
       <PresenceRoster />
       <UsageButton />
-      <Pipe />
+      <TopBarPipe />
       <TimerButton />
       <KeepAwakeButton />
       <K2NounsCheatSheet />
-      <Pipe />
+      <TopBarPipe />
       <ModeToggle />
-      {pageToggles ? <Pipe /> : null}
+      {pageToggles ? <TopBarPipe /> : null}
       {children}
     </div>
     </TopBarFollowRoomContext.Provider>

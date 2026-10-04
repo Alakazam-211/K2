@@ -5,7 +5,8 @@
 // mounts (the tab strip, panes, pinned Chat, Inbox, Thread, Browser, file
 // tabs, terminals), under its own `RoomProvider`, wrapped in the failure
 // gate for its server. Home M5: a room on a server with the layout revision
-// check is usable; an older server's room stays view only, with a note.
+// check is usable (no bar of its own: the top bar shows its server, 0.43.2);
+// an older server's room stays view only, with a one-line notice.
 // Hot rooms stay mounted (shown or hidden); warm and
 // cold rooms are not rendered (their grids close; `stores/home-rooms.ts`
 // keeps or drops the tabs store). The window's server never changes.
@@ -14,24 +15,23 @@
 // App, through `HomeRoomsHost.tsx`'s portal, so a top-switcher change keeps
 // them mounted. The Agents shell only holds the slot they appear in.
 
-import { useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { useStore } from 'zustand'
 import { RoomProvider } from '@/components/Room/RoomContext'
 import { TerminalArea } from '@/components/Terminal/TerminalArea'
 import { LeftPanelContent, RightPanelContent } from '@/components/Layout/WorkspaceDrawers'
-import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { useRoomTier } from '@/lib/room-tiers'
-import { usersForWorkspace } from '@/stores/presence'
 import { homeRooms, useHomeRoomsStore, type HomeRoomAccess, type HomeRoomEntry } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
 import { RoomFailureGate, roomFailureActions, useRoomFailure } from './RoomFailure'
 import { hostPool } from '@/lib/host-pool-instance'
 import type { PinnedRoom } from '@/stores/room'
 
-/** What the room bar's chip says (Home M5), and, for an older server, the
- *  label of its "Switch to {server}" button (0.43.2 Z5: with the old
- *  default this row would have switched the window and been usable). */
+/** What a room's access notice says (Home M5), and, for an older server,
+ *  the label of its "Switch to {server}" button (0.43.2 Z5: with the old
+ *  default this row would have switched the window and been usable). A
+ *  usable room shows no notice: the top bar already names its server. */
 export function roomAccessCopy(
   access: HomeRoomAccess | null,
   serverLabel: string,
@@ -55,47 +55,35 @@ export function roomAccessCopy(
   return { chip: 'View only', title: 'Nothing is sent to that server from this room.', switchLabel: null }
 }
 
-/** The room's chip (usable, or view only and why), the room's server, and
- *  that server's people on this agent (R7: the room shows B's who's-here). */
-export function RoomBar({
+/** 0.43.2: the old room bar ("Remote room", "{agent} on {server}", that
+ *  server's people) is gone, because the top bar follows the focused room's
+ *  server (label, people, usage, Keep awake). What stays is a one-line
+ *  notice, only when the room is not usable: View only, why, and on an
+ *  older server a "Switch to {server}" button. A usable room renders
+ *  nothing here. Failures (offline, sign in, too old) are
+ *  `RoomFailureGate`'s banners, around the room. */
+export function RoomAccessNotice({
   room,
-  label,
   access,
 }: {
   room: PinnedRoom
-  label: string
   access: HomeRoomAccess | null
-}): React.JSX.Element {
-  const roster = useStore(room.presence, (s) => s.roster)
-  const supported = useStore(room.presence, (s) => s.supported)
-  const path = room.cwd()
-  const people = useMemo(
-    () => (supported ? usersForWorkspace(roster, path).map((u) => ({ user: u.user, role: u.role })) : []),
-    [roster, supported, path],
-  )
+}): React.JSX.Element | null {
   const version = useStore(hostPool.store, (s) => s.entries[room.scope.hostKey]?.boot?.version ?? null)
+  if (access === 'use') return null
   const copy = roomAccessCopy(access, room.scope.label, version)
   return (
     <div
-      className="flex h-6 flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 text-[10px] text-[var(--color-text-muted)]"
-      data-room-bar=""
+      className="flex flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-1 text-[10px] text-[var(--color-text-muted)]"
+      data-room-notice=""
       data-room-access={access ?? ''}
     >
-      <span
-        className="flex-shrink-0 border border-[var(--color-border)] px-1.5 py-px text-[var(--color-text-secondary)]"
-        data-room-chip=""
-        title={copy.title}
-      >
+      <span className="flex-shrink-0 text-[var(--color-text-secondary)]" data-room-chip="">
         {copy.chip}
       </span>
-      <span className="truncate" data-room-server="">
-        {label} on {room.scope.label}
+      <span className="truncate" data-room-note="">
+        {copy.title}
       </span>
-      {access === 'view-older-server' && (
-        <span className="truncate" data-room-note="">
-          {copy.title}
-        </span>
-      )}
       {copy.switchLabel !== null && (
         <button
           type="button"
@@ -107,9 +95,6 @@ export function RoomBar({
           {copy.switchLabel}
         </button>
       )}
-      <span className="ml-auto flex items-center" data-room-people={people.map((p) => p.user).join(',')}>
-        <PresenceAvatarCluster users={people} />
-      </span>
     </div>
   )
 }
@@ -132,7 +117,7 @@ function PinnedRoomShell({ entry, shown }: { entry: HomeRoomEntry; shown: boolea
       <RoomProvider room={room} shown={shown}>
         <RoomFailureGate hostKey={room.scope.hostKey}>
           <div className="flex h-full min-h-0 w-full flex-col">
-            <RoomBar room={room} label={entry.label} access={entry.access} />
+            <RoomAccessNotice room={room} access={entry.access} />
             <div className="min-h-0 flex-1">
               {/* `shown` already means "Home is the page and this is the
                   room on screen"; the window's own PageLive is about the

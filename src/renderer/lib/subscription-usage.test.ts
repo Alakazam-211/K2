@@ -247,7 +247,7 @@ describe('UsageButton mounts', () => {
     const timer = utils.indexOf('<TimerButton />')
     expect(usage).toBeGreaterThanOrEqual(0)
     expect(timer).toBeGreaterThan(usage)
-    expect(utils.slice(usage, timer).replace(/\s+/g, '')).toBe('<UsageButton/><Pipe/>')
+    expect(utils.slice(usage, timer).replace(/\s+/g, '')).toBe('<UsageButton/><TopBarPipe/>')
     for (const rel of MOUNTS) {
       const text = readFileSync(resolve(root, rel), 'utf8')
       expect(text.includes('<TopBarUtilities'), rel).toBe(true)

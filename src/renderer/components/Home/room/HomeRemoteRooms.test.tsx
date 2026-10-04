@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // Home M4 — remote rooms inside Home's main area: the failure gate's states
-// render over the room (MS45), a live room shows its bar ("Remote room",
-// or View only with a Switch to {server} button on an older server, 0.43.2
-// Z3/Z5) with its server and that server's people (R7), and only hot rooms
-// are mounted (MS24).
+// render over the room (MS45), a usable room has no bar of its own (the top
+// bar follows its server, 0.43.2), an older server's room shows a View only
+// notice with a Switch to {server} button (Z3/Z5), and only hot rooms are
+// mounted (MS24).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -132,17 +132,26 @@ function q(sel: string): Element {
 }
 
 describe('remote rooms in Home (M4)', () => {
-  it('a live server: the usable room renders with its room bar and no failure banner (M5)', () => {
+  it('a live server: the usable room renders with no room bar, no notice and no failure banner (M5, 0.43.2)', () => {
     hostPool.store.setState({ entries: { [KEY]: poolEntry({}) } })
     showRoom(fakeRoom())
     render()
-    expect(q(`[data-home-room="anna::${KEY}"] [data-room-bar]`).getAttribute('data-room-access')).toBe('use')
-    expect(q('[data-room-chip]').textContent).toBe('Remote room')
-    expect(q('[data-room-server]').textContent).toBe('Anna on Box B')
+    const shell = q(`[data-home-room="anna::${KEY}"]`)
+    expect(q('[data-stub-terminal-area]').getAttribute('data-stub-terminal-area')).toBe('/srv/anna')
+    // The top bar names the room's server; the room has no bar of its own.
+    expect(container.querySelector('[data-room-bar]')).toBe(null)
+    expect(container.querySelector('[data-room-notice]')).toBe(null)
+    expect(container.querySelector('[data-room-chip]')).toBe(null)
+    expect(container.querySelector('[data-room-server]')).toBe(null)
     expect(container.querySelector('[data-room-note]')).toBe(null)
     expect(container.querySelector('[data-room-switch]')).toBe(null)
-    expect(q('[data-stub-terminal-area]').getAttribute('data-stub-terminal-area')).toBe('/srv/anna')
     expect(container.querySelector('[data-room-failure]')).toBe(null)
+    expect(container.textContent).not.toContain('Remote room')
+    expect(container.textContent).not.toContain('Anna on Box B')
+    // Nothing sits above the terminal area: it is the room's first row.
+    const column = shell.querySelector('[data-stub-terminal-area]')?.parentElement?.parentElement
+    if (!column) throw new Error('no room column around the terminal area')
+    expect(column.children).toHaveLength(1)
   })
 
   it('an older server: the room says View only and why, with a Switch to button that switches this window to B (MS43, Z5)', () => {
@@ -151,7 +160,9 @@ describe('remote rooms in Home (M4)', () => {
     useConnectHostStore.setState({ pickHost } as never)
     showRoom(fakeRoom(true))
     render()
-    expect(q('[data-room-bar]').getAttribute('data-room-access')).toBe('view-older-server')
+    expect(container.querySelector('[data-room-bar]')).toBe(null)
+    expect(container.querySelector('[data-room-server]')).toBe(null)
+    expect(q(`[data-home-room="anna::${KEY}"] [data-room-notice]`).getAttribute('data-room-access')).toBe('view-older-server')
     expect(q('[data-room-chip]').textContent).toBe('View only')
     expect(q('[data-room-note]').textContent).toBe('Box B runs K2 0.41.6, which can\u2019t save this room\u2019s tabs safely.')
     const button = q('[data-room-switch]') as HTMLButtonElement
@@ -162,19 +173,19 @@ describe('remote rooms in Home (M4)', () => {
     expect(pickHost.mock.calls[0][0]).toBe(B)
   })
 
-  it('shows that server’s people on this agent (R7)', () => {
+  it('the room carries no people strip of its own: the top bar shows that server’s people (R7, 0.43.2)', () => {
     hostPool.store.setState({ entries: { [KEY]: poolEntry({}) } })
     presence.setState({
       roster: [
         { user: 'rosson', role: 'owner', workspaces: ['/srv/anna'] },
-        { user: 'appa', role: 'member', workspaces: ['/srv/other'] },
         { user: 'anna', role: 'member', workspaces: ['/srv/anna/.worktrees/x'] },
       ] as never,
       supported: true,
     })
     showRoom(fakeRoom())
     render()
-    expect(q('[data-room-people]').getAttribute('data-room-people')).toBe('rosson,anna')
+    expect(container.querySelector('[data-room-people]')).toBe(null)
+    expect(container.querySelector('[data-room-bar]')).toBe(null)
   })
 
   for (const [name, patch, kind, action] of [
@@ -195,6 +206,7 @@ describe('remote rooms in Home (M4)', () => {
       expect(frame.hasAttribute('inert')).toBe(true)
       expect(frame.querySelector('[data-stub-terminal-area]')).not.toBe(null)
       expect(shell.contains(frame)).toBe(true)
+      expect(container.querySelector('[data-room-bar]')).toBe(null)
     })
   }
 

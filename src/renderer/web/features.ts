@@ -33,6 +33,12 @@ export const webFeatures = {
   /** Multi-host ServerSwitcher + Add server (hosted web is single same-origin). */
   multiHost: desktop,
   /**
+   * prd-zen-mode-v1 Z2 — Zen Mode (Home's second face). Desktop only: the
+   * hosted web client shows no Zen toggle and never calls `/cli/zen/*`.
+   * Windows is further gated in `lib/zen/zen-platform.ts` (G-Win smoke).
+   */
+  zen: desktop,
+  /**
    * macOS traffic-light (close/min/max) left inset. Owned by desktop-chrome:
    * only true on macOS desktop (0 on Win/Linux + hosted web).
    */

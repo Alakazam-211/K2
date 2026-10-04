@@ -17,6 +17,7 @@ import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPa
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
+import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
@@ -68,6 +69,7 @@ function Bubble({
     >
       <div
         className="selectable-copy"
+        data-zen-bubble={mine ? 'me' : 'agent'}
         style={{
           padding: '9px 14px',
           borderRadius: 'var(--zen-bubble-radius)',
@@ -75,6 +77,8 @@ function Bubble({
           borderBottomLeftRadius: mine ? 'var(--zen-bubble-radius)' : 6,
           background: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
           color: mine ? 'var(--zen-bubble-me-text)' : 'var(--zen-bubble-agent-text)',
+          // Markdown inside reads Styles variables; here they are this bubble's text.
+          ...zenBubbleShield(mine ? 'me' : 'agent'),
           ...CARD_TOKENS,
         }}
       >
@@ -100,6 +104,7 @@ function Bubble({
         )}
       </div>
       <span
+        data-zen-message-meta=""
         style={{
           alignSelf: mine ? 'flex-end' : 'flex-start',
           padding: '0 6px',

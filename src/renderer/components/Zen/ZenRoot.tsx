@@ -27,6 +27,7 @@ import {
 } from '@/lib/zen/zen-theme'
 import { installZenThemeEngine } from '@/lib/zen/zen-theme-engine'
 import { ZEN_KEYFRAMES_CSS } from '@/lib/zen/zen-motion'
+import { ZEN_SHIELD_CSS, ZEN_STYLE_SHIELD } from '@/lib/zen/zen-style-shield'
 import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
   clusterArea,
@@ -329,6 +330,10 @@ export function ZenRoot(): React.JSX.Element {
     fontFamily: 'var(--zen-font-family)',
     fontSize: 'var(--zen-font-size)',
     lineHeight: 'var(--zen-line-height)',
+    // Form controls, scrollbars and UA defaults follow Zen's scheme, not the Style's.
+    colorScheme: theme.scheme,
+    // Reused app components read Styles variables: inside Zen they are Zen tokens.
+    ...ZEN_STYLE_SHIELD,
     ...theme.vars,
     ...area.vars,
   } as React.CSSProperties
@@ -357,6 +362,7 @@ export function ZenRoot(): React.JSX.Element {
       style={style}
     >
       <style data-zen-keyframes="">{ZEN_KEYFRAMES_CSS}</style>
+      <style data-zen-shield="">{ZEN_SHIELD_CSS}</style>
       {theme.background && (
         <div
           aria-hidden

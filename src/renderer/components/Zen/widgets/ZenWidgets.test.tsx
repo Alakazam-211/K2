@@ -291,6 +291,7 @@ import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { __resetZenApiForTests } from '@/lib/zen/zen-api'
 import { __setZenGeometryForTests, runZenControlChecksNow } from '@/lib/zen/zen-monitor'
 import { useZenViewStore } from '@/lib/zen/zen-view'
+import { openZenCheatSheet } from '@/lib/zen/zen-theme-switch'
 import { __resetZenDataForTests } from '@/lib/zen/zen-data'
 import type { ZenGeometry } from '@/lib/zen/zen-controls'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
@@ -832,6 +833,250 @@ describe('texting template controls', () => {
     })
     expect(useZenHomesStore.getState().on.h1).toBeUndefined()
   }, 10_000)
+})
+
+// Zen v1 bug (Rosson): agent messages drew white text on Zen's light agent
+// bubble. The Thread markdown (`.chat-markdown p { color:
+// var(--color-text-primary) }`) took the app Style's text colour. The real
+// stylesheets (`styles.generated.css` + `globals.css`) are loaded here, so
+// jsdom cascades the real rules; it leaves `var()` unresolved, so the test
+// resolves them itself, each at the element that declares it.
+describe('Zen text follows Zen tokens, never the app Style', () => {
+  const RENDERER = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const STYLE_PREFIXES = ['--color-', '--font-', '--radius-', '--term-', '--divider-']
+
+  const raw = (el: Element, prop: string): string => getComputedStyle(el).getPropertyValue(prop).trim()
+
+  /** The nearest ancestor-or-self that declares `prop` (jsdom hands inherited raw text down). */
+  function declarer(el: Element, prop: string): Element {
+    const v = raw(el, prop)
+    let cur = el
+    while (cur.parentElement && raw(cur.parentElement, prop) === v) cur = cur.parentElement
+    return cur
+  }
+
+  type Hop = { name: string; at: Element }
+
+  /** Resolve every `var()` in `text` as the browser would at `el`. */
+  function resolveVars(el: Element, text: string, hops: Hop[]): string {
+    const i = text.indexOf('var(')
+    if (i < 0) return text
+    let depth = 0
+    let end = -1
+    let comma = -1
+    for (let j = i + 4; j < text.length; j++) {
+      const c = text[j]
+      if (c === '(') depth++
+      else if (c === ')') {
+        if (depth === 0) {
+          end = j
+          break
+        }
+        depth--
+      } else if (c === ',' && depth === 0 && comma < 0) comma = j
+    }
+    if (end < 0) throw new Error(`unbalanced var() in ${text}`)
+    const name = text.slice(i + 4, comma > 0 ? comma : end).trim()
+    const fallback = comma > 0 ? text.slice(comma + 1, end).trim() : null
+    let value: string
+    if (raw(el, name) !== '') {
+      const at = declarer(el, name)
+      hops.push({ name, at })
+      value = resolveVars(at, raw(at, name), hops)
+    } else if (fallback !== null) {
+      value = resolveVars(el, fallback, hops)
+    } else {
+      throw new Error(`${name} is not set at <${el.tagName.toLowerCase()}>`)
+    }
+    return resolveVars(el, text.slice(0, i) + value + text.slice(end + 1), hops)
+  }
+
+  /** The used value of a colour property on `el`, and the variables it went through. */
+  function colorOf(el: Element, prop = 'color'): { value: string; hops: Hop[] } {
+    const at = declarer(el, prop)
+    const hops: Hop[] = []
+    return { value: resolveVars(at, raw(at, prop), hops), hops }
+  }
+
+  function zenRoot(): HTMLElement {
+    const el = document.querySelector('[data-zen-root]')
+    if (!(el instanceof HTMLElement)) throw new Error('Zen is not shown')
+    return el
+  }
+
+  /** Fails on any Styles variable read from outside the Zen root. */
+  function expectNoStyleLeak(el: Element, prop: string): string {
+    const { value, hops } = colorOf(el, prop)
+    const root = zenRoot()
+    const leaks = hops
+      .filter((hp) => STYLE_PREFIXES.some((p) => hp.name.startsWith(p)) && !root.contains(hp.at))
+      .map((hp) => `${hp.name} from <${hp.at.tagName.toLowerCase()}>`)
+    expect([el.tagName.toLowerCase(), prop, leaks]).toEqual([el.tagName.toLowerCase(), prop, []])
+    return value
+  }
+
+  function zenVar(name: string): string {
+    const v = raw(zenRoot(), `--zen-${name}`)
+    if (!v) throw new Error(`--zen-${name} is not set on the Zen root`)
+    return v
+  }
+
+  const MARKDOWN = [
+    'Pushed **the fix**.',
+    '',
+    '- one',
+    '- two',
+    '',
+    'Run `k2 ship` or see [the notes](https://example.com).',
+    '',
+    '> quoted',
+    '',
+    '| a | b |',
+    '|---|---|',
+    '| 1 | 2 |',
+  ].join('\n')
+
+  const sheets: HTMLStyleElement[] = []
+  let restoreMatchMedia: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    for (const f of ['styles.generated.css', 'globals.css']) {
+      const s = document.createElement('style')
+      s.setAttribute('data-test-sheet', f)
+      s.textContent = readFileSync(join(RENDERER, f), 'utf8')
+      document.head.appendChild(s)
+      sheets.push(s)
+    }
+    restoreMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const first = h.threads[threadKey('local', 'cortana-main')]
+    h.threads[threadKey('local', 'cortana-main')] = [
+      { collection: 'thread', seq: 1, id: 'a1', doc: { id: 'a1', kind: 'text', from: 'cortana', body: MARKDOWN, created_at: 900 } },
+      ...first.slice(1),
+    ]
+  })
+
+  afterEach(() => {
+    for (const s of sheets.splice(0)) s.remove()
+    document.documentElement.removeAttribute('data-style')
+    document.documentElement.removeAttribute('data-palette')
+    if (restoreMatchMedia) Object.defineProperty(window, 'matchMedia', restoreMatchMedia)
+    else delete (window as { matchMedia?: unknown }).matchMedia
+  })
+
+  function setSchemes(zen: 'light' | 'dark', app: 'light' | 'dark'): void {
+    // The app Style: Square on Paper (light) or Charcoal (dark), the real tokens.
+    document.documentElement.setAttribute('data-style', 'square')
+    document.documentElement.setAttribute('data-palette', app === 'light' ? 'paper' : 'charcoal')
+    // Zen's default theme is `scheme = "auto"`: this computer's setting.
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: (query: string) => ({
+        matches: query === '(prefers-color-scheme: dark)' ? zen === 'dark' : false,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    })
+  }
+
+  const COMBOS = [
+    ['light', 'light'],
+    ['light', 'dark'],
+    ['dark', 'light'],
+    ['dark', 'dark'],
+  ] as const
+
+  for (const [zen, app] of COMBOS) {
+    it(`Zen ${zen} under app Style ${app}: messages, markdown, compose, list and cheat sheet use Zen tokens`, async () => {
+      setSchemes(zen, app)
+      const appText = raw(document.documentElement, '--color-text-primary')
+      expect(appText).toBe(app === 'light' ? '#221e15' : '#e4e4e7')
+      await mountZen()
+      await select(ROWS.cortana.address)
+      await threadReady(ROWS.cortana.address)
+      const root = zenRoot()
+      expect(root.getAttribute('data-zen-scheme')).toBe(zen)
+      expect(root.style.colorScheme).toBe(zen)
+
+      // The root maps the Styles variables to Zen tokens.
+      expect(raw(root, '--color-text-primary')).toBe('var(--zen-text)')
+      expect(raw(root, '--color-accent')).toBe('var(--zen-accent)')
+      expect(raw(root, '--font-ui')).toBe('var(--zen-font-family)')
+
+      // Agent bubble: every markdown child is the bubble's text colour.
+      const agentText = zenVar('bubble-agent-text')
+      expect(agentText).not.toBe(appText)
+      const bubble = document.querySelector('[data-zen-message="a1"] [data-zen-bubble="agent"]')
+      if (!bubble) throw new Error('no agent bubble')
+      expect(expectNoStyleLeak(bubble, 'background')).toBe(zenVar('bubble-agent'))
+      for (const sel of ['p', 'strong', 'li', 'code', 'td', 'th']) {
+        const el = bubble.querySelector(sel)
+        if (!el) throw new Error(`no <${sel}> in the agent bubble`)
+        expect([sel, expectNoStyleLeak(el, 'color')]).toEqual([sel, agentText])
+      }
+      const link = bubble.querySelector('a')
+      if (!link) throw new Error('no link in the agent bubble')
+      expect(expectNoStyleLeak(link, 'color')).toBe(zenVar('accent'))
+      const quote = bubble.querySelector('blockquote')
+      if (!quote) throw new Error('no quote in the agent bubble')
+      expect(expectNoStyleLeak(quote, 'color')).toBe(`color-mix(in srgb, ${agentText} 72%, transparent)`)
+      const code = bubble.querySelector('code')
+      if (!code) throw new Error('no code in the agent bubble')
+      expect(expectNoStyleLeak(code, 'background')).toBe(`color-mix(in srgb, ${agentText} 10%, transparent)`)
+      const meta = document.querySelector('[data-zen-message="a1"] [data-zen-message-meta]')
+      if (!meta) throw new Error('no timestamp')
+      expect(expectNoStyleLeak(meta, 'color')).toBe(zenVar('text-muted'))
+
+      // The choice card (Thread's own component) reads Zen through its card tokens.
+      const card = document.querySelector('[data-zen-message="a2"] [data-testid="thread-choice-card"]')
+      if (!card) throw new Error('no choice card')
+      const hops: Hop[] = []
+      expect(resolveVars(card, 'var(--thread-card-text, var(--color-text-primary))', hops)).toBe(zenVar('text'))
+      expect(resolveVars(card, 'var(--color-text-muted)', [])).toBe(`color-mix(in srgb, ${agentText} 72%, transparent)`)
+
+      // My bubble: my text colour, links included (the bubble is the accent).
+      await typeAndSend('Ship **it** with [this](https://example.com).')
+      await waitFor(() => expect(document.querySelectorAll('[data-zen-message][data-mine]').length).toBe(1))
+      const mine = document.querySelector('[data-zen-message][data-mine] [data-zen-bubble="me"]')
+      if (!mine) throw new Error('no bubble of mine')
+      const meText = zenVar('bubble-me-text')
+      for (const sel of ['p', 'strong', 'a']) {
+        const el = mine.querySelector(sel)
+        if (!el) throw new Error(`no <${sel}> in my bubble`)
+        expect([sel, expectNoStyleLeak(el, 'color')]).toEqual([sel, meText])
+      }
+
+      // Compose: box, attachment chip, and the placeholder rule.
+      expect(expectNoStyleLeak(composeInput(), 'color')).toBe(zenVar('text'))
+      await act(async () => {
+        fireEvent.click(document.querySelector('[data-zen-attach]') as HTMLElement)
+      })
+      await waitFor(() => expect(document.querySelector('[data-zen-attachment]')).not.toBeNull())
+      expect(expectNoStyleLeak(document.querySelector('[data-zen-attachment]') as Element, 'color')).toBe(zenVar('text'))
+      expect(root.querySelector('style[data-zen-shield]')?.textContent).toContain(
+        '[data-zen-root] ::placeholder { color: var(--zen-text-muted); opacity: 1; }',
+      )
+
+      // Agents list: name, preview and status.
+      const row = rowEl(ROWS.sales.address)
+      expect(expectNoStyleLeak(row.querySelector('[data-zen-agent-name]') as Element, 'color')).toBe(zenVar('text'))
+      expect(expectNoStyleLeak(row.querySelector('[data-zen-preview]') as Element, 'color')).toBe(zenVar('text-muted'))
+
+      // Cheat sheet.
+      act(() => openZenCheatSheet())
+      const sheet = document.querySelector('[data-zen-shortcut-sheet] [role="dialog"]')
+      if (!sheet) throw new Error('no cheat sheet')
+      expect(expectNoStyleLeak(sheet, 'color')).toBe(zenVar('text'))
+      expect(expectNoStyleLeak(sheet.querySelector('kbd') as Element, 'color')).toBe(zenVar('text'))
+
+      // Sweep: nothing in Zen reads a Styles variable from outside Zen.
+      for (const el of Array.from(root.querySelectorAll('*'))) {
+        if (el.tagName === 'STYLE' || el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue
+        expectNoStyleLeak(el, 'color')
+        expectNoStyleLeak(el, 'background')
+      }
+    }, 15_000)
+  }
 })
 
 describe('S6 source ratchets', () => {

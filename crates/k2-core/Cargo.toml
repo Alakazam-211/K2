@@ -72,6 +72,10 @@ serde_yaml = "0.9"
 # Context catalog user packs (`~/.k2/context/catalog/packs/<slug>/pack.toml`).
 # Fail-loud parse of host library metadata; scan skips invalid files.
 toml = "0.8"
+# Zen Mode v1 (`~/.k2/zen/*.toml`): parse with spans so validation can
+# report file:line:col. Same resolved version + features already in the
+# lockfile (pulled by proc-macro-crate); parse only, no display.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 # Time handling in the activity feed + heartbeat audit rows.
 chrono = { version = "0.4", features = ["serde"] }

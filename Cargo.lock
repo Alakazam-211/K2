@@ -3539,6 +3539,7 @@ dependencies = [
  "time",
  "tokio",
  "toml 0.8.2",
+ "toml_edit 0.25.11+spec-1.1.0",
  "trash",
  "tungstenite 0.24.0",
  "url",

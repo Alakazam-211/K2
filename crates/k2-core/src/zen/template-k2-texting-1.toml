@@ -1,0 +1,60 @@
+# Built-in Zen page template `k2.texting@1` (prd-zen-mode-v1 Z10).
+#
+# Data, not special code: `/cli/zen/get` returns this layout, these
+# widgets and these controls as the resolved page, and the renderer draws
+# from it. In Zen v1 users change only the theme; v2 opens `layout` and
+# `widget` to user pages with the same shape.
+id = "k2.texting@1"
+schema = 1
+
+[layout]
+kind = "columns"
+
+[[layout.column]]
+widget = "agents"
+size = 34
+min-width = 240
+
+[[layout.column]]
+widget = "conversation"
+size = 66
+min-width = 360
+
+# Every widget, built-ins included, reaches K2 only through the Zen bridge.
+# `caps` are the bridge verbs' capabilities this widget is granted; a
+# built-in is granted by K2 (source "builtin"), never by grants.json.
+[[widget]]
+id = "agents"
+kind = "agents"
+column = 0
+caps = ["agents:read", "presence:read"]
+
+[widget.props]
+order = "home"
+server-tag = true
+preview = true
+status = ["working", "idle", "needs-you"]
+
+[[widget]]
+id = "conversation"
+kind = "conversation"
+column = 1
+caps = ["agents:read", "presence:read", "thread:read", "thread:post"]
+
+[widget.props]
+compose = true
+attachments = true
+load-older = true
+
+# Required controls (Z27). The page draws them; K2 binds and checks them.
+[[control]]
+kind = "home-switcher"
+placement = "top-left"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "top-right"

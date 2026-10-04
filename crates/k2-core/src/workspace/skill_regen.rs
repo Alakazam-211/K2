@@ -641,6 +641,45 @@ fn ensure_compose_sidecar_skills(dot: &Path) {
         &generate_k2_canonical_agents_skill(),
         Some("name: k2-canonical-agents\ndescription: Set up or refresh the canonical AGENTS.md from existing harness files (run with an AI assistant)"),
     );
+
+    // Zen Mode (prd-zen-mode-v1 Z18/Z68): only on a computer that has set
+    // Zen up, so agents on headless servers never see the skill.
+    ensure_zen_skill(dot, crate::zen::is_set_up());
+}
+
+/// Write (or refresh) `.k2/skills/k2-zen/SKILL.md` when `zen_set_up`.
+/// Never removes an existing file. Returns whether the skill is on disk.
+pub fn ensure_zen_skill(dot: &Path, zen_set_up: bool) -> bool {
+    use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_ZEN};
+    let path = dot.join("skills/k2-zen/SKILL.md");
+    if zen_set_up {
+        let frontmatter = format!(
+            "name: k2-zen\ndescription: {}",
+            crate::zen::skill::SKILL_DESCRIPTION
+        );
+        let _ = ensure_skill_up_to_date(
+            &path,
+            "k2-zen",
+            SKILL_VERSION_ZEN,
+            &crate::zen::skill::generate_k2_zen_skill(),
+            Some(&frontmatter),
+        );
+    }
+    path.exists()
+}
+
+/// Z68: Zen was just set up on this computer, so seed `k2-zen` into every
+/// registered workspace now instead of waiting for the next compose.
+/// Returns how many workspaces have the skill afterwards.
+pub fn seed_zen_skill_everywhere() -> usize {
+    let Ok(projects) = crate::projects_ops::projects_list() else {
+        return 0;
+    };
+    let set_up = crate::zen::is_set_up();
+    projects
+        .iter()
+        .filter(|p| ensure_zen_skill(&crate::workspace_dot_dir(&p.path), set_up))
+        .count()
 }
 
 /// Write the canonical `.k2/AGENTS.md` + the two loadable skills (`k2-cli`,

@@ -209,6 +209,9 @@ pub mod themes;
 pub mod tunnel;
 pub mod wake;
 pub mod whats_new;
+// Zen Mode v1 (prd-zen-mode-v1): `~/.k2/zen/` schema, validation,
+// last-good resolve, `.history/` and the `k2-zen` skill body.
+pub mod zen;
 
 // Session Stream primitives — landed in 0.34.0 behind a feature flag;
 // the flag was retired in 0.39.0e (these are always-on now). See

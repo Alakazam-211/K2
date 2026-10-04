@@ -1,0 +1,91 @@
+# Zen theme for every Home on this computer.
+#
+# Save this file and every Zen window changes at once. If you make a
+# mistake, the last good version stays on screen and Zen shows the file
+# and line of the mistake. Check your edit with `k2 zen validate`.
+#
+# Zen is separate from Styles (Square, Liquid Glass, Bezel): nothing here
+# changes the rest of K2. A Home can override any table below in
+# ~/.k2/zen/pages/<home-id>.toml.
+schema = 1
+
+[theme]
+# auto follows this computer's light/dark setting.
+scheme = "auto"
+
+[colors.light]
+canvas = "#faf7f2"
+surface = "#ffffff"
+surface-raised = "#ffffff"
+border = "#e7e1d8"
+text = "#1f1c18"
+text-muted = "#6f675d"
+accent = "#b4532a"
+accent-text = "#ffffff"
+bubble-me = "#b4532a"
+bubble-me-text = "#ffffff"
+bubble-agent = "#efe9e0"
+bubble-agent-text = "#1f1c18"
+working = "#2f855a"
+idle = "#a39b90"
+needs-you = "#c27c0e"
+danger = "#c53030"
+
+[colors.dark]
+canvas = "#161514"
+surface = "#1e1d1b"
+surface-raised = "#262422"
+border = "#34312d"
+text = "#ece7e0"
+text-muted = "#a39b90"
+accent = "#e08a5f"
+accent-text = "#1a1410"
+bubble-me = "#8f4a2c"
+bubble-me-text = "#fff7f0"
+bubble-agent = "#262422"
+bubble-agent-text = "#ece7e0"
+working = "#5fbf8a"
+idle = "#7d766d"
+needs-you = "#e0a43a"
+danger = "#f07167"
+
+[type]
+# system | rounded | serif | mono
+family = "system"
+size = 14          # 12 to 20
+line-height = 1.45 # 1.2 to 1.8
+
+[shape]
+radius = 14         # 0 to 28
+bubble-radius = 18  # 0 to 28
+gap = 12            # 4 to 24
+list-width = 300    # 240 to 420
+
+[chrome]
+# macOS window corners: system | square
+corners = "system"
+# macOS window buttons: round | square
+stoplights = "round"
+# Nudge the window buttons right and down, 0 to 24 px each.
+stoplight-offset = [0, 0]
+
+[bezier]
+# name = [x1, y1, x2, y2]; y may leave 0 to 1 for overshoot.
+# Built in: linear, ease, glide, soft, overshot.
+
+[animation]
+# name = [on, speed, curve, style]
+# on is 1 or 0, speed is in tenths of a second, style is optional:
+# fade | slide | slidefade | popin <n>%
+# A child takes its parent's line until you set it:
+# global > zen (zenIn, zenOut) > rows (rowIn, rowMove)
+#        > messages (messageIn) > conversation (conversationSwitch)
+#        > working (workingPulse)
+global = [1, 3, "glide"]
+zenIn = [1, 4, "glide", "fade"]
+zenOut = [1, 3, "glide", "fade"]
+rowIn = [1, 3, "glide", "slidefade"]
+rowMove = [1, 3, "glide"]
+messageIn = [1, 3, "glide", "popin 92%"]
+conversationSwitch = [1, 2, "glide", "fade"]
+workingPulse = [1, 12, "soft"]

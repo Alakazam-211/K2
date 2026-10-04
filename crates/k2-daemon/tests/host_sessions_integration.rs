@@ -153,17 +153,29 @@ impl HostEnv {
         self.shim_dir.join("claude").to_string_lossy().into_owned()
     }
 
-    /// Rewrite the shim as a RECORDING agent: `tee -a <capture>` echoes
+    /// Rewrite the shim as a RECORDING agent: first appends each argv
+    /// entry (one per line) to `capture`, then `tee -a <capture>` echoes
     /// stdin (grid parity with the plain `cat` shim) AND appends the raw
-    /// received bytes to `capture` — so tests can assert on the exact
-    /// injected payload without Term line-wrapping mangling long lines.
+    /// received bytes — so tests can assert on the exact delivered payload
+    /// without Term line-wrapping mangling long lines. argv is recorded
+    /// because launch-param providers (claude, 4f29dfad) receive the spawn
+    /// prompt as a trailing argument, not on stdin.
     /// Returns the capture file path.
     fn make_shim_recording(&self) -> std::path::PathBuf {
+        self.make_shim_recording_named("claude").1
+    }
+
+    /// [`Self::make_shim_recording`] under basename `name`. Returns
+    /// (shim path, capture path).
+    fn make_shim_recording_named(&self, name: &str) -> (String, std::path::PathBuf) {
         let capture = self.shim_dir.join("received.bytes");
-        let shim = self.shim_dir.join("claude");
+        let shim = self.shim_dir.join(name);
         std::fs::write(
             &shim,
-            format!("#!/bin/sh\nexec tee -a '{}'\n", capture.display()),
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{c}'; done\nexec tee -a '{c}'\n",
+                c = capture.display()
+            ),
         )
         .expect("write recording shim");
         #[cfg(unix)]
@@ -172,7 +184,21 @@ impl HostEnv {
             std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
                 .expect("chmod recording shim");
         }
-        capture
+        (shim.to_string_lossy().into_owned(), capture)
+    }
+
+    /// Rewrite the `claude` shim to print each argv entry on its own line
+    /// before `exec cat`, so a launch-param spawn prompt shows on the Term.
+    fn make_shim_echo_argv(&self) {
+        let shim = self.shim_dir.join("claude");
+        std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\nexec cat\n")
+            .expect("write argv-echo shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod argv-echo shim");
+        }
     }
 
     /// Mint an additional `exec cat` shim under `name` (the basename drives
@@ -317,6 +343,26 @@ async fn mint_api_key(port: u16, label: &str, workspaces: &str) -> String {
     .await;
     assert_eq!(status, 200, "api-key create failed: {resp}");
     json(&resp)["key"].as_str().expect("raw key").to_string()
+}
+
+/// Spawn/resume response keys. fff8bc7a (prd-workspace-default-model-and-
+/// api-model-override-v1) added the `modelApplied` / `modelSource` echo to
+/// the original five (sessionId/agentName/workspace/sandbox/stream).
+fn assert_spawn_shape_no_model(v: &serde_json::Value, resp: &str) {
+    let mut keys: Vec<&str> = v
+        .as_object()
+        .unwrap_or_else(|| panic!("spawn response must be an object; body={resp}"))
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec!["agentName", "modelApplied", "modelSource", "sandbox", "sessionId", "stream", "workspace"],
+        "spawn response is the FROZEN seven-key shape; body={resp}"
+    );
+    assert_eq!(v["modelApplied"], serde_json::Value::Null, "no model requested; body={resp}");
+    assert_eq!(v["modelSource"], "none", "no model requested; body={resp}");
 }
 
 /// All text currently on the session's Term (viewer-claimer suite helper).
@@ -468,12 +514,8 @@ async fn spawn_pins_cwd_mints_command_and_drops_caller_inputs() {
     assert_eq!(status, 200, "spawn failed: {resp}");
     let v = json(&resp);
 
-    // FROZEN wire shape: exactly sessionId/agentName/workspace/sandbox/stream.
-    assert_eq!(
-        v.as_object().map(|o| o.len()),
-        Some(5),
-        "spawn response is FROZEN five-key shape; body={resp}"
-    );
+    // FROZEN wire shape (+ the fff8bc7a model echo).
+    assert_spawn_shape_no_model(&v, &resp);
     assert_eq!(v["sandbox"], "none");
     assert_eq!(v["workspace"], "hs-happy");
     let session_id = v["sessionId"].as_str().expect("sessionId");
@@ -487,8 +529,11 @@ async fn spawn_pins_cwd_mints_command_and_drops_caller_inputs() {
 
     // The LIVE session proves the policy resolver's work: cwd pinned to the
     // REGISTERED workspace path; program is the workspace agent (shimmed
-    // claude), args are EXACTLY the spliced session id — the danger flag
-    // stripped, the hostile caller args absent.
+    // claude), args are EXACTLY the preset flag + the spliced session id —
+    // the hostile caller args absent. api_skip_permissions defaults ON for
+    // /v1 (2ca85159, prd-api-skip-permissions-default-on-v1), so the
+    // preset's auto-approve flag is KEPT; the explicit opt-out strip is
+    // pinned by policy::tests::opt_out_strips_auto_approve_flags.
     let sid = k2_core::session::SessionId::parse(session_id).expect("uuid");
     let session = v2_session_map::lookup_by_session_id(&sid).expect("session registered");
     assert_eq!(
@@ -503,9 +548,12 @@ async fn spawn_pins_cwd_mints_command_and_drops_caller_inputs() {
     );
     assert_eq!(
         session.args,
-        vec!["--session-id".to_string(), session_id.to_string()],
-        "exactly the host-spliced premint — the preset's \
-         --dangerously-skip-permissions STRIPPED, caller args dropped"
+        vec![
+            "--dangerously-skip-permissions".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+        ],
+        "exactly the preset flag (default ON) + host-spliced premint, caller args dropped"
     );
 
     // Reaper armed for this session.
@@ -924,12 +972,15 @@ async fn api_key_principal_hits_quota_429_at_cap() {
 async fn message_live_and_spawn_prompt_reach_the_pty() {
     let _g = lock();
     let env = HostEnv::set(true);
+    // claude supports launch-param (4f29dfad): the spawn prompt rides the
+    // argv as a trailing user message, and the post-spawn injector is
+    // skipped. The shim prints its argv so the prompt lands on the Term.
+    env.make_shim_echo_argv();
     let d = test_harness::start(OWNER_TOKEN).await;
     setup_project("hs-inject");
     configure_ws_agent("hs-inject", &env.shim());
 
-    // Spawn WITH an initial prompt — the background injector delivers it
-    // once the (1s-clamped) readiness ceiling passes; cat echoes it.
+    // Spawn WITH an initial prompt — delivered on the agent's argv.
     let body = serde_json::json!({ "prompt": "hs-spawn-prompt-marker" }).to_string();
     let (status, resp) = http_req(
         d.port,
@@ -1162,19 +1213,22 @@ async fn settle_profile_spawn_prompt_reaches_the_pty() {
     // are cleanly distinguishable (HostEnv::Drop restores the prior
     // value). Poll dialect ⇒ delivery at ~5s; settle:250 ⇒ ~250ms.
     std::env::set_var("K2_HOST_SESSION_READY_TIMEOUT_SECS", "5");
-    let capture = env.make_shim_recording();
+    // The post-spawn injector only runs for providers WITHOUT launch-param
+    // (4f29dfad puts claude's spawn prompt on argv). hermes is the
+    // inject-fallback provider; its static table entry is settle:7000.
+    let (shim, capture) = env.make_shim_recording_named("hermes");
     let d = test_harness::start(OWNER_TOKEN).await;
     let ws_path = setup_project("hs-settle");
-    configure_ws_agent_readiness("hs-settle", &env.shim(), "settle:250");
+    configure_ws_agent_readiness("hs-settle", &shim, "settle:250");
 
     // (b-seam) The resolution seam itself: preset metadata beats the
-    // static table's claude entry — non-polling, exactly 250ms.
+    // static table's hermes entry (settle:7000) — exactly 250ms.
     let profile = k2_daemon::v1_host_sessions::policy::resolve_host_injection_profile(
         ws_path.to_string_lossy().as_ref(),
     );
     assert!(
         !profile.ready_via_bracketed_paste,
-        "preset-declared settle must override the static claude poll entry"
+        "preset-declared settle must be a non-polling profile"
     );
     assert_eq!(profile.post_spawn_settle, Duration::from_millis(250));
 
@@ -1262,7 +1316,7 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     .await;
     assert_eq!(status, 200, "codex-shim spawn failed: {resp}");
     let v = json(&resp);
-    assert_eq!(v.as_object().map(|o| o.len()), Some(5), "frozen shape; body={resp}");
+    assert_spawn_shape_no_model(&v, &resp);
     assert_eq!(v["sandbox"], "none");
     let spawn_sid = v["sessionId"].as_str().expect("sessionId").to_string();
     let agent = v["agentName"].as_str().expect("agentName").to_string();
@@ -1270,8 +1324,15 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     {
         let sid = k2_core::session::SessionId::parse(&spawn_sid).expect("uuid");
         let session = v2_session_map::lookup_by_session_id(&sid).expect("registered");
-        assert!(
-            session.args.is_empty(),
+        // No session identity in argv. Only the auto-approve flags remain:
+        // the shim preset's own flag (kept, api_skip_permissions defaults
+        // ON — 2ca85159) and Codex's flag that ensure_danger_flags adds.
+        assert_eq!(
+            session.args,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ],
             "self-minting spawn must carry NO session identity in argv: {:?}",
             session.args
         );
@@ -1360,7 +1421,15 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     .await;
     assert_eq!(status, 200, "dead resume failed: {resp}");
     let v2 = json(&resp);
-    assert_eq!(v2.as_object().map(|o| o.len()), Some(5), "frozen shape; body={resp}");
+    // S4 (b64e8a3a): a dead re-spawn also echoes `resumed: false` (new PTY).
+    assert_eq!(v2["resumed"], serde_json::json!(false), "dead resume is resumed:false; body={resp}");
+    let mut v2_shape = v2.clone();
+    v2_shape
+        .as_object_mut()
+        .expect("object")
+        .remove("resumed")
+        .expect("resumed key present");
+    assert_spawn_shape_no_model(&v2_shape, &resp);
     assert_eq!(
         v2["sessionId"],
         serde_json::json!(provider_sid),
@@ -1369,10 +1438,18 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     let agent2 = v2["agentName"].as_str().expect("agentName").to_string();
     assert_ne!(agent2, agent, "resume mints a fresh api- agent");
     let resumed = v2_session_map::lookup_by_agent_name(&agent2).expect("resumed PTY registered");
+    // 83810345 keeps the launch flags on a Codex resume
+    // (`codex --yolo resume <id>`): root flags first, then the subcommand
+    // pair. The flags are the same two auto-approve flags as the spawn.
     assert_eq!(
         resumed.args,
-        vec!["resume".to_string(), provider_sid.clone()],
-        "codex resume grammar: leading subcommand pair, preset args dropped"
+        vec![
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+            "resume".to_string(),
+            provider_sid.clone(),
+        ],
+        "codex resume grammar: launch flags, then the subcommand pair"
     );
 
     // The resumed spawn's argv stamped the new row (commit-1 grammar scan) —

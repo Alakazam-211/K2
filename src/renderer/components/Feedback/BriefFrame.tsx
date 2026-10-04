@@ -7,7 +7,8 @@
 // navigation), `referrerPolicy="no-referrer"`, and the per-frame CSP meta
 // first in the document. Links are listed below the frame with their FULL
 // URL and open in the system browser through plugin-opener (`openUrl`),
-// never the in-app Browser tab.
+// never the in-app Browser tab. The list is compact: as tall as its rows,
+// capped small with its own scroll, and absent when there are no links.
 //
 // Size: a fixed `min(60vh, 560px)` box with its own scrollbar and a drag
 // handle; no auto-size (the parent can't read an inert frame's height).
@@ -71,14 +72,18 @@ function openLink(url: string): void {
   openUrl(url).catch((e: unknown) => console.warn('[brief] openUrl failed', url, e))
 }
 
+/** Compact links list: as tall as its rows up to `BRIEF_LINKS_MAX_HEIGHT_CLASS`,
+ *  then it scrolls. No links → nothing rendered (no space taken). */
+export const BRIEF_LINKS_MAX_HEIGHT_CLASS = 'max-h-24'
+
 function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null {
   if (links.length === 0) return null
   return (
-    <div data-testid="brief-links" className="mt-2 text-[11px]">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+    <div data-testid="brief-links" className="mt-1 text-[11px] flex-none">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">
         Links in this brief
       </div>
-      <ol className="flex flex-col gap-0.5">
+      <ol data-testid="brief-links-list" className={`flex flex-col gap-0.5 ${BRIEF_LINKS_MAX_HEIGHT_CLASS} overflow-y-auto`}>
         {links.map((l) => (
           <li key={l.n} className="flex items-baseline gap-1.5 min-w-0">
             <span className="text-[var(--color-text-muted)] tabular-nums flex-shrink-0">[{l.n}]</span>
@@ -307,7 +312,7 @@ function BriefOverlay({
         />
       </div>
       {links.length > 0 && (
-        <div className="px-4 py-2 border-t border-[var(--color-border)] max-h-[30vh] overflow-y-auto flex-shrink-0">
+        <div className="px-4 pb-2 border-t border-[var(--color-border)] flex-shrink-0">
           <BriefLinks links={links} />
         </div>
       )}

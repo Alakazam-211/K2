@@ -6,8 +6,9 @@
 //     resolved) and "from {agent} → assigned to {person}", where the
 //     assignee part opens the reassign picker (users on this box).
 //   - Below it, scrolling: the short summary (`--body`), the HTML brief
-//     (it takes the stage), then comments and history, collapsed by
-//     default when there is a brief. No action bar.
+//     (it takes the stage) with its compact links list. No action bar and
+//     no comments/history section: the conversation lives in the rail's
+//     Thread tab.
 //   - The right-hand chat rail (TicketAgentRail): the pre-redesign Thread |
 //     Agent tabs — the ticket thread with the quick answers above its text
 //     area and Send, and the asking session's terminal.
@@ -48,7 +49,7 @@ import { BriefFrame } from './BriefFrame'
 import { cardAssigneeNames, statusChipClass } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
-import { ChatMessage, ChatMessageBody } from '@/components/common/ChatMessage'
+import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { primaryScope } from '@/kessel/server-scope'
 import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
@@ -183,6 +184,11 @@ export function FeedbackItemView({
     : item?.workspace ?? listRow.projectName ?? UNLINKED_WORKSPACE_LABEL
   const view = item ?? listRow
   const assigneeNames = cardAssigneeNames(view.assignees)
+  // The asker's agentName defaults to the workspace name (feedback_routes),
+  // so the workspace label is shown only when it adds something: an
+  // unlinked ticket, or a workspace that differs from the agent's name.
+  const showWorkspace =
+    unlinked || workspaceName.trim().toLowerCase() !== (view.agentName ?? '').trim().toLowerCase()
   const canOpenWindow = !inOwnWindow && !isWebClient()
   const showRail = railOpen && !unlinked
 
@@ -310,7 +316,7 @@ export function FeedbackItemView({
                 </span>
               )}
               <span className="truncate opacity-70 min-w-0">
-                {' '}· {workspaceName} · asked{' '}
+                {' '}· {showWorkspace ? `${workspaceName} · ` : ''}asked{' '}
                 {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
               </span>
             </span>
@@ -321,7 +327,6 @@ export function FeedbackItemView({
           key={`body-${id}`}
           item={item}
           error={error}
-          nowSec={nowSec}
           ticketId={id}
           unlinked={unlinked}
           hasBrief={hasBrief}
@@ -354,12 +359,11 @@ export function FeedbackItemView({
   )
 }
 
-// ── Body: summary + brief + comments (no action bar) ─────────────────────
+// ── Body: summary + brief (no action bar; the thread is in the rail) ─────
 
 function TicketBody({
   item,
   error,
-  nowSec,
   ticketId,
   unlinked,
   hasBrief,
@@ -372,7 +376,6 @@ function TicketBody({
 }: {
   item: FeedbackShow | null
   error: string | null
-  nowSec: number
   ticketId: string
   unlinked: boolean
   hasBrief: boolean
@@ -385,23 +388,11 @@ function TicketBody({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  // Comments + history: collapsed by default under a brief (the brief is
-  // the ticket); open when there is no brief (they are all there is).
-  const [historyOpen, setHistoryOpen] = useState(!hasBrief)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
   useEffect(() => {
     clearStuckBodyUserSelect()
   }, [ticketId])
-
-  // A brief arriving after first paint collapses the history once.
-  const collapsedForBrief = useRef(hasBrief)
-  useEffect(() => {
-    if (hasBrief && !collapsedForBrief.current) {
-      collapsedForBrief.current = true
-      setHistoryOpen(false)
-    }
-  }, [hasBrief])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -441,8 +432,6 @@ function TicketBody({
     item.status === 'planned' ||
     item.status === 'needs_discussion'
 
-  const comments = item.comments ?? []
-
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
@@ -472,46 +461,6 @@ function TicketBody({
                 Loading brief…
               </div>
             ))}
-
-          <button
-            type="button"
-            data-testid="ticket-history-toggle"
-            aria-expanded={historyOpen}
-            onClick={() => setHistoryOpen((o) => !o)}
-            className="flex items-center gap-1.5 w-full py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] cursor-pointer"
-          >
-            <svg
-              width="9"
-              height="9"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2.5}
-              className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`}
-              aria-hidden
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6" />
-            </svg>
-            Comments and history
-            <span className="tabular-nums font-normal opacity-70">{comments.length}</span>
-          </button>
-          {historyOpen && (
-            <div data-testid="ticket-history" className="flex flex-col gap-2.5 pt-1 pb-2">
-              {comments.map((c, i) => {
-                const isOwner = c.author === 'owner'
-                return (
-                  <ChatMessage
-                    key={`${c.at}-${i}`}
-                    author={isOwner ? 'You' : c.author}
-                    isOwner={isOwner}
-                    timeLabel={formatRelativeTime(c.at, nowSec)}
-                    body={c.body}
-                    fontSize={editorFontSize}
-                  />
-                )
-              })}
-            </div>
-          )}
         </div>
       </SelectableRegion>
 

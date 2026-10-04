@@ -230,7 +230,7 @@ function railOf(): HTMLElement {
 }
 
 describe('ticket detail', () => {
-  it('header: title, from agent → assignee, Expand, Open in window and the chat toggle; history collapsed under a brief', async () => {
+  it('header: title, from agent → assignee, Expand, Open in window and the chat toggle; no comments/history section', async () => {
     detail(makeRow({ hasBrief: true, briefBytes: 120 }))
     await screen.findByTestId('brief-frame')
     const header = screen.getByTestId('ticket-detail-header')
@@ -240,14 +240,42 @@ describe('ticket detail', () => {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
     expect(screen.getByTestId('ticket-chat-toggle').textContent).toBe('Hide chat')
-    const toggle = screen.getByTestId('ticket-history-toggle')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    // The conversation lives in the rail's Thread tab only.
+    expect(screen.queryByTestId('ticket-history-toggle')).toBeNull()
     expect(screen.queryByTestId('ticket-history')).toBeNull()
-    fireEvent.click(toggle)
-    expect(screen.getByTestId('ticket-history')).toBeTruthy()
+    expect(screen.queryByText(/Comments and history/i)).toBeNull()
     // Expand opens the brief overlay.
     fireEvent.click(screen.getByTestId('ticket-expand'))
     expect(screen.getByTestId('brief-overlay')).toBeTruthy()
+  })
+
+  it('byline names the agent once: an Unassigned ticket from a workspace named like its agent shows no second name', async () => {
+    detail(makeRow({ agentName: 'scout', projectName: 'Scout', assignees: [] }))
+    await screen.findByTestId('ticket-rail-thread')
+    const byline = screen.getByTestId('ticket-detail-byline')
+    expect(byline.textContent).toMatch(/^from scout → unassigned · asked /)
+    expect(byline.textContent!.match(/scout/gi)).toHaveLength(1)
+  })
+
+  it('byline keeps the workspace only when it differs from the agent name', async () => {
+    detail(makeRow({ agentName: 'scout', projectName: 'Alpha', assignees: [] }))
+    await screen.findByTestId('ticket-rail-thread')
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from scout → unassigned · Alpha · asked /)
+  })
+
+  it('a ticket with no brief has no comments/history section either; its comments are only in the rail Thread', async () => {
+    detail(makeRow({}))
+    const pane = await screen.findByTestId('ticket-rail-thread')
+    expect(pane.textContent).toContain('Which DB?')
+    expect(screen.queryByTestId('ticket-history-toggle')).toBeNull()
+    expect(screen.queryByTestId('ticket-history')).toBeNull()
+    expect(screen.queryByText(/Comments and history/i)).toBeNull()
+    // The detail body (outside the rail) renders no comment rows.
+    const body = screen.getByTestId('ticket-detail')
+    const rail = screen.getByTestId('ticket-agent-rail')
+    const outside = Array.from(body.querySelectorAll('[data-ticket-thread]')).filter((el) => !rail.contains(el))
+    expect(outside).toHaveLength(1)
+    expect(outside[0].textContent).not.toContain('Which DB?')
   })
 
   it('has no bottom action bar: no Answer / Resolve / Reassign / Chat with agent buttons', async () => {

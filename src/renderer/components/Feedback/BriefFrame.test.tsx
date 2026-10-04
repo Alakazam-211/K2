@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { frameCsp, frameSrcDoc } from '@/lib/frame-csp'
-import { BriefFrame, briefOverlayStoplightInset } from './BriefFrame'
+import { BriefFrame, BRIEF_LINKS_MAX_HEIGHT_CLASS, briefOverlayStoplightInset } from './BriefFrame'
 import { desktopChromeFor, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
 import { buildBriefSrcDoc, briefStylesheet, fallbackBriefTokens } from './brief-srcdoc'
 import type { FeedbackBrief } from './feedback-api'
@@ -146,6 +146,28 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     expect(opener.openUrl).toHaveBeenCalledTimes(1)
     expect(opener.openUrl).toHaveBeenCalledWith('https://example.com/docs/dns?x=1&y=2')
     expect(offOrigin.openOffOriginHttp).not.toHaveBeenCalled()
+  })
+
+  it('the links list is compact: content height, small max height, scrolls beyond it', () => {
+    render(<BriefFrame brief={brief} title="t" />)
+    const area = screen.getByTestId('brief-links')
+    // No fixed or growing height on the area itself.
+    expect(area.className).not.toMatch(/(^|\s)(h-|min-h-|flex-1|grow)/)
+    expect(area.style.height).toBe('')
+    const list = screen.getByTestId('brief-links-list')
+    expect(list.className).toContain(BRIEF_LINKS_MAX_HEIGHT_CLASS)
+    expect(BRIEF_LINKS_MAX_HEIGHT_CLASS).toBe('max-h-24')
+    expect(list.className).toContain('overflow-y-auto')
+    expect(list.className).not.toMatch(/(^|\s)(h-|min-h-)/)
+  })
+
+  it('no links → no links area at all', () => {
+    const noLinks: FeedbackBrief = { ...brief, html: '<p>No links here.</p>', sha256: 'nolinks' }
+    render(<BriefFrame brief={noLinks} title="t" />)
+    expect(screen.getByTestId('brief-frame')).toBeTruthy()
+    expect(screen.queryByTestId('brief-links')).toBeNull()
+    expect(screen.queryByTestId('brief-links-list')).toBeNull()
+    expect(screen.queryByText('Links in this brief')).toBeNull()
   })
 
   it('the resize handle changes the frame height', () => {

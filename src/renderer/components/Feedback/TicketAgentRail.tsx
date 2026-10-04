@@ -1,39 +1,54 @@
-// "Chat with agent" — the right-hand rail of the ticket detail: the asking
-// agent's session in the same Thread | Terminal view the Agents page uses.
+// The ticket's chat rail — the pre-redesign ticket chat surface, restored
+// (Rosson, after the 0.43.2 board review: the rail had lost its compose
+// box). It is the old FeedbackItemView's two tabs, moved to the right of
+// the brief:
 //
-// Nothing new is built here. The rail mounts the Agents page's own session
-// surface, `AgentSessionChrome` (the View menu — `SessionViewMenu` — with
-// Terminal / Thread / Split view, the agent's name and the refresh button)
-// around the kessel `TerminalPane`. One pane, one switcher; the chosen
-// view is remembered by `useSessionViewTab` under the same key the Agents
-// page uses for that conversation, so the rail and the Agents page agree.
+//   Thread — the ticket's comment thread (ThreadTab, from
+//     `FeedbackItemView.tsx` before 93458b8f): the comments, then the
+//     quick-answer buttons (the brief's Options, or the structured
+//     `--options`) ABOVE the text area, then the text area and Send.
+//     - An option pick posts `optionPick: true` → the daemon records it as
+//       the answer (answered).
+//     - Free text posts a plain comment → the ticket goes to
+//       needs_discussion.
+//     Both land in the agent's session (the daemon injects and wakes it),
+//     exactly as the old Comment button did.
+//   Agent — the asking session's terminal in place (the old TerminalTab):
+//     find the session (live-by-id, or the workspace's pinned chat via D6),
+//     attach with `attachAgentName` (the idempotent v2/spawn reuses the
+//     existing PTY), and mark the workspace Active so the reaper spares it
+//     (PRD §4.3.1). A dormant session offers Wake.
 //
-// Attaching rides the ticket's old Agent tab (unchanged): find the asking
-// session (live-by-id, or the workspace's pinned chat via D6), attach with
-// `attachAgentName` (the idempotent v2/spawn reuses the existing PTY), and
-// mark the workspace Active so the reaper spares it (PRD §4.3.1). A
-// dormant session offers Wake. When the terminal cannot be shown (no
-// session, dormant, an error), the rail shows the Thread only, read-only,
-// with a note.
-//
-// `footer` (the ticket's quick-answer buttons) sits at the bottom of the
-// rail, right under the session's compose area.
+// Status, reassign and the rail's open/closed toggle live in the ticket
+// header (FeedbackItemView); the rail has no action bar.
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { useSettingsStore } from '@/stores/settings'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
+import { formatRelativeTime } from '@/lib/format-relative-time'
+import { KeyCombo } from '@/components/KeySymbol'
 import { activateProject } from '@/stores/projects'
 import {
   activateOnLiveSessionAttach,
   wakeCanonicalMemberSession,
 } from '@/components/Projects/wake-member-session'
-import { AgentSessionChrome } from '@/components/SessionView/AgentSessionChrome'
-import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
-import { resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
+import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
+import { ChatMessage } from '@/components/common/ChatMessage'
+import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
+import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
-import { askingSessionWakeAction, type FeedbackSessionKind } from './feedback-api'
+import {
+  askingSessionWakeAction,
+  commentFeedback,
+  type FeedbackSessionKind,
+  type FeedbackShow,
+  type QuickAnswerOption,
+} from './feedback-api'
+
+export type RailTab = 'thread' | 'agent'
 
 interface LiveSessionRow {
   sessionId: string
@@ -163,48 +178,345 @@ function useAskingSession(args: {
   return { phase, wake, retry }
 }
 
-/** The pinned-chat Thread address for the agent's workspace (the same
- *  lookup AgentChatPane uses). Empty until resolved. */
-function useThreadAddr(projectPath: string | null, projectId: string): string {
-  const [addr, setAddr] = useState('')
-  useEffect(() => {
-    let cancelled = false
-    if (!projectPath) return
-    resolvePinnedChatCopyableAddress(primaryScope(), projectPath, projectId)
-      .then((a) => {
-        if (!cancelled && a?.clipboard) setAddr(a.clipboard)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [projectPath, projectId])
-  return addr
-}
-
 export function TicketAgentRail({
   feedbackId,
-  agentName,
+  item,
+  error,
+  nowSec,
+  options,
+  optionsLive,
+  onChanged,
   projectId,
   projectPath,
   sessionId,
   sessionKind,
   canonicalSessionId,
-  onClose,
-  footer,
 }: {
   feedbackId: string
-  /** The agent that filed the ticket (display only). */
-  agentName: string
+  /** The loaded ticket (null while loading). */
+  item: FeedbackShow | null
+  error: string | null
+  nowSec: number
+  /** Quick answers: the brief's Options, else the structured `--options`. */
+  options: QuickAnswerOption[]
+  /** Picks are live until the ticket is closed. */
+  optionsLive: boolean
+  /** After a successful send: refetch the ticket + the list. */
+  onChanged: () => void
   projectId: string
   projectPath: string | null
   sessionId: string | null
   sessionKind: FeedbackSessionKind
   canonicalSessionId: string | null | undefined
-  onClose: () => void
-  /** Rendered at the bottom of the rail, under the compose area (the
-   *  ticket's quick-answer buttons). */
-  footer?: React.ReactNode
+}): React.JSX.Element {
+  const [tab, setTab] = useState<RailTab>('thread')
+
+  return (
+    <aside
+      data-testid="ticket-agent-rail"
+      className="flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
+      style={{ width: 'min(640px, 48vw)' }}
+    >
+      <div role="tablist" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
+        {(['thread', 'agent'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            data-testid={`ticket-rail-tab-${t}`}
+            onClick={() => setTab(t)}
+            className={`px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
+              tab === t
+                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+            }`}
+          >
+            {t === 'thread' ? 'Thread' : 'Agent'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'thread' ? (
+        <ThreadTab
+          key={`thread-${feedbackId}`}
+          item={item}
+          error={error}
+          nowSec={nowSec}
+          ticketId={feedbackId}
+          options={options}
+          optionsLive={optionsLive}
+          onChanged={onChanged}
+        />
+      ) : (
+        <AgentTab
+          feedbackId={feedbackId}
+          projectId={projectId}
+          projectPath={projectPath}
+          sessionId={sessionId}
+          sessionKind={sessionKind}
+          canonicalSessionId={canonicalSessionId}
+        />
+      )}
+    </aside>
+  )
+}
+
+// ── Thread tab (the restored ThreadTab) ──────────────────────────────────
+
+export function ThreadTab({
+  item,
+  error,
+  nowSec,
+  ticketId,
+  options,
+  optionsLive,
+  onChanged,
+}: {
+  item: FeedbackShow | null
+  error: string | null
+  nowSec: number
+  ticketId: string
+  options: QuickAnswerOption[]
+  optionsLive: boolean
+  onChanged: () => void
+}): React.JSX.Element {
+  // Drafts survive unmount (leave ticket / switch tabs or pages).
+  const [reply, setReply] = useState(() => getTicketDraft(ticketId))
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Match Code Editor → Appearance → Font Size (default 12).
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
+
+  // Focus the reply box ONCE per ticket id when the thread first becomes
+  // ready — not on every live `item` refetch. Re-focus steals the caret
+  // and kills drag-selection on message bodies.
+  const focusedForTicketRef = useRef<string | null>(null)
+  useEffect(() => {
+    clearStuckBodyUserSelect()
+    if (!item || error) return
+    if (focusedForTicketRef.current === ticketId) return
+    focusedForTicketRef.current = ticketId
+    let cancelled = false
+    let innerRaf = 0
+    const outerRaf = window.requestAnimationFrame(() => {
+      innerRaf = window.requestAnimationFrame(() => {
+        if (cancelled) return
+        if (hasSelectionWithin(scrollRef.current)) return
+        textareaRef.current?.focus({ preventScroll: true })
+      })
+    })
+    const t = window.setTimeout(() => {
+      if (cancelled) return
+      if (hasSelectionWithin(scrollRef.current)) return
+      textareaRef.current?.focus({ preventScroll: true })
+    }, 50)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(outerRaf)
+      cancelAnimationFrame(innerRaf)
+      window.clearTimeout(t)
+    }
+  }, [ticketId, item, error])
+
+  // Auto-grow the reply field with content.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+  }, [reply])
+
+  const setReplyAndDraft = (text: string): void => {
+    setReply(text)
+    setTicketDraft(ticketId, text)
+  }
+
+  // Keep the newest message in view when the thread grows (and on first
+  // load) — but not while the user is drag-selecting.
+  const commentCount = item?.comments.length ?? 0
+  const prevCommentCountRef = useRef(-1)
+  useEffect(() => {
+    if (!item) return
+    const grew = commentCount > prevCommentCountRef.current
+    prevCommentCountRef.current = commentCount
+    if (!grew) return
+    if (hasSelectionWithin(scrollRef.current)) return
+    requestAnimationFrame(() => {
+      if (hasSelectionWithin(scrollRef.current)) return
+      const el = scrollRef.current?.parentElement
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }, [item, commentCount])
+
+  const submit = useCallback(
+    async (op: () => Promise<void>): Promise<void> => {
+      if (busy) return
+      setBusy(true)
+      setActionError(null)
+      try {
+        await op()
+        onChanged()
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [busy, onChanged],
+  )
+
+  if (error) {
+    return (
+      <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
+        Failed to load ticket: {error}
+      </div>
+    )
+  }
+  if (!item) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+        Loading thread…
+      </div>
+    )
+  }
+
+  // Every message lands in the asking session (the daemon injects it and
+  // wakes the agent). A pick is the answer; free text starts a discussion.
+  // Keep delivered/deliveryReason (D8); a quiet miss is not a store error.
+  const send = async (text: string, optionPick: boolean): Promise<void> => {
+    const res = await commentFeedback(item.id, text, { optionPick })
+    setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
+  }
+
+  const sendReply = (): void => {
+    const text = reply.trim()
+    if (!text) return
+    void submit(async () => {
+      await send(text, false)
+      setReplyAndDraft('')
+      clearTicketDraft(ticketId)
+    })
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0" data-testid="ticket-rail-thread">
+      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
+        <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
+          <div className="flex flex-col gap-2.5">
+            {item.comments.map((c, i) => {
+              const isOwner = c.author === 'owner'
+              return (
+                <ChatMessage
+                  key={`${c.at}-${i}`}
+                  author={isOwner ? 'You' : c.author}
+                  isOwner={isOwner}
+                  timeLabel={formatRelativeTime(c.at, nowSec)}
+                  body={c.body}
+                  fontSize={editorFontSize}
+                />
+              )
+            })}
+          </div>
+        </div>
+      </SelectableRegion>
+
+      <div data-testid="ticket-compose" className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
+        {actionError && (
+          <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>
+        )}
+        {deliveryMiss && (
+          <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
+            Saved. The agent did not receive it ({deliveryMiss}).
+          </p>
+        )}
+
+        {options.length > 0 && (
+          <div data-testid="ticket-quick-answers" className="mb-2 flex flex-wrap gap-2">
+            {options.map((opt) => {
+              const accepted = item.answer === opt.answer
+              return (
+                <button
+                  key={opt.answer}
+                  type="button"
+                  data-testid="ticket-quick-answer"
+                  disabled={!optionsLive || busy}
+                  title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
+                  onClick={() => void submit(() => send(opt.answer, true))}
+                  className={`max-w-full truncate px-3 py-1.5 text-[11px] font-medium border transition-colors ${
+                    accepted
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                      : optionsLive
+                        ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
+                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
+                  } disabled:cursor-not-allowed`}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <textarea
+          ref={textareaRef}
+          data-testid="ticket-compose-input"
+          value={reply}
+          onChange={(e) => setReplyAndDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              sendReply()
+            }
+          }}
+          placeholder={
+            options.length > 0
+              ? 'Pick an option above to answer, or write a message — it starts a discussion'
+              : 'Write a message — it lands in the agent’s session'
+          }
+          rows={2}
+          className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
+          style={{ fontSize: editorFontSize }}
+        />
+        <div className="flex items-center gap-2 mt-2">
+          <div className="flex-1" />
+          <button
+            type="button"
+            data-testid="ticket-compose-send"
+            disabled={busy || reply.trim().length === 0}
+            onClick={sendReply}
+            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            Send
+            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
+              <KeyCombo combo="⌘⏎" />
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Agent tab (the asking session's terminal, in place) ──────────────────
+
+function AgentTab({
+  feedbackId,
+  projectId,
+  projectPath,
+  sessionId,
+  sessionKind,
+  canonicalSessionId,
+}: {
+  feedbackId: string
+  projectId: string
+  projectPath: string | null
+  sessionId: string | null
+  sessionKind: FeedbackSessionKind
+  canonicalSessionId: string | null | undefined
 }): React.JSX.Element {
   // Pinned-chat tickets (canonical / D6) attach to the workspace agent even
   // without a stamped session id; anything else needs the asking session.
@@ -216,139 +528,82 @@ export function TicketAgentRail({
     projectId,
     projectPath,
   })
-  const addr = useThreadAddr(projectPath, projectId)
 
-  return (
-    <aside
-      data-testid="ticket-agent-rail"
-      className="flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
-      style={{ width: 'min(640px, 48vw)' }}
-    >
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0">
-        {/* Live: the session chrome below names the agent; don't repeat it. */}
-        {phase.kind === 'live' ? (
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-            Chat with agent
-          </span>
-        ) : (
-          <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate" title={agentName}>
-            {agentName}
-          </span>
-        )}
-        <span className="flex-1" />
+  if (phase.kind === 'none') {
+    return (
+      <EmptyTermState
+        title="No session attached"
+        detail="This ticket was filed outside a known session, so there is no terminal to show."
+      />
+    )
+  }
+  if (phase.kind === 'checking') return <EmptyTermState title="Checking session…" />
+  if (phase.kind === 'waking') return <EmptyTermState title="Waking session…" />
+  if (phase.kind === 'error') {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-xs text-[var(--color-status-error-soft)] max-w-[48ch]">{phase.message}</p>
         <button
           type="button"
-          data-testid="ticket-agent-rail-close"
-          onClick={onClose}
-          title="Hide the chat"
-          aria-label="Hide the chat"
-          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer"
+          onClick={retry}
+          className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
         >
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <line x1="2" y1="2" x2="10" y2="10" />
-            <line x1="10" y1="2" x2="2" y2="10" />
-          </svg>
+          Retry
         </button>
       </div>
-
-      <PageLiveContext.Provider value={true}>
-        <PrimaryRoom>
-          {phase.kind === 'live' ? (
-            <div className="flex-1 min-h-0 flex flex-col" data-testid="ticket-agent-rail-live">
-              <AgentSessionChrome
-                title={agentName}
-                addr={addr}
-                conversationId={canonicalSessionId ?? null}
-                agentName={phase.agentName}
-                cwd={phase.cwd}
-              >
-                <TerminalPane
-                  terminalId={`feedback-term:${feedbackId}`}
-                  cwd={phase.cwd}
-                  attachAgentName={phase.agentName}
-                  sessionId={phase.sessionId}
-                />
-              </AgentSessionChrome>
-            </div>
-          ) : (
-            <ThreadOnly
-              addr={addr}
-              conversationId={canonicalSessionId ?? null}
-              agentName={agentName}
-              phase={phase}
-              onWake={() => void wake()}
-              onRetry={retry}
-            />
-          )}
-        </PrimaryRoom>
-      </PageLiveContext.Provider>
-
-      {footer}
-    </aside>
-  )
-}
-
-/** The terminal can't be shown: the Thread alone (read-only) plus why. */
-function ThreadOnly({
-  addr,
-  conversationId,
-  agentName,
-  phase,
-  onWake,
-  onRetry,
-}: {
-  addr: string
-  conversationId: string | null
-  agentName: string
-  phase: Exclude<TermPhase, { kind: 'live' }>
-  onWake: () => void
-  onRetry: () => void
-}): React.JSX.Element {
-  const note =
-    phase.kind === 'none'
-      ? 'This ticket was filed outside a known session, so there is no terminal to show.'
-      : phase.kind === 'checking'
-        ? 'Looking for the agent’s session…'
-        : phase.kind === 'waking'
-          ? 'Waking the agent’s session…'
-          : phase.kind === 'error'
-            ? `The terminal can’t be shown: ${phase.message}`
-            : 'The agent’s session isn’t running, so only its Thread is shown.'
-  return (
-    <div className="flex-1 min-h-0 flex flex-col" data-testid="ticket-agent-rail-thread-only">
+    )
+  }
+  if (phase.kind === 'dormant') {
+    return (
       <div
-        data-testid="ticket-agent-rail-note"
-        className="flex items-center gap-2 px-3 py-2 text-[11px] text-[var(--color-text-muted)] border-b border-[var(--color-border)] flex-shrink-0"
+        data-testid="ticket-agent-dormant"
+        className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
       >
-        <span className="flex-1 min-w-0">{note}</span>
-        {phase.kind === 'dormant' && phase.wakeable && (
+        <p className="text-xs font-semibold text-[var(--color-text-primary)]">Session is dormant</p>
+        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">
+          The asking session isn&apos;t running right now.
+          {phase.wakeable ? ' Wake it to attach its terminal here.' : ''}
+        </p>
+        {phase.wakeable && (
           <button
             type="button"
-            onClick={onWake}
-            className="px-2 py-1 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 cursor-pointer"
+            onClick={() => void wake()}
+            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
           >
             Wake session
           </button>
         )}
-        {phase.kind === 'error' && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-2 py-1 text-[11px] bg-white/[0.06] text-[var(--color-text-primary)] cursor-pointer"
-          >
-            Retry
-          </button>
-        )}
       </div>
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        {addr ? (
-          <ThreadOverlayPane addr={addr} conversationId={conversationId} agentName={agentName} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] px-6 text-center">
-            No Thread address for this agent yet.
-          </div>
-        )}
+    )
+  }
+
+  // Live — attach in place. attachAgentName keys the idempotent v2/spawn
+  // to the EXISTING daemon session (reused:true), so this never mints a
+  // duplicate PTY.
+  return (
+    <PageLiveContext.Provider value={true}>
+      <div className="flex-1 min-h-0" data-testid="ticket-agent-terminal">
+        <PrimaryRoom>
+          <TerminalPane
+            terminalId={`feedback-term:${feedbackId}`}
+            cwd={phase.cwd}
+            attachAgentName={phase.agentName}
+            sessionId={phase.sessionId}
+          />
+        </PrimaryRoom>
       </div>
+    </PageLiveContext.Provider>
+  )
+}
+
+function EmptyTermState({ title, detail }: { title: string; detail?: string }): React.JSX.Element {
+  return (
+    <div
+      data-testid="ticket-agent-empty"
+      className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center"
+    >
+      <p className="text-xs text-[var(--color-text-secondary)]">{title}</p>
+      {detail && <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">{detail}</p>}
     </div>
   )
 }

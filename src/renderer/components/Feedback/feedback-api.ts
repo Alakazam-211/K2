@@ -419,9 +419,14 @@ export function askingSessionWakeAction(args: {
  *  settable. */
 export async function resolveFeedback(
   id: string,
-  status: 'resolved' | 'dismissed' | 'waiting' | 'planned' | 'needs_discussion',
+  status: 'resolved' | 'dismissed' | 'waiting' | 'planned' | 'needs_discussion' | 'answered',
+  answer?: string,
 ): Promise<void> {
-  await daemonCliPost(primaryScope(), 'feedback/resolve', { id, status })
+  // `answered` needs the agreed outcome (the daemon refuses a bare one, so
+  // `ask --wait` never sees an answered ticket with no answer).
+  const payload: Record<string, unknown> = { id, status }
+  if (status === 'answered') payload.answer = answer ?? ''
+  await daemonCliPost(primaryScope(), 'feedback/resolve', payload)
 }
 
 /** Human-readable status label for chips / badges. */
@@ -435,8 +440,10 @@ export function statusLabel(status: FeedbackStatus | 'all'): string {
 export async function assignFeedback(
   id: string,
   usernames: string[],
-): Promise<{ assignees: string[] }> {
-  return daemonCliPost<{ assignees: string[] }>(primaryScope(), 'feedback/assign', {
+): Promise<{ assignees: string[]; warnings?: Array<{ code: string; hint: string }> }> {
+  // A name that is not a user on this server still assigns, with an
+  // `assignee_unknown` warning in `warnings` (feedback_routes handle_assign).
+  return daemonCliPost<{ assignees: string[]; warnings?: Array<{ code: string; hint: string }> }>(primaryScope(), 'feedback/assign', {
     id,
     usernames,
   })

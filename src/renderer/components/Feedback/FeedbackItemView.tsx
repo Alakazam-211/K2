@@ -1,59 +1,55 @@
 // Tickets board — the ticket detail (0.43.2 quick redesign, Rosson).
 //
-//   - A slim header that stays put: the title, "from {agent} → assigned to
-//     {person}", the status (also the status menu), Expand and Open in
-//     window.
+//   - A slim header that stays put: the title, Expand, Open in window and
+//     the chat toggle (Hide chat / Show chat, remembered per window); under
+//     it the status (a dropdown: waiting / needs discussion / answered /
+//     resolved) and "from {agent} → assigned to {person}", where the
+//     assignee part opens the reassign picker (users on this box).
 //   - Below it, scrolling: the short summary (`--body`), the HTML brief
 //     (it takes the stage), then comments and history, collapsed by
-//     default when there is a brief.
-//   - An action bar pinned to the bottom: Answer, Resolve, Reassign, and
-//     the Chat with agent / Hide chat toggle.
-//   - The right-hand chat rail (TicketAgentRail), open by default and
-//     remembered per window: the agent's session in the Agents page's
-//     Thread | Terminal view, with the quick-answer buttons (one per brief
-//     Options item, or per structured `--options`) at its bottom, under
-//     the compose area. With the rail hidden they fall back to the action
-//     bar so a pick is never out of reach.
+//     default when there is a brief. No action bar.
+//   - The right-hand chat rail (TicketAgentRail): the pre-redesign Thread |
+//     Agent tabs — the ticket thread with the quick answers above its text
+//     area and Send, and the asking session's terminal.
 //
 // Status model (daemon-first, feedback_routes.rs): a quick-answer pick
-// posts `optionPick: true` → the ticket is answered. A typed Answer is free
-// text → the ticket goes to needs_discussion until the agent settles it.
-// Both land in the agent's session (wake=true) exactly as before.
+// posts `optionPick: true` → the ticket is answered. Free text → the ticket
+// goes to needs_discussion until the agent settles it. Both land in the
+// agent's session. The header's Answered asks for the agreed outcome (the
+// daemon's `resolve` needs one).
 //
-// An UNLINKED ticket (workspace removed, TB18) is read-only: no answer,
-// no options, no reassign, no chat — only Resolve and Dismiss.
+// An UNLINKED ticket (workspace removed, TB18) is read-only: no options,
+// no reassign, no chat — only Resolve and Dismiss.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
+import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { KeyCombo } from '@/components/KeySymbol'
 import { isWebClient } from '@/lib/is-web'
 import {
   assignFeedback,
-  commentFeedback,
   fetchFeedbackBrief,
   fetchFeedbackShow,
   formatFiledDate,
   isUnlinked,
   quickAnswerOptions,
   resolveFeedback,
+  statusLabel,
   UNLINKED_WORKSPACE_LABEL,
   type FeedbackBrief,
   type FeedbackListRow,
   type FeedbackShow,
   type FeedbackStatus,
-  type QuickAnswerOption,
 } from './feedback-api'
 import { HtmlBriefBadge, PriorityBadge, StatusBadge } from './badges'
 import { BriefFrame } from './BriefFrame'
-import { CardStatusDropdown, cardAssigneeNames } from './TicketCard'
+import { cardAssigneeNames, statusChipClass } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessage, ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
-import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
 import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
 
@@ -84,10 +80,17 @@ export function quickAnswersLive(status: FeedbackStatus): boolean {
   return status !== 'resolved' && status !== 'dismissed'
 }
 
+/** The header status dropdown's choices (Rosson). */
+export const HEADER_STATUSES = ['waiting', 'needs_discussion', 'answered', 'resolved'] as const
+export type HeaderStatus = (typeof HEADER_STATUSES)[number]
+
 /** Open the ticket in its own app window (desktop only). */
 export function openTicketWindow(ticketId: string): Promise<unknown> {
   return invoke('window_open_ticket', { ticketId })
 }
+
+const HEADER_BUTTON_CLASS =
+  'px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] disabled:opacity-40 cursor-pointer flex-shrink-0'
 
 export function FeedbackItemView({
   id,
@@ -100,6 +103,7 @@ export function FeedbackItemView({
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [reassignOpen, setReassignOpen] = useState(false)
   // Open by default; remembered per window (ticket-board-chrome).
   const [railOpen, setRailOpenState] = useState(() => readTicketBoardChrome().chatOpen)
   const setRailOpen = useCallback((open: boolean) => {
@@ -124,14 +128,17 @@ export function FeedbackItemView({
 
   // Event-driven refresh: any feedback event bumps the store revision and
   // the OPEN ticket refetches. Bursts coalesce on a trailing 300ms window.
-  // Deferred while the user is drag-selecting ticket text.
+  // Deferred while the user is drag-selecting ticket text (the body or the
+  // rail's thread).
   const seenRevision = useRef(revision)
   useEffect(() => {
     if (revision === seenRevision.current) return
     seenRevision.current = revision
     const timer = setTimeout(() => {
-      const thread = document.querySelector(`[data-ticket-thread="${id}"]`) as HTMLElement | null
-      if (hasSelectionWithin(thread)) return
+      const threads = document.querySelectorAll(`[data-ticket-thread="${id}"]`)
+      for (const t of Array.from(threads)) {
+        if (hasSelectionWithin(t as HTMLElement)) return
+      }
       void load()
     }, 300)
     return () => clearTimeout(timer)
@@ -175,7 +182,6 @@ export function FeedbackItemView({
     ? UNLINKED_WORKSPACE_LABEL
     : item?.workspace ?? listRow.projectName ?? UNLINKED_WORKSPACE_LABEL
   const view = item ?? listRow
-  const statusRow: FeedbackListRow = { ...listRow, status: view.status }
   const assigneeNames = cardAssigneeNames(view.assignees)
   const canOpenWindow = !inOwnWindow && !isWebClient()
   const showRail = railOpen && !unlinked
@@ -185,29 +191,27 @@ export function FeedbackItemView({
     onMutated()
   }, [load, onMutated])
 
-  // The brief's Options as quick answers. They live in the chat rail; with
-  // the rail hidden they fall back to the action bar.
+  // The brief's Options (else the structured --options) as quick answers,
+  // shown above the rail's text area.
   const quick = unlinked || !item ? [] : quickAnswerOptions(item, brief?.html)
-  const quickAnswers =
-    item && quick.length > 0 ? (
-      <TicketQuickAnswers
-        key={`quick-${id}`}
-        ticketId={item.id}
-        options={quick}
-        live={quickAnswersLive(item.status)}
-        acceptedAnswer={item.answer}
-        placement={showRail ? 'rail' : 'bar'}
-        onAnswered={onChanged}
-      />
-    ) : null
+
+  const assignedLabel =
+    assigneeNames.length > 0 ? (
+      <>
+        assigned to <span className="text-[var(--color-text-secondary)]">{assigneeNames.join(', ')}</span>
+      </>
+    ) : (
+      <span className="italic">unassigned</span>
+    )
 
   return (
     <div className="flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap">
       <div className="flex-1 flex flex-col min-h-0 min-w-0" data-testid="ticket-detail">
-        {/* Slim header — outside the scroller, so it stays put. */}
+        {/* Slim header — outside the scroller, so it stays put. Its menus
+            open downward over the body, hence the stacking context. */}
         <div
           data-testid="ticket-detail-header"
-          className="px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
+          className="relative z-20 px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
         >
           <div className="flex items-center gap-2 min-w-0">
             <span
@@ -223,7 +227,7 @@ export function FeedbackItemView({
                 data-testid="ticket-expand"
                 disabled={!brief}
                 onClick={() => setExpanded(true)}
-                className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] disabled:opacity-40 cursor-pointer flex-shrink-0"
+                className={HEADER_BUTTON_CLASS}
               >
                 Expand
               </button>
@@ -237,25 +241,75 @@ export function FeedbackItemView({
                     console.warn('[tickets] open in window failed', e),
                   )
                 }}
-                className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] cursor-pointer flex-shrink-0"
+                className={HEADER_BUTTON_CLASS}
               >
                 Open in window
               </button>
             )}
+            {!unlinked && (
+              <button
+                type="button"
+                data-testid="ticket-chat-toggle"
+                aria-pressed={railOpen}
+                onClick={() => setRailOpen(!railOpen)}
+                title={railOpen ? 'Hide the chat with the agent' : 'Show the chat with the agent'}
+                className={`${HEADER_BUTTON_CLASS} inline-flex items-center gap-1`}
+              >
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+                  <rect x="1" y="1.5" width="10" height="9" />
+                  <line x1="7.5" y1="1.5" x2="7.5" y2="10.5" />
+                </svg>
+                {railOpen ? 'Hide chat' : 'Show chat'}
+              </button>
+            )}
           </div>
           <div className="mt-1 flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
-            {unlinked ? <StatusBadge status={view.status} /> : <CardStatusDropdown row={statusRow} onMutated={() => { void load(); onMutated() }} />}
+            {unlinked ? (
+              <StatusBadge status={view.status} />
+            ) : (
+              <HeaderStatusMenu
+                ticketId={id}
+                status={view.status}
+                currentAnswer={item?.answer ?? null}
+                onChanged={onChanged}
+              />
+            )}
             <PriorityBadge priority={view.priority} />
             {hasBrief && <HtmlBriefBadge />}
-            <span data-testid="ticket-detail-byline" className="truncate selectable-copy">
-              from <span className="text-[var(--color-text-secondary)]">{view.agentName}</span>
-              {' → '}
-              {assigneeNames.length > 0 ? (
-                <>assigned to <span className="text-[var(--color-text-secondary)]">{assigneeNames.join(', ')}</span></>
+            <span data-testid="ticket-detail-byline" className="flex items-center min-w-0 selectable-copy">
+              <span className="flex-shrink-0">
+                from <span className="text-[var(--color-text-secondary)]">{view.agentName}</span>
+                {' → '}
+              </span>
+              {unlinked ? (
+                <span className="flex-shrink-0 ml-1">{assignedLabel}</span>
               ) : (
-                <span className="italic">unassigned</span>
+                <span className="relative flex-shrink-0 ml-1">
+                  <button
+                    type="button"
+                    data-testid="ticket-reassign"
+                    aria-expanded={reassignOpen}
+                    disabled={!item}
+                    onClick={() => setReassignOpen((o) => !o)}
+                    title="Reassign"
+                    className="hover:underline cursor-pointer disabled:cursor-default"
+                  >
+                    {assignedLabel}
+                  </button>
+                  {reassignOpen && item && (
+                    <ReassignMenu
+                      ticketId={item.id}
+                      assignees={item.assignees ?? []}
+                      onClose={() => setReassignOpen(false)}
+                      onSaved={() => {
+                        setReassignOpen(false)
+                        onChanged()
+                      }}
+                    />
+                  )}
+                </span>
               )}
-              <span className="opacity-70">
+              <span className="truncate opacity-70 min-w-0">
                 {' '}· {workspaceName} · asked{' '}
                 {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
               </span>
@@ -276,10 +330,6 @@ export function FeedbackItemView({
           title={view.title}
           expanded={expanded}
           onExpandedChange={setExpanded}
-          railOpen={showRail}
-          onToggleRail={() => setRailOpen(!railOpen)}
-          quickAnswers={showRail ? null : quickAnswers}
-          hasQuickAnswers={quick.length > 0}
           onChanged={onChanged}
         />
       </div>
@@ -287,21 +337,24 @@ export function FeedbackItemView({
       {showRail && (
         <TicketAgentRail
           feedbackId={id}
-          agentName={view.agentName}
+          item={item}
+          error={error}
+          nowSec={nowSec}
+          options={quick}
+          optionsLive={item ? quickAnswersLive(item.status) : false}
+          onChanged={onChanged}
           projectId={view.projectId}
           projectPath={projectPath}
           sessionId={view.sessionId}
           sessionKind={view.sessionKind}
           canonicalSessionId={item?.canonicalSessionId}
-          onClose={() => setRailOpen(false)}
-          footer={quickAnswers}
         />
       )}
     </div>
   )
 }
 
-// ── Body: summary + brief + comments, then the pinned action bar ─────────
+// ── Body: summary + brief + comments (no action bar) ─────────────────────
 
 function TicketBody({
   item,
@@ -315,10 +368,6 @@ function TicketBody({
   title,
   expanded,
   onExpandedChange,
-  railOpen,
-  onToggleRail,
-  quickAnswers,
-  hasQuickAnswers,
   onChanged,
 }: {
   item: FeedbackShow | null
@@ -332,25 +381,13 @@ function TicketBody({
   title: string
   expanded: boolean
   onExpandedChange: (v: boolean) => void
-  railOpen: boolean
-  onToggleRail: () => void
-  /** The quick-answer buttons when the chat rail is hidden; null while
-   *  they sit in the rail. */
-  quickAnswers: React.ReactNode
-  hasQuickAnswers: boolean
   onChanged: () => void
 }): React.JSX.Element {
-  const [answering, setAnswering] = useState(false)
-  const [reply, setReply] = useState(() => getTicketDraft(ticketId))
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
   // Comments + history: collapsed by default under a brief (the brief is
   // the ticket); open when there is no brief (they are all there is).
   const [historyOpen, setHistoryOpen] = useState(!hasBrief)
-  const [reassignOpen, setReassignOpen] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
   useEffect(() => {
@@ -365,23 +402,6 @@ function TicketBody({
       setHistoryOpen(false)
     }
   }, [hasBrief])
-
-  useEffect(() => {
-    if (!answering) return
-    textareaRef.current?.focus({ preventScroll: true })
-  }, [answering])
-
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [reply, answering])
-
-  const setReplyAndDraft = (text: string): void => {
-    setReply(text)
-    setTicketDraft(ticketId, text)
-  }
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -421,27 +441,12 @@ function TicketBody({
     item.status === 'planned' ||
     item.status === 'needs_discussion'
 
-  // Every person's message lands in the agent's session. Free text starts
-  // a discussion (the daemon sets the status); a pick (TicketQuickAnswers)
-  // is the answer.
-  const sendAnswer = (): void => {
-    const text = reply.trim()
-    if (!text) return
-    void submit(async () => {
-      const res = await commentFeedback(item.id, text, { optionPick: false })
-      setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
-      setReplyAndDraft('')
-      clearTicketDraft(ticketId)
-      setAnswering(false)
-    })
-  }
-
   const comments = item.comments ?? []
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
-        <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
+        <div className="min-h-full" data-ticket-thread={ticketId}>
           {item.body && (
             <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)]">
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
@@ -510,7 +515,7 @@ function TicketBody({
         </div>
       </SelectableRegion>
 
-      {unlinked ? (
+      {unlinked && (
         <div data-testid="unlinked-thread-footer" className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
           {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
           <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
@@ -538,229 +543,194 @@ function TicketBody({
             </div>
           )}
         </div>
-      ) : (
-        <div data-testid="ticket-action-bar" className="border-t border-[var(--color-border)] px-4 py-2.5 flex-shrink-0 bg-[var(--color-bg)]">
-          {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
-          {deliveryMiss && (
-            <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
-              Saved. The agent did not receive it ({deliveryMiss}).
-            </p>
-          )}
+      )}
+    </div>
+  )
+}
 
-          {/* Only while the chat rail is hidden; otherwise they sit in the rail. */}
-          {quickAnswers}
+/** Closes a header popover on an outside mousedown or Esc (capture phase,
+ *  so the first Esc closes the popover and not the open ticket). */
+function useDismiss(rootRef: React.RefObject<HTMLElement | null>, onClose: () => void, active = true): void {
+  useEffect(() => {
+    if (!active) return
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [rootRef, onClose, active])
+}
 
+/** The header's status chip, which is also the status dropdown: waiting,
+ *  needs discussion, answered, resolved — all over `POST
+ *  /cli/feedback/resolve`. Answered asks for the agreed outcome first (the
+ *  daemon refuses `answered` without one). */
+export function HeaderStatusMenu({
+  ticketId,
+  status,
+  currentAnswer,
+  onChanged,
+}: {
+  ticketId: string
+  status: FeedbackStatus
+  currentAnswer: string | null
+  onChanged: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [menuError, setMenuError] = useState<string | null>(null)
+  const [answering, setAnswering] = useState(false)
+  const [answer, setAnswer] = useState(currentAnswer ?? '')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => {
+    setOpen(false)
+    setAnswering(false)
+    setMenuError(null)
+  }, [])
+  useDismiss(rootRef, close, open)
+
+  const apply = async (next: HeaderStatus, agreed?: string): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setMenuError(null)
+    try {
+      await resolveFeedback(ticketId, next, agreed)
+      onChanged()
+      close()
+    } catch (e) {
+      setMenuError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const choose = (next: HeaderStatus): void => {
+    if (next === status) {
+      close()
+      return
+    }
+    if (next === 'answered') {
+      setAnswer(currentAnswer ?? '')
+      setAnswering(true)
+      return
+    }
+    void apply(next)
+  }
+
+  return (
+    <div ref={rootRef} className="relative flex-shrink-0">
+      <button
+        type="button"
+        data-testid="ticket-status"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy}
+        onClick={() => (open ? close() : setOpen(true))}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(status)}`}
+        title="Change status"
+      >
+        {statusLabel(status)}
+        <svg
+          className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+          aria-hidden
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-testid="ticket-header-status-menu"
+          className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+        >
+          {HEADER_STATUSES.map((s) => {
+            const current = status === s
+            return (
+              <button
+                key={s}
+                type="button"
+                role="menuitemradio"
+                aria-checked={current}
+                data-testid={`ticket-status-option-${s}`}
+                disabled={busy}
+                onClick={() => choose(s)}
+                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
+                  current
+                    ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <span className="flex-1">{statusLabel(s)}</span>
+                {current && <span className="text-[var(--color-accent)]">✓</span>}
+              </button>
+            )
+          })}
           {answering && (
-            <div className="mb-2" data-testid="ticket-answer-box">
-              <textarea
-                ref={textareaRef}
-                value={reply}
-                onChange={(e) => setReplyAndDraft(e.target.value)}
+            <div className="border-t border-[var(--color-border)] mt-0.5 px-2 py-1.5">
+              <label className="block mb-1 text-[10px] text-[var(--color-text-muted)]" htmlFor={`answered-${ticketId}`}>
+                What was agreed?
+              </label>
+              <input
+                id={`answered-${ticketId}`}
+                data-testid="ticket-answered-input"
+                autoFocus
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  if (e.key === 'Enter' && answer.trim()) {
                     e.preventDefault()
-                    sendAnswer()
-                  }
-                  if (e.key === 'Escape') {
-                    e.stopPropagation()
-                    setAnswering(false)
+                    void apply('answered', answer.trim())
                   }
                 }}
-                placeholder={
-                  hasQuickAnswers
-                    ? railOpen
-                      ? 'Write a message — it starts a discussion. Pick an option in the chat to answer.'
-                      : 'Write a message — it starts a discussion. Pick an option above to answer.'
-                    : 'Write a message — it lands in the agent’s session and starts a discussion'
-                }
-                rows={2}
-                className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
-                style={{ fontSize: editorFontSize }}
+                className="w-full px-1.5 py-1 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)]"
               />
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-[10px] text-[var(--color-text-muted)]">
-                  The agent replies, then marks it answered or resolved.
-                </span>
-                <span className="flex-1" />
+              <div className="mt-1.5 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setAnswering(false)}
-                  className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                  className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  data-testid="ticket-answer-send"
-                  disabled={busy || reply.trim().length === 0}
-                  onClick={sendAnswer}
-                  className="px-3 py-1 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                  data-testid="ticket-answered-save"
+                  disabled={busy || answer.trim().length === 0}
+                  onClick={() => void apply('answered', answer.trim())}
+                  className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
                 >
-                  Send
-                  <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
-                    <KeyCombo combo="⌘⏎" />
-                  </span>
+                  Mark answered
                 </button>
               </div>
             </div>
           )}
-
-          <div className="flex items-center gap-1.5 relative">
-            <ActionButton testId="ticket-action-answer" active={answering} onClick={() => setAnswering((a) => !a)}>
-              Answer
-            </ActionButton>
-            <ActionButton
-              testId="ticket-action-resolve"
-              disabled={busy || item.status === 'resolved'}
-              onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
-            >
-              Resolve
-            </ActionButton>
-            <div className="relative">
-              <ActionButton testId="ticket-action-reassign" active={reassignOpen} onClick={() => setReassignOpen((o) => !o)}>
-                Reassign
-              </ActionButton>
-              {reassignOpen && (
-                <ReassignMenu
-                  ticketId={item.id}
-                  assignees={item.assignees ?? []}
-                  onClose={() => setReassignOpen(false)}
-                  onSaved={() => {
-                    setReassignOpen(false)
-                    onChanged()
-                  }}
-                />
-              )}
-            </div>
-            <span className="flex-1" />
-            <ActionButton testId="ticket-action-chat" active={railOpen} onClick={onToggleRail}>
-              {railOpen ? 'Hide chat' : 'Chat with agent'}
-            </ActionButton>
-          </div>
+          {menuError && (
+            <div className="px-2 py-1 text-[10px] text-[var(--color-status-error-soft)] selectable-copy">{menuError}</div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-/** The brief's Options as one-click answers. A pick posts
- *  `optionPick: true` → the daemon records it as the answer (answered).
- *  `rail`: the bottom of the chat rail, under the compose area. `bar`: the
- *  action bar, while the rail is hidden. */
-export function TicketQuickAnswers({
-  ticketId,
-  options,
-  live,
-  acceptedAnswer,
-  placement,
-  onAnswered,
-}: {
-  ticketId: string
-  options: QuickAnswerOption[]
-  live: boolean
-  acceptedAnswer: string | null
-  placement: 'rail' | 'bar'
-  onAnswered: () => void
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
-
-  const pick = async (answer: string): Promise<void> => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await commentFeedback(ticketId, answer, { optionPick: true })
-      setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
-      onAnswered()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div
-      data-testid="ticket-quick-answers"
-      data-placement={placement}
-      className={
-        placement === 'rail'
-          ? 'border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0 bg-[var(--color-bg)]'
-          : 'mb-2'
-      }
-    >
-      {placement === 'rail' && (
-        <div className="mb-1.5 text-[10px] text-[var(--color-text-muted)]">Pick an option to answer</div>
-      )}
-      {error && <div className="mb-1.5 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{error}</div>}
-      {deliveryMiss && (
-        <p className="mb-1.5 text-[10px] text-[var(--color-text-muted)] selectable-copy">
-          Saved. The agent did not receive it ({deliveryMiss}).
-        </p>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        {options.map((opt) => {
-          const accepted = acceptedAnswer === opt.answer
-          return (
-            <button
-              key={opt.answer}
-              type="button"
-              data-testid="ticket-quick-answer"
-              disabled={!live || busy}
-              title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
-              onClick={() => void pick(opt.answer)}
-              className={`max-w-full truncate px-2.5 py-1 text-[11px] font-medium border transition-colors ${
-                accepted
-                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                  : live
-                    ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
-                    : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
-              } disabled:cursor-not-allowed`}
-            >
-              {opt.label}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function ActionButton({
-  testId,
-  active = false,
-  disabled = false,
-  onClick,
-  children,
-}: {
-  testId: string
-  active?: boolean
-  disabled?: boolean
-  onClick: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={onClick}
-      className={`px-3 py-1.5 text-[11px] font-medium border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-        active
-          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-          : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
-/** Reassign: multi-select from the server's users + `owner`, opening upward
- *  from the action bar. Replaces the whole assignee set. */
+/** Reassign: multi-select from the server's users + `owner`, opening under
+ *  the header's "assigned to" text. Replaces the whole assignee set. A name
+ *  the daemon does not know still assigns; its `assignee_unknown` warning
+ *  is shown as a toast. */
 function ReassignMenu({
   ticketId,
   assignees,
@@ -777,6 +747,7 @@ function ReassignMenu({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  useDismiss(rootRef, onClose)
 
   useEffect(() => {
     let cancelled = false
@@ -795,14 +766,6 @@ function ReassignMenu({
     }
   }, [])
 
-  useEffect(() => {
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [onClose])
-
   const all = [...new Set([...candidates, ...local])]
   const toggle = (name: string): void => {
     setLocal((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))
@@ -811,7 +774,10 @@ function ReassignMenu({
     setSaving(true)
     setSaveError(null)
     try {
-      await assignFeedback(ticketId, local)
+      const res = await assignFeedback(ticketId, local)
+      for (const w of res.warnings ?? []) {
+        useToastStore.getState().addToast(w.hint, 'warning')
+      }
       onSaved()
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e))
@@ -824,7 +790,7 @@ function ReassignMenu({
     <div
       ref={rootRef}
       data-testid="ticket-reassign-menu"
-      className="absolute left-0 bottom-full mb-1 z-20 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
+      className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
     >
       {all.map((name) => {
         const on = local.includes(name)
@@ -832,6 +798,8 @@ function ReassignMenu({
           <button
             key={name}
             type="button"
+            data-testid="ticket-reassign-option"
+            aria-pressed={on}
             onClick={() => toggle(name)}
             className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
               on ? 'bg-white/[0.04] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06]'
@@ -849,6 +817,7 @@ function ReassignMenu({
         </button>
         <button
           type="button"
+          data-testid="ticket-reassign-save"
           disabled={saving}
           onClick={() => void save()}
           className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"

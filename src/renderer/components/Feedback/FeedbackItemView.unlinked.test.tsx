@@ -92,11 +92,12 @@ describe('FeedbackItemView — unlinked ticket', () => {
 
     // Identifying header: workspace label + exact filing date.
     expect(screen.getByText(/Unlinked workspace · asked 2025-09-30 14:05 UTC/)).toBeTruthy()
-    // No action bar: no Answer box, no quick answers, no Reassign, no
-    // Chat with agent (no session preview / wake for a removed workspace).
-    expect(screen.queryByTestId('ticket-action-bar')).toBeNull()
-    expect(screen.queryByTestId('ticket-action-chat')).toBeNull()
-    expect(screen.queryByTestId('ticket-action-reassign')).toBeNull()
+    // No chat rail, no quick answers, no reassign, no chat toggle (no
+    // session preview / wake for a removed workspace), no status menu.
+    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    expect(screen.queryByTestId('ticket-chat-toggle')).toBeNull()
+    expect(screen.queryByTestId('ticket-reassign')).toBeNull()
+    expect(screen.queryByTestId('ticket-status')).toBeNull()
     expect(screen.queryByTestId('ticket-quick-answers')).toBeNull()
     expect(screen.queryByRole('textbox')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull()
@@ -112,7 +113,7 @@ describe('FeedbackItemView — unlinked ticket', () => {
     expect(api.commentFeedback).not.toHaveBeenCalled()
   })
 
-  it('a linked ticket has the pinned action bar and quick answers (control)', async () => {
+  it('a linked ticket has the chat rail with quick answers and a compose box, and no action bar (control)', async () => {
     const linked: FeedbackListRow = {
       ...base,
       projectId: 'p1',
@@ -124,20 +125,19 @@ describe('FeedbackItemView — unlinked ticket', () => {
     render(
       <FeedbackItemView id={linked.id} listRow={linked} nowSec={1_759_241_200} revision={0} onMutated={vi.fn()} />,
     )
-    const bar = await screen.findByTestId('ticket-action-bar')
+    const rail = await screen.findByTestId('ticket-agent-rail')
     expect(screen.queryByTestId('unlinked-thread-footer')).toBeNull()
-    const actions = ['ticket-action-answer', 'ticket-action-resolve', 'ticket-action-reassign', 'ticket-action-chat']
-      .map((t) => screen.getByTestId(t))
-    // The chat rail is open by default, so the toggle reads Hide chat.
-    expect(actions.map((b) => b.textContent)).toEqual(['Answer', 'Resolve', 'Reassign', 'Hide chat'])
-    for (const b of actions) expect(bar.contains(b)).toBe(true)
+    expect(screen.queryByTestId('ticket-action-bar')).toBeNull()
+    // Status, reassign and the chat toggle are in the header.
+    const header = screen.getByTestId('ticket-detail-header')
+    for (const t of ['ticket-status', 'ticket-reassign', 'ticket-chat-toggle']) {
+      expect(header.contains(screen.getByTestId(t)), t).toBe(true)
+    }
     // Structured --options become quick answers (no brief here), in the rail.
-    const rail = screen.getByTestId('ticket-agent-rail')
-    expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['Yes', 'No'])
+    await waitFor(() =>
+      expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['Yes', 'No']),
+    )
     for (const b of screen.getAllByTestId('ticket-quick-answer')) expect(rail.contains(b)).toBe(true)
-    // Answer opens the inline box.
-    expect(screen.queryByRole('textbox')).toBeNull()
-    fireEvent.click(screen.getByTestId('ticket-action-answer'))
-    expect(screen.getByRole('textbox')).toBeTruthy()
+    expect(rail.contains(screen.getByRole('textbox'))).toBe(true)
   })
 })

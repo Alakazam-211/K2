@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 // 0.43.2 tickets redesign (Rosson): the board opens on Mine, the list
 // width (400 px default) + collapsed state are remembered per window, the
-// brief's Options become quick-answer buttons in the chat rail that answer
-// the ticket (free text starts a discussion), and the chat rail — open by
-// default, remembered per window — is the Agents page's Thread | Terminal
-// view (AgentSessionChrome + its View menu).
+// brief's Options become quick-answer buttons that answer the ticket (free
+// text starts a discussion). The chat rail — open by default, toggled from
+// the header and remembered per window — is the pre-redesign Thread | Agent
+// surface: the ticket thread with the options above its text area and
+// Send, and the asking session's terminal. No bottom action bar: status and
+// reassign live in the header.
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -13,8 +15,12 @@ import type { FeedbackBrief, FeedbackListRow, FeedbackShow } from './feedback-ap
 const api = vi.hoisted(() => ({
   fetchFeedbackShow: vi.fn(),
   fetchFeedbackBrief: vi.fn(),
-  resolveFeedback: vi.fn(async () => {}),
-  commentFeedback: vi.fn(async () => ({ ok: true, id: 'x', delivered: true })),
+  resolveFeedback: vi.fn(async (..._args: unknown[]) => {}),
+  commentFeedback: vi.fn(async (..._args: unknown[]) => ({ ok: true, id: 'x', delivered: true })),
+  assignFeedback: vi.fn(async (..._args: unknown[]): Promise<{ assignees: string[]; warnings?: Array<{ code: string; hint: string }> }> => ({
+    assignees: [],
+    warnings: [],
+  })),
 }))
 
 vi.mock('./feedback-api', async () => {
@@ -25,6 +31,7 @@ vi.mock('./feedback-api', async () => {
     fetchFeedbackBrief: api.fetchFeedbackBrief,
     resolveFeedback: api.resolveFeedback,
     commentFeedback: api.commentFeedback,
+    assignFeedback: api.assignFeedback,
   }
 })
 
@@ -33,7 +40,7 @@ const cli = vi.hoisted(() => ({
     if (route === 'auth/whoami') return { owner: true, username: null, role: 'owner' }
     if (route === 'sessions/list-for-workspace') return cli.liveSessions
     if (route === 'sessions/lookup-by-agent') return { sessionAlive: false, sessionId: null }
-    if (route === 'users') return { users: [] }
+    if (route === 'users') return { users: [{ username: 'julie' }, { username: 'baden' }] }
     return {}
   }),
   liveSessions: [] as unknown[],
@@ -56,34 +63,19 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ label: 'window-test' }),
 }))
 
-// The rail reuses the Agents page surfaces; stub the heavy leaves and
-// record what the reused chrome hands them.
-const seen = vi.hoisted(() => ({ terminal: [] as Array<Record<string, unknown>>, thread: [] as string[] }))
-vi.mock('@/kessel-term/TerminalPane', async () => {
-  const { useSessionViewChrome } = await import('@/components/SessionView/sessionViewChrome')
-  return {
-    TerminalPane: (props: Record<string, unknown>) => {
-      const chrome = useSessionViewChrome()
-      seen.terminal.push({ ...props, viewTab: chrome?.viewTab, splitLeft: chrome?.splitLeft, splitRight: chrome?.splitRight, overlayAddr: chrome?.overlayAddr })
-      return <div data-testid="stub-terminal-pane" />
-    },
-  }
-})
-vi.mock('@/components/SessionView/ThreadOverlayPane', () => ({
-  ThreadOverlayPane: ({ addr }: { addr: string }) => {
-    seen.thread.push(addr)
-    return <div data-testid="stub-thread-pane">{addr}</div>
+// The Agent tab mounts the kessel TerminalPane; stub it and record props.
+const seen = vi.hoisted(() => ({ terminal: [] as Array<Record<string, unknown>> }))
+vi.mock('@/kessel-term/TerminalPane', () => ({
+  TerminalPane: (props: Record<string, unknown>) => {
+    seen.terminal.push(props)
+    return <div data-testid="stub-terminal-pane" />
   },
-}))
-vi.mock('@/lib/chat-session-tab', () => ({
-  resolvePinnedChatCopyableAddress: vi.fn(async () => ({ clipboard: 'alpha', display: 'alpha' })),
 }))
 
 import { TicketBoard } from './TicketBoard'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
-import ContextMenu from '@/components/ContextMenu/ContextMenu'
-import { useContextMenuStore } from '@/stores/context-menu'
+import { useToastStore } from '@/stores/toast'
 
 const NOW = 1_759_241_200
 
@@ -130,7 +122,7 @@ beforeEach(() => {
   localStorage.clear()
   cli.liveSessions = []
   seen.terminal.length = 0
-  seen.thread.length = 0
+  useToastStore.setState({ toasts: [] })
 })
 
 afterEach(() => {
@@ -138,8 +130,9 @@ afterEach(() => {
   api.fetchFeedbackShow.mockReset()
   api.fetchFeedbackBrief.mockReset()
   api.commentFeedback.mockClear()
+  api.resolveFeedback.mockClear()
+  api.assignFeedback.mockClear()
   briefCache.clear()
-  useContextMenuStore.getState().close()
 })
 
 function board(rows: FeedbackListRow[] = [mine, julies]): ReturnType<typeof render> {
@@ -231,14 +224,22 @@ function detail(row: FeedbackListRow, canonical: string | null = null): void {
   render(<FeedbackItemView id={row.id} listRow={row} nowSec={NOW} revision={0} onMutated={vi.fn()} />)
 }
 
+
+function railOf(): HTMLElement {
+  return screen.getByTestId('ticket-agent-rail')
+}
+
 describe('ticket detail', () => {
-  it('header: title, from agent → assignee, Expand and Open in window; history collapsed under a brief', async () => {
+  it('header: title, from agent → assignee, Expand, Open in window and the chat toggle; history collapsed under a brief', async () => {
     detail(makeRow({ hasBrief: true, briefBytes: 120 }))
     await screen.findByTestId('brief-frame')
+    const header = screen.getByTestId('ticket-detail-header')
     expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Which DB?')
     expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from scout → assigned to Owner/)
-    expect(screen.getByTestId('ticket-expand')).toBeTruthy()
-    expect(screen.getByTestId('ticket-open-window')).toBeTruthy()
+    for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-chat-toggle', 'ticket-status', 'ticket-reassign']) {
+      expect(header.contains(screen.getByTestId(t)), t).toBe(true)
+    }
+    expect(screen.getByTestId('ticket-chat-toggle').textContent).toBe('Hide chat')
     const toggle = screen.getByTestId('ticket-history-toggle')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByTestId('ticket-history')).toBeNull()
@@ -249,100 +250,192 @@ describe('ticket detail', () => {
     expect(screen.getByTestId('brief-overlay')).toBeTruthy()
   })
 
-  it('the brief Options are quick answers in the chat rail; a pick answers, typed text starts a discussion', async () => {
+  it('has no bottom action bar: no Answer / Resolve / Reassign / Chat with agent buttons', async () => {
+    detail(makeRow({ hasBrief: true, briefBytes: 120 }))
+    await screen.findByTestId('brief-frame')
+    await within(railOf()).findByTestId('ticket-compose-input')
+    expect(screen.queryByTestId('ticket-action-bar')).toBeNull()
+    for (const t of ['ticket-action-answer', 'ticket-action-resolve', 'ticket-action-reassign', 'ticket-action-chat']) {
+      expect(screen.queryByTestId(t), t).toBeNull()
+    }
+    const detailPane = screen.getByTestId('ticket-detail')
+    const labels = Array.from(detailPane.querySelectorAll('button')).map((b) => b.textContent?.trim())
+    for (const gone of ['Answer', 'Resolve', 'Reassign', 'Chat with agent']) {
+      expect(labels, gone).not.toContain(gone)
+    }
+  })
+
+  it('the rail has Thread | Agent tabs; Thread is the ticket thread with a text area and Send', async () => {
+    const row = makeRow({})
+    detail(row)
+    const rail = await screen.findByTestId('ticket-agent-rail')
+    const thread = within(rail).getByTestId('ticket-rail-tab-thread')
+    const agent = within(rail).getByTestId('ticket-rail-tab-agent')
+    expect([thread.textContent, agent.textContent]).toEqual(['Thread', 'Agent'])
+    expect(thread.getAttribute('aria-selected')).toBe('true')
+    expect(agent.getAttribute('aria-selected')).toBe('false')
+    // The ticket's comments are in the thread.
+    const pane = await within(rail).findByTestId('ticket-rail-thread')
+    expect(pane.textContent).toContain('Which DB?')
+
+    const input = within(rail).getByTestId('ticket-compose-input') as HTMLTextAreaElement
+    const send = within(rail).getByTestId('ticket-compose-send') as HTMLButtonElement
+    expect(input.tagName).toBe('TEXTAREA')
+    expect(send.textContent).toContain('Send')
+    expect(send.disabled).toBe(true)
+    fireEvent.change(input, { target: { value: 'what about both?' } })
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    // Free text: the free-text path (no option pick) → needs_discussion.
+    await waitFor(() =>
+      expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'what about both?', { optionPick: false }),
+    )
+    expect(api.commentFeedback).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(input.value).toBe(''))
+
+    // ⌘⏎ sends too.
+    fireEvent.change(input, { target: { value: 'and one more' } })
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true })
+    await waitFor(() =>
+      expect(api.commentFeedback).toHaveBeenLastCalledWith(row.id, 'and one more', { optionPick: false }),
+    )
+  })
+
+  it('the brief Options render above the text area and a pick sends optionPick', async () => {
     const row = makeRow({ hasBrief: true, briefBytes: 120, options: ['Yes', 'No'] })
     detail(row)
     const rail = await screen.findByTestId('ticket-agent-rail')
     await waitFor(() =>
       expect(within(rail).getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['SQLite', 'Postgres']),
     )
-    expect(within(rail).getByTestId('ticket-quick-answers').getAttribute('data-placement')).toBe('rail')
-    // Not in the action bar while the rail is open.
-    expect(within(screen.getByTestId('ticket-action-bar')).queryByTestId('ticket-quick-answer')).toBeNull()
+    // Only in the rail, and above the text area.
     expect(screen.getAllByTestId('ticket-quick-answer')).toHaveLength(2)
+    const picks = within(rail).getByTestId('ticket-quick-answers')
+    const input = within(rail).getByTestId('ticket-compose-input')
+    expect(picks.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(within(rail).getAllByTestId('ticket-quick-answer')[0].getAttribute('title')).toBe('SQLite — simple')
 
     fireEvent.click(within(rail).getAllByTestId('ticket-quick-answer')[1])
     await waitFor(() =>
       expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'Postgres', { optionPick: true }),
     )
-
-    // Answer / Resolve / Reassign stay in the action bar.
-    const bar = screen.getByTestId('ticket-action-bar')
-    expect(within(bar).getByTestId('ticket-action-resolve')).toBeTruthy()
-    expect(within(bar).getByTestId('ticket-action-reassign')).toBeTruthy()
-    fireEvent.click(within(bar).getByTestId('ticket-action-answer'))
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'what about both?' } })
-    fireEvent.click(screen.getByTestId('ticket-answer-send'))
-    await waitFor(() =>
-      expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'what about both?', { optionPick: false }),
-    )
-
-    // Hiding the chat moves the picks back to the action bar; still a pick.
-    fireEvent.click(screen.getByTestId('ticket-action-chat'))
-    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
-    const barPicks = within(screen.getByTestId('ticket-action-bar')).getAllByTestId('ticket-quick-answer')
-    expect(barPicks.map((b) => b.textContent)).toEqual(['SQLite', 'Postgres'])
-    fireEvent.click(barPicks[0])
-    await waitFor(() =>
-      expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'SQLite', { optionPick: true }),
-    )
+    expect(api.commentFeedback).toHaveBeenCalledTimes(1)
   })
 
-  it('the rail is open by default and is the Agents page Thread | Terminal view with its View menu', async () => {
+  it('the Agent tab attaches the asking session’s terminal in place', async () => {
     const row = makeRow({ sessionId: 'sess-1', sessionKind: 'sandbox' })
     cli.liveSessions = [{ sessionId: 'sess-1', agentName: 'tab-x', command: null, args: [], cwd: '/ws', isV2: true }]
     detail(row)
-    render(<ContextMenu />)
-    // Open without a click.
     const rail = await screen.findByTestId('ticket-agent-rail')
-    expect(screen.getByTestId('ticket-action-chat').textContent).toBe('Hide chat')
-    // The reused chrome: AgentSessionChrome's header + the shared View menu.
-    const chrome = await within(rail).findByTestId('sidecar-session-chrome')
-    expect(within(chrome).getByTestId('sidecar-session-title').textContent).toBe('scout')
-    const menu = within(chrome).getByTestId('session-view-menu')
+    expect(within(rail).queryByTestId('stub-terminal-pane')).toBeNull()
+    fireEvent.click(within(rail).getByTestId('ticket-rail-tab-agent'))
+    expect(within(rail).getByTestId('ticket-rail-tab-agent').getAttribute('aria-selected')).toBe('true')
     await within(rail).findByTestId('stub-terminal-pane')
-    await waitFor(() => expect(seen.terminal.at(-1)?.overlayAddr).toBe('alpha'))
-    const last = seen.terminal.at(-1)!
+    const last = seen.terminal.at(-1)
+    if (!last) throw new Error('the terminal never mounted')
     expect(last.attachAgentName).toBe('tab-x')
     expect(last.sessionId).toBe('sess-1')
-    // One pane: the shared default view (Terminal), not a custom split.
-    expect(menu.getAttribute('data-view')).toBe('terminal')
-    expect(last.viewTab).toBe('terminal')
-
-    // The switcher flips the same pane to the Thread.
-    fireEvent.click(within(menu).getByTestId('session-view-button'))
-    const contextMenu = document.querySelector('[data-context-menu]')
-    if (!contextMenu) throw new Error('the View menu did not open')
-    const threadRow = Array.from(contextMenu.querySelectorAll('button')).find((b) =>
-      Array.from(b.querySelectorAll('span')).some((s) => s.textContent === 'Thread'),
-    )
-    if (!threadRow) throw new Error('no Thread row in the View menu')
-    fireEvent.click(threadRow)
-    await waitFor(() => expect(seen.terminal.at(-1)?.viewTab).toBe('thread'))
-    expect(within(rail).getByTestId('session-view-menu').getAttribute('data-view')).toBe('thread')
-
-    // Hide chat closes it and the window remembers.
-    fireEvent.click(screen.getByTestId('ticket-action-chat'))
-    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
-    expect(readTicketBoardChrome('window-test').chatOpen).toBe(false)
-    expect(screen.getByTestId('ticket-action-chat').textContent).toBe('Chat with agent')
-    cleanup()
-    detail(row)
-    await screen.findByTestId('ticket-action-bar')
-    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
-    fireEvent.click(screen.getByTestId('ticket-action-chat'))
-    expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
-    expect(readTicketBoardChrome('window-test').chatOpen).toBe(true)
+    expect(last.terminalId).toBe(`feedback-term:${row.id}`)
+    // Back to the Thread: the compose box is there again.
+    fireEvent.click(within(rail).getByTestId('ticket-rail-tab-thread'))
+    expect(within(rail).getByTestId('ticket-compose-input')).toBeTruthy()
   })
 
-  it('no terminal to show: the rail shows the Thread only, with a note', async () => {
+  it('the Agent tab without a session says so instead of a terminal', async () => {
     detail(makeRow({ sessionId: null, sessionKind: null }))
-    await screen.findByTestId('ticket-action-bar')
     const rail = await screen.findByTestId('ticket-agent-rail')
-    expect(within(rail).getByTestId('ticket-agent-rail-thread-only')).toBeTruthy()
-    expect(within(rail).getByTestId('ticket-agent-rail-note').textContent).toMatch(/no terminal to show/)
-    await within(rail).findByTestId('stub-thread-pane')
+    fireEvent.click(within(rail).getByTestId('ticket-rail-tab-agent'))
+    expect(within(rail).getByTestId('ticket-agent-empty').textContent).toMatch(/No session attached/)
     expect(within(rail).queryByTestId('stub-terminal-pane')).toBeNull()
+  })
+
+  it('the header status dropdown sets waiting / needs discussion / resolved over the resolve route', async () => {
+    const row = makeRow({ status: 'waiting' })
+    detail(row)
+    await within(railOf()).findByTestId('ticket-compose-input')
+    fireEvent.click(screen.getByTestId('ticket-status'))
+    const menu = screen.getByTestId('ticket-header-status-menu')
+    expect(Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map((b) => b.textContent)).toEqual([
+      'Waiting✓',
+      'Needs discussion',
+      'Answered',
+      'Resolved',
+    ])
+    fireEvent.click(screen.getByTestId('ticket-status-option-needs_discussion'))
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenCalledWith(row.id, 'needs_discussion', undefined))
+    await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
+
+    fireEvent.click(screen.getByTestId('ticket-status'))
+    fireEvent.click(screen.getByTestId('ticket-status-option-resolved'))
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenLastCalledWith(row.id, 'resolved', undefined))
+    await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
+    // Picking the current status sends nothing.
+    fireEvent.click(screen.getByTestId('ticket-status'))
+    fireEvent.click(screen.getByTestId('ticket-status-option-waiting'))
+    expect(api.resolveFeedback).toHaveBeenCalledTimes(2)
+  })
+
+  it('Answered in the header asks for the agreed outcome, then calls resolve with it', async () => {
+    const row = makeRow({ status: 'needs_discussion' })
+    detail(row)
+    await within(railOf()).findByTestId('ticket-compose-input')
+    fireEvent.click(screen.getByTestId('ticket-status'))
+    fireEvent.click(screen.getByTestId('ticket-status-option-answered'))
+    expect(api.resolveFeedback).not.toHaveBeenCalled()
+    const save = screen.getByTestId('ticket-answered-save') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('ticket-answered-input'), { target: { value: '  SQLite for now  ' } })
+    fireEvent.click(save)
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenCalledWith(row.id, 'answered', 'SQLite for now'))
+  })
+
+  it('reassign lives in the header: “assigned to” opens the box’s users and saves over the assign route, warning as the daemon does', async () => {
+    const row = makeRow({ assignees: ['owner'] })
+    detail(row)
+    await within(railOf()).findByTestId('ticket-compose-input')
+    fireEvent.click(screen.getByTestId('ticket-reassign'))
+    const menu = screen.getByTestId('ticket-reassign-menu')
+    expect(screen.getByTestId('ticket-detail-header').contains(menu)).toBe(true)
+    await waitFor(() =>
+      expect(within(menu).getAllByTestId('ticket-reassign-option').map((b) => b.textContent)).toEqual([
+        '✓owner',
+        'julie',
+        'baden',
+      ]),
+    )
+    api.assignFeedback.mockResolvedValueOnce({
+      assignees: ['owner', 'julie'],
+      warnings: [{ code: 'assignee_unknown', hint: 'julie is not a user on this server' }],
+    })
+    fireEvent.click(within(menu).getAllByTestId('ticket-reassign-option')[1])
+    fireEvent.click(within(menu).getByTestId('ticket-reassign-save'))
+    await waitFor(() => expect(api.assignFeedback).toHaveBeenCalledWith(row.id, ['owner', 'julie']))
+    await waitFor(() => expect(screen.queryByTestId('ticket-reassign-menu')).toBeNull())
+    expect(useToastStore.getState().toasts.map((t) => [t.type, t.message])).toEqual([
+      ['warning', 'julie is not a user on this server'],
+    ])
+  })
+
+  it('the header chat toggle hides and shows the rail, remembered per window (open by default)', async () => {
+    const row = makeRow({})
+    detail(row)
+    await screen.findByTestId('ticket-agent-rail')
+    const toggle = screen.getByTestId('ticket-chat-toggle')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(toggle)
+    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    expect(screen.getByTestId('ticket-chat-toggle').textContent).toBe('Show chat')
+    expect(readTicketBoardChrome('window-test').chatOpen).toBe(false)
+    // Another window keeps its own (default open).
+    expect(readTicketBoardChrome('main').chatOpen).toBe(true)
+
+    cleanup()
+    detail(row)
+    await screen.findByTestId('ticket-detail-header')
+    await waitFor(() => expect(api.fetchFeedbackShow).toHaveBeenCalled())
+    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    fireEvent.click(screen.getByTestId('ticket-chat-toggle'))
+    expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
+    expect(readTicketBoardChrome('window-test').chatOpen).toBe(true)
   })
 })

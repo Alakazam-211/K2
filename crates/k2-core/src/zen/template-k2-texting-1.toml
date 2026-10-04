@@ -27,7 +27,7 @@ min-width = 360
 id = "agents"
 kind = "agents"
 column = 0
-caps = ["agents:read", "presence:read"]
+caps = ["agents:read", "agents:add", "presence:read"]
 
 [widget.props]
 order = "home"
@@ -46,7 +46,11 @@ compose = true
 attachments = true
 load-older = true
 
-# Required controls (Z27). The page draws them; K2 binds and checks them.
+# Controls (Z27). The page draws them; K2 binds and checks the required
+# three (`zen-toggle`, `home-switcher`, `drag-region`). The top band holds
+# the Home switcher (top left) and the drag strip; the footer under the
+# Agents column (column 0) holds the Zen toggle, the way out, and Add agent
+# (bottom left). K2 draws its own theme swatch in the top-right corner.
 [[control]]
 kind = "home-switcher"
 placement = "top-left"
@@ -57,4 +61,11 @@ placement = "top"
 
 [[control]]
 kind = "zen-toggle"
-placement = "top-right"
+placement = "bottom-left"
+column = 0
+
+# Optional: opens K2's Add agent picker for this Home (`agents.add`).
+[[control]]
+kind = "add-agent"
+placement = "bottom-left"
+column = 0

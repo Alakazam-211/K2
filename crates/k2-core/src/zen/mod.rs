@@ -135,8 +135,10 @@ pub const TEXTING_TEMPLATE_TOML: &str = include_str!("template-k2-texting-1.toml
 pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "home-switcher", "drag-region"];
 
 /// Bridge caps a widget may declare (Z34). `thread:*` reuse the app-gateway
-/// names; `agents:read` and `presence:read` are Zen-bridge only in v1.
-pub const BRIDGE_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post"];
+/// names; `agents:read`, `agents:add` and `presence:read` are Zen-bridge
+/// only in v1. `agents:add` lets a widget OPEN K2's Add agent picker for the
+/// current Home (`agents.add`); the human picks and K2 writes the row.
+pub const BRIDGE_CAPS: &[&str] = &["agents:read", "agents:add", "presence:read", "thread:read", "thread:post"];
 
 /// `~/.k2/zen` on this computer.
 pub fn zen_root() -> PathBuf {

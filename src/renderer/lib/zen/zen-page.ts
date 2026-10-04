@@ -98,7 +98,7 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       kind: 'agents',
       column: 0,
       props: {},
-      caps: ['agents:read', 'presence:read'],
+      caps: ['agents:read', 'agents:add', 'presence:read'],
       source: 'builtin',
     },
     {

@@ -52,11 +52,15 @@ renderer reads them as follows and is lenient about the rest:
     },
     "widgets": [
       { "id": "agents", "kind": "agents", "column": 0, "props": {},
-        "caps": ["agents:read", "presence:read"], "source": "builtin" },
+        "caps": ["agents:read", "agents:add", "presence:read"], "source": "builtin" },
       { "id": "conversation", "kind": "conversation", "column": 1, "props": {},
         "caps": ["agents:read", "presence:read", "thread:read", "thread:post"], "source": "builtin" }
     ],
     "controls": ["zen-toggle", "home-switcher", "drag-region"]   // strings, or objects with `kind`
+    // The built-in template sends objects: {kind, placement, column?}. Its
+    // zen-toggle and optional add-agent are "bottom-left" under column 0;
+    // home-switcher "top-left"; drag-region "top". Only the required three
+    // are checked; other kinds (add-agent) are ignored by the check.
   },
   "theme": { … }, "chrome": { … }, "motion": { … },             // passed whole to the S5 theme engine
   "errors":   [{ "file": "zen.toml", "line": 12, "col": 3, "message": "unknown color 'acent'" }],

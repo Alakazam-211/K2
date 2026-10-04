@@ -205,7 +205,9 @@ When the computer asks for reduced motion, every Zen animation is instant.\n\n",
     s.push_str(
         ")\n\nZen v1 ships one page: the Agents widget (the Home's agents, in Home order, each\n\
 with its live status: working, idle or needs you, plus its last message) beside the\n\
-Conversation widget (that agent's Thread and a box to message it). Layout and\n\
+Conversation widget (that agent's Thread and a box to message it). The Home\n\
+switcher sits top left, the Zen toggle and Add agent bottom left under the\n\
+Agents list, and K2's theme swatch top right. Layout and\n\
 widgets are fixed in v1; you change only the theme. The page always carries the\n\
 required controls, which K2 binds and checks itself: ",
     );
@@ -222,6 +224,7 @@ the widget declares. Caps: ",
     s.push_str(
         ".\n\n\
 - `agents.list()`, `agents.subscribe(cb)`, `conversation.open(address)`, `conversation.close()`: `agents:read`\n\
+- `agents.add({anchor, toggle})`: `agents:add` (opens K2's Add agent picker for this Home; the human picks)\n\
 - `presence.get(address)`, `presence.subscribe(cb)`: `presence:read`\n\
 - `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
 - `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`: `thread:post`\n\

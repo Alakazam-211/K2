@@ -133,11 +133,41 @@ fn template_page_is_data_with_required_controls_and_known_caps() {
     assert_eq!(status, &serde_json::json!(["working", "idle", "needs-you"]), "{page}");
     // Decision 6: compose reuses the attachment path.
     assert_eq!(widgets[1]["props"]["attachments"], true, "{page}");
+    // The Agents widget may open K2's Add agent picker (`agents.add`).
+    let agent_caps: Vec<&str> = widgets[0]["caps"].as_array().expect("agents caps").iter().filter_map(|c| c.as_str()).collect();
+    assert_eq!(agent_caps, vec!["agents:read", "agents:add", "presence:read"], "{page}");
+    assert!(zen::BRIDGE_CAPS.contains(&"agents:add"), "agents:add must be a known bridge cap");
     let controls: Vec<&str> =
         page["controls"].as_array().expect("controls").iter().filter_map(|c| c["kind"].as_str()).collect();
     for req in zen::REQUIRED_CONTROLS {
         assert!(controls.contains(req), "template must declare control {req}: {controls:?}");
     }
+    // Rosson 2026-10-04: Home switcher top left; the Zen toggle (the way out)
+    // and Add agent bottom left under the Agents column (column 0). Matches
+    // the renderer's `k2.texting@1` controls.
+    let placed: Vec<(String, String, Option<i64>)> = page["controls"]
+        .as_array()
+        .expect("controls")
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().expect("control kind").to_string(),
+                c["placement"].as_str().expect("control placement").to_string(),
+                c["column"].as_i64(),
+            )
+        })
+        .collect();
+    let want: Vec<(String, String, Option<i64>)> = [
+        ("home-switcher", "top-left", None),
+        ("drag-region", "top", None),
+        ("zen-toggle", "bottom-left", Some(0)),
+        ("add-agent", "bottom-left", Some(0)),
+    ]
+    .into_iter()
+    .map(|(k, p, c)| (k.to_string(), p.to_string(), c))
+    .collect();
+    assert_eq!(placed, want, "{page}");
+    assert_eq!(cols[0]["widget"], "agents", "column 0 must be the Agents column the footer sits under");
 }
 
 // ── T1.5 validation table ────────────────────────────────────────────
@@ -479,7 +509,7 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     want.extend(zen::BRIDGE_CAPS.iter().map(|c| format!("`{c}`")));
     want.extend(zen::REQUIRED_CONTROLS.iter().map(|c| format!("`{c}`")));
     want.extend(["`fade`", "`slide`", "`slidefade`", "`popin <n>%`", "`stoplight-offset"].map(String::from));
-    want.extend(["agents.list()", "presence.get(", "thread.read(", "thread.post(", "thread.answer(", "thread.void(", "homes.select(", "zen.exit()", "controls.bind(", "theme.get()"].map(String::from));
+    want.extend(["agents.list()", "agents.add(", "presence.get(", "thread.read(", "thread.post(", "thread.answer(", "thread.void(", "homes.select(", "zen.exit()", "controls.bind(", "theme.get()"].map(String::from));
     let missing: Vec<&String> = want.iter().filter(|w| !body.contains(w.as_str())).collect();
     assert!(missing.is_empty(), "skill is missing schema names: {missing:?}");
     for (name, b) in schema::BUILTIN_BEZIERS {
@@ -583,7 +613,7 @@ fn layering_builtin_then_override_then_zen_toml_then_page_and_reset_clears_the_o
     write(&f, &ov, "schema = 1\n[colors.light]\naccent = \"#1d4ed8\"\n");
     let o = f.resolve(Some("home-1")).expect("override");
     assert_eq!(o["theme"]["tokens"]["colors"]["light"]["accent"], "#1d4ed8", "override beats the built-in");
-    assert_eq!(o["theme"]["tokens"]["colors"]["light"]["canvas"], "#faf7f2", "unset keys come from the built-in");
+    assert_eq!(o["theme"]["tokens"]["colors"]["light"]["canvas"], "#f7f8fa", "unset keys come from the built-in");
 
     // zen.toml over the theme, the page over zen.toml.
     write(&f, &ZenFile::Zen, "schema = 1\n[shape]\nradius = 5\n[colors.light]\naccent = \"#7c2d12\"\n");
@@ -604,7 +634,7 @@ fn layering_builtin_then_override_then_zen_toml_then_page_and_reset_clears_the_o
     assert_eq!(p["theme"]["tokens"]["colors"]["light"]["accent"], "#2f5d8a");
     assert_eq!(p["theme"]["tokens"]["shape"]["radius"], 5, "zen.toml applies on every theme");
     assert_eq!(p["theme"]["font"]["family"], "serif");
-    assert_eq!(p["theme"]["tokens"]["colors"]["dark"]["canvas"], "#161514", "paper's unset keys come from default");
+    assert_eq!(p["theme"]["tokens"]["colors"]["dark"]["canvas"], "#121316", "paper's unset keys come from default");
 
     // reset --theme default: snapshot, then the override is gone.
     f.set_theme(Some("default"), None).expect("back");

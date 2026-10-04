@@ -1944,6 +1944,14 @@ mod tests {
         // shared test DB — a fixed address would race sibling tests.
         let mut m = msg();
         m.from = format!("bot-{}@acme.dev", uuid::Uuid::new_v4().simple());
+        // Real-clock timestamps: auto_deny_expired sweeps the WHOLE table
+        // (expired_pending_rows_auto_deny with now=10_000_000, and every
+        // send route with now_secs()). A 1970 created_at made this pending
+        // row look 7+ days old, so a concurrent sweep flipped it to denied.
+        let t0 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs() as i64;
         let id = store
             .insert(&NewOutbound {
                 owner_project_id: &project,
@@ -1953,7 +1961,7 @@ mod tests {
                 decided_by: None,
                 attachment_names: &[],
                 send_after: None,
-                now: 1_000_000,
+                now: t0,
             })
             .expect("insert");
         assert!(id.starts_with("out_"), "{id}");
@@ -1981,17 +1989,17 @@ mod tests {
         assert!(store.load("out_nope").expect("load").is_none());
 
         // Rate counting respects the window boundary.
-        assert_eq!(store.count_recent(&m.from, 1_000_000).unwrap(), 1);
-        assert_eq!(store.count_recent(&m.from, 1_000_001).unwrap(), 0);
+        assert_eq!(store.count_recent(&m.from, t0).unwrap(), 1);
+        assert_eq!(store.count_recent(&m.from, t0 + 1).unwrap(), 0);
         assert_eq!(store.count_recent("other@acme.dev", 0).unwrap(), 0);
 
         // Transitions are ATOMIC on the current status.
         assert!(store
-            .transition(&id, "pending", "denied", Some("owner"), Some("no"), 1_000_500)
+            .transition(&id, "pending", "denied", Some("owner"), Some("no"), t0 + 500)
             .unwrap());
         assert!(
             !store
-                .transition(&id, "pending", "approved", Some("owner"), None, 1_000_600)
+                .transition(&id, "pending", "approved", Some("owner"), None, t0 + 600)
                 .unwrap(),
             "a decided row never re-transitions from pending"
         );
@@ -1999,9 +2007,9 @@ mod tests {
         assert_eq!(row.status, "denied");
         assert_eq!(row.decided_by.as_deref(), Some("owner"));
         assert_eq!(row.note.as_deref(), Some("no"));
-        assert_eq!(row.decided_at, Some(1_000_500));
+        assert_eq!(row.decided_at, Some(t0 + 500));
 
-        store.append_note(&id, "extra line", 1_000_700).expect("note");
+        store.append_note(&id, "extra line", t0 + 700).expect("note");
         let row = store.load(&id).expect("load").expect("row");
         assert_eq!(row.note.as_deref(), Some("no\nextra line"));
 

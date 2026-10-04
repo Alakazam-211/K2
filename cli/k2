@@ -12626,6 +12626,7 @@ cmd_help() {
         settings)                 cmd_help_settings ;;
         heartbeat)                cmd_help_heartbeat ;;
         wiki)                     cmd_help_wiki ;;
+        zen)                      cmd_help_zen ;;
         publish)                  _publish_usage ;;
         connect)                  _connect_usage ;;
         users)                    _users_usage ;;
@@ -15131,6 +15132,78 @@ cmd_schema() {
       "description": "Turn serve OFF and print how to remove the nested subdomain (notes are kept).",
       "args": [{"name": "project", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON summary with rm hint."}]
+    },
+    {
+      "name": "zen",
+      "usage": "k2 zen <validate|reload|reset|history|doctor|pages|path> ...",
+      "description": "Restyle Zen Mode on this computer (~/.k2/zen: zen.toml + pages/<home-id>.toml) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
+      "args": [],
+      "flags": [
+        {"name": "--home", "arg": "name|id", "description": "A Home's page (pages/<id>.toml) instead of zen.toml."},
+        {"name": "--file", "arg": "zen.toml|pages/<id>.toml", "description": "Name the file directly."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen validate",
+      "usage": "k2 zen validate [--home <name|id> | --file <file>] [--json]",
+      "description": "Validate what is on disk now; prints file:line:col: message per error and exits 1 on errors. Never changes what Zen shows.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, errors, warnings, files}."}
+      ]
+    },
+    {
+      "name": "zen reload",
+      "usage": "k2 zen reload [--json]",
+      "description": "Re-read ~/.k2/zen now (the daemon also watches it) and print current errors.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, changed, errors, warnings}."}
+      ]
+    },
+    {
+      "name": "zen reset",
+      "usage": "k2 zen reset [--home <name|id> | --file <file>] [--to <snapshot>] [--json]",
+      "description": "Keep the current file as a snapshot, then restore a snapshot or the default. Never touches homes.json or grants.json.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "snapshot", "description": "Snapshot name from k2 zen history (default: the default theme / page stub)."}
+      ]
+    },
+    {
+      "name": "zen history",
+      "usage": "k2 zen history [--home <name|id> | --file <file>] [--json]",
+      "description": "The last 20 good versions of each Zen file, newest first.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, keep, files:[{file, exists, snapshots}]}."}
+      ]
+    },
+    {
+      "name": "zen doctor",
+      "usage": "k2 zen doctor [--json]",
+      "description": "Check the Zen folder, files, Homes, watcher and history on this computer.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, setUp, path, checks}."}
+      ]
+    },
+    {
+      "name": "zen pages",
+      "usage": "k2 zen pages [--json]",
+      "description": "This computer's Homes (id, name) and whether each has a page file.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Status JSON."}
+      ]
+    },
+    {
+      "name": "zen path",
+      "usage": "k2 zen path",
+      "description": "Print the Zen folder (~/.k2/zen on the daemon's computer).",
+      "args": [],
+      "flags": []
     },
     {
       "name": "skills",
@@ -33482,6 +33555,229 @@ cmd_store() {
     esac
 }
 
+# ── Zen Mode — k2 zen (prd-zen-mode-v1 Z17, S3) ──────────────────────
+# `~/.k2/zen/` belongs to THIS computer's K2. Every verb talks to the
+# local daemon's /cli/zen/* routes, which answer only this computer's own
+# owner token. There is deliberately no `grant` verb: agents may request a
+# permission from the human, never grant one (Z19). The `k2-zen` skill
+# documents tokens, motion grammar, chrome and bridge verbs.
+
+cmd_help_zen() {
+    cat <<'EOF'
+k2 zen — restyle Zen Mode on this computer (~/.k2/zen)
+
+Zen Mode is a second face for a Home in the K2 desktop app. Its look comes
+from ~/.k2/zen/zen.toml (every Home) and ~/.k2/zen/pages/<home-id>.toml
+(one Home). Edit a file, then validate. A file with errors is not shown:
+Zen keeps the last good version and shows the error line.
+
+USAGE
+  k2 zen validate [--home <name|id> | --file <zen.toml|pages/<id>.toml>] [--json]
+  k2 zen reload [--json]
+  k2 zen reset [--home <name|id> | --file <file>] [--to <snapshot>] [--json]
+  k2 zen history [--home <name|id> | --file <file>] [--json]
+  k2 zen doctor [--json]
+  k2 zen pages [--json]
+  k2 zen path
+
+COMMANDS
+  validate  Check what is on disk now. Prints file:line:col: message for
+            each error and exits 1; exits 0 when every file is clean.
+  reload    Re-read now (the daemon also watches the folder) and print errors.
+  reset     Keep the current file as a snapshot, then restore --to <snapshot>,
+            or the default theme / page stub. Defaults to zen.toml.
+  history   List the last 20 good versions of each file (newest first).
+  doctor    Check the folder, files, Homes, watcher and history.
+  pages     List this computer's Homes and whether each has a page file.
+  path      Print the Zen folder.
+
+RULES
+  Run `k2 zen validate` before you say a restyle is done.
+  Never write grants.json, homes.json or .history/: K2 writes them.
+  Agents request permissions from the human; they never grant them.
+  Load the k2-zen skill for every token, range, curve and animation name.
+
+EXIT
+  0 ok · 1 errors (validate) or a refused request · 3 Zen isn't set up on
+  this computer (turn it on from Home in the K2 app).
+EOF
+}
+
+# Shared formatter: verb, as_json, raw daemon body.
+_zen_print() {
+    ZEN_VERB="$1" ZEN_JSON="$2" ZEN_RAW="$3" python3 -c '
+import json, os, sys
+verb = os.environ["ZEN_VERB"]
+as_json = os.environ.get("ZEN_JSON") == "true"
+raw = os.environ.get("ZEN_RAW") or ""
+NOT_SET_UP = "Zen isn\x27t set up on this computer. Turn it on from Home in the K2 app."
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err == "zen_not_set_up" or (verb in ("path", "pages") and d.get("setUp") is False):
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    print(d.get("message") or NOT_SET_UP, file=sys.stderr)
+    sys.exit(3)
+if err is not None:
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    if err == "zen_local_only":
+        print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner.", file=sys.stderr)
+    elif isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("message") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (d.get("message") or err), file=sys.stderr)
+    sys.exit(1)
+if as_json:
+    print(json.dumps(d, indent=2))
+    if verb == "validate" and d.get("ok") is False:
+        sys.exit(1)
+    sys.exit(0)
+
+def diag(e, warn=False):
+    return "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
+
+if verb in ("validate", "reload"):
+    errs = d.get("errors") or []
+    for e in errs:
+        print(diag(e))
+    for w in d.get("warnings") or []:
+        print(diag(w, True))
+    if verb == "reload":
+        print("reloaded: %s" % ("changed" if d.get("changed") else "no change"))
+    if errs:
+        print("%d error(s). Zen is showing the last good version." % len(errs), file=sys.stderr)
+        sys.exit(1)
+    if verb == "validate":
+        files = d.get("files") or []
+        print("ok: %s" % (", ".join(files) if files else "no files"))
+elif verb == "reset":
+    print("reset %s to %s" % (d.get("file"), d.get("restored")))
+    if d.get("snapshot"):
+        print("previous file kept as snapshot %s (k2 zen reset --to %s to undo)" % (d["snapshot"], d["snapshot"]))
+elif verb == "history":
+    for f in d.get("files") or []:
+        snaps = f.get("snapshots") or []
+        print("%s (%d snapshot%s%s)" % (f.get("file"), len(snaps), "" if len(snaps) == 1 else "s", "" if f.get("exists", True) else ", file deleted"))
+        for s in snaps:
+            print("  %s  %s%s" % (s.get("name"), s.get("at"), "" if s.get("clean") else "  (has errors)"))
+elif verb == "doctor":
+    for c in d.get("checks") or []:
+        print("%s %s: %s" % ("ok  " if c.get("ok") else "FAIL", c.get("name"), c.get("detail")))
+    if not d.get("ok"):
+        sys.exit(1)
+elif verb == "pages":
+    pages = d.get("pages") or []
+    if not pages:
+        print("no Homes yet")
+    for p in pages:
+        print("%s  %s  %s" % (p.get("id"), p.get("name") or "(no Home)", "page" if p.get("hasFile") else "template"))
+elif verb == "path":
+    print(d.get("path"))
+'
+}
+
+# Parse --home/--file/--to/--json into ZEN_* globals.
+_zen_args() {
+    ZEN_AS_JSON=false; ZEN_HOME_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) ZEN_AS_JSON=true; shift ;;
+            --home)
+                [ -n "${2:-}" ] || { echo "Error: --home needs a Home name or id" >&2; exit 2; }
+                ZEN_HOME_SEL="$2"; shift 2 ;;
+            --home=*) ZEN_HOME_SEL="${1#*=}"; shift ;;
+            --file)
+                [ -n "${2:-}" ] || { echo "Error: --file needs zen.toml or pages/<id>.toml" >&2; exit 2; }
+                ZEN_FILE_SEL="$2"; shift 2 ;;
+            --file=*) ZEN_FILE_SEL="${1#*=}"; shift ;;
+            --to)
+                [ -n "${2:-}" ] || { echo "Error: --to needs a snapshot name (see k2 zen history)" >&2; exit 2; }
+                ZEN_TO="$2"; shift 2 ;;
+            --to=*) ZEN_TO="${1#*=}"; shift ;;
+            *) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+        esac
+    done
+    if [ -n "$ZEN_HOME_SEL" ] && [ -n "$ZEN_FILE_SEL" ]; then
+        echo "Error: pass --home or --file, not both" >&2
+        exit 2
+    fi
+}
+
+cmd_zen() {
+    local sub="${1:-}"
+    shift || true
+    local raw=""
+    case "$sub" in
+        validate|history)
+            _zen_args "$@"
+            [ -z "$ZEN_TO" ] || { echo "Error: --to is for k2 zen reset" >&2; exit 2; }
+            local -a q=()
+            [ -n "$ZEN_HOME_SEL" ] && q+=("home=$(urlencode "$ZEN_HOME_SEL")")
+            [ -n "$ZEN_FILE_SEL" ] && q+=("file=$(urlencode "$ZEN_FILE_SEL")")
+            raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
+            _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
+            ;;
+        reload)
+            _zen_args "$@"
+            if [ -n "$ZEN_HOME_SEL$ZEN_FILE_SEL$ZEN_TO" ]; then
+                echo "Error: k2 zen reload takes only --json" >&2
+                exit 2
+            fi
+            raw=$(cli_post_json "/cli/zen/reload" '{}')
+            _zen_print reload "$ZEN_AS_JSON" "$raw"
+            ;;
+        reset)
+            _zen_args "$@"
+            local body
+            body=$(ZH="$ZEN_HOME_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" python3 -c '
+import json, os
+b = {}
+for k, e in (("home", "ZH"), ("file", "ZF"), ("to", "ZT")):
+    if os.environ.get(e):
+        b[k] = os.environ[e]
+print(json.dumps(b))
+')
+            raw=$(cli_post_json "/cli/zen/reset" "$body")
+            _zen_print reset "$ZEN_AS_JSON" "$raw"
+            ;;
+        doctor|pages|path)
+            _zen_args "$@"
+            if [ -n "$ZEN_HOME_SEL$ZEN_FILE_SEL$ZEN_TO" ]; then
+                echo "Error: k2 zen $sub takes only --json" >&2
+                exit 2
+            fi
+            if [ "$sub" = "doctor" ]; then
+                raw=$(cli_request "/cli/zen/doctor")
+            else
+                raw=$(cli_request "/cli/zen/status")
+            fi
+            _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
+            ;;
+        ""|help|--help|-h)
+            cmd_help_zen
+            exit 0
+            ;;
+        grant|grants|allow)
+            echo "Error: there is no 'k2 zen $sub'. Agents never grant permissions." >&2
+            echo "Tell the human what the widget needs and why; they grant it in the K2 app." >&2
+            exit 2
+            ;;
+        *)
+            echo "Unknown 'k2 zen' subcommand: $sub" >&2
+            cmd_help_zen >&2
+            exit 2
+            ;;
+    esac
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
@@ -34158,6 +34454,15 @@ EOF
             exit 0
         fi
         shift; cmd_remote_session "$@"
+        ;;
+    zen)
+        # Zen Mode (prd-zen-mode-v1 Z17): this computer's ~/.k2/zen via the
+        # local daemon's owner-only /cli/zen/* routes. No grant verb (Z19).
+        if _wants_help "${@:2}"; then
+            cmd_help_zen
+            exit 0
+        fi
+        shift; cmd_zen "$@"
         ;;
     wiki)
         # Workspace knowledge base (brain map): index / note / seed /

@@ -81,7 +81,7 @@ afterEach(() => {
 })
 
 describe('FeedbackItemView — unlinked ticket', () => {
-  it('is read-only with only Resolve and Dismiss, and no Agent tab', async () => {
+  it('is read-only with only Resolve and Dismiss, and no chat with the agent', async () => {
     api.fetchFeedbackShow.mockResolvedValue(show(base))
     const onMutated = vi.fn()
     render(
@@ -91,14 +91,14 @@ describe('FeedbackItemView — unlinked ticket', () => {
 
     // Identifying header: workspace label + exact filing date.
     expect(screen.getByText(/Unlinked workspace · asked 2025-09-30 14:05 UTC/)).toBeTruthy()
-    // Thread only — the Agent (session preview / wake) tab is gone.
-    expect(screen.getByRole('button', { name: 'Thread' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Agent' })).toBeNull()
-    // No comment box, no Comment button, no option taps, no assignee edit.
+    // No action bar: no Answer box, no quick answers, no Reassign, no
+    // Chat with agent (no session preview / wake for a removed workspace).
+    expect(screen.queryByTestId('ticket-action-bar')).toBeNull()
+    expect(screen.queryByTestId('ticket-action-chat')).toBeNull()
+    expect(screen.queryByTestId('ticket-action-reassign')).toBeNull()
+    expect(screen.queryByTestId('ticket-quick-answers')).toBeNull()
     expect(screen.queryByRole('textbox')).toBeNull()
-    expect(screen.queryByRole('button', { name: /Comment/ })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
 
     const actions = Array.from(footer.querySelectorAll('button')).map((b) => b.textContent?.trim())
     expect(actions).toEqual(['Resolve', 'Dismiss'])
@@ -111,7 +111,7 @@ describe('FeedbackItemView — unlinked ticket', () => {
     expect(api.commentFeedback).not.toHaveBeenCalled()
   })
 
-  it('a linked ticket keeps the comment box, the extra actions and the Agent tab (control)', async () => {
+  it('a linked ticket has the pinned action bar and quick answers (control)', async () => {
     const linked: FeedbackListRow = {
       ...base,
       projectId: 'p1',
@@ -123,11 +123,17 @@ describe('FeedbackItemView — unlinked ticket', () => {
     render(
       <FeedbackItemView id={linked.id} listRow={linked} nowSec={1_759_241_200} revision={0} onMutated={vi.fn()} />,
     )
-    await screen.findByRole('textbox')
+    const bar = await screen.findByTestId('ticket-action-bar')
     expect(screen.queryByTestId('unlinked-thread-footer')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Agent' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Comment/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Needs discussion' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Planned' })).toBeTruthy()
+    const actions = ['ticket-action-answer', 'ticket-action-resolve', 'ticket-action-reassign', 'ticket-action-chat']
+      .map((t) => screen.getByTestId(t))
+    expect(actions.map((b) => b.textContent)).toEqual(['Answer', 'Resolve', 'Reassign', 'Chat with agent'])
+    for (const b of actions) expect(bar.contains(b)).toBe(true)
+    // Structured --options become quick answers (no brief here).
+    expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['Yes', 'No'])
+    // Answer opens the inline box.
+    expect(screen.queryByRole('textbox')).toBeNull()
+    fireEvent.click(screen.getByTestId('ticket-action-answer'))
+    expect(screen.getByRole('textbox')).toBeTruthy()
   })
 })

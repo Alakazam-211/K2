@@ -137,21 +137,33 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     return container
   }
 
-  it('shows the assigned person with an initial', () => {
-    card({ ...row, assignees: ['julie'] })
+  it('shows the assigned person as initials on the bottom row, no agent name', () => {
+    card({ ...row, assignees: ['julie'], hasBrief: true, briefBytes: 64 })
     const a = screen.getByTestId('card-assignee')
     expect(a.getAttribute('data-unassigned')).toBeNull()
-    expect(a.textContent).toBe('Jjulie')
-    expect(screen.getByTestId('card-assignee-initial').textContent).toBe('J')
+    expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.textContent)).toEqual(['J'])
     expect(a.getAttribute('title')).toBe('Assigned to julie')
-    // Bottom row: the same row as the kind badge and the agent name.
-    expect(a.parentElement?.textContent).toContain('scout')
-    expect(a.parentElement?.textContent).toContain('approval')
+    // Bottom row: status chip, initials, age, HTML mark — and no agent.
+    const bottom = screen.getByTestId('card-bottom-row')
+    expect(bottom.contains(a)).toBe(true)
+    expect(bottom.contains(screen.getByTestId('card-status'))).toBe(true)
+    expect(screen.getByTestId('card-status').textContent).toBe('Waiting')
+    expect(bottom.contains(screen.getByTestId('html-badge'))).toBe(true)
+    expect(screen.getByTestId('card-age').textContent).toBe('2m ago')
+    const card0 = screen.getByTestId('ticket-card')
+    expect(card0.textContent).not.toContain('scout')
+    expect(card0.textContent).not.toContain('Alpha')
+    // Title, then the one-line summary (the --body).
+    expect(screen.getByTestId('card-title').textContent).toBe('Deploy blocked: DNS?')
+    expect(screen.getByTestId('card-title').className).toContain('truncate')
+    expect(screen.getByTestId('card-summary').textContent).toBe('Short summary.')
+    expect(screen.getByTestId('card-summary').className).toContain('truncate')
   })
 
-  it('the wire owner reads Owner; several people are listed', () => {
+  it('the wire owner reads Owner; several people are initials', () => {
     card({ ...row, assignees: ['owner', 'julie', 'owner', ' '] })
-    expect(screen.getByTestId('card-assignee').textContent).toBe('OOwner, julie')
+    expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.textContent)).toEqual(['O', 'J'])
+    expect(screen.getByTestId('card-assignee').getAttribute('title')).toBe('Assigned to Owner, julie')
   })
 
   it('shows a subtle Unassigned when nobody is assigned', () => {

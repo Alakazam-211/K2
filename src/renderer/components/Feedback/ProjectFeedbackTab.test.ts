@@ -3,7 +3,7 @@
 // mapping. No DOM. Fail-loud: exact equality.
 
 import { describe, it, expect } from 'vitest'
-import { memberFeedbackRefs } from './ProjectFeedbackTab'
+import { memberFeedbackRefs, rowsForMembers } from './ProjectFeedbackTab'
 import type { ProjectGroupMemberInfo } from '@/components/Projects/projects-api'
 
 function member(
@@ -36,5 +36,17 @@ describe('memberFeedbackRefs', () => {
 
   it('empty membership fans out to nothing', () => {
     expect(memberFeedbackRefs([])).toEqual([])
+  })
+})
+
+describe('rowsForMembers', () => {
+  it('keeps only tickets filed by member workspaces (list-all returns the whole host)', () => {
+    const refs = memberFeedbackRefs([member('ws-a', 'Alpha', '/dev/alpha')])
+    const rows = [
+      { id: 't1', projectId: 'ws-a' },
+      { id: 't2', projectId: 'ws-other' },
+    ] as unknown as Parameters<typeof rowsForMembers>[0]
+    expect(rowsForMembers(rows, refs).map((r) => r.id)).toEqual(['t1'])
+    expect(rowsForMembers(rows, [])).toEqual([])
   })
 })

@@ -148,9 +148,9 @@ describe('unlinked ticket card (prd-tickets-badge-orphans TB18 + Appa A1)', () =
         onMutated={onMutated}
       />,
     )
-    // No workspace name to show: the card says so, and carries the agent,
-    // the exact filing date, and a short id for `k2 tickets show`.
-    expect(screen.getByText('Unlinked workspace')).toBeTruthy()
+    // No workspace name to show: the card carries the agent, the exact
+    // filing date, and a short id for `k2 tickets show` (the list puts it
+    // under the "Unlinked workspace" section).
     expect(screen.getByText('Approve the vendor contract')).toBeTruthy()
     const details = screen.getByTestId('unlinked-details')
     expect(details.textContent).toBe('Filed by scout·2025-09-30 14:05 UTC·3f2a9c1e')
@@ -178,8 +178,10 @@ describe('unlinked ticket card (prd-tickets-badge-orphans TB18 + Appa A1)', () =
         onMutated={vi.fn()}
       />,
     )
-    expect(screen.getByText('Alpha')).toBeTruthy()
-    expect(screen.queryByText('Unlinked workspace')).toBeNull()
+    expect(screen.getByText('Need a decision')).toBeTruthy()
+    // The compact card names neither the workspace nor the agent.
+    expect(screen.queryByText('Alpha')).toBeNull()
+    expect(screen.queryByText(/claude/)).toBeNull()
     expect(screen.queryByTestId('unlinked-details')).toBeNull()
   })
 })

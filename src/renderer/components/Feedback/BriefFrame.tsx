@@ -101,10 +101,21 @@ function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null
 export function BriefFrame({
   brief,
   title,
+  expanded: expandedProp,
+  onExpandedChange,
+  hideToolbar = false,
+  heightClass = DEFAULT_HEIGHT_CLASS,
 }: {
   brief: FeedbackBrief
   /** The ticket title — names the frame and the Expand overlay. */
   title: string
+  /** Controlled Expand overlay (the ticket detail header owns the button). */
+  expanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
+  /** Hide the "Brief · HTML · size · Expand" row (the header has Expand). */
+  hideToolbar?: boolean
+  /** Box height until the user drags the handle (a Tailwind class). */
+  heightClass?: string
 }): React.JSX.Element {
   const themeKey = useBriefThemeKey()
   // Memo on sha256 + theme (H39): a thread refetch hands a new `brief`
@@ -114,7 +125,15 @@ export function BriefFrame({
 
   const [height, setHeight] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const [expandedLocal, setExpandedLocal] = useState(false)
+  const expanded = expandedProp ?? expandedLocal
+  const setExpanded = useCallback(
+    (v: boolean) => {
+      if (onExpandedChange) onExpandedChange(v)
+      if (expandedProp === undefined) setExpandedLocal(v)
+    },
+    [onExpandedChange, expandedProp],
+  )
   const boxRef = useRef<HTMLDivElement>(null)
 
   const clamp = (h: number): number =>
@@ -144,30 +163,32 @@ export function BriefFrame({
     setHeight(clamp(current + (e.key === 'ArrowDown' ? KEY_STEP : -KEY_STEP)))
   }
 
-  const close = useCallback(() => setExpanded(false), [])
+  const close = useCallback(() => setExpanded(false), [setExpanded])
 
   return (
     <div data-testid="brief" className="mb-3">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-          Brief
-        </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums opacity-70">
-          HTML · {formatBytes(brief.bytes)}
-        </span>
-        <button
-          type="button"
-          data-testid="brief-expand"
-          onClick={() => setExpanded(true)}
-          className="ml-auto px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
-        >
-          Expand
-        </button>
-      </div>
+      {!hideToolbar && (
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            Brief
+          </span>
+          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums opacity-70">
+            HTML · {formatBytes(brief.bytes)}
+          </span>
+          <button
+            type="button"
+            data-testid="brief-expand"
+            onClick={() => setExpanded(true)}
+            className="ml-auto px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
+          >
+            Expand
+          </button>
+        </div>
+      )}
       <div
         ref={boxRef}
         data-testid="brief-box"
-        className={`relative border border-[var(--color-border)] ${height === null ? DEFAULT_HEIGHT_CLASS : ''}`}
+        className={`relative border border-[var(--color-border)] ${height === null ? heightClass : ''}`}
         style={height === null ? undefined : { height: `${height}px` }}
       >
         <HtmlFrame

@@ -1,28 +1,20 @@
-// Feedback F2 — the full-page agent→human ask queue
-// (prd-agent-feedback-notifications §6 F2).
+// The Tickets page — the full-page agent→human ask queue
+// (prd-agent-feedback-notifications §6 F2; 0.43.2 quick redesign).
 //
-// Mirrors AgentOps' full-screen overlay idiom: a fixed inset view over the
-// app, opened from the top-bar Feedback button (useFeedbackStore), its own
-// draggable top bar with a back affordance, Esc to close. The list fans
-// out `/cli/feedback/list?all=1` per registered workspace (feedback-api)
-// and stays live via the store's `revision` (bumped by the
-// feedback:created / feedback:answered listeners) — no polling loop.
+// A fixed inset view over the app, opened from the top-bar Tickets tab
+// (useFeedbackStore), with its own draggable top bar; Esc closes it (the
+// board clears an open ticket first). The list reads
+// `/cli/feedback/list-all?all=1` (feedback-api) and stays live via the
+// store's `revision` (bumped by the feedback:* listeners) — no polling.
 //
-// Layout is the AFSROW master-detail board: a persistent card list in the
-// left column (search + workspace filter fixed above it, the list itself
-// scrolls), a response panel in the right column. Selecting a card swaps
-// the right panel in place — no navigation. Zero selection shows a
-// dashed empty state; the selection survives filters hiding its card.
+// The board itself (narrow list + brief-first detail + chat rail) is the
+// shared TicketBoard; this page adds the workspace/project filter (§6.6)
+// beside the board's search.
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useFeedbackStore } from '@/stores/feedback'
-import { useToastStore } from '@/stores/toast'
-import { formatRelativeTime } from '@/lib/format-relative-time'
-import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
@@ -31,510 +23,22 @@ import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import { Surface } from '@/components/ui'
-import {
-  collectAssignees,
-  countByStatus,
-  fetchAllFeedback,
-  filterByAssignee,
-  filterBySearch,
-  groupByStatus,
-  isUnlinked,
-  resolveFeedback,
-  selectableStatusesFor,
-  statusLabel,
-  UNLINKED_WORKSPACE_LABEL,
-  unlinkedDetails,
-  type AssigneeFilter,
-  type FeedbackListRow,
-  type FeedbackStatus,
-  type SelectableStatus,
-} from './feedback-api'
-import { FeedbackItemView } from './FeedbackItemView'
+import { fetchAllFeedback, isUnlinked, type FeedbackListRow } from './feedback-api'
 import {
   parseProjectFilter,
   rowsForWorkspaceFilter,
   UNLINKED_FILTER_VALUE,
   WorkspaceFilterDropdown,
-  type FilterableWorkspace,
 } from './WorkspaceFilterDropdown'
 import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { HtmlBriefBadge, KindBadge, PriorityBadge } from './badges'
-import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
 import { primaryScope } from '@/kessel/server-scope'
+import { TicketBoard } from './TicketBoard'
+
+// The card + its pieces moved to TicketCard.tsx; re-exported for callers.
+export { FeedbackCard, SectionHeader, cardAssigneeNames } from './TicketCard'
 
 const TOPBAR_HEIGHT = 38
-
-// ── Per-card status dropdown ──────────────────────────────────────────────
-
-/** StatusBadge's palette, shared by the trigger so the dropdown reads
- *  as the card's status badge with a chevron. */
-function statusChipClass(status: FeedbackStatus): string {
-  return status === 'waiting'
-    ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_12%,transparent)] text-[var(--color-status-warn-amber)]'
-    : status === 'needs_discussion'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
-      : status === 'answered'
-        ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-        : status === 'planned'
-          ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
-          : 'bg-white/[0.06] text-[var(--color-text-muted)]'
-}
-
-function CardStatusDropdown({
-  row,
-  onMutated,
-}: {
-  row: FeedbackListRow
-  onMutated: () => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [menuBox, setMenuBox] = useState<{ top: number; right: number; zIndex: number } | null>(null)
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuBox(null)
-      return
-    }
-    const place = (): void => {
-      const trigger = buttonRef.current
-      if (!trigger) return
-      const rect = trigger.getBoundingClientRect()
-      setMenuBox({
-        top: rect.bottom + 2,
-        right: window.innerWidth - rect.right,
-        zIndex: menuLayerForTrigger(trigger),
-      })
-    }
-    place()
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      const node = e.target as Node
-      if (rootRef.current?.contains(node)) return
-      if (menuRef.current?.contains(node)) return
-      setOpen(false)
-    }
-    // Capture-phase so the first Esc closes THIS popover instead of
-    // reaching the page-level handler (clear selection / close page).
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [open])
-
-  // Manually selectable statuses (Answered is display-only, via a reply).
-  // An unlinked ticket offers only Resolve and Dismiss (TB18).
-  const statuses = selectableStatusesFor(row)
-  const setStatus = async (status: SelectableStatus): Promise<void> => {
-    if (busy || status === row.status) {
-      setOpen(false)
-      return
-    }
-    setBusy(true)
-    try {
-      await resolveFeedback(row.id, status)
-      onMutated()
-    } catch (e) {
-      useToastStore
-        .getState()
-        .addToast(`Status change failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
-    } finally {
-      setBusy(false)
-      setOpen(false)
-    }
-  }
-
-  return (
-    // stopPropagation everywhere — interacting with the status control
-    // must not select/deselect the card underneath.
-    <div ref={rootRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled={busy}
-        onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(row.status)}`}
-        title="Change status"
-      >
-        {statusLabel(row.status)}
-        <svg
-          className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {open && menuBox && createPortal(
-        <div
-          ref={menuRef}
-          data-testid="ticket-status-menu"
-          style={{
-            position: 'fixed',
-            top: menuBox.top,
-            right: menuBox.right,
-            zIndex: menuBox.zIndex,
-          }}
-          className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
-        >
-          {/* Answered shows as the current state but is not offered. */}
-          {row.status === 'answered' && (
-            <div
-              className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-[var(--color-status-ok-soft)] opacity-70 cursor-default select-none"
-              title="Answered is set by an actual reply, not by hand"
-            >
-              <span className="flex-1">Answered</span>
-              <CheckGlyph />
-            </div>
-          )}
-          {statuses.map((s) => {
-            const current = row.status === s
-            return (
-              <button
-                key={s}
-                type="button"
-                disabled={busy}
-                onClick={() => void setStatus(s)}
-                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
-                  current
-                    ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
-                }`}
-                title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
-              >
-                <span className="flex-1">{statusLabel(s)}</span>
-                {current && <CheckGlyph />}
-              </button>
-            )
-          })}
-        </div>,
-        document.body,
-      )}
-    </div>
-  )
-}
-
-/** Compact people filter sitting next to search: All / Unassigned / each
- *  assignee username currently present on the board. */
-function AssigneeFilterDropdown({
-  value,
-  options,
-  onChange,
-}: {
-  value: AssigneeFilter
-  options: string[]
-  onChange: (v: AssigneeFilter) => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [open])
-
-  const label =
-    value === 'all' ? 'All people' : value === 'unassigned' ? 'Unassigned' : value
-
-  const pick = (v: AssigneeFilter): void => {
-    onChange(v)
-    setOpen(false)
-  }
-
-  return (
-    <div ref={rootRef} className="relative flex-shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] border transition-colors cursor-pointer max-w-[160px] ${
-          value === 'all'
-            ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
-            : 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-        }`}
-        title="Filter by assignee"
-      >
-        <span className="truncate">{label}</span>
-        <svg
-          className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[160px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5">
-          {(
-            [
-              { v: 'all' as const, text: 'All people' },
-              { v: 'unassigned' as const, text: 'Unassigned' },
-            ] as const
-          ).map(({ v, text }) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => pick(v)}
-              className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left cursor-pointer ${
-                value === v
-                  ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
-              }`}
-            >
-              <span className="flex-1">{text}</span>
-              {value === v && <CheckGlyph />}
-            </button>
-          ))}
-          {options.length > 0 && (
-            <div className="border-t border-[var(--color-border)] my-0.5" />
-          )}
-          {options.map((name) => (
-            <button
-              key={name}
-              type="button"
-              onClick={() => pick(name)}
-              className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left cursor-pointer ${
-                value === name
-                  ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
-              }`}
-            >
-              <span className="flex-1 truncate">{name}</span>
-              {value === name && <CheckGlyph />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CheckGlyph(): React.JSX.Element {
-  return (
-    <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  )
-}
-
-// ── List card ─────────────────────────────────────────────────────────────
-
-/** The assignee names a card shows: the wire `"owner"` reads "Owner"
- *  (same as presence), duplicates and blanks dropped. Empty = unassigned. */
-export function cardAssigneeNames(assignees: readonly string[] | null | undefined): string[] {
-  const out: string[] = []
-  for (const raw of assignees ?? []) {
-    const name = presenceDisplayName(raw.trim())
-    if (name && !out.includes(name)) out.push(name)
-  }
-  return out
-}
-
-/** Bottom-row assignee: initials chip + name(s), or a subtle "Unassigned".
- *  Usernames are snapshots (no role on the row), so the chip is neutral,
- *  not a role-colored presence avatar. */
-function CardAssignee({ assignees }: { assignees: readonly string[] | null | undefined }): React.JSX.Element {
-  const names = cardAssigneeNames(assignees)
-  if (names.length === 0) {
-    return (
-      <span
-        data-testid="card-assignee"
-        data-unassigned="true"
-        className="ml-auto flex-shrink-0 italic opacity-60"
-        title="No one is assigned. Assign with k2 tickets assign <id> <user>."
-      >
-        Unassigned
-      </span>
-    )
-  }
-  const label = names.join(', ')
-  return (
-    <span
-      data-testid="card-assignee"
-      className="ml-auto inline-flex items-center gap-1 min-w-0 text-[var(--color-text-secondary)]"
-      title={`Assigned to ${label}`}
-    >
-      <span
-        aria-hidden
-        data-testid="card-assignee-initial"
-        className="flex flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elevated)] font-bold leading-none"
-        style={{ width: 14, height: 14, fontSize: 8 }}
-      >
-        {names[0].charAt(0).toUpperCase()}
-      </span>
-      <span className="truncate selectable-copy">{label}</span>
-    </span>
-  )
-}
-
-/** True when the user just finished a drag-select (non-empty selection).
- *  Used so clickable cards don't treat "copy this title" as card select. */
-function clickWasTextSelection(): boolean {
-  const sel = window.getSelection()
-  return !!sel && !sel.isCollapsed && sel.toString().length > 0
-}
-
-export function FeedbackCard({
-  row,
-  workspace,
-  nowSec,
-  selected,
-  onSelect,
-  onMutated,
-}: {
-  row: FeedbackListRow
-  /** The host workspace's store row (icon/color) — undefined when the
-   *  project has been unregistered since the ask was filed. */
-  workspace: FilterableWorkspace | undefined
-  nowSec: number
-  selected: boolean
-  onSelect: () => void
-  onMutated: () => void
-}): React.JSX.Element {
-  const dimmed =
-    row.status === 'resolved' || row.status === 'dismissed' || row.status === 'planned'
-  const unlinked = isUnlinked(row)
-  const details = unlinked ? unlinkedDetails(row) : null
-  return (
-    // NOT Surface (P2 final wave): the selected state's `ring-1` sets
-    // box-shadow, and Surface's elevation slot `[box-shadow:var(--ring-surface)]`
-    // sorts LATER in the Tailwind bundle — it would clobber the accent ring.
-    <div
-      onClick={() => {
-        // Drag-highlighting the title leaves a selection — don't treat that
-        // mouseup as "open this ticket" (re-render would clear the copy).
-        if (clickWasTextSelection()) return
-        onSelect()
-      }}
-      className={`border bg-[var(--color-bg-surface)] p-3 cursor-pointer transition-colors ${
-        selected
-          ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
-      } ${dimmed && !selected ? 'opacity-60' : ''}`}
-    >
-      {/* Top row: the host WORKSPACE (icon + name — instantly see where
-          the ask comes from) left, priority + status dropdown right. */}
-      <div className="flex items-center gap-2 min-w-0">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          {workspace && !unlinked && (
-            <ProjectAvatar
-              projectPath={workspace.path}
-              projectName={workspace.name}
-              projectColor={workspace.color}
-              projectId={workspace.id}
-              iconUrl={workspace.iconUrl}
-              size={18}
-            />
-          )}
-          <span
-            className={`text-[11px] truncate selectable-copy ${
-              unlinked ? 'text-[var(--color-text-muted)] italic' : 'text-[var(--color-text-secondary)]'
-            }`}
-            title={unlinked ? 'This ticket’s workspace was removed from this server' : undefined}
-          >
-            {unlinked ? UNLINKED_WORKSPACE_LABEL : row.projectName}
-          </span>
-        </div>
-        <PriorityBadge priority={row.priority} />
-        <CardStatusDropdown row={row} onMutated={onMutated} />
-      </div>
-      {/* No title= tooltip — selectable body text is the source of truth. */}
-      <p className="mt-2 text-sm text-[var(--color-text-primary)] break-words selectable-copy cursor-text">
-        {row.title}
-        {row.hasBrief === true && (
-          <>
-            {' '}
-            <HtmlBriefBadge />
-          </>
-        )}
-      </p>
-      <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
-        <KindBadge kind={row.kind} />
-        <span className="truncate selectable-copy">{row.agentName}</span>
-        <span className="opacity-60 flex-shrink-0">·</span>
-        <span className="tabular-nums flex-shrink-0">
-          {formatRelativeTime(row.createdAt, nowSec)}
-        </span>
-        <CardAssignee assignees={row.assignees} />
-        {row.commentCount > 1 && (
-          <span className="inline-flex items-center gap-1 text-[var(--color-accent)] tabular-nums flex-shrink-0">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            {row.commentCount}
-          </span>
-        )}
-      </div>
-      {/* Appa A1: an unlinked ticket has no workspace name to show, so it
-          carries what still identifies it — the agent it was filed as, the
-          exact filing date, and a short id for `k2 tickets show`. */}
-      {details && (
-        <div
-          data-testid="unlinked-details"
-          className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-[var(--color-text-muted)] selectable-copy"
-        >
-          <span>Filed by {details.agent}</span>
-          <span className="opacity-60">·</span>
-          <span className="tabular-nums">{details.filed}</span>
-          <span className="opacity-60">·</span>
-          <span className="font-mono">{details.shortId}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export function SectionHeader({ label, count }: { label: string; count: number }): React.JSX.Element {
-  return (
-    <div className="flex items-center gap-2 px-1 pt-4 pb-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-        {label}
-      </span>
-      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums opacity-70">{count}</span>
-    </div>
-  )
-}
-
-// ── Main view ─────────────────────────────────────────────────────────────
 
 export default function FeedbackPage(): React.JSX.Element | null {
   const isOpen = useFeedbackStore((s) => s.isOpen)
@@ -544,22 +48,9 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
   const [rows, setRows] = useState<FeedbackListRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Workspace filter — a workspace id, `project:<groupId>` (§6.6), or
-  // 'all' (the default).
+  // Workspace filter — a workspace id, `project:<groupId>` (§6.6), or 'all'.
   const [workspaceFilter, setWorkspaceFilter] = useState<string>('all')
-  // Member workspace ids of the selected project filter — resolved via
-  // /cli/project-group/show when a project is picked; null = no project
-  // filter active OR still resolving.
   const [projectMemberIds, setProjectMemberIds] = useState<Set<string> | null>(null)
-  // Tokenized free-text search across title / agent / workspace / id.
-  const [search, setSearch] = useState('')
-  // People filter — one assignee username, `unassigned`, or `all`.
-  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>('all')
-  // Status filter — one status or 'all'; the chips show per-status
-  // counts (AFSROW idiom), counted after workspace + search filtering.
-  const [statusFilter, setStatusFilter] = useState<FeedbackStatus | 'all'>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
 
   const loadList = useCallback(async (): Promise<void> => {
     try {
@@ -581,10 +72,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
     void loadList()
   }, [isOpen, revision, projects, loadList])
 
-  // Resolve the selected project filter's membership (§6.6) — refreshed
-  // on project-group events (members-changed rides pgRevision) so the
-  // filter tracks membership live. A failed resolve logs and leaves the
-  // set null (= empty result), never blanking the page.
+  // Resolve the selected project filter's membership (§6.6), refreshed on
+  // project-group events. A failed resolve logs and leaves the set null.
   const pgRevision = useProjectGroupsStore((s) => s.revision)
   const projectFilterId = parseProjectFilter(workspaceFilter)
   useEffect(() => {
@@ -608,83 +97,35 @@ export default function FeedbackPage(): React.JSX.Element | null {
     }
   }, [isOpen, projectFilterId, pgRevision])
 
-  // Relative-time ticker (AgentOps idiom) — labels only, no refetch.
-  useEffect(() => {
-    if (!isOpen) return
-    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 30_000)
-    return () => clearInterval(id)
-  }, [isOpen])
-
-  // Esc — clear the selection first, then close the page.
+  // Esc closes the page. The board's capture-phase Esc clears an open
+  // ticket first (and stops the event), so this only sees Esc with none.
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        if (selectedId !== null) setSelectedId(null)
-        else close()
+        close()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, selectedId, close])
+  }, [isOpen, close])
 
   // Reset transient view state when the page closes.
   useEffect(() => {
     if (!isOpen) {
-      setSelectedId(null)
       setRows(null)
       setError(null)
-      setSearch('')
-      setAssigneeFilter('all')
-      setStatusFilter('all')
     }
   }, [isOpen])
 
-  // Workspace → assignee → search; the status chips count THIS set (so
-  // each chip says exactly how many cards selecting it reveals), then
-  // the active status chip narrows it.
-  const searched = useMemo(() => {
-    if (!rows) return null
-    const byWorkspace = rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds)
-    const byAssignee = filterByAssignee(byWorkspace, assigneeFilter)
-    return filterBySearch(byAssignee, search)
-  }, [rows, workspaceFilter, projectMemberIds, assigneeFilter, search])
-
-  // People options from the workspace-filtered board (not search) so the
-  // dropdown still lists everyone visible under the current workspace.
-  const assigneeOptions = useMemo(() => {
-    if (!rows) return [] as string[]
-    return collectAssignees(rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds))
-  }, [rows, workspaceFilter, projectMemberIds])
-
-  // If the selected person drops out of the option set (e.g. workspace
-  // filter change), fall back to All rather than showing a empty board
-  // with a stale label.
-  useEffect(() => {
-    if (assigneeFilter === 'all' || assigneeFilter === 'unassigned') return
-    if (!assigneeOptions.includes(assigneeFilter)) setAssigneeFilter('all')
-  }, [assigneeFilter, assigneeOptions])
-
-  const statusCounts = useMemo(() => (searched ? countByStatus(searched) : null), [searched])
-
-  const filtered = useMemo(() => {
-    if (!searched) return null
-    return statusFilter === 'all' ? searched : searched.filter((r) => r.status === statusFilter)
-  }, [searched, statusFilter])
-
-  const grouped = useMemo(() => (filtered ? groupByStatus(filtered) : null), [filtered])
-
-  // Resolved against the FULL row set (not the filtered subset) so a
-  // filter hiding the selected card never blanks the open thread.
-  const selectedRow = useMemo(
-    () => (selectedId ? rows?.find((r) => r.id === selectedId) ?? null : null),
-    [rows, selectedId],
+  const scoped = useMemo(
+    () => (rows ? rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds) : null),
+    [rows, workspaceFilter, projectMemberIds],
   )
 
-  // The workspace filter offers "Unlinked workspace" only while such rows
-  // exist; once the last one is gone, an active unlinked filter falls back
-  // to All rather than showing an empty board under a dead label.
+  // "Unlinked workspace" is offered only while such rows exist; once the
+  // last one is gone, an active unlinked filter falls back to All.
   const hasUnlinked = useMemo(() => (rows ?? []).some(isUnlinked), [rows])
   useEffect(() => {
     if (rows !== null && workspaceFilter === UNLINKED_FILTER_VALUE && !hasUnlinked) {
@@ -692,87 +133,16 @@ export default function FeedbackPage(): React.JSX.Element | null {
     }
   }, [rows, workspaceFilter, hasUnlinked])
 
-  // Store rows by id for the cards' workspace avatar (icon + color).
-  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
-
-  // Shared post-mutation refresh (card status dropdown + item view).
   const onMutated = useCallback((): void => {
     void loadList()
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [loadList])
 
-  // Resizable detail (right) column — persisted per client.
-  // Hooks must sit above the early return.
-  const DETAIL_MIN = 360
-  const DETAIL_MAX = 960
-  const DETAIL_DEFAULT = 560
-  const [detailWidth, setDetailWidth] = useState(() => {
-    try {
-      const n = Number(localStorage.getItem('k2.tickets.detailWidth'))
-      if (Number.isFinite(n) && n >= DETAIL_MIN && n <= DETAIL_MAX) return n
-    } catch {
-      /* ignore */
-    }
-    return DETAIL_DEFAULT
-  })
-  const [liveDetailWidth, setLiveDetailWidth] = useState<number | null>(null)
-  const [resizingDetail, setResizingDetail] = useState(false)
-  const width = liveDetailWidth ?? detailWidth
-
-  const startDetailResize = useCallback(
-    (e: React.MouseEvent): void => {
-      if (e.button !== 0) return
-      e.preventDefault()
-      const startX = e.clientX
-      const base = detailWidth
-      let last = base
-      document.body.style.cursor = 'col-resize'
-      // Full-screen overlay already blocks interaction during drag. Avoid
-      // body.userSelect=none — it sticks in WKWebView and blocks selection
-      // of ticket message bodies after the drag.
-      setResizingDetail(true)
-      const onMove = (ev: MouseEvent): void => {
-        // Dragging left widens the right panel.
-        last = Math.min(DETAIL_MAX, Math.max(DETAIL_MIN, base + (startX - ev.clientX)))
-        setLiveDetailWidth(last)
-      }
-      const onUp = (): void => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.removeProperty('user-select')
-        document.body.style.removeProperty('-webkit-user-select')
-        setResizingDetail(false)
-        setDetailWidth(last)
-        setLiveDetailWidth(null)
-        try {
-          localStorage.setItem('k2.tickets.detailWidth', String(last))
-        } catch {
-          /* ignore */
-        }
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [detailWidth],
-  )
-
   if (!isOpen) return null
-
-  const sections = grouped
-    ? ([
-        { label: 'Waiting on you', rows: grouped.waiting },
-        { label: 'Needs discussion', rows: grouped.needs_discussion },
-        { label: 'Answered', rows: grouped.answered },
-        { label: 'Planned', rows: grouped.planned },
-        { label: UNLINKED_WORKSPACE_LABEL, rows: grouped.unlinked },
-        { label: 'Closed', rows: grouped.closed },
-      ] as const)
-    : []
 
   return (
     <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
-      {/* Top bar — mirrors AgentOps: traffic-light spacer + wordmark, draggable. */}
+      {/* Top bar — traffic-light spacer + wordmark, draggable. */}
       <Surface
         role2="surface"
         bordered={false}
@@ -787,9 +157,6 @@ export default function FeedbackPage(): React.JSX.Element | null {
         >
           <DesktopChromeLeft />
           <K2MarkButton />
-          {/* §6.0 — the server dropdown + page switcher stay visible on
-              every page; the Feedback tab reads selected here. (Replaces
-              the old Back button — Esc still returns to Agents.) */}
           <ServerSwitcher />
           <PageTabs />
         </div>
@@ -811,156 +178,21 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </DesktopChromeRight>
       </Surface>
 
-      {/* Master-detail: list left, resizable ticket panel right. */}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        {/* LEFT COLUMN — fixed filter rows (search + workspace filter,
-            then the status chips) above the scrollable card list. */}
-        <div className="flex flex-col min-h-0 min-w-0 flex-1">
-          <div className="flex flex-col gap-2 px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by title, agent, workspace, id… (any order)"
-                className="w-full px-2.5 py-1.5 pr-7 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => setSearch('')}
-                  aria-label="Clear search"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-                >
-                  <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <line x1="2" y1="2" x2="10" y2="10" />
-                    <line x1="10" y1="2" x2="2" y2="10" />
-                  </svg>
-                </button>
-              )}
-            </div>
-            {/* People filter — All / Unassigned / each assignee seen on
-                the board under the current workspace filter. */}
-            <AssigneeFilterDropdown
-              value={assigneeFilter}
-              options={assigneeOptions}
-              onChange={setAssigneeFilter}
-            />
-            {/* Workspace filter — custom dropdown mirroring the
-                Settings → Workspaces list (search, focus groups,
-                icons), plus the Projects section (§6.6): picking a
-                project filters to its member workspaces. */}
-            <WorkspaceFilterDropdown
-              projects={projects}
-              value={workspaceFilter}
-              onChange={setWorkspaceFilter}
-              showUnlinked={hasUnlinked}
-            />
-            </div>
-
-            {/* Status filter — per-status counts always visible (the
-                AFSROW board idiom); one status, or All. */}
-            <div className="flex items-center gap-1 flex-wrap">
-              {(['all', 'waiting', 'needs_discussion', 'answered', 'planned', 'resolved', 'dismissed'] as const).map((s) => {
-                const active = statusFilter === s
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setStatusFilter(s)}
-                    className={`flex items-center gap-1.5 px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer ${
-                      active
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    <span>{statusLabel(s)}</span>
-                    <span
-                      className={`tabular-nums ${
-                        active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
-                      }`}
-                    >
-                      {statusCounts ? statusCounts[s] : 0}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto min-h-0 px-3 pb-3">
-            {error && (
-              <div className="px-1 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">Failed to load tickets: {error}</div>
-            )}
-            {rows === null && !error && (
-              <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-sm">Loading tickets…</div>
-            )}
-            {grouped && filtered !== null && filtered.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full text-center px-8">
-                {rows !== null && rows.length > 0 ? (
-                  <p className="text-sm text-[var(--color-text-secondary)]">No tickets match your filters</p>
-                ) : (
-                  <>
-                    <p className="text-sm text-[var(--color-text-secondary)]">No tickets yet</p>
-                    <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-                      Agents file asks with `k2 tickets ask` — new items appear live.
-                    </p>
-                  </>
-                )}
-              </div>
-            )}
-            {sections.map(
-              (section) =>
-                section.rows.length > 0 && (
-                  <React.Fragment key={section.label}>
-                    <SectionHeader label={section.label} count={section.rows.length} />
-                    <div className="flex flex-col gap-2">
-                      {section.rows.map((row) => (
-                        <FeedbackCard
-                          key={row.id}
-                          row={row}
-                          workspace={projectById.get(row.projectId)}
-                          nowSec={nowSec}
-                          selected={selectedId === row.id}
-                          onSelect={() => setSelectedId(row.id)}
-                          onMutated={onMutated}
-                        />
-                      ))}
-                    </div>
-                  </React.Fragment>
-                ),
-            )}
-          </div>
-        </div>
-
-        {/* RIGHT COLUMN — resizable ticket panel. */}
-        <div
-          className="relative flex flex-col min-h-0 min-w-0 border-t lg:border-t-0 lg:border-l border-[var(--color-border)] flex-shrink-0 flex-1 lg:flex-none"
-          style={{ width }}
-        >
-          <div
-            className="hidden lg:block absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
-            style={{ left: -4, width: 7 }}
-            onMouseDown={startDetailResize}
+      <TicketBoard
+        rows={scoped}
+        allRows={rows}
+        error={error}
+        revision={revision}
+        onMutated={onMutated}
+        extraFilter={
+          <WorkspaceFilterDropdown
+            projects={projects}
+            value={workspaceFilter}
+            onChange={setWorkspaceFilter}
+            showUnlinked={hasUnlinked}
           />
-          {resizingDetail && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
-          {selectedRow ? (
-            <FeedbackItemView
-              key={selectedRow.id}
-              id={selectedRow.id}
-              listRow={selectedRow}
-              nowSec={nowSec}
-              revision={revision}
-              onMutated={onMutated}
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center m-4 border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-muted)] text-center px-6">
-              Select a ticket to open its thread.
-            </div>
-          )}
-        </div>
-      </div>
+        }
+      />
       <div
         data-toast-host="feedback"
         className="pointer-events-none overflow-hidden"

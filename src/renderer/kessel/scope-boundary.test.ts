@@ -92,7 +92,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // Home M4: window-level surfaces about the window's own server.
   'components/FocusWindow/FocusWorkspaceHeader.tsx',
   'components/Feedback/FeedbackPage.tsx',
+  // Tickets live on the window's own server: the chat rail and "me".
+  'components/Feedback/TicketAgentRail.tsx',
   'components/Feedback/feedback-api.ts',
+  'components/Feedback/useTicketMe.ts',
   'components/FileViewerPane/CodeEditor.tsx',
   'components/GitInitDialog/GitInitDialog.tsx',
   'components/HeartbeatScheduleDialog/HeartbeatScheduleDialog.tsx',

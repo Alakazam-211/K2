@@ -251,8 +251,138 @@ export interface FeedbackCommentResult {
 export async function commentFeedback(
   id: string,
   body: string,
+  opts: { optionPick?: boolean } = {},
 ): Promise<FeedbackCommentResult> {
-  return daemonCliPost<FeedbackCommentResult>(primaryScope(), 'feedback/comment', { id, body })
+  // optionPick: the person picked one of the ticket's options → the daemon
+  // records it as the answer (status answered). Free text (no flag) moves
+  // the ticket to needs_discussion until the agent settles it.
+  const payload: Record<string, unknown> = { id, body }
+  if (opts.optionPick === true) payload.optionPick = true
+  return daemonCliPost<FeedbackCommentResult>(primaryScope(), 'feedback/comment', payload)
+}
+
+/** One quick-answer choice: `answer` is what gets sent, `label` what the
+ *  button says, `detail` the full option text (tooltip). */
+export interface QuickAnswerOption {
+  answer: string
+  label: string
+  detail: string
+}
+
+function collapseWs(s: string | null | undefined): string {
+  return (s ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/** The Options list of a cleaned brief (`<ol class="k2-options">`, or any
+ *  element with class `k2-options` wrapping an `<ol>`/`<ul>`): one entry
+ *  per `<li>`. An item that starts with `<strong>`/`<b>` answers with that
+ *  short label; otherwise with its whole text. Duplicates and empty items
+ *  are dropped. Parsed with DOMParser — the brief HTML is never put into
+ *  the app's DOM. */
+export function extractBriefOptions(html: string | null | undefined): QuickAnswerOption[] {
+  if (!html || typeof DOMParser === 'undefined') return []
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const out: QuickAnswerOption[] = []
+  const seen = new Set<string>()
+  for (const root of Array.from(doc.querySelectorAll('.k2-options'))) {
+    const items =
+      root.tagName === 'OL' || root.tagName === 'UL'
+        ? Array.from(root.children).filter((el) => el.tagName === 'LI')
+        : Array.from(root.querySelectorAll('li'))
+    for (const li of items) {
+      const detail = collapseWs(li.textContent)
+      if (!detail) continue
+      const first = li.firstElementChild
+      const lead =
+        first && (first.tagName === 'STRONG' || first.tagName === 'B') ? collapseWs(first.textContent) : ''
+      const answer = lead || detail
+      if (seen.has(answer)) continue
+      seen.add(answer)
+      out.push({ answer, label: answer, detail })
+    }
+  }
+  return out
+}
+
+/** Quick-answer buttons for a ticket: the brief's Options list when it has
+ *  one, else the structured `--options`. */
+export function quickAnswerOptions(
+  item: { options: string[] | null },
+  briefHtml: string | null | undefined,
+): QuickAnswerOption[] {
+  const fromBrief = extractBriefOptions(briefHtml)
+  if (fromBrief.length > 0) return fromBrief
+  return (item.options ?? [])
+    .map((o) => collapseWs(o))
+    .filter(Boolean)
+    .map((o) => ({ answer: o, label: o, detail: o }))
+}
+
+// ── List scope: Mine / Waiting on me / All ────────────────────────────────
+
+export type TicketScope = 'mine' | 'waiting' | 'all'
+
+export const TICKET_SCOPES: ReadonlyArray<{ value: TicketScope; label: string }> = [
+  { value: 'mine', label: 'Mine' },
+  { value: 'waiting', label: 'Waiting on me' },
+  { value: 'all', label: 'All' },
+]
+
+/** The board opens on Mine (Rosson). */
+export const DEFAULT_TICKET_SCOPE: TicketScope = 'mine'
+
+/** The assignee names that mean "me" for the current login. The owner is
+ *  `owner` (the wire literal) or the owner's display name; a Connect user
+ *  is their username. Lower-cased (assignee matching is case-insensitive,
+ *  like the daemon's people check). */
+export function myAssigneeNames(
+  whoami: { owner?: boolean; username?: string | null } | null,
+  ownerDisplayName: string,
+): string[] {
+  if (!whoami) return []
+  const names: string[] = []
+  if (whoami.owner) {
+    names.push('owner')
+    const display = ownerDisplayName.trim()
+    if (display) names.push(display)
+  } else if (whoami.username && whoami.username.trim()) {
+    names.push(whoami.username.trim())
+  }
+  return [...new Set(names.map((n) => n.toLowerCase()))]
+}
+
+export function isAssignedToMe(
+  row: { assignees?: string[] | null },
+  me: readonly string[],
+): boolean {
+  if (me.length === 0) return false
+  return (row.assignees ?? []).some((a) => me.includes(a.trim().toLowerCase()))
+}
+
+/** Mine = assigned to me; Waiting on me = assigned to me AND still waiting
+ *  for an answer; All = everything. */
+export function filterByScope<T extends { status: FeedbackStatus; assignees?: string[] | null }>(
+  rows: T[],
+  scope: TicketScope,
+  me: readonly string[],
+): T[] {
+  if (scope === 'all') return rows
+  const mine = rows.filter((r) => isAssignedToMe(r, me))
+  return scope === 'waiting' ? mine.filter((r) => r.status === 'waiting') : mine
+}
+
+/** Up to two initials for an assignee chip: "julie" → "J",
+ *  "Rosson Long" → "RL", the wire `owner` → "O". */
+export function assigneeInitials(name: string): string {
+  const parts = name.trim().split(/[\s._-]+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].charAt(0).toUpperCase()
+  return (parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase()
+}
+
+/** One line of the card summary: the `--body`, whitespace collapsed. */
+export function cardSummary(body: string | null | undefined): string {
+  return collapseWs(body)
 }
 
 /** Agent-tab wake plan (D6). Never `sandbox/reopen` a pinned conversation id. */

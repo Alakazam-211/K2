@@ -1,66 +1,56 @@
-// Feedback F2 — single-item view: two tabs along the top,
-// Thread (default) | Agent (the asking session's terminal).
+// Tickets board — the ticket detail (0.43.2 quick redesign, Rosson).
 //
-// Thread: the ask + structured-option one-tap buttons + the comment
-// thread + a reply box. There is NO Answer mode — it's just a comment
-// thread. Every reply (and every tapped option) posts a plain comment;
-// the daemon injects human comments into the asking session, and the
-// first human comment on a waiting question/approval becomes the
-// answer behind the scenes (so `ask --wait` unblocks). Resolve/dismiss
-// actions ride the resolve route.
+//   - A slim header that stays put: the title, "from {agent} → assigned to
+//     {person}", the status (also the status menu), Expand and Open in
+//     window.
+//   - Below it, scrolling: the short summary (`--body`), the HTML brief
+//     (it takes the stage), then comments and history, collapsed by
+//     default when there is a brief.
+//   - An action bar pinned to the bottom: quick-answer buttons (one per
+//     brief Options item, or per structured `--options`), then Answer,
+//     Resolve, Reassign, Chat with agent.
 //
-// Agent: the ASKING session's terminal embedded IN PLACE via the
-// kessel TerminalPane attach machinery (attachAgentName → the idempotent
-// /cli/sessions/v2/spawn reuses the existing daemon PTY — the same
-// mechanism as AgentChatPane and the orange-tab sandbox adoption). A
-// live session attaches immediately; a dormant one shows "Wake session"
-// (D6: session_id == workspace_sessions.session_id → ensure-pinned-chat
-// even if the row still says sandbox; never sandbox/reopen a pinned
-// conversation id; unknown kinds attach if live-by-id only).
-// PRD §4.3.1: open/attach ⇒ activate so active_reaper spares it.
+// Status model (daemon-first, feedback_routes.rs): a quick-answer pick
+// posts `optionPick: true` → the ticket is answered. A typed Answer is free
+// text → the ticket goes to needs_discussion until the agent settles it.
+// Both land in the agent's session (wake=true) exactly as before.
+//
+// Chat with agent opens the right-hand rail (TicketAgentRail): the agent's
+// Thread plus its terminal, reusing the Agents page session surfaces.
+//
+// An UNLINKED ticket (workspace removed, TB18) is read-only: no answer,
+// no options, no reassign, no chat — only Resolve and Dismiss.
 
-import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { invoke } from '@tauri-apps/api/core'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
-import { TerminalPane } from '@/kessel-term/TerminalPane'
-import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
-import { activateProject } from '@/stores/projects'
+import { isWebClient } from '@/lib/is-web'
 import {
-  activateOnLiveSessionAttach,
-  wakeCanonicalMemberSession,
-} from '@/components/Projects/wake-member-session'
-import {
-  askingSessionWakeAction,
   assignFeedback,
   commentFeedback,
   fetchFeedbackBrief,
   fetchFeedbackShow,
   formatFiledDate,
   isUnlinked,
-  optionsActionable,
+  quickAnswerOptions,
   resolveFeedback,
   UNLINKED_WORKSPACE_LABEL,
   type FeedbackBrief,
   type FeedbackListRow,
-  type FeedbackSessionKind,
   type FeedbackShow,
+  type FeedbackStatus,
 } from './feedback-api'
-import { HtmlBriefBadge, KindBadge, PriorityBadge, StatusBadge } from './badges'
+import { HtmlBriefBadge, PriorityBadge, StatusBadge } from './badges'
 import { BriefFrame } from './BriefFrame'
-import {
-  SelectableRegion,
-  clearStuckBodyUserSelect,
-} from '@/components/common/SelectableText'
+import { CardStatusDropdown, cardAssigneeNames } from './TicketCard'
+import { TicketAgentRail } from './TicketAgentRail'
+import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessage, ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
-import {
-  clearTicketDraft,
-  getTicketDraft,
-  setTicketDraft,
-} from '@/lib/composer-drafts'
+import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
 
 interface FeedbackItemViewProps {
@@ -74,13 +64,26 @@ interface FeedbackItemViewProps {
   /** Fired after any successful mutation so the parent list + badge
    *  update instantly (the daemon events also arrive, slightly later). */
   onMutated: () => void
+  /** Rendered inside its own window: no "Open in window" button. */
+  inOwnWindow?: boolean
 }
-
-type ItemTab = 'thread' | 'terminal'
 
 /** Ticket id → its HTML brief. Briefs never change after filing (H8), so
  *  one fetch per ticket per window is enough (H39). Exported for tests. */
 export const briefCache = new Map<string, FeedbackBrief>()
+
+/** The brief box fills the detail pane (the brief takes the stage). */
+const BRIEF_HEIGHT_CLASS = 'h-[max(320px,calc(100vh-300px))]'
+
+/** Quick answers stay live until the ticket is closed. */
+export function quickAnswersLive(status: FeedbackStatus): boolean {
+  return status !== 'resolved' && status !== 'dismissed'
+}
+
+/** Open the ticket in its own app window (desktop only). */
+export function openTicketWindow(ticketId: string): Promise<unknown> {
+  return invoke('window_open_ticket', { ticketId })
+}
 
 export function FeedbackItemView({
   id,
@@ -88,10 +91,12 @@ export function FeedbackItemView({
   nowSec,
   revision,
   onMutated,
+  inOwnWindow = false,
 }: FeedbackItemViewProps): React.JSX.Element {
-  const [tab, setTab] = useState<ItemTab>('thread')
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [railOpen, setRailOpen] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -108,34 +113,23 @@ export function FeedbackItemView({
     void load()
   }, [load])
 
-  // Event-driven refresh: any feedback event (commented / answered /
-  // status-changed / created) bumps the store revision, and the OPEN
-  // thread refetches so a new reply appears without reselecting the
-  // item. Bursts coalesce on a trailing 300ms window — N rapid
-  // comments fire ONE fetch (each bump resets the timer via the
-  // cleanup). Only `item` is replaced by the refetch; the composer's
-  // draft lives in ThreadTab state, so mid-typed text survives.
-  // Defer while the user is drag-selecting thread text (FileViewer
-  // hasSelectionWithin idiom — DOM rebuild collapses the range).
+  // Event-driven refresh: any feedback event bumps the store revision and
+  // the OPEN ticket refetches. Bursts coalesce on a trailing 300ms window.
+  // Deferred while the user is drag-selecting ticket text.
   const seenRevision = useRef(revision)
   useEffect(() => {
     if (revision === seenRevision.current) return
     seenRevision.current = revision
     const timer = setTimeout(() => {
-      const thread = document.querySelector(
-        `[data-ticket-thread="${id}"]`,
-      ) as HTMLElement | null
+      const thread = document.querySelector(`[data-ticket-thread="${id}"]`) as HTMLElement | null
       if (hasSelectionWithin(thread)) return
       void load()
     }, 300)
     return () => clearTimeout(timer)
   }, [revision, load, id])
 
-  // Ticket HTML brief (prd-ticket-html-brief-v1 H39): fetched ONCE per
-  // ticket, when `hasBrief` first appears, via `show?brief=1`. The 300ms
-  // event refetch above stays on plain `show`, so a busy thread never
-  // re-downloads the brief or reloads its frame. Briefs are immutable (H8),
-  // so the module cache (id → brief, sha256 inside) survives reselects.
+  // HTML brief (prd-ticket-html-brief-v1 H39): fetched ONCE per ticket via
+  // `show?brief=1`; the event refetch stays on plain `show`.
   const hasBrief = item?.hasBrief === true || listRow.hasBrief === true
   const [brief, setBrief] = useState<FeedbackBrief | null>(() => briefCache.get(id) ?? null)
   const [briefError, setBriefError] = useState<string | null>(null)
@@ -149,8 +143,6 @@ export function FeedbackItemView({
     }
     if (briefRequested.current === id) return
     briefRequested.current = id
-    // No cancel flag: the parent keys this view by id, and a StrictMode
-    // effect re-run must still receive the one in-flight result.
     fetchFeedbackBrief(id).then(
       (b) => {
         if (b) briefCache.set(id, b)
@@ -162,64 +154,86 @@ export function FeedbackItemView({
         }
       },
       (e: unknown) => {
-        // Allow a retry on the next ticket open (not on every event).
         briefRequested.current = null
         setBriefError(e instanceof Error ? e.message : String(e))
       },
     )
   }, [hasBrief, id])
 
-  // TB18: a ticket whose workspace is gone has no agent left to receive a
-  // reply. Thread only (read-only), Resolve and Dismiss; no Agent tab.
   const unlinked = isUnlinked(listRow)
   const projectPath = unlinked ? null : item?.projectPath ?? listRow.projectPath
   const workspaceName = unlinked
     ? UNLINKED_WORKSPACE_LABEL
     : item?.workspace ?? listRow.projectName ?? UNLINKED_WORKSPACE_LABEL
   const view = item ?? listRow
-  const tabs = unlinked ? (['thread'] as const) : (['thread', 'terminal'] as const)
+  const statusRow: FeedbackListRow = { ...listRow, status: view.status }
+  const assigneeNames = cardAssigneeNames(view.assignees)
+  const canOpenWindow = !inOwnWindow && !isWebClient()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      {/* Item header: title + badges + the two tabs along the top. */}
-      <div className="px-4 pt-3 border-b border-[var(--color-border)] flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy">
-            {view.title}
-          </span>
-          <PriorityBadge priority={view.priority} />
-          {hasBrief && <HtmlBriefBadge />}
-          <KindBadge kind={view.kind} />
-          <StatusBadge status={view.status} />
-        </div>
-        <div className="mt-1 text-[10px] text-[var(--color-text-muted)] truncate">
-          {view.agentName}
-          <span className="opacity-60">
-            {' '}· {workspaceName} · asked{' '}
-            {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 mt-2">
-          {tabs.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
-                tab === t
-                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-              }`}
+    <div className="flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0" data-testid="ticket-detail">
+        {/* Slim header — outside the scroller, so it stays put. */}
+        <div
+          data-testid="ticket-detail-header"
+          className="px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              data-testid="ticket-detail-title"
+              className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
+              title={view.title}
             >
-              {t === 'thread' ? 'Thread' : 'Agent'}
-            </button>
-          ))}
+              {view.title}
+            </span>
+            {hasBrief && (
+              <button
+                type="button"
+                data-testid="ticket-expand"
+                disabled={!brief}
+                onClick={() => setExpanded(true)}
+                className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] disabled:opacity-40 cursor-pointer flex-shrink-0"
+              >
+                Expand
+              </button>
+            )}
+            {canOpenWindow && (
+              <button
+                type="button"
+                data-testid="ticket-open-window"
+                onClick={() => {
+                  openTicketWindow(id).catch((e: unknown) =>
+                    console.warn('[tickets] open in window failed', e),
+                  )
+                }}
+                className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] cursor-pointer flex-shrink-0"
+              >
+                Open in window
+              </button>
+            )}
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
+            {unlinked ? <StatusBadge status={view.status} /> : <CardStatusDropdown row={statusRow} onMutated={() => { void load(); onMutated() }} />}
+            <PriorityBadge priority={view.priority} />
+            {hasBrief && <HtmlBriefBadge />}
+            <span data-testid="ticket-detail-byline" className="truncate selectable-copy">
+              from <span className="text-[var(--color-text-secondary)]">{view.agentName}</span>
+              {' → '}
+              {assigneeNames.length > 0 ? (
+                <>assigned to <span className="text-[var(--color-text-secondary)]">{assigneeNames.join(', ')}</span></>
+              ) : (
+                <span className="italic">unassigned</span>
+              )}
+              <span className="opacity-70">
+                {' '}· {workspaceName} · asked{' '}
+                {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
+              </span>
+            </span>
+          </div>
         </div>
-      </div>
 
-      {tab === 'thread' || unlinked ? (
-        <ThreadTab
-          key={`thread-${id}`}
+        <TicketBody
+          key={`body-${id}`}
           item={item}
           error={error}
           nowSec={nowSec}
@@ -228,135 +242,109 @@ export function FeedbackItemView({
           hasBrief={hasBrief}
           brief={brief}
           briefError={briefError}
+          title={view.title}
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          railOpen={railOpen}
+          onToggleRail={() => setRailOpen((o) => !o)}
           onChanged={() => {
             void load()
             onMutated()
           }}
         />
-      ) : (
-        <TerminalTab
+      </div>
+
+      {railOpen && !unlinked && (
+        <TicketAgentRail
+          feedbackId={id}
+          agentName={view.agentName}
+          projectId={view.projectId}
+          projectPath={projectPath}
           sessionId={view.sessionId}
           sessionKind={view.sessionKind}
           canonicalSessionId={item?.canonicalSessionId}
-          projectId={view.projectId}
-          projectPath={projectPath}
-          feedbackId={id}
+          onClose={() => setRailOpen(false)}
         />
       )}
     </div>
   )
 }
 
-// ── Thread tab ────────────────────────────────────────────────────────────
+// ── Body: summary + brief + comments, then the pinned action bar ─────────
 
-export function ThreadTab({
+function TicketBody({
   item,
   error,
   nowSec,
   ticketId,
-  unlinked = false,
-  hasBrief = false,
-  brief = null,
-  briefError = null,
+  unlinked,
+  hasBrief,
+  brief,
+  briefError,
+  title,
+  expanded,
+  onExpandedChange,
+  railOpen,
+  onToggleRail,
   onChanged,
 }: {
   item: FeedbackShow | null
   error: string | null
   nowSec: number
   ticketId: string
-  /** Workspace removed: read-only thread, Resolve and Dismiss only. */
-  unlinked?: boolean
-  /** The ticket has an HTML brief (H18): shown above the thread. */
-  hasBrief?: boolean
-  brief?: FeedbackBrief | null
-  briefError?: string | null
+  unlinked: boolean
+  hasBrief: boolean
+  brief: FeedbackBrief | null
+  briefError: string | null
+  title: string
+  expanded: boolean
+  onExpandedChange: (v: boolean) => void
+  railOpen: boolean
+  onToggleRail: () => void
   onChanged: () => void
 }): React.JSX.Element {
-  // Drafts survive unmount (leave ticket / switch pages).
+  const [answering, setAnswering] = useState(false)
   const [reply, setReply] = useState(() => getTicketDraft(ticketId))
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
+  // Comments + history: collapsed by default under a brief (the brief is
+  // the ticket); open when there is no brief (they are all there is).
+  const [historyOpen, setHistoryOpen] = useState(!hasBrief)
+  const [reassignOpen, setReassignOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
-  // Focus the reply box ONCE per ticket id when the thread first becomes
-  // ready — not on every live `item` refetch. Re-focus steals the caret
-  // and kills drag-selection on message bodies.
-  const focusedForTicketRef = useRef<string | null>(null)
   useEffect(() => {
     clearStuckBodyUserSelect()
-    if (!item || error) return
-    if (focusedForTicketRef.current === ticketId) return
-    focusedForTicketRef.current = ticketId
-    let cancelled = false
-    let innerRaf = 0
-    const outerRaf = window.requestAnimationFrame(() => {
-      innerRaf = window.requestAnimationFrame(() => {
-        if (cancelled) return
-        // Don't yank focus if the user is already selecting thread text.
-        if (hasSelectionWithin(scrollRef.current)) return
-        textareaRef.current?.focus({ preventScroll: true })
-      })
-    })
-    const t = window.setTimeout(() => {
-      if (cancelled) return
-      if (hasSelectionWithin(scrollRef.current)) return
-      textareaRef.current?.focus({ preventScroll: true })
-    }, 50)
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(outerRaf)
-      cancelAnimationFrame(innerRaf)
-      window.clearTimeout(t)
+  }, [ticketId])
+
+  // A brief arriving after first paint collapses the history once.
+  const collapsedForBrief = useRef(hasBrief)
+  useEffect(() => {
+    if (hasBrief && !collapsedForBrief.current) {
+      collapsedForBrief.current = true
+      setHistoryOpen(false)
     }
-  }, [ticketId, item, error])
+  }, [hasBrief])
 
-  // Ticket switch → allow one-shot focus for the new id. Combined into the
-  // same commit as a ticketId change so we don't null the flag after the
-  // focus effect already stamped it.
-  const prevTicketIdRef = useRef(ticketId)
-  if (prevTicketIdRef.current !== ticketId) {
-    prevTicketIdRef.current = ticketId
-    focusedForTicketRef.current = null
-  }
+  useEffect(() => {
+    if (!answering) return
+    textareaRef.current?.focus({ preventScroll: true })
+  }, [answering])
 
-  // Auto-grow the reply field with content.
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
-  }, [reply])
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  }, [reply, answering])
 
   const setReplyAndDraft = (text: string): void => {
     setReply(text)
     setTicketDraft(ticketId, text)
   }
-
-  // Keep the newest message in view when the thread grows — but not while
-  // the user is drag-selecting (scroll jump + DOM churn kill the range).
-  const commentCount = item?.comments.length ?? 0
-  const prevCommentCountRef = useRef(commentCount)
-  const firstLoadSeenRef = useRef(false)
-  useEffect(() => {
-    if (!item) return
-    const firstLoad = !firstLoadSeenRef.current
-    firstLoadSeenRef.current = true
-    const grew = commentCount > prevCommentCountRef.current
-    prevCommentCountRef.current = commentCount
-    // A ticket with a brief opens on the brief (H18), not the newest reply.
-    if (firstLoad && hasBrief) return
-    if (!grew && prevCommentCountRef.current !== 0) return
-    if (hasSelectionWithin(scrollRef.current)) return
-    requestAnimationFrame(() => {
-      if (hasSelectionWithin(scrollRef.current)) return
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
-    })
-  }, [item, commentCount, hasBrief])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -376,44 +364,47 @@ export function ThreadTab({
   )
 
   if (error) {
-    return <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">Failed to load ticket: {error}</div>
+    return (
+      <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
+        Failed to load ticket: {error}
+      </div>
+    )
   }
   if (!item) {
     return (
       <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-        Loading thread…
+        Loading ticket…
       </div>
     )
   }
 
-  const canTapOptions = optionsActionable(item)
-  const openItem =
+  const quick = unlinked ? [] : quickAnswerOptions(item, brief?.html)
+  const quickLive = quickAnswersLive(item.status)
+  const open =
     item.status === 'waiting' ||
     item.status === 'answered' ||
     item.status === 'planned' ||
     item.status === 'needs_discussion'
 
-  // Always a plain comment — the daemon lands human comments in the
-  // asking session, and the first one on a waiting ask answers it.
-  // Keep delivered/deliveryReason (D8); a quiet miss is not a store error.
-  const sendComment = async (text: string): Promise<void> => {
-    const res = await commentFeedback(item.id, text)
-    if (res.delivered === false) {
-      setDeliveryMiss(res.deliveryReason ?? 'not delivered')
-    } else {
-      setDeliveryMiss(null)
-    }
+  // Every person's message lands in the agent's session. A pick is the
+  // answer; free text starts a discussion (the daemon sets the status).
+  const send = async (text: string, optionPick: boolean): Promise<void> => {
+    const res = await commentFeedback(item.id, text, { optionPick })
+    setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
   }
 
-  const sendReply = (): void => {
+  const sendAnswer = (): void => {
     const text = reply.trim()
     if (!text) return
     void submit(async () => {
-      await sendComment(text)
+      await send(text, false)
       setReplyAndDraft('')
       clearTicketDraft(ticketId)
+      setAnswering(false)
     })
   }
+
+  const comments = item.comments ?? []
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -427,12 +418,16 @@ export function ThreadTab({
 
           {hasBrief &&
             (brief ? (
-              <BriefFrame brief={brief} title={item.title} />
+              <BriefFrame
+                brief={brief}
+                title={title}
+                hideToolbar
+                expanded={expanded}
+                onExpandedChange={onExpandedChange}
+                heightClass={BRIEF_HEIGHT_CLASS}
+              />
             ) : briefError ? (
-              <div
-                data-testid="brief-error"
-                className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy"
-              >
+              <div data-testid="brief-error" className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
                 Failed to load the brief: {briefError}
               </div>
             ) : (
@@ -441,69 +436,56 @@ export function ThreadTab({
               </div>
             ))}
 
-          {!unlinked && (
-            <AssigneePicker
-              ticketId={item.id}
-              assignees={item.assignees ?? []}
-              busy={busy}
-              onChanged={onChanged}
-            />
-          )}
-
-          {!unlinked && item.options && item.options.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {item.options.map((opt) => {
-                const accepted = item.answer === opt
+          <button
+            type="button"
+            data-testid="ticket-history-toggle"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen((o) => !o)}
+            className="flex items-center gap-1.5 w-full py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] cursor-pointer"
+          >
+            <svg
+              width="9"
+              height="9"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.5}
+              className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`}
+              aria-hidden
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6" />
+            </svg>
+            Comments and history
+            <span className="tabular-nums font-normal opacity-70">{comments.length}</span>
+          </button>
+          {historyOpen && (
+            <div data-testid="ticket-history" className="flex flex-col gap-2.5 pt-1 pb-2">
+              {comments.map((c, i) => {
+                const isOwner = c.author === 'owner'
                 return (
-                  <button
-                    key={opt}
-                    type="button"
-                    disabled={!canTapOptions || busy}
-                    onClick={() => void submit(() => sendComment(opt))}
-                    className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
-                      accepted
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : canTapOptions
-                          ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
-                          : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
-                    } disabled:cursor-not-allowed`}
-                  >
-                    {opt}
-                  </button>
+                  <ChatMessage
+                    key={`${c.at}-${i}`}
+                    author={isOwner ? 'You' : c.author}
+                    isOwner={isOwner}
+                    timeLabel={formatRelativeTime(c.at, nowSec)}
+                    body={c.body}
+                    fontSize={editorFontSize}
+                  />
                 )
               })}
             </div>
           )}
-
-          <div className="flex flex-col gap-2.5">
-            {item.comments.map((c, i) => {
-              const isOwner = c.author === 'owner'
-              return (
-                <ChatMessage
-                  key={`${c.at}-${i}`}
-                  author={isOwner ? 'You' : c.author}
-                  isOwner={isOwner}
-                  timeLabel={formatRelativeTime(c.at, nowSec)}
-                  body={c.body}
-                  fontSize={editorFontSize}
-                />
-              )
-            })}
-          </div>
         </div>
       </SelectableRegion>
 
       {unlinked ? (
-        <div
-          data-testid="unlinked-thread-footer"
-          className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0"
-        >
+        <div data-testid="unlinked-thread-footer" className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
           {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
           <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
             This ticket&apos;s workspace was removed from this server, so no agent can receive a
             reply. Resolve or Dismiss it here.
           </p>
-          {openItem && (
+          {open && (
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -525,105 +507,181 @@ export function ThreadTab({
           )}
         </div>
       ) : (
-      <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
-        {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
-        {deliveryMiss && (
-          <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
-            Reply saved. The workspace agent did not receive it ({deliveryMiss}).
-          </p>
-        )}
-        <textarea
-          ref={textareaRef}
-          value={reply}
-          onChange={(e) => setReplyAndDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              sendReply()
-            }
-          }}
-          placeholder="Add a comment — it lands in the agent's session"
-          rows={2}
-          className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
-          style={{ fontSize: editorFontSize }}
-        />
-        <div className="flex items-center gap-2 mt-2">
-          {openItem && (
-            <>
-              <button
-                type="button"
-                disabled={busy || item.status === 'needs_discussion'}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'needs_discussion'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Needs discussion
-              </button>
-              <button
-                type="button"
-                disabled={busy || item.status === 'planned'}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'planned'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Planned
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Resolve
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Dismiss
-              </button>
-            </>
+        <div data-testid="ticket-action-bar" className="border-t border-[var(--color-border)] px-4 py-2.5 flex-shrink-0 bg-[var(--color-bg)]">
+          {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
+          {deliveryMiss && (
+            <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
+              Saved. The agent did not receive it ({deliveryMiss}).
+            </p>
           )}
-          <div className="flex-1" />
-          <button
-            type="button"
-            disabled={busy || reply.trim().length === 0}
-            onClick={sendReply}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
-          >
-            Comment
-            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
-              <KeyCombo combo="⌘⏎" />
-            </span>
-          </button>
+
+          {quick.length > 0 && (
+            <div data-testid="ticket-quick-answers" className="mb-2 flex flex-wrap gap-1.5">
+              {quick.map((opt) => {
+                const accepted = item.answer === opt.answer
+                return (
+                  <button
+                    key={opt.answer}
+                    type="button"
+                    data-testid="ticket-quick-answer"
+                    disabled={!quickLive || busy}
+                    title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
+                    onClick={() => void submit(() => send(opt.answer, true))}
+                    className={`max-w-full truncate px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+                      accepted
+                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                        : quickLive
+                          ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
+                          : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
+                    } disabled:cursor-not-allowed`}
+                  >
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {answering && (
+            <div className="mb-2" data-testid="ticket-answer-box">
+              <textarea
+                ref={textareaRef}
+                value={reply}
+                onChange={(e) => setReplyAndDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    sendAnswer()
+                  }
+                  if (e.key === 'Escape') {
+                    e.stopPropagation()
+                    setAnswering(false)
+                  }
+                }}
+                placeholder={
+                  quick.length > 0
+                    ? 'Write a message — it starts a discussion. Pick an option above to answer.'
+                    : 'Write a message — it lands in the agent’s session and starts a discussion'
+                }
+                rows={2}
+                className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
+                style={{ fontSize: editorFontSize }}
+              />
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="text-[10px] text-[var(--color-text-muted)]">
+                  The agent replies, then marks it answered or resolved.
+                </span>
+                <span className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => setAnswering(false)}
+                  className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="ticket-answer-send"
+                  disabled={busy || reply.trim().length === 0}
+                  onClick={sendAnswer}
+                  className="px-3 py-1 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                >
+                  Send
+                  <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
+                    <KeyCombo combo="⌘⏎" />
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 relative">
+            <ActionButton testId="ticket-action-answer" active={answering} onClick={() => setAnswering((a) => !a)}>
+              Answer
+            </ActionButton>
+            <ActionButton
+              testId="ticket-action-resolve"
+              disabled={busy || item.status === 'resolved'}
+              onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
+            >
+              Resolve
+            </ActionButton>
+            <div className="relative">
+              <ActionButton testId="ticket-action-reassign" active={reassignOpen} onClick={() => setReassignOpen((o) => !o)}>
+                Reassign
+              </ActionButton>
+              {reassignOpen && (
+                <ReassignMenu
+                  ticketId={item.id}
+                  assignees={item.assignees ?? []}
+                  onClose={() => setReassignOpen(false)}
+                  onSaved={() => {
+                    setReassignOpen(false)
+                    onChanged()
+                  }}
+                />
+              )}
+            </div>
+            <span className="flex-1" />
+            <ActionButton testId="ticket-action-chat" active={railOpen} onClick={onToggleRail}>
+              Chat with agent
+            </ActionButton>
+          </div>
         </div>
-      </div>
       )}
     </div>
   )
 }
 
-/** Multi-select assignees from server users + synthetic `owner`. */
-function AssigneePicker({
+function ActionButton({
+  testId,
+  active = false,
+  disabled = false,
+  onClick,
+  children,
+}: {
+  testId: string
+  active?: boolean
+  disabled?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-3 py-1.5 text-[11px] font-medium border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+        active
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+          : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Reassign: multi-select from the server's users + `owner`, opening upward
+ *  from the action bar. Replaces the whole assignee set. */
+function ReassignMenu({
   ticketId,
   assignees,
-  busy,
-  onChanged,
+  onClose,
+  onSaved,
 }: {
   ticketId: string
   assignees: string[]
-  busy: boolean
-  onChanged: () => void
+  onClose: () => void
+  onSaved: () => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
   const [candidates, setCandidates] = useState<string[]>(['owner'])
   const [local, setLocal] = useState<string[]>(assignees)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    setLocal(assignees)
-  }, [assignees, ticketId])
 
   useEffect(() => {
     let cancelled = false
@@ -634,7 +692,7 @@ function AssigneePicker({
         setCandidates(['owner', ...names.filter((n) => n !== 'owner')])
       })
       .catch(() => {
-        // Viewer may not list users — still allow assigning owner.
+        // A login that may not list users can still assign the owner.
         if (!cancelled) setCandidates(['owner'])
       })
     return () => {
@@ -643,338 +701,66 @@ function AssigneePicker({
   }, [])
 
   useEffect(() => {
-    if (!open) return
     const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
+  }, [onClose])
 
+  const all = [...new Set([...candidates, ...local])]
   const toggle = (name: string): void => {
-    setLocal((prev) =>
-      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
-    )
+    setLocal((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))
   }
-
   const save = async (): Promise<void> => {
     setSaving(true)
+    setSaveError(null)
     try {
       await assignFeedback(ticketId, local)
-      onChanged()
-      setOpen(false)
+      onSaved()
     } catch (e) {
-      console.warn('[tickets] assign failed', e)
+      setSaveError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div ref={rootRef} className="mb-3 relative">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-          Assignees
-        </span>
-        {(local.length === 0 ? ['Unassigned'] : local).map((a) => (
-          <span
-            key={a}
-            className="px-1.5 py-0.5 text-[10px] bg-white/[0.06] text-[var(--color-text-secondary)] selectable-copy"
-          >
-            {a}
-          </span>
-        ))}
-        <button
-          type="button"
-          disabled={busy || saving}
-          onClick={() => setOpen((o) => !o)}
-          className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 cursor-pointer disabled:opacity-50"
-        >
-          Edit
-        </button>
-      </div>
-      {open && (
-        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-48 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1">
-          {candidates.map((name) => {
-            const on = local.includes(name)
-            return (
-              <button
-                key={name}
-                type="button"
-                onClick={() => toggle(name)}
-                className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
-                  on
-                    ? 'bg-white/[0.04] text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06]'
-                }`}
-              >
-                <span className="w-3 text-[var(--color-accent)]">{on ? '✓' : ''}</span>
-                {name}
-              </button>
-            )
-          })}
-          <div className="border-t border-[var(--color-border)] mt-1 pt-1 px-2 pb-1 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void save()}
-              className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Agent tab (the asking session's terminal, in place) ──────────────────────────────────────────────────────────
-
-interface LiveSessionRow {
-  sessionId: string
-  agentName: string
-  command: string | null
-  args: string[]
-  cwd: string
-  isV2: boolean
-}
-
-type TermPhase =
-  | { kind: 'checking' }
-  | { kind: 'none' }
-  | { kind: 'live'; agentName: string; cwd: string; sessionId?: string }
-  | { kind: 'dormant'; wakeable: boolean }
-  | { kind: 'waking' }
-  | { kind: 'error'; message: string }
-
-/** Every live daemon session (path=/ prefix-matches every absolute cwd —
- *  sandbox cells live under ~/.k2/sandbox-sessions/, outside any
- *  registered workspace, so a workspace-scoped list would miss them). */
-async function fetchLiveSessions(): Promise<LiveSessionRow[]> {
-  const rows = await daemonCliGet<LiveSessionRow[]>(primaryScope(), 'sessions/list-for-workspace', { path: '/' })
-  return Array.isArray(rows) ? rows : []
-}
-
-function TerminalTab({
-  sessionId,
-  sessionKind,
-  canonicalSessionId,
-  projectId,
-  projectPath,
-  feedbackId,
-}: {
-  sessionId: string | null
-  sessionKind: FeedbackSessionKind
-  canonicalSessionId: string | null | undefined
-  projectId: string
-  projectPath: string | null
-  feedbackId: string
-}): React.JSX.Element {
-  const [phase, setPhase] = useState<TermPhase>(
-    sessionId ? { kind: 'checking' } : { kind: 'none' },
-  )
-
-  // Resolve whether the asking session is live and which daemon
-  // agent_name key to attach to:
-  //  - live-by-id: sandbox cells (and any live PTY whose daemon id
-  //    matches the stamp) attach immediately.
-  //  - D6 / canonical: conversation id matches workspace_sessions, or
-  //    kind is canonical → lookup-by-agent, wake via ensure-pinned-chat.
-  //  - true sandbox (kind sandbox, id is NOT the pinned conversation)
-  //    → sandbox/reopen. Unknown kinds never reopen.
-  const resolve = useCallback(async (): Promise<TermPhase> => {
-    if (!sessionId) return { kind: 'none' }
-    try {
-      const live = await fetchLiveSessions()
-      const match = live.find((r) => r.sessionId === sessionId)
-      const action = askingSessionWakeAction({
-        sessionId,
-        sessionKind,
-        canonicalSessionId,
-        liveById: Boolean(match),
-      })
-      if (action === 'attach-live' && match) {
-        return { kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId }
-      }
-      if (action === 'ensure-pinned-chat' && projectPath) {
-        const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(primaryScope(),
-          'sessions/lookup-by-agent',
-          { agent: projectId },
-        )
-        if (lookup.sessionAlive) {
-          return {
-            kind: 'live',
-            agentName: projectId,
-            cwd: projectPath,
-            sessionId: lookup.sessionId ?? undefined,
-          }
-        }
-      }
-      if (action === 'checking') return { kind: 'checking' }
-      const wakeable =
-        projectPath !== null && (action === 'ensure-pinned-chat' || action === 'sandbox/reopen')
-      return { kind: 'dormant', wakeable }
-    } catch (e) {
-      return { kind: 'error', message: e instanceof Error ? e.message : String(e) }
-    }
-  }, [sessionId, sessionKind, canonicalSessionId, projectId, projectPath])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!sessionId) {
-      setPhase({ kind: 'none' })
-      return
-    }
-    setPhase({ kind: 'checking' })
-    void resolve().then((p) => {
-      if (!cancelled) setPhase(p)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId, resolve])
-
-  // Live attach (wake success or already-alive PTY): client watching ⇒
-  // Active so active_reaper spares the chat. Deduped / no-op when already
-  // active for this workspace id.
-  useEffect(() => {
-    if (phase.kind !== 'live') return
-    activateOnLiveSessionAttach(projectId, activateProject)
-  }, [phase.kind, projectId])
-
-  // Wake a dormant session via the existing wake paths, then attach.
-  // Canonical: activate (PRD §4.3.1) before ensure-pinned-chat so Active
-  // is set before reaper arms — without it, active_reaper reaps after ~15s.
-  const wake = useCallback(async (): Promise<void> => {
-    if (!projectPath || !sessionId) return
-    const action = askingSessionWakeAction({
-      sessionId,
-      sessionKind,
-      canonicalSessionId,
-      liveById: false,
-    })
-    if (action !== 'ensure-pinned-chat' && action !== 'sandbox/reopen') return
-    setPhase({ kind: 'waking' })
-    try {
-      if (action === 'ensure-pinned-chat') {
-        // Daemon-owned find-or-spawn under the canonical project-id key —
-        // the same wake AgentChatPane rides; activate first (see helper).
-        // D6: poison sandbox + pinned conversation id takes this arm.
-        await wakeCanonicalMemberSession(projectId, projectPath, {
-          activateProject,
-          ensurePinnedChat: (project) =>
-            daemonCliPost(primaryScope(), 'workspace/ensure-pinned-chat', { project }),
-        })
-        setPhase({ kind: 'live', agentName: projectId, cwd: projectPath })
-        return
-      }
-      // True sandbox (id is not the pinned conversation): mark workspace
-      // Active, re-mount the cell's persistent layer + resume, then poll
-      // the live list until the session registers.
-      activateOnLiveSessionAttach(projectId, activateProject)
-      await daemonCliPost(primaryScope(), 'sandbox/reopen', {
-        project_path: projectPath,
-        session_id: sessionId,
-      })
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const live = await fetchLiveSessions()
-        const match = live.find((r) => r.sessionId === sessionId)
-        if (match) {
-          setPhase({ kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId })
-          return
-        }
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      setPhase({ kind: 'error', message: 'Session woke but never registered — try again.' })
-    } catch (e) {
-      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
-  }, [projectPath, sessionId, sessionKind, canonicalSessionId, projectId])
-
-  if (phase.kind === 'none') {
-    return (
-      <EmptyTermState
-        title="No session attached"
-        detail="This ask was filed outside a known session, so there is no terminal to show."
-      />
-    )
-  }
-  if (phase.kind === 'checking') {
-    return <EmptyTermState title="Checking session…" />
-  }
-  if (phase.kind === 'waking') {
-    return <EmptyTermState title="Waking session…" />
-  }
-  if (phase.kind === 'error') {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-xs text-[var(--color-status-error-soft)] max-w-[48ch]">{phase.message}</p>
-        <button
-          type="button"
-          onClick={() => {
-            setPhase({ kind: 'checking' })
-            void resolve().then(setPhase)
-          }}
-          className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
-        >
-          Retry
-        </button>
-      </div>
-    )
-  }
-  if (phase.kind === 'dormant') {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-xs font-semibold text-[var(--color-text-primary)]">Session is dormant</p>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">
-          The asking session isn&apos;t running right now.
-          {phase.wakeable ? ' Wake it to attach its terminal here.' : ''}
-        </p>
-        {phase.wakeable && (
+    <div
+      ref={rootRef}
+      data-testid="ticket-reassign-menu"
+      className="absolute left-0 bottom-full mb-1 z-20 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
+    >
+      {all.map((name) => {
+        const on = local.includes(name)
+        return (
           <button
+            key={name}
             type="button"
-            onClick={() => void wake()}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
+            onClick={() => toggle(name)}
+            className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
+              on ? 'bg-white/[0.04] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06]'
+            }`}
           >
-            Wake session
+            <span className="w-3 text-[var(--color-accent)]">{on ? '✓' : ''}</span>
+            {name}
           </button>
-        )}
+        )
+      })}
+      {saveError && <div className="px-2 py-1 text-[10px] text-[var(--color-status-error-soft)]">{saveError}</div>}
+      <div className="border-t border-[var(--color-border)] mt-1 pt-1 px-2 pb-1 flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="text-[10px] text-[var(--color-text-muted)] cursor-pointer">
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => void save()}
+          className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
+        >
+          Save
+        </button>
       </div>
-    )
-  }
-
-  // phase.kind === 'live' — attach in place. attachAgentName keys the
-  // idempotent v2/spawn to the EXISTING daemon session (reused:true), so
-  // this never mints a duplicate PTY.
-  return (
-    <PageLiveContext.Provider value={true}>
-    <div className="flex-1 min-h-0">
-      <PrimaryRoom>
-        <TerminalPane
-          terminalId={`feedback-term:${feedbackId}`}
-          cwd={phase.cwd}
-          attachAgentName={phase.agentName}
-          sessionId={phase.sessionId}
-        />
-      </PrimaryRoom>
-    </div>
-    </PageLiveContext.Provider>
-  )
-}
-
-function EmptyTermState({ title, detail }: { title: string; detail?: string }): React.JSX.Element {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
-      <p className="text-xs text-[var(--color-text-secondary)]">{title}</p>
-      {detail && <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">{detail}</p>}
     </div>
   )
 }

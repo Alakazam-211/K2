@@ -77,7 +77,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useWindowRoomStore, __resetWindowRoomForTests } from '@/stores/window-room'
 import { usePresenceStore } from '@/stores/presence'
 import { setPoolStatusSource, type PoolHostStatus } from '@/lib/pool-hooks'
-import { resetSubscriptionUsageForTests, usageEntryFor } from '@/stores/subscription-usage'
+import { USAGE_CACHE_POLL_MS, resetSubscriptionUsageForTests, usageEntryFor } from '@/stores/subscription-usage'
 import { keepAwakeEntryFor, resetKeepAwakeForTests } from '@/stores/keep-awake'
 import { useServerSwitcherStore } from '@/stores/server-switcher'
 import type { PresenceView } from '@/stores/server-view'
@@ -390,6 +390,63 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     act(() => setPool({ role: 'member' }))
     await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions').map((c) => isB(c.scope))).toEqual([true])
+  })
+
+  it('re-reads only the shown server’s cache on the 60 s timer, never probing', async () => {
+    // Only intervals are fake; waitFor keeps its real timeouts.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const usageGets = (pred: (s: ServerScope) => boolean): number =>
+        h.gets.filter((c) => c.route === 'usage/subscriptions' && pred(c.scope)).length
+      bar()
+      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude10%'))
+      expect(usageGets(isWindow)).toBe(1)
+
+      // The window's server is polled while it is shown.
+      act(() => {
+        vi.advanceTimersByTime(USAGE_CACHE_POLL_MS)
+      })
+      await waitFor(() => expect(usageGets(isWindow)).toBe(2))
+      expect(usageGets(isB)).toBe(0)
+
+      // Focus B's room: B is polled, the window's server is not.
+      focus(roomOnB())
+      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+      expect(usageGets(isB)).toBe(1)
+      for (let i = 0; i < 3; i++) {
+        act(() => {
+          vi.advanceTimersByTime(USAGE_CACHE_POLL_MS)
+        })
+        await waitFor(() => expect(usageGets(isB)).toBe(2 + i))
+      }
+      expect(usageGets(isWindow)).toBe(2)
+      expect(h.posts).toHaveLength(0)
+
+      // Hidden: no reads. Shown again: one read, for B only.
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      act(() => {
+        vi.advanceTimersByTime(USAGE_CACHE_POLL_MS * 3)
+      })
+      expect(usageGets(isB)).toBe(4)
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await waitFor(() => expect(usageGets(isB)).toBe(5))
+      expect(usageGets(isWindow)).toBe(2)
+
+      // An offline room is not polled.
+      act(() => setPool({ reach: 'offline' }))
+      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Boffline'))
+      act(() => {
+        vi.advanceTimersByTime(USAGE_CACHE_POLL_MS * 2)
+      })
+      expect(usageGets(isB)).toBe(5)
+      expect(usageGets(isWindow)).toBe(2)
+    } finally {
+      vi.useRealTimers()
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    }
   })
 
   it('a top-switcher change drops the window’s entry before the new load; B’s stays', async () => {

@@ -7,6 +7,7 @@ import {
 } from '@/lib/subscription-usage'
 import { primaryScope, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import { onActiveHostChange } from '@/stores/connect-host'
+import { useWindowFocusStore } from '@/stores/window-focus'
 
 // Subscription usage, per server (0.43.2 Z16). The numbers belong to the
 // CLI logins of the machine that runs the agents, so a focused Home room
@@ -134,3 +135,38 @@ export function resetWindowUsage(): void {
 }
 
 onActiveHostChange(() => resetWindowUsage())
+
+/** How often the shown chip re-reads its server's cache. The daemon probes
+ *  every 15 minutes on its own (`subscription_usage::PROBE_INTERVAL`); a
+ *  GET is cheap and never probes, so a new probe shows within a minute. */
+export const USAGE_CACHE_POLL_MS = 60_000
+
+function pageHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
+/** Re-read one server's cache (`GET`, never the refresh POST) on a timer.
+ *  Ticks are skipped while the page is hidden; becoming visible or this
+ *  window regaining focus reads once right away. Returns the stop fn. */
+export function startUsageCachePoll(target: UsageTarget, intervalMs = USAGE_CACHE_POLL_MS): () => void {
+  let stopped = false
+  const tick = (): void => {
+    if (stopped || pageHidden()) return
+    void useSubscriptionUsageStore.getState().load(target)
+  }
+  const interval = setInterval(tick, intervalMs)
+  const onVisible = (): void => {
+    if (!pageHidden()) tick()
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
+  const unsubFocus = useWindowFocusStore.subscribe((state, prev) => {
+    if (!prev.isFocused && state.isFocused) tick()
+  })
+  return () => {
+    if (stopped) return
+    stopped = true
+    clearInterval(interval)
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
+    unsubFocus()
+  }
+}

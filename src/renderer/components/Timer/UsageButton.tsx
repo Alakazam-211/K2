@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
+import { startUsageCachePoll, useSubscriptionUsageStore } from '@/stores/subscription-usage'
 import { scopeMayWrite } from '@/kessel/server-scope'
 import { roomServerState, usePoolHostStatus, useTopBarScope } from '@/components/TopBar/top-bar-scope'
 import TopBarPipe from '@/components/TopBar/TopBarPipe'
@@ -49,6 +49,15 @@ export default function UsageButton(): React.JSX.Element {
     if (hasEntry || serverState !== 'ok') return
     void load(target)
   }, [hasEntry, serverState, target, load])
+
+  // Re-read the shown server's cache about once a minute so the daemon's
+  // 15-minute background probe reaches the chip without a click. Only the
+  // shown server (the window's, or the focused room's) is polled, and only
+  // while it is reachable. Paused while the page is hidden.
+  useEffect(() => {
+    if (serverState !== 'ok') return
+    return startUsageCachePoll(target)
+  }, [serverState, target])
 
   useEffect(() => {
     if (!open) return

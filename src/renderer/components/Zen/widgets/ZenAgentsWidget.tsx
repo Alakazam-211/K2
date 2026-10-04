@@ -17,7 +17,7 @@ import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenWidgetStyles, initials, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
 
-export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Exit Zen to add some.'
+export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 
 const ACTIVITY_TEXT = { working: 'working', 'needs-you': 'needs you', idle: 'idle' } as const
 

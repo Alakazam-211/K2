@@ -7,13 +7,16 @@
 //     then a placeholder fills the column.
 //   - template controls by template id (`k2.texting@1`). The template draws
 //     its own Zen toggle, Home switcher and drag strip and binds them through
-//     the bridge; S6 restyles them with `registerZenTemplateControls`.
+//     the bridge; S6 restyles them with `registerZenTemplateControls`. A
+//     template has a top band and, optionally, a footer that ZenPage draws
+//     under the first column (the bottom-left corner): `k2.texting@1` puts
+//     its Zen toggle and Add agent button there.
 // Every widget gets only a `ZenWidgetBridge` built with its declared caps.
 
 import type { ComponentType } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
-import { TextingTemplateControls } from './ZenTemplateControls'
+import { TextingTemplateControls, TextingTemplateFooter } from './ZenTemplateControls'
 
 export interface ZenWidgetProps {
   decl: ZenWidgetDecl
@@ -21,8 +24,18 @@ export interface ZenWidgetProps {
 }
 
 export interface ZenTemplateControlsProps {
-  /** A no-cap bridge: homes, zen.exit, controls.bind, theme.get. */
+  /** The template's bridge: the no-cap verbs (homes, zen.exit,
+   *  controls.bind, theme.get) plus `agents.add` (cap `agents:add`, granted
+   *  by K2 to the template's own controls). */
   bridge: ZenWidgetBridge
+}
+
+/** Caps K2 grants the template's own controls. */
+export const ZEN_TEMPLATE_CONTROL_CAPS: readonly string[] = ['agents:add']
+
+interface TemplateParts {
+  top: ComponentType<ZenTemplateControlsProps>
+  footer: ComponentType<ZenTemplateControlsProps> | null
 }
 
 /** Placeholder until S6 registers the real widget. */
@@ -41,8 +54,8 @@ function PlaceholderWidget({ decl }: ZenWidgetProps): React.JSX.Element {
 }
 
 const widgets = new Map<string, ComponentType<ZenWidgetProps>>()
-const templateControls = new Map<string, ComponentType<ZenTemplateControlsProps>>([
-  ['k2.texting@1', TextingTemplateControls],
+const templateControls = new Map<string, TemplateParts>([
+  ['k2.texting@1', { top: TextingTemplateControls, footer: TextingTemplateFooter }],
 ])
 
 /** S6 plug-in point: the component for widget `kind`. Returns the unregister. */
@@ -57,15 +70,19 @@ export function zenWidgetFor(kind: string): ComponentType<ZenWidgetProps> {
   return widgets.get(kind) ?? PlaceholderWidget
 }
 
-/** S6 / v2 plug-in point: the controls a template draws. */
+/** S6 / v2 plug-in point: the controls a template draws — its top band
+ *  and, optionally, its footer under the first column. Registering without
+ *  a footer means none (the top band carries every control). */
 export function registerZenTemplateControls(
   templateId: string,
   component: ComponentType<ZenTemplateControlsProps>,
+  footer: ComponentType<ZenTemplateControlsProps> | null = null,
 ): () => void {
   const prev = templateControls.get(templateId)
-  templateControls.set(templateId, component)
+  const parts: TemplateParts = { top: component, footer }
+  templateControls.set(templateId, parts)
   return () => {
-    if (templateControls.get(templateId) !== component) return
+    if (templateControls.get(templateId) !== parts) return
     if (prev) templateControls.set(templateId, prev)
     else templateControls.delete(templateId)
   }
@@ -74,7 +91,12 @@ export function registerZenTemplateControls(
 /** The template's controls; an unknown template draws none (and so fails
  *  the required-controls check into safe mode). */
 export function zenTemplateControlsFor(templateId: string): ComponentType<ZenTemplateControlsProps> | null {
-  return templateControls.get(templateId) ?? null
+  return templateControls.get(templateId)?.top ?? null
+}
+
+/** The template's footer (under the first column), if it has one. */
+export function zenTemplateFooterFor(templateId: string): ComponentType<ZenTemplateControlsProps> | null {
+  return templateControls.get(templateId)?.footer ?? null
 }
 
 /** The built-in template's controls (safe mode always uses these). */

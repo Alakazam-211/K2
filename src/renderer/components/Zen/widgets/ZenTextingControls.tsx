@@ -1,5 +1,8 @@
 // prd-zen-mode-v1 Z27 — `k2.texting@1`'s own Home switcher, Zen toggle and
-// drag area, registered with `registerZenTemplateControls`.
+// drag area, registered with `registerZenTemplateControls`. The top band
+// holds the Home switcher (top left, it names the Home you're in) and the
+// drag area; the footer under the Agents column holds the Zen toggle and
+// the Add agent button (bottom left, Rosson 2026-10-04).
 //
 // They are the TEMPLATE's controls, drawn and laid out by the page, and they
 // bind through the bridge (`bridge.controls.bind`) exactly as a v2 user page
@@ -8,12 +11,14 @@
 //     every Home (each bound as `home-option`, with its ⌥⌘N hint) and closes
 //     on a pick, Esc or a click outside;
 //   - the Zen toggle is a switch, on, that turns Zen off for this Home;
-//   - the drag area fills the band between them.
+//   - the drag area fills the top band after the switcher;
+//   - Add agent opens K2's Add agent picker for this Home (`agents.add`,
+//     the regular Home's searchable picker) above the button.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
-import { TEXTING_BAR_HEIGHT_PX, useZenBind } from '../ZenTemplateControls'
+import { TEXTING_BAR_HEIGHT_PX, TEXTING_FOOTER_HEIGHT_PX, useZenAddAgentClick, useZenBind } from '../ZenTemplateControls'
 import { ZenWidgetStyles } from './zen-widget-kit'
 
 function HomeChoice({
@@ -180,6 +185,36 @@ function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   )
 }
 
+function AddAgentButton({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
+  const { ref, onClick } = useZenAddAgentClick(bridge)
+  return (
+    <button
+      ref={ref}
+      type="button"
+      aria-haspopup="dialog"
+      title="Add an agent to this Home"
+      onClick={onClick}
+      data-zen-add-agent=""
+      data-zen-soft-button=""
+      className="no-drag flex items-center gap-1.5"
+      style={{
+        height: 30,
+        flexShrink: 0,
+        padding: '0 12px 0 10px',
+        borderRadius: 999,
+        color: 'var(--zen-text)',
+        border: '1px solid var(--zen-border)',
+        background: 'var(--zen-surface)',
+      }}
+    >
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden style={{ color: 'var(--zen-text-muted)' }}>
+        <path d="M6 1.5v9M1.5 6h9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+      <span style={{ fontWeight: 600, fontSize: '0.9em' }}>Add agent</span>
+    </button>
+  )
+}
+
 function DragArea({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const ref = useZenBind(bridge, 'drag-region')
   return <div ref={ref} data-zen-drag="" className="min-w-0 flex-1 self-stretch" />
@@ -201,7 +236,25 @@ export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.
       <ZenWidgetStyles />
       <HomeSwitcher bridge={bridge} />
       <DragArea bridge={bridge} />
+    </div>
+  )
+}
+
+/** The texting template's footer under the Agents column: the Zen toggle
+ *  (the way out) and Add agent, in the bottom-left corner. */
+export function ZenTextingFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
+  return (
+    <div
+      data-zen-template-footer=""
+      data-zen-texting-footer=""
+      className="flex flex-shrink-0 items-center gap-2"
+      style={{
+        height: `calc(${TEXTING_FOOTER_HEIGHT_PX}px + var(--zen-gap, 0px))`,
+        paddingTop: 'var(--zen-gap, 0px)',
+      }}
+    >
       <ZenToggle bridge={bridge} />
+      <AddAgentButton bridge={bridge} />
     </div>
   )
 }

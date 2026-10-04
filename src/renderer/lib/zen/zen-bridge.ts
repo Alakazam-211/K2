@@ -12,6 +12,11 @@
 // the S6 widgets slice through `registerZenVerb`; until one is registered
 // the verb throws `verb_unavailable`.
 //
+// `agents.add` (cap `agents:add`) opens K2's own Add agent picker for the
+// current Home (the regular Home's searchable picker): the human picks, K2
+// writes the row. A widget never writes Home rows itself. The template's
+// controls get this cap from K2 (the bottom-left Add agent button).
+//
 // Which server a data verb talks to (Z35) and the per-row role check (Z36)
 // belong to those implementations: a row on the window's server uses the
 // primary room, any other row its pinned room (`scopeForHost(hostKey)`),
@@ -23,6 +28,7 @@ import type { ZenResolvedPage } from './zen-page'
 export const ZEN_VERBS = {
   'agents.list': 'agents:read',
   'agents.subscribe': 'agents:read',
+  'agents.add': 'agents:add',
   'presence.get': 'presence:read',
   'presence.subscribe': 'presence:read',
   'conversation.open': 'agents:read',

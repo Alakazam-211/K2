@@ -3,8 +3,10 @@
 // Draws the template's controls, then the layout host: one column per
 // `layout.split` entry, each holding the widgets placed in it. Every widget
 // gets its own `ZenWidgetBridge` built with the caps its source declared
-// (Z33); the template's controls get a no-cap bridge. The page owns the
-// control registry (Z27) and, outside safe mode, the check schedule (Z28).
+// (Z33); the template's controls get the template bridge (no-cap verbs plus
+// `agents.add`). The template's footer, if any, sits under the first column
+// (the bottom-left corner). The page owns the control registry (Z27) and,
+// outside safe mode, the check schedule (Z28).
 //
 // S5 / S6 plug in without touching this file: widgets by kind and template
 // controls by template id (`zen-registry.tsx`), data verbs on the bridge
@@ -29,7 +31,7 @@ import {
 } from '@/lib/zen/zen-monitor'
 import type { ZenResolvedPage } from '@/lib/zen/zen-page'
 import { exitZen } from '@/lib/zen/zen-view'
-import { zenTemplateControlsFor, zenWidgetFor } from './zen-registry'
+import { ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenTemplateFooterFor, zenWidgetFor } from './zen-registry'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -82,7 +84,7 @@ export function ZenPage({
     [registry],
   )
 
-  const controlsBridge = useMemo(() => createZenBridge(host, { id: 'template-controls', caps: [] }), [host])
+  const controlsBridge = useMemo(() => createZenBridge(host, { id: 'template-controls', caps: ZEN_TEMPLATE_CONTROL_CAPS }), [host])
   const widgetBridges = useMemo(() => {
     const m = new Map<string, ZenWidgetBridge>()
     for (const w of page.widgets) m.set(w.id, createZenBridge(host, { id: w.id, caps: w.caps }))
@@ -134,6 +136,7 @@ export function ZenPage({
   }, [safe, focused, runCheck])
 
   const Controls = zenTemplateControlsFor(page.template)
+  const Footer = zenTemplateFooterFor(page.template)
   const { layout } = page
   return (
     <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template}>
@@ -147,25 +150,31 @@ export function ZenPage({
         {layout.split.map((pct, col) => (
           <div
             key={col}
-            data-zen-column={col}
+            data-zen-column-slot={col}
             className="flex min-h-0 min-w-0 flex-col"
-            style={{
-              flex: `${pct} 1 0%`,
-              minWidth: layout.minWidths[col] ?? 0,
-              background: 'var(--zen-surface)',
-              border: '1px solid var(--zen-border)',
-              borderRadius: 'var(--zen-radius)',
-              overflow: 'hidden',
-            }}
+            style={{ flex: `${pct} 1 0%`, minWidth: layout.minWidths[col] ?? 0 }}
           >
-            {page.widgets
-              .filter((w) => w.column === col)
-              .map((w) => {
-                const Widget = zenWidgetFor(w.kind)
-                const bridge = widgetBridges.get(w.id)
-                if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
-                return <Widget key={w.id} decl={w} bridge={bridge} />
-              })}
+            <div
+              data-zen-column={col}
+              className="flex min-h-0 min-w-0 flex-col"
+              style={{
+                flex: '1 1 0%',
+                background: 'var(--zen-surface)',
+                border: '1px solid var(--zen-border)',
+                borderRadius: 'var(--zen-radius)',
+                overflow: 'hidden',
+              }}
+            >
+              {page.widgets
+                .filter((w) => w.column === col)
+                .map((w) => {
+                  const Widget = zenWidgetFor(w.kind)
+                  const bridge = widgetBridges.get(w.id)
+                  if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
+                  return <Widget key={w.id} decl={w} bridge={bridge} />
+                })}
+            </div>
+            {col === 0 && Footer && <Footer bridge={controlsBridge} />}
           </div>
         ))}
       </div>

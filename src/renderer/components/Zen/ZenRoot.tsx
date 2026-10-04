@@ -48,6 +48,7 @@ import {
   ZEN_SHORTCUTS_MENU_EVENT,
 } from '@/lib/zen/zen-theme-switch'
 import { ZenShortcutSheet, ZenThemePicker } from './ZenThemeTools'
+import { ZenAddAgentPicker } from './ZenAddAgent'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { setZenReservedRects } from '@/lib/zen/zen-monitor'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
@@ -407,6 +408,7 @@ export function ZenRoot(): React.JSX.Element {
         />
       )}
       <ZenShortcutSheet os={os} />
+      <ZenAddAgentPicker />
     </div>
   )
 }

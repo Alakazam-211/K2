@@ -20,7 +20,11 @@
 //   - attachments go through the existing attach path (local paths, or an
 //     upload to the agent's server);
 //   - "Open in Agents" shows for a permission prompt;
-//   - the template's own controls pass the required-controls check.
+//   - the template's own controls pass the required-controls check, with
+//     the Zen toggle in the footer under the Agents column (bottom left);
+//   - Add agent opens the Home's shared picker (`agents.add`), adds to the
+//     current Home, the row shows in the Agents widget at once, and the
+//     picker closes on Esc, a Home switch and leaving Zen.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -293,6 +297,8 @@ import { __setZenGeometryForTests, runZenControlChecksNow } from '@/lib/zen/zen-
 import { useZenViewStore } from '@/lib/zen/zen-view'
 import { openZenCheatSheet } from '@/lib/zen/zen-theme-switch'
 import { __resetZenDataForTests } from '@/lib/zen/zen-data'
+import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
+import { ZenBridgeError, createZenBridge } from '@/lib/zen/zen-bridge'
 import type { ZenGeometry } from '@/lib/zen/zen-controls'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { ZenHost } from '../ZenHost'
@@ -355,6 +361,8 @@ const fakeGeometry: ZenGeometry = {
   rect(el) {
     lastRected = el
     if (el.hasAttribute('data-zen-drag')) return { left: 300, top: 8, width: 500, height: 28 }
+    // The footer under the Agents column: bottom left.
+    if (el.closest('[data-zen-template-footer]')) return { left: 14, top: 756, width: 80, height: 30 }
     return { left: 120, top: 8, width: 80, height: 28 }
   },
   style() {
@@ -553,7 +561,7 @@ describe('Agents widget', () => {
     })
     await waitFor(() =>
       expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(
-        'This Home has no agents yet. Exit Zen to add some.',
+        'This Home has no agents yet. Use Add agent to add some.',
       ),
     )
   })
@@ -797,8 +805,23 @@ describe('texting template controls', () => {
     const bar = document.querySelector('[data-zen-texting-controls]')
     if (!bar) throw new Error('the S6 template controls are not registered')
     expect(bar.querySelector('[data-zen-home-pill]')?.getAttribute('data-zen-bound')).toBe('home-switcher')
-    expect(bar.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
     expect(bar.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound')).toBe('drag-region')
+    // The Zen toggle left the top band for the bottom-left footer: under
+    // the Agents column (column 0), after its box, with Add agent beside it.
+    expect(bar.querySelector('[data-zen-switch]')).toBeNull()
+    const footer = document.querySelector('[data-zen-texting-footer]')
+    if (!footer) throw new Error('no template footer')
+    expect(footer.parentElement?.getAttribute('data-zen-column-slot')).toBe('0')
+    expect(footer.previousElementSibling?.getAttribute('data-zen-column')).toBe('0')
+    expect(footer.previousElementSibling?.querySelector('[data-zen-widget="agents"]')).not.toBeNull()
+    expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
+    expect(footer.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
+    const footerKids = Array.from(footer.children).map((c) =>
+      c.hasAttribute('data-zen-switch') ? 'toggle' : c.hasAttribute('data-zen-add-agent') ? 'add' : c.tagName,
+    )
+    expect(footerKids).toEqual(['toggle', 'add'])
+    // The other column has no footer: the conversation runs to the bottom.
+    expect(document.querySelector('[data-zen-column-slot="1"]')?.children.length).toBe(1)
 
     // Wired: activating the switcher binds an option for every Home in 1 s.
     await act(async () => {
@@ -1079,9 +1102,200 @@ describe('Zen text follows Zen tokens, never the app Style', () => {
   }
 })
 
+describe('Zen Add agent', () => {
+  function addButton(): HTMLElement {
+    const el = document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]')
+    if (!(el instanceof HTMLElement)) throw new Error('no Add agent button in the footer')
+    return el
+  }
+
+  function picker(): HTMLElement | null {
+    const el = document.querySelector('[data-zen-add-agent-picker]')
+    return el instanceof HTMLElement ? el : null
+  }
+
+  function menuButton(label: string): HTMLElement {
+    const p = picker()
+    if (!p) throw new Error('picker not open')
+    const b = Array.from(p.querySelectorAll('button')).find((x) => x.textContent?.includes(label))
+    if (!(b instanceof HTMLElement)) throw new Error(`no "${label}" in the picker`)
+    return b
+  }
+
+  it('opens the Home’s shared picker, adds to the current Home, and the row shows in the Agents widget', async () => {
+    act(() => {
+      useProjectsStore.setState({
+        projects: [
+          ...(useProjectsStore.getState().projects as never[]),
+          { id: 'p2', name: 'atlas', handle: 'atlas', path: '/w/atlas', color: '#3366aa', workspaces: [{ id: 'w2', type: 'main', name: 'main' }] },
+        ] as never,
+      })
+    })
+    await mountZen()
+    expect(picker()).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    const p = picker()
+    if (!p) throw new Error('Add agent did not open the picker')
+    // The regular Home's picker, for the current Home.
+    expect(p.getAttribute('data-zen-add-agent-picker')).toBe('h1')
+    expect(p.querySelector('[role="dialog"][aria-label="Add Agent"]')).not.toBeNull()
+    expect(p.textContent).toContain('Add an agent to Work')
+    menuButton('From a server')
+    await act(async () => {
+      fireEvent.click(menuButton('This server'))
+    })
+    // The shared searchable list: search box, cortana already on the Home
+    // (checked), atlas pickable.
+    expect(p.querySelector('[role="combobox"]')).not.toBeNull()
+    expect(p.querySelector('[data-ws-filter-value="p1"]')?.getAttribute('data-row-state')).toBe('checked')
+    const atlas = p.querySelector('[data-ws-filter-value="p2"]')
+    if (!(atlas instanceof HTMLElement)) throw new Error('atlas is not in the picker')
+    expect(atlas.getAttribute('data-row-state')).toBe('pickable')
+    await act(async () => {
+      fireEvent.click(atlas)
+    })
+    expect(selectedHome(useHomesStore.getState()).rows.map((r) => r.address)).toEqual([
+      ROWS.cortana.address,
+      ROWS.sales.address,
+      ROWS.julie.address,
+      ROWS.ops.address,
+      'atlas::local',
+    ])
+    await waitFor(() => expect(rowAddresses()).toContain('atlas::local'))
+    expect(rowEl('atlas::local').querySelector('[data-zen-agent-name]')?.textContent).toBe('atlas')
+    // Adding keeps it open (like Home); atlas is now checked.
+    expect(picker()).not.toBeNull()
+    await waitFor(() =>
+      expect(document.querySelector('[data-ws-filter-value="p2"]')?.getAttribute('data-row-state')).toBe('checked'),
+    )
+
+    // The button toggles it closed (its press doesn't count as outside).
+    await act(async () => {
+      fireEvent.mouseDown(addButton())
+      fireEvent.click(addButton())
+    })
+    expect(picker()).toBeNull()
+
+    // Esc closes it.
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()).not.toBeNull()
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' })
+    })
+    expect(picker()).toBeNull()
+    expect(useZenAddAgentStore.getState().open).toBe(false)
+
+    // A click outside closes it.
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()).not.toBeNull()
+    const outside = document.querySelector('[data-zen-widget="conversation"]')
+    if (!outside) throw new Error('no conversation widget')
+    await act(async () => {
+      fireEvent.mouseDown(outside)
+    })
+    expect(picker()).toBeNull()
+  }, 10_000)
+
+  it('closes on a Home switch and when leaving Zen, and stays shut on the next Zen-on', async () => {
+    await mountZen()
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()?.getAttribute('data-zen-add-agent-picker')).toBe('h1')
+
+    // A Home switch (Zen on for both) closes it.
+    act(() => {
+      useZenHomesStore.setState({ on: { h1: true, h2: true } })
+      useHomesStore.getState().selectHome('h2')
+    })
+    await waitFor(() => expect(picker()).toBeNull())
+    expect(useZenAddAgentStore.getState().open).toBe(false)
+    act(() => useHomesStore.getState().selectHome('h1'))
+    await waitFor(() => expect(document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]')).not.toBeNull())
+
+    // Open, then leave Zen with the bottom-left toggle: gone, store closed.
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()).not.toBeNull()
+    const toggle = document.querySelector('[data-zen-texting-footer] [data-zen-switch]')
+    if (!(toggle instanceof HTMLElement)) throw new Error('no Zen toggle in the footer')
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+    expect(useZenHomesStore.getState().on.h1).toBeUndefined()
+    await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
+    expect(picker()).toBeNull()
+    expect(useZenAddAgentStore.getState()).toMatchObject({ open: false, anchor: null })
+
+    // Zen on again: the picker stays shut.
+    act(() => useZenHomesStore.setState({ on: { h1: true, h2: true } }))
+    await waitFor(() => expect(document.querySelector('[data-zen-texting-footer]')).not.toBeNull())
+    expect(picker()).toBeNull()
+  }, 10_000)
+
+  it('agents.add is a bridge verb behind agents:add: a widget without the cap is refused, one with it opens the same picker', async () => {
+    await mountZen()
+    const hostStub = {
+      homes: () => [],
+      selectedHomeId: () => 'h1',
+      selectHome: () => {},
+      exit: () => {},
+      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
+      page: () => {
+        throw new Error('unused')
+      },
+    }
+    const reader = createZenBridge(hostStub as never, { id: 'agents', caps: ['agents:read'] })
+    let refused: unknown = null
+    try {
+      reader.call('agents.add')
+    } catch (err) {
+      refused = err
+    }
+    if (!(refused instanceof ZenBridgeError)) throw new Error('agents.add without agents:add was not refused')
+    expect(refused.code).toBe('cap_not_granted')
+    expect(picker()).toBeNull()
+
+    // A v2-style widget granted agents:add opens the same picker (no
+    // anchor: the bottom-left corner) and can toggle it shut.
+    const adder = createZenBridge(hostStub as never, { id: 'v2', caps: ['agents:add'] })
+    let opened: unknown = null
+    await act(async () => {
+      opened = adder.call('agents.add')
+    })
+    expect(opened).toBe(true)
+    expect(picker()?.querySelector('[role="dialog"][aria-label="Add Agent"]')).not.toBeNull()
+    let after: unknown = null
+    await act(async () => {
+      after = adder.call('agents.add', { toggle: true })
+    })
+    expect(after).toBe(false)
+    expect(picker()).toBeNull()
+    expect(() => adder.call('agents.add', 'nope')).toThrow(/options must be an object/)
+  })
+})
+
 describe('S6 source ratchets', () => {
   const RENDERER = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const read = (p: string): string => readFileSync(join(RENDERER, p), 'utf8')
+
+  it('Zen Add agent reuses the Home picker and its add path (no copy)', () => {
+    const zen = read('components/Zen/ZenAddAgent.tsx')
+    expect(zen).toContain("import { AddAgentPicker } from '@/components/Home/HomeAddPanels'")
+    expect(zen).toContain('<AddAgentPicker home={home} />')
+    expect(zen).not.toContain('addRow(')
+    expect(zen).not.toContain("from '@/components/ui/SearchableAgentList'")
+    const panels = read('components/Home/HomeAddPanels.tsx')
+    expect(panels).toContain('putHomeAvatarOnAdd(hostKey, address, w)')
+  })
 
   it('T6.3: the Agents page compose bar and Zen send through the same helpers', () => {
     const bar = read('components/Terminal/TerminalComposeBar.tsx')

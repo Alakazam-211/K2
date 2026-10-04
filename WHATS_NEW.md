@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.43.2 — Agents from other servers open right on Home
+
+- **Other servers open in place.** On macOS and Linux, picking an agent from another server on Home opens it right there. Your window doesn't switch. If you turned this off before, it stays off. The setting is Settings → General → Experimental → Open agents from other servers here. Windows keeps the old behavior for now. Servers older than 0.41.0 still switch the window, and 0.41–0.42 servers open view only.
+- **Switching servers keeps your rooms.** Changing servers in the top bar no longer reconnects the agents you have open on Home. Their tabs and terminals stay put.
+- **The top bar follows the agent you're looking at.** When an agent from another server is in front, the server label, people list, usage chip (for example "akzm · 42%") and Keep awake show that server. The timer and Tickets badge stay on your window's server.
+- **Live status everywhere.** Working dots and Active update live for agents from other servers, too. Email settings refresh on their own.
+- **Keep awake without the password prompt.** Choosing a mode no longer asks for your Mac's admin password. Keeping the Mac awake with the lid closed is its own switch, "Also with the lid closed." Its one-time setup runs only when an Admin or Owner clicks Set up on that Mac. Only Admins and Owners can change Keep awake. Members see it read-only.
+- **Tickets with a full write-up.** An agent asking you for help can attach an HTML brief covering the problem, what it tried, what it needs from you, and the options. You read it in the ticket, in a locked frame with no scripts. In this version a missing brief is only a warning.
+- **Fixes.** An agent can no longer open or change the inbox of a workspace it isn't connected to. Codex host sessions start again with codex 0.154.
+
 ## 0.43.1 — No more "Something went wrong" after 0.43.0
 
 - **The 0.43.0 crash.** On 0.43.0, the window could fall into "Something went wrong" soon after opening, on your own server or another one. After the Keep awake button checked its status, other requests on the same connection could get that status back instead of their own reply. Every reply now matches its request.

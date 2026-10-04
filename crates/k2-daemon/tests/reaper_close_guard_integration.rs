@@ -106,8 +106,10 @@ fn subscriber_count_reflects_attached_grid_ws_viewers() {
 /// must NEVER count as an attached viewer. Pre-fix, this receiver
 /// inflated `subscriber_count()` so it never reached zero, and the
 /// un-forced close guard below refused EVERY reap.
-#[test]
-fn internal_event_receivers_do_not_count_as_viewers() {
+// v2_session_map::register spawns the session-activity observer task
+// (5851a5ad), so it needs a Tokio runtime, as in the daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn internal_event_receivers_do_not_count_as_viewers() {
     let session = spawn_live_session();
 
     // Internal-observer shape: hold an events receiver, no viewer reg.
@@ -168,8 +170,10 @@ fn attach_viewer_latches_ever_attached() {
 
 /// (2a) `/cli/sessions/v2/close` REFUSES to reap a session with an
 /// attached subscriber and does NOT unregister it.
-#[test]
-fn v2_close_refuses_when_subscriber_attached() {
+// v2_session_map::register spawns the session-activity observer task
+// (5851a5ad), so it needs a Tokio runtime, as in the daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_close_refuses_when_subscriber_attached() {
     let agent = uniq_agent_name();
     let session = spawn_live_session();
     v2_session_map::register(agent.clone(), session.clone());
@@ -207,8 +211,10 @@ fn v2_close_refuses_when_subscriber_attached() {
 
 /// (2b) `/cli/sessions/v2/close` PROCEEDS (unregisters) when no
 /// subscribers are attached — the normal reap path.
-#[test]
-fn v2_close_proceeds_when_no_subscriber() {
+// v2_session_map::register spawns the session-activity observer task
+// (5851a5ad), so it needs a Tokio runtime, as in the daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_close_proceeds_when_no_subscriber() {
     let agent = uniq_agent_name();
     let session = spawn_live_session();
     v2_session_map::register(agent.clone(), session.clone());
@@ -235,8 +241,10 @@ fn v2_close_proceeds_when_no_subscriber() {
 
 /// (2c) `force: true` bypasses the attached-subscriber guard — the
 /// deliberate-teardown escape hatch.
-#[test]
-fn v2_close_force_bypasses_attached_guard() {
+// v2_session_map::register spawns the session-activity observer task
+// (5851a5ad), so it needs a Tokio runtime, as in the daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_close_force_bypasses_attached_guard() {
     let agent = uniq_agent_name();
     let session = spawn_live_session();
     v2_session_map::register(agent.clone(), session.clone());

@@ -2,7 +2,8 @@
 //
 // Same chrome as the Agents `Sidebar`: resize handle, the header control
 // row (here the Home picker in the focus-group dropdown's spot, plus the
-// command palette button), the row list, and the bottom bar with ONE
+// rows' "⌘ 1-9" hint; ⌘K stays on the keyboard, the menus and the rails),
+// the row list, and the bottom bar with ONE
 // button in the Add Workspace spot — Add Agent — beside the collapse
 // button. Add Agent opens one picker with This server and From a server.
 //
@@ -26,7 +27,6 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageViewStore } from '@/stores/page-view'
-import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
@@ -39,7 +39,8 @@ import type { RowStatus } from '@/lib/home-status'
 import { openHomeRow } from '@/lib/home-open'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
-import { AgentRowButton, ShortcutIndexBadge, SingleProjectItem } from '@/components/Sidebar/Sidebar'
+import { AgentRowButton, ShortcutIndexBadge, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
+import { HOME_ROW_SHORTCUT_HINT } from '@/lib/home-shortcuts'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
@@ -368,7 +369,7 @@ export default function HomeSidebar(): React.JSX.Element {
     <div className="relative flex flex-col h-full" data-home-sidebar="">
       <ResizeHandle />
 
-      {/* Beta notice, above the Home picker and the command palette button. */}
+      {/* Beta notice, above the Home picker and its row hint. */}
       <div
         className="px-3 pt-3 no-drag flex items-center justify-center gap-2.5 text-[11px] text-[var(--color-text-muted)]"
         data-testid="home-beta-notice"
@@ -397,16 +398,17 @@ export default function HomeSidebar(): React.JSX.Element {
         <div className="flex-1 min-w-0">
           <HomePicker />
         </div>
-        <button
-          className="flex-shrink-0 flex items-center gap-1 px-1.5 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          onClick={() => useCommandPaletteStore.getState().toggle()}
-          title="Command Palette (⌘K)"
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-        </button>
+        {/* The rows' Cmd+1–9 hint, where the palette button was (P1/P2).
+            The per-Home ⌥⌘N badges stay inside the open picker. */}
+        {rows.length > 0 && (
+          <span
+            className="flex-shrink-0 px-1.5"
+            title="⌘1–⌘9 open this Home's agents 1–9"
+            data-home-row-hint=""
+          >
+            <ShortcutRangeHint combo={HOME_ROW_SHORTCUT_HINT} />
+          </span>
+        )}
       </div>
 
       {/* Home roster */}

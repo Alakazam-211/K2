@@ -10,14 +10,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { Button, Input } from '@/components/ui'
-import { ShortcutIndexBadge, ShortcutRangeHint } from '@/components/Sidebar/Sidebar'
-import { HOME_ROW_SHORTCUT_HINT, HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
+import { ShortcutIndexBadge } from '@/components/Sidebar/Sidebar'
+import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 
 type Mode = 'menu' | 'create' | 'rename'
 
-// The button carries the Home rows' chord hint beside the row count (the
-// Agents pinned header's look); each Home in the menu carries its Home
-// switcher chord (HOME_SWITCH_BINDING) in the row badge's look.
+// The button carries the row count; the rows' "⌘ 1-9" hint sits beside
+// the picker in the sidebar header (HomeSidebar). Each Home in the menu
+// carries its Home switcher chord (HOME_SWITCH_BINDING) in the row badge's
+// look.
 export default function HomePicker(): React.JSX.Element {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
@@ -91,7 +92,6 @@ export default function HomePicker(): React.JSX.Element {
         <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono flex-shrink-0">
           {current.rows.length}
         </span>
-        {current.rows.length > 0 && <ShortcutRangeHint combo={HOME_ROW_SHORTCUT_HINT} />}
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}

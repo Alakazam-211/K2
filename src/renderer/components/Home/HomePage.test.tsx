@@ -26,6 +26,9 @@
 //     with no login shows "sign in" and is never asked.
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -522,10 +525,16 @@ describe('Home — the Agents page shell', () => {
       expect(rowOf('Cortana').querySelector('[data-shortcut-badge="1"]')).not.toBeNull()
       expect(rowOf('Bee').querySelector('[data-shortcut-badge="2"]')).not.toBeNull()
       expect(rowOf('Nova').querySelector('[data-shortcut-badge="4"]')).not.toBeNull()
-      // The modifier: the Agents pinned header's `⌘ 1-9` beside the count.
+      // The modifier: `⌘ 1-9` in the header, beside (not inside) the picker
+      // button (P2), where the palette button was.
       const pickerButton = within(homeSidebar()).getByTitle('Pick a Home')
-      const hint = pickerButton.querySelector('[data-shortcut-hint]')
-      if (!hint) throw new Error('no row chord hint on the Home picker')
+      expect(pickerButton.querySelector('[data-shortcut-hint]')).toBeNull()
+      const slot = homeSidebar().querySelector('[data-home-row-hint]')
+      if (!(slot instanceof HTMLElement)) throw new Error('no row hint slot in the Home header')
+      expect(pickerButton.contains(slot)).toBe(false)
+      expect(slot.getAttribute('title')).toBe("⌘1–⌘9 open this Home's agents 1–9")
+      const hint = slot.querySelector('[data-shortcut-hint]')
+      if (!hint) throw new Error('no row chord hint in the Home header')
       expect(hint.getAttribute('data-shortcut-hint')).toBe('⌘ 1-9')
       expect(hint.textContent).toBe('⌘ 1-9')
       expect(hint.querySelector('.key-symbol')?.textContent).toBe('⌘')
@@ -540,6 +549,30 @@ describe('Home — the Agents page shell', () => {
     } finally {
       for (const id of extra) if (id) useHomesStore.getState().deleteHome(id)
     }
+  })
+
+  it('the header has no palette button and no hint on an empty Home (T1.1, T1.2)', () => {
+    render(<Shell />)
+    expect(within(homeSidebar()).queryByTitle('Command Palette (⌘K)')).toBeNull()
+    expect(homeSidebar().querySelector('[data-home-row-hint] [data-shortcut-hint="⌘ 1-9"]')).not.toBeNull()
+    cleanup()
+
+    const home = useHomesStore.getState().homes[0]
+    for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
+    render(<Shell />)
+    expect(homeSidebar().querySelector('[data-home-row-hint]')).toBeNull()
+    expect(homeSidebar().querySelector('[data-shortcut-hint]')).toBeNull()
+  })
+
+  it('HomeSidebar no longer imports the palette store; App still binds ⌘K (T1.1)', () => {
+    const dir = dirname(fileURLToPath(import.meta.url))
+    const sidebar = readFileSync(join(dir, 'HomeSidebar.tsx'), 'utf8')
+    expect(sidebar).not.toContain('stores/command-palette')
+    expect(sidebar).not.toContain('useCommandPaletteStore')
+    const app = readFileSync(join(dir, '..', '..', 'App.tsx'), 'utf8')
+    const at = app.indexOf("if (e.metaKey && e.key === 'k') {")
+    expect(at).toBeGreaterThan(-1)
+    expect(app.slice(at, at + 240)).toContain('toggleCommandPalette()')
   })
 
   it('right-click Remove from Home drops the row only', async () => {

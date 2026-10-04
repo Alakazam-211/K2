@@ -193,10 +193,28 @@ async fn must_change_password_round_trip_restricts_then_releases() {
             let sess = v["token"].as_str().expect("login token").to_string();
 
             // ARBITRARY session-authed routes → 403 password_change_required.
+            // GET /cli/users/policy is allowlisted (06b84b23) so the account
+            // portal can show the password rules during a forced change.
+            let r = http(d.port, "GET", &format!("/cli/users/policy?token={sess}"), None);
+            assert_eq!(r.status, 200, "policy GET stays reachable; body={}", r.body);
+            let b: serde_json::Value = serde_json::from_str(&r.body).expect("policy JSON");
+            assert!(b["minLength"].is_u64(), "policy carries minLength: {}", r.body);
+            // POST policy (an owner write) is still blocked by the gate.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/users/policy?token={sess}"),
+                Some(r#"{"minLength":12}"#),
+            );
+            assert_eq!(r.status, 403, "restricted policy POST must 403; body={}", r.body);
+            assert!(
+                r.body.contains("password_change_required"),
+                "pinned error body on policy POST: {}",
+                r.body
+            );
             for path in [
                 format!("/status?token={sess}"),
                 format!("/cli/presence/roster?token={sess}"),
-                format!("/cli/users/policy?token={sess}"),
             ] {
                 let r = http(d.port, "GET", &path, None);
                 assert_eq!(r.status, 403, "restricted session must 403 on {path}; body={}", r.body);

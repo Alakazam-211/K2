@@ -675,6 +675,22 @@ pub fn projects_add_from_path_ex(
         let project = Project::get(&conn, &project_id).map_err(|e| e.to_string())?;
         Ok(AddFromPathResult::Project(project))
     })?;
+    if let AddFromPathResult::Project(_) = &result {
+        // A folder that still has a pre-0.40.4 `.k2so/` dot-dir gets the same
+        // `.k2so/` → `.k2/` cutover boot gives registered workspaces — BEFORE
+        // the seeding below writes `.k2/`. Otherwise the seeds create a fresh
+        // `.k2/` beside `.k2so/`, the boot cutover then refuses the pair
+        // ("left for manual merge"), and the folder's inbox, skills and agent
+        // are stranded under `.k2so/`. No-op without a `.k2so/` dir or when
+        // `.k2/` already exists.
+        let moved = crate::workspace::dot_dir_migration::migrate_workspace_dot_dir(p);
+        if moved.renamed {
+            crate::log_debug!(
+                "[projects/add] {path}: .k2so -> .k2 ({} symlink(s) re-pointed)",
+                moved.symlinks_repointed
+            );
+        }
+    }
     if seed_wiki {
         if let AddFromPathResult::Project(_) = &result {
             crate::wiki::seed_wiki_on_add(path);

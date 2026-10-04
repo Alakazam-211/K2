@@ -457,7 +457,7 @@ export default function HomeSidebar(): React.JSX.Element {
             className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"
             onClick={() => setPickerOpen(!pickerOpen)}
             aria-expanded={pickerOpen}
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

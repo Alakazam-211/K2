@@ -165,7 +165,7 @@ vi.mock('@/stores/session-events', () => ({
 }))
 
 import AgentsShell from '@/components/Layout/AgentsShell'
-import { HomeShellEffects } from './home-room'
+import { HomeShellEffects, useHomeAddPickerStore } from './home-room'
 import { useHomesStore } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { usePanelsStore } from '@/stores/panels'
@@ -177,6 +177,14 @@ import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pend
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
 import { otherRowOpenTitle } from './HomeSidebar'
+import { __resetAddPickerListingsForTests } from './HomeAddPanels'
+
+// jsdom has neither CSS.escape nor scrollIntoView; the picker's list uses
+// both for its keyboard row.
+if (typeof globalThis.CSS === 'undefined') {
+  ;(globalThis as { CSS?: unknown }).CSS = { escape: (v: string) => v.replace(/["\\]/g, '\\$&') }
+}
+Element.prototype.scrollIntoView = vi.fn()
 
 const boxB: ConnectHost = {
   id: 'b',
@@ -222,6 +230,15 @@ const fetchMock = vi.fn(async (url: string) => {
       { status: 200 },
     )
   }
+  if (url === 'https://b.k2.dev/cli/projects/list?token=tok-b') {
+    return new Response(
+      JSON.stringify([
+        { id: 'pb', name: 'Bee', handle: 'bee', path: '/srv/bee', color: '#123456', iconUrl: null },
+        { id: 'pq', name: 'Quill', handle: 'quill', path: '/srv/quill', color: '#654321', iconUrl: null },
+      ]),
+      { status: 200 },
+    )
+  }
   throw new Error(`unexpected fetch ${url}`)
 })
 
@@ -249,6 +266,7 @@ beforeEach(() => {
   useConnectHostStore.setState({ hosts: [boxB, boxC], connectionStatus: 'connected' })
   clearHostSelect()
   __resetHostPoolForTests()
+  __resetAddPickerListingsForTests()
   useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
   useSidebarStore.setState({ isCollapsed: false })
   usePanelsStore.setState({
@@ -484,17 +502,90 @@ describe('Home — the Agents page shell', () => {
       'Collapse workspaces sidebar',
     ])
 
-    fireEvent.click(screen.getByText('Add Agent'))
-    const picker = screen.getByRole('menu', { name: 'Add Agent' })
+    const addButton = screen.getByText('Add Agent').closest('button')
+    if (!addButton) throw new Error('no Add Agent button')
+    expect(addButton.getAttribute('aria-haspopup')).toBe('dialog')
+    fireEvent.click(addButton)
+    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
     expect(within(picker).getByText('This server')).toBeTruthy()
     expect(within(picker).getByText('From a server')).toBeTruthy()
 
     fireEvent.click(within(picker).getByText('This server'))
     expect(picker.textContent).toContain('Agents on This computer')
-    expect(picker.textContent).toContain('Nova')
-    expect(picker.textContent).not.toContain('Cortana')
-    fireEvent.click(within(picker).getByText('Nova'))
+    // T2.3: an agent already on this Home stays in the list, checked.
+    const cortana = within(picker).getByRole('option', { name: /Cortana/ })
+    expect(cortana.getAttribute('aria-disabled')).toBe('true')
+    expect(cortana.getAttribute('data-row-state')).toBe('checked')
+    expect(cortana.getAttribute('title')).toBe('Already on Home')
+    const nova = within(picker).getByRole('option', { name: /Nova/ })
+    expect(nova.getAttribute('data-row-state')).toBe('pickable')
+    // Clicking the checked row does nothing (Q4).
+    fireEvent.click(cortana)
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual([
+      'cortana::local',
+      'bee::b.k2.dev',
+      'cee::c.k2.dev',
+    ])
+    fireEvent.click(nova)
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
+    // The picker stays open and Nova is now checked.
+    expect(screen.getByRole('dialog', { name: 'Add Agent' })).toBe(picker)
+    expect(within(picker).getByRole('option', { name: /Nova/ }).getAttribute('data-row-state')).toBe('checked')
+  })
+
+  it('This server search matches name, path and handle; ↓ Enter adds; Esc closes (T2.3, P26, P35)', async () => {
+    render(<Shell />)
+    fireEvent.click(screen.getByText('Add Agent'))
+    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
+    fireEvent.click(within(picker).getByText('This server'))
+    const input = within(picker).getByRole('combobox')
+    const listbox = within(picker).getByRole('listbox')
+    expect(input.getAttribute('aria-controls')).toBe(listbox.id)
+    const shown = (): string[] => within(picker).queryAllByRole('option').map((o) => o.textContent ?? '')
+
+    fireEvent.change(input, { target: { value: '/w/nov' } })
+    expect(shown()).toEqual(['NNovanova'])
+    fireEvent.change(input, { target: { value: 'cortana' } })
+    expect(shown()).toEqual(['CCortanacortana'])
+    fireEvent.change(input, { target: { value: 'zzz' } })
+    expect(shown()).toEqual([])
+    expect(picker.textContent).toContain('No agents match')
+
+    // The search box takes focus when the list opens.
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(document.activeElement).toBe(input)
+
+    // Arrow keys skip the checked Cortana: ↓ lands on Nova.
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
+
+    // Esc in the search box reaches the sidebar's listener and closes.
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Add Agent' })).toBeNull()
+  })
+
+  it('turning Zen on closes the open picker (P31)', async () => {
+    const { useZenHomesStore } = await import('@/lib/zen/zen-homes')
+    const { zenAvailable } = await import('@/lib/zen/zen-platform')
+    if (!zenAvailable()) throw new Error('Zen is not available in this test environment')
+    render(<Shell />)
+    fireEvent.click(screen.getByText('Add Agent'))
+    expect(screen.getByRole('dialog', { name: 'Add Agent' })).toBeTruthy()
+    const homeId = useHomesStore.getState().homes[0].id
+    try {
+      await act(async () => {
+        useZenHomesStore.getState().setOn(homeId, true)
+      })
+      expect(useHomeAddPickerStore.getState().open).toBe(false)
+    } finally {
+      await act(async () => {
+        useZenHomesStore.getState().setOn(homeId, false)
+      })
+    }
   })
 
   it('rows 1–9 carry the pinned area badge (Cmd+N order); the picker shows ⌘ 1-9 and each Home its ⌥⌘N', () => {
@@ -592,14 +683,22 @@ describe('Home — the Agents page shell', () => {
     expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-remove'])
   })
 
-  it('From a server lists saved servers, minus the connected one', () => {
+  it('From a server is one list with a section per saved server, minus the connected one (Q3)', async () => {
     render(<Shell />)
     fireEvent.click(screen.getByText('Add Agent'))
-    const picker = screen.getByRole('menu', { name: 'Add Agent' })
+    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
     fireEvent.click(within(picker).getByText('From a server'))
-    expect(within(picker).getByText('Box B')).toBeTruthy()
-    expect(within(picker).getByText('Box C')).toBeTruthy()
+    const groups = within(picker).getAllByRole('group')
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Box B', 'Box C'])
     expect(within(picker).queryByText('This computer')).toBeNull()
+    // B lists with its own login; Bee is already on this Home.
+    await waitFor(() => expect(within(groups[0]).getAllByRole('option').length).toBe(2))
+    const bee = within(groups[0]).getByRole('option', { name: /Bee/ })
+    expect(bee.getAttribute('data-row-state')).toBe('checked')
+    fireEvent.click(within(groups[0]).getByRole('option', { name: /Quill/ }))
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('quill::b.k2.dev')
+    // No request for C's agents: it has no login.
+    expect(fetchMock.mock.calls.map((c) => c[0]).filter((u) => u.startsWith('https://c.k2.dev/cli/'))).toEqual([])
   })
 })
 

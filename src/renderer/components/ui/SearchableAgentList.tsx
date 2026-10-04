@@ -65,8 +65,9 @@ export interface AgentListSection {
   color?: string | null
   /** The header's accent bar (Tickets' Projects section). */
   accent?: boolean
-  /** Header count; defaults to the rows shown. */
-  count?: number
+  /** Header count; defaults to the rows shown. Null hides it (a section
+   *  still loading has nothing to count). */
+  count?: number | null
   /** Shown under the header (loading, offline, sign in…). A section with
    *  no rows left to show and no status is hidden. */
   status?: React.ReactNode
@@ -235,9 +236,11 @@ export function SearchableAgentList({
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] flex-1 truncate">
                   {section.label}
                 </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                  {section.count ?? section.rows.length}
-                </span>
+                {section.count !== null && (
+                  <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+                    {section.count ?? section.rows.length}
+                  </span>
+                )}
               </div>
             )}
             {section.status && <div data-agent-list-status={section.key}>{section.status}</div>}

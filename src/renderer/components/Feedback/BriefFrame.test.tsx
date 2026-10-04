@@ -170,6 +170,8 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     expect(box.className).toContain('flex-1')
     expect(box.className).toContain('min-h-[240px]')
     expect(box.className).not.toContain('h-[999px]')
+    // The iframe is pinned to the box so it fills whatever height the box gets.
+    expect(screen.getByTestId('brief-frame').className).toContain('absolute inset-0')
   })
 
   it('without fill: the frame keeps its fixed default height class', () => {

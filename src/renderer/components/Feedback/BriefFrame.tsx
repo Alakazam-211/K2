@@ -204,7 +204,10 @@ export function BriefFrame({
           html={built.frameHtml}
           profile="inert"
           title={`Brief: ${title}`}
-          className={`block w-full h-full border-0 ${dragging ? 'pointer-events-none' : ''}`}
+          // Absolutely filled: the box's height comes from flex (fill) or a
+          // dragged px value, and a % height would not resolve inside the
+          // scroll pane's min-height chain.
+          className={`absolute inset-0 block w-full h-full border-0 ${dragging ? 'pointer-events-none' : ''}`}
           testId="brief-frame"
         />
       </div>

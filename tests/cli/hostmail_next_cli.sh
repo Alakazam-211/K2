@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -21,28 +23,22 @@ fi
 # `k2 mail list` is cmd_mail_inboxes.
 grep -q 'list)        shift 2; cmd_mail_inboxes' "$K2" || fail "k2 mail list must still be cmd_mail_inboxes"
 
-# Redirect spam|queue|acl|autoconfig only.
-grep -q 'spam|queue|acl|autoconfig)' "$K2" || fail "k2 mail spam|queue|acl|autoconfig must redirect to hostmail"
-
-# Do not steal k2 mail list via the redirect case.
-python3 - <<'PY' || fail "redirect case must not include list"
-import pathlib, re, sys
-text = pathlib.Path("cli/k2").read_text()
-# Find the mail-family moved-to-hostmail cases.
-hits = re.findall(r"create\|status\|domain\|doctor\|config\|approvals\)[^\n]+moved to", text)
-if not hits:
-    # allow split cases
-    pass
-# The dedicated spam|queue|acl|autoconfig redirect must not mention list.
-block = None
-for m in re.finditer(r"spam\|queue\|acl\|autoconfig\)", text):
-    block = text[m.start(): m.start()+400]
-    break
-if not block:
-    sys.exit("missing spam|queue|acl|autoconfig redirect")
-if re.search(r"(^|\|)list(\||\))", block.split(")",1)[0]):
-    sys.exit("do not add list to moved-to-hostmail")
-print("ok redirect")
+# The `k2 mail` moved-to-hostmail redirect case must cover
+# spam|queue|acl|autoconfig and must not steal `list`. 95de3056 gave them
+# their own `spam|queue|acl|autoconfig)` arm; 7926a0db folded every moved
+# verb into ONE case arm, so check that arm's label, not a literal string.
+python3 - "$K2" <<'PY' || fail "k2 mail spam|queue|acl|autoconfig must redirect to hostmail, and list must not"
+import re, sys
+text = open(sys.argv[1]).read()
+arms = re.findall(r"^\s*([a-z|-]+)\)\n\s*_mail_err \"usage\" \"'k2 mail \$\{2\}' moved to 'k2 hostmail \$\{2\}'", text, re.M)
+if len(arms) != 1:
+    sys.exit("expected one k2 mail moved-to-hostmail arm, found %d" % len(arms))
+verbs = set(arms[0].split("|"))
+missing = {"spam", "queue", "acl", "autoconfig"} - verbs
+if missing:
+    sys.exit("redirect arm is missing %s: %s" % (sorted(missing), arms[0]))
+if "list" in verbs:
+    sys.exit("do not add list to moved-to-hostmail: %s" % arms[0])
 PY
 
 help="$("$K2" hostmail --help)"

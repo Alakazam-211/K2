@@ -213,10 +213,15 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
 
   if (!status) return null
 
-  const setMode = (mode: KeepAwakeMode): Promise<void> => setModeOf(kaTarget, mode)
-  const setLidClosed = (on: boolean): Promise<void> => setLidClosedOf(kaTarget, on)
-  const setUp = (): Promise<void> => setUpOf(kaTarget)
-  const setOnBattery = (on: boolean): Promise<void> => setOnBatteryOf(kaTarget, on)
+  // A read-only caller never sends, even if a disabled control still fires
+  // (jsdom does; the daemon would answer 403 anyway).
+  const setMode = (mode: KeepAwakeMode): Promise<void> =>
+    mayChange ? setModeOf(kaTarget, mode) : Promise.resolve()
+  const setLidClosed = (on: boolean): Promise<void> =>
+    mayChange ? setLidClosedOf(kaTarget, on) : Promise.resolve()
+  const setUp = (): Promise<void> => (mayChange ? setUpOf(kaTarget) : Promise.resolve())
+  const setOnBattery = (on: boolean): Promise<void> =>
+    mayChange ? setOnBatteryOf(kaTarget, on) : Promise.resolve()
   const controlsDisabled = busy || !mayChange
   const readOnlyNote = mayChange
     ? null

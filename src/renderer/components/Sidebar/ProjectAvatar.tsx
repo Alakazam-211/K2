@@ -39,13 +39,17 @@ export default function ProjectAvatar({
     return !fetchIcon || !!iconUrlProp || iconCache.has(projectPath)
   })
 
-  // Sync prop changes
+  // Sync prop changes. With `fetchIcon` off the prop is the only source, so
+  // a prop that goes to null paints the letter again (vs-live P29); with it
+  // on, a fetched image is kept.
   useEffect(() => {
     if (iconUrlProp) {
       setIconUrl(iconUrlProp)
       setLoaded(true)
+    } else if (!fetchIcon) {
+      setIconUrl(null)
     }
-  }, [iconUrlProp])
+  }, [iconUrlProp, fetchIcon])
 
   useEffect(() => {
     // If iconUrl was provided via prop, skip the query

@@ -44,6 +44,7 @@ import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useHomeRoomsStore } from '@/stores/home-rooms'
 import { useZenShown } from '@/lib/zen/zen-view'
+import { useHomeAvatarSync } from '@/lib/home-avatars'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -294,6 +295,9 @@ export function HomeShellEffects(): null {
   const home = useHomesStore(selectedHome)
   useHomeStatusPoll(home)
   useConnectedRowRepair()
+  // Pictures for rows on other servers, from this computer's cache
+  // (prd-home-picker-and-remote-avatars-v1 S4).
+  useHomeAvatarSync()
   useEffect(() => () => useHomeAddPickerStore.getState().setOpen(false), [])
   // vs-live P31: the Zen toggle row sits inside the picker's outside-click
   // area, so turning Zen on would leave the picker open under Zen (and back

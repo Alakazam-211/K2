@@ -37,6 +37,7 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { useStore } from 'zustand'
 import type { RowStatus } from '@/lib/home-status'
 import { openHomeRow } from '@/lib/home-open'
+import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
 import { AgentRowButton, ShortcutIndexBadge, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
@@ -194,6 +195,8 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
             ? `${row.label} is not on this server any more`
             : `Open ${row.label}`
   const title = status.note ? `${base} (${status.note})` : base
+  // The agent's picture from this computer's cache (data URL), or null.
+  const avatarUrl = useHomeRowAvatar(row.address)
 
   return (
     <AgentRowButton
@@ -210,6 +213,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
           projectPath={`home:${row.address}`}
           projectName={row.label}
           projectColor={OTHER_SERVER_AVATAR_COLOR}
+          iconUrl={avatarUrl}
           size={32}
           fetchIcon={false}
         />

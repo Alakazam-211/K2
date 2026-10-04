@@ -136,6 +136,14 @@ export function cleanHomeName(name: string): string | null {
 
 export interface HomesState {
   homes: Home[]
+  /**
+   * P28 (prd-home-picker-and-remote-avatars-v1): true when `homes` came from
+   * storage — `k2.homes.v1` parsed as a v1 doc, the first-run seed was
+   * written, or another window's good doc was applied. False on a read
+   * error or an unreadable doc (the in-memory seed). Avatar cache cleanup
+   * never runs while it is false, so one storage error can't wipe it.
+   */
+  storageOk: boolean
   /** This window's selected Home id (always one of `homes`). */
   selectedId: string
   selectHome: (id: string) => void
@@ -218,14 +226,16 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
   // unreadable data → in-memory seed, left on disk untouched.
   const read = safeGet(env.local, HOMES_STORAGE_KEY)
   let initial: Home[]
+  let storageOk = false
   if (!read.ok) {
     initial = seedHomes(env.newId)
   } else if (read.value === null) {
     initial = seedHomes(env.newId)
-    safeSet(env.local, HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes: initial }))
+    storageOk = safeSet(env.local, HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes: initial }))
   } else {
     const doc = parseHomesDoc(read.value)
     if (doc) {
+      storageOk = true
       const migrated = env.savedHosts ? migrateHomeRowHostKeys(doc.homes, env.savedHosts()) : null
       initial = migrated ?? doc.homes
       if (migrated) {
@@ -258,6 +268,7 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
 
     return {
       homes: initial,
+      storageOk,
       selectedId: pickSelected(initial, env),
 
       selectHome: (id) => {
@@ -363,7 +374,7 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         const { selectedId } = get()
         const sel = doc.homes.some((h) => h.id === selectedId) ? selectedId : pickSelected(doc.homes, env)
         // No write-back: the other window already saved this exact doc.
-        set({ homes: doc.homes, selectedId: sel })
+        set({ homes: doc.homes, selectedId: sel, storageOk: true })
       },
     }
   })

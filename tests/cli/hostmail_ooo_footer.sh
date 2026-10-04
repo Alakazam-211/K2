@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -57,7 +59,7 @@ printf '%s' "$group" | grep -q 'ooo set|unset|show' || fail "hostmail --help mus
 printf '%s' "$group" | grep -q 'footer set|unset|show' || fail "hostmail --help must list footer: $group"
 
 out="$(mktemp -t k2-hostmail-ooo-XXXXXX)"
-trap 'rm -f "$out"' EXIT
+trap 'rm -f "$out"; hermetic_cli_cleanup' EXIT
 
 set +e
 K2SO_PORT=1 K2_PORT=1 K2_HOOK_TOKEN=x "$K2" hostmail ooo set --json >"$out" 2>&1

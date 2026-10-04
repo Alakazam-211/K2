@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

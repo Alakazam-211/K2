@@ -6,12 +6,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K2="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Usage without --hostname (no daemon needed).
 out="$(mktemp -t k2-hostmail-enable-XXXXXX)"
-trap 'rm -f "$out"' EXIT
+trap 'rm -f "$out"; hermetic_cli_cleanup' EXIT
 set +e
 K2SO_PORT=1 K2_PORT=1 K2_HOOK_TOKEN=x "$K2" hostmail enable --json >"$out" 2>&1
 code=$?

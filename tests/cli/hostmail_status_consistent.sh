@@ -204,7 +204,9 @@ help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$K2_CLI")"
 assert_contains "status help consistent" "$help_out" "consistent: false"
 assert_contains "status help systemd" "$help_out" "systemctl is-active stalwart"
 assert_contains "status help disable" "$help_out" "until \`k2 hostmail enable\`"
-group_help="$("$K2_CLI" hostmail --help)"
+# Through the stub env: the CLI connection gate needs a port + token even
+# for help, and must never fall back to the real ~/.k2.
+group_help="$("${K2_STUB[@]}" "$K2_CLI" hostmail --help)"
 assert_contains "hostmail help consistent" "$group_help" "consistent:false"
 assert_contains "hostmail help systemd" "$group_help" "systemctl is-active stalwart"
 assert_contains "hostmail help disable" "$group_help" "Host-wide inbound down"

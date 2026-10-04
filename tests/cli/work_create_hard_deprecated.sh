@@ -5,10 +5,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2SO_CLI="$PROJECT_ROOT/cli/k2so"
+K2SO_CLI="$PROJECT_ROOT/cli/k2"
+source "$SCRIPT_DIR/_hermetic_cli.sh"
+hermetic_cli_env
 
 OUTPUT_FILE="$(mktemp -t k2so-2.1b-work-create-XXXXXX)"
-trap "rm -f '$OUTPUT_FILE'" EXIT
+trap "rm -f '$OUTPUT_FILE'; hermetic_cli_cleanup" EXIT
 
 # The CLI may try to contact the daemon for some verbs but `work
 # create` hard-deps BEFORE any network call. Run with an

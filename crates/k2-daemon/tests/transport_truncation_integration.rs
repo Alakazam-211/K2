@@ -128,6 +128,22 @@ fn temp_workspace(tag: &str) -> std::path::PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp workspace");
+    // 25b6b54c: compose resolves its target through the registered
+    // workspaces (handle / name / path) and 404s an unknown path, so the
+    // temp dir must be a registered workspace.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                format!("trunc-{tag}-{nanos}"),
+                dir.to_string_lossy().as_ref()
+            ],
+        )
+        .expect("register temp workspace");
+    }
     dir
 }
 

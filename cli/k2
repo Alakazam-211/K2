@@ -13452,10 +13452,10 @@ cmd_schema() {
     },
     {
       "name": "feedback resolve",
-      "usage": "k2 tickets resolve <id> [--json]",
-      "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all.",
+      "usage": "k2 tickets resolve <id> [--answered <outcome>] [--json]",
+      "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all. With --answered, settle a discussion instead: a person's free-text message put the ticket in needs_discussion; once you replied and agreed, mark it answered with the outcome.",
       "args": [{"name": "id", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+      "flags": [{"name": "--answered", "arg": "outcome", "description": "Mark it answered with the agreed outcome (not resolved)."}, {"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "project create",
@@ -16413,6 +16413,14 @@ FOLLOW
   k2 feedback show <id>
   k2 feedback comment <id> "…"
   k2 feedback resolve <id>     you got what you needed
+  k2 feedback resolve <id> --answered "<outcome>"   settled a discussion
+
+HOW THE PERSON ANSWERS
+  Picking one of your options answers the ticket (status answered).
+  A free-text message puts it in needs_discussion: reply with
+  `k2 feedback comment`, settle it, then mark it answered
+  (`resolve <id> --answered "<outcome>"`) or resolved. You decide when
+  the discussion is done. --wait exits 5 with their message.
 
 WHEN TO ASK (NOT RETRY)
   Mail send is off
@@ -16473,6 +16481,10 @@ FORMAT (sections; only "What I need from you" is highlighted)
   Options                 <ol class="k2-options"> — match --options when used
   Context                 logs in <pre>, screenshots as data: images
   A missing k2-need section is a warning (brief_no_need), not an error.
+  Each k2-options <li> becomes a quick-answer button. Start each item with
+  a short <strong> label: that label is what comes back as the answer.
+  A pick marks the ticket answered. Free text marks it needs_discussion:
+  reply, settle it, then `k2 tickets resolve <id> --answered "<outcome>"`.
 
 CAPS
   1 MiB of raw HTML, inline images included. Over → brief_too_large.
@@ -22807,6 +22819,20 @@ while True:
         if status == "answered" and answer:
             print(answer)
             sys.exit(0)
+        # Free text instead of an option pick: the person wants to talk.
+        # Hand the agent their latest message (exit 5) so it can reply
+        # with `comment`, settle it, then `resolve --answered`.
+        if status == "needs_discussion":
+            human = [c for c in (d.get("comments") or [])
+                     if isinstance(c, dict) and c.get("author") != d.get("agentName")]
+            if human:
+                print(human[-1].get("body", ""))
+            sys.stderr.write(json.dumps({"status": "needs_discussion", "hint": (
+                "The person wrote a message instead of picking an option. "
+                "Reply with: k2 tickets comment %s \"<reply>\". When settled: "
+                "k2 tickets resolve %s --answered \"<outcome>\" (or resolve)."
+                % (fid[:8], fid[:8]))}) + "\n")
+            sys.exit(5)
         if status in ("resolved", "dismissed"):
             if answer:
                 print(answer)
@@ -23119,12 +23145,15 @@ PYEOF
 
 cmd_feedback_resolve() {
     if _wants_help "$@"; then cmd_help_feedback_resolve; exit 0; fi
-    local id="" as_json=false
+    local id="" as_json=false answered="" has_answered=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --answered)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--answered requires the agreed outcome — k2 tickets resolve <id> --answered \"<outcome>\""; exit 2; }
+                answered="$2"; has_answered=true; shift 2 ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets resolve <id> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets resolve <id> [--answered \"<outcome>\"] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -23138,9 +23167,22 @@ cmd_feedback_resolve() {
         _feedback_err "usage" "resolve requires an <id> (from ask/list; a short unique prefix works)"
         exit 2
     fi
+    if [ "$has_answered" = true ] && [ -z "$(printf '%s' "$answered" | tr -d '[:space:]')" ]; then
+        _feedback_err "usage" "--answered requires the agreed outcome — k2 tickets resolve <id> --answered \"<outcome>\""
+        exit 2
+    fi
+    # Settling a discussion records the outcome under the AGENT's name
+    # (same identity rule as `comment`), never as a human answer.
+    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
-    body=$(FB_ID="$id" python3 -c 'import json,os
-print(json.dumps({"id": os.environ["FB_ID"]}))')
+    body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" python3 -c 'import json,os
+b = {"id": os.environ["FB_ID"]}
+if os.environ.get("FB_HAS_ANSWERED") == "true":
+    b["status"] = "answered"
+    b["answer"] = os.environ["FB_ANSWERED"]
+    b["author"] = os.environ["FB_AUTHOR"]
+print(json.dumps(b))')
     resp=$(cli_post_json "/cli/feedback/resolve" "$body") || resp=""
     if [ -z "$resp" ]; then
         _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
@@ -23158,6 +23200,8 @@ if err is not None:
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
+elif d.get("status") == "answered":
+    print("Marked %s answered." % str(d.get("id", ""))[:8])
 else:
     print("Resolved %s." % str(d.get("id", ""))[:8])
 PYEOF
@@ -23261,6 +23305,16 @@ COMMANDS
                          card's message count; only NEW items fire notifications)
   assign <id> …          Set who the ticket is for (owner / connect-user names)
   resolve <id>           Mark an item resolved (you got what you needed)
+  resolve <id> --answered "<outcome>"
+                         Settle a discussion: mark it answered with what you
+                         and the person agreed
+
+HOW A PERSON ANSWERS
+  Picking one of your options (the --options buttons or the brief's Options
+  list) answers the ticket: status answered. Typing a free-text message puts
+  it in needs_discussion: reply with `comment`, settle it, then mark it
+  answered (`resolve <id> --answered "<outcome>"`) or resolved (`resolve <id>`).
+  Both kinds of message land in your session.
 
 ADDRESSING
   <id> is a feedback id (from `ask`/`list` output). A short unique prefix works.
@@ -23275,7 +23329,8 @@ OUTPUT CONTRACT
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage · 4 not found (ambiguous id prefix = 4 too,
-  with the matching candidates listed in the hint)
+  with the matching candidates listed in the hint) · 5 ask --wait: the person
+  wrote free text instead of picking an option (needs_discussion)
 
 Run 'k2 feedback <command> --help' for details on a command.
 EOF
@@ -23324,6 +23379,13 @@ FLAGS
                          and shows on the ticket card. Alias: --to.
   --wait                 Block until the item is answered, then print the BARE
                          answer to stdout (exit 0) — safe for $(...) capture.
+                         A person answers by picking one of your options.
+                         If they write free text instead, the ticket goes to
+                         needs_discussion: their message prints to stdout,
+                         {"status":"needs_discussion"} to stderr, and the
+                         exit code is 5. Reply with `k2 tickets comment`,
+                         settle it, then `k2 tickets resolve <id> --answered
+                         "<outcome>"` (or plain `resolve`).
                          If the item is resolved/dismissed WITHOUT an answer,
                          stdout stays empty, a {"error":{"code":"closed_unanswered"}}
                          prints to stderr, and the exit code is 1.
@@ -23446,8 +23508,12 @@ EOF
 cmd_help_feedback_comment() {
     cat <<'EOF'
 Add a message to a feedback item's discussion thread. Bumps the card's
-message count only — commenting does NOT change the item's status and does
+message count only — your comment does NOT change the item's status and does
 not fire a notification (only NEW items notify).
+
+Use it to reply when a person wrote free text (status needs_discussion).
+When you have settled it, mark it answered with
+`k2 tickets resolve <id> --answered "<outcome>"`, or `k2 tickets resolve <id>`.
 
 USAGE
   k2 tickets comment <id> "<text>" [flags]
@@ -23467,13 +23533,20 @@ Mark a feedback item resolved — you got what you needed (or the ask no longer
 applies). Resolved items drop out of the default `list` view (still visible
 with --all). The recorded answer, if any, is kept.
 
+With --answered, settle a discussion instead: a person wrote free text, so the
+ticket is in needs_discussion. Once you have replied and agreed on an outcome,
+mark it answered with that outcome. It becomes the ticket's answer (what
+`ask --wait` and `show` print). It is not sent back into your session.
+
 USAGE
   k2 tickets resolve <id> [flags]
+  k2 tickets resolve <id> --answered "<outcome>" [flags]
 
 ARGUMENTS
   <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
 
 FLAGS
+  --answered <outcome>   Mark it answered with the agreed outcome (not resolved)
   --json                 JSON output
 EOF
 }

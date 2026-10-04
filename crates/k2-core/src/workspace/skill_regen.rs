@@ -405,7 +405,14 @@ k2 tickets ask "<title>" --html brief.html --assign <user> [--body "..."] [--opt
 k2 tickets assign <id> <user>                  # (re)assign a filed ticket
 k2 tickets list                                # your asks + their status
 k2 tickets show <id>                           # one ask: status, answer, thread
+k2 tickets comment <id> "<reply>"              # reply in the ticket's thread
+k2 tickets resolve <id> [--answered "<outcome>"] # settle: answered or resolved
 ```
+A person who picks one of your options answers the ticket (status
+answered). A free-text message puts it in needs_discussion: reply with
+`k2 tickets comment`, settle it, then mark it answered
+(`k2 tickets resolve <id> --answered "<outcome>"`) or resolved
+(`k2 tickets resolve <id>`). You decide when the discussion is done.
 `tickets ask` files a durable question on your human's Tickets page — it
 survives your session and the answer comes back to you. Use it instead of a
 dead terminal prompt when you need a decision or approval. Attach an HTML

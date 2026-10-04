@@ -20,7 +20,7 @@
 // vitest env is node — the session-events registry + notification
 // plugin are mocked at the module boundary.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Boundary mocks (installed BEFORE the store imports) ──────────────────
 
@@ -71,8 +71,13 @@ async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0))
 }
 
+/** 'created' fires since the last beforeEach. The window is unfocused in
+ *  every test, so each one owes exactly ONE desktop notification. */
+let createdFired = 0
+
 function fire(reason: string): void {
   if (ev.handlers.length === 0) throw new Error('no feedback handler registered')
+  if (reason === 'created') createdFired++
   for (const fn of [...ev.handlers]) fn(reason)
 }
 
@@ -83,13 +88,22 @@ describe('feedback store event wiring', () => {
     // no-op. Unfocused so reason 'created' WOULD notify.
     useWindowFocusStore.setState({ isFocused: false })
     initFeedbackEvents(true)
-    // Double-flush: notifyDesktop uses a dynamic import; a prior test's
-    // 'created' notify can settle AFTER the next test's mockClear and
-    // falsely fail the answered/status-changed "not called" assertion.
-    await flush()
-    await flush()
     notification.send.mockClear()
     api.fetchWaitingCount.mockClear()
+    createdFired = 0
+  })
+
+  afterEach(async () => {
+    // Drain this test's notifications before the next test starts.
+    // notifyDesktop rides a dynamic import whose settle time grows under
+    // load (full-suite runs), so a fixed number of flushes was not
+    // enough: a 'created' notify from one test could land after the next
+    // test's mockClear and fail its "not called" check. Wait until every
+    // 'created' this test fired has notified (exactly once each), so no
+    // notification can leak across tests.
+    await vi.waitFor(() => expect(notification.send).toHaveBeenCalledTimes(createdFired))
+    await flush()
+    expect(notification.send).toHaveBeenCalledTimes(createdFired)
   })
 
   it('registers ONE handler on the session-events registry', () => {

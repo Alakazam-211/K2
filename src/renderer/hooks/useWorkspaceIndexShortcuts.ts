@@ -7,6 +7,7 @@ import { useHomesStore, selectedHome } from '@/stores/homes'
 import { getActiveBarItems } from '@/components/Sidebar/ActiveBar'
 import { openHomeRow } from '@/lib/home-open'
 import { homeRowOpenableNow } from '@/components/Home/home-room'
+import { homeSwitchDigit } from '@/lib/home-shortcuts'
 
 /**
  * Cmd+1–9 / Cmd+0 and Cmd+Option+1–9 — pick a workspace (or a Home row) by
@@ -19,10 +20,23 @@ import { homeRowOpenableNow } from '@/components/Home/home-room'
  * - Home: Cmd+1–9 (and Cmd+0 for the tenth) selects Home row N, the same
  *   as clicking it (answer Q5). A row that cannot open (no access, gone,
  *   another server on web) does nothing, as its click does.
+ * - Home switcher (0.43.2): on Home, Cmd+Option+1–9 (HOME_SWITCH_BINDING;
+ *   see `lib/home-shortcuts.ts` for why not Cmd+Shift) selects the Nth
+ *   named Home INSTEAD of the Agents workspace switch. Off Home that chord
+ *   is the Agents switch as before; the two never both fire. Like every
+ *   chord here it fires with focus in a terminal or text field.
  */
 export function useWorkspaceIndexShortcuts(): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      const homeN = homeSwitchDigit(e)
+      if (homeN !== null && usePageViewStore.getState().page === 'home') {
+        e.preventDefault()
+        const target = useHomesStore.getState().homes[homeN - 1]
+        if (target) useHomesStore.getState().selectHome(target.id)
+        return
+      }
+
       // Cmd+Option+1-9 (e.code: Option modifies e.key on macOS).
       if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey) {
         const digitMatch = e.code.match(/^Digit(\d)$/)

@@ -179,6 +179,35 @@ const NavWorktreeRow = React.memo(function NavWorktreeRow({
   )
 })
 
+// ── Shortcut badges (the pinned area's look; Home reuses them) ──────────────
+
+/** How many rows a digit chord reaches with a badge (1–9). */
+export const SHORTCUT_BADGE_LIMIT = 9
+
+/** A nav row's position number on its second line — the digit of its
+ *  1–9 chord. `index` is 0-based; nothing past the ninth row. `combo`
+ *  paints the whole chord instead of the bare digit (the Home dropdown). */
+export function ShortcutIndexBadge({ index, combo }: { index?: number; combo?: string }): React.JSX.Element | null {
+  if (index === undefined || index < 0 || index >= SHORTCUT_BADGE_LIMIT) return null
+  return (
+    <span
+      className="ml-auto -mr-1 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 leading-none pl-2"
+      data-shortcut-badge={index + 1}
+    >
+      {combo !== undefined ? <KeyCombo combo={combo} /> : index + 1}
+    </span>
+  )
+}
+
+/** A section header's modifier hint beside its count (e.g. `⌥⌘ 1-9`). */
+export function ShortcutRangeHint({ combo }: { combo: string }): React.JSX.Element {
+  return (
+    <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50" data-shortcut-hint={combo}>
+      <KeyCombo combo={combo} />
+    </span>
+  )
+}
+
 // ── Agent row shell (one workspace / agent in the nav) ──────────────────────
 
 /** The nav row every agent list paints: 32px avatar, name + presence on
@@ -289,11 +318,7 @@ export function SingleProjectItem({
           <>
             <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
-            {shortcutIndex !== undefined && shortcutIndex < 9 && (
-              <span className="ml-auto -mr-1 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 leading-none pl-2">
-                {shortcutIndex + 1}
-              </span>
-            )}
+            <ShortcutIndexBadge index={shortcutIndex} />
           </>
         }
       />
@@ -983,9 +1008,7 @@ export default function Sidebar(): React.JSX.Element {
             <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
               {totalCount}
             </span>
-            <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50">
-              <KeyCombo combo={useTerminalSettingsStore.getState().shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌥⌘ 1-9' : '⌘ 1-9'} />
-            </span>
+            <ShortcutRangeHint combo={useTerminalSettingsStore.getState().shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌥⌘ 1-9' : '⌘ 1-9'} />
             <span className="flex-1" />
             <svg
               className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"

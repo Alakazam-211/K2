@@ -10,9 +10,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { Button, Input } from '@/components/ui'
+import { ShortcutIndexBadge, ShortcutRangeHint } from '@/components/Sidebar/Sidebar'
+import { HOME_ROW_SHORTCUT_HINT, HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 
 type Mode = 'menu' | 'create' | 'rename'
 
+// The button carries the Home rows' chord hint beside the row count (the
+// Agents pinned header's look); each Home in the menu carries its Home
+// switcher chord (HOME_SWITCH_BINDING) in the row badge's look.
 export default function HomePicker(): React.JSX.Element {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
@@ -86,6 +91,7 @@ export default function HomePicker(): React.JSX.Element {
         <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono flex-shrink-0">
           {current.rows.length}
         </span>
+        {current.rows.length > 0 && <ShortcutRangeHint combo={HOME_ROW_SHORTCUT_HINT} />}
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
@@ -102,7 +108,7 @@ export default function HomePicker(): React.JSX.Element {
           {mode === 'menu' ? (
             <>
               <div className="max-h-48 overflow-y-auto py-0.5">
-                {homes.map((h) => {
+                {homes.map((h, idx) => {
                   const isCurrent = h.id === current.id
                   return (
                     <button
@@ -119,6 +125,9 @@ export default function HomePicker(): React.JSX.Element {
                       <span className="w-2 flex-shrink-0" />
                       <span className="truncate flex-1">{h.name}</span>
                       <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)] tabular-nums">{h.rows.length}</span>
+                      {idx < HOME_SWITCH_LIMIT && (
+                        <ShortcutIndexBadge index={idx} combo={homeSwitchCombo(idx + 1)} />
+                      )}
                       {isCurrent && (
                         <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />

@@ -39,7 +39,7 @@ import type { RowStatus } from '@/lib/home-status'
 import { openHomeRow } from '@/lib/home-open'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
-import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
+import { AgentRowButton, ShortcutIndexBadge, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
@@ -171,7 +171,7 @@ export function otherRowOpenTitle(
 }
 
 /** A row that does not paint as a live Agents row. */
-function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element {
+function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
   const preview = useRemoteRoomsPreview()
   const shownRoom = useShownHomeRoom()
@@ -223,13 +223,17 @@ function OtherHomeRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
             {status.note && <SameServerNote note={status.note} />}
           </div>
           <RowStateText status={status} />
+          <ShortcutIndexBadge index={index} />
         </>
       }
     />
   )
 }
 
-function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element {
+/** `index` is the row's position: its Cmd+N badge (useWorkspaceIndexShortcuts
+ *  selects `rows[N - 1]` on Home), shown for the first nine rows like the
+ *  Agents pinned area. */
+function HomeRowView({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
   const projects = useProjectsStore((s) => s.projects)
@@ -251,6 +255,7 @@ function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Ele
           project={ws}
           isActive={isActive}
           onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
+          shortcutIndex={index}
         />
       </div>
     )
@@ -262,6 +267,7 @@ function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Ele
           project={ws}
           isActive={isActive}
           onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
+          shortcutIndex={index}
         />
         <div className="pointer-events-none absolute right-2 top-1">
           <SameServerNote note={note} />
@@ -271,7 +277,7 @@ function HomeRowView({ home, row }: { home: Home; row: HomeRow }): React.JSX.Ele
   }
   return (
     <div className="no-drag">
-      <OtherHomeRow home={home} row={row} />
+      <OtherHomeRow home={home} row={row} index={index} />
     </div>
   )
 }
@@ -420,7 +426,7 @@ export default function HomeSidebar(): React.JSX.Element {
               }}
             >
               {dragIndex !== null && dropIndex === idx && <div className="h-[2px] bg-[var(--color-accent)] mx-3" />}
-              <HomeRowView home={home} row={row} />
+              <HomeRowView home={home} row={row} index={idx} />
               {idx < rows.length - 1 && !(dragIndex !== null && dropIndex === idx + 1) && (
                 <div className="border-b border-[var(--color-border)]" />
               )}

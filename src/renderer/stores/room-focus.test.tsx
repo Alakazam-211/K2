@@ -262,6 +262,80 @@ describe('Cmd+1–9 is one window-level handler (MS18, Q5)', () => {
   })
 })
 
+describe('Cmd+Option+1–9: Home switcher on Home, Agents switch elsewhere (0.43.2)', () => {
+  function Index(): null {
+    useWorkspaceIndexShortcuts()
+    return null
+  }
+
+  /** Three named Homes (one row each) and a pinned agent workspace, with
+   *  the default layout: Cmd+Option+N = Nth pinned on Agents. */
+  function setup(): { ids: string[]; setActiveWorkspace: ReturnType<typeof vi.fn> } {
+    const st = useHomesStore.getState()
+    for (const h of [...st.homes].slice(1)) useHomesStore.getState().deleteHome(h.id)
+    const first = useHomesStore.getState().homes[0]
+    for (const r of [...first.rows]) useHomesStore.getState().removeRow(first.id, r.address)
+    useHomesStore.getState().addRow(first.id, { address: 'cortana::local', workspaceId: null, label: 'cortana' })
+    const second = useHomesStore.getState().createHome('Second')
+    const third = useHomesStore.getState().createHome('Third')
+    if (!second || !third) throw new Error('createHome failed')
+    useHomesStore.getState().addRow(second, { address: 'anna::dtl.k2.dev', workspaceId: null, label: 'anna' })
+    useHomesStore.getState().selectHome(first.id)
+    const setActiveWorkspace = vi.fn()
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', path: '/p1', agentMode: 'agent', pinned: 0, worktreeMode: 0, workspaces: [{ id: 'w1', tabOrder: 0 }] },
+        { id: 'p2', path: '/p2', agentMode: 'agent', pinned: 0, worktreeMode: 0, workspaces: [{ id: 'w2', tabOrder: 0 }] },
+      ] as never,
+      setActiveWorkspace,
+    } as never)
+    useTerminalSettingsStore.setState({ shortcutLayout: 'cmd-active-cmdshift-pinned' })
+    const ids = useHomesStore.getState().homes.map((h) => h.id)
+    expect(ids).toEqual([first.id, second, third])
+    return { ids, setActiveWorkspace }
+  }
+
+  it('on Home, ⌥⌘N selects the Nth Home and never switches an Agents workspace', () => {
+    const { ids, setActiveWorkspace } = setup()
+    usePageViewStore.getState().setPage('home')
+    render(<Index />)
+    const ev = new KeyboardEvent('keydown', { code: 'Digit2', key: '™', metaKey: true, altKey: true, cancelable: true })
+    act(() => void window.dispatchEvent(ev))
+    expect(ev.defaultPrevented).toBe(true)
+    expect(useHomesStore.getState().selectedId).toBe(ids[1])
+    act(() => void fireEvent.keyDown(window, { code: 'Digit3', key: '£', metaKey: true, altKey: true }))
+    expect(useHomesStore.getState().selectedId).toBe(ids[2])
+    // No Home 9: nothing changes.
+    act(() => void fireEvent.keyDown(window, { code: 'Digit9', key: 'ª', metaKey: true, altKey: true }))
+    expect(useHomesStore.getState().selectedId).toBe(ids[2])
+    expect(setActiveWorkspace).not.toHaveBeenCalled()
+    expect(opened.rows).toEqual([])
+  })
+
+  it('on Agents, ⌥⌘N switches the pinned workspace as before and never changes the Home', () => {
+    const { ids, setActiveWorkspace } = setup()
+    usePageViewStore.getState().setPage('agents')
+    render(<Index />)
+    fireEvent.keyDown(window, { code: 'Digit2', key: '™', metaKey: true, altKey: true })
+    expect(setActiveWorkspace).toHaveBeenCalledTimes(1)
+    expect(setActiveWorkspace).toHaveBeenCalledWith('p2', 'w2')
+    expect(useHomesStore.getState().selectedId).toBe(ids[0])
+  })
+
+  it('on Home, Cmd+N still opens row N and Ctrl+N (presets) never switches a Home', () => {
+    const { ids, setActiveWorkspace } = setup()
+    usePageViewStore.getState().setPage('home')
+    render(<Index />)
+    fireEvent.keyDown(window, { code: 'Digit1', key: '1', metaKey: true })
+    expect(opened.rows).toEqual(['cortana::local'])
+    fireEvent.keyDown(window, { code: 'Digit2', key: '2', ctrlKey: true })
+    fireEvent.keyDown(window, { code: 'Digit2', key: '@', metaKey: true, shiftKey: true })
+    fireEvent.keyDown(window, { code: 'Digit2', key: '2', metaKey: true, altKey: true, shiftKey: true })
+    expect(useHomesStore.getState().selectedId).toBe(ids[0])
+    expect(setActiveWorkspace).not.toHaveBeenCalled()
+  })
+})
+
 describe("a pinned room's activity slice (MS68)", () => {
   it("records into its own slice and chimes with its own server's project list", () => {
     const serverB = projectsStoreOf([{ id: 'p1', path: '/work/k2', completionSoundEnabled: 1, workspaces: [] } as never])

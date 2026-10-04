@@ -494,6 +494,54 @@ describe('Home — the Agents page shell', () => {
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
   })
 
+  it('rows 1–9 carry the pinned area badge (Cmd+N order); the picker shows ⌘ 1-9 and each Home its ⌥⌘N', () => {
+    const home = useHomesStore.getState().homes[0]
+    // 3 rows from beforeEach (connected Cortana, Bee, Cee) + Nova + 7 more on
+    // the no-login server = 11 rows of three kinds.
+    useHomesStore.getState().addRow(home.id, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
+    for (let i = 1; i <= 7; i++) {
+      useHomesStore.getState().addRow(home.id, { address: `x${i}::c.k2.dev`, workspaceId: null, label: `X${i}` })
+    }
+    const extra = [useHomesStore.getState().createHome('Second'), useHomesStore.getState().createHome('Third')]
+    useHomesStore.getState().selectHome(home.id)
+    try {
+      render(<Shell />)
+      const rowEls = Array.from(homeSidebar().querySelectorAll('[data-home-row]'))
+      expect(rowEls.length).toBe(11)
+      const badges = rowEls.map((el) => {
+        const found = el.querySelectorAll('[data-shortcut-badge]')
+        expect(found.length).toBeLessThanOrEqual(1)
+        return found[0]?.textContent ?? null
+      })
+      expect(badges).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', null, null])
+      // Badge N is on rows[N - 1], the row Cmd+N opens.
+      expect(rowEls.map((el) => el.getAttribute('data-home-row'))).toEqual(
+        useHomesStore.getState().homes[0].rows.map((r) => r.address),
+      )
+      // Connected rows (SingleProjectItem) and other-server rows both carry it.
+      expect(rowOf('Cortana').querySelector('[data-shortcut-badge="1"]')).not.toBeNull()
+      expect(rowOf('Bee').querySelector('[data-shortcut-badge="2"]')).not.toBeNull()
+      expect(rowOf('Nova').querySelector('[data-shortcut-badge="4"]')).not.toBeNull()
+      // The modifier: the Agents pinned header's `⌘ 1-9` beside the count.
+      const pickerButton = within(homeSidebar()).getByTitle('Pick a Home')
+      const hint = pickerButton.querySelector('[data-shortcut-hint]')
+      if (!hint) throw new Error('no row chord hint on the Home picker')
+      expect(hint.getAttribute('data-shortcut-hint')).toBe('⌘ 1-9')
+      expect(hint.textContent).toBe('⌘ 1-9')
+      expect(hint.querySelector('.key-symbol')?.textContent).toBe('⌘')
+
+      fireEvent.click(pickerButton)
+      const items = within(homeSidebar()).getAllByRole('menuitemradio')
+      expect(items.map((el) => el.querySelector('[data-shortcut-badge]')?.textContent ?? null)).toEqual([
+        '⌥⌘1',
+        '⌥⌘2',
+        '⌥⌘3',
+      ])
+    } finally {
+      for (const id of extra) if (id) useHomesStore.getState().deleteHome(id)
+    }
+  })
+
   it('right-click Remove from Home drops the row only', async () => {
     menu.next = 'home-remove'
     menu.items = []

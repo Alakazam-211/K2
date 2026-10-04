@@ -18,12 +18,20 @@
 // Data comes from the SAME stores the settings page reads
 // (useProjectsStore via the parent's `projects` prop +
 // useFocusGroupsStore for groups/enabled + useProjectGroupsStore for
-// the project-group rows) — no duplicated plumbing.
+// the project-group rows) — no duplicated plumbing. The popover body
+// (search, sections, rows, keyboard) is the shared `SearchableAgentList`,
+// which Home's Add Agent picker uses too; this wrapper keeps the trigger,
+// the popover, its close rules and the store reads.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import {
+  SearchableAgentList,
+  type AgentListRow,
+  type AgentListSection,
+} from '@/components/ui/SearchableAgentList'
 
 /** The slice of a project row the dropdown needs (a subset of the
  *  projects store's shape, so the page can pass its rows straight in). */
@@ -171,9 +179,7 @@ export function WorkspaceFilterDropdown({
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [keyboardIndex, setKeyboardIndex] = useState(-1)
   const rootRef = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
 
   const sections = useMemo(
     () => groupWorkspacesForFilter(projects, focusGroups, focusGroupsEnabled, query),
@@ -185,17 +191,9 @@ export function WorkspaceFilterDropdown({
     [projectGroups, query],
   )
 
-  // Flattened selectable values for ArrowUp/Down + Enter (the settings
-  // search's keyboard feel). The All row only shows without a query.
+  // The All row only shows without a query.
   const showAllRow = !query.trim()
   const showUnlinkedRow = showUnlinked && workspaceMatchesSearch({ name: UNLINKED_FILTER_LABEL, path: '' }, query)
-  const flatValues = useMemo(() => {
-    const vals: string[] = showAllRow ? ['all'] : []
-    if (showUnlinkedRow) vals.push(UNLINKED_FILTER_VALUE)
-    for (const g of groupRows) vals.push(projectFilterValue(g.id))
-    for (const s of sections) for (const ws of s.workspaces) vals.push(ws.id)
-    return vals
-  }, [sections, groupRows, showAllRow, showUnlinkedRow])
 
   const selectedGroupId = parseProjectFilter(value)
   const selectedGroup =
@@ -208,17 +206,24 @@ export function WorkspaceFilterDropdown({
       ? null
       : projects.find((p) => p.id === value) ?? null
 
-  // Focus the search on open; reset transient state on close.
-  useEffect(() => {
-    if (open) {
-      requestAnimationFrame(() => searchRef.current?.focus())
-    } else {
-      setQuery('')
-      setKeyboardIndex(-1)
-    }
-  }, [open])
+  // The shared list's sections, in the board's order: All + Unlinked (no
+  // header), Projects (accent header), then the workspace sections.
+  const listSections = useMemo(
+    () =>
+      workspaceFilterListSections({
+        showAllRow,
+        showUnlinkedRow,
+        groupRows,
+        sections,
+        value,
+      }),
+    [showAllRow, showUnlinkedRow, groupRows, sections, value],
+  )
 
-  useEffect(() => setKeyboardIndex(-1), [query])
+  // Reset transient state on close.
+  useEffect(() => {
+    if (!open) setQuery('')
+  }, [open])
 
   // Outside click closes; capture-phase Esc closes the popover BEFORE
   // the page-level Esc handler (clear selection / close page) sees it.
@@ -241,47 +246,10 @@ export function WorkspaceFilterDropdown({
     }
   }, [open])
 
-  // Keep the keyboard-highlighted row in view.
-  useEffect(() => {
-    if (keyboardIndex < 0) return
-    const val = flatValues[keyboardIndex]
-    if (!val) return
-    const el = rootRef.current?.querySelector(`[data-ws-filter-value="${CSS.escape(val)}"]`)
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [keyboardIndex, flatValues])
-
   const pick = (v: string): void => {
     onChange(v)
     setOpen(false)
   }
-
-  const onSearchKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setKeyboardIndex((prev) => Math.min(prev + 1, flatValues.length - 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setKeyboardIndex((prev) => Math.max(prev - 1, 0))
-    } else if (e.key === 'Enter' && keyboardIndex >= 0 && keyboardIndex < flatValues.length) {
-      e.preventDefault()
-      pick(flatValues[keyboardIndex])
-    } else if (e.key === 'Escape') {
-      // Stop the page-level Esc (clear selection / close page) — the
-      // first Esc only closes this popover.
-      e.preventDefault()
-      e.stopPropagation()
-      setOpen(false)
-    }
-  }
-
-  const rowClass = (isSelected: boolean, isKeyboard: boolean): string =>
-    `flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left ${
-      isSelected
-        ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-        : isKeyboard
-          ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
-    }`
 
   return (
     <div ref={rootRef} className="relative flex-shrink-0">
@@ -325,144 +293,131 @@ export function WorkspaceFilterDropdown({
 
       {open && (
         <div className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
-          {/* Search — same feel as the settings page's workspace search. */}
-          <div className="p-1.5 border-b border-[var(--color-border)]">
-            <input
-              ref={searchRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onSearchKeyDown}
-              placeholder="Search workspaces..."
-              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]"
-            />
-          </div>
-
-          <div className="max-h-72 overflow-y-auto py-1">
-            {showAllRow && (
-              <button
-                type="button"
-                data-ws-filter-value="all"
-                onClick={() => pick('all')}
-                className={rowClass(value === 'all', keyboardIndex === 0)}
-              >
-                {/* Stand-in glyph so the label aligns with avatar rows. */}
-                <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="7" height="7" />
-                    <rect x="14" y="3" width="7" height="7" />
-                    <rect x="3" y="14" width="7" height="7" />
-                    <rect x="14" y="14" width="7" height="7" />
-                  </svg>
-                </span>
-                <span className="text-xs truncate flex-1">All workspaces</span>
-              </button>
-            )}
-
-            {showUnlinkedRow && (
-              <button
-                type="button"
-                data-ws-filter-value={UNLINKED_FILTER_VALUE}
-                onClick={() => pick(UNLINKED_FILTER_VALUE)}
-                className={rowClass(
-                  unlinkedSelected,
-                  flatValues.indexOf(UNLINKED_FILTER_VALUE) === keyboardIndex,
-                )}
-                title="Tickets whose workspace was removed from this server"
-              >
-                <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]">
-                  ?
-                </span>
-                <span className="text-xs truncate flex-1 italic">{UNLINKED_FILTER_LABEL}</span>
-              </button>
-            )}
-
-            {/* Projects section (§6.6) — visually distinct: accent
-                header + group glyph rows; picking one filters the board
-                to that project's member workspaces. */}
-            {groupRows.length > 0 && (
-              <div>
-                <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 select-none">
-                  <span className="w-1 h-3 flex-shrink-0 bg-[var(--color-accent)]" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] flex-1 truncate">
-                    Projects
-                  </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                    {groupRows.length}
-                  </span>
-                </div>
-                {groupRows.map((g) => {
-                  const gv = projectFilterValue(g.id)
-                  const kbIdx = flatValues.indexOf(gv)
-                  return (
-                    <button
-                      key={g.id}
-                      type="button"
-                      data-ws-filter-value={gv}
-                      onClick={() => pick(gv)}
-                      className={rowClass(value === gv, kbIdx >= 0 && kbIdx === keyboardIndex)}
-                      title={`Only feedback from ${g.name}'s member workspaces`}
-                    >
-                      <ProjectGroupGlyph size={20} />
-                      <span className="text-xs truncate flex-1">{g.name}</span>
-                      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                        {g.memberCount}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-
-            {sections.map((section) => (
-              <div key={section.key}>
-                {section.label !== null && (
-                  <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 select-none">
-                    {section.color && (
-                      <span className="w-1 h-3 flex-shrink-0" style={{ backgroundColor: section.color }} />
-                    )}
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] flex-1 truncate">
-                      {section.label}
-                    </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                      {section.workspaces.length}
-                    </span>
-                  </div>
-                )}
-                {section.workspaces.map((ws) => {
-                  const kbIdx = flatValues.indexOf(ws.id)
-                  return (
-                    <button
-                      key={ws.id}
-                      type="button"
-                      data-ws-filter-value={ws.id}
-                      onClick={() => pick(ws.id)}
-                      className={rowClass(value === ws.id, kbIdx >= 0 && kbIdx === keyboardIndex)}
-                    >
-                      <ProjectAvatar
-                        projectPath={ws.path}
-                        projectName={ws.name}
-                        projectColor={ws.color}
-                        projectId={ws.id}
-                        iconUrl={ws.iconUrl}
-                        size={20}
-                      />
-                      <span className="text-xs truncate flex-1">{ws.name}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
-
-            {sections.length === 0 && groupRows.length === 0 && !showUnlinkedRow && (
-              <div className="px-2 py-4 text-center text-[10px] text-[var(--color-text-muted)]">
-                No workspaces match
-              </div>
-            )}
-          </div>
+          {/* Search + rows: the shared list (search, sections, keyboard). */}
+          <SearchableAgentList
+            sections={listSections}
+            query={query}
+            onQuery={setQuery}
+            onPick={pick}
+            onEscape={() => setOpen(false)}
+            placeholder="Search workspaces..."
+            emptyText="No workspaces match"
+            ariaLabel="Workspaces"
+            autoFocus
+          />
         </div>
       )}
     </div>
+  )
+}
+
+/** The dropdown's rows as shared-list sections (already filtered for the
+ *  query by the pure helpers above). */
+function workspaceFilterListSections({
+  showAllRow,
+  showUnlinkedRow,
+  groupRows,
+  sections,
+  value,
+}: {
+  showAllRow: boolean
+  showUnlinkedRow: boolean
+  groupRows: FilterableProjectGroup[]
+  sections: WorkspaceFilterSection[]
+  value: string
+}): AgentListSection[] {
+  const out: AgentListSection[] = []
+  const loose: AgentListRow[] = []
+  if (showAllRow) {
+    loose.push({
+      value: 'all',
+      label: 'All workspaces',
+      avatar: { kind: 'node', node: <AllWorkspacesGlyph /> },
+      state: 'pickable',
+      selected: value === 'all',
+    })
+  }
+  if (showUnlinkedRow) {
+    loose.push({
+      value: UNLINKED_FILTER_VALUE,
+      label: UNLINKED_FILTER_LABEL,
+      labelClassName: 'italic',
+      avatar: { kind: 'node', node: <UnlinkedGlyph /> },
+      state: 'pickable',
+      selected: value === UNLINKED_FILTER_VALUE,
+      title: 'Tickets whose workspace was removed from this server',
+    })
+  }
+  if (loose.length > 0) out.push({ key: '__loose__', label: null, rows: loose })
+  // Projects section (§6.6) — visually distinct: accent header + group
+  // glyph rows; picking one filters the board to that project's member
+  // workspaces.
+  if (groupRows.length > 0) {
+    out.push({
+      key: '__projects__',
+      label: 'Projects',
+      accent: true,
+      rows: groupRows.map((g): AgentListRow => {
+        const gv = projectFilterValue(g.id)
+        return {
+          value: gv,
+          label: g.name,
+          detail: g.memberCount,
+          avatar: { kind: 'node', node: <ProjectGroupGlyph size={20} /> },
+          state: 'pickable',
+          selected: value === gv,
+          title: `Only feedback from ${g.name}'s member workspaces`,
+        }
+      }),
+    })
+  }
+  for (const section of sections) {
+    out.push({
+      key: section.key,
+      label: section.label,
+      color: section.color,
+      rows: section.workspaces.map(
+        (ws): AgentListRow => ({
+          value: ws.id,
+          label: ws.name,
+          avatar: {
+            kind: 'workspace',
+            path: ws.path,
+            name: ws.name,
+            color: ws.color,
+            id: ws.id,
+            iconUrl: ws.iconUrl,
+            fetchIcon: true,
+          },
+          state: 'pickable',
+          selected: value === ws.id,
+        }),
+      ),
+    })
+  }
+  return out
+}
+
+/** Stand-in glyph for the All row, so its label aligns with avatar rows. */
+function AllWorkspacesGlyph(): React.JSX.Element {
+  return (
+    <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="3" y="3" width="7" height="7" />
+        <rect x="14" y="3" width="7" height="7" />
+        <rect x="3" y="14" width="7" height="7" />
+        <rect x="14" y="14" width="7" height="7" />
+      </svg>
+    </span>
+  )
+}
+
+/** The Unlinked row's dashed "?" box. */
+function UnlinkedGlyph(): React.JSX.Element {
+  return (
+    <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]">
+      ?
+    </span>
   )
 }
 

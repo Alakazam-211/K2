@@ -267,17 +267,21 @@ async fn case4_users_set_role_with_valid_bearer_is_403() {
 async fn case5_inbox_list_is_200_with_parseable_json() {
     let _g = lock();
     let home = set_short_home();
-    // The principal owns workspace W; Finding-1 forces the operand to W.
-    let (ws_uuid, _ws) = mk_workspace(&home, "ws");
+    // The principal owns workspace W. Inbox `project=` is the TARGET (C2,
+    // 9aeb10db): its own inbox lists 200; an unregistered path is the
+    // shared 404, never a read of that path.
+    let (ws_uuid, ws) = mk_workspace(&home, "ws");
     let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
     settle().await;
-    // `project=` is FORCED to the principal's own workspace; a bogus operand
-    // still yields a valid own-workspace listing (never a 400/foreign read).
+    let own = urlencode(ws.to_str().unwrap());
     let (status, body) =
-        uds(&sock, &get("/cli/inbox/list?project=/bogus-other-ws", Some(&token))).await;
+        uds(&sock, &get(&format!("/cli/inbox/list?project={own}"), Some(&token))).await;
     assert_eq!(status, 200, "inbox list over the cell socket must 200; body={body}");
     let _v: serde_json::Value =
         serde_json::from_str(&body).unwrap_or_else(|e| panic!("inbox list body must be JSON: {e}; body={body}"));
+    let (status, body) =
+        uds(&sock, &get("/cli/inbox/list?project=/bogus-other-ws", Some(&token))).await;
+    assert_eq!(status, 404, "a bogus inbox path must 404, not list it; body={body}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -342,9 +346,20 @@ async fn case6b_inbox_compose_stamps_principal_from_durably() {
         !rbody.contains("FORGED-ATTACKER"),
         "stored memo must NOT carry the forged from; body={rbody}"
     );
-    assert!(
-        rbody.contains("agent-c3"),
-        "stored memo must carry the principal-stamped from (agent-c3); body={rbody}"
+    // 3c8ed526 (D7/D18): the stamped `from` is the principal's workspace
+    // HANDLE ("wsc"), not its agent_address.
+    let items: serde_json::Value = serde_json::from_str(&rbody)
+        .unwrap_or_else(|e| panic!("inbox list JSON: {e}; body={rbody}"));
+    let froms: Vec<&str> = items
+        .as_array()
+        .unwrap_or_else(|| panic!("inbox list must be an array; body={rbody}"))
+        .iter()
+        .map(|i| i["from"].as_str().unwrap_or_else(|| panic!("item without from; body={rbody}")))
+        .collect();
+    assert_eq!(
+        froms,
+        vec!["wsc"],
+        "stored memo must carry the principal-stamped from (handle wsc); body={rbody}"
     );
 }
 
@@ -376,9 +391,9 @@ async fn case9_revoked_session_is_403() {
     let _g = lock();
     let home = set_short_home();
     // The principal owns workspace W; the operand is forced to it.
-    let (ws_uuid, _ws) = mk_workspace(&home, "wsr");
+    let (ws_uuid, ws) = mk_workspace(&home, "wsr");
     let (sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
-    let q = "/cli/inbox/list?project=/bogus-other-ws".to_string();
+    let q = format!("/cli/inbox/list?project={}", urlencode(ws.to_str().unwrap()));
     settle().await;
 
     // Pre-revoke: authorized → 200.
@@ -414,28 +429,32 @@ async fn case10_oversized_content_length_is_413() {
     assert_eq!(status, 413, "an oversized declared body must be refused with 413");
 }
 
-/// Sandbox P1 — Finding 1 (e2e): a scoped request that addresses ANOTHER
-/// workspace (`project=<OTHER>`) operates on the PRINCIPAL's OWN workspace W,
-/// not OTHER. Compose addressed at OTHER lands under W; the list addressed at
-/// OTHER returns W's listing (which now holds the item); and on disk the memo
-/// is under W's inbox, never OTHER's.
+/// Inbox `project=` is the compose TARGET, not the operand Finding 1 forces.
+///
+/// Sandbox P1 (a4b13281) forced every `project=` to the principal's own
+/// workspace. C2 (9aeb10db) made the inbox routes keep the caller's target so
+/// an agent can compose into ANOTHER workspace's inbox, gated on a local
+/// connection. A scoped cell therefore:
+/// - gets the shared 404 for an unregistered OTHER (nothing written anywhere);
+/// - gets 403 `not_connected` for a registered OTHER it is not connected to
+///   (nothing lands in OTHER's inbox, nothing is diverted into W's).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn case11_project_is_forced_to_principal_workspace() {
+async fn case11_inbox_target_is_kept_and_gated_by_connection() {
     let _g = lock();
     let home = set_short_home();
 
-    // W = the principal's own workspace; OTHER = a foreign workspace dir the
-    // attacker's body tries to address.
     let (ws_uuid, w_path) = mk_workspace(&home, "W");
     let other_path = home.join("OTHER");
     std::fs::create_dir_all(&other_path).expect("create OTHER dir");
     let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
     settle().await;
 
-    let marker = "FINDING1ForceMarker";
+    let marker = "C2TargetKeptMarker";
     let other_proj = urlencode(other_path.to_str().unwrap());
+    let w_inbox = k2_core::inbox::inbox_root(&w_path);
+    let other_inbox = k2_core::inbox::inbox_root(&other_path);
 
-    // Compose addressed at OTHER — Finding 1 FORCES the operand to W.
+    // Unregistered OTHER: unknown workspace, never rewritten to W.
     let (status, body) = uds(
         &sock,
         &post_form(
@@ -445,33 +464,38 @@ async fn case11_project_is_forced_to_principal_workspace() {
         ),
     )
     .await;
-    assert_eq!(status, 200, "compose must 200; body={body}");
+    assert_eq!(status, 404, "unregistered target must 404; body={body}");
+    let v: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("404 body JSON: {e}; body={body}"));
+    assert_eq!(v["error"]["code"], "not_found", "body={body}");
+    assert_eq!(md_count(&w_inbox), 0, "nothing may be diverted into W ({w_inbox:?})");
+    assert_eq!(md_count(&other_inbox), 0, "nothing may land under OTHER ({other_inbox:?})");
 
-    // List addressed at OTHER — also forced to W → returns W's listing, which
-    // now contains the composed item.
+    // Registered OTHER with no connection from W: the C2 gate refuses.
+    let (_other_uuid, _) = mk_workspace(&home, "OTHER");
+    let (status, body) = uds(
+        &sock,
+        &post_form(
+            "/cli/inbox/compose",
+            &token,
+            &format!("project={other_proj}&title={marker}&body=x"),
+        ),
+    )
+    .await;
+    assert_eq!(status, 403, "unconnected target must 403; body={body}");
+    let v: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("403 body JSON: {e}; body={body}"));
+    assert_eq!(v["error"]["code"], "not_connected", "body={body}");
+    assert_eq!(md_count(&w_inbox), 0, "nothing may be diverted into W ({w_inbox:?})");
+    assert_eq!(md_count(&other_inbox), 0, "nothing may land under OTHER ({other_inbox:?})");
+
+    // The listing is gated the same way: OTHER's inbox is not readable.
     let (lstatus, lbody) = uds(
         &sock,
         &get(&format!("/cli/inbox/list?project={other_proj}"), Some(&token)),
     )
     .await;
-    assert_eq!(lstatus, 200, "list must 200; body={lbody}");
-    assert!(
-        lbody.contains(marker),
-        "the composed item must appear in W's listing (operand forced to W); body={lbody}"
-    );
-
-    // On disk: the memo landed under W, and NOTHING landed under OTHER.
-    let w_inbox = k2_core::inbox::inbox_root(&w_path);
-    let other_inbox = k2_core::inbox::inbox_root(&other_path);
-    assert!(
-        md_count(&w_inbox) > 0,
-        "the composed memo must exist under W's inbox ({w_inbox:?})"
-    );
-    assert_eq!(
-        md_count(&other_inbox),
-        0,
-        "NO memo may land under OTHER's inbox ({other_inbox:?}) — the operand was forced to W"
-    );
+    assert_eq!(lstatus, 403, "unconnected list must 403; body={lbody}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

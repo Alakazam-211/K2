@@ -23,13 +23,37 @@ fn need_project_path(params: &HashMap<String, String>) -> Result<PathBuf, CliRes
     for key in &["project", "project_path"] {
         if let Some(v) = params.get(*key) {
             if !v.is_empty() {
-                return Ok(PathBuf::from(v));
+                return gate_scoped_inbox_target(params, v);
             }
         }
     }
     Err(CliResponse::bad_request(
         "Missing project (or project_path) parameter",
     ))
+}
+
+/// C2 for every inbox route, not just compose. Both cell transports
+/// restore the caller's `project=` after stamp_principal (it is the inbox
+/// TARGET), so without this a scoped agent could list, read, move, archive
+/// or delete the inbox at ANY path. A scoped principal must name a
+/// registered workspace (else the shared 404) that is its own or a
+/// connected local peer (else 403 `not_connected`). Owner / ambient
+/// callers (no principal) are unchanged.
+fn gate_scoped_inbox_target(
+    params: &HashMap<String, String>,
+    target: &str,
+) -> Result<PathBuf, CliResponse> {
+    let Some(principal) = crate::caller_workspace::principal_from_params(params) else {
+        return Ok(PathBuf::from(target));
+    };
+    let Some(resolved) = crate::workspace_msg::resolve_workspace_allowing_handle(target) else {
+        return Err(crate::workspace_routes::workspace_not_found_response(target));
+    };
+    match crate::comms::gate_cross_workspace(Some(&principal), &resolved) {
+        Ok(()) => Ok(PathBuf::from(resolved)),
+        Err(Some(resp)) => Err(resp),
+        Err(None) => Err(crate::workspace_routes::workspace_not_found_response(target)),
+    }
 }
 
 fn str_param(params: &HashMap<String, String>, key: &str) -> String {

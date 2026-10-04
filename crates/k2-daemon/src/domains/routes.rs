@@ -7,9 +7,10 @@
 use std::collections::HashMap;
 
 use k2_core::domains::{
-    apex_attached_for_write, get_binding, get_name, hostname_under_apex, list_bindings,
-    list_names_for_apex, normalize_apex, normalize_hostname, normalize_role, remove_binding,
-    remove_name, upsert_binding, upsert_name, DomainBinding, DomainName,
+    apex_attached_for_write, get_binding, get_binding_by_zone_id, get_name, hostname_under_apex,
+    list_bindings, list_names_for_apex, normalize_apex, normalize_hostname, normalize_role,
+    remove_binding, remove_name, upsert_binding, upsert_binding_zone, upsert_name, DomainBinding,
+    DomainName,
 };
 
 use crate::cli_response::CliResponse;
@@ -116,23 +117,81 @@ fn domain_json(conn: &rusqlite::Connection, b: &DomainBinding) -> serde_json::Va
         "apex": b.apex,
         "zoneId": b.zone_id,
         "dnsWrite": b.dns_write,
+        // A8.1: `active` | `pending_ns` from k2.dev; null for BYO rows.
+        "status": b.status,
+        "pendingNs": b.is_pending_ns(),
+        "nameservers": b.nameservers,
+        // k2.dev auto-added the zone to this account on bind.
+        "created": b.auto_created,
         "names": names.iter().map(name_json).collect::<Vec<_>>(),
     })
 }
 
-fn maybe_reresolve(conn: &rusqlite::Connection, b: &DomainBinding) -> DomainBinding {
-    if b.dns_write || b.zone_id.is_some() {
-        return b.clone();
-    }
-    match bind_apex(&b.apex) {
-        BindOutcome::Bound { zone_id } => {
-            upsert_binding(conn, &b.apex, zone_id.as_deref(), true).unwrap_or_else(|_| b.clone())
+/// Teaching text for a `pending_ns` zone (CLI + record-write refusal).
+pub fn pending_ns_hint(b: &DomainBinding) -> String {
+    let ns = if b.nameservers.is_empty() {
+        "the k2.dev nameservers shown in your k2.dev dashboard".to_string()
+    } else {
+        b.nameservers.join(", ")
+    };
+    format!(
+        "Pending: point nameservers to {ns} at the registrar for {apex}, then check again \
+(Settings → K2 Server → Domains → Check again, or `k2 domain refresh {apex}`). \
+DNS record writes open once the zone is active.",
+        apex = b.apex
+    )
+}
+
+/// Map a failed bind/unbind to the CLI response. `None` = proceed.
+///
+/// API-missing (405 / empty or HTML 404 / any HTML) is **503**
+/// `bind_api_unavailable`, never 502 — the daemon is fine, k2.dev has not
+/// shipped the route.
+fn bind_error_response(outcome: &BindOutcome, failed_code: &str) -> Option<CliResponse> {
+    match outcome {
+        BindOutcome::Bound(_) | BindOutcome::NotOwned | BindOutcome::NoTunnel => None,
+        BindOutcome::OwnedElsewhere { hint } => Some(error_response(
+            "409 Conflict",
+            "zone_owned_elsewhere",
+            hint,
+        )),
+        BindOutcome::ApiMissing { hint } => Some(error_response(
+            "503 Service Unavailable",
+            "bind_api_unavailable",
+            hint,
+        )),
+        BindOutcome::Failed { status, hint } => {
+            let http = match status {
+                401 => "401 Unauthorized",
+                403 => "403 Forbidden",
+                409 => "409 Conflict",
+                0 => "503 Service Unavailable",
+                _ => "502 Bad Gateway",
+            };
+            Some(error_response(http, failed_code, hint))
         }
-        _ => b.clone(),
     }
 }
 
-/// GET `/cli/domains` — host inventory.
+/// Write what a bind said onto the local row. `Ok(None)` = unpaired, the
+/// row is left as it was (an unreachable tunnel never downgrades a zone).
+fn store_bind_outcome(
+    conn: &rusqlite::Connection,
+    apex: &str,
+    outcome: &BindOutcome,
+    unpaired_is_byo: bool,
+) -> rusqlite::Result<Option<DomainBinding>> {
+    match outcome {
+        BindOutcome::Bound(zone) => upsert_binding_zone(conn, apex, zone).map(Some),
+        BindOutcome::NotOwned => upsert_binding(conn, apex, None, false).map(Some),
+        BindOutcome::NoTunnel if unpaired_is_byo => upsert_binding(conn, apex, None, false).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// GET `/cli/domains` — host inventory. Pure read: never dials k2.dev
+/// (A8.1 bind can auto-add a zone to the account, so a GET must not
+/// bind). Re-check is `POST /cli/domains/refresh`.
 pub fn handle_list(_params: &HashMap<String, String>) -> CliResponse {
     if let Err(r) = gate_agent_list() {
         return r;
@@ -143,16 +202,97 @@ pub fn handle_list(_params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
     };
-    let domains: Vec<serde_json::Value> = bindings
-        .iter()
-        .map(|b| {
-            let b = maybe_reresolve(&conn, b);
-            domain_json(&conn, &b)
-        })
-        .collect();
+    let domains: Vec<serde_json::Value> =
+        bindings.iter().map(|b| domain_json(&conn, b)).collect();
     CliResponse::ok_json(
         serde_json::json!({ "ok": true, "domains": domains }).to_string(),
     )
+}
+
+/// POST `/cli/domains/refresh` `{apex?}` — re-bind on demand so a
+/// `pending_ns` zone flips to `active` once its nameservers point at
+/// k2.dev. With `apex`: that binding, whatever its state (404 when not
+/// attached) — also how a BYO row picks up a zone k2.dev now owns.
+/// Without: every `pending_ns` binding. Owner/admin (a re-bind may
+/// auto-add the zone to the k2.dev account).
+///
+/// `checked:false` = no tunnel token; rows are left unchanged.
+pub fn handle_refresh(params: &HashMap<String, String>) -> CliResponse {
+    let single = body_str(params, &["apex", "domain"]).map(str::to_string);
+    let targets: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(raw) = single.as_deref() {
+            let apex = match normalize_apex(raw) {
+                Ok(a) => a,
+                Err(e) => return error_response("400 Bad Request", "invalid_domain", &e),
+            };
+            match get_binding(&conn, &apex) {
+                Ok(Some(_)) => vec![apex],
+                Ok(None) => {
+                    return error_response(
+                        "404 Not Found",
+                        "not_found",
+                        &format!("no domain binding for '{apex}' — k2 domain add {apex} first"),
+                    )
+                }
+                Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
+            }
+        } else {
+            match list_bindings(&conn) {
+                Ok(v) => v
+                    .into_iter()
+                    .filter(|b| b.is_pending_ns())
+                    .map(|b| b.apex)
+                    .collect(),
+                Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
+            }
+        }
+    };
+
+    // Dial k2.dev without holding the DB lock.
+    let mut outcomes: Vec<(String, BindOutcome)> = Vec::with_capacity(targets.len());
+    for apex in targets {
+        let outcome = bind_apex(&apex);
+        if let Some(r) = bind_error_response(&outcome, "bind_failed") {
+            return r;
+        }
+        outcomes.push((apex, outcome));
+    }
+
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut checked = true;
+    let mut domains = Vec::with_capacity(outcomes.len());
+    for (apex, outcome) in &outcomes {
+        if matches!(outcome, BindOutcome::NoTunnel) {
+            checked = false;
+        }
+        let row = match store_bind_outcome(&conn, apex, outcome, false) {
+            Ok(Some(b)) => Some(b),
+            Ok(None) => get_binding(&conn, apex).ok().flatten(),
+            Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
+        };
+        if let Some(b) = row {
+            domains.push(domain_json(&conn, &b));
+        }
+    }
+    let mut body = serde_json::json!({
+        "ok": true,
+        "checked": checked,
+        "domains": domains,
+    });
+    if !checked {
+        body["hint"] = serde_json::json!(
+            "no K2 Connect tunnel token on this server — pair K2 Connect, then check again"
+        );
+    }
+    if single.is_some() {
+        if let Some(first) = body["domains"].get(0).cloned() {
+            body["domain"] = first;
+        }
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// POST `/cli/domains` `{apex}` — attach (idempotent). Owner/admin.
@@ -165,27 +305,20 @@ pub fn handle_attach(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "invalid_domain", &e),
     };
 
-    let (dns_write, zone_id) = match bind_apex(&apex) {
-        BindOutcome::Bound { zone_id } => (true, zone_id),
-        BindOutcome::NotOwned | BindOutcome::NoTunnel => (false, None),
-        BindOutcome::ApiMissing { hint } => {
-            return error_response("404 Not Found", "bind_api_unavailable", &hint);
-        }
-        BindOutcome::Failed { status, hint } => {
-            let http = match status {
-                401 => "401 Unauthorized",
-                403 => "403 Forbidden",
-                0 => "503 Service Unavailable",
-                _ => "502 Bad Gateway",
-            };
-            return error_response(http, "bind_failed", &hint);
-        }
-    };
+    let outcome = bind_apex(&apex);
+    if let Some(r) = bind_error_response(&outcome, "bind_failed") {
+        return r;
+    }
 
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match upsert_binding(&conn, &apex, zone_id.as_deref(), dns_write) {
-        Ok(b) => CliResponse::ok_json(
+    match store_bind_outcome(&conn, &apex, &outcome, true) {
+        Ok(None) => error_response(
+            "500 Internal Server Error",
+            "bind_failed",
+            &format!("unexpected bind outcome for '{apex}': {outcome:?}"),
+        ),
+        Ok(Some(b)) => CliResponse::ok_json(
             serde_json::json!({
                 "ok": true,
                 "domain": domain_json(&conn, &b),
@@ -223,21 +356,12 @@ pub fn handle_remove(params: &HashMap<String, String>) -> CliResponse {
     if existing.as_ref().map(|b| b.dns_write).unwrap_or(false)
         || existing.as_ref().and_then(|b| b.zone_id.as_ref()).is_some()
     {
-        match unbind_apex(&apex) {
-            BindOutcome::Bound { .. }
-            | BindOutcome::NotOwned
-            | BindOutcome::NoTunnel => {}
-            BindOutcome::ApiMissing { hint } => {
-                return error_response("404 Not Found", "bind_api_unavailable", &hint);
-            }
-            BindOutcome::Failed { status, hint } => {
-                let http = match status {
-                    401 => "401 Unauthorized",
-                    403 => "403 Forbidden",
-                    0 => "503 Service Unavailable",
-                    _ => "502 Bad Gateway",
-                };
-                return error_response(http, "unbind_failed", &hint);
+        let outcome = unbind_apex(&apex);
+        // Another account owning the apex means there is nothing of ours
+        // to unbind — local remove proceeds.
+        if !matches!(outcome, BindOutcome::OwnedElsewhere { .. }) {
+            if let Some(r) = bind_error_response(&outcome, "unbind_failed") {
+                return r;
             }
         }
     }
@@ -528,6 +652,10 @@ pub fn handle_remove_post(body: &[u8]) -> CliResponse {
     handle_remove(&params_from_post(body))
 }
 
+pub fn handle_refresh_post(body: &[u8]) -> CliResponse {
+    handle_refresh(&params_from_post(body))
+}
+
 pub fn handle_names_add_post(body: &[u8]) -> CliResponse {
     handle_names_add(&params_from_post(body))
 }
@@ -536,17 +664,44 @@ pub fn handle_names_remove_post(body: &[u8]) -> CliResponse {
     handle_names_remove(&params_from_post(body))
 }
 
-/// Belt used by `/cli/dns/*` writes (A6).
+fn zone_not_attached() -> CliResponse {
+    error_response(
+        "403 Forbidden",
+        "dns_zone_not_attached",
+        crate::dns::DNS_ZONE_NOT_ATTACHED_HINT,
+    )
+}
+
+/// Belt used by `/cli/dns/*` record writes (A6). A `pending_ns` zone
+/// (A8.1) refuses with `zone_pending_ns` + the nameservers to set.
 pub fn require_zone_attached_for_write(zone_id: &str) -> Result<(), CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match k2_core::domains::zone_attached_for_write(&conn, zone_id) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(error_response(
+    match get_binding_by_zone_id(&conn, zone_id) {
+        Ok(Some(b)) if b.is_pending_ns() => Err(error_response(
             "403 Forbidden",
-            "dns_zone_not_attached",
-            crate::dns::DNS_ZONE_NOT_ATTACHED_HINT,
+            "zone_pending_ns",
+            &pending_ns_hint(&b),
         )),
+        Ok(Some(b)) if b.dns_write => Ok(()),
+        Ok(_) => Err(zone_not_attached()),
+        Err(e) => Err(error_response(
+            "500 Internal Server Error",
+            "db",
+            &e.to_string(),
+        )),
+    }
+}
+
+/// Belt for `/cli/dns/*` reads (records list, delegation verify): a
+/// `pending_ns` zone may be read and verified — that is how it turns
+/// active — but not written.
+pub fn require_zone_attached_for_read(zone_id: &str) -> Result<(), CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match get_binding_by_zone_id(&conn, zone_id) {
+        Ok(Some(b)) if b.dns_write || b.is_pending_ns() => Ok(()),
+        Ok(_) => Err(zone_not_attached()),
         Err(e) => Err(error_response(
             "500 Internal Server Error",
             "db",
@@ -630,23 +785,353 @@ mod tests {
     #[test]
     fn attach_byo_without_tunnel_is_dns_write_false() {
         init();
-        // No tunnel.json in this process HOME (tests typically have none).
+        // No fake bind installed → the test seam reads as an unpaired box
+        // (never dials k2.dev) → BYO.
         let mut params = HashMap::new();
         params.insert("apex".into(), "byo-attach.example".into());
         let resp = handle_attach(&params);
-        // Air-gap/no token → BYO, or bind_api_unavailable if a token exists
-        // and k2.dev 404s HTML. Either is loud; BYO is the unpaired path.
-        assert!(
-            resp.status.starts_with("200") || resp.body.contains("bind_api_unavailable") || resp.body.contains("bind_failed"),
-            "{}",
-            resp.body
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = json(&resp);
+        assert_eq!(v.pointer("/domain/dnsWrite"), Some(&serde_json::json!(false)), "{v}");
+        assert_eq!(v.pointer("/domain/status"), Some(&serde_json::Value::Null), "{v}");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = remove_binding(&conn, "byo-attach.example");
+    }
+
+    // ── A8.1 bind contract → route mapping ──────────────────────────
+
+    use crate::dns::proxy::DnsHttpResponse;
+    use crate::domains::bind::{
+        fake_bind_calls, pending_rows_test_lock, replace_fake_bind, set_fake_bind,
+    };
+
+    fn json(resp: &CliResponse) -> serde_json::Value {
+        serde_json::from_str(&resp.body)
+            .unwrap_or_else(|e| panic!("non-JSON body ({e}): {}", resp.body))
+    }
+
+    fn reply(status: u16, body: &str) -> Result<DnsHttpResponse, String> {
+        Ok(DnsHttpResponse {
+            status,
+            body: body.into(),
+        })
+    }
+
+    fn attach(apex: &str) -> CliResponse {
+        let mut params = HashMap::new();
+        params.insert("apex".into(), apex.into());
+        handle_attach(&params)
+    }
+
+    fn refresh(apex: Option<&str>) -> CliResponse {
+        let body = match apex {
+            Some(a) => serde_json::json!({ "apex": a }).to_string(),
+            None => "{}".to_string(),
+        };
+        handle_refresh_post(body.as_bytes())
+    }
+
+    fn binding(apex: &str) -> Option<DomainBinding> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        get_binding(&conn, apex).expect("db read")
+    }
+
+    fn drop_binding(apex: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        remove_binding(&conn, apex).expect("cleanup");
+    }
+
+    fn error_code(resp: &CliResponse) -> String {
+        json(resp)
+            .pointer("/error/code")
+            .and_then(|c| c.as_str())
+            .unwrap_or_else(|| panic!("no error.code: {}", resp.body))
+            .to_string()
+    }
+
+    const PENDING_CREATED: &str = r#"{"ok":true,"zoneId":"zone-a81-pending","status":"pending_ns","nameservers":["ns1.k2.dev","ns2.k2.dev"],"dnsWrite":false,"created":true}"#;
+    const FLIP_PENDING: &str = r#"{"ok":true,"zoneId":"zone-a81-flip","status":"pending_ns","nameservers":["ns1.k2.dev","ns2.k2.dev"],"dnsWrite":false,"created":true}"#;
+    const FLIP_ACTIVE: &str = r#"{"ok":true,"zoneId":"zone-a81-flip","status":"active","nameservers":["ns1.k2.dev","ns2.k2.dev"],"dnsWrite":true}"#;
+
+    #[test]
+    fn attach_api_missing_is_503_never_502() {
+        init();
+        let cases: &[(u16, &str)] = &[
+            (405, ""),
+            (404, ""),
+            (404, "<!DOCTYPE html><html><body>404</body></html>"),
+            (200, "<html><body>catch-all</body></html>"),
+            (502, "<html><body>Bad gateway</body></html>"),
+        ];
+        for (status, body) in cases {
+            let _g = set_fake_bind(reply(*status, body));
+            let resp = attach("api-missing.example");
+            assert_eq!(
+                resp.status, "503 Service Unavailable",
+                "HTTP {status} {body:?} → {}",
+                resp.body
+            );
+            assert_ne!(resp.status, "502 Bad Gateway");
+            assert_eq!(error_code(&resp), "bind_api_unavailable");
+            let hint = json(&resp)["error"]["hint"].as_str().expect("hint").to_string();
+            assert!(hint.starts_with("Domain linking isn't live on k2.dev yet"), "{hint}");
+            assert!(binding("api-missing.example").is_none(), "nothing stored on API-missing");
+            assert_eq!(fake_bind_calls().len(), 1, "one bind call");
+        }
+    }
+
+    #[test]
+    fn attach_409_is_zone_owned_elsewhere_with_hint() {
+        init();
+        let _g = set_fake_bind(reply(
+            409,
+            r#"{"error":"zone_owned_elsewhere","hint":"owned-else.example is in another k2.dev account"}"#,
+        ));
+        let resp = attach("owned-else.example");
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert_eq!(error_code(&resp), "zone_owned_elsewhere");
+        assert_eq!(
+            json(&resp)["error"]["hint"],
+            "owned-else.example is in another k2.dev account"
         );
-        if resp.status.starts_with("200") {
-            assert!(resp.body.contains("\"dnsWrite\":false") || resp.body.contains("\"dnsWrite\": false"), "{}", resp.body);
+        assert!(binding("owned-else.example").is_none());
+    }
+
+    #[test]
+    fn attach_auth_and_upstream_failures_keep_their_status() {
+        init();
+        let _g = set_fake_bind(reply(401, r#"{"error":"unauthorized"}"#));
+        let r = attach("auth-fail.example");
+        assert_eq!(r.status, "401 Unauthorized", "{}", r.body);
+        assert_eq!(error_code(&r), "bind_failed");
+        replace_fake_bind(reply(403, r#"{"error":"forbidden","hint":"plan required"}"#));
+        let r = attach("auth-fail.example");
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(json(&r)["error"]["hint"], "plan required");
+        // A real JSON 5xx from a deployed route is still a bad gateway.
+        replace_fake_bind(reply(500, r#"{"error":"db down"}"#));
+        let r = attach("auth-fail.example");
+        assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
+        assert!(binding("auth-fail.example").is_none());
+    }
+
+    #[test]
+    fn attach_json_404_is_byo() {
+        init();
+        let _g = set_fake_bind(reply(404, r#"{"error":"not found"}"#));
+        let r = attach("json404-byo.example");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let b = binding("json404-byo.example").expect("stored");
+        assert!(!b.dns_write);
+        assert_eq!(b.status, None);
+        assert!(b.zone_id.is_none());
+        drop_binding("json404-byo.example");
+    }
+
+    #[test]
+    fn attach_pending_created_is_stored_and_listed() {
+        init();
+        let _lock = pending_rows_test_lock();
+        let apex = "a81-pending.example";
+        let _g = set_fake_bind(reply(200, PENDING_CREATED));
+        let r = attach(apex);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r);
+        assert_eq!(v["domain"]["status"], "pending_ns");
+        assert_eq!(v["domain"]["pendingNs"], true);
+        assert_eq!(v["domain"]["dnsWrite"], false);
+        assert_eq!(v["domain"]["created"], true);
+        assert_eq!(v["domain"]["zoneId"], "zone-a81-pending");
+        assert_eq!(v["domain"]["nameservers"], serde_json::json!(["ns1.k2.dev", "ns2.k2.dev"]));
+
+        // GET list exposes the same fields and never dials k2.dev.
+        let before = fake_bind_calls().len();
+        let list = handle_list(&HashMap::new());
+        assert_eq!(list.status, "200 OK", "{}", list.body);
+        assert_eq!(fake_bind_calls().len(), before, "GET /cli/domains must not bind");
+        let lv = json(&list);
+        let row = lv["domains"]
+            .as_array()
+            .expect("domains")
+            .iter()
+            .find(|d| d["apex"] == apex)
+            .unwrap_or_else(|| panic!("{apex} missing from list: {lv}"))
+            .clone();
+        assert_eq!(row["status"], "pending_ns");
+        assert_eq!(row["created"], true);
+        assert_eq!(row["nameservers"], serde_json::json!(["ns1.k2.dev", "ns2.k2.dev"]));
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn refresh_flips_pending_zone_to_active() {
+        init();
+        let _lock = pending_rows_test_lock();
+        let apex = "a81-flip.example";
+        let _g = set_fake_bind(reply(200, FLIP_PENDING));
+        assert_eq!(attach(apex).status, "200 OK");
+        assert!(binding(apex).expect("stored").is_pending_ns());
+
+        // Writes are refused while pending.
+        let w = match require_zone_attached_for_write("zone-a81-flip") {
+            Err(r) => r,
+            Ok(()) => panic!("pending zone must refuse writes"),
+        };
+        assert_eq!(error_code(&w), "zone_pending_ns");
+
+        // Nameservers now point at k2.dev → Check again.
+        replace_fake_bind(reply(200, FLIP_ACTIVE));
+        let r = refresh(Some(apex));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r);
+        assert_eq!(v["checked"], true);
+        assert_eq!(v["domain"]["status"], "active");
+        assert_eq!(v["domain"]["dnsWrite"], true);
+        assert_eq!(v["domain"]["pendingNs"], false);
+        // `created` stays sticky across a re-bind that omits it.
+        assert_eq!(v["domain"]["created"], true);
+        let b = binding(apex).expect("stored");
+        assert_eq!(b.status.as_deref(), Some("active"));
+        assert!(b.dns_write);
+        let calls = fake_bind_calls();
+        assert_eq!(calls.last().map(|c| c.0.as_str()), Some("/api/dns/zones/bind"));
+
+        if let Err(r) = require_zone_attached_for_write("zone-a81-flip") {
+            panic!("active zone must accept writes: {}", r.body);
+        }
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn refresh_all_rebinds_only_pending_rows() {
+        init();
+        let _lock = pending_rows_test_lock();
+        {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let _ = remove_binding(&conn, "byo-attach.example");
+            upsert_binding(&conn, "a81-all-byo.example", None, false).unwrap();
         }
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            upsert_binding_zone(
+                &conn,
+                "a81-all-active.example",
+                &k2_core::domains::BoundZone {
+                    zone_id: Some("z-all-active".into()),
+                    status: Some("active".into()),
+                    nameservers: vec![],
+                    dns_write: true,
+                    auto_created: false,
+                },
+            )
+            .unwrap();
+            upsert_binding_zone(
+                &conn,
+                "a81-all-pending.example",
+                &k2_core::domains::BoundZone {
+                    zone_id: Some("z-all-pending".into()),
+                    status: Some("pending_ns".into()),
+                    nameservers: vec!["ns1.k2.dev".into()],
+                    dns_write: false,
+                    auto_created: true,
+                },
+            )
+            .unwrap();
+        }
+        let _g = set_fake_bind(reply(
+            200,
+            r#"{"zoneId":"z-all-pending","status":"active","dnsWrite":true}"#,
+        ));
+        let r = refresh(None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let bodies: Vec<String> = fake_bind_calls().into_iter().map(|c| c.1).collect();
+        assert!(
+            bodies.iter().any(|b| b.contains("a81-all-pending.example")),
+            "{bodies:?}"
+        );
+        assert!(
+            !bodies.iter().any(|b| b.contains("a81-all-active.example")),
+            "active rows are not re-bound: {bodies:?}"
+        );
+        assert!(
+            !bodies.iter().any(|b| b.contains("a81-all-byo.example")),
+            "BYO rows are re-checked by apex only: {bodies:?}"
+        );
+        assert_eq!(
+            binding("a81-all-pending.example").expect("row").status.as_deref(),
+            Some("active")
+        );
+        assert_eq!(binding("a81-all-byo.example").expect("row").status, None);
+        drop_binding("a81-all-byo.example");
+        drop_binding("a81-all-active.example");
+        drop_binding("a81-all-pending.example");
+    }
+
+    #[test]
+    fn refresh_errors_and_unpaired() {
+        init();
+        let _lock = pending_rows_test_lock();
+        // Not attached → 404.
+        let r = refresh(Some("never-attached.example"));
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+
+        let apex = "a81-refresh-err.example";
+        {
+            let _g = set_fake_bind(reply(200, PENDING_CREATED));
+            assert_eq!(attach(apex).status, "200 OK");
+        }
+        // API missing on refresh → 503, row untouched.
+        {
+            let _g = set_fake_bind(reply(405, ""));
+            let r = refresh(Some(apex));
+            assert_eq!(r.status, "503 Service Unavailable", "{}", r.body);
+            assert_eq!(error_code(&r), "bind_api_unavailable");
+            assert!(binding(apex).expect("row").is_pending_ns());
+        }
+        // 409 on refresh → 409, row untouched.
+        {
+            let _g = set_fake_bind(reply(409, r#"{"error":"zone_owned_elsewhere"}"#));
+            let r = refresh(Some(apex));
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+            assert_eq!(error_code(&r), "zone_owned_elsewhere");
+            assert!(binding(apex).expect("row").is_pending_ns());
+        }
+        // Unpaired (no fake) → checked:false, row unchanged, never BYO.
+        let r = refresh(Some(apex));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r);
+        assert_eq!(v["checked"], false);
+        assert_eq!(v["domain"]["status"], "pending_ns");
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn remove_pending_unbinds_and_maps_api_missing_to_503() {
+        init();
+        let _lock = pending_rows_test_lock();
+        let apex = "a81-remove.example";
+        let _g = set_fake_bind(reply(200, PENDING_CREATED));
+        assert_eq!(attach(apex).status, "200 OK");
+        replace_fake_bind(reply(405, ""));
+        let mut params = HashMap::new();
+        params.insert("apex".into(), apex.into());
+        let r = handle_remove(&params);
+        assert_eq!(r.status, "503 Service Unavailable", "{}", r.body);
+        assert_eq!(error_code(&r), "bind_api_unavailable");
+        assert!(binding(apex).is_some(), "row kept when unbind can't run");
+
+        replace_fake_bind(reply(200, r#"{"ok":true}"#));
+        let r = handle_remove(&params);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            fake_bind_calls().last().map(|c| c.0.as_str()),
+            Some("/api/dns/zones/unbind")
+        );
+        assert!(binding(apex).is_none());
     }
 
     #[test]

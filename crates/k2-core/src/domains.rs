@@ -43,6 +43,12 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Control-plane zone status: records are live (NS delegated to k2.dev).
+pub const ZONE_STATUS_ACTIVE: &str = "active";
+/// Control-plane zone status: zone exists in the k2.dev account but the
+/// registrar nameservers do not point at k2.dev yet. No record writes.
+pub const ZONE_STATUS_PENDING_NS: &str = "pending_ns";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainBinding {
@@ -50,7 +56,38 @@ pub struct DomainBinding {
     pub zone_id: Option<String>,
     pub dns_write: bool,
     pub created_at: i64,
+    /// `active` | `pending_ns` from k2.dev bind (A8.1). `None` for BYO
+    /// rows and rows bound before A8.1 (0127).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Nameservers k2.dev wants at the registrar (A8.1).
+    #[serde(default)]
+    pub nameservers: Vec<String>,
+    /// k2.dev auto-added this zone to the account on bind (`created:true`).
+    #[serde(default)]
+    pub auto_created: bool,
 }
+
+impl DomainBinding {
+    /// True when the zone is in the k2.dev account but its nameservers do
+    /// not point at k2.dev yet (record writes are refused).
+    pub fn is_pending_ns(&self) -> bool {
+        self.status.as_deref() == Some(ZONE_STATUS_PENDING_NS)
+    }
+}
+
+/// Everything a successful control-plane bind says about the zone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BoundZone {
+    pub zone_id: Option<String>,
+    pub status: Option<String>,
+    pub nameservers: Vec<String>,
+    pub dns_write: bool,
+    pub auto_created: bool,
+}
+
+const BINDING_COLS: &str =
+    "apex, zone_id, dns_write, created_at, status, nameservers, auto_created";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -63,26 +100,35 @@ pub struct DomainName {
 impl DomainBinding {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         let dns_write: i64 = row.get(2)?;
+        let ns_json: Option<String> = row.get(5)?;
+        let nameservers = ns_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default();
+        let auto_created: i64 = row.get(6)?;
         Ok(Self {
             apex: row.get(0)?,
             zone_id: row.get(1)?,
             dns_write: dns_write != 0,
             created_at: row.get(3)?,
+            status: row.get(4)?,
+            nameservers,
+            auto_created: auto_created != 0,
         })
     }
 }
 
 pub fn list_bindings(conn: &Connection) -> rusqlite::Result<Vec<DomainBinding>> {
-    let mut stmt = conn.prepare(
-        "SELECT apex, zone_id, dns_write, created_at FROM domain_bindings ORDER BY apex",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {BINDING_COLS} FROM domain_bindings ORDER BY apex"
+    ))?;
     let rows = stmt.query_map([], DomainBinding::from_row)?;
     rows.collect()
 }
 
 pub fn get_binding(conn: &Connection, apex: &str) -> rusqlite::Result<Option<DomainBinding>> {
     conn.query_row(
-        "SELECT apex, zone_id, dns_write, created_at FROM domain_bindings WHERE apex = ?1",
+        &format!("SELECT {BINDING_COLS} FROM domain_bindings WHERE apex = ?1"),
         params![apex],
         DomainBinding::from_row,
     )
@@ -95,26 +141,72 @@ pub fn get_binding_by_zone_id(conn: &Connection, zone_id: &str) -> rusqlite::Res
         return Ok(None);
     }
     conn.query_row(
-        "SELECT apex, zone_id, dns_write, created_at FROM domain_bindings WHERE zone_id = ?1",
+        &format!("SELECT {BINDING_COLS} FROM domain_bindings WHERE zone_id = ?1"),
         params![z],
         DomainBinding::from_row,
     )
     .optional()
 }
 
-/// Insert or refresh a binding. Idempotent on apex.
+/// Insert or refresh a BYO / legacy binding (no control-plane zone
+/// status). Idempotent on apex. Clears any A8.1 status so a row that
+/// k2.dev no longer owns stops reading as pending/active.
 pub fn upsert_binding(
     conn: &Connection,
     apex: &str,
     zone_id: Option<&str>,
     dns_write: bool,
 ) -> rusqlite::Result<DomainBinding> {
+    upsert_binding_zone(
+        conn,
+        apex,
+        &BoundZone {
+            zone_id: zone_id.map(str::to_string),
+            status: None,
+            nameservers: Vec::new(),
+            dns_write,
+            auto_created: false,
+        },
+    )
+}
+
+/// Insert or refresh a binding with everything k2.dev bind returned
+/// (A8.1: status, nameservers, created). Idempotent on apex.
+/// `auto_created` is sticky: a later re-bind that omits `created` keeps
+/// the note that k2.dev added the zone.
+pub fn upsert_binding_zone(
+    conn: &Connection,
+    apex: &str,
+    zone: &BoundZone,
+) -> rusqlite::Result<DomainBinding> {
     let now = now_unix();
+    let ns_json: Option<String> = if zone.nameservers.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&zone.nameservers).unwrap_or_else(|_| "[]".into()))
+    };
+    let keep_created = zone.status.is_some();
     conn.execute(
-        "INSERT INTO domain_bindings (apex, zone_id, dns_write, created_at) \
-         VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(apex) DO UPDATE SET zone_id = excluded.zone_id, dns_write = excluded.dns_write",
-        params![apex, zone_id, if dns_write { 1 } else { 0 }, now],
+        "INSERT INTO domain_bindings \
+           (apex, zone_id, dns_write, created_at, status, nameservers, auto_created) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT(apex) DO UPDATE SET \
+           zone_id = excluded.zone_id, \
+           dns_write = excluded.dns_write, \
+           status = excluded.status, \
+           nameservers = excluded.nameservers, \
+           auto_created = CASE WHEN ?8 THEN MAX(domain_bindings.auto_created, excluded.auto_created) \
+                               ELSE excluded.auto_created END",
+        params![
+            apex,
+            zone.zone_id.as_deref(),
+            if zone.dns_write { 1 } else { 0 },
+            now,
+            zone.status.as_deref(),
+            ns_json,
+            if zone.auto_created { 1 } else { 0 },
+            keep_created,
+        ],
     )?;
     Ok(get_binding(conn, apex)?.expect("just upserted"))
 }

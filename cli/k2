@@ -14196,6 +14196,13 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
     },
     {
+      "name": "domain refresh",
+      "usage": "k2 domain refresh [<apex>] [--json]",
+      "description": "Check again with k2.dev (re-bind) so a pending_ns domain flips to active once its nameservers point at k2.dev. No apex = every pending domain. Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
       "name": "domain name add",
       "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]",
       "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
@@ -14214,7 +14221,7 @@ cmd_schema() {
     },
     {
       "name": "domain",
-      "usage": "k2 domain <list|add|remove|name> ...",
+      "usage": "k2 domain <list|add|remove|refresh|name> ...",
       "description": "Attach custom domains to THIS server. Apex add/remove is owner; hostname add/remove is dns_manage. Not k2 hostmail domain. Not a nameserver cutover. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
@@ -31109,17 +31116,27 @@ GATED_CODES = frozenset({
 USAGE_CODES = frozenset({
     "usage", "type_not_allowed",
 })
+# A8.1: the zone is in the k2.dev account but its registrar nameservers do
+# not point at k2.dev yet. Only a human can fix that (exit 3), and it is
+# not a Settings toggle, so no Settings teaching is appended.
+PENDING_NS_CODES = frozenset({"zone_pending_ns"})
+PENDING_NS_HINT = (
+    "Pending: this zone's nameservers don't point at k2.dev yet — set them at "
+    "the registrar (k2 domain list shows which), then k2 domain refresh <apex>"
+)
 
 def die(err, exit_code=None):
     if isinstance(err, str):
         err = {"code": "error", "hint": err}
     code = err.get("code", "error") if isinstance(err, dict) else "error"
     hint = err.get("hint", "") if isinstance(err, dict) else str(err)
+    if code in PENDING_NS_CODES and not hint.startswith("Pending:"):
+        hint = PENDING_NS_HINT + ((" — " + hint) if hint and hint != code else "")
     if code in GATED_CODES and "Settings" not in hint:
         hint = (hint + " — " if hint else "") + DNS_GATED_HINT
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     if exit_code is None:
-        if code in GATED_CODES:
+        if code in GATED_CODES or code in PENDING_NS_CODES:
             exit_code = 3
         elif code in USAGE_CODES:
             exit_code = 2
@@ -31191,11 +31208,16 @@ if verb == "list":
         if not isinstance(z, dict):
             print(str(z))
             continue
+        status = z.get("status") or z.get("state") or "?"
         print("%-28s  %-12s  %s" % (
             z.get("domain") or "?",
-            z.get("status") or z.get("state") or "?",
+            status,
             z.get("id") or "",
         ))
+        if status == "pending_ns":
+            ns = [str(n) for n in (z.get("nameservers") or []) if n]
+            print("  Pending: point nameservers to %s (record writes refused until active)" % (
+                ", ".join(ns) if ns else "the k2.dev nameservers (k2 domain list shows them)"))
     sys.exit(0)
 
 if verb == "records":
@@ -31727,6 +31749,48 @@ if as_json:
     print(dumps(d))
     sys.exit(0)
 
+# A8.1: a zone k2.dev holds but whose registrar NS do not point at
+# k2.dev yet. Records stay read-only until `k2 domain refresh` flips it.
+def is_pending(row):
+    return isinstance(row, dict) and row.get("status") == "pending_ns"
+
+def dns_label(row):
+    if is_pending(row):
+        return "pending"
+    return "write" if row.get("dnsWrite") else "byo"
+
+def pending_lines(row, indent="  "):
+    if not is_pending(row):
+        return
+    ns = [str(n) for n in (row.get("nameservers") or []) if n]
+    print("%sPending: point nameservers to %s" % (
+        indent, ", ".join(ns) if ns else "the k2.dev nameservers (see your k2.dev dashboard)"))
+    if row.get("created"):
+        print("%sAuto-added to your k2.dev account" % indent)
+    print("%sthen: k2 domain refresh %s" % (indent, row.get("apex") or "<apex>"))
+
+def state_words(row):
+    if is_pending(row):
+        return "pending nameservers"
+    return "K2-hosted DNS (writable)" if row.get("dnsWrite") else "BYO DNS (inventory only)"
+
+if verb == "add":
+    row = d.get("domain") if isinstance(d.get("domain"), dict) else {}
+    print("attached %s — %s" % (row.get("apex") or "?", state_words(row)))
+    pending_lines(row)
+    sys.exit(0)
+
+if verb == "refresh":
+    rows = [r for r in (d.get("domains") or []) if isinstance(r, dict)]
+    if not rows:
+        print("(no pending domains to check)")
+    for row in rows:
+        print("%-28s  %s" % (row.get("apex") or "?", state_words(row)))
+        pending_lines(row)
+    if d.get("checked") is False:
+        print("not checked: %s" % (d.get("hint") or "no K2 Connect tunnel token"))
+    sys.exit(0)
+
 if verb == "list":
     domains = d.get("domains") or []
     if not domains:
@@ -31738,12 +31802,12 @@ if verb == "list":
         if not isinstance(row, dict):
             print(str(row))
             continue
-        write = "write" if row.get("dnsWrite") else "byo"
         print("%-28s  %-8s  %s" % (
             row.get("apex") or "?",
-            write,
+            dns_label(row),
             row.get("zoneId") or "-",
         ))
+        pending_lines(row)
         for n in row.get("names") or []:
             if not isinstance(n, dict):
                 continue
@@ -31765,8 +31829,8 @@ if verb == "certs":
         print("%-32s  %-8s  %s" % (c.get("hostname") or "?", c.get("role") or "other", cert))
     sys.exit(0)
 
-# add / remove / name — compact success
-if verb in ("add", "remove", "name-add", "name-remove", "issue", "renew"):
+# remove / name — compact success
+if verb in ("remove", "name-add", "name-remove", "issue", "renew"):
     print(dumps(d) if as_json else dumps({k: d[k] for k in d if k != "ok"} or d))
     sys.exit(0)
 
@@ -31851,6 +31915,32 @@ cmd_domain_remove() {
     _dom_handle_resp
 }
 
+cmd_domain_refresh() {
+    if _wants_help "$@"; then cmd_help_domain_refresh; exit 0; fi
+    local apex="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain refresh [<apex>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$apex" ]; then apex="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1' — one <apex> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    local body RESP
+    body=$(D_APEX="$apex" python3 -c 'import json,os
+a=os.environ.get("D_APEX","").strip()
+print(json.dumps({"apex": a} if a else {}))')
+    RESP=$(cli_send cli_post_json "/cli/domains/refresh" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="refresh"
+    _dom_handle_resp
+}
+
 cmd_domain_name_add() {
     if _wants_help "$@"; then cmd_help_domain_name_add; exit 0; fi
     local hostname="" role="" as_json=false
@@ -31930,6 +32020,7 @@ cmd_domain() {
         list) shift; cmd_domain_list "$@" ;;
         add) shift; cmd_domain_add "$@" ;;
         remove|rm|delete|del) shift; cmd_domain_remove "$@" ;;
+        refresh|check) shift; cmd_domain_refresh "$@" ;;
         name) shift; cmd_domain_name "$@" ;;
         --help|-h|'') cmd_help_domain; exit 0 ;;
         *)
@@ -32039,8 +32130,14 @@ USAGE
   k2 domain list [--json]
   k2 domain add <apex> [--json]
   k2 domain remove <apex> [--json]
+  k2 domain refresh [<apex>] [--json]
   k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]
   k2 domain name remove <hostname> [--json]
+
+A domain k2.dev holds but whose nameservers don't point at k2.dev yet
+lists as "pending" with the nameservers to set at your registrar. DNS
+record writes are refused (zone_pending_ns) until `k2 domain refresh`
+sees it active.
 
 See also: k2 dns (records on attached K2-hosted zones), k2 cert (certs
 for attached hostnames), k2 hostmail domain (mail).
@@ -32049,16 +32146,33 @@ EOF
 
 cmd_help_domain_list() {
     cat <<'EOF'
-List custom domains attached to this server.
+List custom domains attached to this server. A pending row prints
+"Pending: point nameservers to …" and whether k2.dev auto-added the
+zone to your account.
 
 USAGE
   k2 domain list [--json]
 EOF
 }
 
+cmd_help_domain_refresh() {
+    cat <<'EOF'
+Check again with k2.dev: re-bind an attached apex so a pending zone
+(nameservers not yet pointed at k2.dev) flips to active. With no apex,
+checks every pending domain. Owner/admin; agents exit 3.
+
+USAGE
+  k2 domain refresh [<apex>] [--json]
+EOF
+}
+
 cmd_help_domain_add() {
     cat <<'EOF'
 Attach an apex to this server (idempotent). Does not transfer NS.
+If k2.dev auto-adds the zone to your account it starts pending: point
+the registrar nameservers at k2.dev, then `k2 domain refresh <apex>`.
+Exit 1 with zone_owned_elsewhere when another k2.dev account owns it;
+bind_api_unavailable when domain linking isn't live on k2.dev yet.
 
 USAGE
   k2 domain add <apex> [--json]

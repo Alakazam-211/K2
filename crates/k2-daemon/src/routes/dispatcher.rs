@@ -5052,6 +5052,7 @@ async fn handle_one_request(
             && post_allowed
             && (p == "/cli/domains"
                 || p == "/cli/domains/remove"
+                || p == "/cli/domains/refresh"
                 || p == "/cli/certs/upload"
                 || p == "/cli/certs/config") =>
         {

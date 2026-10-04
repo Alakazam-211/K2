@@ -1267,6 +1267,10 @@ mod tests {
             !is_agent_verb("/cli/domains/remove"),
             "apex attach/remove is owner/admin — not an agent verb"
         );
+        assert!(
+            !is_agent_verb("/cli/domains/refresh"),
+            "re-bind may auto-add a zone to the k2.dev account — owner/admin"
+        );
         assert!(is_agent_verb("/cli/domains/names"));
         assert!(is_agent_verb("/cli/domains/names/remove"));
         assert!(

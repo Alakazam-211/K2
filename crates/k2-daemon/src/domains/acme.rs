@@ -931,6 +931,9 @@ mod tests {
             zone_id: None,
             dns_write: false,
             created_at: 0,
+            status: None,
+            nameservers: Vec::new(),
+            auto_created: false,
         }
     }
 
@@ -952,6 +955,9 @@ mod tests {
             zone_id: Some("z1".into()),
             dns_write: true,
             created_at: 0,
+            status: Some("active".into()),
+            nameservers: Vec::new(),
+            auto_created: false,
         };
         let kind = match select_challenge(&binding, "mail.discover-nocode.com") {
             Ok(k) => k,

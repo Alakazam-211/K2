@@ -250,6 +250,7 @@ pub const ROUTES: &[Route] = &[
     split("/cli/domains", Member, Admin),
     both("/cli/domains/names", Member),
     both("/cli/domains/names/remove", Member),
+    post("/cli/domains/refresh", Admin),
     both("/cli/domains/remove", Admin),
     get("/cli/done", Member),
     get("/cli/events", Member),

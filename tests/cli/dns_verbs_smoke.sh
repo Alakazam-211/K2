@@ -151,6 +151,16 @@ class H(BaseHTTPRequestHandler):
                 ],
             }).encode()
             self.send_response(200)
+        elif path == "/cli/dns/records/add" and b'"pending.example"' in body:
+            # A8.1: daemon belt refuses writes on a pending_ns zone.
+            data = json.dumps({
+                "ok": False,
+                "error": {
+                    "code": "zone_pending_ns",
+                    "hint": "Pending: point nameservers to ns1.k2.dev, ns2.k2.dev at the registrar for pending.example, then check again (Settings → K2 Server → Domains → Check again, or `k2 domain refresh pending.example`). DNS record writes open once the zone is active.",
+                },
+            }).encode()
+            self.send_response(403)
         elif path == "/cli/dns/records/add":
             try:
                 b = json.loads(body.decode() or "{}")
@@ -300,6 +310,23 @@ for line in open("'"$WORK"'/reqs.jsonl"):
 assert_contains "add body type A" "$add_body" '"type": "A"'
 assert_contains "add body value" "$add_body" '203.0.113.10'
 assert_contains "add body ttl 60" "$add_body" '"ttl": 60'
+
+echo "== pending_ns zone (A8.1) =="
+set +e
+out="$(run_cli dns record add pending.example A www 203.0.113.10 2>"$WORK/err_pending")"
+rc=$?
+set -e
+assert_eq "record add on pending zone exit 3" "$rc" "3"
+pending_err="$(cat "$WORK/err_pending")"
+assert_contains "pending code" "$pending_err" '"code":"zone_pending_ns"'
+assert_contains "pending names the nameservers" "$pending_err" 'Pending: point nameservers to ns1.k2.dev, ns2.k2.dev'
+if grep -Fq 'Allow agents to manage DNS records' <<<"$pending_err"; then
+    echo "  FAIL: pending error must not append the Settings toggle teaching" >&2
+    fail=$((fail + 1))
+else
+    echo "  PASS: pending error has no Settings toggle teaching"
+    pass=$((pass + 1))
+fi
 
 set +e
 out="$(run_cli dns record remove r1 --json 2>"$WORK/err_rm")"

@@ -214,7 +214,7 @@ pub fn handle_records(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(r) => return r,
     };
-    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+    if let Err(r) = crate::domains::routes::require_zone_attached_for_read(&zone_id) {
         return r;
     }
     let agent = agent_name(params);
@@ -381,7 +381,7 @@ pub fn handle_verify(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(r) => return r,
     };
-    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+    if let Err(r) = crate::domains::routes::require_zone_attached_for_read(&zone_id) {
         return r;
     }
     let agent = agent_name(params);
@@ -801,6 +801,75 @@ mod tests {
             resp.body
         );
 
+        cleanup(id);
+    }
+
+    /// A8.1: a `pending_ns` zone refuses `k2 dns` record writes with
+    /// `zone_pending_ns` + the nameservers to set — before any proxy call.
+    #[test]
+    fn record_writes_on_pending_ns_zone_are_zone_pending_ns() {
+        let _ = k2_core::db::init_for_tests();
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let id = "f6f6f6f6-f6f6-f6f6-f6f6-f6f6f6f6f6f6";
+        let path = "/tmp/k2-dns-pending-ns";
+        seed_project(id, path, "dns-pending");
+        enable_dns(path);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding_zone(
+                &conn,
+                "pending-write.example",
+                &k2_core::domains::BoundZone {
+                    zone_id: Some("zone-pending-write".into()),
+                    status: Some("pending_ns".into()),
+                    nameservers: vec!["ns1.k2.dev".into(), "ns2.k2.dev".into()],
+                    dns_write: false,
+                    auto_created: true,
+                },
+            )
+            .expect("seed pending binding");
+        }
+
+        let principal = HookPrincipal {
+            workspace_uuid: id.to_string(),
+            agent_address: "agent-pending".to_string(),
+        };
+        let mut params = HashMap::new();
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        params.insert("type".into(), "A".into());
+        params.insert("name".into(), "www".into());
+        params.insert("value".into(), "203.0.113.10".into());
+        params.insert("zone".into(), "zone-pending-write".into());
+
+        let add = handle_record_add(&params);
+        assert_eq!(add.status, "403 Forbidden", "{}", add.body);
+        let v: serde_json::Value = serde_json::from_str(&add.body).expect("json");
+        assert_eq!(
+            v.pointer("/error/code").and_then(|c| c.as_str()),
+            Some("zone_pending_ns"),
+            "{}",
+            add.body
+        );
+        let hint = v.pointer("/error/hint").and_then(|c| c.as_str()).expect("hint");
+        assert!(hint.starts_with("Pending: point nameservers to ns1.k2.dev, ns2.k2.dev"), "{hint}");
+        assert!(hint.contains("k2 domain refresh pending-write.example"), "{hint}");
+
+        params.insert("id".into(), "rec-1".into());
+        let rm = handle_record_remove(&params);
+        assert_eq!(rm.status, "403 Forbidden", "{}", rm.body);
+        assert!(rm.body.contains("zone_pending_ns"), "{}", rm.body);
+
+        // Reads / delegation verify stay open on a pending zone; writes don't.
+        if let Err(r) = crate::domains::routes::require_zone_attached_for_read("zone-pending-write") {
+            panic!("pending zone must be readable: {}", r.body);
+        }
+        assert!(crate::domains::routes::require_zone_attached_for_read("zone-nope").is_err());
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::remove_binding(&conn, "pending-write.example").expect("cleanup");
+        drop(conn);
         cleanup(id);
     }
 }

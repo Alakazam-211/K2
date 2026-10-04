@@ -181,6 +181,20 @@ pub fn map_proxy_response(resp: &DnsHttpResponse) -> (&'static str, String) {
             })
             .to_string(),
         ),
+        // A8.1: k2.dev refuses record writes on a zone whose nameservers
+        // do not point at k2.dev yet.
+        403 if parse_error_code(&resp.body).as_deref() == Some(ZONE_PENDING_NS) => (
+            "403 Forbidden",
+            serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": ZONE_PENDING_NS,
+                    "hint": parse_top_hint(&resp.body)
+                        .unwrap_or_else(|| ZONE_PENDING_NS_HINT.to_string())
+                }
+            })
+            .to_string(),
+        ),
         403 => (
             "403 Forbidden",
             serde_json::json!({
@@ -265,6 +279,30 @@ pub fn map_proxy_response(resp: &DnsHttpResponse) -> (&'static str, String) {
     }
 }
 
+/// Error code k2.dev (and the daemon belt) use for a `pending_ns` zone.
+pub const ZONE_PENDING_NS: &str = "zone_pending_ns";
+
+/// Default teaching text when k2.dev sends `zone_pending_ns` without a hint.
+pub const ZONE_PENDING_NS_HINT: &str = "Pending: this zone's nameservers do not point at \
+k2.dev yet — set them at the registrar, then `k2 domain refresh <apex>`. DNS record writes \
+open once the zone is active.";
+
+fn parse_error_code(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    v.get("error")
+        .and_then(|e| e.as_str().or_else(|| e.get("code").and_then(|c| c.as_str())))
+        .map(|s| s.to_string())
+}
+
+fn parse_top_hint(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    v.get("hint")
+        .or_else(|| v.get("error").and_then(|e| e.get("hint")))
+        .and_then(|h| h.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn parse_error_hint(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     v.get("error")
@@ -317,6 +355,32 @@ mod tests {
         assert_eq!(status, "429 Too Many Requests");
         assert!(body.contains("rate_limited"), "{body}");
         assert!(body.contains("retry"), "{body}");
+    }
+
+    #[test]
+    fn map_proxy_response_403_zone_pending_ns_is_its_own_code() {
+        let (status, body) = map_proxy_response(&DnsHttpResponse {
+            status: 403,
+            body: r#"{"error":"zone_pending_ns"}"#.to_string(),
+        });
+        assert_eq!(status, "403 Forbidden");
+        let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(v.pointer("/error/code").and_then(|c| c.as_str()), Some("zone_pending_ns"));
+        let hint = v.pointer("/error/hint").and_then(|c| c.as_str()).expect("hint");
+        assert!(hint.starts_with("Pending:"), "{hint}");
+
+        let (_, body) = map_proxy_response(&DnsHttpResponse {
+            status: 403,
+            body: r#"{"error":"zone_pending_ns","hint":"point NS to ns1.k2.dev"}"#.to_string(),
+        });
+        assert!(body.contains("point NS to ns1.k2.dev"), "{body}");
+
+        // A plain 403 stays `forbidden`.
+        let (_, body) = map_proxy_response(&DnsHttpResponse {
+            status: 403,
+            body: r#"{"error":"nope"}"#.to_string(),
+        });
+        assert!(body.contains("\"code\":\"forbidden\""), "{body}");
     }
 
     #[test]

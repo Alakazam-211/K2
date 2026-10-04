@@ -1033,6 +1033,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0126_feedback_briefs",
             include_str!("../../drizzle_sql/0126_feedback_briefs.sql"),
         ),
+        // 0127 — custom-domain attach A8.1: domain_bindings.status
+        // (`active` | `pending_ns`), nameservers (JSON array), and
+        // auto_created. ALTER only; never rebuild domain_bindings.
+        (
+            "0127_domain_binding_status",
+            include_str!("../../drizzle_sql/0127_domain_binding_status.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1693,7 +1700,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0126_feedback_briefs",
+            last_name, "0127_domain_binding_status",
             "unexpected last migration name: {last_name}"
         );
     }

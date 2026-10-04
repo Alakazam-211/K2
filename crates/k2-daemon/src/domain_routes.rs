@@ -19,6 +19,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/domains" => routes::handle_list(params),
         "/cli/certs" => routes::handle_certs_list(params),
         "/cli/domains/remove"
+        | "/cli/domains/refresh"
         | "/cli/domains/names"
         | "/cli/domains/names/remove"
         | "/cli/certs/issue"
@@ -34,6 +35,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
     match path {
         "/cli/domains" => routes::handle_attach_post(body),
         "/cli/domains/remove" => routes::handle_remove_post(body),
+        "/cli/domains/refresh" => routes::handle_refresh_post(body),
         "/cli/domains/names" => routes::handle_names_add_post(body),
         "/cli/domains/names/remove" => routes::handle_names_remove_post(body),
         "/cli/certs/issue" => routes::handle_issue_post(body),
@@ -56,6 +58,7 @@ pub fn is_mutating_get_path(path: &str) -> bool {
     matches!(
         path,
         "/cli/domains/remove"
+            | "/cli/domains/refresh"
             | "/cli/domains/names"
             | "/cli/domains/names/remove"
             | "/cli/certs/issue"
@@ -74,6 +77,7 @@ mod tests {
         let params = HashMap::new();
         for route in [
             "/cli/domains/remove",
+            "/cli/domains/refresh",
             "/cli/domains/names",
             "/cli/domains/names/remove",
             "/cli/certs/issue",

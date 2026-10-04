@@ -30207,6 +30207,10 @@ COMMANDS
   password rotate <addr>      Rotate IMAP/SMTP password (one secret, shown
                               once). mail_manage. Invalidates the mint-time
                               secret. Not rotate-admin.
+  app-password add|list|revoke <addr>
+                              Extra labeled secrets on a minted mailbox
+                              (secret shown once). mail_manage. Survive
+                              password rotate. Not `k2 mail link`.
   domain add|list|show|check|remove
                               Host a domain: DNS record table + live verify
   create <local>[@<domain>]   Mint a hosted address (bound to this workspace)
@@ -30250,7 +30254,11 @@ COMMANDS
   ptr show|set <hostname>     HELO + reverse DNS. show = origin/rDNS/alignment;
                               set = Stalwart HELO then CP POST /api/dns/ptr
                               (Bearer k2c_). mail_manage. Not auto on enable.
-  bans list|clear|migrate     BlockedIp list/clear + auth-ban migrate window.
+  dkim show|rotate|retire     DKIM selectors. rotate mints a new pair and keeps
+                              the old selector until retire. mail_manage.
+  dmarc show|report-to        DMARC report mailbox (a minted inbox). Prints the
+                              rua= line; does not rewrite _dmarc. mail_manage.
+  bans list|clear|migrate    BlockedIp list/clear + auth-ban migrate window.
                               clear default = authFailure only (--all for scan).
                               Pair clear with allowlist (fail counters survive).
   allowlist list|add|remove   AllowedIp (beats blocked; ReloadSettings).
@@ -30342,7 +30350,8 @@ Rotate the IMAP/SMTP password for a hosted address (one secret for
 both). POST /cli/mail/address/password {address}. The new password is
 printed once with the Mail.app client block (IMAP host:443 ALPN,
 submission :465). This invalidates the mint-time secret — existing
-Mail.app sessions die. Cannot GET the old secret. No port 993.
+mailbox-password sessions die, app passwords do not (`k2 hostmail
+app-password`). Cannot GET the old secret. No port 993.
 
 USAGE
   k2 hostmail password rotate <addr> [--json]

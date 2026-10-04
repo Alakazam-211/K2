@@ -15,11 +15,45 @@ type DomainNameRow = {
   cert?: CertState
 }
 
-type DomainRow = {
+export type DomainRow = {
   apex: string
   zoneId: string | null
   dnsWrite: boolean
+  /** A8.1: `active` | `pending_ns` from k2.dev bind; null for BYO rows. */
+  status?: string | null
+  /** Nameservers k2.dev wants at the registrar. */
+  nameservers?: string[]
+  /** k2.dev auto-added the zone to this account on bind. */
+  created?: boolean
   names: DomainNameRow[]
+}
+
+/** Copy for a 409 `zone_owned_elsewhere` attach. */
+export const OWNED_ELSEWHERE_COPY = 'This domain belongs to another k2.dev account.'
+
+/** Daemon error with its machine code kept (`zone_owned_elsewhere`, …). */
+class DomainApiError extends Error {
+  code: string | null
+  constructor(message: string, code: string | null) {
+    super(message)
+    this.code = code
+  }
+}
+
+function toApiError(status: number, body: unknown): DomainApiError {
+  const err = (body as { error?: { hint?: string; code?: string } | string })?.error
+  if (typeof err === 'string') return new DomainApiError(err, null)
+  return new DomainApiError(err?.hint || `domains ${status}`, err?.code ?? null)
+}
+
+/** What the user reads for a failed domain call. */
+export function domainErrorText(e: unknown): string {
+  if (e instanceof DomainApiError && e.code === 'zone_owned_elsewhere') return OWNED_ELSEWHERE_COPY
+  return e instanceof Error ? e.message : String(e)
+}
+
+export function isPendingNs(d: DomainRow): boolean {
+  return d.status === 'pending_ns'
 }
 
 async function cliGet(path: string): Promise<unknown> {
@@ -28,13 +62,7 @@ async function cliGet(path: string): Promise<unknown> {
     method: 'GET',
   })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const hint =
-      (body as { error?: { hint?: string } | string })?.error
-    throw new Error(
-      typeof hint === 'string' ? hint : hint?.hint || `domains ${res.status}`,
-    )
-  }
+  if (!res.ok) throw toApiError(res.status, body)
   return body
 }
 
@@ -46,14 +74,80 @@ async function cliPost(path: string, payload: Record<string, string>): Promise<u
     body: JSON.stringify(payload),
   })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const hint =
-      (body as { error?: { hint?: string } | string })?.error
-    throw new Error(
-      typeof hint === 'string' ? hint : hint?.hint || `domains ${res.status}`,
-    )
-  }
+  if (!res.ok) throw toApiError(res.status, body)
   return body
+}
+
+/** One nameserver with a copy button (square, matches the section's buttons). */
+function NameserverCopyRow({ ns }: { ns: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    void navigator.clipboard.writeText(ns)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div className="flex items-center justify-between gap-2 py-0.5">
+      <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all">{ns}</span>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={`Copy ${ns}`}
+        className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag cursor-pointer"
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
+}
+
+/** Pending-nameservers block for a `pending_ns` row (A8.1). */
+export function PendingNameservers({
+  domain,
+  busy,
+  onCheckAgain,
+}: {
+  domain: DomainRow
+  busy: boolean
+  onCheckAgain: (apex: string) => void
+}): React.JSX.Element {
+  const ns = domain.nameservers ?? []
+  return (
+    <div
+      className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
+      data-testid={`pending-ns-${domain.apex}`}
+    >
+      <p className="text-[10px] text-[var(--color-text-muted)] mb-1 leading-relaxed">
+        Point this domain&apos;s nameservers to these at your registrar. DNS records
+        can&apos;t be changed until k2.dev sees them.
+      </p>
+      {ns.length === 0 ? (
+        <p className="text-[10px] text-[var(--color-text-muted)]">
+          k2.dev didn&apos;t list nameservers. See your k2.dev dashboard.
+        </p>
+      ) : (
+        ns.map((n) => <NameserverCopyRow key={n} ns={n} />)
+      )}
+      {domain.created && (
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+          Auto-added to your k2.dev account
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => onCheckAgain(domain.apex)}
+        disabled={busy}
+        className="mt-2 px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+      >
+        Check again
+      </button>
+    </div>
+  )
+}
+
+function dnsLabel(d: DomainRow): string {
+  if (isPendingNs(d)) return 'Pending nameservers'
+  return d.dnsWrite ? 'K2-hosted DNS (writable)' : 'BYO DNS (inventory only)'
 }
 
 export const DOMAINS_MANIFEST: SettingEntry[] = [
@@ -99,7 +193,7 @@ export function DomainsSection(): React.JSX.Element {
       setDomains(body.domains ?? [])
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     }
   }, [])
 
@@ -116,7 +210,24 @@ export function DomainsSection(): React.JSX.Element {
       setApex('')
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const checkAgain = async (value: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const body = (await cliPost('/cli/domains/refresh', { apex: value })) as {
+        checked?: boolean
+        hint?: string
+      }
+      await refresh()
+      if (body.checked === false) setError(body.hint || 'Could not check with k2.dev')
+    } catch (e) {
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -129,7 +240,7 @@ export function DomainsSection(): React.JSX.Element {
       await cliPost('/cli/domains/remove', { apex: value })
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -144,7 +255,7 @@ export function DomainsSection(): React.JSX.Element {
       setHostname('')
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -157,7 +268,7 @@ export function DomainsSection(): React.JSX.Element {
       await cliPost('/cli/certs/issue', { hostname: value })
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -170,7 +281,7 @@ export function DomainsSection(): React.JSX.Element {
       await cliPost('/cli/certs/renew', { hostname: value })
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -182,7 +293,7 @@ export function DomainsSection(): React.JSX.Element {
     try {
       await cliPost('/cli/certs/config', { email: acmeEmail, directory: acmeDir })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -202,7 +313,7 @@ export function DomainsSection(): React.JSX.Element {
       setUploadKey('')
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -215,7 +326,7 @@ export function DomainsSection(): React.JSX.Element {
       await cliPost('/cli/domains/names/remove', { hostname: value })
       await refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(domainErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -280,7 +391,7 @@ export function DomainsSection(): React.JSX.Element {
               <div>
                 <div className="text-xs font-mono text-[var(--color-text-primary)]">{d.apex}</div>
                 <div className="text-[10px] text-[var(--color-text-muted)]">
-                  {d.dnsWrite ? 'K2-hosted DNS (writable)' : 'BYO DNS (inventory only)'}
+                  {dnsLabel(d)}
                   {d.zoneId ? ` · zone ${d.zoneId}` : ''}
                 </div>
               </div>
@@ -292,6 +403,13 @@ export function DomainsSection(): React.JSX.Element {
                 Remove
               </button>
             </div>
+            {isPendingNs(d) && (
+              <PendingNameservers
+                domain={d}
+                busy={busy}
+                onCheckAgain={(a) => void checkAgain(a)}
+              />
+            )}
             <div className="mt-1 ml-2">
               {d.names.length === 0 && (
                 <div className="text-[10px] text-[var(--color-text-muted)]">No hostnames yet</div>

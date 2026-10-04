@@ -243,6 +243,16 @@ mod tests {
 
     #[test]
     fn add_rejects_bad_bodies_and_reports_not_ready_without_server() {
+        // Tests that seed a running `mail_server` row hold this lock; without
+        // it a concurrent seeder made this "no server" path dial its fake
+        // JMAP port (502 engine). Hold it and drop any leftover row.
+        let _g = crate::mail::mail_server_test_lock();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM mail_server WHERE id = 1", [])
+                .expect("clear mail_server row");
+        }
         // Body validation happens before any engine construction.
         let resp = handle_domain_add(b"not json");
         assert_eq!(resp.status, "400 Bad Request");

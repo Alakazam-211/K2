@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { frameCsp, frameSrcDoc } from '@/lib/frame-csp'
-import { BriefFrame } from './BriefFrame'
+import { BriefFrame, briefOverlayStoplightInset } from './BriefFrame'
+import { desktopChromeFor, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
 import { buildBriefSrcDoc, briefStylesheet, fallbackBriefTokens } from './brief-srcdoc'
 import type { FeedbackBrief } from './feedback-api'
 
@@ -16,6 +17,15 @@ vi.mock('@tauri-apps/plugin-opener', () => opener)
 
 const offOrigin = vi.hoisted(() => ({ openOffOriginHttp: vi.fn() }))
 vi.mock('@/lib/open-off-origin-http', () => offOrigin)
+
+// The window chrome the overlay reads at render (mac / linux / windows).
+const chromeState = vi.hoisted(() => ({
+  current: { trafficLightSpacer: false, appMenuButton: false, windowControls: false, linuxStoplights: false },
+}))
+vi.mock('@/lib/desktop-chrome', async (orig) => ({
+  ...(await orig<typeof import('@/lib/desktop-chrome')>()),
+  getDesktopChrome: () => chromeState.current,
+}))
 
 const CLEANED =
   '<h2>Problem</h2><p>DNS for <a href="https://example.com/docs/dns?x=1&amp;y=2" rel="noopener noreferrer">the docs</a> is stale.</p>' +
@@ -176,5 +186,50 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
       expect(screen.getByTestId('brief-frame').getAttribute('srcdoc')).toContain('color-scheme:light')
     })
     document.documentElement.setAttribute('data-scheme', 'dark')
+  })
+})
+
+describe('BriefFrame — expanded title clears the macOS stoplights', () => {
+  afterEach(() => {
+    chromeState.current = desktopChromeFor(false, 'other')
+  })
+
+  it('reserves the page top bars\' stoplight cluster on mac only', () => {
+    const mac = briefOverlayStoplightInset(desktopChromeFor(false, 'mac'))
+    // px-3 (12) + this inset puts the title where every page's logo sits:
+    // past the zoom light (69) plus the cluster gap (14).
+    expect(12 + mac).toBe(TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + 14)
+    expect(briefOverlayStoplightInset(desktopChromeFor(false, 'linux'))).toBe(0)
+    expect(briefOverlayStoplightInset(desktopChromeFor(false, 'windows'))).toBe(0)
+    expect(briefOverlayStoplightInset(desktopChromeFor(true, 'mac'))).toBe(0)
+  })
+
+  it('on mac the expanded header puts the spacer before the title', () => {
+    chromeState.current = desktopChromeFor(false, 'mac')
+    render(<BriefFrame brief={brief} title="Covered title" />)
+    fireEvent.click(screen.getByTestId('brief-expand'))
+    const header = screen.getByTestId('brief-overlay-header')
+    const spacer = screen.getByTestId('brief-overlay-stoplight-inset')
+    const title = screen.getByTestId('brief-overlay-title')
+    expect(header.firstElementChild).toBe(spacer)
+    expect(spacer.nextElementSibling).toBe(title)
+    expect(spacer.style.width).toBe(`${briefOverlayStoplightInset(chromeState.current) - 12}px`)
+    expect(title.textContent).toBe('Covered title')
+    expect(header.style.height).toBe('38px')
+    // Same window inset the native lights follow.
+    expect(screen.getByTestId('brief-overlay').className).toContain('inset-[var(--inset-window)]')
+  })
+
+  it('on linux and windows the title stays at the left edge', () => {
+    for (const os of ['linux', 'windows'] as const) {
+      chromeState.current = desktopChromeFor(false, os)
+      render(<BriefFrame brief={brief} title={`On ${os}`} />)
+      fireEvent.click(screen.getByTestId('brief-expand'))
+      expect(screen.queryByTestId('brief-overlay-stoplight-inset')).toBeNull()
+      expect(screen.getByTestId('brief-overlay-header').firstElementChild).toBe(
+        screen.getByTestId('brief-overlay-title'),
+      )
+      cleanup()
+    }
   })
 })

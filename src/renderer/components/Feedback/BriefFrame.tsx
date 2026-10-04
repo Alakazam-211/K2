@@ -11,7 +11,11 @@
 //
 // Size: a fixed `min(60vh, 560px)` box with its own scrollbar and a drag
 // handle; no auto-size (the parent can't read an inert frame's height).
-// Expand shows the same document as a full-page overlay.
+// Expand shows the same document as a full-page overlay. Its header is a
+// title bar like every page's top bar: the window inset, 38px tall, px-3,
+// draggable, and on macOS it reserves the stoplight cluster before the
+// title (the same spacer DesktopChromeLeft uses), so the lights never
+// cover it. Linux and Windows keep the title at the left edge.
 //
 // The frame document is memoized on the brief's sha256 + the app theme, so
 // the thread's event-driven refetches never reload the frame.
@@ -20,6 +24,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import { createPortal } from 'react-dom'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
+import {
+  getDesktopChrome,
+  TRAFFIC_LIGHT_CLUSTER_GAP_PX,
+  TRAFFIC_LIGHT_SPACER_BASE_PX,
+  type DesktopChrome,
+} from '@/lib/desktop-chrome'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import type { FeedbackBrief } from './feedback-api'
 import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
 
@@ -187,6 +198,21 @@ export function BriefFrame({
   )
 }
 
+/** Top bar height shared with the Feedback, Wiki, and Projects pages. */
+const OVERLAY_TOPBAR_HEIGHT = 38
+
+/**
+ * Width reserved before the overlay title for the macOS stoplights: the
+ * page top bars' spacer (`TRAFFIC_LIGHT_SPACER_BASE_PX`, measured from the
+ * px-3 padding) plus their cluster gap. 0 on hosted web, Linux, Windows.
+ * The native lights follow `--inset-window` (style.ts re-applies them on
+ * resize, fullscreen, and display moves), and the overlay sits on the same
+ * inset, so this holds in every case the page top bars hold.
+ */
+export function briefOverlayStoplightInset(chrome: DesktopChrome): number {
+  return chrome.trafficLightSpacer ? TRAFFIC_LIGHT_SPACER_BASE_PX + TRAFFIC_LIGHT_CLUSTER_GAP_PX : 0
+}
+
 function BriefOverlay({
   title,
   frameHtml,
@@ -209,23 +235,43 @@ function BriefOverlay({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
+  const stoplightInset = briefOverlayStoplightInset(getDesktopChrome())
+
   return createPortal(
     <div
       data-testid="brief-overlay"
       role="dialog"
       aria-modal="true"
       aria-label={`Brief: ${title}`}
-      className="fixed inset-0 z-[400] flex flex-col bg-[var(--color-bg)]"
+      className="fixed inset-[var(--inset-window)] z-[400] flex flex-col bg-[var(--color-bg)]"
     >
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-        <span className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy">
+      <div
+        data-testid="brief-overlay-header"
+        className="flex items-center gap-3 px-3 border-b border-[var(--color-border)] flex-shrink-0 select-none"
+        style={{ height: OVERLAY_TOPBAR_HEIGHT, minHeight: OVERLAY_TOPBAR_HEIGHT }}
+        onMouseDown={titleBarDragOnMouseDown}
+        onDoubleClick={titleBarOnDoubleClick}
+      >
+        {stoplightInset > 0 && (
+          <div
+            data-testid="brief-overlay-stoplight-inset"
+            aria-hidden
+            className="flex-shrink-0"
+            // gap-3 (12) already separates it from the title.
+            style={{ width: stoplightInset - 12 }}
+          />
+        )}
+        <span
+          data-testid="brief-overlay-title"
+          className="no-drag min-w-0 text-sm font-medium text-[var(--color-text-primary)] truncate selectable-copy"
+        >
           {title}
         </span>
         <button
           type="button"
           data-testid="brief-overlay-close"
           onClick={onClose}
-          className="px-3 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+          className="ml-auto flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
         >
           Close
         </button>

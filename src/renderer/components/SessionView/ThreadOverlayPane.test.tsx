@@ -244,8 +244,8 @@ describe('Thread overlay choice chips + secret field', () => {
     const go = screen.getAllByTestId('thread-choice-chip')[0]
     expect(go.getAttribute('disabled')).not.toBeNull()
     expect(go.getAttribute('data-letter')).toBe('A')
-    expect(go.className).toContain('border-[var(--color-accent)]')
-    expect(go.className).toContain('bg-[var(--color-accent)]/15')
+    expect(go.className).toContain('border-[var(--thread-card-accent,var(--color-accent))]')
+    expect(go.className).toContain('bg-[var(--thread-card-accent,var(--color-accent))]/15')
   })
 
   it('renders a secret field and submit/dismiss; never shows the value as body text', () => {

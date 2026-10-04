@@ -48,6 +48,7 @@ import { HomeRoomsPortal } from '@/components/Home/room/HomeRoomsHost'
 import AgentsShell from './components/Layout/AgentsShell'
 import { HomeShellEffects, useHomeRoomSelected } from './components/Home/home-room'
 import { useZenShown, zenShownNow } from './lib/zen/zen-view'
+import { ensureZenBuiltins } from './components/Zen/widgets/builtins'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
@@ -329,6 +330,8 @@ export default function App(): React.JSX.Element {
 /** prd-zen-mode-v1 Z6/Z60 — Zen's host, mounted by ConnectionGate beside
  *  `HomeRoomsHost` (outside the keyed App), from this chunk. */
 export { ZenHost } from './components/Zen/ZenHost'
+// S6: the texting template's built-in widgets, controls and data verbs.
+ensureZenBuiltins()
 
 /** prd-home-seamless-0432 Z8/Z32 — Home's remote rooms, mounted by
  *  ConnectionGate OUTSIDE the keyed App (first child of every gate branch),

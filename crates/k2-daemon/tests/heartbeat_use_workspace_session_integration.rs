@@ -314,6 +314,12 @@ async fn flag_off_uses_legacy_heartbeat_cascade_unchanged() {
             true,
         )
         .expect("seed heartbeat");
+        // D22 (323b1ca0): AgentHeartbeat::insert now defaults
+        // use_workspace_session = 1. This test exercises the flag-OFF
+        // legacy cascade, so opt out explicitly.
+        let n = AgentHeartbeat::set_use_workspace_session(&conn, workspace_id, "legacy-hb", false)
+            .expect("opt out of workspace session");
+        assert_eq!(n, 1, "exactly one heartbeat row flipped off");
     }
 
     let result = k2_daemon::heartbeat_launch::smart_launch(&project_path, "legacy-hb");
@@ -428,6 +434,12 @@ async fn chat_tab_and_heartbeat_register_under_separate_canonical_keys() {
             true,
         )
         .expect("seed heartbeat");
+        // D22 (323b1ca0): AgentHeartbeat::insert now defaults
+        // use_workspace_session = 1. This test exercises the flag-OFF
+        // legacy cascade, so opt out explicitly.
+        let n = AgentHeartbeat::set_use_workspace_session(&conn, workspace_id, "lane-hb", false)
+            .expect("opt out of workspace session");
+        assert_eq!(n, 1, "exactly one heartbeat row flipped off");
     }
 
     // 1. First simulate the chat tab opening: register a v2 session

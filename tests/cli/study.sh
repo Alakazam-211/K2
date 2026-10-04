@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop ticket-brief"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -98,6 +98,37 @@ assert_absent "never scheduler-status for apps" "$hb_out" "GET  /cli/heartbeat/s
 hb_json="$("$K2" study app-heartbeats --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-heartbeats" and "no_ticks" in d["body"], d["id"]' "$hb_json"
 echo "  PASS: app-heartbeats --json id+body"
+pass=$((pass + 1))
+
+echo "== k2 study app-tickets (prd-app-tickets-websocket-v1) =="
+tk_out="$("$K2" study app-tickets)"
+assert_contains "tickets socket path" "$tk_out" "WS   /cli/activity/events?workspace=<handle>"
+assert_contains "ticket_changed frame" "$tk_out" '{"kind":"ticket_changed","workspace":"<handle>","id":"<id>",'
+for change in created commented answered status_changed assigned resolved dismissed brief_attached; do
+    if printf '%s\n' "$tk_out" | grep -Eq "^  ${change}[[:space:]]"; then
+        echo "  PASS: change $change has a row"
+        pass=$((pass + 1))
+    else
+        echo "  FAIL: change $change missing from k2 study app-tickets" >&2
+        fail=$((fail + 1))
+    fi
+done
+assert_contains "via option_pick" "$tk_out" "option_pick"
+assert_contains "via free_text" "$tk_out" "free_text"
+assert_contains "option pick answers" "$tk_out" "optionPick:true"
+assert_contains "free text discusses" "$tk_out" "needs_discussion"
+assert_contains "assign route" "$tk_out" "POST /cli/feedback/assign"
+assert_contains "assign warning" "$tk_out" "assignee_unknown"
+assert_contains "brief on demand" "$tk_out" "show?id=<id>&brief=1"
+assert_contains "brief never on the socket" "$tk_out" "The brief is never on the socket."
+assert_contains "no backfill" "$tk_out" "backfill or replay"
+assert_contains "refetch on reopen" "$tk_out" "On every socket (re)open, refetch once."
+assert_contains "apps cannot set answered" "$tk_out" "answered is refused for apps"
+assert_contains "no 404 oracle" "$tk_out" "no 404 oracle"
+assert_absent "never list-all for apps" "$tk_out" "GET  /cli/feedback/list-all"
+tk_json="$("$K2" study app-tickets --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-tickets" and "ticket_changed" in d["body"], d["id"]' "$tk_json"
+echo "  PASS: app-tickets --json id+body"
 pass=$((pass + 1))
 
 echo "== k2 study skins thread/overlay contract =="
@@ -149,6 +180,8 @@ assert_contains "tickets create path" "$skins_out" "/cli/feedback/create"
 assert_contains "tickets comment path" "$skins_out" "/cli/feedback/comment"
 assert_contains "tickets answer path" "$skins_out" "/cli/feedback/answer"
 assert_contains "tickets resolve path" "$skins_out" "/cli/feedback/resolve"
+assert_contains "tickets assign path" "$skins_out" "/cli/feedback/assign"
+assert_contains "tickets live pointer" "$skins_out" "k2 study app-tickets"
 assert_contains "tickets on docs not sales" "$skins_out" "tickets on Documents does not grant tickets on Sales"
 assert_contains "tickets project handle" "$skins_out" "project= is handle or uuid only"
 assert_contains "wiki:read scope" "$skins_out" "wiki:read"

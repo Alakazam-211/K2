@@ -15181,7 +15181,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats skins feedback-loop ticket-brief"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief"
 
 _study_usage() {
     cat <<'EOF'
@@ -15197,8 +15197,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 
 Topics:
   what  source  map  identity  send  human  people  auth  errors
-  context  db  mail  connect-boundary  apps  app-heartbeats  skins
-  feedback-loop  ticket-brief
+  context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
+  skins  feedback-loop  ticket-brief
 EOF
 }
 
@@ -15219,6 +15219,7 @@ _study_title() {
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
         app-heartbeats) echo "Heartbeats in an app" ;;
+        app-tickets) echo "Tickets in an app" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -15255,6 +15256,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
+  app-tickets         App tickets: routes, live ticket_changed frames, contract
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -15280,6 +15282,7 @@ _study_page() {
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
         app-heartbeats) _study_page_app_heartbeats ;;
+        app-tickets) _study_page_app_tickets ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -15995,6 +15998,107 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
 EOF
 }
 
+_study_page_app_tickets() {
+    cat <<'EOF'
+k2 study app-tickets — tickets in an app (client contract)
+
+An app with tickets:read / tickets:post on a room can see and work THAT
+room's tickets. Never another workspace's, never the host-wide board.
+Grant: `k2 app role room <role> <room> --caps tickets:read,tickets:post`.
+tickets:post does not imply tickets:read. Every path below is exact, on
+the official origin (cookie k2_skin_ui; never ?token=).
+
+ROUTES (project= is the room handle or uuid; never a path)
+  tickets:read  GET  /cli/feedback/list?project=<handle>[&all=1|&status=<s>]
+                GET  /cli/feedback/show?id=<id>
+                GET  /cli/feedback/show?id=<id>&brief=1   adds brief {html,text,bytes,sha256,…}
+  tickets:post  POST /cli/feedback/create   {"project":"<handle>","title":"…",
+                                             "body"?,"options"?,"briefHtml"?,"assignees"?}
+                POST /cli/feedback/comment  {"id":"<id>","body":"…","optionPick":true|false}
+                POST /cli/feedback/answer   {"id":"<id>","answer":"…"}
+                POST /cli/feedback/resolve  {"id":"<id>","status":"<status>"}
+                POST /cli/feedback/assign   {"id":"<id>","usernames":["owner","ana"]}
+  tickets:read  WS   /cli/activity/events?workspace=<handle>
+                ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
+                   "change":"<change>","status":"<status after>",
+                   "via":"<via>"|null,"hasBrief":true|false}
+  The same socket carries agent working (activity:read) and heartbeats
+  (heartbeats:read). Any one of the three caps opens it; each frame needs
+  its own cap in the room. A pass without tickets:read never gets a ticket
+  frame.
+
+ANSWERING (what a person's reply does)
+  optionPick:true    The person picked one of the ticket's options. That IS
+                     the answer: status answered, the agent's
+                     `k2 tickets ask --wait` returns it.
+  free text          A comment. The ticket moves to needs_discussion; the
+                     agent replies and settles it later.
+  Both wake the asking agent. Your username is the author, never "owner"
+  (a body "author" is ignored for apps).
+
+STATUS (resolve "status")
+  resolved | dismissed | planned | needs_discussion | waiting (reopen).
+  answered is refused for apps (400): a person answers with an option pick.
+  Anything else is 400.
+
+ASSIGN
+  usernames replaces the whole set ([] clears it). Names are snapshots:
+  "owner" or a Connect user on this server. A name that is not a user here
+  is still stored, and the reply says so:
+    {"ok":true,"id":"…","assignees":[…],
+     "warnings":[{"code":"assignee_unknown","hint":"…"}]}
+  The assignees show up in list and show.
+
+EVENTS (one stored change → exactly one frame)
+  change           via                         status after
+  created          null                        waiting (hasBrief says if a brief came with it)
+  commented        free_text | agent           needs_discussion for a person's free text
+  answered         option_pick | answer | settled   answered
+  status_changed   null                        planned | needs_discussion | waiting
+  assigned         null                        unchanged
+  resolved         null                        resolved
+  dismissed        null                        dismissed
+  brief_attached   reserved. Briefs attach only at create today, so
+                   created carries hasBrief.
+  A refused request sends nothing. Frames carry ids and metadata only:
+  no title, body, comment text, assignee names, brief or path.
+
+WHAT THE APP MUST DO
+  1. Load with list (and show for the open ticket). The socket has no
+     backfill or replay.
+  2. On ticket_changed, refetch: list for the board, show?id= for the open
+     ticket. Debounce bursts to one refetch per 300 ms.
+  3. On every socket (re)open, refetch once. Frames sent while you were
+     disconnected are gone.
+  4. Never fetch the brief because of a frame unless that ticket is open
+     and hasBrief is true. The brief is never on the socket.
+  5. Render brief.html in an iframe with sandbox="" and a
+     default-src 'none'; img-src data: CSP. Never inject it into your page.
+     It is already cleaned (scripts, handlers, javascript: links removed)
+     and at most 1 MiB.
+  6. Treat unknown change or via values (a newer server) as "refetch".
+
+LIMITS
+  Brief: 1 MiB after cleaning; the whole create body 2 MiB.
+  Over the cap: 400 brief_too_large (413 when the body itself is too big).
+
+ERRORS
+  400 usage (bad JSON, empty body, bad status, answered from an app) |
+      brief_too_large | brief_empty | brief_invalid
+  403 skin_room (room not on the pass; also any id you cannot see, so there
+      is no 404 oracle) | missing capability tickets:read | tickets:post
+  404 a path that is not an app door (waiting-count, list-all, GET assign)
+
+SUPPORT CHECK
+  Live ticket frames and app assign shipped in K2 0.43.3. On an older
+  server a pass with tickets:read but neither activity:read nor
+  heartbeats:read gets 403 at the socket, and assign answers 404: refetch
+  on focus instead.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
 _study_page_app_heartbeats() {
     cat <<'EOF'
 k2 study app-heartbeats — heartbeats in an app (client contract)
@@ -16302,9 +16406,12 @@ TICKETS
     POST     /cli/feedback/comment  {"id":"<id>","body":"…"}
     POST     /cli/feedback/answer   {"id":"<id>","answer":"…"}
     POST     /cli/feedback/resolve  {"id":"<id>"}
+    POST     /cli/feedback/assign   {"id":"<id>","usernames":["owner"]}
+    WS GET   /cli/activity/events?workspace=<handle>   (tickets:read: ticket_changed)
   project= is handle or uuid only — never a folder basename or absolute path.
   Doors are has_cap_in_room: tickets on Documents does not grant tickets on Sales.
-  waiting-count, list-all, assign, and unknown /cli/feedback/foo stay 404.
+  waiting-count, list-all, and unknown /cli/feedback/foo stay 404.
+  Live frames, option pick vs free text, statuses: `k2 study app-tickets`.
   Render `brief.html` in `sandbox=""` with a `default-src 'none'; img-src data:` CSP.
   Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.

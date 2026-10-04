@@ -36,7 +36,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
-# Search active production code only: crates/, src-tauri/, cli/k2so.
+# Search active production code only: crates/, src-tauri/, cli/k2 (+ the
+# cli/k2so shim), src/.
 # Exclude tests/, migration helpers, and the new sentinel migration.
 HITS_FILE="$(mktemp -t k2so-no-lead-sentinel-XXXXXX)"
 trap "rm -f '$HITS_FILE'" EXIT
@@ -50,9 +51,9 @@ trap "rm -f '$HITS_FILE'" EXIT
 exclude_file() {
     local f="$1"
     case "$f" in
-        crates/k2so-core/drizzle_sql/0049_drop_lead_sentinel_in_activity_feed.sql) return 0 ;;
-        crates/k2so-core/drizzle_sql/0042_canonical_key_drop_agent_suffix.sql) return 0 ;;
-        crates/k2so-core/src/migrations/unification_0_37_0.rs) return 0 ;;
+        crates/k2-core/drizzle_sql/0049_drop_lead_sentinel_in_activity_feed.sql) return 0 ;;
+        crates/k2-core/drizzle_sql/0042_canonical_key_drop_agent_suffix.sql) return 0 ;;
+        crates/k2-core/src/migrations/unification_0_37_0.rs) return 0 ;;
     esac
     return 1
 }
@@ -107,7 +108,7 @@ while IFS= read -r line; do
     esac
 
     echo "$line"
-done < <(grep -rn --binary-files=without-match --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist '__lead__' crates/ src-tauri/ cli/k2so src/ channels/ 2>/dev/null) > "$HITS_FILE"
+done < <(grep -rn --binary-files=without-match --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist '__lead__' crates/ src-tauri/ cli/k2 cli/k2so src/ channels/ 2>/dev/null) > "$HITS_FILE"
 
 if [ -s "$HITS_FILE" ]; then
     echo "FAIL: production code still contains \`__lead__\` literal:" >&2

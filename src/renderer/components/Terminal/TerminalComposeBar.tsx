@@ -29,7 +29,7 @@ import {
   buildComposeDropPayload,
   filesFromDataTransfer,
 } from '@/lib/external-drop-router'
-import { executeBrowserFileDrop, executeRemoteDrop } from '@/lib/handle-remote-drop'
+import { composeAttachPayload } from '@/lib/compose-attach'
 import {
   composeAttachPlan,
   pickLocalComposeFiles,
@@ -70,10 +70,7 @@ import {
   writeComposeCaret,
 } from './terminalCompose'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
-import {
-  ingestOverlayThreadItem,
-  overlayItemFromThreadPost,
-} from '@/components/SessionView/overlayThread'
+import { postThreadCompose } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
 
@@ -363,12 +360,7 @@ export function TerminalComposeBar({
         }
         if (paths.length > 0) {
           if (scope.isRemote) {
-            void executeRemoteDrop(scope,
-              paths,
-              { kind: 'terminal' },
-              { workspacePath: workspacePath || undefined },
-              buildComposeDropPayload,
-            ).then((payload) => {
+            void composeAttachPayload(scope, { paths, workspacePath }).then((payload) => {
               if (payload) insertPathsText(payload)
             })
           } else {
@@ -379,12 +371,7 @@ export function TerminalComposeBar({
         // Hosted web / no File.path — upload File bytes then insert host path.
         const browserFiles = filesFromDataTransfer(e.dataTransfer)
         if (browserFiles.length > 0) {
-          void executeBrowserFileDrop(scope,
-            browserFiles,
-            { kind: 'terminal' },
-            { workspacePath: workspacePath || undefined },
-            buildComposeDropPayload,
-          ).then((payload) => {
+          void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
             if (payload) insertPathsText(payload)
           })
           return
@@ -406,13 +393,7 @@ export function TerminalComposeBar({
       void pickLocalComposeFiles()
         .then(async (paths) => {
           if (!paths || paths.length === 0) return
-          const payload = await executeRemoteDrop(
-            scope,
-            paths,
-            { kind: 'terminal' },
-            { workspacePath: workspacePath || undefined },
-            buildComposeDropPayload,
-          )
+          const payload = await composeAttachPayload(scope, { paths, workspacePath })
           if (payload) insertPathsText(payload)
         })
         .catch((err) => {
@@ -462,12 +443,7 @@ export function TerminalComposeBar({
       }
       const browserFiles = Array.from(list)
       if (browserFiles.length > 0) {
-        void executeBrowserFileDrop(scope,
-          browserFiles,
-          { kind: 'terminal' },
-          { workspacePath: workspacePath || undefined },
-          buildComposeDropPayload,
-        ).then((payload) => {
+        void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
           if (payload) insertPathsText(payload)
         })
       }
@@ -496,18 +472,10 @@ export function TerminalComposeBar({
 
     try {
       if (sendOnThread) {
-        const body: { addr: string; text: string; via: string; command?: string } = {
-          addr: threadAddr,
-          text,
-          via: 'compose',
-        }
-        if (command) body.command = command
-        const resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
-        if (resp?.ok === false) {
+        const result = await postThreadCompose(scope, threadAddr, text, command)
+        if (!result.ok) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
-          const item = overlayItemFromThreadPost(resp, text)
-          if (item) ingestOverlayThreadItem(item)
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''

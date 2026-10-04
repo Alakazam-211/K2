@@ -1,5 +1,8 @@
 /** Overlay Thread snapshot + WS frame helpers. Thread pane never shows chatter. */
 
+import { daemonCliPost } from '@/lib/daemon-cli'
+import type { ServerScope } from '@/kessel/server-scope'
+
 export const OVERLAY_PAGE_SIZE = 25
 
 export interface OverlayChoice {
@@ -136,6 +139,42 @@ export function overlayItemFromThreadPost(
       via: typeof resp.via === 'string' ? resp.via : 'compose',
     },
   }
+}
+
+/** What `postThreadCompose` did: the server took it (`item` is the new row,
+ *  already pushed to every live Thread list), or it answered `ok: false`. */
+export type ThreadComposeResult =
+  | { ok: true; item: OverlayThreadItem | null }
+  | { ok: false; error: string }
+
+/**
+ * The one "message the agent on its Thread" send (prd-zen-mode-v1 Z42,
+ * vs-live Z67): `POST /cli/thread/post {addr, text, via:'compose'}` on the
+ * agent's own server, then the returned row goes to every live Thread list
+ * (`ingestOverlayThreadItem`) without waiting on the overlay socket. A
+ * `via=compose` post wakes a dormant session and injects `[thread:<addr>]`
+ * into the agent's PTY (overlay_routes.rs). The Agents page compose bar and
+ * Zen's compose both send through here. Throws on a transport error.
+ */
+export async function postThreadCompose(
+  scope: ServerScope,
+  addr: string,
+  text: string,
+  command?: string | null,
+): Promise<ThreadComposeResult> {
+  const body: { addr: string; text: string; via: string; command?: string } = {
+    addr,
+    text,
+    via: 'compose',
+  }
+  if (command) body.command = command
+  const resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
+  if (resp?.ok === false) {
+    return { ok: false, error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }
+  }
+  const item = overlayItemFromThreadPost(resp, text)
+  if (item) ingestOverlayThreadItem(item)
+  return { ok: true, item }
 }
 
 export function applyOverlayFrame(

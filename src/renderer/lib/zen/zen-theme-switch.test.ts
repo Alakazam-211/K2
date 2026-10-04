@@ -1,12 +1,30 @@
 // @vitest-environment jsdom
 //
 // Omarchy additions 2 and 4 — the theme-cycle and cheat-sheet keys never
-// collide with the window's chords, and next / prev wrap in the daemon's
-// list order.
+// collide with the window's chords, and switches go to this computer's
+// daemon (`theme/set`, `theme/next`, `theme/prev`), scoped to the Home only
+// when the Home has its own pick.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+const posts = vi.hoisted(() => [] as Array<{ hostKey: string; route: string; body: unknown }>)
+vi.mock('@/lib/daemon-cli', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/daemon-cli')>()),
+  daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body?: unknown) => {
+    posts.push({ hostKey: scope.hostKey, route, body })
+    return { ok: true }
+  }),
+}))
+
 import type { DesktopOs } from '@/lib/desktop-chrome'
-import { cycleTarget, isZenCheatSheetKey, zenShortcutGroups, zenThemeCycleDir, type ZenKeyLike } from './zen-theme-switch'
+import {
+  cycleZenTheme,
+  isZenCheatSheetKey,
+  setZenTheme,
+  zenShortcutGroups,
+  zenThemeCycleDir,
+  type ZenKeyLike,
+} from './zen-theme-switch'
 import { isZenChordNonMac } from './zen-shortcut'
 
 function key(code: string, k: string, mods: Partial<ZenKeyLike> = {}): ZenKeyLike {
@@ -69,19 +87,22 @@ describe('theme keys', () => {
     expect(isZenCheatSheetKey(key('Slash', '/', { ctrlKey: true, altKey: true }), 'windows')).toBe(true)
   })
 
-  it('next / prev wrap in the daemon’s order; an unknown active starts at an end', () => {
-    const themes = [
-      { name: 'a', builtin: true },
-      { name: 'b', builtin: true },
-      { name: 'c', builtin: false },
-    ]
-    expect(cycleTarget(themes, 'a', 1)).toBe('b')
-    expect(cycleTarget(themes, 'c', 1)).toBe('a')
-    expect(cycleTarget(themes, 'a', -1)).toBe('c')
-    expect(cycleTarget(themes, null, 1)).toBe('a')
-    expect(cycleTarget(themes, 'gone', -1)).toBe('c')
-    expect(cycleTarget([{ name: 'a', builtin: true }], 'a', 1)).toBeNull()
-    expect(cycleTarget([], null, 1)).toBeNull()
+  it('set, next and prev go to this computer’s daemon; a Home’s own pick stays the Home’s', async () => {
+    posts.length = 0
+    await setZenTheme('paper', 'global', 'h1')
+    await cycleZenTheme(1, 'global', 'h1')
+    await cycleZenTheme(-1, 'global', 'h1')
+    await setZenTheme('midnight', 'home', 'h1')
+    await cycleZenTheme(1, 'home', 'h1')
+    await cycleZenTheme(-1, 'home', 'h1')
+    expect(posts).toEqual([
+      { hostKey: 'local', route: 'zen/theme/set', body: { name: 'paper' } },
+      { hostKey: 'local', route: 'zen/theme/next', body: {} },
+      { hostKey: 'local', route: 'zen/theme/prev', body: {} },
+      { hostKey: 'local', route: 'zen/theme/set', body: { name: 'midnight', home: 'h1' } },
+      { hostKey: 'local', route: 'zen/theme/next', body: { home: 'h1' } },
+      { hostKey: 'local', route: 'zen/theme/prev', body: { home: 'h1' } },
+    ])
   })
 
   it('the cheat sheet lists every Zen shortcut per platform', () => {

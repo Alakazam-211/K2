@@ -11,7 +11,9 @@
 //   - reduced motion wins (every duration 0ms, every keyframe none), reduced
 //     transparency wins (nothing see-through);
 //   - `auto` follows this computer's scheme; safe mode ignores the page;
-//   - the renderer's default theme is the daemon's `default-zen.toml`.
+//   - the renderer's default theme is the daemon's built-in `themes/default.toml`,
+//     and its font stacks are the daemon's `FONT_FAMILIES`;
+//   - the daemon's real `/cli/zen/get` theme shape reads with nothing rejected.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -22,10 +24,15 @@ import {
   ZEN_COLOR_TOKENS,
   ZEN_DEFAULT_COLORS,
   ZEN_DEFAULT_NUMS,
+  ZEN_DEFAULT_TERMINAL,
+  ZEN_FONT_STACKS,
+  ZEN_FONT_TABLE,
+  ZEN_TERMINAL_KEYS,
   ZEN_THEME_VARS,
   ZEN_BUNDLE_VARS,
   parseZenColor,
   rgbCss,
+  zenTerminalKeyOf,
 } from './zen-tokens'
 import {
   cubicBezierCss,
@@ -115,7 +122,7 @@ describe('tokens: only known names, never raw CSS', () => {
     expect(r.vars['--zen-canvas']).toBe(rgbCss(parseZenColor(def.canvas)!))
     expect(r.vars['--zen-accent']).toBe(rgbCss(parseZenColor(def.accent)!))
     expect(r.vars['--zen-text']).toBe(rgbCss(parseZenColor(def.text)!))
-    expect(r.vars['--zen-font-size']).toBe(`${ZEN_DEFAULT_NUMS['type.size']}px`)
+    expect(r.vars['--zen-font-size']).toBe(`${ZEN_DEFAULT_NUMS['font.size']}px`)
     expect(r.vars['--zen-gap']).toBe(`${ZEN_DEFAULT_NUMS['shape.gap']}px`)
     expect(r.vars['--zen-list-width']).toBe(`${ZEN_DEFAULT_NUMS['shape.list-width']}px`)
     expect(r.vars['--zen-font-family']).not.toContain('Comic')
@@ -268,12 +275,12 @@ describe('motion: Hyprland curves and animation lines', () => {
   })
 })
 
-describe('the default template theme is the daemon’s default-zen.toml', () => {
-  const toml = readFileSync(resolve(process.cwd(), 'crates/k2-core/src/zen/default-zen.toml'), 'utf8')
+describe('the default template theme is the daemon’s built-in themes/default.toml', () => {
+  const toml = readFileSync(resolve(process.cwd(), 'crates/k2-core/src/zen/themes/default.toml'), 'utf8')
 
   function table(name: string): Record<string, string> {
     const m = new RegExp(`^\\[${name.replace('.', '\\.')}\\]\\n([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, 'm').exec(toml)
-    if (!m) throw new Error(`no [${name}] in default-zen.toml`)
+    if (!m) throw new Error(`no [${name}] in themes/default.toml`)
     const out: Record<string, string> = {}
     for (const line of m[1].split('\n')) {
       const kv = /^([A-Za-z-]+)\s*=\s*("[^"]*"|\[[^\]]*\]|[^#\s]+)/.exec(line.trim())
@@ -283,17 +290,27 @@ describe('the default template theme is the daemon’s default-zen.toml', () => 
   }
   const unq = (s: string): string => s.replace(/^"|"$/g, '')
 
-  it('colours, type, shape, chrome and animation lines match', () => {
+  it('colours, font, shape, terminal palettes, chrome and animation lines match', () => {
     for (const scheme of ['light', 'dark'] as const) {
       const t = table(`colors.${scheme}`)
       expect(Object.keys(t).sort()).toEqual([...ZEN_COLOR_TOKENS].sort())
       for (const tok of ZEN_COLOR_TOKENS) expect(unq(t[tok]), `${scheme}.${tok}`).toBe(ZEN_DEFAULT_COLORS[scheme][tok])
+      const term = table(`terminal.${scheme}`)
+      const keys = Object.keys(term).map((k) => {
+        const key = zenTerminalKeyOf(k)
+        if (!key) throw new Error(`terminal.${scheme}.${k} has no renderer key`)
+        return key
+      })
+      expect(keys.sort()).toEqual([...ZEN_TERMINAL_KEYS].sort())
+      for (const [k, v] of Object.entries(term)) {
+        expect(unq(v), `terminal.${scheme}.${k}`).toBe(ZEN_DEFAULT_TERMINAL[scheme][zenTerminalKeyOf(k)!])
+      }
     }
-    const type = table('type')
+    const font = table('font')
     const shape = table('shape')
-    expect(unq(type.family)).toBe('system')
-    expect(Number(type.size)).toBe(ZEN_DEFAULT_NUMS['type.size'])
-    expect(Number(type['line-height'])).toBe(ZEN_DEFAULT_NUMS['type.line-height'])
+    expect(unq(font.family)).toBe('system')
+    expect(Number(font.size)).toBe(ZEN_DEFAULT_NUMS['font.size'])
+    expect(Number(font['line-height'])).toBe(ZEN_DEFAULT_NUMS['font.line-height'])
     for (const k of ['radius', 'bubble-radius', 'gap', 'list-width']) {
       expect(Number(shape[k]), k).toBe(ZEN_DEFAULT_NUMS[`shape.${k}`])
     }
@@ -309,6 +326,29 @@ describe('the default template theme is the daemon’s default-zen.toml', () => 
       const arr = JSON.parse(anim[name]) as unknown[]
       expect(arr, name).toEqual([line.on ? 1 : 0, line.speed, line.curve, ...(line.style ? [line.style] : [])])
     }
+  })
+
+  it('the font table is the daemon’s FONT_FAMILIES: names, stacks and fixed-width flags', () => {
+    const rs = readFileSync(resolve(process.cwd(), 'crates/k2-core/src/zen/schema.rs'), 'utf8')
+    const block = /pub const FONT_FAMILIES: &\[\(&str, &str, bool\)\] = &\[([\s\S]*?)\n\];/.exec(rs)
+    if (!block) throw new Error('no FONT_FAMILIES in schema.rs')
+    const rows = [...block[1].matchAll(/\("([a-z-]+)", "((?:[^"\\]|\\.)*)", (true|false)\)/g)].map((m) => [
+      m[1],
+      m[2].replace(/\\"/g, '"'),
+      m[3] === 'true',
+    ])
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows).toEqual(ZEN_FONT_TABLE.map((f) => [...f]))
+    expect(/pub const TERMINAL_PARTNER: &str = "meslo";/.test(rs)).toBe(true)
+  })
+
+  it('no page draws exactly the default: the light palette, the system font, meslo terminals', () => {
+    const r = buildZenTheme({ systemScheme: 'light', page: null })
+    expect(r.font).toBe('system')
+    expect(r.vars['--zen-font-family']).toBe(ZEN_FONT_STACKS.system)
+    expect(r.vars['--zen-terminal-font-family']).toBe(ZEN_FONT_STACKS.meslo)
+    expect(r.terminal?.background).toBe(rgbCss(parseZenColor(ZEN_DEFAULT_TERMINAL.light.background)!))
+    expect(r.background).toBeNull()
   })
 })
 
@@ -329,70 +369,176 @@ describe('theme bundles (Omarchy additions 1 and 5)', () => {
   const PNG =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
-  function bundle(extra: object): ZenResolvedPage {
-    return page({
-      theme: {
-        name: 'tokyo-night',
-        tokens: { scheme: 'dark', colors: { dark: { accent: '#7aa2f7' } } },
-        terminal: { palette: { background: '#1a1b26', foreground: '#c0caf5', red: '#f7768e', brightWhite: '#ffffff' } },
-        font: 'JetBrains Mono',
-        ...extra,
-      },
-    })
+  /** A palette as the daemon sends it: TOML-style keys, every one present. */
+  function daemonPalette(scheme: 'light' | 'dark', over: Record<string, string> = {}): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const k of ZEN_TERMINAL_KEYS) {
+      const toml = k === 'cursorAccent' ? 'cursor-text' : k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+      out[toml] = ZEN_DEFAULT_TERMINAL[scheme][k]
+    }
+    return { ...out, ...over }
   }
 
-  it('reads tokens, font, terminal palette and name from the bundle shape', () => {
-    const r = buildZenTheme({ systemScheme: 'light', page: bundle({}) })
+  /** `theme` exactly as `GET /cli/zen/get` returns it (store.rs `resolve`). */
+  function daemonTheme(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      name: 'tokyo-night',
+      builtin: false,
+      user: true,
+      scope: 'global',
+      tokens: {
+        scheme: 'dark',
+        colors: { light: { ...ZEN_DEFAULT_COLORS.light }, dark: { ...ZEN_DEFAULT_COLORS.dark, accent: '#7aa2f7' } },
+        shape: { radius: 10, 'bubble-radius': 18, gap: 12, 'list-width': 300 },
+      },
+      font: {
+        family: 'jetbrains-mono',
+        stack: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+        monospace: true,
+        size: 15,
+        lineHeight: 1.5,
+        terminal: { family: 'jetbrains-mono', stack: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace', monospace: true },
+      },
+      terminal: {
+        palette: {
+          light: daemonPalette('light'),
+          dark: daemonPalette('dark', { background: '#1a1b26', red: '#f7768e', 'bright-white': '#fefefe', 'cursor-text': '#010203' }),
+        },
+      },
+      ...extra,
+    }
+  }
+  const bundle = (extra: Record<string, unknown> = {}): ZenResolvedPage => page({ theme: daemonTheme(extra) })
+
+  it('reads the daemon’s theme: tokens, font block, per-scheme palette, name — nothing rejected', () => {
+    const r = buildZenTheme({ systemScheme: 'light', page: bundle() })
     expect(r.rejected).toEqual([])
     expect(r.name).toBe('tokyo-night')
     expect(r.scheme).toBe('dark')
     expect(r.vars['--zen-accent']).toBe('rgb(122, 162, 247)')
-    // One font token: the UI and the terminals.
-    expect(r.font).toBe('JetBrains Mono')
-    expect(r.vars['--zen-font-family'].startsWith('"JetBrains Mono"')).toBe(true)
+    expect(r.vars['--zen-radius']).toBe('10px')
+    expect(r.vars['--zen-font-size']).toBe('15px')
+    expect(r.vars['--zen-line-height']).toBe('1.5')
+    // One font: the UI and the terminals, from K2's own table.
+    expect(r.font).toBe('jetbrains-mono')
+    expect(r.vars['--zen-font-family']).toBe(ZEN_FONT_STACKS['jetbrains-mono'])
     expect(r.vars['--zen-terminal-font-family']).toBe(r.vars['--zen-font-family'])
+    // The dark palette (the active scheme), TOML keys mapped to xterm keys.
     expect(r.terminal?.background).toBe('rgb(26, 27, 38)')
     expect(r.terminal?.red).toBe('rgb(247, 118, 142)')
-    expect(r.vars['--zen-term-bright-white']).toBe('rgb(255, 255, 255)')
+    expect(r.terminal?.cursorAccent).toBe('rgb(1, 2, 3)')
+    expect(r.vars['--zen-term-bright-white']).toBe('rgb(254, 254, 254)')
     expect(r.vars['--zen-term-red']).toBe('rgb(247, 118, 142)')
-    // A key the palette leaves out is K2's default for the scheme.
-    expect(r.terminal?.cyan).toBe(rgbCss(parseZenColor('#6cc4c4')!))
+    expect(r.terminal?.cyan).toBe(rgbCss(parseZenColor(ZEN_DEFAULT_TERMINAL.dark.cyan)!))
+    // The light palette follows the scheme.
+    const light = buildZenTheme({ systemScheme: 'light', page: bundle({ tokens: { scheme: 'light' } }) })
+    expect(light.terminal?.background).toBe(rgbCss(parseZenColor(ZEN_DEFAULT_TERMINAL.light.background)!))
   })
 
-  it('a proportional font drives the UI; terminals keep a fixed-width face', () => {
-    const r = buildZenTheme({ systemScheme: 'light', page: bundle({ font: 'serif' }) })
-    expect(r.vars['--zen-font-family']).toContain('Georgia')
-    expect(r.vars['--zen-terminal-font-family']).toContain('monospace')
-    expect(r.vars['--zen-terminal-font-family']).not.toContain('Georgia')
+  it('a proportional font drives the UI; terminals take the daemon’s fixed-width partner', () => {
+    const r = buildZenTheme({
+      systemScheme: 'light',
+      page: bundle({
+        font: {
+          family: 'serif',
+          stack: 'ignored',
+          monospace: false,
+          size: 14,
+          lineHeight: 1.45,
+          terminal: { family: 'meslo', stack: 'x', monospace: true },
+        },
+      }),
+    })
+    expect(r.vars['--zen-font-family']).toBe(ZEN_FONT_STACKS.serif)
+    expect(r.vars['--zen-terminal-font-family']).toBe(ZEN_FONT_STACKS.meslo)
+    // A proportional or unknown terminal family never reaches a terminal.
+    const odd = buildZenTheme({
+      systemScheme: 'light',
+      page: bundle({ font: { family: 'rounded', terminal: { family: 'serif' } } }),
+    })
+    expect(odd.vars['--zen-terminal-font-family']).toBe(ZEN_FONT_STACKS.meslo)
   })
 
-  it('rejects unknown bundle, palette and background keys and never writes a remote or non-image background', () => {
+  it('the daemon’s stack text never reaches CSS', () => {
+    const r = buildZenTheme({
+      systemScheme: 'light',
+      page: bundle({
+        font: { family: 'nope', stack: 'x; background: url(evil)', terminal: { family: 'lilex', stack: 'url(evil)' } },
+      }),
+    })
+    expect(r.vars['--zen-font-family']).toBe(ZEN_FONT_STACKS.system)
+    expect(r.vars['--zen-terminal-font-family']).toBe(ZEN_FONT_STACKS.lilex)
+    expect(Object.values(r.vars).join(' ')).not.toContain('evil')
+  })
+
+  it('older shapes still read: a bare font name, an alias, a flat xterm palette, a bare data URL', () => {
+    const r = buildZenTheme({
+      systemScheme: 'light',
+      page: page({
+        theme: {
+          tokens: { scheme: 'dark' },
+          font: 'JetBrains Mono',
+          terminal: { palette: { red: '#aa0000', brightWhite: '#fefefe' } },
+          background: PNG,
+        },
+      }),
+    })
+    expect(r.rejected).toEqual([])
+    expect(r.font).toBe('jetbrains-mono')
+    expect(r.terminal?.red).toBe('rgb(170, 0, 0)')
+    expect(r.terminal?.brightWhite).toBe('rgb(254, 254, 254)')
+    expect(r.background).toEqual({ src: PNG, fit: 'cover', opacity: 1 })
+  })
+
+  it('rejects unknown bundle, font, palette and background keys and never writes a remote or non-image background', () => {
     const r = buildZenTheme({
       systemScheme: 'light',
       page: bundle({
         wallpaperBlur: 12,
-        terminal: { palette: { background: '#000000', sparkle: '#ff00ff' }, cursorBlink: true },
-        background: { url: 'https://example.com/a.png', opacity: 0.2 },
+        font: { family: 'mono', weight: 700, terminal: { family: 'mono', ligatures: true } },
+        terminal: { palette: { light: { background: '#000000', sparkle: '#ff00ff' }, sepia: {} }, cursorBlink: true },
+        background: { dataUrl: 'https://example.com/a.png', dim: 0.2 },
       }),
     })
     expect(r.rejected?.sort()).toEqual(
-      ['theme.wallpaperBlur', 'terminal.palette.sparkle', 'terminal.cursorBlink', 'background.opacity'].sort(),
+      [
+        'theme.wallpaperBlur',
+        'font.weight',
+        'font.terminal.ligatures',
+        'terminal.palette.sepia',
+        'terminal.palette.light.sparkle',
+        'terminal.cursorBlink',
+        'background.dim',
+      ].sort(),
     )
     expect(r.background).toBeNull()
     for (const bad of ['https://x/a.png', 'data:text/html;base64,PGgxPg==', 'data:image/svg+xml;base64,PHN2Zz4=', 'url(x)']) {
-      const b = buildZenTheme({ systemScheme: 'light', page: bundle({ background: { data: bad } }) })
+      const b = buildZenTheme({ systemScheme: 'light', page: bundle({ background: { dataUrl: bad, fit: 'cover', opacity: 1 } }) })
       expect(b.background, bad).toBeNull()
     }
   })
 
-  it('background: a data:image under a canvas scrim; dim clamps; reduced transparency drops it', () => {
-    const r = buildZenTheme({ systemScheme: 'light', page: bundle({ background: { data: PNG, dim: 0.6 } }) })
-    expect(r.background).toEqual({ src: PNG, dim: 0.6 })
-    const tooFaint = buildZenTheme({ systemScheme: 'light', page: bundle({ background: { data: PNG, dim: 0.1 } }) })
-    expect(tooFaint.background?.dim).toBe(0.8)
+  it('background: the daemon’s dataUrl with fit and opacity; bad ones default; reduced transparency drops it', () => {
+    const bg = (over: object = {}): object => ({
+      dataUrl: PNG,
+      mime: 'image/png',
+      bytes: 68,
+      file: 'background.png',
+      fit: 'tile',
+      opacity: 0.4,
+      lastGood: false,
+      ...over,
+    })
+    const r = buildZenTheme({ systemScheme: 'light', page: bundle({ background: bg() }) })
+    expect(r.rejected).toEqual([])
+    expect(r.background).toEqual({ src: PNG, fit: 'tile', opacity: 0.4 })
+    const lastGood = buildZenTheme({ systemScheme: 'light', page: bundle({ background: bg({ lastGood: true, fit: 'contain' }) }) })
+    expect(lastGood.background).toEqual({ src: PNG, fit: 'contain', opacity: 0.4 })
+    const odd = buildZenTheme({ systemScheme: 'light', page: bundle({ background: bg({ fit: 'stretch', opacity: 3 }) }) })
+    expect(odd.background).toEqual({ src: PNG, fit: 'cover', opacity: 1 })
     const reduced = buildZenTheme({
       systemScheme: 'light',
-      page: bundle({ background: { url: PNG } }),
+      page: bundle({ background: bg() }),
       reducedTransparency: true,
     })
     expect(reduced.background).toBeNull()
@@ -400,28 +546,26 @@ describe('theme bundles (Omarchy additions 1 and 5)', () => {
 
   it('a bad bundle value keeps the last good one; a theme switch puts left-out keys back to defaults', () => {
     const engine = createZenThemeEngine()
-    engine({ systemScheme: 'dark', page: bundle({ background: { data: PNG } }) })
+    engine({ systemScheme: 'dark', page: bundle({ background: { dataUrl: PNG, fit: 'cover', opacity: 1 } }) })
     const bad = engine({
       systemScheme: 'dark',
-      page: bundle({ font: 'Papyrus', background: { data: 'nope' }, terminal: { palette: { red: 'nope' } } }),
+      page: bundle({
+        font: { family: 'Papyrus' },
+        background: { dataUrl: 'nope', fit: 'cover', opacity: 1 },
+        terminal: { palette: { light: daemonPalette('light'), dark: daemonPalette('dark', { red: 'nope' }) } },
+      }),
     })
-    expect(bad.font).toBe('JetBrains Mono')
+    expect(bad.font).toBe('jetbrains-mono')
     expect(bad.background?.src).toBe(PNG)
     expect(bad.terminal?.red).toBe('rgb(247, 118, 142)')
     const other = engine({ systemScheme: 'dark', page: page({ theme: { name: 'plain', tokens: { scheme: 'dark' } } }) })
     expect(other.name).toBe('plain')
+    expect(other.font).toBe('system')
     expect(other.background).toBeNull()
-    expect(other.terminal?.red).toBe(rgbCss(parseZenColor('#f07167')!))
+    expect(other.terminal?.red).toBe(rgbCss(parseZenColor(ZEN_DEFAULT_TERMINAL.dark.red)!))
   })
 
-  it('per-scheme and ANSI-array palettes', () => {
-    const perScheme = buildZenTheme({
-      systemScheme: 'light',
-      page: page({
-        theme: { tokens: { scheme: 'light' }, terminal: { palette: { light: { red: '#ff0000' }, dark: { red: '#00ff00' } } } },
-      }),
-    })
-    expect(perScheme.terminal?.red).toBe('rgb(255, 0, 0)')
+  it('ANSI-array palettes', () => {
     const ansi = Array.from({ length: 16 }, (_, i) => `#0000${i.toString(16).padStart(2, '0')}`)
     const arr = buildZenTheme({ systemScheme: 'light', page: page({ theme: { tokens: {}, terminal: { palette: ansi } } }) })
     expect(arr.terminal?.black).toBe('rgb(0, 0, 0)')

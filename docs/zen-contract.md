@@ -160,52 +160,83 @@ mode:
 An unknown name gets 404 `{error: "unknown_theme", theme, themes, message}`
 and changes nothing. Each switch emits one `zen_changed`, so the renderer
 re-`get`s. Cycle order: built-ins first in K2's order, then the user's
-themes by name. The renderer may cycle on the client over `themes`, or
-call next and prev.
+themes by name. The renderer calls next and prev (Flag 7).
 
 ## `theme`, `chrome`, `motion`: what the S5 engine reads
 
 Source: `src/renderer/lib/zen/zen-theme-engine.ts`, `zen-chrome.ts`,
-`zen-motion.ts`, `zen-tokens.ts`. Only the names below are read; any other
-key is ignored (logged once) and never reaches CSS. A value that is present
-but doesn't parse keeps the last good value for that key; a key left out is
-K2's default (`default-zen.toml`).
+`zen-motion.ts`, `zen-tokens.ts` and `zen-page.ts`. The renderer reads the
+daemon's `theme` shape from the section above. Only the names below are
+read. Any other key is ignored, logged once, and never reaches CSS. A value
+that is present but doesn't parse keeps the last good value for that key. A
+key left out gets K2's default, which is the built-in `themes/default.toml`;
+`zen-theme-engine.test.ts` checks that the two match.
 
 ```jsonc
 "theme": {
-  "name": "tokyo-night",                 // shown as the active theme
-  "tokens": {                            // or these four keys flat on `theme` (S1 today)
-    "scheme": "auto",                    // auto | light | dark
+  "name": "default", "builtin": true, "user": false,
+  "scope": "global",                   // "home": a switch carries the Home (Flag 7)
+  "tokens": {
+    "scheme": "auto",                  // auto | light | dark
     "colors": { "light": { "canvas": "#faf7f2", … }, "dark": { … } },   // 16 tokens each
-    "type":   { "family": "system", "size": 14, "line-height": 1.45 },
     "shape":  { "radius": 14, "bubble-radius": 18, "gap": 12, "list-width": 300 }
   },
-  "font": "JetBrains Mono",              // system | rounded | serif | mono | MesloLGM Nerd Font | JetBrains Mono
-  "terminal": { "palette": {             // flat, {light, dark}, or 16 ANSI colours as an array
-    "foreground": "#…", "background": "#…", "cursor": "#…", "cursorAccent": "#…", "selection": "#…",
-    "black": "#…", … "brightWhite": "#…" } },
-  "background": { "data": "data:image/png;base64,…", "dim": 0.8 }      // optional
+  "font": {
+    "family": "system",                // a FONT_FAMILIES name; the CSS stack comes from K2's own table
+    "size": 14, "lineHeight": 1.45,
+    "terminal": { "family": "meslo" }  // used when it is a fixed-width family K2 knows
+  },                                   // `stack` and `monospace` are accepted and not read
+  "terminal": { "palette": { "light": { "foreground": "#…", "cursor-text": "#…", "bright-black": "#…", … },
+                             "dark":  { … } } },
+  "background": { "dataUrl": "data:image/png;base64,…", "fit": "cover", "opacity": 1 }  // optional
 },
-"themes": [{ "name": "k2-light", "builtin": true }, { "name": "mine", "builtin": false }],
+"themes": [{ "name": "default", "builtin": true, "user": false, "active": true }, …],
 "chrome": { "corners": "system", "stoplights": "round", "stoplight-offset": [0, 0] },
 "motion": { "animations": { "<name>": { "on": true, "speed": 3, "bezier": [0.22, 1, 0.36, 1], "style": "popin 92%" }, … } }
 ```
 
+- **Font.** The renderer writes the stack for `font.family` from
+  `ZEN_FONT_TABLE`, which is a byte-for-byte copy of the daemon's
+  `FONT_FAMILIES`. The daemon's `stack` text is never used as CSS.
+  Terminals use `font.terminal.family` when it names a fixed-width family.
+  Otherwise they pair a proportional family with `meslo`.
+- **Terminal palette.** The renderer reads the active scheme's table. The
+  daemon's TOML-style keys map to xterm `ITheme` names: `cursor-text`
+  becomes `cursorAccent`, and `bright-black` becomes `brightBlack`. Unknown
+  keys in either scheme are rejected.
+- **Older shapes**, still read because they cost nothing:
+  - tokens flat on `theme`;
+  - a `tokens.type` table, `{family, size, line-height}`;
+  - `font` as a bare name, or `MesloLGM Nerd Font` / `JetBrains Mono`;
+  - a flat palette, xterm-style keys, or 16 ANSI colours as an array;
+  - `background` as a bare data URL string.
+- **`themes`.** The renderer reads `name`, `builtin` and `user`. If
+  `theme.name` is missing, the entry with `active: true` names the active
+  theme.
+
 **Flag 5, background.** Only a base64 `data:image/(png|jpeg|webp|gif|avif)`
-URL is drawn, in `data` or `url`. The app CSP allows `data:` and `blob:`
-images only, and Zen loads nothing remote. A daemon-served URL would need a
-fetch-to-blob path; send `data` instead. `dim` (0.5–0.95, default 0.8) is the
-canvas scrim over the image for readability. Reduced transparency drops it.
+`dataUrl` is drawn. The app CSP allows `data:` and `blob:` images only, and
+Zen loads nothing remote. The image is painted under the page, over the
+root's canvas colour:
+- `fit` is one of `cover`, `contain`, `tile` and `center`. Any other value
+  becomes `cover`.
+- `opacity` is 0–1, default 1. The canvas shows through the rest.
+- `lastGood` is not read, because the daemon already reports the error.
+- Reduced transparency drops the image.
 
 **Flag 6, `motion`.** The renderer rebuilds each curve from the four
 `bezier` numbers and the duration from `speed` (tenths of a second). The
 `ease`, `durationMs` and `curve` strings are not read.
 
-**Flag 7, theme switch route.** The picker and the cycle keys call
-`POST /cli/zen/theme/set {"name": "<theme>"}` on the local daemon, then
-re-read `get`. Next and previous are computed from the `themes` order, so
-the renderer needs no `next` or `prev` route. `zen_changed` should follow a
-switch like any other change.
+**Flag 7, theme switch routes.** All three calls go to the local daemon:
+- The picker calls `POST /cli/zen/theme/set {name}`.
+- ⌃⌘. (Ctrl+Alt+.) calls `POST /cli/zen/theme/next {}`.
+- ⌃⌘⇧. (Ctrl+Alt+Shift+.) calls `POST /cli/zen/theme/prev {}`.
+
+When `theme.scope` is `"home"`, each body also carries `home: <Home id>`, so
+the switch changes what this Home shows and its own pick stays its own. The
+daemon owns the order and the wrap. The renderer then re-reads `get`, and
+`zen_changed` follows the switch as well.
 
 ## Event
 

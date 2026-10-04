@@ -50,8 +50,14 @@ export interface ZenWidgetDecl {
  *  read-only themes and the user's own under `~/.k2/zen/themes/`. */
 export interface ZenThemeEntry {
   name: string
+  /** Shipped inside K2 (read-only). */
   builtin: boolean
+  /** `~/.k2/zen/themes/<name>/theme.toml` exists (for a built-in: an override). */
+  user: boolean
 }
+
+/** Where the active theme was picked: for every Home, or this Home only. */
+export type ZenThemeScope = 'global' | 'home'
 
 export interface ZenResolvedPage {
   schema: 1
@@ -66,6 +72,8 @@ export interface ZenResolvedPage {
   theme: unknown
   /** The active theme's name (`theme.name`), null when the daemon sends none. */
   activeTheme: string | null
+  /** `theme.scope`: a switch keeps it (a Home's own pick stays the Home's). */
+  themeScope: ZenThemeScope
   /** Themes to pick from, in the daemon's order (empty when it sends none). */
   themes: ZenThemeEntry[]
   chrome: unknown
@@ -105,6 +113,7 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
   controls: [...ZEN_REQUIRED_CONTROLS],
   theme: null,
   activeTheme: null,
+  themeScope: 'global',
   themes: [],
   chrome: null,
   motion: null,
@@ -198,7 +207,7 @@ function parseThemes(raw: unknown): ZenThemeEntry[] {
     const name = typeof t === 'string' ? t : isObj(t) && typeof t.name === 'string' ? t.name : null
     if (!name || seen.has(name)) continue
     seen.add(name)
-    out.push({ name, builtin: isObj(t) && t.builtin === true })
+    out.push({ name, builtin: isObj(t) && t.builtin === true, user: isObj(t) && t.user === true })
   }
   return out
 }
@@ -220,6 +229,11 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
     throw new ZenPageParseError(`this K2 reads Zen schema 1, the page is schema ${String(raw.schema)}`)
   }
   const layout = parseLayout(page.layout)
+  const themes = parseThemes(raw.themes)
+  const named = isObj(raw.theme) && typeof raw.theme.name === 'string' && raw.theme.name ? raw.theme.name : null
+  const flagged = Array.isArray(raw.themes)
+    ? raw.themes.find((t): t is { name: string } => isObj(t) && t.active === true && typeof t.name === 'string')
+    : undefined
   return {
     schema: 1,
     version: typeof raw.version === 'string' ? raw.version : String(raw.version ?? ''),
@@ -228,8 +242,9 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
     widgets: parseWidgets(page.widgets, layout.split.length),
     controls: parseControls(page.controls),
     theme: raw.theme ?? null,
-    activeTheme: isObj(raw.theme) && typeof raw.theme.name === 'string' && raw.theme.name ? raw.theme.name : null,
-    themes: parseThemes(raw.themes),
+    activeTheme: named ?? flagged?.name ?? null,
+    themeScope: isObj(raw.theme) && raw.theme.scope === 'home' ? 'home' : 'global',
+    themes,
     chrome: raw.chrome ?? null,
     motion: raw.motion ?? null,
     errors: parseIssues(raw.errors),

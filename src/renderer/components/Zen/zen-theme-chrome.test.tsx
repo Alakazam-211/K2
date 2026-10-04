@@ -103,17 +103,32 @@ function zenPage(opts: { version?: string; accent?: string; chrome?: object; the
       ],
       controls: ['zen-toggle', 'home-switcher', 'drag-region'],
     },
+    // The daemon's `theme` shape (store.rs `resolve`).
     theme: {
       name: 'k2-light',
-      tokens: { scheme: 'light', colors: { light: { accent: opts.accent ?? '#112233' } } },
-      terminal: { palette: { red: '#aa0000' } },
-      font: 'mono',
+      builtin: true,
+      user: false,
+      scope: 'global',
+      tokens: {
+        scheme: 'light',
+        colors: { light: { accent: opts.accent ?? '#112233' }, dark: {} },
+        shape: { radius: 14, 'bubble-radius': 18, gap: 12, 'list-width': 300 },
+      },
+      font: {
+        family: 'mono',
+        stack: 'ui-monospace, monospace',
+        monospace: true,
+        size: 14,
+        lineHeight: 1.45,
+        terminal: { family: 'mono', stack: 'ui-monospace, monospace', monospace: true },
+      },
+      terminal: { palette: { light: { red: '#aa0000', 'bright-white': '#fefefe' }, dark: {} } },
       ...opts.theme,
     },
     themes: [
-      { name: 'k2-light', builtin: true },
-      { name: 'k2-dark', builtin: true },
-      { name: 'mine', builtin: false },
+      { name: 'k2-light', builtin: true, user: false, active: true },
+      { name: 'k2-dark', builtin: true, user: false, active: false },
+      { name: 'mine', builtin: false, user: true, active: false },
     ],
     chrome: opts.chrome ?? { corners: 'square', stoplights: 'square', 'stoplight-offset': [6, 4] },
     motion: {},
@@ -211,6 +226,7 @@ describe('theme on the Zen root', () => {
     await waitFor(() => expect(root().style.getPropertyValue('--zen-accent')).toBe('rgb(17, 34, 51)'))
     expect(root().getAttribute('data-zen-scheme')).toBe('light')
     expect(root().style.getPropertyValue('--zen-term-red')).toBe('rgb(170, 0, 0)')
+    expect(root().style.getPropertyValue('--zen-term-bright-white')).toBe('rgb(254, 254, 254)')
     expect(root().style.getPropertyValue('--zen-terminal-font-family')).toContain('monospace')
     expect(root().style.getPropertyValue('--zen-anim-rowIn-ease')).toBe('cubic-bezier(0.22, 1, 0.36, 1)')
     expect(document.querySelector('[data-zen-keyframes]')?.textContent).toContain('@keyframes zen-kf-popin')
@@ -258,12 +274,29 @@ describe('theme on the Zen root', () => {
     expect(root().style.getPropertyValue('--zen-anim-messageIn-keyframes')).toBe('none')
   })
 
-  it('a background image sits under a canvas scrim; reduced transparency drops it', async () => {
-    h.page = zenPage({ theme: { background: { data: PNG, dim: 0.7 } } })
+  it('the theme’s background image is drawn with its fit and opacity; reduced transparency drops it', async () => {
+    h.page = zenPage({
+      theme: {
+        background: {
+          dataUrl: PNG,
+          mime: 'image/png',
+          bytes: 68,
+          file: 'background.png',
+          fit: 'contain',
+          opacity: 0.7,
+          lastGood: false,
+        },
+      },
+    })
     await enterZen()
     await waitFor(() => expect(document.querySelector('[data-zen-background]')).not.toBeNull())
-    const scrim = document.querySelector<HTMLElement>('[data-zen-background-scrim]')
-    expect(scrim?.style.opacity).toBe('0.7')
+    const bg = document.querySelector<HTMLElement>('[data-zen-background]')
+    if (!bg) throw new Error('no background')
+    expect(bg.getAttribute('data-zen-background-fit')).toBe('contain')
+    expect(bg.style.opacity).toBe('0.7')
+    expect(bg.style.backgroundSize).toBe('contain')
+    expect(bg.style.backgroundRepeat).toBe('no-repeat')
+    expect(bg.style.backgroundImage).toContain('data:image/png;base64,')
     cleanup()
     mediaMatches['(prefers-reduced-transparency: reduce)'] = true
     await enterZen()
@@ -362,8 +395,38 @@ describe('theme picker and cycle keys (Omarchy 2)', () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { code: 'Period', key: '>', ctrlKey: true, metaKey: true, shiftKey: true })
     })
-    const sets = h.calls.filter((c) => c.route === 'zen/theme/set').map((c) => c.data)
-    expect(sets).toEqual([{ name: 'k2-dark' }, { name: 'mine' }])
+    // The daemon owns the order and the wrap: next and prev, not a computed set.
+    const switches = h.calls.filter((c) => c.method === 'POST').map((c) => [c.route, c.data])
+    expect(switches).toEqual([
+      ['zen/theme/next', {}],
+      ['zen/theme/prev', {}],
+    ])
+  })
+
+  it('a Home with its own theme pick keeps it: set, next and prev carry the Home', async () => {
+    h.page = zenPage({ theme: { scope: 'home' } })
+    await enterZen()
+    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('k2-light'))
+    const homeId = selectedHome(useHomesStore.getState()).id
+    h.calls.length = 0
+    await act(async () => {
+      fireEvent.keyDown(document.body, { code: 'Period', key: '.', ctrlKey: true, metaKey: true })
+    })
+    await act(async () => {
+      fireEvent.keyDown(document.body, { code: 'Period', key: '>', ctrlKey: true, metaKey: true, shiftKey: true })
+    })
+    const button = document.querySelector('[data-zen-theme-button]')
+    if (!button) throw new Error('no theme button')
+    act(() => void fireEvent.click(button))
+    const mine = document.querySelector('[data-zen-theme-option="mine"]')
+    if (!mine) throw new Error('no option')
+    await act(async () => void fireEvent.click(mine))
+    await waitFor(() => expect(h.calls.filter((c) => c.method === 'POST')).toHaveLength(3))
+    expect(h.calls.filter((c) => c.method === 'POST').map((c) => [c.route, c.data])).toEqual([
+      ['zen/theme/next', { home: homeId }],
+      ['zen/theme/prev', { home: homeId }],
+      ['zen/theme/set', { name: 'mine', home: homeId }],
+    ])
   })
 
   it('safe mode draws no picker and the keys change nothing', async () => {
@@ -374,7 +437,7 @@ describe('theme picker and cycle keys (Omarchy 2)', () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { code: 'Period', key: '.', ctrlKey: true, metaKey: true })
     })
-    expect(h.calls.filter((c) => c.route === 'zen/theme/set')).toEqual([])
+    expect(h.calls.filter((c) => c.method === 'POST')).toEqual([])
   })
 })
 
@@ -428,7 +491,7 @@ describe('shortcut cheat sheet (Omarchy 4)', () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { code: 'Period', key: '.', ctrlKey: true, altKey: true })
     })
-    expect(h.calls.filter((c) => c.route === 'zen/theme/set').map((c) => c.data)).toEqual([{ name: 'k2-dark' }])
+    expect(h.calls.filter((c) => c.method === 'POST').map((c) => [c.route, c.data])).toEqual([['zen/theme/next', {}]])
     act(() => void fireEvent.keyDown(document.body, { code: 'Slash', key: '/', ctrlKey: true, altKey: true }))
     expect(document.querySelector('[data-zen-shortcut="Ctrl+Alt+Z"]')).not.toBeNull()
     // No native chrome call on Linux.

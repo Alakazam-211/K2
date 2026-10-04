@@ -9,7 +9,7 @@
 // range) is never passed through as CSS. The daemon's schema
 // (`crates/k2-core/src/zen/schema.rs`) is the source of truth for names and
 // ranges; `zen-theme-engine.test.ts` checks the two agree with the daemon's
-// `default-zen.toml`.
+// built-in `themes/default.toml` and its `FONT_FAMILIES` table.
 
 /** Colour tokens, the same keys in `colors.light` and `colors.dark`.
  *  (Decision 9, 2026-10-04: no unread tracking, so `idle`, not `unread`.) */
@@ -33,20 +33,59 @@ export const ZEN_COLOR_TOKENS = [
 ] as const
 export type ZenColorToken = (typeof ZEN_COLOR_TOKENS)[number]
 
-export const ZEN_FAMILIES = ['system', 'rounded', 'serif', 'mono'] as const
-export type ZenFamily = (typeof ZEN_FAMILIES)[number]
+/**
+ * The `font.family` names (daemon `FAMILIES`) with the daemon's CSS stacks
+ * (`FONT_FAMILIES` in `schema.rs`, byte for byte) and whether each is
+ * fixed-width. System stacks and fonts K2 already bundles; nothing loads from
+ * the network (Z21). The renderer writes the stack from this table, never
+ * the `stack` text the daemon sends.
+ */
+export const ZEN_FONT_TABLE = [
+  ['system', '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif', false],
+  ['rounded', 'ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif', false],
+  ['serif', 'ui-serif, "New York", Charter, Georgia, "Times New Roman", serif', false],
+  ['mono', 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace', true],
+  ['meslo', '"MesloLGM Nerd Font", "MesloLGM Nerd Font Mono", Menlo, Monaco, "Courier New", monospace', true],
+  ['jetbrains-mono', '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace', true],
+  ['fira-code', '"Fira Code", ui-monospace, Menlo, Consolas, monospace', true],
+  ['lilex', '"Lilex", ui-monospace, Menlo, Consolas, monospace', true],
+] as const
 
-/** System stacks and fonts K2 already bundles. No remote fonts (Z21). */
-export const ZEN_FAMILY_STACKS: Record<ZenFamily, string> = {
-  system: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-  rounded: 'ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
-  serif: 'ui-serif, "New York", Georgia, "Times New Roman", serif',
-  mono: '"MesloLGM Nerd Font", "JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
+export type ZenFont = (typeof ZEN_FONT_TABLE)[number][0]
+export const ZEN_FONTS: readonly ZenFont[] = ZEN_FONT_TABLE.map((f) => f[0])
+export const ZEN_FONT_STACKS = Object.fromEntries(ZEN_FONT_TABLE.map((f) => [f[0], f[1]])) as Record<ZenFont, string>
+const MONO_FONTS: ReadonlySet<ZenFont> = new Set(ZEN_FONT_TABLE.filter((f) => f[2]).map((f) => f[0]))
+/** The face terminals use when the font is proportional (daemon `TERMINAL_PARTNER`). */
+export const ZEN_TERMINAL_PARTNER: ZenFont = 'meslo'
+
+/** Older spellings a pre-bundle daemon sent, read as today's names. */
+const FONT_ALIASES: Record<string, ZenFont> = {
+  'MesloLGM Nerd Font': 'meslo',
+  'JetBrains Mono': 'jetbrains-mono',
+}
+
+/** A known font family name (or an older alias), else null. */
+export function parseZenFont(v: unknown): ZenFont | null {
+  if (typeof v !== 'string') return null
+  if ((ZEN_FONTS as readonly string[]).includes(v)) return v as ZenFont
+  return FONT_ALIASES[v] ?? null
+}
+
+export function isZenMonoFont(f: ZenFont): boolean {
+  return MONO_FONTS.has(f)
+}
+
+/** The terminals' face for font `f`: `f` itself when it is fixed-width. */
+export function zenTerminalFont(f: ZenFont): ZenFont {
+  return MONO_FONTS.has(f) ? f : ZEN_TERMINAL_PARTNER
 }
 
 export interface ZenNumToken {
-  table: 'type' | 'shape'
+  table: 'font' | 'shape'
+  /** The TOML key (`line-height`). */
   key: string
+  /** The key in the daemon's resolved JSON (`font.lineHeight`). */
+  jsonKey: string
   /** The `--zen-*` property it writes. */
   cssVar: string
   min: number
@@ -56,12 +95,12 @@ export interface ZenNumToken {
 
 /** Numeric tokens with their inclusive ranges (daemon `NUM_TOKENS`). */
 export const ZEN_NUM_TOKENS: readonly ZenNumToken[] = [
-  { table: 'type', key: 'size', cssVar: '--zen-font-size', min: 12, max: 20, unit: 'px' },
-  { table: 'type', key: 'line-height', cssVar: '--zen-line-height', min: 1.2, max: 1.8, unit: '' },
-  { table: 'shape', key: 'radius', cssVar: '--zen-radius', min: 0, max: 28, unit: 'px' },
-  { table: 'shape', key: 'bubble-radius', cssVar: '--zen-bubble-radius', min: 0, max: 28, unit: 'px' },
-  { table: 'shape', key: 'gap', cssVar: '--zen-gap', min: 4, max: 24, unit: 'px' },
-  { table: 'shape', key: 'list-width', cssVar: '--zen-list-width', min: 240, max: 420, unit: 'px' },
+  { table: 'font', key: 'size', jsonKey: 'size', cssVar: '--zen-font-size', min: 12, max: 20, unit: 'px' },
+  { table: 'font', key: 'line-height', jsonKey: 'lineHeight', cssVar: '--zen-line-height', min: 1.2, max: 1.8, unit: '' },
+  { table: 'shape', key: 'radius', jsonKey: 'radius', cssVar: '--zen-radius', min: 0, max: 28, unit: 'px' },
+  { table: 'shape', key: 'bubble-radius', jsonKey: 'bubble-radius', cssVar: '--zen-bubble-radius', min: 0, max: 28, unit: 'px' },
+  { table: 'shape', key: 'gap', jsonKey: 'gap', cssVar: '--zen-gap', min: 4, max: 24, unit: 'px' },
+  { table: 'shape', key: 'list-width', jsonKey: 'list-width', cssVar: '--zen-list-width', min: 240, max: 420, unit: 'px' },
 ]
 
 export const ZEN_FONT_FAMILY_VAR = '--zen-font-family'
@@ -82,8 +121,8 @@ export type ZenSchemeMode = 'auto' | 'light' | 'dark'
 /**
  * K2's default Zen template theme (Z44): clean, smooth and simple. Solid
  * surfaces, no blur, no glass, generous spacing, one accent; a warm light
- * scheme and a soft dark one. Byte-for-byte the daemon's builtin
- * `default-zen.toml`, so safe mode and a fresh install look the same.
+ * scheme and a soft dark one. Byte-for-byte the daemon's built-in
+ * `themes/default.toml`, so safe mode and a fresh install look the same.
  */
 export const ZEN_DEFAULT_COLORS: Record<'light' | 'dark', Record<ZenColorToken, string>> = {
   light: {
@@ -125,11 +164,11 @@ export const ZEN_DEFAULT_COLORS: Record<'light' | 'dark', Record<ZenColorToken, 
 }
 
 export const ZEN_DEFAULT_SCHEME_MODE: ZenSchemeMode = 'auto'
-export const ZEN_DEFAULT_FAMILY: ZenFamily = 'system'
-/** `type.*` and `shape.*` defaults, keyed `table.key`. */
+export const ZEN_DEFAULT_FONT: ZenFont = 'system'
+/** `font.*` and `shape.*` defaults, keyed `table.key` (TOML names). */
 export const ZEN_DEFAULT_NUMS: Record<string, number> = {
-  'type.size': 14,
-  'type.line-height': 1.45,
+  'font.size': 14,
+  'font.line-height': 1.45,
   'shape.radius': 14,
   'shape.bubble-radius': 18,
   'shape.gap': 12,
@@ -198,34 +237,15 @@ export function zenNumInRange(token: ZenNumToken, raw: unknown): number | null {
 
 // ── Theme bundles (Omarchy additions 1 and 5, 2026-10-04) ───────────────
 // A theme is a bundle: tokens, an optional background image, a terminal
-// palette and one font. The font token drives the Zen UI and the terminals
-// shown in Zen. A terminal needs a fixed-width face, so a proportional
-// choice (`system`, `rounded`, `serif`) keeps K2's mono stack in terminals.
-
-/** The `font` token: a family preset or a font K2 bundles. No remote fonts. */
-export const ZEN_FONTS = ['system', 'rounded', 'serif', 'mono', 'MesloLGM Nerd Font', 'JetBrains Mono'] as const
-export type ZenFont = (typeof ZEN_FONTS)[number]
-
-export const ZEN_FONT_STACKS: Record<ZenFont, string> = {
-  ...ZEN_FAMILY_STACKS,
-  'MesloLGM Nerd Font': '"MesloLGM Nerd Font", "JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
-  'JetBrains Mono': '"JetBrains Mono", "MesloLGM Nerd Font", ui-monospace, Menlo, Monaco, monospace',
-}
-
-const MONO_FONTS: ReadonlySet<ZenFont> = new Set(['mono', 'MesloLGM Nerd Font', 'JetBrains Mono'])
-
-export function isZenFont(v: unknown): v is ZenFont {
-  return typeof v === 'string' && (ZEN_FONTS as readonly string[]).includes(v)
-}
-
-/** The terminals' face for font `f`: `f` itself when it is fixed-width. */
-export function zenTerminalFontStack(f: ZenFont): string {
-  return MONO_FONTS.has(f) ? ZEN_FONT_STACKS[f] : ZEN_FAMILY_STACKS.mono
-}
+// palette and one font. The font drives the Zen UI and the terminals shown
+// in Zen. A terminal needs a fixed-width face, so a proportional choice
+// (`system`, `rounded`, `serif`) pairs with `meslo` in terminals.
 
 export const ZEN_TERMINAL_FONT_VAR = '--zen-terminal-font-family'
 
-/** Terminal palette keys (xterm-style), ANSI 0–15 in order after the five UI keys. */
+/** Terminal palette keys (xterm-style `ITheme` names), ANSI 0–15 in order
+ *  after the five UI keys. The daemon spells them in TOML style
+ *  (`cursor-text`, `bright-black`); see `zenTerminalKeyOf`. */
 export const ZEN_TERMINAL_UI_KEYS = ['foreground', 'background', 'cursor', 'cursorAccent', 'selection'] as const
 export const ZEN_TERMINAL_ANSI_KEYS = [
   'black',
@@ -250,65 +270,76 @@ export type ZenTerminalKey = (typeof ZEN_TERMINAL_KEYS)[number]
 /** A resolved terminal palette: every key, as CSS colours. */
 export type ZenTerminalPalette = Record<ZenTerminalKey, string>
 
+/** The daemon's `TERMINAL_TOKENS` name → this palette's key:
+ *  `cursor-text` → `cursorAccent`, `bright-black` → `brightBlack`. An
+ *  xterm-style key is accepted as is. Null for anything else. */
+export function zenTerminalKeyOf(raw: string): ZenTerminalKey | null {
+  const k = raw === 'cursor-text' ? 'cursorAccent' : raw.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+  return (ZEN_TERMINAL_KEYS as readonly string[]).includes(k) ? (k as ZenTerminalKey) : null
+}
+
 /** `brightBlack` → `--zen-term-bright-black`. */
 export function zenTerminalVar(key: ZenTerminalKey): string {
   return `--zen-term-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
 }
 
-/** K2's default terminal palettes for the default template theme. */
+/** K2's default terminal palettes: the daemon's built-in `themes/default.toml`
+ *  `[terminal.light]` / `[terminal.dark]`. */
 export const ZEN_DEFAULT_TERMINAL: Record<'light' | 'dark', ZenTerminalPalette> = {
   light: {
     foreground: '#1f1c18',
-    background: '#ffffff',
+    background: '#faf7f2',
     cursor: '#b4532a',
     cursorAccent: '#ffffff',
-    selection: '#efe9e0',
-    black: '#1f1c18',
-    red: '#c53030',
-    green: '#2f855a',
-    yellow: '#a8670b',
-    blue: '#2b6cb0',
-    magenta: '#97266d',
-    cyan: '#2c7a7b',
-    white: '#e7e1d8',
+    selection: '#eadfce',
+    black: '#2a2622',
+    red: '#b8322a',
+    green: '#3d7a3a',
+    yellow: '#9a6a12',
+    blue: '#2f5f9a',
+    magenta: '#8a3f86',
+    cyan: '#2a7a7a',
+    white: '#d8d0c4',
     brightBlack: '#6f675d',
-    brightRed: '#e53e3e',
-    brightGreen: '#38a169',
-    brightYellow: '#c27c0e',
-    brightBlue: '#3182ce',
-    brightMagenta: '#b83280',
-    brightCyan: '#319795',
-    brightWhite: '#faf7f2',
+    brightRed: '#d0473e',
+    brightGreen: '#4f944b',
+    brightYellow: '#b8841f',
+    brightBlue: '#3f76b8',
+    brightMagenta: '#a3549f',
+    brightCyan: '#3a9494',
+    brightWhite: '#ffffff',
   },
   dark: {
     foreground: '#ece7e0',
-    background: '#1e1d1b',
+    background: '#161514',
     cursor: '#e08a5f',
     cursorAccent: '#1a1410',
-    selection: '#34312d',
-    black: '#161514',
+    selection: '#3a3530',
+    black: '#262422',
     red: '#f07167',
-    green: '#5fbf8a',
-    yellow: '#e0a43a',
-    blue: '#7aa7e0',
-    magenta: '#d38bc4',
-    cyan: '#6cc4c4',
-    white: '#ece7e0',
+    green: '#7fbf7a',
+    yellow: '#e0b45a',
+    blue: '#7aa7d8',
+    magenta: '#c792c7',
+    cyan: '#6fc1bd',
+    white: '#d8d0c4',
     brightBlack: '#7d766d',
     brightRed: '#ff8a80',
-    brightGreen: '#7fd9a4',
-    brightYellow: '#f2c46b',
-    brightBlue: '#9cc2f0',
-    brightMagenta: '#e6a8d8',
-    brightCyan: '#8fdede',
+    brightGreen: '#9ad694',
+    brightYellow: '#f2cc7a',
+    brightBlue: '#9cc2ec',
+    brightMagenta: '#dcaadc',
+    brightCyan: '#8fd6d2',
     brightWhite: '#ffffff',
   },
 }
 
-/** Background scrim: how much canvas lies over a theme's image (readability). */
-export const ZEN_BACKGROUND_DIM_MIN = 0.5
-export const ZEN_BACKGROUND_DIM_MAX = 0.95
-export const ZEN_BACKGROUND_DIM_DEFAULT = 0.8
+/** `[background] fit` (daemon `BACKGROUND_FITS`). */
+export const ZEN_BACKGROUND_FITS = ['cover', 'contain', 'tile', 'center'] as const
+export type ZenBackgroundFit = (typeof ZEN_BACKGROUND_FITS)[number]
+export const ZEN_BACKGROUND_FIT_DEFAULT: ZenBackgroundFit = 'cover'
+/** `[background] opacity`, 0–1; the canvas shows through the rest. */
+export const ZEN_BACKGROUND_OPACITY_DEFAULT = 1
 /** Data URLs above this many characters are refused (about 12 MB of image). */
 export const ZEN_BACKGROUND_MAX_CHARS = 16 * 1024 * 1024
 

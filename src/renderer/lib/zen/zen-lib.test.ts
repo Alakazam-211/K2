@@ -236,6 +236,30 @@ describe('the resolved page (Z10, Z13)', () => {
     expect(p.layout).toEqual(BUILTIN_TEXTING_PAGE.layout)
     expect(p.widgets.map((w) => w.kind)).toEqual(['agents', 'conversation'])
     expect(p.controls).toEqual([])
+    expect(p.activeTheme).toBeNull()
+    expect(p.themeScope).toBe('global')
+    expect(p.themes).toEqual([])
+  })
+
+  it('reads the daemon’s active theme, its scope and the theme list', () => {
+    const page = { template: 'k2.texting@1' }
+    const themes = [
+      { name: 'default', builtin: true, user: false, summary: 'clean', active: false },
+      { name: 'paper', builtin: true, user: true, summary: 'warm', active: true },
+      { name: 'mine', builtin: false, user: true, summary: '', active: false },
+    ]
+    const p = parseZenGet({ version: 'v', page, theme: { name: 'paper', scope: 'home', tokens: {} }, themes })
+    expect(p.activeTheme).toBe('paper')
+    expect(p.themeScope).toBe('home')
+    expect(p.themes).toEqual([
+      { name: 'default', builtin: true, user: false },
+      { name: 'paper', builtin: true, user: true },
+      { name: 'mine', builtin: false, user: true },
+    ])
+    // No `theme.name`: the list's `active` flag names it; an odd scope is global.
+    const q = parseZenGet({ version: 'v', page, theme: { scope: 'everywhere' }, themes })
+    expect(q.activeTheme).toBe('paper')
+    expect(q.themeScope).toBe('global')
   })
 
   it('throws for no page, a non-object, or another schema', () => {

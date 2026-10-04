@@ -16,7 +16,7 @@
 import { create } from 'zustand'
 import type { ZenResolvedPage } from './zen-page'
 import { buildZenTheme } from './zen-theme-engine'
-import type { ZenFont, ZenTerminalPalette } from './zen-tokens'
+import type { ZenBackgroundFit, ZenFont, ZenTerminalPalette } from './zen-tokens'
 
 export type ZenScheme = 'light' | 'dark'
 
@@ -27,13 +27,14 @@ export interface ZenThemeResult {
   rejected?: string[]
   /** The active theme bundle's name, when the daemon names one. */
   name?: string | null
-  /** The one font token (UI and terminals). */
+  /** The one font family (UI and terminals). */
   font?: ZenFont
   /** The terminal palette for terminals shown in Zen (CSS colours). */
   terminal?: ZenTerminalPalette
-  /** The page background image under a canvas scrim (`dim` 0.5–0.95), or
-   *  null (none, or reduced transparency). Only `data:image` URLs. */
-  background?: { src: string; dim: number } | null
+  /** The theme's background image under the page, drawn with `fit` and
+   *  `opacity` over the canvas, or null (none, or reduced transparency).
+   *  Only `data:image` URLs. */
+  background?: { src: string; fit: ZenBackgroundFit; opacity: number } | null
 }
 
 /** What a theme engine gets: the resolved page (null in safe mode), this

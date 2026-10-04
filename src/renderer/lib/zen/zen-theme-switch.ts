@@ -3,10 +3,13 @@
 //
 // The daemon owns the active theme (`k2 zen theme next|prev|set|list`); the
 // renderer shows which theme is active (from `/cli/zen/get`'s `theme.name`
-// and `themes`) and asks for a change with
-//   POST /cli/zen/theme/set {name}      on THIS computer's daemon
-// then re-reads the page (the daemon's `zen_changed` follows). Next / prev
-// are computed here from the daemon's list order, so they need only `set`.
+// and `themes`) and asks for a change on THIS computer's daemon:
+//   POST /cli/zen/theme/set  {name}      the picker
+//   POST /cli/zen/theme/next {}          ⌃⌘.
+//   POST /cli/zen/theme/prev {}          ⌃⌘⇧.
+// each with `home` added when the Home has its own pick (`theme.scope =
+// "home"`), so the switch changes what this Home shows. The daemon owns the
+// order and the wrap. Then the page is re-read (`zen_changed` follows too).
 //
 // Keys (checked against every window chord: ⌘1–9 / ⌘0, ⌘⌥1–9, ⌃1–9,
 // ⌃⌘Z, ⌘L, ⌘⇧L, ⌘⇧N, ⌘⇧Z, ⌘, ⌘K ⌘J ⌘P ⌘B ⌘⇧F, ⌘[ ⌘], ⌘= ⌘- ⌘0, and the
@@ -27,7 +30,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { zenLocalScope } from './zen-api'
 import { ZEN_CHORD_LABEL } from './zen-shortcut'
-import type { ZenThemeEntry } from './zen-page'
+import type { ZenThemeScope } from './zen-page'
 
 export { ZEN_SHORTCUTS_MENU_EVENT, dispatchZenShortcutsMenu } from './zen-shortcut'
 
@@ -41,18 +44,19 @@ export function closeZenOverlays(): void {
   useZenOverlayStore.setState({ sheet: false, picker: false })
 }
 
-/** `POST /cli/zen/theme/set {name}` on this computer's daemon. */
-export async function setZenTheme(name: string): Promise<void> {
-  await daemonCliPost(zenLocalScope(), 'zen/theme/set', { name })
+/** Where a switch applies: the Home itself only when the Home has its own pick. */
+function scopeBody(scope: ZenThemeScope, homeId: string): { home?: string } {
+  return scope === 'home' ? { home: homeId } : {}
 }
 
-/** The theme `dir` steps from `active` in the daemon's list (wraps). */
-export function cycleTarget(themes: readonly ZenThemeEntry[], active: string | null, dir: 1 | -1): string | null {
-  if (themes.length === 0) return null
-  const i = active ? themes.findIndex((t) => t.name === active) : -1
-  if (i < 0) return themes[dir === 1 ? 0 : themes.length - 1].name
-  if (themes.length === 1) return null
-  return themes[(i + dir + themes.length) % themes.length].name
+/** `POST /cli/zen/theme/set {name, home?}` on this computer's daemon. */
+export async function setZenTheme(name: string, scope: ZenThemeScope, homeId: string): Promise<void> {
+  await daemonCliPost(zenLocalScope(), 'zen/theme/set', { name, ...scopeBody(scope, homeId) })
+}
+
+/** `POST /cli/zen/theme/next|prev {home?}` on this computer's daemon. */
+export async function cycleZenTheme(dir: 1 | -1, scope: ZenThemeScope, homeId: string): Promise<void> {
+  await daemonCliPost(zenLocalScope(), dir === 1 ? 'zen/theme/next' : 'zen/theme/prev', scopeBody(scope, homeId))
 }
 
 export interface ZenKeyLike {

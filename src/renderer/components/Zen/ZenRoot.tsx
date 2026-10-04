@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useHomesStore, selectedHome } from '@/stores/homes'
 import { loadZenPage, useZenConfigStore, watchLocalZenChanged } from '@/lib/zen/zen-api'
-import { BUILTIN_TEXTING_PAGE, type ZenResolvedPage } from '@/lib/zen/zen-page'
+import { BUILTIN_TEXTING_PAGE, type ZenResolvedPage, type ZenThemeScope } from '@/lib/zen/zen-page'
 import { exitZen, useZenViewStore } from '@/lib/zen/zen-view'
 import {
   REDUCED_MOTION_QUERY,
@@ -27,6 +27,7 @@ import {
 } from '@/lib/zen/zen-theme'
 import { installZenThemeEngine } from '@/lib/zen/zen-theme-engine'
 import { ZEN_KEYFRAMES_CSS } from '@/lib/zen/zen-motion'
+import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
   clusterArea,
   currentMacStoplightArea,
@@ -38,7 +39,7 @@ import { onChromeApplied, setChromeSource, type ZenChromeSource } from '@/stores
 import { useZenAppliedThemeStore } from '@/lib/zen/zen-theme'
 import {
   closeZenOverlays,
-  cycleTarget,
+  cycleZenTheme,
   installZenThemeKeys,
   openZenCheatSheet,
   setZenTheme,
@@ -58,6 +59,14 @@ import { ZenPage } from './ZenPage'
 // S5: the Zen theme engine (tokens, scheme, type, shape, motion) through the
 // S4 plug-in point. Once per app session.
 installZenThemeEngine()
+
+/** `[background] fit` as CSS (the daemon's `cover|contain|tile|center`). */
+const ZEN_BACKGROUND_FIT_CSS: Record<ZenBackgroundFit, React.CSSProperties> = {
+  cover: { backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' },
+  contain: { backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' },
+  tile: { backgroundSize: 'auto', backgroundPosition: '0 0', backgroundRepeat: 'repeat' },
+  center: { backgroundSize: 'auto', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' },
+}
 
 /** A live `matchMedia` flag (reduced motion / reduced transparency). */
 function useMediaFlag(query: string): boolean {
@@ -122,29 +131,35 @@ function useZenThemeControls(
   const safeRef = useRef(safe)
   safeRef.current = safe
 
-  const pick = useCallback((name: string) => {
-    if (safeRef.current) return
+  /** Run one switch on this computer's daemon, then re-read the page. */
+  const run = useCallback((what: string, send: (scope: ZenThemeScope, homeId: string) => Promise<void>) => {
+    const p = pageRef.current
+    if (safeRef.current || !p) return
     setError(null)
-    void setZenTheme(name)
+    const h = selectedHome(useHomesStore.getState())
+    void send(p.themeScope, h.id)
       .then(() => {
         useZenOverlayStore.setState({ picker: false })
-        const h = selectedHome(useHomesStore.getState())
-        return loadZenPage(h.id, h.name)
+        const now = selectedHome(useHomesStore.getState())
+        return loadZenPage(now.id, now.name)
       })
       .catch((err: unknown) => {
-        setError(`Couldn't switch to ${name}: ${err instanceof Error ? err.message : String(err)}`)
+        setError(`Couldn't switch ${what}: ${err instanceof Error ? err.message : String(err)}`)
         useZenOverlayStore.setState({ picker: true })
       })
   }, [])
 
+  const pick = useCallback(
+    (name: string) => run(`to ${name}`, (scope, homeId) => setZenTheme(name, scope, homeId)),
+    [run],
+  )
+
   useEffect(() => {
     const uninstallKeys = installZenThemeKeys(os, window, {
-      cycle: (dir) => {
-        const p = pageRef.current
-        if (safeRef.current || !p) return
-        const next = cycleTarget(p.themes, p.activeTheme, dir)
-        if (next) pick(next)
-      },
+      cycle: (dir) =>
+        run(dir === 1 ? 'to the next theme' : 'to the previous theme', (scope, homeId) =>
+          cycleZenTheme(dir, scope, homeId),
+        ),
       sheet: openZenCheatSheet,
     })
     // Linux / Windows app menu (DOM event, this window only).
@@ -176,7 +191,7 @@ function useZenThemeControls(
       unlisten?.()
       closeZenOverlays()
     }
-  }, [os, pick])
+  }, [os, run])
 
   return { pick, error }
 }
@@ -343,34 +358,21 @@ export function ZenRoot(): React.JSX.Element {
     >
       <style data-zen-keyframes="">{ZEN_KEYFRAMES_CSS}</style>
       {theme.background && (
-        <>
-          <div
-            aria-hidden
-            data-zen-background=""
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 0,
-              backgroundImage: `url("${theme.background.src}")`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              pointerEvents: 'none',
-            }}
-          />
-          {/* Readability: the canvas over the image (Omarchy 1). */}
-          <div
-            aria-hidden
-            data-zen-background-scrim=""
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 0,
-              background: 'var(--zen-canvas)',
-              opacity: theme.background.dim,
-              pointerEvents: 'none',
-            }}
-          />
-        </>
+        <div
+          aria-hidden
+          data-zen-background=""
+          data-zen-background-fit={theme.background.fit}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 0,
+            backgroundImage: `url("${theme.background.src}")`,
+            ...ZEN_BACKGROUND_FIT_CSS[theme.background.fit],
+            // Over the root's canvas: the canvas shows through the rest.
+            opacity: theme.background.opacity,
+            pointerEvents: 'none',
+          }}
+        />
       )}
       <ZenChromeCluster os={os} onRect={onClusterRect} />
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>

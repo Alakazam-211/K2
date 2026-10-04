@@ -65,7 +65,7 @@ export interface ZenAnimationLine {
 }
 
 /** The default template's motion: gentle `glide` curves (Z44). Mirrors the
- *  daemon's `default-zen.toml` `[animation]` table. */
+ *  daemon's built-in `themes/default.toml` `[animation]` table. */
 export const ZEN_DEFAULT_ANIMATIONS: Record<string, ZenAnimationLine> = {
   global: { on: true, speed: 3, curve: 'glide' },
   zenIn: { on: true, speed: 4, curve: 'glide', style: 'fade' },

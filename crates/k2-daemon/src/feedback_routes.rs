@@ -2544,23 +2544,37 @@ mod tests {
         .expect("claimed");
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
 
-        let before = dispatch("/cli/feedback/waiting-count", &HashMap::new())
-            .expect("waiting-count claimed");
-        assert_eq!(before.status, "200 OK", "body={}", before.body);
-        let before_n = serde_json::from_str::<serde_json::Value>(&before.body).expect("json")
-            ["count"]
-            .as_i64()
-            .expect("count");
-        create_via_route(&path, "another waiting", serde_json::json!({}));
-        let after = dispatch("/cli/feedback/waiting-count", &HashMap::new())
-            .expect("waiting-count claimed");
-        let after_n = serde_json::from_str::<serde_json::Value>(&after.body).expect("json")
-            ["count"]
-            .as_i64()
-            .expect("count");
+        // The count is host-wide and other tests in this process create
+        // and resolve tickets in parallel, so a bare before/after read
+        // could move by more or less than our one ticket. Hold the shared
+        // DB's reentrant lock across read → create → read: the route
+        // calls re-enter it on this thread, other tests' writes wait, and
+        // the delta is exactly this test's own fixture.
+        let (before_n, another_id, after_n) = {
+            let db = k2_core::db::shared();
+            let _hold = db.lock();
+            let read_count = || {
+                let resp = dispatch("/cli/feedback/waiting-count", &HashMap::new())
+                    .expect("waiting-count claimed");
+                assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+                serde_json::from_str::<serde_json::Value>(&resp.body).expect("json")["count"]
+                    .as_i64()
+                    .expect("count")
+            };
+            let before_n = read_count();
+            let another = create_via_route(&path, "another waiting", serde_json::json!({}));
+            let another_id = another["id"].as_str().expect("id").to_string();
+            (before_n, another_id, read_count())
+        };
+        assert_eq!(
+            after_n,
+            before_n + 1,
+            "one new waiting ticket adds exactly one to the waiting count"
+        );
+        let waiting = list_ids(&path, &[("status", "waiting")]);
         assert!(
-            after_n >= before_n + 1,
-            "host-wide waiting count ticks (before={before_n} after={after_n})"
+            waiting.contains(&id) && waiting.contains(&another_id),
+            "both of this test's tickets are waiting: {waiting:?}"
         );
 
         // Missing project param → 400; unregistered project → 404.

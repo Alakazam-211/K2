@@ -99,7 +99,10 @@ export function useOverlayThread(opts: {
           } catch {
             return
           }
-          setItems((prev) => applyOverlayFrame(prev, frame, snapshotSeqRef.current))
+          // Read the seq NOW: a deferred updater would see the bump below
+          // and drop this new frame as a replay.
+          const seenSeq = snapshotSeqRef.current
+          setItems((prev) => applyOverlayFrame(prev, frame, seenSeq))
           if (frame.collection === 'thread' && typeof frame.seq === 'number' && Number.isFinite(frame.seq)) {
             snapshotSeqRef.current = Math.max(snapshotSeqRef.current, frame.seq)
           }

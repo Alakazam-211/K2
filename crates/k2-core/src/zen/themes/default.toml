@@ -1,6 +1,6 @@
 # Zen theme "default": clean, smooth, simple. Built into K2 (read-only).
 #
-# Warm light scheme, soft dark scheme, `scheme = "auto"` follows this
+# Cool light scheme, soft dark scheme, K2 blue accent, `scheme = "auto"` follows this
 # computer's light/dark setting. Every other theme starts from this one,
 # so it sets every token.
 #
@@ -15,36 +15,36 @@ schema = 1
 scheme = "auto"
 
 [colors.light]
-canvas = "#faf7f2"
+canvas = "#f7f8fa"
 surface = "#ffffff"
 surface-raised = "#ffffff"
-border = "#e7e1d8"
-text = "#1f1c18"
-text-muted = "#6f675d"
-accent = "#b4532a"
+border = "#e3e6ec"
+text = "#1a1d23"
+text-muted = "#5f6672"
+accent = "#2563eb"
 accent-text = "#ffffff"
-bubble-me = "#b4532a"
+bubble-me = "#2563eb"
 bubble-me-text = "#ffffff"
-bubble-agent = "#efe9e0"
-bubble-agent-text = "#1f1c18"
+bubble-agent = "#eef1f5"
+bubble-agent-text = "#1a1d23"
 working = "#2f855a"
 idle = "#a39b90"
 needs-you = "#c27c0e"
 danger = "#c53030"
 
 [colors.dark]
-canvas = "#161514"
-surface = "#1e1d1b"
-surface-raised = "#262422"
-border = "#34312d"
-text = "#ece7e0"
-text-muted = "#a39b90"
-accent = "#e08a5f"
-accent-text = "#1a1410"
-bubble-me = "#8f4a2c"
-bubble-me-text = "#fff7f0"
-bubble-agent = "#262422"
-bubble-agent-text = "#ece7e0"
+canvas = "#121316"
+surface = "#1a1b1f"
+surface-raised = "#222328"
+border = "#2e3036"
+text = "#e6e8ec"
+text-muted = "#9aa0ab"
+accent = "#60a5fa"
+accent-text = "#0b1220"
+bubble-me = "#1d4ed8"
+bubble-me-text = "#eff6ff"
+bubble-agent = "#222328"
+bubble-agent-text = "#e6e8ec"
 working = "#5fbf8a"
 idle = "#7d766d"
 needs-you = "#e0a43a"
@@ -66,11 +66,11 @@ list-width = 300    # 240 to 420
 
 # Agent terminals shown in Zen use this palette.
 [terminal.light]
-foreground = "#1f1c18"
-background = "#faf7f2"
-cursor = "#b4532a"
+foreground = "#1a1d23"
+background = "#f7f8fa"
+cursor = "#2563eb"
 cursor-text = "#ffffff"
-selection = "#eadfce"
+selection = "#dbe6fb"
 black = "#2a2622"
 red = "#b8322a"
 green = "#3d7a3a"
@@ -89,11 +89,11 @@ bright-cyan = "#3a9494"
 bright-white = "#ffffff"
 
 [terminal.dark]
-foreground = "#ece7e0"
-background = "#161514"
-cursor = "#e08a5f"
-cursor-text = "#1a1410"
-selection = "#3a3530"
+foreground = "#e6e8ec"
+background = "#121316"
+cursor = "#60a5fa"
+cursor-text = "#0b1220"
+selection = "#263452"
 black = "#262422"
 red = "#f07167"
 green = "#7fbf7a"

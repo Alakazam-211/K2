@@ -568,7 +568,7 @@ fn layering_builtin_then_override_then_zen_toml_then_page_and_reset_clears_the_o
     assert_eq!(base["theme"]["builtin"], true);
     assert_eq!(base["theme"]["user"], false);
     assert_eq!(base["theme"]["scope"], "global");
-    assert_eq!(base["theme"]["tokens"]["colors"]["light"]["accent"], "#b4532a");
+    assert_eq!(base["theme"]["tokens"]["colors"]["light"]["accent"], "#2563eb");
 
     // Override the built-in: the user's value wins, the rest stays K2's.
     let out = f.new_theme("default", None).expect("override default");
@@ -614,7 +614,7 @@ fn layering_builtin_then_override_then_zen_toml_then_page_and_reset_clears_the_o
     assert!(std::fs::read_to_string(f.history_root().join("themes/default/theme.toml").join(&kept)).expect("snap").contains("#1d4ed8"));
     assert!(!f.path_of(&ov).exists(), "reset removes the override");
     let back = f.resolve(Some("home-1")).expect("back");
-    assert_eq!(back["theme"]["tokens"]["colors"]["light"]["accent"], "#b4532a", "the built-in shows again");
+    assert_eq!(back["theme"]["tokens"]["colors"]["light"]["accent"], "#2563eb", "the built-in shows again");
     assert_eq!(back["theme"]["user"], false);
     // Undo the reset from history.
     f.reset(&ov, Some(&kept)).expect("undo");

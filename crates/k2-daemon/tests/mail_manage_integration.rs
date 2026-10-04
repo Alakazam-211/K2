@@ -33,12 +33,17 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
     stream
         .set_read_timeout(Some(Duration::from_secs(15)))
         .expect("set read timeout");
+    // The daemon keeps HTTP/1.1 connections alive (0.39.7, routes/http.rs).
+    // This reader reads to EOF, so ask the server to close; without it
+    // every request sat out the full read timeout (a ~15 min suite).
     let req = match body {
         Some(b) => format!(
-            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
+            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
             b.len()
         ),
-        None => format!("{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+        None => format!(
+            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        ),
     };
     stream.write_all(req.as_bytes()).expect("write request");
     stream.flush().expect("flush");
@@ -49,13 +54,18 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            // With Connection: close a timeout means the daemon hung — fail
+            // loudly instead of parsing whatever arrived.
             Err(e)
                 if matches!(
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                break
+                panic!(
+                    "{method} {path_and_query}: no EOF within 15s; got {:?}",
+                    String::from_utf8_lossy(&raw)
+                )
             }
             Err(e)
                 if matches!(

@@ -353,6 +353,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // 0.40.150 — token-usage ledger grew: app-level refetch signal
         // (no workspace scope; the live log is machine-wide).
         SessionEvent::TokenUsageChanged {} => None,
+        // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
+        SessionEvent::ZenChanged {} => None,
         // 0.40.39 — daemon-side activity: app-level (the store maps
         // agent/pane keys itself; spinners exist on every host's UI).
         SessionEvent::SessionActivityChanged { .. } => None,
@@ -715,6 +717,7 @@ mod tests {
             SessionEvent::ProjectsChanged {},
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
+            SessionEvent::ZenChanged {},
             SessionEvent::PresenceChanged { roster: vec![] },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },

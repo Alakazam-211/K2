@@ -194,6 +194,14 @@ pub fn attach_only_supported() -> bool {
 /// share a version string until the next cut.
 pub const FEATURE_TICKETS_LIST_ALL: &str = "tickets-list-all";
 
+/// Zen Mode v1 (prd-zen-mode-v1 Z16): this daemon serves `/cli/zen/*`
+/// for the person on this computer (owner token only).
+pub const FEATURE_ZEN_V1: &str = "zen-v1";
+
+/// Zen Z41: `GET /cli/thread/latest?addrs=` answers on this server. A
+/// client without it falls back to `GET /cli/thread?addr=&limit=1`.
+pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -203,6 +211,8 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_SPAWN_ATTACH_ONLY);
     }
     out.push(FEATURE_TICKETS_LIST_ALL);
+    out.push(FEATURE_ZEN_V1);
+    out.push(FEATURE_THREAD_LATEST);
     out
 }
 
@@ -214,7 +224,10 @@ mod tests {
     fn features_report_spawn_attach_only_and_tickets_list_all() {
         // The harness hook is never set in unit tests.
         assert!(attach_only_supported());
-        assert_eq!(features(), vec!["spawn-attach-only", "tickets-list-all"]);
+        assert_eq!(
+            features(),
+            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "thread-latest"]
+        );
     }
 
     // These mutate process-global state, so they live in ONE test to

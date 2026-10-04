@@ -73,6 +73,8 @@ mod fs_routes;
 mod fs_live;
 mod charter_compose_watch;
 mod notify_bound;
+mod zen_routes;
+mod zen_watch;
 mod grid_emitter;
 mod git_routes;
 mod heartbeat_app_routes;
@@ -1188,6 +1190,9 @@ async fn async_main() {
     // FileTree. DB is ready above; projects_list() is live.
     fs_live::start();
     charter_compose_watch::start();
+    // Zen Mode (Z12/Z61): watch `~/.k2/zen/` only when this computer has
+    // set Zen up; otherwise the first `page/ensure` starts it.
+    zen_watch::start_at_boot();
 
     // heartbeat.port watchdog — see `run_heartbeat_port_watchdog` docs.
     // The daemon takes over `~/.k2so/heartbeat.port` whenever Tauri

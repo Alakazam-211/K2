@@ -439,6 +439,15 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "token_usage_changed" }`.
     TokenUsageChanged {},
 
+    /// Zen Mode v1 (prd-zen-mode-v1 Z12) — this computer's `~/.k2/zen/`
+    /// changed effectively (a theme or page now resolves differently, or
+    /// its errors changed). APP-LEVEL refetch signal, deliberately
+    /// payload-free so nothing about the user's files reaches other
+    /// connected clients: a desktop re-reads `GET /cli/zen/get` from its
+    /// LOCAL daemon. Emitted once per effective change (`zen_routes`).
+    /// Wire: `{ "kind": "zen_changed" }`.
+    ZenChanged {},
+
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
     /// deregistered). `grantedEdit` is retired and always false.
@@ -621,6 +630,7 @@ impl SessionEvent {
             SessionEvent::ProjectsChanged {} => "projects_changed",
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
+            SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",

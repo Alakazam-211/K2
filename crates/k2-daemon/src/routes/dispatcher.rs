@@ -4538,6 +4538,40 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // Zen Mode v1 (prd-zen-mode-v1 Z15, vs-live Z59): `/cli/zen/*` is
+        // this computer's `~/.k2/zen`. POST rows refuse a GET with 405
+        // (require_post); every arm consumes its request before answering
+        // (keep-alive ratchet); bodies over 64 KB get 413 and close. Only
+        // the LOCAL owner token passes: a Connect login of any role, an app
+        // pass or an agent passport gets 403 `zen_local_only` (Z15a).
+        p if p.starts_with("/cli/zen/") => {
+            let is_post_row = crate::zen_routes::POST_ROUTES.contains(&p);
+            if is_post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::zen_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let owner = super::http::token_is_owner(&query, state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::zen_routes::handle(&p_owned, owner, &params, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Phase 2 Unit 6 — POST routes for filesystem / chat /
         // themes / skill-layers / review-checklist. All JSON-bodied;
         // delegate to per-domain modules. The match-arm guard

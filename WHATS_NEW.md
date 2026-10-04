@@ -3,14 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.43.2 — Agents from other servers open right on Home
+## 0.43.2 — Agents from other servers open right on Home, and tickets you can read
 
-- **Other servers open in place.** On macOS and Linux, picking an agent from another server on Home opens it right there. Your window doesn't switch. If you turned this off before, it stays off. The setting is Settings → General → Experimental → Open agents from other servers here. Windows keeps the old behavior for now. Servers older than 0.41.0 still switch the window, and 0.41–0.42 servers open view only.
-- **Switching servers keeps your rooms.** Changing servers in the top bar no longer reconnects the agents you have open on Home. Their tabs and terminals stay put.
-- **The top bar follows the agent you're looking at.** When an agent from another server is in front, the server label, people list, usage chip (for example "akzm · 42%") and Keep awake show that server. The timer and Tickets badge stay on your window's server.
-- **Live status everywhere.** Working dots and Active update live for agents from other servers, too. Email settings refresh on their own.
-- **Keep awake without the password prompt.** Choosing a mode no longer asks for your Mac's admin password. Keeping the Mac awake with the lid closed is its own switch, "Also with the lid closed." Its one-time setup runs only when an Admin or Owner clicks Set up on that Mac. Only Admins and Owners can change Keep awake. Members see it read-only.
-- **Tickets with a full write-up.** An agent asking you for help can attach an HTML brief covering the problem, what it tried, what it needs from you, and the options. You read it in the ticket, in a locked frame with no scripts. In this version a missing brief is only a warning.
+- **Other servers open in place.** On macOS and Linux, picking an agent from another server on Home opens it right there, and your window stays put. If you turned this off before, it stays off. The setting is Settings → General → Experimental → Open agents from other servers here. Windows keeps the old behavior for now. Servers older than 0.41.0 still switch the window, and 0.41 and 0.42 servers open view only.
+- **Switching servers keeps your rooms.** Changing servers in the top bar no longer reconnects the agents open on Home.
+- **The top bar follows the agent you're looking at.** For an agent from another server, the server name, people, usage (for example "akzm | 42%") and Keep awake show that server. The timer and the Tickets badge stay on your window's server.
+- **Home shortcuts.** Rows on Home show their number. ⌘1–9 opens a row, and ⌘⌥1–9 switches between your Homes.
+- **Tickets, redesigned.** A narrow list sits on the left, with short cards showing status, who it's assigned to, age, and an HTML mark. The agent's write-up fills the middle. The chat sits on the right, with Thread and Agent tabs, and a message box that has the agent's suggested answers above it. Change the status or the assignee from the ticket's header. Filter by Mine, Waiting on me, or All. Collapse the list to agent pictures. Open a ticket in its own window.
+- **Answers and discussions.** Picking one of the agent's suggested answers marks the ticket answered. Writing your own message moves it to Needs discussion until the agent settles it.
+- **Agents write their requests up.** An agent asking you for help can attach an HTML brief covering the problem, what it tried, what it needs from you, and the options. It opens in a locked frame with no scripts, and its links open in your browser. Agents should also assign every ticket to a person on this server. For now a missing brief or assignee is only a warning.
+- **Keep awake without the password prompt.** Choosing a mode no longer asks for your Mac's admin password. "Also with the lid closed" is its own switch, and its one-time setup runs only when an Admin or Owner clicks Set up on that Mac. Only Admins and Owners can change Keep awake. Members see it read-only.
+- **Live status everywhere.** Working dots update live for agents from other servers too. Email settings refresh on their own. The usage figures in the top bar update within a minute of each check.
+- **Mac touches.** The daemon shows up as K2 Daemon with the K2 icon in Activity Monitor. The window buttons stay centered when you zoom with ⌘- and ⌘=. The Tickets page has no leftover close button.
 - **Fixes.** An agent can no longer open or change the inbox of a workspace it isn't connected to. Codex host sessions start again with codex 0.154.
 
 ## 0.43.1 — No more "Something went wrong" after 0.43.0

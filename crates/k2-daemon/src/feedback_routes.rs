@@ -661,6 +661,39 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
             None
         }
     };
+
+    // Assignee policy (0.43.2, `feedback_brief::ASSIGNEE_POLICY`). Same
+    // door and `fyi` exemption as the brief. A name that is not a user on
+    // this server warns on every door; only the agent door under Require
+    // is refused. Checked BEFORE the insert so a refusal stores nothing.
+    let assignees = k2_core::feedback_brief::clean_assignees(b.assignees.as_deref().unwrap_or(&[]));
+    let assignee_policy_applies =
+        door == CreateDoor::Owner && k2_core::feedback_brief::assignee_required(&kind_for_policy);
+    let unknown = unknown_assignees_here(&assignees);
+    let require = k2_core::feedback_brief::assignee_policy()
+        == k2_core::feedback_brief::AssigneePolicy::Require;
+    if assignee_policy_applies && require {
+        if assignees.is_empty() {
+            return brief_error(
+                "assignee_required",
+                format!(
+                    "{} {}",
+                    k2_core::feedback_brief::ASSIGNEE_REQUIRED_MESSAGE,
+                    k2_core::feedback_brief::ASSIGNEE_REQUIRED_HINT
+                ),
+            );
+        }
+        if !unknown.is_empty() {
+            return brief_error(
+                "assignee_unknown",
+                k2_core::feedback_brief::assignee_unknown_hint(&unknown),
+            );
+        }
+    }
+    if !unknown.is_empty() {
+        warnings.push(k2_core::feedback_brief::assignee_unknown_warning(&unknown));
+    }
+
     // Asker attribution: explicit agentName wins; otherwise the
     // workspace's agent display name (always returns a string).
     let agent_name = b
@@ -700,13 +733,15 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
 
     // Optional assignees at create — set before push so mobile targeting
     // and the create response include them. Snapshots only (no FK).
-    if let Some(names) = b.assignees {
-        if !names.is_empty() {
-            match feedback::set_assignees(&item.id, &names) {
-                Ok(updated) => item = updated,
-                Err(e) => return usage_error(e),
-            }
+    if !assignees.is_empty() {
+        match feedback::set_assignees(&item.id, &assignees) {
+            Ok(updated) => item = updated,
+            Err(e) => return usage_error(e),
         }
+    } else if assignee_policy_applies {
+        // Warn policy (Require returned above): filed, but say so, with
+        // the id so the fix is one copy-paste.
+        warnings.push(k2_core::feedback_brief::assignee_missing_warning(Some(&item.id)));
     }
 
     // FeedbackCreated on the existing /events broadcast (frozen
@@ -739,6 +774,28 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
         map.insert("warnings".to_string(), serde_json::json!(warnings));
     }
     CliResponse::ok_json(v.to_string())
+}
+
+/// The names in `assignees` that are not users on this server: the host
+/// owner (the literal `owner` or the owner display name) or a stored
+/// Connect user, the same people `k2 connections list --users` prints.
+/// If the user store can't be read, nothing is reported (a broken store
+/// must not make every assignee look unknown).
+fn unknown_assignees_here(assignees: &[String]) -> Vec<String> {
+    if assignees.is_empty() {
+        return Vec::new();
+    }
+    let owner = crate::workspace_msg::resolve_owner_from();
+    match k2_core::connect_users::list_people_for_agents(&owner) {
+        Ok(rows) => {
+            let known: Vec<String> = rows.into_iter().map(|r| r.username).collect();
+            k2_core::feedback_brief::unknown_assignees(assignees, &known)
+        }
+        Err(e) => {
+            k2_core::log_debug!("[feedback] assignee check skipped: people list failed: {e}");
+            Vec::new()
+        }
+    }
 }
 
 fn resolve_create_project(
@@ -1135,6 +1192,14 @@ pub fn handle_assign(body: &[u8]) -> CliResponse {
         Ok(f) => f,
         Err(e) => return prefix_error_response(&b.id, e),
     };
+    // Same check as `create`: a name that is not a user on this server
+    // still assigns (snapshots), with an `assignee_unknown` warning.
+    let unknown = unknown_assignees_here(&k2_core::feedback_brief::clean_assignees(&b.usernames));
+    let warnings: Vec<k2_core::feedback_brief::BriefWarning> = if unknown.is_empty() {
+        Vec::new()
+    } else {
+        vec![k2_core::feedback_brief::assignee_unknown_warning(&unknown)]
+    };
     match feedback::set_assignees(&full_id, &b.usernames) {
         Ok(item) => {
             let (_, path) = project_name_path(&item.project_id);
@@ -1153,6 +1218,7 @@ pub fn handle_assign(body: &[u8]) -> CliResponse {
                     "ok": true,
                     "id": item.id,
                     "assignees": item.assignees,
+                    "warnings": warnings,
                 })
                 .to_string(),
             )
@@ -2511,8 +2577,11 @@ mod tests {
 
     use k2_core::feedback_brief::{with_policy_override, BriefPolicy};
 
+    /// Assigns `owner` (always a user on this server) unless `extra` sets
+    /// `assignees` itself, so the brief tests see only brief warnings.
     fn create_at(path: &str, door: CreateDoor, extra: serde_json::Value) -> CliResponse {
-        let mut body = serde_json::json!({ "project": path, "title": "Brief door" });
+        let mut body =
+            serde_json::json!({ "project": path, "title": "Brief door", "assignees": ["owner"] });
         if let (Some(dst), Some(src)) = (body.as_object_mut(), extra.as_object()) {
             for (k, v) in src {
                 dst.insert(k.clone(), v.clone());
@@ -2597,6 +2666,186 @@ mod tests {
             let r = create_at(&path, CreateDoor::Connect, serde_json::json!({}));
             assert!(warning_codes(&parse(&r)).is_empty(), "people never warn: {}", r.body);
         });
+    }
+
+    // ── Assignee policy (0.43.2) ─────────────────────────────────────
+    //
+    // Only `owner` and uuid names here: the in-file tests read the real
+    // HOME's user store (read-only), so a Connect user is proved in
+    // tests/ticket_brief_integration.rs under a temp HOME instead.
+
+    use k2_core::feedback_brief::{with_assignee_policy_override, AssigneePolicy};
+
+    /// [`create_at`] with [`TEST_BRIEF`], so only assignee warnings show.
+    fn create_assign(path: &str, door: CreateDoor, extra: serde_json::Value) -> CliResponse {
+        let mut body = serde_json::json!({ "briefHtml": TEST_BRIEF });
+        if let (Some(dst), Some(src)) = (body.as_object_mut(), extra.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        create_at(path, door, body)
+    }
+
+    fn no_one_by_this_name() -> String {
+        format!("nobody-{}", uuid::Uuid::new_v4().simple())
+    }
+
+    /// Warn column (the 0.43.2 default) on the agent door.
+    #[test]
+    fn assignee_door_matrix_warn() {
+        let (name, path) = unique("assignee-warn");
+        insert_project(&name, &path);
+        with_assignee_policy_override(AssigneePolicy::Warn, || {
+            // No assignee: filed, unassigned, with assignee_required.
+            for extra in [
+                serde_json::json!({ "assignees": [] }),
+                serde_json::json!({ "assignees": null }),
+            ] {
+                let r = create_assign(&path, CreateDoor::Owner, extra);
+                assert_eq!(r.status, "200 OK", "{}", r.body);
+                let v = parse(&r);
+                assert_eq!(warning_codes(&v), vec!["assignee_required"], "{}", r.body);
+                let id = v["id"].as_str().expect("id");
+                let hint = v["warnings"][0]["hint"].as_str().expect("hint");
+                assert!(
+                    hint.starts_with(k2_core::feedback_brief::ASSIGNEE_REQUIRED_MESSAGE),
+                    "{hint}"
+                );
+                assert!(hint.contains("required in a future update"), "{hint}");
+                assert!(hint.contains(&format!("k2 tickets assign {}", &id[..8])), "{hint}");
+                assert!(hint.contains("k2 connections list --users"), "{hint}");
+                assert_eq!(v["assignees"], serde_json::json!([]), "{}", r.body);
+                assert!(feedback::get_item(id).is_some(), "Warn still files the ticket");
+            }
+
+            // Assigned to a user here: no warning, stored.
+            let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": ["owner"] }));
+            let v = parse(&r);
+            assert!(warning_codes(&v).is_empty(), "{}", r.body);
+            assert_eq!(v["assignees"], serde_json::json!(["owner"]), "{}", r.body);
+
+            // Not a user here: filed and stored (snapshot), assignee_unknown.
+            let ghost = no_one_by_this_name();
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "assignees": ["owner", ghost, "  "] }),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v = parse(&r);
+            assert_eq!(warning_codes(&v), vec!["assignee_unknown"], "{}", r.body);
+            let hint = v["warnings"][0]["hint"].as_str().expect("hint");
+            assert!(hint.starts_with(&format!("`{ghost}` is not a user on this server")), "{hint}");
+            assert!(!hint.contains("`owner`"), "owner is a user here: {hint}");
+            assert_eq!(v["assignees"], serde_json::json!([ghost, "owner"]), "{}", r.body);
+
+            // fyi is exempt from assignee_required…
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "kind": "fyi", "assignees": [] }),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(warning_codes(&parse(&r)).is_empty(), "fyi is exempt: {}", r.body);
+            // …but a name that is nobody here still warns.
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "kind": "fyi", "assignees": [no_one_by_this_name()] }),
+            );
+            assert_eq!(warning_codes(&parse(&r)), vec!["assignee_unknown"], "{}", r.body);
+
+            // People never need an assignee.
+            for door in [CreateDoor::App, CreateDoor::Connect] {
+                let r = create_assign(&path, door, serde_json::json!({ "assignees": [] }));
+                assert_eq!(r.status, "200 OK", "{door:?}: {}", r.body);
+                assert!(warning_codes(&parse(&r)).is_empty(), "{door:?}: {}", r.body);
+            }
+        });
+    }
+
+    /// Require column: the one-line flip refuses on the agent door and
+    /// stores nothing; people and fyi still file.
+    #[test]
+    fn assignee_door_matrix_require() {
+        let (name, path) = unique("assignee-require");
+        let pid = insert_project(&name, &path);
+        with_assignee_policy_override(AssigneePolicy::Require, || {
+            let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": [] }));
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            let v = parse(&r);
+            assert_eq!(v["error"]["code"], "assignee_required", "{}", r.body);
+            assert!(
+                v["error"]["hint"].as_str().expect("hint").contains("--assign <user>"),
+                "{}",
+                r.body
+            );
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "assignees": [no_one_by_this_name()] }),
+            );
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            assert_eq!(parse(&r)["error"]["code"], "assignee_unknown", "{}", r.body);
+            let stored = feedback::list_for_project(&pid, &feedback::ListFilter::All).expect("list");
+            assert!(stored.is_empty(), "a refusal stores no ticket: {stored:?}");
+
+            let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": ["owner"] }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(warning_codes(&parse(&r)).is_empty(), "{}", r.body);
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "kind": "fyi", "assignees": [] }),
+            );
+            assert_eq!(r.status, "200 OK", "fyi is exempt: {}", r.body);
+            // A person naming nobody here is told, not refused.
+            let r = create_assign(
+                &path,
+                CreateDoor::Connect,
+                serde_json::json!({ "assignees": [no_one_by_this_name()] }),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(warning_codes(&parse(&r)), vec!["assignee_unknown"], "{}", r.body);
+        });
+    }
+
+    /// 0.43.2 ships Warn; the flip is one line in feedback_brief.rs.
+    #[test]
+    fn assignee_policy_ships_warn_in_0_43_2() {
+        assert_eq!(k2_core::feedback_brief::ASSIGNEE_POLICY, AssigneePolicy::Warn);
+        assert_eq!(k2_core::feedback_brief::assignee_policy(), AssigneePolicy::Warn);
+        assert!(k2_core::feedback_brief::assignee_required("question"));
+        assert!(k2_core::feedback_brief::assignee_required("approval"));
+        assert!(!k2_core::feedback_brief::assignee_required("fyi"));
+    }
+
+    /// `assign` keeps assigning snapshots, and warns on a name that is
+    /// not a user here (POST-only: the GET chain 405s).
+    #[test]
+    fn assign_warns_on_unknown_user() {
+        let (name, path) = unique("assign-unknown");
+        insert_project(&name, &path);
+        let created =
+            create_via_route(&path, "Assign me", serde_json::json!({ "assignees": ["owner"] }));
+        let id = created["id"].as_str().expect("id").to_string();
+        let ghost = no_one_by_this_name();
+        let r = handle_assign(
+            serde_json::json!({ "id": id, "usernames": ["owner", ghost] })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = parse(&r);
+        assert_eq!(v["assignees"], serde_json::json!([ghost, "owner"]), "{}", r.body);
+        assert_eq!(warning_codes(&v), vec!["assignee_unknown"], "{}", r.body);
+        let r = handle_assign(
+            serde_json::json!({ "id": id, "usernames": ["owner"] }).to_string().as_bytes(),
+        );
+        assert!(warning_codes(&parse(&r)).is_empty(), "{}", r.body);
+        let get = dispatch("/cli/feedback/assign", &HashMap::new()).expect("assign claimed on GET");
+        assert_eq!(get.status, "405 Method Not Allowed", "{}", get.body);
     }
 
     /// The shipped constant is Warn for 0.43.2. 0.43.3 flips it (S8);

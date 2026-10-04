@@ -21,6 +21,11 @@
 //!
 //! The owner-token door is the agent door (default 1, H1); the daemon
 //! route decides the door and calls [`brief_required`].
+//!
+//! The same door also carries the **assignee policy** (0.43.2): an agent
+//! ticket should name a user on this server. See the "Assignee policy"
+//! block: [`ASSIGNEE_POLICY`] is `Warn` now and flips to `Require` in one
+//! line, exactly like [`BRIEF_POLICY`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -184,6 +189,150 @@ pub fn missing_warning() -> BriefWarning {
              The next release refuses an agent ticket without a brief."
         ),
     }
+}
+
+// ── Assignee policy (0.43.2) ────────────────────────────────────────────
+//
+// An agent's ticket should be assigned to a person on this server, so it
+// lands on someone's board (and in their push) instead of nobody's. Same
+// shape as the brief: the owner-token door only, `fyi` exempt, `Warn`
+// for now. "A user on this server" is the host owner (the literal
+// `owner`, or the owner display name) or any stored Connect user: the
+// people list `k2 connections list --users` prints
+// (`connect_users::list_people_for_agents`). The daemon route builds
+// that list and calls [`unknown_assignees`].
+
+/// Whether the agent door must assign the ticket to a user on this server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssigneePolicy {
+    /// No assignee (or a name that is not a user here) still files the
+    /// ticket; the response carries an `assignee_required` /
+    /// `assignee_unknown` warning (exit 0 in the CLI).
+    Warn,
+    /// Refused: 400 `assignee_required` / `assignee_unknown`.
+    Require,
+}
+
+/// THE switch. 0.43.2 ships `Warn` (agents still run the old skill text).
+/// **A later release flips this to `AssigneePolicy::Require`**: one
+/// line; the Require column of the door-matrix test already runs through
+/// [`with_assignee_policy_override`].
+pub const ASSIGNEE_POLICY: AssigneePolicy = AssigneePolicy::Warn;
+
+/// `fyi` tickets ask nothing of a person, so they need no assignee (they
+/// may still carry one), same as [`FYI_NEEDS_BRIEF`].
+pub const FYI_NEEDS_ASSIGNEE: bool = false;
+
+/// The live assignee policy: [`ASSIGNEE_POLICY`] unless a test on this
+/// thread set an override.
+pub fn assignee_policy() -> AssigneePolicy {
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        if let Some(p) = ASSIGNEE_POLICY_OVERRIDE.with(|c| c.get()) {
+            return p;
+        }
+    }
+    ASSIGNEE_POLICY
+}
+
+/// Must a caller through the agent door assign this kind of ticket?
+/// People (app guests, Connect users) never must; the route only calls
+/// this for the owner-token door.
+pub fn assignee_required(kind: &str) -> bool {
+    FYI_NEEDS_ASSIGNEE || kind != "fyi"
+}
+
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static ASSIGNEE_POLICY_OVERRIDE: Cell<Option<AssigneePolicy>> = const { Cell::new(None) };
+}
+
+/// Test-only: run `f` with the assignee policy forced on THIS thread.
+#[cfg(any(test, feature = "test-util"))]
+pub fn with_assignee_policy_override<R>(policy: AssigneePolicy, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<AssigneePolicy>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ASSIGNEE_POLICY_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(ASSIGNEE_POLICY_OVERRIDE.with(|c| c.replace(Some(policy))));
+    f()
+}
+
+/// The rule, in the words agents see (warning, refusal, skill text).
+pub const ASSIGNEE_REQUIRED_MESSAGE: &str = "A ticket must be assigned to a user on this \
+    server (`--assign <user>`). This will be required in a future update.";
+
+/// How to fix it: who the users are, and how to assign.
+pub const ASSIGNEE_REQUIRED_HINT: &str = "Run `k2 connections list --users` to see the \
+    users on this server, then `k2 tickets ask \"<title>\" --assign <user>`. Fix a filed \
+    ticket with `k2 tickets assign <id> <user>`. See `k2 study ticket-brief`.";
+
+/// The `assignee_required` warning (Warn policy, agent door, no assignee).
+/// `ticket_id` (when filed) makes the fix command copy-pasteable.
+pub fn assignee_missing_warning(ticket_id: Option<&str>) -> BriefWarning {
+    let fix = match ticket_id {
+        Some(id) => format!(
+            " This ticket was filed unassigned: assign it now with \
+             `k2 tickets assign {} <user>`.",
+            &id[..id.len().min(8)]
+        ),
+        None => String::new(),
+    };
+    BriefWarning {
+        code: "assignee_required",
+        hint: format!("{ASSIGNEE_REQUIRED_MESSAGE}{fix} {ASSIGNEE_REQUIRED_HINT}"),
+    }
+}
+
+/// Text for the `assignee_unknown` warning / refusal.
+pub fn assignee_unknown_hint(unknown: &[String]) -> String {
+    let who = unknown
+        .iter()
+        .map(|u| format!("`{u}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let noun = if unknown.len() == 1 { "is not a user" } else { "are not users" };
+    format!(
+        "{who} {noun} on this server (the owner or a Connect user). \
+         {ASSIGNEE_REQUIRED_MESSAGE} {ASSIGNEE_REQUIRED_HINT}"
+    )
+}
+
+/// The `assignee_unknown` warning.
+pub fn assignee_unknown_warning(unknown: &[String]) -> BriefWarning {
+    BriefWarning {
+        code: "assignee_unknown",
+        hint: assignee_unknown_hint(unknown),
+    }
+}
+
+/// Trim, drop blanks, dedup (first spelling wins): the same cleaning
+/// `feedback::set_assignees` applies before it stores the snapshots.
+pub fn clean_assignees(names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in names {
+        let t = n.trim();
+        if !t.is_empty() && !out.iter().any(|o| o == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+/// The names in `assignees` that are not users on this server. `known`
+/// is the people list (owner display name + Connect usernames); the wire
+/// literal `owner` always counts. Case-insensitive, like Connect
+/// usernames and the owner dedup in `list_people_for_agents`.
+pub fn unknown_assignees(assignees: &[String], known: &[String]) -> Vec<String> {
+    clean_assignees(assignees)
+        .into_iter()
+        .filter(|a| {
+            !a.eq_ignore_ascii_case("owner")
+                && !known.iter().any(|k| k.trim().eq_ignore_ascii_case(a))
+        })
+        .collect()
 }
 
 // ── Allowlist (H11 + H34) ───────────────────────────────────────────────

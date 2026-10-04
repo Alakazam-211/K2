@@ -673,10 +673,12 @@ type AppComponent = React.ComponentType
 
 /** The App chunk, kept whole (vs-live Z32): its default export is the keyed
  *  App; `HomeRoomsHost` is Home's remote rooms, which the gate mounts beside
- *  App so a host switch never unmounts them. */
+ *  App so a host switch never unmounts them. `ZenHost` (prd-zen-mode-v1
+ *  Z6/Z60) is Zen's layer, mounted the same way. */
 interface AppChunk {
   default: AppComponent
   HomeRoomsHost: AppComponent
+  ZenHost: AppComponent
 }
 
 // `activeHostKey` — the stable host identity that keys the <App> remount —
@@ -1291,7 +1293,7 @@ export function ConnectionGate(): React.ReactElement {
       void import('../App').then((mod) => {
         if (cancelled) return
         setImportFailed(false)
-        setAppModule(() => ({ default: mod.default, HomeRoomsHost: mod.HomeRoomsHost }))
+        setAppModule(() => ({ default: mod.default, HomeRoomsHost: mod.HomeRoomsHost, ZenHost: mod.ZenHost }))
       }).catch((err: unknown) => {
         console.error(
           `[ConnectionGate] dynamic import of App failed (attempt ${attempt + 1}/${APP_IMPORT_RETRY_DELAYS_MS.length + 1}):`,
@@ -1340,7 +1342,15 @@ export function ConnectionGate(): React.ReactElement {
   // Nothing renders in this slot until the App chunk is loaded (its stores
   // must evaluate against an accepted daemon).
   const RoomsHost = AppModule?.HomeRoomsHost ?? null
-  const roomsHost = RoomsHost ? <RoomsHost key="home-rooms-host" /> : null
+  // prd-zen-mode-v1 Z6: Zen sits in the same slot, right after the rooms,
+  // so a server switch never remounts it either.
+  const ZenLayer = AppModule?.ZenHost ?? null
+  const roomsHost = RoomsHost ? (
+    <>
+      <RoomsHost key="home-rooms-host" />
+      {ZenLayer && <ZenLayer key="zen-host" />}
+    </>
+  ) : null
 
   if (keepRemoteMounted) {
     const App = AppModule.default

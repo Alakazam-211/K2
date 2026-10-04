@@ -7,6 +7,7 @@
 import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
+import { dispatchZenMenuToggle } from '@/lib/zen/zen-shortcut'
 
 /** Action IDs that map 1:1 to Tauri menu item ids / event stems. */
 export const APP_MENU_ACTION_IDS = [
@@ -25,6 +26,7 @@ export const APP_MENU_ACTION_IDS = [
   'server-switcher',
   'toggle-assistant',
   'focus-window',
+  'zen-toggle',
   'new-window',
   'minimize',
   'maximize',
@@ -64,6 +66,7 @@ export function isAppMenuActionId(id: string): id is AppMenuActionId {
 export function appMenuActionHasHandler(id: AppMenuActionId): boolean {
   if (EVENT_ACTIONS.has(id)) return true
   return (
+    id === 'zen-toggle' ||
     id === 'new-window' ||
     id === 'minimize' ||
     id === 'maximize' ||
@@ -75,6 +78,14 @@ export function appMenuActionHasHandler(id: AppMenuActionId): boolean {
 export async function handleAppMenuAction(id: AppMenuActionId): Promise<void> {
   if (EVENT_ACTIONS.has(id)) {
     await emit(eventName(id))
+    return
+  }
+
+  // prd-zen-mode-v1 Z63: the same `menu:zen-toggle` name as the macOS menu,
+  // delivered to THIS window only (Zen on/off is per Home and shared, so a
+  // broadcast would flip it once per window).
+  if (id === 'zen-toggle') {
+    dispatchZenMenuToggle()
     return
   }
 

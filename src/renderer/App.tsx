@@ -47,9 +47,10 @@ import { parseTicketWindowId } from './lib/ticket-window'
 import { HomeRoomsPortal } from '@/components/Home/room/HomeRoomsHost'
 import AgentsShell from './components/Layout/AgentsShell'
 import { HomeShellEffects, useHomeRoomSelected } from './components/Home/home-room'
+import { useZenShown, zenShownNow } from './lib/zen/zen-view'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
-import { usePageViewStore, isRoomPage } from './stores/page-view'
+import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
 import { initProjectGroupEvents } from './stores/project-groups'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
@@ -325,6 +326,10 @@ export default function App(): React.JSX.Element {
   )
 }
 
+/** prd-zen-mode-v1 Z6/Z60 — Zen's host, mounted by ConnectionGate beside
+ *  `HomeRoomsHost` (outside the keyed App), from this chunk. */
+export { ZenHost } from './components/Zen/ZenHost'
+
 /** prd-home-seamless-0432 Z8/Z32 — Home's remote rooms, mounted by
  *  ConnectionGate OUTSIDE the keyed App (first child of every gate branch),
  *  so a top-switcher change keeps them. It lives in the App chunk so its
@@ -343,6 +348,9 @@ function AppRoot(): React.JSX.Element {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const page = usePageViewStore((s) => s.page)
   const homeRoomShown = useHomeRoomSelected()
+  // prd-zen-mode-v1 Z4/Z7/Z48: while Zen owns the window, the Home under it
+  // is hidden and parked (no terminal grid or WebGL context stays open).
+  const zenShown = useZenShown()
   const focusProjectId = useMemo(() => parseFocusProjectId(), [])
   // Tickets "Open in window": this window shows one ticket.
   const ticketWindowId = useMemo(() => {
@@ -477,6 +485,9 @@ function AppRoot(): React.JSX.Element {
       }
       if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
+        // Zen Z31/Z56: the switcher and assistant hang off the top bar Zen
+        // doesn't draw.
+        if (zenShownNow()) return
         if (e.shiftKey && !useWindowFocusStore.getState().isFocused) return
         applyCmdL({
           shift: e.shiftKey,
@@ -781,13 +792,16 @@ function AppRoot(): React.JSX.Element {
         usePageViewStore.getState().setPage('projects')
       }).then(track)
       listen('menu:toggle-sidebar', () => {
+        if (zenShownNow()) return
         useSidebarStore.getState().toggle()
       }).then(track)
       listen('menu:toggle-assistant', () => {
+        if (zenShownNow()) return
         if (!useWindowFocusStore.getState().isFocused) return
         toggleAssistant()
       }).then(track)
       listen('menu:server-switcher', () => {
+        if (zenShownNow()) return
         applyCmdL({
           shift: false,
           focusAddress: focusVisibleBrowserAddress,
@@ -795,6 +809,7 @@ function AppRoot(): React.JSX.Element {
         })
       }).then(track)
       listen('menu:focus-window', () => {
+        if (zenShownNow()) return
         // Home M4 (MS57/MS67): the Focus window looks the project up on
         // THIS computer's daemon. It acts on the focused room, and only
         // when that room may run this computer's commands.
@@ -1021,7 +1036,7 @@ function AppRoot(): React.JSX.Element {
   // Settings is a full-viewport overlay on top; terminals keep their
   // WebGL contexts and re-paint when style-store.textGamma changes.
   return (
-    <PageLiveContext.Provider value={page === 'agents' || (page === 'home' && homeRoomShown)}>
+    <PageLiveContext.Provider value={primaryRoomPageLive(page, homeRoomShown, zenShown)}>
       {/* The retainer portals the primary room's pinned chats (room code). */}
       <RoomProvider room={primaryRoom()}>
         <PinnedChatRetainer />
@@ -1043,8 +1058,9 @@ function AppRoot(): React.JSX.Element {
       ) : (
         <div
           className="h-full w-full"
-          style={settingsOpen ? { display: 'none' } : undefined}
-          aria-hidden={settingsOpen || undefined}
+          style={settingsOpen || zenShown ? { display: 'none' } : undefined}
+          aria-hidden={settingsOpen || zenShown || undefined}
+          data-zen-parked={zenShown ? '' : undefined}
         >
           {/* Agents and Home share this one shell (Home = Home roster in
               the sidebar; same top bar, drawers, and room). */}

@@ -6,6 +6,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { resolveAgentPreset, readProjectDefaultAgent } from '@/lib/agent-resolve'
 import { isFocusedRoom } from '@/stores/window-room'
+import { zenShownNow } from '@/lib/zen/zen-view'
 import { roomActiveProject, type Room } from '@/stores/room'
 import type { TerminalPane } from '@/stores/tabs'
 
@@ -38,6 +39,9 @@ import type { TerminalPane } from '@/stores/tabs'
 export function useTerminalShortcuts(room: Room, cwd: string): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      // prd-zen-mode-v1 Z31/Z32/Z56: under Zen the room is parked; nothing
+      // in Zen sends keys to a PTY or acts on a hidden tab strip.
+      if (zenShownNow()) return
       if (!isFocusedRoom(room)) return
       const tabs = room.tabs
 

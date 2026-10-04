@@ -32,6 +32,7 @@ import { RoomParkedContext } from '@/contexts/RoomParkedContext'
 import { AppErrorBoundary } from '@/components/AppErrorBoundary'
 import { homeRooms } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
+import { useZenShown } from '@/lib/zen/zen-view'
 import { HomeRemoteRooms } from './HomeRemoteRooms'
 
 export interface ParkRect {
@@ -161,9 +162,12 @@ export function RoomSlot({ visible }: { visible: boolean }): React.JSX.Element {
 export function HomeRoomsPortal(): React.ReactPortal {
   const parked = useRoomParkStore((s) => s.parked)
   const onHome = usePageViewStore((s) => s.page === 'home')
+  // prd-zen-mode-v1 Z7/Z48: under Zen, Home is not on screen: the shown
+  // room hides (tier clock) like any other page change.
+  const zenShown = useZenShown()
   useEffect(() => {
-    homeRooms.setPageVisible(onHome && !parked)
-  }, [onHome, parked])
+    homeRooms.setPageVisible(onHome && !parked && !zenShown)
+  }, [onHome, parked, zenShown])
   return createPortal(
     <AppErrorBoundary>
       <RoomParkedContext.Provider value={parked}>

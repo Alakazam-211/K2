@@ -25,6 +25,14 @@ export function isRoomPage(page: AppPage): boolean {
   return page === 'agents' || page === 'home'
 }
 
+/** `PageLiveContext` for the window's own (primary) room: true while its
+ *  terminals may hold grids. Agents always; Home only while a room is shown
+ *  and Zen is not covering it (prd-zen-mode-v1 Z7/Z48: the Home under Zen
+ *  parks like a hidden tab). */
+export function primaryRoomPageLive(page: AppPage, homeRoomShown: boolean, zenShown: boolean): boolean {
+  return page === 'agents' || (page === 'home' && homeRoomShown && !zenShown)
+}
+
 interface PageViewState {
   page: AppPage
   /** Workspace path whose wiki is open when `page === 'wiki'`. */

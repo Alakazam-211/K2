@@ -47,6 +47,7 @@ import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAv
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
+import { ZenToggleRow } from '@/components/Home/ZenToggleRow'
 
 /** Avatar color for an agent on another server (its color lives there). */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
@@ -443,21 +444,26 @@ export default function HomeSidebar(): React.JSX.Element {
         )}
       </div>
 
-      {/* Add Agent + collapse the nav — the Add Workspace bar. */}
-      <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex gap-2">
+      {/* Add Agent + collapse the nav — the Add Workspace bar. Zen Mode
+          (prd-zen-mode-v1, Rosson 2026-10-04 answer 2) is its own row just
+          above the two buttons. */}
+      <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2">
         {pickerOpen && <AddAgentPicker home={home} />}
-        <button
-          className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"
-          onClick={() => setPickerOpen(!pickerOpen)}
-          aria-expanded={pickerOpen}
-          aria-haspopup="menu"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          Add Agent
-        </button>
-        <SidebarCollapseButton />
+        <ZenToggleRow />
+        <div className="flex gap-2">
+          <button
+            className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"
+            onClick={() => setPickerOpen(!pickerOpen)}
+            aria-expanded={pickerOpen}
+            aria-haspopup="menu"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Add Agent
+          </button>
+          <SidebarCollapseButton />
+        </div>
       </div>
     </div>
   )

@@ -1,3 +1,5 @@
+import { useZenShown } from '@/lib/zen/zen-view'
+import { zenAvailable } from '@/lib/zen/zen-platform'
 import {
   APP_MENU_ACTION_IDS,
   handleAppMenuAction,
@@ -44,6 +46,8 @@ const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
       { kind: 'item', id: 'server-switcher', label: 'Switch Server' },
       { kind: 'item', id: 'toggle-assistant', label: 'Toggle Assistant' },
       { kind: 'item', id: 'focus-window', label: 'Open in Focus Window' },
+      // prd-zen-mode-v1 Z25/Z63: label follows this window's Zen state.
+      { kind: 'item', id: 'zen-toggle', label: 'Enter Zen Mode' },
     ],
   },
   {
@@ -66,6 +70,8 @@ void APP_MENU_ACTION_IDS.every((id) => _menuIds.has(id))
 
 /** Dropdown. Position comes from the logo's relative parent, not from a left-slot Menu button. */
 export default function AppMenuPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const zenShown = useZenShown()
+  const showZen = zenAvailable()
   const run = (id: AppMenuActionId): void => {
     onClose()
     void handleAppMenuAction(id).catch(() => {})
@@ -83,7 +89,7 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
             {section.title}
           </div>
           {section.items.map((item, ii) =>
-            item.kind === 'sep' ? (
+            item.kind === 'item' && item.id === 'zen-toggle' && !showZen ? null : item.kind === 'sep' ? (
               <div key={`${section.title}-sep-${ii}`} className="my-1 border-t border-[var(--color-border)]" />
             ) : (
               <button
@@ -93,7 +99,7 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
                 onClick={() => run(item.id)}
                 className="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
               >
-                {item.label}
+                {item.id === 'zen-toggle' ? (zenShown ? 'Exit Zen Mode' : 'Enter Zen Mode') : item.label}
               </button>
             ),
           )}

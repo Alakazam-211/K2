@@ -24,6 +24,7 @@ import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { useRoomTier } from '@/lib/room-tiers'
 import { homeRooms, useHomeRoomsStore, type HomeRoomAccess, type HomeRoomEntry } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
+import { useZenShown } from '@/lib/zen/zen-view'
 import { RoomFailureGate, roomFailureActions, useRoomFailure } from './RoomFailure'
 import { hostPool } from '@/lib/host-pool-instance'
 import type { PinnedRoom } from '@/stores/room'
@@ -179,9 +180,14 @@ function PendingRoom({ entry }: { entry: HomeRoomEntry }): React.JSX.Element {
 /** Every remote room this window holds, for Home's main area. Rendered by
  *  `HomeRoomsPortal` (outside the keyed App), shown in the shell's slot. */
 export function HomeRemoteRooms(): React.JSX.Element {
+  const zenShown = useZenShown()
   const entries = useHomeRoomsStore((s) => s.entries)
   const shown = useHomeRoomsStore((s) => s.shown)
-  const onHome = usePageViewStore((s) => s.page === 'home')
+  // prd-zen-mode-v1 Z7/Z48: while Zen owns the window, Home's rooms are
+  // not on screen: no room is `shown`, so PageLive is false and their grids
+  // park. Their keep-alive and workspace sockets stay (Zen's conversations
+  // use them).
+  const onHome = usePageViewStore((s) => s.page === 'home') && !zenShown
   // Home's page visibility (the tier clock) is driven by the portal host,
   // which also knows when the rooms are parked.
   const shownEntry = shown ? entries[shown] : undefined

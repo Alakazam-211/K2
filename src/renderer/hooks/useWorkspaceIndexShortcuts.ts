@@ -8,6 +8,7 @@ import { getActiveBarItems } from '@/components/Sidebar/ActiveBar'
 import { openHomeRow } from '@/lib/home-open'
 import { homeRowOpenableNow } from '@/components/Home/home-room'
 import { homeSwitchDigit } from '@/lib/home-shortcuts'
+import { zenSelectRow, zenShownNow } from '@/lib/zen/zen-view'
 
 /**
  * Cmd+1–9 / Cmd+0 and Cmd+Option+1–9 — pick a workspace (or a Home row) by
@@ -58,6 +59,13 @@ export function useWorkspaceIndexShortcuts(): void {
       if (isNaN(num) || e.key.length !== 1) return
       e.preventDefault()
       const targetIdx = num === 0 ? 9 : num - 1
+
+      // prd-zen-mode-v1 Z32/Z54: in Zen, conversation N; never a window
+      // server switch (`openHomeRow` may switch).
+      if (zenShownNow()) {
+        zenSelectRow(targetIdx)
+        return
+      }
 
       if (usePageViewStore.getState().page === 'home') {
         const row = selectedHome(useHomesStore.getState()).rows[targetIdx]

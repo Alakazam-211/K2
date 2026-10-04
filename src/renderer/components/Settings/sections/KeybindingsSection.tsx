@@ -13,6 +13,15 @@ import type { HotkeyDefinition } from '@shared/hotkeys'
 import { KeyCombo } from '@/components/KeySymbol'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import type { SettingEntry } from '../searchManifest'
+import { ZEN_CHORD_COMBO, ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
+import { zenAvailable } from '@/lib/zen/zen-platform'
+
+/** prd-zen-mode-v1 Z30/Z56: the Zen escape chord is fixed (the native menu
+ *  accelerator on macOS, a capture listener elsewhere). Shown here as taken;
+ *  never rebindable, and no other binding may take it. */
+export function isZenChordCombo(combo: string): boolean {
+  return combo === ZEN_CHORD_COMBO.mac || combo === ZEN_CHORD_COMBO.other
+}
 
 /**
  * Keybindings manifest: one entry per hotkey definition (dynamically
@@ -141,6 +150,19 @@ export function KeybindingsSection(): React.JSX.Element {
                 </div>
               </div>
             )}
+            {category === 'App' && zenAvailable() && (
+              <div className="border border-[var(--color-border)] mb-px" data-zen-keybinding="">
+                <div className="flex items-center justify-between px-3 py-2">
+                  <div>
+                    <span className="text-xs text-[var(--color-text-secondary)]">Enter / Exit Zen Mode</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">Not rebindable</span>
+                  </div>
+                  <span className="text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-2 py-0.5">
+                    <KeyCombo combo={isMacPlatform() ? ZEN_CHORD_LABEL.mac : ZEN_CHORD_LABEL.other} />
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="border border-[var(--color-border)]">
               {items.map((hotkey, i) => (
                 <KeybindingRow
@@ -212,6 +234,7 @@ function KeybindingRow({
       if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return
 
       if (isReservedKey(newCombo)) return
+      if (isZenChordCombo(newCombo)) return
 
       onCapture(newCombo)
     }

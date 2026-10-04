@@ -110,6 +110,7 @@ export function BriefFrame({
   onExpandedChange,
   hideToolbar = false,
   heightClass = DEFAULT_HEIGHT_CLASS,
+  fill = false,
 }: {
   brief: FeedbackBrief
   /** The ticket title — names the frame and the Expand overlay. */
@@ -121,6 +122,9 @@ export function BriefFrame({
   hideToolbar?: boolean
   /** Box height until the user drags the handle (a Tailwind class). */
   heightClass?: string
+  /** Fill the parent's remaining height (the ticket detail pane) until the
+   *  user drags the handle; the links list sits under it with no empty gap. */
+  fill?: boolean
 }): React.JSX.Element {
   const themeKey = useBriefThemeKey()
   // Memo on sha256 + theme (H39): a thread refetch hands a new `brief`
@@ -171,7 +175,7 @@ export function BriefFrame({
   const close = useCallback(() => setExpanded(false), [setExpanded])
 
   return (
-    <div data-testid="brief" className="mb-3">
+    <div data-testid="brief" className={fill ? 'mb-3 flex flex-1 flex-col min-h-0' : 'mb-3'}>
       {!hideToolbar && (
         <div className="flex items-center gap-2 mb-1">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -193,7 +197,7 @@ export function BriefFrame({
       <div
         ref={boxRef}
         data-testid="brief-box"
-        className={`relative border border-[var(--color-border)] ${height === null ? heightClass : ''}`}
+        className={`relative border border-[var(--color-border)] ${height === null ? (fill ? 'flex-1 min-h-[240px]' : heightClass) : 'flex-none'}`}
         style={height === null ? undefined : { height: `${height}px` }}
       >
         <HtmlFrame

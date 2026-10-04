@@ -161,6 +161,23 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     expect(list.className).not.toMatch(/(^|\s)(h-|min-h-)/)
   })
 
+  it('fill: the frame takes the remaining pane height, with no fixed height class', () => {
+    render(<BriefFrame brief={brief} title="t" heightClass="h-[999px]" fill />)
+    const root = screen.getByTestId('brief')
+    expect(root.className).toContain('flex-1')
+    expect(root.className).toContain('flex-col')
+    const box = screen.getByTestId('brief-box')
+    expect(box.className).toContain('flex-1')
+    expect(box.className).toContain('min-h-[240px]')
+    expect(box.className).not.toContain('h-[999px]')
+  })
+
+  it('without fill: the frame keeps its fixed default height class', () => {
+    render(<BriefFrame brief={brief} title="t" heightClass="h-[999px]" />)
+    expect(screen.getByTestId('brief-box').className).toContain('h-[999px]')
+    expect(screen.getByTestId('brief').className).not.toContain('flex-1')
+  })
+
   it('no links → no links area at all', () => {
     const noLinks: FeedbackBrief = { ...brief, html: '<p>No links here.</p>', sha256: 'nolinks' }
     render(<BriefFrame brief={noLinks} title="t" />)

@@ -74,7 +74,7 @@ interface FeedbackItemViewProps {
 export const briefCache = new Map<string, FeedbackBrief>()
 
 /** The brief box fills the detail pane (the brief takes the stage). */
-const BRIEF_HEIGHT_CLASS = 'h-[max(240px,calc((100vh-300px)*0.5))]'
+const BRIEF_HEIGHT_CLASS = 'h-[max(320px,calc(100vh-300px))]'
 
 /** Quick answers stay live until the ticket is closed. */
 export function quickAnswersLive(status: FeedbackStatus): boolean {
@@ -435,7 +435,7 @@ function TicketBody({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
-        <div className="min-h-full" data-ticket-thread={ticketId}>
+        <div className="min-h-full flex flex-col" data-ticket-thread={ticketId}>
           {item.body && (
             <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)]">
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
@@ -451,6 +451,7 @@ function TicketBody({
                 expanded={expanded}
                 onExpandedChange={onExpandedChange}
                 heightClass={BRIEF_HEIGHT_CLASS}
+                fill
               />
             ) : briefError ? (
               <div data-testid="brief-error" className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">

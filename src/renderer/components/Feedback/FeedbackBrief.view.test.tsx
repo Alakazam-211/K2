@@ -5,7 +5,7 @@
 // refreshes (revision bumps) neither refetch it nor rebuild the frame.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { FeedbackCard } from './FeedbackPage'
+import { FeedbackCard, cardAssigneeNames } from './FeedbackPage'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import type { FeedbackBrief, FeedbackListRow, FeedbackShow } from './feedback-api'
 
@@ -119,6 +119,54 @@ describe('FeedbackCard — HTML badge (T11)', () => {
     const title = screen.getByText('Deploy blocked: DNS?')
     expect(title.tagName).toBe('P')
     expect(title.innerHTML).toBe('Deploy blocked: DNS?')
+  })
+})
+
+describe('FeedbackCard — assignee on the bottom row', () => {
+  const card = (r: FeedbackListRow): HTMLElement => {
+    const { container } = render(
+      <FeedbackCard
+        row={r}
+        workspace={undefined}
+        nowSec={1_759_241_200}
+        selected={false}
+        onSelect={vi.fn()}
+        onMutated={vi.fn()}
+      />,
+    )
+    return container
+  }
+
+  it('shows the assigned person with an initial', () => {
+    card({ ...row, assignees: ['julie'] })
+    const a = screen.getByTestId('card-assignee')
+    expect(a.getAttribute('data-unassigned')).toBeNull()
+    expect(a.textContent).toBe('Jjulie')
+    expect(screen.getByTestId('card-assignee-initial').textContent).toBe('J')
+    expect(a.getAttribute('title')).toBe('Assigned to julie')
+    // Bottom row: the same row as the kind badge and the agent name.
+    expect(a.parentElement?.textContent).toContain('scout')
+    expect(a.parentElement?.textContent).toContain('approval')
+  })
+
+  it('the wire owner reads Owner; several people are listed', () => {
+    card({ ...row, assignees: ['owner', 'julie', 'owner', ' '] })
+    expect(screen.getByTestId('card-assignee').textContent).toBe('OOwner, julie')
+  })
+
+  it('shows a subtle Unassigned when nobody is assigned', () => {
+    card({ ...row, assignees: [] })
+    const a = screen.getByTestId('card-assignee')
+    expect(a.textContent).toBe('Unassigned')
+    expect(a.getAttribute('data-unassigned')).toBe('true')
+    expect(a.className).toContain('opacity-60')
+    expect(screen.queryByTestId('card-assignee-initial')).toBeNull()
+  })
+
+  it('names helper: dedup, blanks dropped, owner display', () => {
+    expect(cardAssigneeNames(undefined)).toEqual([])
+    expect(cardAssigneeNames(['', '  '])).toEqual([])
+    expect(cardAssigneeNames(['owner', 'bob', 'bob'])).toEqual(['Owner', 'bob'])
   })
 })
 

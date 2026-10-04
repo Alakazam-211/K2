@@ -60,6 +60,7 @@ import {
 import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { HtmlBriefBadge, KindBadge, PriorityBadge } from './badges'
+import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
 import { primaryScope } from '@/kessel/server-scope'
 
 const TOPBAR_HEIGHT = 38
@@ -357,6 +358,54 @@ function CheckGlyph(): React.JSX.Element {
 
 // ── List card ─────────────────────────────────────────────────────────────
 
+/** The assignee names a card shows: the wire `"owner"` reads "Owner"
+ *  (same as presence), duplicates and blanks dropped. Empty = unassigned. */
+export function cardAssigneeNames(assignees: readonly string[] | null | undefined): string[] {
+  const out: string[] = []
+  for (const raw of assignees ?? []) {
+    const name = presenceDisplayName(raw.trim())
+    if (name && !out.includes(name)) out.push(name)
+  }
+  return out
+}
+
+/** Bottom-row assignee: initials chip + name(s), or a subtle "Unassigned".
+ *  Usernames are snapshots (no role on the row), so the chip is neutral,
+ *  not a role-colored presence avatar. */
+function CardAssignee({ assignees }: { assignees: readonly string[] | null | undefined }): React.JSX.Element {
+  const names = cardAssigneeNames(assignees)
+  if (names.length === 0) {
+    return (
+      <span
+        data-testid="card-assignee"
+        data-unassigned="true"
+        className="ml-auto flex-shrink-0 italic opacity-60"
+        title="No one is assigned. Assign with k2 tickets assign <id> <user>."
+      >
+        Unassigned
+      </span>
+    )
+  }
+  const label = names.join(', ')
+  return (
+    <span
+      data-testid="card-assignee"
+      className="ml-auto inline-flex items-center gap-1 min-w-0 text-[var(--color-text-secondary)]"
+      title={`Assigned to ${label}`}
+    >
+      <span
+        aria-hidden
+        data-testid="card-assignee-initial"
+        className="flex flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elevated)] font-bold leading-none"
+        style={{ width: 14, height: 14, fontSize: 8 }}
+      >
+        {names[0].charAt(0).toUpperCase()}
+      </span>
+      <span className="truncate selectable-copy">{label}</span>
+    </span>
+  )
+}
+
 /** True when the user just finished a drag-select (non-empty selection).
  *  Used so clickable cards don't treat "copy this title" as card select. */
 function clickWasTextSelection(): boolean {
@@ -441,20 +490,13 @@ export function FeedbackCard({
       <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
         <KindBadge kind={row.kind} />
         <span className="truncate selectable-copy">{row.agentName}</span>
-        {(row.assignees?.length ?? 0) > 0 && (
-          <>
-            <span className="opacity-60 flex-shrink-0">·</span>
-            <span className="truncate selectable-copy opacity-80">
-              → {row.assignees.join(', ')}
-            </span>
-          </>
-        )}
         <span className="opacity-60 flex-shrink-0">·</span>
         <span className="tabular-nums flex-shrink-0">
           {formatRelativeTime(row.createdAt, nowSec)}
         </span>
+        <CardAssignee assignees={row.assignees} />
         {row.commentCount > 1 && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[var(--color-accent)] tabular-nums flex-shrink-0">
+          <span className="inline-flex items-center gap-1 text-[var(--color-accent)] tabular-nums flex-shrink-0">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>

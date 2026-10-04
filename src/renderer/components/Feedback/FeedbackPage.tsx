@@ -2,8 +2,9 @@
 // (prd-agent-feedback-notifications §6 F2; 0.43.2 quick redesign).
 //
 // A fixed inset view over the app, opened from the top-bar Tickets tab
-// (useFeedbackStore), with its own draggable top bar; Esc closes it (the
-// board clears an open ticket first). The list reads
+// (useFeedbackStore), with its own draggable top bar. It is a page tab like
+// Projects: no close button, and Esc never navigates away (the board's Esc
+// only clears an open ticket). Leave it with another tab. The list reads
 // `/cli/feedback/list-all?all=1` (feedback-api) and stays live via the
 // store's `revision` (bumped by the feedback:* listeners) — no polling.
 //
@@ -42,7 +43,6 @@ const TOPBAR_HEIGHT = 38
 
 export default function FeedbackPage(): React.JSX.Element | null {
   const isOpen = useFeedbackStore((s) => s.isOpen)
-  const close = useFeedbackStore((s) => s.close)
   const revision = useFeedbackStore((s) => s.revision)
   const projects = useProjectsStore((s) => s.projects)
 
@@ -97,20 +97,6 @@ export default function FeedbackPage(): React.JSX.Element | null {
     }
   }, [isOpen, projectFilterId, pgRevision])
 
-  // Esc closes the page. The board's capture-phase Esc clears an open
-  // ticket first (and stops the event), so this only sees Esc with none.
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        close()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, close])
-
   // Reset transient view state when the page closes.
   useEffect(() => {
     if (!isOpen) {
@@ -162,19 +148,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </div>
 
         <DesktopChromeRight>
-          <TopBarUtilities>
-            <button
-              type="button"
-              onClick={close}
-              className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
-              title="Close (Esc)"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="2" y1="2" x2="10" y2="10" />
-                <line x1="10" y1="2" x2="2" y2="10" />
-              </svg>
-            </button>
-          </TopBarUtilities>
+          <TopBarUtilities />
         </DesktopChromeRight>
       </Surface>
 

@@ -242,7 +242,7 @@ describe('top bars share the Agents bar, not Focus', () => {
     )
   })
 
-  it('puts Projects nav and chat, and Tickets and Wiki close, after the utilities start', () => {
+  it('puts Projects nav and chat, and Wiki close, after the utilities start; Tickets has no close', () => {
     const projects = read('src/renderer/components/Projects/ProjectsPage.tsx')
     const navAt = projects.indexOf('title="Toggle projects nav"')
     const chatAt = projects.indexOf('title="Toggle project chat"')
@@ -253,10 +253,13 @@ describe('top bars share the Agents bar, not Focus', () => {
     expect(chatAt).toBeGreaterThan(navAt)
     expect(chatAt).toBeLessThan(utilsEnd)
 
+    // Tickets is a page tab like Projects: no close X, no Esc-to-close.
     const tickets = read('src/renderer/components/Feedback/FeedbackPage.tsx')
-    const ticketUtils = tickets.indexOf('<TopBarUtilities>')
-    expect(tickets.indexOf('title="Close (Esc)"')).toBeGreaterThan(ticketUtils)
-    expect(tickets).toContain('h-6 w-6')
+    expect(tickets).toContain('<TopBarUtilities />')
+    expect(tickets).not.toContain('title="Close (Esc)"')
+    expect(tickets).not.toContain('onClick={close}')
+    expect(tickets).not.toContain("s.close)")
+    expect(tickets).not.toContain("e.key === 'Escape'")
     expect(tickets).not.toContain('w-7 h-7')
 
     const wiki = read('src/renderer/components/Wiki/WikiPage.tsx')

@@ -3,6 +3,13 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.43.3 — Tickets go live for apps
+
+- **Live tickets in apps.** An app with ticket access now hears ticket changes the moment they happen, on the same activity socket it already uses: new tickets, comments, answers, status changes, assignments, and resolves or dismisses. Each person only hears about tickets in rooms where they're allowed to read them. Briefs are never sent over the socket. Apps fetch them on demand.
+- **Apps catch up with the new tickets.** Apps that can post to tickets can assign a person, with the same warning for names that aren't on the server. Answering with a suggested option or a typed message, changing the status, and reading a brief are all covered.
+- **Privacy.** Ticket reads for app guests no longer include file paths on the server or internal session IDs.
+- **For app developers.** `k2 study app-tickets` documents the events and the ticket calls.
+
 ## 0.43.2 — Agents from other servers open right on Home, and tickets you can read
 
 - **Other servers open in place.** On macOS and Linux, picking an agent from another server on Home opens it right there, and your window stays put. If you turned this off before, it stays off. The setting is Settings → General → Experimental → Open agents from other servers here. Windows keeps the old behavior for now. Servers older than 0.41.0 still switch the window, and 0.41 and 0.42 servers open view only.

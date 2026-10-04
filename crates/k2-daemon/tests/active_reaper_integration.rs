@@ -548,6 +548,18 @@ async fn get_active_and_active_changed_match_window_pin_only() {
     let _g = lock();
     init_for_tests();
     v2_session_map::clear_for_tests();
+    // Start from this test's fixtures only. Earlier tests in this binary
+    // leave their projects behind, and the dismiss tests call
+    // arm_dismiss_grace without the route's clock clear — a state the
+    // dismiss route never produces (in-window AND dismiss-suppressed). The
+    // broadcast drops suppressed ids, GET does not, so whether they agreed
+    // depended on test order.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM projects WHERE id LIKE 'reaper-pid-%'", [])
+            .expect("clear earlier reaper fixtures");
+    }
 
     let (win_pid, win_path) = setup_project("active-win");
     set_last_interaction(&win_pid, Some(now_secs() - 3600));

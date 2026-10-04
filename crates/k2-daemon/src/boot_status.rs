@@ -202,6 +202,10 @@ pub const FEATURE_ZEN_V1: &str = "zen-v1";
 /// client without it falls back to `GET /cli/thread?addr=&limit=1`.
 pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
 
+/// prd-home-picker-and-remote-avatars-v1 S3: this daemon serves the
+/// local-only Home avatar cache (`/cli/home/avatars*`).
+pub const FEATURE_HOME_AVATARS: &str = "home-avatars-v1";
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -213,6 +217,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_TICKETS_LIST_ALL);
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_THREAD_LATEST);
+    out.push(FEATURE_HOME_AVATARS);
     out
 }
 
@@ -226,7 +231,7 @@ mod tests {
         assert!(attach_only_supported());
         assert_eq!(
             features(),
-            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "thread-latest"]
+            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "thread-latest", "home-avatars-v1"]
         );
     }
 

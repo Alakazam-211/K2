@@ -357,6 +357,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/heartbeat/unarchive", Member),
     post("/cli/heartbeat/uninstall-launchd", Member),
     post("/cli/heartbeat/wake", Member),
+    // Home avatar cache (prd-home-picker-and-remote-avatars-v1 P18): this
+    // computer only. NoLogin refuses every Connect login at role_gate; the
+    // handler refuses anything but the owner token (`home_avatars_local_only`).
+    get("/cli/home/avatars", NoLogin),
+    post("/cli/home/avatars/prune", NoLogin),
+    post("/cli/home/avatars/put", NoLogin),
     get("/cli/hooks/status", Member),
     get("/cli/host-sessions/list", Member),
     get("/cli/inbox", Member),

@@ -82,6 +82,7 @@ mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;
 mod heartbeat_wait;
+mod home_avatar_routes;
 mod power;
 mod inbox_routes;
 mod wiki_routes;

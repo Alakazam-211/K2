@@ -4572,6 +4572,45 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Home avatar cache (prd-home-picker-and-remote-avatars-v1 P18, vs-live
+        // P34): `~/.k2/cache/agent-avatars/`, this computer only, built like
+        // Zen's arm. POST rows refuse a GET with 405; every arm consumes its
+        // request before answering (keep-alive); an oversized body gets 413
+        // and closes. NoLogin policy rows turn every Connect login away at
+        // role_gate; the handler refuses anything but the owner token.
+        p if crate::home_avatar_routes::is_route(p) => {
+            let is_post_row = crate::home_avatar_routes::POST_ROUTES.contains(&p);
+            if is_post_row && !is_post {
+                // Only GET reaches here (the method allowlist 405s the rest),
+                // and a GET has no body: require_post consumed the whole
+                // request, so the socket stays good for the next one.
+                let _ = super::http::require_post(&mut *stream, &mut buf, is_post).await;
+                return DispatchOutcome::KeepAlive;
+            }
+            let body_bytes = if is_post {
+                let cap = crate::home_avatar_routes::max_body(p);
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, cap).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::home_avatar_routes::too_large(p);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let owner = super::http::token_is_owner(&query, state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::home_avatar_routes::handle(&p_owned, owner, &params, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Phase 2 Unit 6 — POST routes for filesystem / chat /
         // themes / skill-layers / review-checklist. All JSON-bodied;
         // delegate to per-domain modules. The match-arm guard

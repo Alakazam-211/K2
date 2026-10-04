@@ -11,6 +11,7 @@ import {
   hostOpPost,
   hostOpGet,
   hostBootStatus,
+  HostOpError,
   type HostCreds,
 } from './host-ops'
 import type { UpdateCheckResult } from '@/components/Settings/sections/update-host'
@@ -176,6 +177,27 @@ describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-
 
     await expect(hostOpGet(CREDS, 'settings/get')).rejects.toThrow('boom')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a non-2xx throws HostOpError with the status and the daemon message (P23)', async () => {
+    for (const [status, body, message] of [
+      [401, JSON.stringify({ error: 'session expired' }), 'session expired'],
+      [403, JSON.stringify({ error: 'role_required' }), 'role_required'],
+      [502, '', 'daemon 502'],
+    ] as const) {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status, body })))
+      const err = await hostOpGet(CREDS, 'projects/list').then(
+        () => {
+          throw new Error(`a ${status} resolved`)
+        },
+        (e: unknown) => e,
+      )
+      if (!(err instanceof HostOpError)) throw new Error(`a ${status} threw ${String(err)}`)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.status).toBe(status)
+      expect(err.message).toBe(message)
+      expect(err.name).toBe('HostOpError')
+    }
   })
 })
 

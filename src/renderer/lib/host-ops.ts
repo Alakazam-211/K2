@@ -46,6 +46,19 @@ export function remoteCreds(
   return { base: `${scheme}://${authority}`, token: h.token ?? '' }
 }
 
+/** A non-2xx answer from a host op. The message is the daemon's
+ *  `{"error":"…"}` text (as before); `status` is the HTTP status, so a
+ *  caller can tell a 401 (sign in again) from a 403 (no access) — vs-live
+ *  P23. A network failure is not one of these (fetch throws a TypeError). */
+export class HostOpError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'HostOpError'
+    this.status = status
+  }
+}
+
 /** Surface a clean message from a daemon error body (`{"error":"…"}`) or the
  *  raw text, matching daemon-cli's parseDaemonResponse. */
 async function parse<T>(res: Response): Promise<T> {
@@ -58,7 +71,7 @@ async function parse<T>(res: Response): Promise<T> {
     } catch {
       /* fall through with raw text */
     }
-    throw new Error(msg || `daemon ${res.status}`)
+    throw new HostOpError(msg || `daemon ${res.status}`, res.status)
   }
   if (text.length === 0) return undefined as unknown as T
   try {

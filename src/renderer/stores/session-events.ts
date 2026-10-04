@@ -379,6 +379,20 @@ export interface FeedbackChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — one ticket changed (prd-app-tickets-websocket-v1, 0.43.3).
+ *  The app gateway's activity socket maps it to the room-scoped
+ *  `ticket_changed` guest frame. This client ignores it: the Tickets board
+ *  already refetches on `feedback_changed`. Ids and metadata only. */
+export interface TicketChangedEvent {
+  kind: 'ticket_changed'
+  projectId: string
+  id: string
+  change: string
+  status: string
+  via: string | null
+  hasBrief: boolean
+}
+
 /** 0.40.38 remote live-update — chat-history list mutated (session
  *  rename / pin / refresh). Payload-free refetch signal (ProjectsChanged
  *  convention). */
@@ -429,6 +443,7 @@ export type SessionEventMessage =
   | OpenUrlEvent
   | ProjectGroupsChangedEvent
   | FeedbackChangedEvent
+  | TicketChangedEvent
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
   | FsChangedEvent

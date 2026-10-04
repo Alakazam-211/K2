@@ -261,6 +261,7 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/feedback/comment")
             | ("POST", "/cli/feedback/answer")
             | ("POST", "/cli/feedback/resolve")
+            | ("POST", "/cli/feedback/assign")
             | ("GET", "/cli/wiki/index")
             | ("HEAD", "/cli/wiki/index")
             | ("GET", "/cli/wiki/note")
@@ -1229,7 +1230,9 @@ mod tests {
         assert!(allowlisted_http("POST", "/cli/feedback/resolve"));
         assert!(!allowlisted_http("GET", "/cli/feedback/waiting-count"));
         assert!(!allowlisted_http("GET", "/cli/feedback/list-all"));
-        assert!(!allowlisted_http("POST", "/cli/feedback/assign"));
+        // prd-app-tickets-websocket-v1: assign is an app door (tickets:post).
+        assert!(allowlisted_http("POST", "/cli/feedback/assign"));
+        assert!(!allowlisted_http("GET", "/cli/feedback/assign"));
         assert!(!allowlisted_http("GET", "/cli/feedback/foo"));
         assert!(!allowlisted_http("POST", "/cli/feedback/foo"));
         assert!(!allowlisted_http("GET", "/cli/tickets"));

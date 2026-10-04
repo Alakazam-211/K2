@@ -20,6 +20,14 @@
 //! falls back to its path equal to the room root. No path on the wire.
 //! Roster frames are coalesced to one per room per 250 ms (AH31), with a
 //! trailing frame so the last change is never lost.
+//!
+//! Ticket frames (prd-app-tickets-websocket-v1, 0.43.3): `tickets:read`
+//! also opens the socket, and each `ticket_changed` session event whose
+//! `projectId` is the room's becomes
+//! `{"kind":"ticket_changed","workspace":"<handle>","id","change","status",
+//! "via","hasBrief"}`. Ids and metadata only: no title, body, comment
+//! text, assignee names or brief HTML (refetch `show`; the brief stays
+//! `show?brief=1`). Not coalesced: one stored mutation, one frame.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,14 +47,16 @@ use crate::session_events::{self, SessionEvent};
 pub const ACTIVITY_EVENTS_WS_PATH: &str = "/cli/activity/events";
 
 /// AH29 — the caps that open this socket (any one, in the room).
-pub const SOCKET_CAPS: [&str; 2] = [
+/// `tickets:read` joined in 0.43.3 (prd-app-tickets-websocket-v1).
+pub const SOCKET_CAPS: [&str; 3] = [
     crate::skin_routes::ACTIVITY_READ,
     k2_core::skin::CAP_HEARTBEATS_READ,
+    crate::skin_routes::TICKETS_READ,
 ];
 
-/// AH20/AH29 refusal cap text: names both, so the 403 says
-/// `missing capability activity:read or heartbeats:read`.
-pub const SOCKET_CAPS_TEXT: &str = "activity:read or heartbeats:read";
+/// AH20/AH29 refusal cap text: names every socket cap, so the 403 says
+/// `missing capability activity:read, heartbeats:read or tickets:read`.
+pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read or tickets:read";
 
 /// AH31 — at most one roster-derived `heartbeat_changed` per room per this.
 pub const HEARTBEAT_COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -98,6 +108,38 @@ pub fn heartbeat_frame(
         }),
         _ => None,
     }
+}
+
+/// prd-app-tickets-websocket-v1 — the guest frame for a ticket event in
+/// this room (`project_id`), or `None` (other room / other kind). Matches
+/// on the project id only: a ticket belongs to exactly one room.
+pub fn ticket_frame(project_id: &str, wire_workspace: &str, event: &SessionEvent) -> Option<String> {
+    let SessionEvent::TicketChanged {
+        project_id: pid,
+        id,
+        change,
+        status,
+        via,
+        has_brief,
+    } = event
+    else {
+        return None;
+    };
+    if project_id.trim().is_empty() || pid != project_id {
+        return None;
+    }
+    Some(
+        serde_json::json!({
+            "kind": "ticket_changed",
+            "workspace": wire_workspace,
+            "id": id,
+            "change": change,
+            "status": status,
+            "via": via,
+            "hasBrief": has_brief,
+        })
+        .to_string(),
+    )
 }
 
 /// The roster frame text (no row data).
@@ -275,12 +317,13 @@ pub async fn serve_activity_events_connection(
     };
     let project_id = resolved.project_id.clone();
     let room_root = resolved.path.clone();
-    let (want_activity, want_heartbeats) = match skin_pass {
+    let (want_activity, want_heartbeats, want_tickets) = match skin_pass {
         Some(ref pass) => (
             pass.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ),
             pass.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ),
+            pass.has_cap_in_room(&project_id, crate::skin_routes::TICKETS_READ),
         ),
-        None => (true, true),
+        None => (true, true, true),
     };
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
@@ -330,6 +373,19 @@ pub async fn serve_activity_events_connection(
             event = rx.recv() => {
                 match event {
                     Ok(event) => {
+                        if let SessionEvent::TicketChanged { .. } = event {
+                            // Fail closed: no tickets:read in this room, no frame.
+                            if !want_tickets {
+                                continue;
+                            }
+                            let Some(frame) = ticket_frame(&project_id, &wire_workspace, &event) else {
+                                continue;
+                            };
+                            if write.send(Message::Text(frame)).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
                         if want_heartbeats {
                             match heartbeat_frame(&project_id, &room_root, &wire_workspace, &event) {
                                 Some(HeartbeatFrame::Roster) => {
@@ -387,6 +443,7 @@ mod tests {
     use k2_core::skin::{
         RoomPolicy, SkinPass, CAP_ACTIVITY_READ, CAP_FILES_READ, CAP_FILES_WRITE,
         CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_THREAD_POST, CAP_THREAD_READ,
+        CAP_TICKETS_POST, CAP_TICKETS_READ,
     };
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
@@ -777,6 +834,114 @@ mod tests {
         assert!(
             take_text(&mut act_only, Duration::from_millis(500)).await.is_none(),
             "activity-only pass must not get heartbeat frames"
+        );
+
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
+
+    fn emit_ticket(project_id: &str, id: &str, change: &str, status: &str, via: Option<&str>) {
+        session_events::emit(SessionEvent::TicketChanged {
+            project_id: project_id.to_string(),
+            id: id.to_string(),
+            change: change.to_string(),
+            status: status.to_string(),
+            via: via.map(str::to_string),
+            has_brief: true,
+        })
+        .expect("ticket subscriber is connected");
+    }
+
+    #[test]
+    fn ticket_frame_matches_room_by_project_id_only() {
+        let ev = SessionEvent::TicketChanged {
+            project_id: "p1".into(),
+            id: "t1".into(),
+            change: "answered".into(),
+            status: "answered".into(),
+            via: Some("option_pick".into()),
+            has_brief: false,
+        };
+        let frame = ticket_frame("p1", "sales", &ev).expect("same room");
+        let v: serde_json::Value = serde_json::from_str(&frame).expect("json");
+        assert_eq!(
+            v,
+            serde_json::json!({"kind": "ticket_changed", "workspace": "sales", "id": "t1",
+                               "change": "answered", "status": "answered",
+                               "via": "option_pick", "hasBrief": false})
+        );
+        assert!(ticket_frame("p2", "sales", &ev).is_none(), "other room");
+        assert!(ticket_frame("", "sales", &ev).is_none(), "empty room id never matches");
+        let other_kind = SessionEvent::FeedbackChanged { reason: "created".into() };
+        assert!(ticket_frame("p1", "sales", &other_kind).is_none());
+    }
+
+    /// prd-app-tickets-websocket-v1 T1/T4: tickets:read opens the room
+    /// socket; each frame goes only to its own room; a pass without
+    /// tickets:read in the room never gets a ticket frame (fail closed).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ticket_frames_follow_tickets_read_and_room() {
+        let root_a = temp_dir("tk-a");
+        let root_b = temp_dir("tk-b");
+        let handle_a = format!("ta{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let handle_b = format!("tb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id_a = insert_project(&root_a.to_string_lossy(), &handle_a);
+        let id_b = insert_project(&root_b.to_string_lossy(), &handle_b);
+
+        // tickets:post alone, or thread only → 403 before upgrade, naming tickets:read.
+        for caps in [vec![CAP_TICKETS_POST], vec![CAP_THREAD_READ, CAP_THREAD_POST]] {
+            let raw = pre_upgrade(Some(session_pass(&id_a, &caps)), &handle_a).await;
+            assert!(raw.starts_with("HTTP/1.1 403"), "{caps:?}: {raw}");
+            assert!(raw.contains("tickets:read"), "{caps:?}: {raw}");
+            assert!(!raw.contains("101"), "{caps:?}: {raw}");
+        }
+        // tickets:read in room B does not open room A.
+        let raw = pre_upgrade(Some(session_pass(&id_b, &[CAP_TICKETS_READ])), &handle_a).await;
+        assert!(raw.starts_with("HTTP/1.1 403"), "{raw}");
+        assert!(raw.contains("skin_room"), "{raw}");
+
+        let mut tk_a = connect_room(Some(session_pass(&id_a, &[CAP_TICKETS_READ])), &handle_a).await;
+        let mut tk_b = connect_room(Some(session_pass(&id_b, &[CAP_TICKETS_READ])), &handle_b).await;
+        let mut act_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_READ])), &handle_a).await;
+        let mut hb_a = connect_room(Some(session_pass(&id_a, &[CAP_HEARTBEATS_READ])), &handle_a).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        emit_ticket(&id_b, "ticket-b", "created", "waiting", None);
+        emit_ticket(&uuid::Uuid::new_v4().to_string(), "ticket-x", "created", "waiting", None);
+        emit_ticket(&id_a, "ticket-a", "commented", "needs_discussion", Some("free_text"));
+
+        let a = take_text(&mut tk_a, Duration::from_secs(2)).await.expect("room A frame");
+        let v: serde_json::Value = serde_json::from_str(&a).expect("json");
+        assert_eq!(
+            v,
+            serde_json::json!({"kind": "ticket_changed", "workspace": handle_a, "id": "ticket-a",
+                               "change": "commented", "status": "needs_discussion",
+                               "via": "free_text", "hasBrief": true})
+        );
+        assert!(!a.contains(&*root_a.to_string_lossy()), "no path on the wire: {a}");
+        assert!(!a.contains(&id_a), "the room is the handle, not the id: {a}");
+        assert!(
+            take_text(&mut tk_a, Duration::from_millis(400)).await.is_none(),
+            "room A hears only its own ticket, once"
+        );
+
+        let b = take_text(&mut tk_b, Duration::from_secs(2)).await.expect("room B frame");
+        let vb: serde_json::Value = serde_json::from_str(&b).expect("json");
+        assert_eq!(vb["id"], "ticket-b", "{vb}");
+        assert_eq!(vb["workspace"], handle_b.as_str(), "{vb}");
+        assert_eq!(vb["via"], serde_json::Value::Null, "{vb}");
+        assert!(
+            take_text(&mut tk_b, Duration::from_millis(400)).await.is_none(),
+            "room B never hears room A"
+        );
+
+        assert!(
+            take_text(&mut act_a, Duration::from_millis(400)).await.is_none(),
+            "activity:read alone gets no ticket frame"
+        );
+        assert!(
+            take_text(&mut hb_a, Duration::from_millis(400)).await.is_none(),
+            "heartbeats:read alone gets no ticket frame"
         );
 
         let _ = std::fs::remove_dir_all(&root_a);

@@ -143,7 +143,7 @@ pub fn dispatch_post_as_gated(
         "/cli/feedback/comment" => handle_comment_gated(body, session_author, skin.as_ref()),
         "/cli/feedback/answer" => handle_answer_gated(body, session_author, skin.as_ref()),
         "/cli/feedback/resolve" => handle_resolve_gated(body, skin.as_ref()),
-        "/cli/feedback/assign" if skin.is_none() => handle_assign(body),
+        "/cli/feedback/assign" => handle_assign_gated(body, skin.as_ref()),
         _ => CliResponse::not_found(),
     }
 }
@@ -350,7 +350,7 @@ fn handle_skin_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
     if let Err(e) = skin_require_cap(pass, &project_id, crate::skin_routes::TICKETS_READ) {
         return e;
     }
-    list_items(&project_id, params)
+    guest_projection(list_items(&project_id, params))
 }
 
 fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
@@ -363,9 +363,11 @@ fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
         Err(e) => return e,
     };
     match feedback::get_with_comments(&item.id) {
-        Some((item, comments)) => {
-            CliResponse::ok_json(show_json(&item, &comments, wants_brief(params)))
-        }
+        Some((item, comments)) => guest_projection(CliResponse::ok_json(show_json(
+            &item,
+            &comments,
+            wants_brief(params),
+        ))),
         None => crate::skin_routes::skin_room_response(),
     }
 }
@@ -419,6 +421,84 @@ fn emit_commented(feedback_id: &str, author: &str) {
             "author": author,
         }),
     );
+}
+
+// ── prd-app-tickets-websocket-v1 — one `ticket_changed` per mutation ──
+
+/// `change` values on [`crate::session_events::SessionEvent::TicketChanged`]
+/// (and the app frame). One stored mutation emits exactly one.
+pub const CHANGE_CREATED: &str = "created";
+pub const CHANGE_STATUS: &str = "status_changed";
+pub const CHANGE_ASSIGNED: &str = "assigned";
+pub const CHANGE_ANSWERED: &str = "answered";
+pub const CHANGE_COMMENTED: &str = "commented";
+pub const CHANGE_RESOLVED: &str = "resolved";
+pub const CHANGE_DISMISSED: &str = "dismissed";
+
+/// `via` on `answered`: a person picked one of the ticket's options.
+pub const VIA_OPTION_PICK: &str = "option_pick";
+/// `via` on `answered`: the `/cli/feedback/answer` route.
+pub const VIA_ANSWER: &str = "answer";
+/// `via` on `answered`: the agent settled a discussion (`resolve --answered`).
+pub const VIA_SETTLED: &str = "settled";
+/// `via` on `commented`: a person's free-text reply (opens a discussion).
+pub const VIA_FREE_TEXT: &str = "free_text";
+/// `via` on `commented`: an agent-authored comment.
+pub const VIA_AGENT: &str = "agent";
+
+/// The `change` a `resolve` to `status` reports.
+pub(crate) fn resolve_change(status: &str) -> &'static str {
+    match status {
+        "resolved" => CHANGE_RESOLVED,
+        "dismissed" => CHANGE_DISMISSED,
+        _ => CHANGE_STATUS,
+    }
+}
+
+/// Emit the per-ticket live event after a stored mutation. Ids and
+/// metadata only (no title, body, names or brief). Best-effort: no
+/// subscriber is not an error.
+fn emit_ticket_changed(item: &feedback::FeedbackItem, change: &str, via: Option<&str>) {
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::TicketChanged {
+        project_id: item.project_id.clone(),
+        id: item.id.clone(),
+        change: change.to_string(),
+        status: item.status.clone(),
+        via: via.map(str::to_string),
+        has_brief: item.has_brief,
+    });
+}
+
+/// Keys an app guest never gets on a ticket (prd-app-tickets-websocket-v1
+/// D6): absolute paths and session ids are host internals. The room is
+/// `projectId` / `workspace`.
+pub const GUEST_HIDDEN_KEYS: [&str; 4] =
+    ["projectPath", "canonicalSessionId", "sessionId", "sessionKind"];
+
+fn strip_guest_keys(v: &mut serde_json::Value) {
+    if let Some(map) = v.as_object_mut() {
+        for k in GUEST_HIDDEN_KEYS {
+            map.remove(k);
+        }
+    }
+}
+
+/// A `list` / `show` body re-shaped for an app guest.
+fn guest_projection(resp: CliResponse) -> CliResponse {
+    if resp.status != "200 OK" {
+        return resp;
+    }
+    let mut v: serde_json::Value = match serde_json::from_str(&resp.body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::internal_error(format!("ticket projection: {e}")),
+    };
+    strip_guest_keys(&mut v);
+    if let Some(items) = v.get_mut("items").and_then(|i| i.as_array_mut()) {
+        for item in items {
+            strip_guest_keys(item);
+        }
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// The `show` wire shape (mockup contract): the item's fields flat at
@@ -765,6 +845,7 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
     // §4.5) and dormant/fire-and-forget inside push_routes. Assignees
     // narrow the fan-out when present.
     crate::push_routes::notify_feedback_created(&item.agent_name, &item.id, &item.assignees);
+    emit_ticket_changed(&item, CHANGE_CREATED, None);
 
     let (name, _) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(&item).unwrap_or_else(|_| serde_json::json!({}));
@@ -931,6 +1012,7 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
                 // Push assignees (or all devices if unassigned) on thread
                 // activity — not just create.
                 if let Some(item) = feedback::get_item(&full_id) {
+                    emit_ticket_changed(&item, CHANGE_COMMENTED, Some(VIA_AGENT));
                     crate::push_routes::notify_feedback_commented(&full_id, &item.assignees);
                 }
                 CliResponse::ok_json(
@@ -1010,6 +1092,13 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     // [`emit_commented`]) — also before the injection, so an open
     // thread panel refreshes without waiting on a slow wake.
     emit_commented(&item.id, &comment.author);
+    // One app frame for this reply: an option pick is the answer; free
+    // text is a comment whose `status` says needs_discussion.
+    if answers {
+        emit_ticket_changed(&item, CHANGE_ANSWERED, Some(VIA_OPTION_PICK));
+    } else {
+        emit_ticket_changed(&item, CHANGE_COMMENTED, Some(VIA_FREE_TEXT));
+    }
     crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
 
     // Shared F3 delivery. Owner token → server display name. Connect
@@ -1111,6 +1200,7 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
     // fires too (see [`emit_commented`]) — an open thread panel picks
     // up the answer without a reselect.
     emit_commented(&item.id, &comment.author);
+    emit_ticket_changed(&item, CHANGE_ANSWERED, Some(VIA_ANSWER));
 
     // F3 — the answer ALWAYS injects into the asking session (PRD §7
     // decision 1), best-effort AFTER the store + emit: a delivery
@@ -1211,6 +1301,7 @@ fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
                     "status": item.status,
                 }),
             );
+            emit_ticket_changed(&item, resolve_change(&item.status), None);
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,
@@ -1264,6 +1355,7 @@ fn settle_answered(b: &ResolveBody, skin: Option<&SkinPass>) -> CliResponse {
         }),
     );
     emit_commented(&item.id, &comment.author);
+    emit_ticket_changed(&item, CHANGE_ANSWERED, Some(VIA_SETTLED));
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -1286,8 +1378,17 @@ struct AssignBody {
     usernames: Vec<String>,
 }
 
-/// Handler for `POST /cli/feedback/assign`.
+/// Handler for `POST /cli/feedback/assign` (owner / Connect).
+#[cfg(test)]
 pub fn handle_assign(body: &[u8]) -> CliResponse {
+    handle_assign_gated(body, None)
+}
+
+/// `assign` for every door. An app pass (prd-app-tickets-websocket-v1)
+/// needs `tickets:post` in the ticket's room; another room's id or an
+/// unknown id is 403 `skin_room` (no 404 oracle). Same names, same
+/// `assignee_unknown` warning as the owner.
+fn handle_assign_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     let b: AssignBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -1295,9 +1396,16 @@ pub fn handle_assign(body: &[u8]) -> CliResponse {
     if b.id.is_empty() {
         return usage_error("missing 'id' (a ticket id or unique prefix)");
     }
-    let full_id = match feedback::resolve_id_prefix(&b.id) {
-        Ok(f) => f,
-        Err(e) => return prefix_error_response(&b.id, e),
+    let full_id = if let Some(pass) = skin {
+        match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
+            Ok(item) => item.id,
+            Err(e) => return e,
+        }
+    } else {
+        match feedback::resolve_id_prefix(&b.id) {
+            Ok(f) => f,
+            Err(e) => return prefix_error_response(&b.id, e),
+        }
     };
     // Same check as `create`: a name that is not a user on this server
     // still assigns (snapshots), with an `assignee_unknown` warning.
@@ -1320,6 +1428,7 @@ pub fn handle_assign(body: &[u8]) -> CliResponse {
                     "assignees": item.assignees,
                 }),
             );
+            emit_ticket_changed(&item, CHANGE_ASSIGNED, None);
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,
@@ -3238,5 +3347,297 @@ mod tests {
         let v = parse(&r);
         assert_eq!(v["error"]["code"], "brief_too_large");
         assert!(v["error"]["hint"].as_str().expect("hint").contains("3145728 bytes"));
+    }
+
+    // ── prd-app-tickets-websocket-v1 — ticket_changed + app parity ──────
+
+    /// The `TicketChanged` events for `id` since `rx` subscribed, as
+    /// `(change, via, status, hasBrief)`. A lagged receiver fails loudly.
+    fn ticket_events(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>,
+        id: &str,
+        project_id: &str,
+    ) -> Vec<(String, Option<String>, String, bool)> {
+        let mut out = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(crate::session_events::SessionEvent::TicketChanged {
+                    project_id: pid,
+                    id: tid,
+                    change,
+                    status,
+                    via,
+                    has_brief,
+                }) if tid == id => {
+                    assert_eq!(pid, project_id, "ticket_changed carries the ticket's room");
+                    out.push((change, via, status, has_brief));
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => panic!("session-events receiver: {e:?}"),
+            }
+        }
+        out
+    }
+
+    fn tickets_pass(username: &str, project_id: &str, caps: &[&str]) -> k2_core::skin::SkinPass {
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(project_id.to_string(), caps.iter().map(|c| (*c).to_string()).collect());
+        skin_session(username, policy)
+    }
+
+    /// T2/T3: every mutation emits exactly one `ticket_changed` with the
+    /// right change / via / status, on every door. Option pick vs free text
+    /// over the app door; app assign + status set; apps still cannot set
+    /// `answered`.
+    #[test]
+    fn ticket_changed_fires_once_per_mutation_with_shape() {
+        let handle = format!("tkt{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (name, path) = unique("ticket-events");
+        let pid = insert_project_handle(&name, &path, &handle);
+        let pass = tickets_pass(
+            "bob",
+            &pid,
+            &[k2_core::skin::CAP_TICKETS_READ, k2_core::skin::CAP_TICKETS_POST],
+        );
+        let mut rx = crate::session_events::subscribe();
+        let app = |path: &str, body: serde_json::Value| {
+            dispatch_post_as_gated(
+                path,
+                body.to_string().as_bytes(),
+                "bob",
+                Some(pass.clone()),
+                CreateDoor::App,
+            )
+        };
+
+        // create (app, with a brief and options)
+        let r = app(
+            "/cli/feedback/create",
+            serde_json::json!({
+                "project": handle, "title": "Pick a colour",
+                "options": ["Navy", "Teal"], "briefHtml": TEST_BRIEF,
+            }),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let id = parse(&r)["id"].as_str().expect("id").to_string();
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("created".into(), None, "waiting".into(), true)]
+        );
+
+        // free text → one commented/free_text frame, status needs_discussion
+        let r = app("/cli/feedback/comment", serde_json::json!({"id": id, "body": "why navy?"}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(parse(&r)["answered"], false, "{}", r.body);
+        assert_eq!(parse(&r)["status"], "needs_discussion", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("commented".into(), Some("free_text".into()), "needs_discussion".into(), true)]
+        );
+
+        // option pick → one answered/option_pick frame
+        let r = app(
+            "/cli/feedback/comment",
+            serde_json::json!({"id": id, "body": "Navy", "optionPick": true}),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(parse(&r)["answered"], true, "{}", r.body);
+        assert_eq!(parse(&r)["author"], "bob", "{}", r.body);
+        let item = feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered");
+        assert_eq!(item.answer.as_deref(), Some("Navy"));
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("answered".into(), Some("option_pick".into()), "answered".into(), true)]
+        );
+
+        // app status set from the allowed set
+        let r = app("/cli/feedback/resolve", serde_json::json!({"id": id, "status": "planned"}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("status_changed".into(), None, "planned".into(), true)]
+        );
+        let r = app(
+            "/cli/feedback/resolve",
+            serde_json::json!({"id": id, "status": "needs_discussion"}),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("status_changed".into(), None, "needs_discussion".into(), true)]
+        );
+        // apps never set answered, and an unknown status is refused
+        for bad in [
+            serde_json::json!({"id": id, "status": "answered", "answer": "x"}),
+            serde_json::json!({"id": id, "status": "shipped"}),
+        ] {
+            let r = app("/cli/feedback/resolve", bad);
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        }
+        assert!(ticket_events(&mut rx, &id, &pid).is_empty(), "a refusal emits nothing");
+
+        // app assign: stored, same unknown-name warning as the owner
+        let r = app(
+            "/cli/feedback/assign",
+            serde_json::json!({"id": id, "usernames": ["owner", "ghost-user-zz"]}),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = parse(&r);
+        assert_eq!(v["assignees"], serde_json::json!(["ghost-user-zz", "owner"]), "{v}");
+        let warnings = v["warnings"].as_array().expect("warnings array");
+        assert_eq!(warnings.len(), 1, "{v}");
+        assert_eq!(warnings[0]["code"], "assignee_unknown", "{v}");
+        assert!(warnings[0].to_string().contains("ghost-user-zz"), "{v}");
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("assigned".into(), None, "needs_discussion".into(), true)]
+        );
+
+        // owner doors: answer route, agent comment, agent settle
+        let r = dispatch_post_as(
+            "/cli/feedback/answer",
+            serde_json::json!({"id": id, "answer": "Teal after all"}).to_string().as_bytes(),
+            "owner",
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("answered".into(), Some("answer".into()), "answered".into(), true)]
+        );
+        let r = dispatch_post_as(
+            "/cli/feedback/comment",
+            serde_json::json!({"id": id, "body": "noted", "author": "scout"}).to_string().as_bytes(),
+            "owner",
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("commented".into(), Some("agent".into()), "answered".into(), true)]
+        );
+        let r = dispatch_post_as(
+            "/cli/feedback/resolve",
+            serde_json::json!({"id": id, "status": "answered", "answer": "Teal", "author": "scout"})
+                .to_string()
+                .as_bytes(),
+            "owner",
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![("answered".into(), Some("settled".into()), "answered".into(), true)]
+        );
+
+        // dismissed / resolved are their own changes
+        let r = app("/cli/feedback/resolve", serde_json::json!({"id": id, "status": "dismissed"}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = app("/cli/feedback/resolve", serde_json::json!({"id": id}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(
+            ticket_events(&mut rx, &id, &pid),
+            vec![
+                ("dismissed".into(), None, "dismissed".into(), true),
+                ("resolved".into(), None, "resolved".into(), true),
+            ]
+        );
+
+        // A ticket without a brief says so.
+        let r = app("/cli/feedback/create", serde_json::json!({"project": handle, "title": "plain"}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let plain = parse(&r)["id"].as_str().expect("id").to_string();
+        assert_eq!(
+            ticket_events(&mut rx, &plain, &pid),
+            vec![("created".into(), None, "waiting".into(), false)]
+        );
+    }
+
+    /// T1/T5: app assign is room-jailed and cap-gated; a guest without
+    /// tickets:read gets 403 on reads; guest reads carry no path or
+    /// session ids; the brief is the stored, cleaned one.
+    #[test]
+    fn app_assign_and_reads_are_room_jailed_and_projected() {
+        let h_a = format!("ra{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let h_b = format!("rb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (name_a, path_a) = unique("jail-a");
+        let (name_b, path_b) = unique("jail-b");
+        let a = insert_project_handle(&name_a, &path_a, &h_a);
+        let _b = insert_project_handle(&name_b, &path_b, &h_b);
+        let in_a = create_via_route(&path_a, "A ask", serde_json::json!({
+            "briefHtml": "<p>Hi<script>alert(1)</script></p>",
+            "sessionId": "sess-secret", "sessionKind": "canonical",
+        }))["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        let in_b = create_via_route(&path_b, "B ask", serde_json::json!({}))["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        let reader = tickets_pass("rita", &a, &[k2_core::skin::CAP_TICKETS_READ]);
+        let writer = tickets_pass(
+            "wes",
+            &a,
+            &[k2_core::skin::CAP_TICKETS_READ, k2_core::skin::CAP_TICKETS_POST],
+        );
+        let thread_only = tickets_pass("tom", &a, &[k2_core::skin::CAP_THREAD_READ]);
+        let assign = |pass: &k2_core::skin::SkinPass, id: &str| {
+            dispatch_post_as_gated(
+                "/cli/feedback/assign",
+                serde_json::json!({"id": id, "usernames": ["owner"]}).to_string().as_bytes(),
+                &pass.username,
+                Some(pass.clone()),
+                CreateDoor::App,
+            )
+        };
+        let r = assign(&reader, &in_a);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("missing capability tickets:post"), "{}", r.body);
+        let r = assign(&writer, &in_b);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("skin_room"), "other room is skin_room: {}", r.body);
+        let r = assign(&writer, "00000000-0000-0000-0000-000000000000");
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("skin_room"), "no 404 oracle: {}", r.body);
+        assert!(feedback::get_item(&in_b).expect("b").assignees.is_empty(), "B untouched");
+
+        // No tickets:read → 403 on list and show.
+        let r = handle_list_gated(&list_params(&h_a, &[]), Some(thread_only.clone()));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("missing capability tickets:read"), "{}", r.body);
+        let r = handle_show_gated(&HashMap::from([("id".into(), in_a.clone())]), Some(thread_only));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+
+        // tickets:read: brief (cleaned) + assignee, no host internals.
+        let r = assign(&writer, &in_a);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = handle_show_gated(
+            &HashMap::from([("id".into(), in_a.clone()), ("brief".into(), "1".into())]),
+            Some(reader.clone()),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = parse(&r);
+        assert_eq!(v["assignees"], serde_json::json!(["owner"]), "{v}");
+        assert_eq!(v["brief"]["html"], "<p>Hi</p>", "{v}");
+        assert_eq!(v["hasBrief"], true, "{v}");
+        for k in GUEST_HIDDEN_KEYS {
+            assert!(v.get(k).is_none(), "guest show must not carry {k}: {v}");
+        }
+        assert!(!r.body.contains(&path_a), "no path: {}", r.body);
+        assert!(!r.body.contains("sess-secret"), "no session id: {}", r.body);
+        let r = handle_list_gated(&list_params(&h_a, &[]), Some(reader));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = parse(&r);
+        let items = v["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1, "room A only: {v}");
+        for k in GUEST_HIDDEN_KEYS {
+            assert!(items[0].get(k).is_none(), "guest list must not carry {k}: {v}");
+        }
+        // The owner door is unchanged.
+        let r = handle_show_gated(&HashMap::from([("id".into(), in_a.clone())]), None);
+        let v = parse(&r);
+        assert_eq!(v["projectPath"], path_a.as_str(), "{v}");
+        assert_eq!(v["sessionId"], "sess-secret", "{v}");
     }
 }

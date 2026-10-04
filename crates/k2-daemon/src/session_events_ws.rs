@@ -373,6 +373,10 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // never cross the tunnel.
         SessionEvent::ProjectGroupsChanged { .. } => None,
         SessionEvent::FeedbackChanged { .. } => None,
+        // prd-app-tickets-websocket-v1 — APP-LEVEL like FeedbackChanged.
+        // The desktop board ignores it (it refetches on feedback_changed);
+        // the app activity socket maps it per room on projectId.
+        SessionEvent::TicketChanged { .. } => None,
 
         // K2 Mail — APP-LEVEL: the mail server / domains / approvals
         // queue are daemon-global owner surface, not tied to one
@@ -715,6 +719,14 @@ mod tests {
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },
             SessionEvent::FeedbackChanged { reason: "created".into() },
+            SessionEvent::TicketChanged {
+                project_id: "p".into(),
+                id: "t".into(),
+                change: "created".into(),
+                status: "waiting".into(),
+                via: None,
+                has_brief: false,
+            },
             SessionEvent::MailChanged { reason: "send-decided".into() },
             SessionEvent::RemoteSessionAccessDenied {
                 principal_label: "owner".into(),

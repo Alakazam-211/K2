@@ -838,6 +838,253 @@ fn publish_skin(dport: u16, path: &str, gport: u16, skin_root: Option<&str>) {
     );
 }
 
+/// One text frame, or `None` when nothing arrives within `wait`.
+fn try_read_ws_text(stream: &mut StdTcpStream, wait: Duration) -> Option<String> {
+    stream.set_read_timeout(Some(wait)).expect("short timeout");
+    let mut first = [0u8; 1];
+    let got = match stream.peek(&mut first) {
+        Ok(0) => panic!("ws closed while waiting for a frame"),
+        Ok(_) => true,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            false
+        }
+        Err(e) => panic!("ws peek: {e:?}"),
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("restore timeout");
+    got.then(|| read_ws_text(stream))
+}
+
+/// Open the room socket through the helper; returns the stream after 101.
+fn open_room_socket(gport: u16, workspace: &str, cookie: &str) -> StdTcpStream {
+    let mut sock = StdTcpStream::connect(("127.0.0.1", gport)).expect("ws connect");
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read timeout");
+    let req = format!(
+        "GET /cli/activity/events?workspace={workspace} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{cookie}\r\n\r\n"
+    );
+    sock.write_all(req.as_bytes()).expect("ws write");
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        sock.read_exact(&mut byte).expect("upgrade head");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head).to_string();
+    assert!(head.starts_with("HTTP/1.1 101"), "room socket {workspace}: {head}");
+    sock
+}
+
+/// prd-app-tickets-websocket-v1 T6–T9 through the helper: tickets:read
+/// opens the room socket; each mutation made through the gateway sends one
+/// `ticket_changed` with ids + metadata only; two rooms stay apart; a pass
+/// without tickets:read in a room gets no socket and 403 reads; assign,
+/// option pick vs free text and status set work for apps; the brief comes
+/// back cleaned and over-cap briefs are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_tickets_socket_and_parity() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("othr{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_docs_id, _c1, docs_path) = seed_workspace(&docs);
+        let (_anna_id, _c2, anna_path) = seed_workspace(&anna);
+        let (_other_id, _c3, other_path) = seed_workspace(&other);
+        for (user, role, rooms) in [
+            (
+                "tkbob",
+                "tkdocs",
+                vec![
+                    (docs.as_str(), r#"["thread:read","tickets:read","tickets:post"]"#),
+                    (anna.as_str(), r#"["thread:read","thread:post"]"#),
+                ],
+            ),
+            ("tkcarl", "tkanna", vec![(anna.as_str(), r#"["tickets:read"]"#)]),
+        ] {
+            add_user(dport, user);
+            set_password(dport, user, "s3cret-horse");
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+                Some(&format!(r#"{{"name":"{role}"}}"#)),
+            );
+            assert_eq!(r.status, 200, "role {role}; {}", r.body);
+            for (handle, caps) in rooms {
+                let r = http(
+                    dport,
+                    "POST",
+                    &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+                    Some(&format!(r#"{{"name":"{role}","handle":"{handle}","caps":{caps}}}"#)),
+                );
+                assert_eq!(r.status, 200, "room {handle}; {}", r.body);
+            }
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+                Some(&format!(r#"{{"username":"{user}","role":"{role}"}}"#)),
+            );
+            assert_eq!(r.status, 200, "assign {user}; {}", r.body);
+        }
+
+        let gport = free_port();
+        publish_skin(dport, &docs_path, gport, None);
+        let bob = gateway_login_cookie(gport, "tkbob", "s3cret-horse");
+        let carl = gateway_login_cookie(gport, "tkcarl", "s3cret-horse");
+
+        // No tickets:read in anna → no socket (thread caps only).
+        let refused = ws_upgrade(gport, &format!("/cli/activity/events?workspace={anna}"), &bob);
+        assert_eq!(refused.status, 403, "bob anna socket; {}", refused.body);
+        assert!(refused.body.contains("tickets:read"), "{}", refused.body);
+
+        let mut bob_docs = open_room_socket(gport, &docs, &bob);
+        let mut carl_anna = open_room_socket(gport, &anna, &carl);
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Owner tickets in a room nobody holds, then in anna.
+        let owner_create = |project: &str, extra: &str| {
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/feedback/create?token={OWNER_TOKEN}"),
+                Some(&format!(
+                    r#"{{"project":"{project}","title":"Owner ask","briefHtml":"{OWNER_BRIEF}"{extra}}}"#
+                )),
+            );
+            assert_eq!(r.status, 200, "owner create {project}; {}", r.body);
+            json(&r.body)["id"].as_str().expect("id").to_string()
+        };
+        let _other_ticket = owner_create(&other, "");
+        let anna_ticket = owner_create(&anna, r#","options":["Yes","No"]"#);
+
+        let f = try_read_ws_text(&mut carl_anna, Duration::from_secs(5)).expect("carl hears anna");
+        assert_eq!(
+            json(&f),
+            serde_json::json!({"kind": "ticket_changed", "workspace": anna, "id": anna_ticket,
+                               "change": "created", "status": "waiting", "via": null,
+                               "hasBrief": true}),
+            "{f}"
+        );
+        assert!(!f.contains("Owner ask"), "no title on the wire: {f}");
+        assert!(!f.contains(&anna_path), "no path on the wire: {f}");
+
+        // Carl (tickets:read only) cannot write; reads in anna work.
+        let r = http_ex(
+            gport,
+            "POST",
+            "/cli/feedback/comment",
+            Some(&format!(r#"{{"id":"{anna_ticket}","body":"Yes","optionPick":true}}"#)),
+            &carl,
+        );
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert!(r.body.contains("missing capability tickets:post"), "{}", r.body);
+        // Bob has no tickets:read in anna: 403 on reads.
+        let r = http_ex(gport, "GET", &format!("/cli/feedback/show?id={anna_ticket}"), None, &bob);
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert!(r.body.contains("missing capability tickets:read"), "{}", r.body);
+
+        // Bob works in docs through the gateway.
+        let post = |path: &str, body: serde_json::Value| {
+            http_ex(gport, "POST", path, Some(&body.to_string()), &bob)
+        };
+        let r = post(
+            "/cli/feedback/create",
+            serde_json::json!({"project": docs, "title": "Which colour?",
+                               "options": ["Navy", "Teal"],
+                               "briefHtml": "<p>Pick<script>alert(1)</script></p>"}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        let t = json(&r.body)["id"].as_str().expect("id").to_string();
+        let r = post("/cli/feedback/comment", serde_json::json!({"id": t, "body": "why?"}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["status"], "needs_discussion", "{}", r.body);
+        let r = post(
+            "/cli/feedback/comment",
+            serde_json::json!({"id": t, "body": "Navy", "optionPick": true}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["answered"], true, "{}", r.body);
+        let r = post("/cli/feedback/resolve", serde_json::json!({"id": t, "status": "planned"}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let r = post(
+            "/cli/feedback/assign",
+            serde_json::json!({"id": t, "usernames": ["owner", "nobody-here-zz"]}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        let av = json(&r.body);
+        assert_eq!(av["assignees"], serde_json::json!(["nobody-here-zz", "owner"]), "{av}");
+        assert_eq!(av["warnings"][0]["code"], "assignee_unknown", "{av}");
+        let r = post("/cli/feedback/resolve", serde_json::json!({"id": t}));
+        assert_eq!(r.status, 200, "{}", r.body);
+
+        let want = [
+            ("created", serde_json::Value::Null, "waiting"),
+            ("commented", serde_json::json!("free_text"), "needs_discussion"),
+            ("answered", serde_json::json!("option_pick"), "answered"),
+            ("status_changed", serde_json::Value::Null, "planned"),
+            ("assigned", serde_json::Value::Null, "planned"),
+            ("resolved", serde_json::Value::Null, "resolved"),
+        ];
+        for (change, via, status) in want {
+            let f = try_read_ws_text(&mut bob_docs, Duration::from_secs(5))
+                .unwrap_or_else(|| panic!("bob: no {change} frame"));
+            assert_eq!(
+                json(&f),
+                serde_json::json!({"kind": "ticket_changed", "workspace": docs, "id": t,
+                                   "change": change, "status": status, "via": via,
+                                   "hasBrief": true}),
+                "{f}"
+            );
+            assert!(!f.contains("Navy") && !f.contains("nobody-here-zz"), "no bodies or names: {f}");
+        }
+        assert!(
+            try_read_ws_text(&mut bob_docs, Duration::from_millis(600)).is_none(),
+            "each mutation sends one frame; no other room's ticket"
+        );
+        assert!(
+            try_read_ws_text(&mut carl_anna, Duration::from_millis(600)).is_none(),
+            "room anna never hears docs or the unheld room"
+        );
+
+        // Brief: fetch on demand, cleaned, no host internals.
+        let r = http_ex(gport, "GET", &format!("/cli/feedback/show?id={t}&brief=1"), None, &bob);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let sv = json(&r.body);
+        assert_eq!(sv["brief"]["html"], "<p>Pick</p>", "{sv}");
+        assert_eq!(sv["assignees"], serde_json::json!(["nobody-here-zz", "owner"]), "{sv}");
+        assert!(sv.get("projectPath").is_none(), "{sv}");
+        assert!(sv.get("canonicalSessionId").is_none(), "{sv}");
+        assert!(!r.body.contains(&docs_path), "{}", r.body);
+        // Over the 1 MiB cap → refused, nothing stored, no frame.
+        let big = format!("<p>{}</p>", "x".repeat(k2_core::feedback_brief::MAX_BRIEF_BYTES));
+        let r = post(
+            "/cli/feedback/create",
+            serde_json::json!({"project": docs, "title": "Too big", "briefHtml": big}),
+        );
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(json(&r.body)["error"]["code"], "brief_too_large", "{}", r.body);
+        assert!(
+            try_read_ws_text(&mut bob_docs, Duration::from_millis(600)).is_none(),
+            "a refused create sends nothing"
+        );
+
+        drop(bob_docs);
+        drop(carl_anna);
+        stop_skin(dport, &docs_path);
+        for p in [&docs_path, &anna_path, &other_path] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    });
+}
+
 fn stop_skin(dport: u16, path: &str) {
     let _ = http(
         dport,
@@ -2080,15 +2327,32 @@ async fn publish_run_skin_gateway_tickets_per_room() {
         assert_eq!(list_all.status, 404, "list-all; {}", list_all.body);
         assert!(list_all.body.contains("not found"), "{}", list_all.body);
 
+        // prd-app-tickets-websocket-v1 (0.43.3): assign is an app door
+        // with tickets:post in the ticket's room; anna's is a cap miss.
         let assign_gw = http_ex(
             gport,
             "POST",
             "/cli/feedback/assign",
-            Some(&format!(r#"{{"id":"{docs_id}","usernames":["bob"]}}"#)),
+            Some(&format!(r#"{{"id":"{docs_id}","usernames":["owner"]}}"#)),
             &cookie,
         );
-        assert_eq!(assign_gw.status, 404, "assign; {}", assign_gw.body);
-        assert!(assign_gw.body.contains("not found"), "{}", assign_gw.body);
+        assert_eq!(assign_gw.status, 200, "assign; {}", assign_gw.body);
+        assert_eq!(json(&assign_gw.body)["assignees"], serde_json::json!(["owner"]));
+        let assign_anna = http_ex(
+            gport,
+            "POST",
+            "/cli/feedback/assign",
+            Some(&format!(r#"{{"id":"{anna_id}","usernames":["owner"]}}"#)),
+            &cookie,
+        );
+        assert_eq!(assign_anna.status, 403, "assign anna; {}", assign_anna.body);
+        assert!(
+            assign_anna.body.contains("missing capability tickets:post"),
+            "{}",
+            assign_anna.body
+        );
+        let assign_get = http_ex(gport, "GET", "/cli/feedback/assign", None, &cookie);
+        assert_eq!(assign_get.status, 404, "GET assign is no door; {}", assign_get.body);
 
         let foo = http_ex(gport, "GET", "/cli/feedback/foo", None, &cookie);
         assert_eq!(foo.status, 404, "foo; {}", foo.body);

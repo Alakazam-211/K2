@@ -504,6 +504,36 @@ pub enum SessionEvent {
     /// Refetch signal only, no item payload.
     FeedbackChanged { reason: String },
 
+    /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
+    /// once per stored ticket mutation from `feedback_routes.rs`, next to
+    /// the legacy hook (which keeps driving [`SessionEvent::FeedbackChanged`]
+    /// for the desktop board). The app activity socket
+    /// (`activity_events_ws.rs`) maps it to the room-scoped guest frame
+    /// `ticket_changed`; it matches the room on `project_id`.
+    ///
+    /// Ids and metadata only: no title, body, comment text, assignee names
+    /// or brief HTML. Consumers refetch `show`.
+    ///
+    /// Wire: `{ "kind": "ticket_changed", "projectId": string, "id":
+    /// string, "change": string, "status": string, "via": string|null,
+    /// "hasBrief": bool }`. `change` is one of `created` | `status_changed`
+    /// | `assigned` | `answered` | `commented` | `resolved` | `dismissed`
+    /// (`brief_attached` is reserved: briefs attach only at create today,
+    /// so `created` carries `hasBrief`). `via` is set on `answered`
+    /// (`option_pick` | `answer` | `settled`) and `commented`
+    /// (`free_text` | `agent`), null otherwise. `status` is the status
+    /// after the change. APP-LEVEL routing class.
+    TicketChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        id: String,
+        change: String,
+        status: String,
+        via: Option<String>,
+        #[serde(rename = "hasBrief")]
+        has_brief: bool,
+    },
+
     /// Remote live-update fix — mail state changed (server state /
     /// domain verification / an outbound approval requested or
     /// decided). APP-LEVEL twin of the legacy `mail:*` HookEvents
@@ -595,6 +625,7 @@ impl SessionEvent {
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
+            SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
             SessionEvent::FsChanged { .. } => "fs_changed",

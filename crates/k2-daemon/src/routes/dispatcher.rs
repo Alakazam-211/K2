@@ -1219,8 +1219,9 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    // AH29: activity:read OR heartbeats:read opens the
-                    // socket; each frame checks its own cap.
+                    // AH29: activity:read, heartbeats:read or (0.43.3)
+                    // tickets:read opens the socket; each frame checks
+                    // its own cap.
                     Some(pass)
                         if pass.dispatcher_admits_any(
                             &crate::activity_events_ws::SOCKET_CAPS,
@@ -4803,7 +4804,9 @@ async fn handle_one_request(
                 .await;
         }
         // Skin tickets POST — dedicated exact arms before the host-wide
-        // `/cli/feedback/` glob. waiting-count/assign stay off this door.
+        // `/cli/feedback/` glob. waiting-count stays off this door. assign
+        // joined in 0.43.3 (prd-app-tickets-websocket-v1): an app pass
+        // needs tickets:post in the ticket's room.
         p if is_post
             && post_allowed
             && matches!(
@@ -4812,6 +4815,7 @@ async fn handle_one_request(
                     | "/cli/feedback/comment"
                     | "/cli/feedback/answer"
                     | "/cli/feedback/resolve"
+                    | "/cli/feedback/assign"
             ) =>
         {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {

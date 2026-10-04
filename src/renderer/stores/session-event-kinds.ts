@@ -85,6 +85,11 @@ export const SESSION_EVENT_ROUTES = {
   open_url: { class: 'app', app: true },
   project_groups_changed: { class: 'app', app: true },
   feedback_changed: { class: 'app', app: true },
+  // prd-app-tickets-websocket-v1: the per-ticket twin for the app gateway.
+  ticket_changed: {
+    class: 'app',
+    ignored: 'The app activity socket maps it per room; the desktop board refetches on feedback_changed.',
+  },
   // Home 0.43.2 (Q7): Settings → Email refetches on it (`onMailChanged`).
   mail_changed: { class: 'app', app: true },
   remote_session_access_denied: {

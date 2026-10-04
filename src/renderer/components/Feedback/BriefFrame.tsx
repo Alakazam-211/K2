@@ -74,25 +74,25 @@ function openLink(url: string): void {
 
 /** Compact links list: as tall as its rows up to `BRIEF_LINKS_MAX_HEIGHT_CLASS`,
  *  then it scrolls. No links → nothing rendered (no space taken). */
-export const BRIEF_LINKS_MAX_HEIGHT_CLASS = 'max-h-24'
+export const BRIEF_LINKS_MAX_HEIGHT_CLASS = 'max-h-14'
 
 function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null {
   if (links.length === 0) return null
   return (
     <div data-testid="brief-links" className="mt-1 text-[11px] flex-none">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] leading-tight">
         Links in this brief
       </div>
       <ol data-testid="brief-links-list" className={`flex flex-col gap-0.5 ${BRIEF_LINKS_MAX_HEIGHT_CLASS} overflow-y-auto`}>
         {links.map((l) => (
-          <li key={l.n} className="flex items-baseline gap-1.5 min-w-0">
+          <li key={l.n} className="flex items-baseline gap-1.5 min-w-0 leading-tight">
             <span className="text-[var(--color-text-muted)] tabular-nums flex-shrink-0">[{l.n}]</span>
             <button
               type="button"
               data-testid="brief-link"
               onClick={() => openLink(l.url)}
-              title="Open in your browser"
-              className="text-left text-[var(--color-accent)] hover:underline break-all cursor-pointer selectable-copy"
+              title={`Open in your browser: ${l.url}`}
+              className="min-w-0 truncate text-left text-[var(--color-accent)] hover:underline cursor-pointer selectable-copy"
             >
               {l.url}
             </button>

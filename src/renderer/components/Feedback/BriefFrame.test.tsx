@@ -156,7 +156,7 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     expect(area.style.height).toBe('')
     const list = screen.getByTestId('brief-links-list')
     expect(list.className).toContain(BRIEF_LINKS_MAX_HEIGHT_CLASS)
-    expect(BRIEF_LINKS_MAX_HEIGHT_CLASS).toBe('max-h-24')
+    expect(BRIEF_LINKS_MAX_HEIGHT_CLASS).toBe('max-h-14')
     expect(list.className).toContain('overflow-y-auto')
     expect(list.className).not.toMatch(/(^|\s)(h-|min-h-)/)
   })

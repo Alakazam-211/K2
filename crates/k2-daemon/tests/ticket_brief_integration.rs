@@ -13,6 +13,9 @@
 //!   T14 no migration after 0126 rebuilds `feedback` (H10/H35)
 //!   H30 a 3 MiB create body gets 413 through the REAL dispatcher
 //!   H29 the door comes from the token: owner warns, a Connect member does not
+//!   A1  assignee policy through the real dispatcher: no assignee warns,
+//!       a Connect user / owner does not, an unknown name warns, fyi exempt
+//!   T12 teaching: the brief AND `--assign <user>`
 //!
 //! ISOLATION: `$HOME`, connect-user stores and the in-memory DB are
 //! process-wide, so dispatcher tests serialize on `TEST_LOCK`. Rows are
@@ -525,6 +528,113 @@ async fn the_door_comes_from_the_token() {
     });
 }
 
+/// A1: the assignee policy through the real dispatcher with the owner
+/// token (the agent door). "A user on this server" = the owner (literal
+/// `owner` or the owner display name) or a stored Connect user.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assignee_policy_through_the_dispatcher() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("tb_julie", "password123").expect("add_user");
+        connect_users::add_user("tb_gone", "password123").expect("add_user");
+        connect_users::set_disabled("tb_gone", true).expect("disable");
+        let mut settings = k2_core::app_settings::load();
+        settings.owner_display_name = Some("Rosson".to_string());
+        k2_core::app_settings::save(&settings).expect("save owner display name");
+        let member = connect_users::create_session("tb_julie");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let path = seed_workspace_path("assignee");
+        let create = |token: &str, extra: serde_json::Value| -> Resp {
+            let mut body = serde_json::json!({
+                "project": path,
+                "title": "assignee",
+                "briefHtml": "<p>Why</p><section class=\"k2-need\"><p>Go?</p></section>",
+            });
+            for (k, v) in extra.as_object().expect("extra is an object") {
+                body[k] = v.clone();
+            }
+            http(d.port, "POST", &format!("/cli/feedback/create?token={token}"), Some(&body.to_string()))
+        };
+        let codes = |r: &Resp| -> Vec<String> {
+            json(&r.body)["warnings"]
+                .as_array()
+                .expect("warnings array")
+                .iter()
+                .map(|w| w["code"].as_str().expect("code").to_string())
+                .collect()
+        };
+
+        // No assignee: filed, with assignee_required and its wording.
+        let r = create(OWNER_TOKEN, serde_json::json!({}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(codes(&r), vec!["assignee_required"], "{}", r.body);
+        let hint = json(&r.body)["warnings"][0]["hint"].as_str().expect("hint").to_string();
+        assert!(
+            hint.starts_with(
+                "A ticket must be assigned to a user on this server (`--assign <user>`). \
+                 This will be required in a future update."
+            ),
+            "{hint}"
+        );
+
+        // A Connect user, any case; the literal owner; the owner display
+        // name; a disabled Connect user (still a user here): no warning.
+        for who in [
+            serde_json::json!(["tb_julie"]),
+            serde_json::json!(["TB_Julie"]),
+            serde_json::json!(["owner"]),
+            serde_json::json!(["rosson"]),
+            serde_json::json!(["tb_gone"]),
+        ] {
+            let r = create(OWNER_TOKEN, serde_json::json!({ "assignees": who }));
+            assert_eq!(r.status, 200, "{}", r.body);
+            assert!(codes(&r).is_empty(), "{who}: {}", r.body);
+            assert_eq!(json(&r.body)["assignees"], who, "{}", r.body);
+        }
+
+        // Not a user here: filed, snapshot kept, assignee_unknown.
+        let r = create(OWNER_TOKEN, serde_json::json!({ "assignees": ["tb_julie", "tb_nobody"] }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(codes(&r), vec!["assignee_unknown"], "{}", r.body);
+        let v = json(&r.body);
+        assert!(
+            v["warnings"][0]["hint"]
+                .as_str()
+                .expect("hint")
+                .starts_with("`tb_nobody` is not a user on this server"),
+            "{}",
+            r.body
+        );
+        assert_eq!(v["assignees"], serde_json::json!(["tb_julie", "tb_nobody"]), "{}", r.body);
+
+        // fyi is exempt.
+        let r = create(OWNER_TOKEN, serde_json::json!({ "kind": "fyi" }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(codes(&r).is_empty(), "fyi is exempt: {}", r.body);
+
+        // A Connect member is a person: no assignee needed.
+        let r = create(&member, serde_json::json!({}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(codes(&r).is_empty(), "people never must assign: {}", r.body);
+
+        // assign: POST warns on an unknown name; GET is 405.
+        let id = json(&create(OWNER_TOKEN, serde_json::json!({ "assignees": ["owner"] })).body)["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/feedback/assign?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({ "id": id, "usernames": ["tb_nobody"] }).to_string()),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(codes(&r), vec!["assignee_unknown"], "{}", r.body);
+        let r = http(d.port, "GET", &format!("/cli/feedback/assign?token={OWNER_TOKEN}"), None);
+        assert_eq!(r.status, 405, "{}", r.body);
+    });
+}
+
 /// `k2 tickets template` (static, no daemon) passes the cleaner with no
 /// warnings: nothing stripped, and it has the `.k2-need` section.
 #[test]
@@ -563,6 +673,10 @@ fn teaching_sites_teach_the_brief() {
 
     let tooling = k2_core::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION;
     assert!(tooling.contains("with an HTML brief (`k2 study ticket-brief`)"), "{tooling}");
+    assert!(
+        tooling.contains("assigned to a user on this server (`--assign <user>`; required in a future update)"),
+        "{tooling}"
+    );
 
     let pp = format!("/tmp/tb-teach-{}", uuid::Uuid::new_v4());
     for (name, body) in [
@@ -573,11 +687,15 @@ fn teaching_sites_teach_the_brief() {
         assert!(body.contains("k2so tickets template > brief.html"), "{name}");
         assert!(body.contains("--html brief.html"), "{name}");
         assert!(body.contains("k2 study ticket-brief"), "{name}");
+        assert!(body.contains("--html brief.html --assign <user>"), "{name}");
+        assert!(body.contains("Assign every ticket to a user on this server"), "{name}");
+        assert!(body.contains("required in a future update"), "{name}");
+        assert!(body.contains("k2 connections list --users"), "{name}");
     }
-    assert_eq!(version::SKILL_VERSION_MANAGER, 12);
-    assert_eq!(version::SKILL_VERSION_K2SO_AGENT, 12);
-    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 12);
-    assert_eq!(version::SKILL_VERSION_WORKSPACE, 29);
+    assert_eq!(version::SKILL_VERSION_MANAGER, 13);
+    assert_eq!(version::SKILL_VERSION_K2SO_AGENT, 13);
+    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 13);
+    assert_eq!(version::SKILL_VERSION_WORKSPACE, 30);
 
     // The loadable k2-cli skill the compose path writes into a workspace
     // (temp HOME so nothing lands in the real one).
@@ -592,6 +710,12 @@ fn teaching_sites_teach_the_brief() {
         assert!(skill.contains("k2 tickets template > brief.html"), "{skill}");
         assert!(skill.contains("k2 tickets ask \"<title>\" --html brief.html"), "{skill}");
         assert!(skill.contains("k2 study ticket-brief"), "{skill}");
+        assert!(
+            skill.contains("k2 tickets ask \"<title>\" --html brief.html --assign <user>"),
+            "{skill}"
+        );
+        assert!(skill.contains("k2 tickets assign <id> <user>"), "{skill}");
+        assert!(skill.contains("required in a future update"), "{skill}");
         std::fs::remove_dir_all(&ws).expect("cleanup");
     });
 }

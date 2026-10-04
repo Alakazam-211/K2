@@ -18,6 +18,11 @@
 #  10. show --html prints exactly brief.html.
 #  11. show --html on a brief-less ticket → exit 1, no_brief, empty stdout.
 #  12. show on an unknown id → exit 4 (with and without --html).
+#  13. assignee policy (0.43.2): --assign sends assignees; assignee_required /
+#      assignee_unknown warnings print on stderr with exit 0; a Require-policy
+#      assignee_* refusal exits 2; `assign` prints its warnings; template's
+#      next-step line (with --assign) goes to stderr only; help, study, and
+#      --schema teach assigning.
 #
 # No daemon build. Never touches ~/.k2.
 
@@ -73,6 +78,14 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if urlsplit(self.path).path == "/cli/feedback/assign":
+            req = json.loads(body)
+            with open(os.path.join(work, "assign-req.json"), "wb") as f:
+                f.write(body)
+            warnings = []
+            if "ghost" in req.get("usernames", []):
+                warnings = [{"code": "assignee_unknown", "hint": "`ghost` is not a user on this server"}]
+            return self.reply(200, {"ok": True, "id": "fb-assigned-0001", "assignees": req.get("usernames", []), "warnings": warnings})
         if urlsplit(self.path).path != "/cli/feedback/create":
             return self.reply(404, {"error": {"code": "not_found", "hint": "stub: unknown route"}})
         counter["n"] += 1
@@ -83,6 +96,9 @@ class H(BaseHTTPRequestHandler):
         if title == "require":
             return self.reply(400, {"ok": False, "error": {"code": "brief_required",
                 "hint": "brief_required: agents must attach an HTML brief. Run `k2 tickets template > brief.html`"}})
+        if title == "assign-require":
+            return self.reply(400, {"ok": False, "error": {"code": "assignee_required",
+                "hint": "A ticket must be assigned to a user on this server (`--assign <user>`)."}})
         resp = {"ok": True, "id": "fb-stub-%08d" % counter["n"], "title": title,
                 "kind": "question", "priority": 3, "status": "waiting",
                 "hasBrief": "briefHtml" in req, "warnings": []}
@@ -93,6 +109,11 @@ class H(BaseHTTPRequestHandler):
         if title == "old":
             del resp["hasBrief"]
             del resp["warnings"]
+        if title == "assign-warn":
+            resp["assignees"] = req.get("assignees", [])
+            if not resp["assignees"]:
+                resp["warnings"] = [{"code": "assignee_required",
+                    "hint": "A ticket must be assigned to a user on this server (`--assign <user>`). This will be required in a future update."}]
         self.reply(200, resp)
 
     def do_GET(self):
@@ -345,6 +366,71 @@ for flag in "" "--html"; do
     fi
 done
 
+# 13. Assignee policy (0.43.2).
+k2 tickets ask "assign-warn" --html "$WORK/small.html"
+next_req
+if [ "$RC" -eq 0 ]; then ok "assignee_required keeps exit 0"; else bad "assign-warn exit $RC: $(cat "$WORK/err")"; fi
+if python3 - "$WORK/err" <<'PY'
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]).read().splitlines() if l.strip()]
+assert [l["warning"]["code"] for l in lines] == ["assignee_required"], lines
+assert "required in a future update" in lines[0]["warning"]["hint"], lines[0]
+PY
+then ok "assignee_required prints as {\"warning\":…} on stderr"; else bad "assignee_required stderr: $(cat "$WORK/err")"; fi
+grep -q '^Filed feedback ' "$WORK/out" && ok "unassigned still files" || bad "unassigned stdout: $(cat "$WORK/out")"
+
+k2 tickets ask "assign-warn" --html "$WORK/small.html" --assign " owner, julie ,"
+next_req
+if [ "$RC" -eq 0 ] && [ ! -s "$WORK/err" ] && python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["assignees"]==["owner","julie"]' "$req"; then
+    ok "--assign sends trimmed assignees, no warning"
+else
+    bad "--assign: rc=$RC err=$(cat "$WORK/err") req=$(cat "$req" 2>/dev/null)"
+fi
+grep -q -- '→ owner, julie' "$WORK/out" && ok "ask prints the assignees" || bad "ask assignees stdout: $(cat "$WORK/out")"
+
+k2 tickets ask "assign-require" --html "$WORK/small.html"
+next_req
+if [ "$RC" -eq 2 ] && grep -q '"assignee_required"' "$WORK/err" && [ ! -s "$WORK/out" ]; then
+    ok "assignee_required refusal (Require policy) exits 2"
+else
+    bad "assign-require: rc=$RC err=$(cat "$WORK/err")"
+fi
+
+k2 tickets assign fb-1 owner ghost
+if [ "$RC" -eq 0 ] && grep -q '"assignee_unknown"' "$WORK/err" && grep -q '^Assigned fb-assig → owner, ghost\.$' "$WORK/out"; then
+    ok "assign prints assignee_unknown on stderr, exit 0"
+else
+    bad "assign unknown: rc=$RC out=$(cat "$WORK/out") err=$(cat "$WORK/err")"
+fi
+k2 tickets assign fb-1 owner
+if [ "$RC" -eq 0 ] && [ ! -s "$WORK/err" ]; then ok "assign to a user here: no warning"; else bad "assign owner: rc=$RC err=$(cat "$WORK/err")"; fi
+
+set +e
+env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" tickets template >"$WORK/tpl.out" 2>"$WORK/tpl.err"
+tpl_rc=$?
+set -e
+if [ "$tpl_rc" -eq 0 ] && grep -q -- '--assign <user>' "$WORK/tpl.err" && grep -q 'required in a future update' "$WORK/tpl.err" && ! grep -q -- '--assign' "$WORK/tpl.out"; then
+    ok "template: --assign next step on stderr, brief on stdout stays clean"
+else
+    bad "template assign line: rc=$tpl_rc err=$(cat "$WORK/tpl.err")"
+fi
+
+k2 tickets ask --help
+grep -q 'assignee_required' "$WORK/out" && grep -q 'k2 connections list --users' "$WORK/out" && ok "ask --help teaches --assign" || bad "ask --help missing assignee text"
+k2 tickets template --help
+grep -q -- '--assign <user>' "$WORK/out" && ok "template --help teaches --assign" || bad "template --help missing --assign"
+set +e
+study_tb="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" study ticket-brief 2>/dev/null)"
+study_fl="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" study feedback-loop 2>/dev/null)"
+set -e
+if printf '%s' "$study_tb" | grep -q 'A ticket must be assigned to a user on this server (`--assign <user>`)' \
+    && printf '%s' "$study_tb" | grep -q 'assignee_unknown' \
+    && printf '%s' "$study_fl" | grep -q -- '--assign <user>'; then
+    ok "study ticket-brief + feedback-loop teach assigning"
+else
+    bad "study pages missing assignee text"
+fi
+
 # Help + schema mention the flags.
 k2 tickets ask --help
 grep -q -- '--html <file|->' "$WORK/out" && ok "ask --help documents --html" || bad "ask --help missing --html"
@@ -360,6 +446,10 @@ cmds = {c["name"]: c for c in d["commands"]}
 assert any(f["name"] == "--html" for f in cmds["feedback ask"]["flags"]), "ask --html"
 assert any(f["name"] == "--html" for f in cmds["feedback show"]["flags"]), "show --html"
 assert "feedback template" in cmds, "template"
+ask = cmds["feedback ask"]
+assert "--assign <user>" in ask["description"] and "future update" in ask["description"], "ask description"
+assign_flag = [f for f in ask["flags"] if f["name"] == "--assign"][0]
+assert "assignee_required" in assign_flag["description"], assign_flag
 PY
 then ok "--schema lists ask --html, show --html, template"; else bad "--schema missing brief entries"; fi
 

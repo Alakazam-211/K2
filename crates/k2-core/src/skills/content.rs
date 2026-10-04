@@ -374,10 +374,10 @@ Only workspaces linked via `k2so connections` are reachable.
 ### Ask a human
 ```
 k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html [--options "a,b,c"] [--wait]
+k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 # (`k2 feedback` is a compatibility alias. Product "Feedback" for K2 itself is separate/future.)
 ```
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
 
 ### Respond to your API caller
 If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `k2 respond` output reaches it.
@@ -525,10 +525,10 @@ Only workspaces linked via `k2so connections` are reachable.
 
 ```
 k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html [--options "a,b,c"] [--wait]
+k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
 
 ## Respond to your API caller
 
@@ -740,10 +740,10 @@ Only workspaces linked via `k2so connections` are reachable.
 
 ```
 k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html [--options "a,b,c"] [--wait]
+k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`.
 
 ## Respond to your API caller
 

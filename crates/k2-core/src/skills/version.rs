@@ -77,9 +77,11 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// ownership or sql_grants.
 /// Bumped to 12 (0.43.2, ticket HTML brief): "Ask a human" teaches
 /// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
-pub const SKILL_VERSION_MANAGER: u32 = 12;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 12;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 12;
+/// Bumped to 13 (0.43.2, assignee policy): "Ask a human" teaches
+/// `--assign <user>` (a user on this server; required in a future update).
+pub const SKILL_VERSION_MANAGER: u32 = 13;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 13;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 13;
 pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -126,7 +128,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// leftover `k2 skin` / `k2 skin-token` / `skin:roster`; pass prefix still `k2skn_`.
 /// Bumped to 29 (0.43.2, ticket HTML brief): "Ask a human" teaches
 /// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 29;
+/// Bumped to 30 (0.43.2, assignee policy): "Ask a human" teaches
+/// `--assign <user>` and `k2 tickets assign`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 30;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -106,6 +106,7 @@ side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — 
 PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
 with `k2 thread <addr> \"...\"`, do not answer in this terminal; Thread text is markdown), `feedback` to \
 ask your human a durable question with an HTML brief (`k2 study ticket-brief`), \
+assigned to a user on this server (`--assign <user>`; required in a future update), \
 `project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
@@ -400,7 +401,8 @@ k2 inbox compose --title "Fix login bug" --body "Users can't log in after reset"
 ## Ask a human
 ```
 k2 tickets template > brief.html               # HTML brief skeleton; fill it in
-k2 tickets ask "<title>" --html brief.html [--body "..."] [--options "a,b,c"] [--wait]
+k2 tickets ask "<title>" --html brief.html --assign <user> [--body "..."] [--options "a,b,c"] [--wait]
+k2 tickets assign <id> <user>                  # (re)assign a filed ticket
 k2 tickets list                                # your asks + their status
 k2 tickets show <id>                           # one ask: status, answer, thread
 ```
@@ -410,6 +412,10 @@ dead terminal prompt when you need a decision or approval. Attach an HTML
 brief (Problem, What I tried, What I need from you, Options): K2 0.43.2 warns
 without one, the next release refuses. `fyi` needs none. Format, caps, and
 what gets stripped: `k2 study ticket-brief`. (`k2 feedback` is an alias.)
+Assign every ticket to a user on this server with `--assign <user>`: the
+owner or a Connect user (`k2 connections list --users`). K2 0.43.2 warns on
+a ticket with no assignee, or a name that is not a user here; this will be
+required in a future update. `fyi` is exempt.
 
 ## Respond to your API caller
 ```
@@ -568,7 +574,8 @@ K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `k2 connections list --users` humans. Never `k2 msg` usernames.
 
-To change this box, `k2 feedback ask` with an HTML brief (`k2 study ticket-brief`).
+To change this box, `k2 feedback ask` with an HTML brief (`k2 study ticket-brief`)
+and `--assign <user>` (a user on this server).
 To talk in this chat, `k2 thread`.
 "#
     .to_string()

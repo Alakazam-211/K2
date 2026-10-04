@@ -13389,7 +13389,7 @@ cmd_schema() {
     {
       "name": "feedback ask",
       "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
-      "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Prefer --assign <user> when you know who should handle it. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
+      "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Assign every ticket with --assign <user> (a user on this server); 0.43.2 warns without one (assignee_required) and it will be required in a future update. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
         {"name": "--html", "arg": "file|-", "description": "The HTML brief (Problem, What I tried, What I need from you, Options, Context). Agents must attach one; fyi is exempt. Start from k2 tickets template; - reads stdin. Max 1 MiB; cleaned by the daemon. brief_* errors exit 2. 0.43.2 warns when missing; 0.43.3 refuses. See k2 study ticket-brief."},
@@ -13398,7 +13398,7 @@ cmd_schema() {
         {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
         {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
-        {"name": "--assign", "arg": "users", "description": "Comma-separated usernames to assign at create (owner and/or connect-user names). Alias: --to. Prefer this when you know who should handle the ticket."},
+        {"name": "--assign", "arg": "users", "description": "Comma-separated users on this server to assign at create (owner and/or Connect users: k2 connections list --users). Alias: --to. Assign every ticket: 0.43.2 warns without one (assignee_required) or on a name that is not a user here (assignee_unknown); it will be required in a future update. fyi is exempt."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
         {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -16400,10 +16400,13 @@ THIS CHAT VS THE BOX
 
 ASK
   k2 tickets template > brief.html      fill in Problem / Tried / Need / Options
-  k2 feedback ask "<title>" --html brief.html [--body "…"] [--options a,b,c] [--wait]
+  k2 feedback ask "<title>" --html brief.html --assign <user> [--body "…"] [--options a,b,c] [--wait]
   Returns an id immediately unless --wait. Options are choices for
   the human; --wait blocks until answered or resolved. The brief is
   how the human reads your problem — see `k2 study ticket-brief`.
+  Assign every ticket to a user on this server (the owner or a Connect
+  user: `k2 connections list --users`). 0.43.2 warns without one; this
+  will be required in a future update.
 
 FOLLOW
   k2 feedback list
@@ -16444,11 +16447,21 @@ WHEN
   0.43.2 warns when it is missing ({"warning":{"code":"brief_missing"}}
   on stderr, exit 0). 0.43.3 refuses: brief_required, exit 2.
 
+ASSIGN IT
+  A ticket must be assigned to a user on this server (`--assign <user>`).
+  This will be required in a future update. A user on this server is the
+  owner (`owner`, or the owner's display name) or a Connect user:
+  k2 connections list --users
+  0.43.2 files the ticket anyway and warns on stderr, exit 0:
+  assignee_required (no assignee) or assignee_unknown (a name that is not
+  a user here). `--kind fyi` is exempt. Fix a filed ticket with
+  k2 tickets assign <id> <user>
+
 HOW
   k2 tickets template > brief.html        skeleton with the five sections
   (edit it)
-  k2 tickets ask "<one-line title>" --html brief.html [--body "summary"]
-  k2 tickets ask "<title>" --html - < brief.html     stdin works too
+  k2 tickets ask "<one-line title>" --html brief.html --assign <user> [--body "summary"]
+  k2 tickets ask "<title>" --assign <user> --html - < brief.html     stdin works too
 
   <title> stays the one line for the list, push, and search.
   --body is the plain one-or-two-sentence summary text-only readers see.
@@ -22662,9 +22675,11 @@ def die(err, exit_code=None):
         code = str(err.get("code") or "")
         if code in ("not_found", "ambiguous_id"):
             exit_code = 4
-        elif code == "usage" or code.startswith("brief_"):
+        elif code == "usage" or code.startswith("brief_") or code.startswith("assignee_"):
             # brief_required / brief_empty / brief_too_large / brief_invalid
-            # are bad usage: fix the brief and ask again (H3/H32).
+            # are bad usage: fix the brief and ask again (H3/H32). So are
+            # assignee_required / assignee_unknown once the assignee policy
+            # is Require (0.43.2 only warns).
             exit_code = 2
         else:
             exit_code = 1
@@ -23044,6 +23059,8 @@ cmd_feedback_template() {
 <pre><code>Relevant log lines or command output.</code></pre>
 <p>Screenshots go inline as &lt;img alt="what it shows" src="data:image/png;base64,…"&gt;. Delete this line if you have none.</p>
 EOF
+    # The next step goes to stderr, so `> brief.html` stays a clean brief.
+    echo 'Next: k2 tickets ask "<title>" --html brief.html --assign <user>  (a user on this server: k2 connections list --users; assigning will be required in a future update)' >&2
 }
 
 cmd_feedback_comment() {
@@ -23205,6 +23222,11 @@ if err is not None:
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+# Warnings (assignee_unknown: a name that is not a user on this server)
+# print as JSON on stderr and never change the exit code.
+for w in d.get("warnings") or []:
+    if isinstance(w, dict):
+        sys.stderr.write(json.dumps({"warning": {"code": str(w.get("code") or "warning"), "hint": str(w.get("hint") or "")}}) + "\n")
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
 else:
@@ -23292,10 +23314,14 @@ FLAGS
                          (e.g. --options "Ship it,Hold,Needs changes")
                          Escape a literal comma inside an option with \,
   --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
-  --assign <users>       Suggest who should handle it: comma-separated
-                         usernames (owner and/or connect-user names from
-                         `k2 users list`). Narrows mobile push and shows
-                         on the Tickets board. Alias: --to.
+  --assign <users>       Who handles it: comma-separated users on this
+                         server (owner and/or Connect users, from
+                         `k2 connections list --users`). Assign every
+                         ticket: 0.43.2 warns without one (assignee_required)
+                         or on a name that is not a user here
+                         (assignee_unknown); this will be required in a
+                         future update. fyi is exempt. Narrows mobile push
+                         and shows on the ticket card. Alias: --to.
   --wait                 Block until the item is answered, then print the BARE
                          answer to stdout (exit 0) — safe for $(...) capture.
                          If the item is resolved/dismissed WITHOUT an answer,
@@ -23312,13 +23338,14 @@ FLAGS
 BRIEF ERRORS (exit 2, JSON on stderr)
   brief_required · brief_empty · brief_too_large · brief_invalid
   Warnings print as {"warning":{"code","hint"}} on stderr and keep exit 0
-  (brief_missing, brief_sanitized, brief_no_need, brief_not_stored).
+  (brief_missing, brief_sanitized, brief_no_need, brief_not_stored,
+  assignee_required, assignee_unknown).
 
 EXAMPLES
   k2 tickets template > brief.html
-  k2 tickets ask "Deploy to prod now?" --html brief.html --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
   k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
-  k2 tickets ask "Review the sales pricing" --assign julie --priority 2
+  k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
   ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
 EOF
 }
@@ -23402,7 +23429,11 @@ no daemon running.
 USAGE
   k2 tickets template > brief.html
   (fill in the sections)
-  k2 tickets ask "<one-line title>" --html brief.html
+  k2 tickets ask "<one-line title>" --html brief.html --assign <user>
+
+Assign every ticket to a user on this server (the owner or a Connect user:
+`k2 connections list --users`). 0.43.2 warns without one; this will be
+required in a future update.
 
 SECTIONS
   Problem · What I tried · What I need from you (section.k2-need) ·

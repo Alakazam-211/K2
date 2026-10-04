@@ -361,14 +361,22 @@ async fn wake_claude_resume_argv_is_byte_identical() {
     let live = k2_daemon::v2_session_map::lookup_by_agent_name(workspace_id)
         .expect("woken canonical session must be registered");
     assert_eq!(live.program.as_deref(), Some("claude"));
+    // Pre-3b hardcode, then the canonical identity brief that 25b6b54c
+    // (sidecar whoami brief on Claude/Grok/Pi) appends via
+    // --append-system-prompt.
     assert_eq!(
         live.args,
         vec![
             "--dangerously-skip-permissions".to_string(),
             "--resume".to_string(),
             sid.to_string(),
+            "--append-system-prompt".to_string(),
+            format!(
+                "K2 cell (this session)\nworkspace: claudewakeresume\nrole:      canonical\n\
+                 address:   claudewakeresume\nprimary:   claudewakeresume\nsession:   {sid}"
+            ),
         ],
-        "claude wake argv must be byte-identical to the pre-3b hardcode"
+        "claude wake argv must be byte-identical to the pre-3b hardcode + identity brief"
     );
 
     kill_canonical_session(workspace_id);
@@ -411,11 +419,20 @@ async fn wake_claude_fresh_argv_is_byte_identical_and_premints() {
     let live = k2_daemon::v2_session_map::lookup_by_agent_name(workspace_id)
         .expect("woken canonical session must be registered");
     assert_eq!(live.program.as_deref(), Some("claude"));
-    assert_eq!(live.args.len(), 3, "flag + premint pair: {:?}", live.args);
+    // Flag + premint pair, then the canonical identity brief (25b6b54c).
+    assert_eq!(live.args.len(), 5, "flag + premint pair + brief: {:?}", live.args);
     assert_eq!(live.args[0], "--dangerously-skip-permissions");
     assert_eq!(live.args[1], "--session-id");
     let minted = live.args[2].clone();
     assert_eq!(minted.len(), 36, "v4 uuid: {minted}");
+    assert_eq!(live.args[3], "--append-system-prompt");
+    assert_eq!(
+        live.args[4],
+        format!(
+            "K2 cell (this session)\nworkspace: claudewakefresh\nrole:      canonical\n\
+             address:   claudewakefresh\nprimary:   claudewakefresh\nsession:   {minted}"
+        )
+    );
 
     // The premint is persisted to the SSOT with a truthful harness.
     let (saved, harness) = {

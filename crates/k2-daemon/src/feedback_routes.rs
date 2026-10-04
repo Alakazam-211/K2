@@ -33,11 +33,13 @@
 //! (sidecar / API / true-sandbox do not get a live-only no-wake arm).
 //! Injection runs AFTER the store + emit: a delivery failure never
 //! fails the store; the outcome rides the response as
-//! `delivered`/`deliveryReason`. A human's FIRST comment on a
-//! `waiting` question/approval doubles as the ANSWER behind the
-//! scenes (set_answer → status `answered` → `FeedbackAnswered`), so
-//! `k2 tickets ask --wait` unblocks — `fyi` NEVER auto-answers (the
-//! frozen contract: fyi sits until dismissed/resolved). Agent-authored
+//! `delivered`/`deliveryReason`. A human comment with `optionPick:
+//! true` (they picked one of the ticket's options) is the ANSWER
+//! (set_answer → status `answered` → `FeedbackAnswered`), so
+//! `k2 tickets ask --wait` unblocks. A FREE-TEXT human comment moves
+//! the ticket to `needs_discussion` (`FeedbackStatusChanged`); the
+//! agent replies, settles it, and marks it answered
+//! (`resolve` with `status: "answered"` + `answer`) or resolved. Agent-authored
 //! comments (`k2 tickets comment` passes the agent's name as
 //! `author`) store ONLY — no injection back into their own session,
 //! no auto-answer. Resolve / dismiss / reopen never inject.
@@ -835,6 +837,23 @@ struct CommentBody {
     id: String,
     body: String,
     author: Option<String>,
+    /// The person picked one of the ticket's options (a structured
+    /// `--options` button or a brief `k2-options` item). An option pick
+    /// ANSWERS the ticket; free text (false / absent) opens a discussion.
+    /// Ignored on agent-authored comments.
+    option_pick: bool,
+}
+
+/// The status a HUMAN comment moves a ticket to. An option pick is the
+/// answer (`answered`); free text means the person wants to talk it over
+/// (`needs_discussion`). The agent settles a discussion later with
+/// `k2 tickets resolve <id> --answered "<outcome>"` or plain `resolve`.
+pub(crate) fn human_comment_status(option_pick: bool) -> &'static str {
+    if option_pick {
+        "answered"
+    } else {
+        "needs_discussion"
+    }
 }
 
 /// Handler for `POST /cli/feedback/comment`.
@@ -846,9 +865,13 @@ struct CommentBody {
 /// - HUMAN-authored (`author` absent or `owner` — the renderer/API
 ///   default; `k2 feedback comment` always self-identifies with the
 ///   agent's name, so an agent never matches):
-///   - on a `waiting` question/approval, the comment IS the answer:
-///     `set_answer` → status `answered` → `FeedbackAnswered` emit —
-///     `ask --wait` unblocks and prints it. `fyi` NEVER auto-answers.
+///   - `optionPick: true` (the person picked one of the ticket's
+///     options) IS the answer: `set_answer` → status `answered` →
+///     `FeedbackAnswered` emit — `ask --wait` unblocks and prints it.
+///   - free text (`optionPick` false/absent) stores the comment and
+///     moves the ticket to `needs_discussion` (`FeedbackStatusChanged`
+///     when it changed). The agent replies, settles it, then marks it
+///     answered or resolved (`k2 tickets resolve <id> [--answered]`).
 ///   - ALWAYS best-effort injects into the asking session via the
 ///     shared F3 machinery ([`deliver_to_asker`], wake=true) AFTER
 ///     the store + emit; a delivery failure never fails the store.
@@ -924,14 +947,15 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
         };
     }
 
-    // Human comment. A first comment on a waiting question/approval
-    // doubles as the ANSWER (frozen contract: --wait prints it); fyi
-    // never auto-answers, it sits until dismissed/resolved.
+    // Human comment. An OPTION PICK is the answer (status answered,
+    // --wait prints it). FREE TEXT opens a discussion: the comment is
+    // stored and the ticket moves to needs_discussion until the agent
+    // settles it (`k2 tickets resolve <id> [--answered "<outcome>"]`).
     let Some(before) = feedback::get_item(&full_id) else {
         return prefix_error_response(&b.id, PrefixError::NotFound);
     };
-    let answers =
-        before.status == "waiting" && matches!(before.kind.as_str(), "question" | "approval");
+    let answers = b.option_pick;
+    let target_status = human_comment_status(b.option_pick);
 
     let (item, comment) = if answers {
         match feedback::set_answer(&full_id, author, &b.body) {
@@ -939,14 +963,24 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
             Err(e) => return usage_error(e),
         }
     } else {
-        match feedback::add_comment(&full_id, author, &b.body) {
-            Ok(c) => match feedback::get_item(&full_id) {
-                Some(item) => (item, c),
-                None => return usage_error("feedback row vanished after comment"),
-            },
+        let c = match feedback::add_comment(&full_id, author, &b.body) {
+            Ok(c) => c,
             Err(e) => return usage_error(e),
-        }
+        };
+        let item = if before.status == target_status {
+            match feedback::get_item(&full_id) {
+                Some(item) => item,
+                None => return usage_error("feedback row vanished after comment"),
+            }
+        } else {
+            match feedback::set_status(&full_id, target_status) {
+                Ok(item) => item,
+                Err(e) => return usage_error(e),
+            }
+        };
+        (item, c)
     };
+    let status_changed = !answers && before.status != item.status;
 
     // FeedbackAnswered BEFORE the injection so `ask --wait` pollers
     // unblock even if delivery is slow (a wake can take seconds).
@@ -957,6 +991,18 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
             serde_json::json!({
                 "id": item.id,
                 "projectPath": path,
+            }),
+        );
+    }
+    // Free text moved the ticket to needs_discussion: every window's
+    // list + waiting-count badge refresh on the status bus.
+    if status_changed {
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::FeedbackStatusChanged,
+            serde_json::json!({
+                "id": item.id,
+                "projectPath": path,
+                "status": item.status,
             }),
         );
     }
@@ -1096,15 +1142,22 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
 /// `dismissed` rides the same route (one mutation, two terminal
 /// states) — matching the mockup surface, where the CLI only exposes
 /// `resolve` and dismiss is the human's board action. `waiting` is the
-/// board's REOPEN (the per-card status dropdown); a manual `answered`
-/// is REJECTED loudly — an answered status with a null answer would
-/// break the `ask --wait` contract, so `answered` is only reachable
-/// through an actual reply (answer route / first human comment).
+/// board's REOPEN (the per-card status dropdown). `answered` is the
+/// AGENT settling a discussion (`k2 tickets resolve <id> --answered
+/// "<outcome>"`): it needs a non-empty `answer` (an answered status with a
+/// null answer would break the `ask --wait` contract), stores it as the
+/// ticket's answer + a thread entry under `author`, and never injects.
+/// A bare `answered` (no `answer`) stays a loud usage error, and apps
+/// (skin passes) cannot use it: a person answers by picking an option.
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct ResolveBody {
     id: String,
     status: Option<String>,
+    /// Required with `status: "answered"`: what was agreed.
+    answer: Option<String>,
+    /// Who settled it (the agent's name from the CLI). Defaults to owner.
+    author: Option<String>,
 }
 
 /// Handler for `POST /cli/feedback/resolve`.
@@ -1121,13 +1174,16 @@ fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     if b.id.is_empty() {
         return usage_error("missing 'id' (a feedback id or unique prefix)");
     }
-    let status = b.status.unwrap_or_else(|| "resolved".to_string());
+    let status = b.status.clone().unwrap_or_else(|| "resolved".to_string());
+    if status == "answered" {
+        return settle_answered(&b, skin);
+    }
     if !matches!(
         status.as_str(),
         "resolved" | "dismissed" | "waiting" | "planned" | "needs_discussion"
     ) {
         return usage_error(format!(
-            "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, needs_discussion, waiting (reopen)"
+            "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, needs_discussion, waiting (reopen), or answered with an answer (k2 tickets resolve <id> --answered \"<outcome>\")"
         ));
     }
     let full_id = if let Some(pass) = skin {
@@ -1166,6 +1222,57 @@ fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
         }
         Err(e) => usage_error(e),
     }
+}
+
+/// `resolve` with `status: "answered"`: the agent settles a discussion
+/// (usually out of `needs_discussion`) and records what was agreed. Stores
+/// the answer + a thread entry, fires `FeedbackAnswered` +
+/// `FeedbackCommented` (so `ask --wait` and open boards see it), and never
+/// injects — the agent is the one writing it.
+fn settle_answered(b: &ResolveBody, skin: Option<&SkinPass>) -> CliResponse {
+    if skin.is_some() {
+        return usage_error(
+            "apps cannot set answered — a person answers by picking one of the ticket's options",
+        );
+    }
+    let answer = b.answer.as_deref().map(str::trim).unwrap_or_default();
+    if answer.is_empty() {
+        return usage_error(
+            "answered needs the agreed outcome — k2 tickets resolve <id> --answered \"<outcome>\"",
+        );
+    }
+    let full_id = match feedback::resolve_id_prefix(&b.id) {
+        Ok(f) => f,
+        Err(e) => return prefix_error_response(&b.id, e),
+    };
+    let author = b
+        .author
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("owner");
+    let (item, comment) = match feedback::set_answer(&full_id, author, answer) {
+        Ok(pair) => pair,
+        Err(e) => return usage_error(e),
+    };
+    let (_, path) = project_name_path(&item.project_id);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackAnswered,
+        serde_json::json!({
+            "id": item.id,
+            "projectPath": path,
+        }),
+    );
+    emit_commented(&item.id, &comment.author);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "id": item.id,
+            "status": item.status,
+            "answer": item.answer,
+        })
+        .to_string(),
+    )
 }
 
 /// `POST /cli/feedback/assign` — replace the assignee set with
@@ -1880,20 +1987,20 @@ mod tests {
     /// The comment injection/answer matrix ("it's just a comment
     /// thread; human comments land in the terminal session"):
     ///
-    /// | author | item state           | injects | answers |
-    /// |--------|----------------------|---------|---------|
-    /// | human  | waiting question     | yes     | yes     |
-    /// | human  | waiting approval     | yes     | yes     |
-    /// | human  | waiting fyi          | yes     | NEVER   |
-    /// | human  | answered (follow-up) | yes     | no (answer unchanged) |
-    /// | agent  | anything             | no      | no      |
+    /// | author | comment     | item state | injects | → status          |
+    /// |--------|-------------|------------|---------|-------------------|
+    /// | human  | option pick | waiting    | yes     | answered (+answer)|
+    /// | human  | free text   | waiting    | yes     | needs_discussion  |
+    /// | human  | free text   | answered   | yes     | needs_discussion (answer kept) |
+    /// | human  | free text   | waiting fyi| yes     | needs_discussion  |
+    /// | agent  | anything    | anything   | no      | unchanged         |
     ///
     /// Delivery is best-effort against a dead project (no agent →
     /// no_agent_mode via WorkspaceAgent), so `delivered:false` here —
     /// the point is the delivery ATTEMPT is reported and the store
     /// never fails.
     #[test]
-    fn feedback_comment_matrix_human_injects_and_first_comment_answers() {
+    fn feedback_comment_matrix_option_pick_answers_free_text_discusses() {
         let (name, path) = unique("comment-matrix");
         insert_project(&name, &path);
         let sandbox_session = || {
@@ -1908,12 +2015,12 @@ mod tests {
             serde_json::from_str(&resp.body).expect("valid comment JSON")
         };
 
-        // Human first comment on a WAITING question → answers +
-        // unblocks --wait (status answered, answer denormalized,
-        // delivery attempted with the shared [feedback:] framing).
+        // OPTION PICK on a WAITING question → answers + unblocks --wait
+        // (status answered, answer denormalized, delivery attempted with
+        // the shared [feedback:] framing).
         let created = create_via_route(&path, "Which color?", sandbox_session());
         let id = created["id"].as_str().expect("id").to_string();
-        let c = comment(serde_json::json!({ "id": id, "body": "navy" }));
+        let c = comment(serde_json::json!({ "id": id, "body": "navy", "optionPick": true }));
         assert_eq!(c["author"], "owner", "author defaults to owner (human)");
         assert_eq!(c["answered"], true);
         assert_eq!(c["status"], "answered");
@@ -1928,42 +2035,53 @@ mod tests {
         assert_eq!(item.answer.as_deref(), Some("navy"));
         assert_eq!(item.comment_count, 2);
 
-        // Human FOLLOW-UP comment on the now-answered item → injects,
-        // but never re-answers (the accepted answer is untouched).
+        // FREE TEXT on the answered item → injects, opens a discussion,
+        // and never overwrites the accepted answer.
         let c = comment(serde_json::json!({ "id": id, "body": "also check contrast" }));
         assert_eq!(c["answered"], false);
-        assert_eq!(c["status"], "answered");
+        assert_eq!(c["status"], "needs_discussion");
         assert_eq!(c["deliveryReason"], "no_agent_mode", "still injects");
         let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "needs_discussion");
         assert_eq!(item.answer.as_deref(), Some("navy"), "answer unchanged");
         assert_eq!(item.comment_count, 3);
 
-        // Human comment on a WAITING approval → answers too.
+        // FREE TEXT on a WAITING approval → needs_discussion, NOT
+        // answered (it used to auto-answer; that is the bug Rosson saw:
+        // needs_discussion never happened).
         let created =
             create_via_route(&path, "Ship it?", serde_json::json!({ "kind": "approval" }));
         let id = created["id"].as_str().expect("id").to_string();
-        let c = comment(serde_json::json!({ "id": id, "body": "Ship it" }));
-        assert_eq!(c["answered"], true);
+        let c = comment(serde_json::json!({ "id": id, "body": "why not Friday?" }));
+        assert_eq!(c["answered"], false);
+        assert_eq!(c["status"], "needs_discussion");
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.answer.as_deref(), Some("Ship it"));
+        assert_eq!(item.status, "needs_discussion");
+        assert!(item.answer.is_none(), "free text never records an answer");
 
-        // Human comment on a WAITING fyi → injects but NEVER answers
-        // (frozen contract: fyi sits until dismissed/resolved).
+        // `optionPick: false` is the same as absent: free text.
+        let created = create_via_route(&path, "Port?", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+        let c = comment(serde_json::json!({ "id": id, "body": "8080?", "optionPick": false }));
+        assert_eq!(c["status"], "needs_discussion");
+
+        // FREE TEXT on a WAITING fyi → needs_discussion too, and still
+        // injects.
         let created = create_via_route(
             &path,
             "Heads up",
             serde_json::json!({ "kind": "fyi", "sessionId": uuid::Uuid::new_v4().to_string(), "sessionKind": "sandbox" }),
         );
         let id = created["id"].as_str().expect("id").to_string();
-        let c = comment(serde_json::json!({ "id": id, "body": "noted, thanks" }));
+        let c = comment(serde_json::json!({ "id": id, "body": "noted, but why?" }));
         assert_eq!(c["answered"], false);
-        assert_eq!(c["status"], "waiting");
+        assert_eq!(c["status"], "needs_discussion");
         assert_eq!(
             c["deliveryReason"], "no_agent_mode",
             "fyi comment still injects"
         );
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.status, "waiting", "fyi never auto-answers");
+        assert_eq!(item.status, "needs_discussion");
         assert!(item.answer.is_none());
 
         // AGENT comment (author = its name, as the CLI always sends)
@@ -1983,6 +2101,116 @@ mod tests {
         let item = k2_core::feedback::get_item(&id).expect("item");
         assert_eq!(item.status, "waiting", "agent comment must not answer");
         assert_eq!(item.comment_count, 2);
+
+        // An agent cannot answer its own ticket with `optionPick`.
+        let c = comment(serde_json::json!({
+            "id": id, "body": "Go", "author": "scout", "optionPick": true
+        }));
+        assert!(c.get("answered").is_none(), "agent pick is a plain note: {c}");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "waiting", "agent optionPick is ignored");
+        assert!(item.answer.is_none());
+    }
+
+    /// The agent settles a discussion: free text put the ticket in
+    /// needs_discussion; the agent replies (status stays), then marks it
+    /// answered with the agreed outcome (`k2 tickets resolve <id>
+    /// --answered "<outcome>"` → resolve route `status: answered` +
+    /// `answer`) or resolved. Settling never injects, fires answered +
+    /// commented (so --wait and open boards see it), and a bare
+    /// `answered` without an outcome stays a loud usage error.
+    #[test]
+    fn feedback_agent_settles_discussion_to_answered_or_resolved() {
+        install_capture_sink();
+        let (name, path) = unique("settle");
+        insert_project(&name, &path);
+        let created = create_via_route(&path, "Which DB?", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+
+        // Human free text → needs_discussion (+ status-changed event).
+        let mark = event_mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "what about SQLite?" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:status-changed", "feedback:commented"],
+            "free text discusses: {events:?}"
+        );
+        assert_eq!(events[0].1["status"], "needs_discussion");
+
+        // Agent reply keeps it in discussion.
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "SQLite fits; Postgres later", "author": "scout" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "agent reply failed: {}", resp.body);
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "needs_discussion", "agent reply does not settle");
+
+        // Bare answered (no outcome) → usage error, status untouched.
+        let resp = handle_resolve(
+            serde_json::json!({ "id": id, "status": "answered", "answer": "  " })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["error"]["code"], "usage");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "needs_discussion");
+
+        // Agent settles → answered with the outcome as the answer.
+        let mark = event_mark();
+        let resp = handle_resolve(
+            serde_json::json!({
+                "id": id,
+                "status": "answered",
+                "answer": "SQLite now, Postgres later",
+                "author": "scout",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "settle failed: {}", resp.body);
+        let r: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(r["status"], "answered");
+        assert_eq!(r["answer"], "SQLite now, Postgres later");
+        assert!(
+            r.get("delivered").is_none() && r.get("deliveryReason").is_none(),
+            "settling never injects: {r}"
+        );
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:answered", "feedback:commented"],
+            "settle answers + stores a thread entry: {events:?}"
+        );
+        assert_eq!(events[1].1["author"], "scout");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered");
+        assert_eq!(item.answer.as_deref(), Some("SQLite now, Postgres later"));
+
+        // A second discussion settles to resolved instead.
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "one more thing" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        assert_eq!(
+            k2_core::feedback::get_item(&id).expect("item").status,
+            "needs_discussion"
+        );
+        let resp = handle_resolve(serde_json::json!({ "id": id }).to_string().as_bytes());
+        assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "resolved");
     }
 
     /// Resolve / dismiss / reopen never touch the delivery path.
@@ -2056,7 +2284,7 @@ mod tests {
         );
         let id = created["id"].as_str().expect("id").to_string();
         let resp = handle_comment_as(
-            serde_json::json!({ "id": id, "body": "navy" })
+            serde_json::json!({ "id": id, "body": "navy", "optionPick": true })
                 .to_string()
                 .as_bytes(),
             "alice",
@@ -2101,12 +2329,12 @@ mod tests {
         assert_eq!(events[0].1["projectPath"], path.as_str());
         assert_eq!(events[0].1["author"], "scout");
 
-        // Human FIRST comment on the waiting question → answers, so
+        // Human OPTION PICK on the waiting question → answers, so
         // feedback:answered AND feedback:commented — still never
         // feedback:created (comments must not notify).
         let mark = event_mark();
         let resp = handle_comment(
-            serde_json::json!({ "id": id, "body": "8080" })
+            serde_json::json!({ "id": id, "body": "8080", "optionPick": true })
                 .to_string()
                 .as_bytes(),
         );
@@ -2120,7 +2348,8 @@ mod tests {
         assert_eq!(events[1].1["projectPath"], path.as_str());
         assert_eq!(events[1].1["author"], "owner");
 
-        // Human FOLLOW-UP on the answered item → commented only.
+        // Human free-text FOLLOW-UP on the answered item → discussion:
+        // status-changed + commented, never re-answered or notified.
         let mark = event_mark();
         let resp = handle_comment(
             serde_json::json!({ "id": id, "body": "and 8081 for metrics" })
@@ -2131,10 +2360,26 @@ mod tests {
         let events = events_since(mark, &id);
         assert_eq!(
             events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-            vec!["feedback:commented"],
+            vec!["feedback:status-changed", "feedback:commented"],
             "follow-up must not re-answer or notify: {events:?}"
         );
-        assert_eq!(events[0].1["author"], "owner");
+        assert_eq!(events[1].1["author"], "owner");
+
+        // A second free-text message while already in discussion →
+        // commented only (no status change to announce).
+        let mark = event_mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "or 9090" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:commented"],
+            "no status change → commented only: {events:?}"
+        );
     }
 
     /// The answer route also creates a thread entry, so it fires

@@ -53,7 +53,7 @@ export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Elem
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
       >
-        {stoplightInset > 0 && <div aria-hidden className="flex-shrink-0" style={{ width: stoplightInset - 12 }} />}
+        {stoplightInset > 0 && <div aria-hidden className="k2-stoplight-spacer-brief" />}
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
           Ticket
         </span>

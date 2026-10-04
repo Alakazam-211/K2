@@ -34,7 +34,7 @@ import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from '
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
 import { focusVisibleBrowserAddress } from './components/BrowserPane/BrowserPane'
 import { k2PageTitle } from './web/page-title'
-import { reapplyTrafficLights, reapplyWindowCorners } from './stores/style'
+import { onAppZoomChange, reapplyTrafficLights, reapplyWindowCorners } from './stores/style'
 import { mountExternalDropRouter } from './lib/external-drop-router'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
@@ -220,6 +220,9 @@ function applyK2SOZoom(): void {
   } else {
     document.documentElement.style.zoom = String(z)
   }
+  // macOS: re-center the stoplights on the zoomed top bar and size the
+  // spacer to their unscaled width. Runs at startup too (mount effect).
+  onAppZoomChange()
   const title = k2PageTitle(z, undefined, isWebClient() ? undefined : missionControlServerLabel())
   document.title = title
   if (isWebClient() || title === lastWindowTitle) return

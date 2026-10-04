@@ -35,7 +35,7 @@ import {
   resolveTextGammaPreset,
   writeStoredTextGamma,
 } from '@/lib/text-gamma'
-import { createTrafficLightController } from '@/lib/traffic-lights'
+import { STOPLIGHT_SPACER_VAR, createTrafficLightController } from '@/lib/traffic-lights'
 import { createWindowCornerController } from '@/lib/window-corners'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
@@ -147,7 +147,10 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 // three — including Square compact, whose inset is 0. Rust owns the
 // re-apply (commands/traffic_lights.rs observes resize, screen, backing
 // scale, wake, appearance, key/main); these hooks are the backup. The app
-// zoom rides along so the buttons stay centered on the zoomed top bar.
+// zoom rides along so the buttons stay centered on the zoomed top bar, and
+// every apply also writes the top-bar spacer width (--k2-stoplight-spacer)
+// so the reserved gap matches the unscaled buttons at any zoom. One source:
+// App.tsx calls onAppZoomChange on every zoom change and at startup.
 // Fire-and-forget: in non-Tauri contexts (parity harness, plain browser)
 // the invoke rejects and the miss is purely cosmetic.
 const trafficLights = createTrafficLightController({
@@ -166,6 +169,9 @@ const trafficLights = createTrafficLightController({
   apply: (cmd) => {
     void invoke('set_traffic_light_inset', cmd).catch(() => {})
   },
+  setSpacer: (px) => {
+    document.documentElement.style.setProperty(STOPLIGHT_SPACER_VAR, `${px}px`)
+  },
   schedule: (fn) => {
     requestAnimationFrame(fn)
   },
@@ -174,6 +180,16 @@ const trafficLights = createTrafficLightController({
 function syncTrafficLights(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return
   trafficLights.syncIfChanged()
+}
+
+/**
+ * The app zoom changed (or the app started). Re-centers the native buttons
+ * on the zoomed top bar and resizes the spacer. macOS only; a no-op on
+ * Linux, Windows, and other platforms.
+ */
+export function onAppZoomChange(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  trafficLights.onZoomChange()
 }
 
 /** AppKit puts the buttons back at the top when the window title changes. */

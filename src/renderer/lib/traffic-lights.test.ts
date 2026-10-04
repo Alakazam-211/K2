@@ -3,13 +3,22 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  STOPLIGHT_SPACER_VAR,
   TRAFFIC_LIGHT_Y_NUDGE_PX,
   createTrafficLightController,
+  stoplightSpacerPx,
   trafficLightCommand,
   trafficLightShape,
   trafficLightZoom,
   type TrafficLightCommand,
 } from './traffic-lights'
+
+import {
+  TOP_BAR_PAD_X_PX,
+  TRAFFIC_LIGHT_CLUSTER_GAP_PX,
+  TRAFFIC_LIGHT_CLUSTER_RIGHT_PX,
+  TRAFFIC_LIGHT_SPACER_BASE_PX,
+} from './desktop-chrome'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -197,5 +206,167 @@ describe('traffic light source locks', () => {
     expect(style).toContain('onResize')
     expect(style).toContain('onFullscreen')
     expect(style).not.toMatch(/lastTrafficInset\s*<=\s*0/)
+  })
+})
+
+describe('stoplight spacer under app zoom', () => {
+  // The zoom levels Cmd+- / Cmd+= step through that Rosson checked.
+  const expected: Array<[number, number]> = [
+    [0.8, 69 / 0.8 - 12],
+    [1.0, 57],
+    [1.25, 69 / 1.25 - 12],
+    [1.5, 69 / 1.5 - 12],
+  ]
+
+  it('is the native cluster width divided by the zoom at inset 0', () => {
+    expect(TRAFFIC_LIGHT_CLUSTER_RIGHT_PX).toBe(69)
+    expect(TOP_BAR_PAD_X_PX).toBe(12)
+    for (const [zoom, want] of expected) {
+      const got = stoplightSpacerPx(zoom, 0)
+      expect(got, `zoom ${zoom}`).toBeCloseTo(want, 9)
+      // On screen: the zoomed px-3 plus the zoomed spacer end exactly on
+      // the unscaled zoom light's right edge.
+      expect((TOP_BAR_PAD_X_PX + got) * zoom, `zoom ${zoom}`).toBeCloseTo(69, 9)
+    }
+    expect(stoplightSpacerPx(1, 0)).toBe(TRAFFIC_LIGHT_SPACER_BASE_PX)
+    // Zooming out widens the spacer, zooming in narrows it.
+    expect(stoplightSpacerPx(0.8, 0)).toBeGreaterThan(stoplightSpacerPx(1, 0))
+    expect(stoplightSpacerPx(1.5, 0)).toBeLessThan(stoplightSpacerPx(1.25, 0))
+  })
+
+  it('keeps the buttons on the unscaled window inset while the DOM inset zooms', () => {
+    for (const inset of [6, 10, 12]) {
+      for (const [zoom] of expected) {
+        const got = stoplightSpacerPx(zoom, inset)
+        // Rust moves the buttons right by the raw inset (not zoomed).
+        const nativeRight = TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + inset
+        expect((inset + TOP_BAR_PAD_X_PX + got) * zoom, `inset ${inset} zoom ${zoom}`).toBeCloseTo(
+          nativeRight,
+          9,
+        )
+      }
+      expect(stoplightSpacerPx(1, inset)).toBe(TRAFFIC_LIGHT_SPACER_BASE_PX)
+    }
+  })
+
+  it('falls back to 100% for a bad zoom and never goes negative', () => {
+    for (const zoom of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(stoplightSpacerPx(zoom, 0)).toBe(TRAFFIC_LIGHT_SPACER_BASE_PX)
+    }
+    expect(stoplightSpacerPx(1, Number.NaN)).toBe(TRAFFIC_LIGHT_SPACER_BASE_PX)
+    expect(stoplightSpacerPx(10, 0)).toBe(0)
+  })
+
+  it('the zoom hook re-sends the zoom now and writes the spacer with it', () => {
+    const applied: TrafficLightCommand[] = []
+    const spacers: number[] = []
+    const scheduled: Array<() => void> = []
+    let zoom = 1
+    const lights = createTrafficLightController({
+      isMac: () => true,
+      read: () => ({ styleId: 'square', inset: 0, zoom }),
+      apply: (cmd) => {
+        applied.push(cmd)
+      },
+      setSpacer: (px) => {
+        spacers.push(px)
+      },
+      schedule: (fn) => {
+        scheduled.push(fn)
+      },
+    })
+
+    for (const [z, want] of expected) {
+      zoom = z
+      lights.onZoomChange()
+      expect(applied.at(-1)).toEqual({ x: 0, y: 3, square: true, zoom: z })
+      expect(spacers.at(-1)).toBeCloseTo(want, 9)
+    }
+    expect(applied).toHaveLength(expected.length)
+    expect(spacers).toHaveLength(expected.length)
+    // Immediate, not deferred to the next frame.
+    expect(scheduled).toHaveLength(0)
+
+    // Same zoom again still re-applies (AppKit may have parked the buttons).
+    lights.onZoomChange()
+    expect(applied).toHaveLength(expected.length + 1)
+
+    // Every apply path writes the spacer, so it cannot go stale.
+    lights.resetBaseline()
+    lights.syncIfChanged()
+    expect(spacers).toHaveLength(applied.length)
+  })
+
+  it('does nothing off macOS', () => {
+    const applied: TrafficLightCommand[] = []
+    const spacers: number[] = []
+    const scheduled: Array<() => void> = []
+    const lights = createTrafficLightController({
+      isMac: () => false,
+      read: () => ({ styleId: 'square', inset: 0, zoom: 1.5 }),
+      apply: (cmd) => {
+        applied.push(cmd)
+      },
+      setSpacer: (px) => {
+        spacers.push(px)
+      },
+      schedule: (fn) => {
+        scheduled.push(fn)
+      },
+    })
+    lights.onZoomChange()
+    lights.reapply()
+    lights.syncIfChanged()
+    lights.onResize()
+    lights.onFullscreen()
+    expect(applied).toEqual([])
+    expect(spacers).toEqual([])
+    expect(scheduled).toEqual([])
+  })
+
+  it('globals.css holds the 100% width and every stoplight spacer reads it', () => {
+    const css = readFileSync(resolve(root, 'src/renderer/globals.css'), 'utf8')
+    expect(STOPLIGHT_SPACER_VAR).toBe('--k2-stoplight-spacer')
+    expect(css).toContain(`${STOPLIGHT_SPACER_VAR}: ${TRAFFIC_LIGHT_SPACER_BASE_PX}px;`)
+    expect(css).toMatch(/\.k2-stoplight-spacer \{[^}]*width: var\(--k2-stoplight-spacer\);/)
+    // gap-3 headers: the cluster gap (14) minus their gap (12).
+    expect(TRAFFIC_LIGHT_CLUSTER_GAP_PX - 12).toBe(2)
+    expect(css).toMatch(
+      /\.k2-stoplight-spacer-brief \{[^}]*width: calc\(var\(--k2-stoplight-spacer\) \+ 2px\);/,
+    )
+
+    const read = (rel: string): string => readFileSync(resolve(root, rel), 'utf8')
+    const spacer = read('src/renderer/components/TopBar/TrafficLightSpacer.tsx')
+    expect(spacer).toContain('className="k2-stoplight-spacer"')
+    expect(spacer).not.toMatch(/style=\{\{\s*width/)
+    for (const rel of [
+      'src/renderer/components/Feedback/BriefFrame.tsx',
+      'src/renderer/components/Feedback/TicketWindow.tsx',
+    ]) {
+      const src = read(rel)
+      expect(src, rel).toContain('className="k2-stoplight-spacer-brief"')
+      expect(src, rel).not.toContain('stoplightInset - 12 }')
+    }
+  })
+
+  it('App zoom calls the reposition hook, which writes the spacer variable', () => {
+    const app = readFileSync(resolve(root, 'src/renderer/App.tsx'), 'utf8')
+    const start = app.indexOf('function applyK2SOZoom(): void {')
+    expect(start).toBeGreaterThan(-1)
+    const end = app.indexOf('\n}\n', start)
+    expect(end).toBeGreaterThan(start)
+    const body = app.slice(start, end)
+    expect(body).toContain('onAppZoomChange()')
+    // After the zoom is on <html>, so the spacer and the bar move together.
+    expect(body.indexOf('onAppZoomChange()')).toBeGreaterThan(
+      body.indexOf('document.documentElement.style.zoom = String(z)'),
+    )
+    // Startup: the mount effect runs it.
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*applyK2SOZoom\(\)/)
+
+    const style = readFileSync(resolve(root, 'src/renderer/stores/style.ts'), 'utf8')
+    expect(style).toContain('export function onAppZoomChange(): void')
+    expect(style).toContain('trafficLights.onZoomChange()')
+    expect(style).toContain('setProperty(STOPLIGHT_SPACER_VAR')
   })
 })

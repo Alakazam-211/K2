@@ -235,7 +235,9 @@ describe('BriefFrame — expanded title clears the macOS stoplights', () => {
     const title = screen.getByTestId('brief-overlay-title')
     expect(header.firstElementChild).toBe(spacer)
     expect(spacer.nextElementSibling).toBe(title)
-    expect(spacer.style.width).toBe(`${briefOverlayStoplightInset(chromeState.current) - 12}px`)
+    // Width comes from the zoom-aware class, not a fixed inline px.
+    expect(spacer.className).toBe('k2-stoplight-spacer-brief')
+    expect(spacer.style.width).toBe('')
     expect(title.textContent).toBe('Covered title')
     expect(header.style.height).toBe('38px')
     // Same window inset the native lights follow.

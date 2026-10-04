@@ -46,6 +46,20 @@
  */
 html {
   --k2-app-zoom: 1;
+  /* macOS stoplight spacer at 100% (TRAFFIC_LIGHT_SPACER_BASE_PX).
+     stores/style.ts rewrites it on every zoom change: the native buttons
+     do not scale, so the CSS width is their remaining width / zoom. */
+  --k2-stoplight-spacer: 57px;
+}
+/* Page top bars (DesktopChromeLeft on macOS). */
+.k2-stoplight-spacer {
+  flex-shrink: 0;
+  width: var(--k2-stoplight-spacer);
+}
+/* Headers with gap-3 (12) instead of the cluster gap (14): 2px more. */
+.k2-stoplight-spacer-brief {
+  flex-shrink: 0;
+  width: calc(var(--k2-stoplight-spacer) + 2px);
 }
 [data-k2-exclude-app-zoom] {
   min-width: 0;

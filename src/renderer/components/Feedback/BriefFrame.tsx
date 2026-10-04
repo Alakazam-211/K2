@@ -233,7 +233,9 @@ const OVERLAY_TOPBAR_HEIGHT = 38
  * px-3 padding) plus their cluster gap. 0 on hosted web, Linux, Windows.
  * The native lights follow `--inset-window` (style.ts re-applies them on
  * resize, fullscreen, and display moves), and the overlay sits on the same
- * inset, so this holds in every case the page top bars hold.
+ * inset, so this holds in every case the page top bars hold. This is the
+ * 100% value; the rendered spacer is `.k2-stoplight-spacer-brief`, which
+ * follows `--k2-stoplight-spacer` under app zoom.
  */
 export function briefOverlayStoplightInset(chrome: DesktopChrome): number {
   return chrome.trafficLightSpacer ? TRAFFIC_LIGHT_SPACER_BASE_PX + TRAFFIC_LIGHT_CLUSTER_GAP_PX : 0
@@ -282,9 +284,9 @@ function BriefOverlay({
           <div
             data-testid="brief-overlay-stoplight-inset"
             aria-hidden
-            className="flex-shrink-0"
-            // gap-3 (12) already separates it from the title.
-            style={{ width: stoplightInset - 12 }}
+            // `stoplightInset - 12` at 100%; gap-3 (12) already separates
+            // it from the title. The class follows the app zoom.
+            className="k2-stoplight-spacer-brief"
           />
         )}
         <span

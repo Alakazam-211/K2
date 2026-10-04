@@ -39,7 +39,8 @@ const NO_CHROME: DesktopChrome = {
  */
 export const TRAFFIC_LIGHT_CLUSTER_RIGHT_PX = 69
 export const TRAFFIC_LIGHT_CLUSTER_GAP_PX = 14
-const TOP_BAR_PAD_X_PX = 12
+/** The top bars' px-3. The spacer starts after it. */
+export const TOP_BAR_PAD_X_PX = 12
 
 /** Reserved width for macOS traffic lights when the spacer is active. */
 export const TRAFFIC_LIGHT_SPACER_BASE_PX =

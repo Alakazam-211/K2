@@ -4,7 +4,16 @@
 // do not turn that off. The y nudge is the title-bar grow the native
 // command already applies; it is not added to the button origin again.
 
+import { TOP_BAR_PAD_X_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from './desktop-chrome'
+
 export const TRAFFIC_LIGHT_Y_NUDGE_PX = 3
+
+/**
+ * CSS custom property on <html> holding the top-bar stoplight spacer
+ * width. Set on macOS at startup and on every app-zoom change; globals.css
+ * gives it the 100% value so the first paint is right.
+ */
+export const STOPLIGHT_SPACER_VAR = '--k2-stoplight-spacer'
 
 export type TrafficLightShape = 'square' | 'round'
 
@@ -22,6 +31,25 @@ export type TrafficLightCommand = {
 /** A finite zoom above 0, else 1. */
 export function trafficLightZoom(zoom: number | null | undefined): number {
   return typeof zoom === 'number' && Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+}
+
+/**
+ * Spacer width in CSS px so its right edge lands on the zoom light's
+ * right edge at app zoom `zoom`.
+ *
+ * The native buttons do not scale: the cluster ends at
+ * `TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + inset` window points (Rust moves them
+ * right by the unscaled inset). The DOM before the spacer (the window
+ * inset and the bar's px-3) does scale. So
+ * `(inset + pad + spacer) * zoom = right + inset`, and the spacer is the
+ * remaining native width divided by the zoom. At 100% this is
+ * `TRAFFIC_LIGHT_SPACER_BASE_PX`. Never below 0.
+ */
+export function stoplightSpacerPx(zoom: number | null | undefined, inset: number): number {
+  const z = trafficLightZoom(zoom)
+  const i = Number.isFinite(inset) && inset > 0 ? inset : 0
+  const nativeWidth = TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + i - (i + TOP_BAR_PAD_X_PX) * z
+  return Math.max(0, nativeWidth / z)
 }
 
 /** `square` only. A missing or unknown id is round. */
@@ -66,12 +94,20 @@ export type TrafficLightController = {
   onResize: () => void
   /** Fullscreen enter and exit share this. Both schedule a re-apply. */
   onFullscreen: () => void
+  /**
+   * App zoom changed (Cmd+= / Cmd+- / Cmd+0 or the View menu). Re-applies
+   * now, not on the next frame, so the spacer and the buttons move with
+   * the zoomed bar in the same paint.
+   */
+  onZoomChange: () => void
 }
 
 export function createTrafficLightController(opts: {
   isMac: () => boolean
   read: () => { styleId: string | null | undefined; inset: number; zoom?: number | null }
   apply: (cmd: TrafficLightCommand) => void
+  /** Writes the spacer width (CSS px). Called with every apply. */
+  setSpacer?: (px: number) => void
   schedule: (fn: () => void) => void
 }): TrafficLightController {
   let insetSeen: number | null = null
@@ -83,6 +119,7 @@ export function createTrafficLightController(opts: {
     insetSeen = inset
     squareSeen = cmd.square
     zoomSeen = cmd.zoom
+    opts.setSpacer?.(stoplightSpacerPx(cmd.zoom, inset))
     opts.apply(cmd)
   }
 
@@ -124,5 +161,6 @@ export function createTrafficLightController(opts: {
     // reset even when the only vertical extra is the 3px nudge.
     onResize: scheduleReapply,
     onFullscreen: scheduleReapply,
+    onZoomChange: reapply,
   }
 }

@@ -1637,6 +1637,61 @@ mod tests {
     }
 
     #[test]
+    fn buttons_center_on_the_zoomed_38px_top_bar_at_each_zoom_step() {
+        // System center 16 + the renderer's 3px nudge = 19, half the 38px
+        // top bar: centered at 100%. Close origin x 9, 23 apart (macOS 27).
+        let d = Defaults {
+            button_x: 9.0,
+            button_y: 9.0,
+            button_h: 14.0,
+            spacing: 23.0,
+            titlebar_h: 32.0,
+        };
+        const TOPBAR_H: f64 = 38.0;
+        for inset in [0.0, 6.0, 10.0, 12.0] {
+            for zoom in [0.8, 1.0, 1.25, 1.5] {
+                let f = place(
+                    d,
+                    Frames {
+                        container: Rect {
+                            x: 0.0,
+                            y: WINDOW_H - d.titlebar_h,
+                            w: WINDOW_W,
+                            h: d.titlebar_h,
+                        },
+                        buttons: [0.0, 1.0, 2.0].map(|i| Rect {
+                            x: d.button_x + i * d.spacing,
+                            y: d.button_y,
+                            w: 14.0,
+                            h: d.button_h,
+                        }),
+                    },
+                    WINDOW_H,
+                    Offset {
+                        x: inset,
+                        y: inset + 3.0,
+                        zoom,
+                    },
+                );
+                // The DOM bar's top (inset) and height both scale.
+                let bar_center = zoom * (inset + TOPBAR_H / 2.0);
+                let center = button_center_from_top(f);
+                assert!(
+                    (center - bar_center).abs() < 1e-9,
+                    "inset {inset} zoom {zoom}: center {center}, bar center {bar_center}"
+                );
+                // Horizontal inset stays native; the renderer's spacer
+                // (stoplightSpacerPx) absorbs the zoom.
+                for (i, b) in f.buttons.iter().enumerate() {
+                    assert_eq!(b.x, 9.0 + inset + (i as f64) * 23.0, "button {i} x");
+                    assert_eq!((b.w, b.h), (14.0, 14.0), "button {i} size");
+                }
+                assert_eq!(f.buttons[2].x + 14.0, 69.0 + inset, "cluster right edge");
+            }
+        }
+    }
+
+    #[test]
     fn zoom_below_100_never_lifts_the_buttons_out_of_the_window() {
         for zoom in [0.9, 0.5, 0.1] {
             let f = place(

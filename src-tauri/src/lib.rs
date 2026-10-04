@@ -1790,6 +1790,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Win/Linux App Menu — open secondary window (macOS uses native menu).
             menu::window_new,
+            // Tickets "Open in window" — one window per ticket.
+            menu::window_open_ticket,
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
             // 0.40.48 connection resilience — out-of-webview boot-status

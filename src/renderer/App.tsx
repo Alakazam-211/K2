@@ -42,6 +42,8 @@ import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import FeedbackPage from './components/Feedback/FeedbackPage'
+import { TicketWindow } from './components/Feedback/TicketWindow'
+import { parseTicketWindowId } from './lib/ticket-window'
 import { HomeRoomsPortal } from '@/components/Home/room/HomeRoomsHost'
 import AgentsShell from './components/Layout/AgentsShell'
 import { HomeShellEffects, useHomeRoomSelected } from './components/Home/home-room'
@@ -339,6 +341,16 @@ function AppRoot(): React.JSX.Element {
   const page = usePageViewStore((s) => s.page)
   const homeRoomShown = useHomeRoomSelected()
   const focusProjectId = useMemo(() => parseFocusProjectId(), [])
+  // Tickets "Open in window": this window shows one ticket.
+  const ticketWindowId = useMemo(() => {
+    let label: string | null = null
+    try {
+      label = getCurrentTauriWindow().label
+    } catch {
+      label = null
+    }
+    return parseTicketWindowId(window.location.hash, label)
+  }, [])
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
   const setActiveProject = useProjectsStore((s) => s.setActiveProject)
@@ -1013,7 +1025,11 @@ function AppRoot(): React.JSX.Element {
       </RoomProvider>
 
       {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
-      {focusProjectId ? (
+      {ticketWindowId ? (
+        <div className="h-full w-full" style={settingsOpen ? { display: 'none' } : undefined}>
+          <TicketWindow ticketId={ticketWindowId} />
+        </div>
+      ) : focusProjectId ? (
         <div
           className="h-full w-full"
           style={settingsOpen ? { display: 'none' } : undefined}

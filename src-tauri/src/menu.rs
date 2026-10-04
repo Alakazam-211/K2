@@ -6,7 +6,7 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
 use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(target_os = "macos"))]
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "macos")]
 pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {
@@ -236,6 +236,41 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 #[tauri::command]
 pub fn window_new(app: AppHandle) -> Result<(), String> {
     open_new_window(&app).map_err(|e| e.to_string())
+}
+
+/// Tickets "Open in window": one window per ticket (label `window-ticket-<id>`,
+/// fragment `#ticket=<id>`), focused if it is already open. The renderer
+/// shows only that ticket's detail there. OS integration only: the ticket
+/// itself is read from the daemon by the renderer.
+#[tauri::command]
+pub fn window_open_ticket(app: AppHandle, ticket_id: String) -> Result<(), String> {
+    let id = ticket_id.trim();
+    if id.is_empty()
+        || id.len() > 64
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(format!("invalid ticket id '{ticket_id}'"));
+    }
+    // `window-*` so the default capability (main, window-*, focus-*) covers it.
+    let label = format!("window-ticket-{id}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        existing.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let fragment = format!("ticket={id}");
+    let webview_url = crate::k2_app_window::k2_app_webview_url(&app, Some(&fragment));
+    let builder = crate::k2_app_window::k2_app_window_builder(&app, &label, webview_url)
+        .title("K2 | Ticket")
+        .inner_size(1100.0, 860.0)
+        .min_inner_size(600.0, 400.0);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.decorations(false);
+    builder.build().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {

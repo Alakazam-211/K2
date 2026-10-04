@@ -75,6 +75,7 @@ function show(row: FeedbackListRow): FeedbackShow {
 
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   api.fetchFeedbackShow.mockReset()
   api.resolveFeedback.mockClear()
   api.commentFeedback.mockClear()
@@ -127,10 +128,13 @@ describe('FeedbackItemView — unlinked ticket', () => {
     expect(screen.queryByTestId('unlinked-thread-footer')).toBeNull()
     const actions = ['ticket-action-answer', 'ticket-action-resolve', 'ticket-action-reassign', 'ticket-action-chat']
       .map((t) => screen.getByTestId(t))
-    expect(actions.map((b) => b.textContent)).toEqual(['Answer', 'Resolve', 'Reassign', 'Chat with agent'])
+    // The chat rail is open by default, so the toggle reads Hide chat.
+    expect(actions.map((b) => b.textContent)).toEqual(['Answer', 'Resolve', 'Reassign', 'Hide chat'])
     for (const b of actions) expect(bar.contains(b)).toBe(true)
-    // Structured --options become quick answers (no brief here).
+    // Structured --options become quick answers (no brief here), in the rail.
+    const rail = screen.getByTestId('ticket-agent-rail')
     expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['Yes', 'No'])
+    for (const b of screen.getAllByTestId('ticket-quick-answer')) expect(rail.contains(b)).toBe(true)
     // Answer opens the inline box.
     expect(screen.queryByRole('textbox')).toBeNull()
     fireEvent.click(screen.getByTestId('ticket-action-answer'))

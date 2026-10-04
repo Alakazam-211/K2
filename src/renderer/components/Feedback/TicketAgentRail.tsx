@@ -1,12 +1,12 @@
 // "Chat with agent" — the right-hand rail of the ticket detail: the asking
-// agent's Thread plus its terminal, side by side.
+// agent's session in the same Thread | Terminal view the Agents page uses.
 //
-// Nothing new is built here. The live case is the Agents page's own
-// pinned-session surface: `PinnedSessionBody` (session-view chrome
-// context) around the kessel `TerminalPane`, set to the Split view with
-// Thread on the left and the terminal on the right — so TerminalPane
-// renders the same `ThreadOverlayColumn` + Message-the-agent bar it does
-// on the Agents page. The rail picks Thread / Split / Terminal locally.
+// Nothing new is built here. The rail mounts the Agents page's own session
+// surface, `AgentSessionChrome` (the View menu — `SessionViewMenu` — with
+// Terminal / Thread / Split view, the agent's name and the refresh button)
+// around the kessel `TerminalPane`. One pane, one switcher; the chosen
+// view is remembered by `useSessionViewTab` under the same key the Agents
+// page uses for that conversation, so the rail and the Agents page agree.
 //
 // Attaching rides the ticket's old Agent tab (unchanged): find the asking
 // session (live-by-id, or the workspace's pinned chat via D6), attach with
@@ -15,6 +15,9 @@
 // dormant session offers Wake. When the terminal cannot be shown (no
 // session, dormant, an error), the rail shows the Thread only, read-only,
 // with a note.
+//
+// `footer` (the ticket's quick-answer buttons) sits at the bottom of the
+// rail, right under the session's compose area.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
@@ -26,9 +29,8 @@ import {
   activateOnLiveSessionAttach,
   wakeCanonicalMemberSession,
 } from '@/components/Projects/wake-member-session'
-import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
+import { AgentSessionChrome } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
-import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import { resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { primaryScope } from '@/kessel/server-scope'
 import { askingSessionWakeAction, type FeedbackSessionKind } from './feedback-api'
@@ -180,14 +182,6 @@ function useThreadAddr(projectPath: string | null, projectId: string): string {
   return addr
 }
 
-type RailView = Extract<SessionViewTab, 'thread' | 'split' | 'terminal'>
-
-const RAIL_VIEWS: ReadonlyArray<{ value: RailView; label: string }> = [
-  { value: 'thread', label: 'Thread' },
-  { value: 'split', label: 'Both' },
-  { value: 'terminal', label: 'Terminal' },
-]
-
 export function TicketAgentRail({
   feedbackId,
   agentName,
@@ -197,6 +191,7 @@ export function TicketAgentRail({
   sessionKind,
   canonicalSessionId,
   onClose,
+  footer,
 }: {
   feedbackId: string
   /** The agent that filed the ticket (display only). */
@@ -207,6 +202,9 @@ export function TicketAgentRail({
   sessionKind: FeedbackSessionKind
   canonicalSessionId: string | null | undefined
   onClose: () => void
+  /** Rendered at the bottom of the rail, under the compose area (the
+   *  ticket's quick-answer buttons). */
+  footer?: React.ReactNode
 }): React.JSX.Element {
   // Pinned-chat tickets (canonical / D6) attach to the workspace agent even
   // without a stamped session id; anything else needs the asking session.
@@ -219,7 +217,6 @@ export function TicketAgentRail({
     projectPath,
   })
   const addr = useThreadAddr(projectPath, projectId)
-  const [view, setView] = useState<RailView>('split')
 
   return (
     <aside
@@ -228,36 +225,23 @@ export function TicketAgentRail({
       style={{ width: 'min(640px, 48vw)' }}
     >
       <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0">
-        <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate" title={agentName}>
-          {agentName}
-        </span>
-        {phase.kind === 'live' && (
-          <div className="flex border border-[var(--color-border)] ml-1">
-            {RAIL_VIEWS.map((v) => (
-              <button
-                key={v.value}
-                type="button"
-                data-testid={`ticket-rail-view-${v.value}`}
-                aria-pressed={view === v.value}
-                onClick={() => setView(v.value)}
-                className={`px-2 py-0.5 text-[10px] cursor-pointer ${
-                  view === v.value
-                    ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-                }`}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
+        {/* Live: the session chrome below names the agent; don't repeat it. */}
+        {phase.kind === 'live' ? (
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            Chat with agent
+          </span>
+        ) : (
+          <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate" title={agentName}>
+            {agentName}
+          </span>
         )}
         <span className="flex-1" />
         <button
           type="button"
           data-testid="ticket-agent-rail-close"
           onClick={onClose}
-          title="Close the chat"
-          aria-label="Close the chat"
+          title="Hide the chat"
+          aria-label="Hide the chat"
           className="flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer"
         >
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -271,14 +255,12 @@ export function TicketAgentRail({
         <PrimaryRoom>
           {phase.kind === 'live' ? (
             <div className="flex-1 min-h-0 flex flex-col" data-testid="ticket-agent-rail-live">
-              <PinnedSessionBody
-                viewTab={view}
-                splitLeft="thread"
-                splitRight="terminal"
+              <AgentSessionChrome
+                title={agentName}
                 addr={addr}
                 conversationId={canonicalSessionId ?? null}
-                agentName={projectId}
-                displayName={agentName}
+                agentName={phase.agentName}
+                cwd={phase.cwd}
               >
                 <TerminalPane
                   terminalId={`feedback-term:${feedbackId}`}
@@ -286,7 +268,7 @@ export function TicketAgentRail({
                   attachAgentName={phase.agentName}
                   sessionId={phase.sessionId}
                 />
-              </PinnedSessionBody>
+              </AgentSessionChrome>
             </div>
           ) : (
             <ThreadOnly
@@ -300,6 +282,8 @@ export function TicketAgentRail({
           )}
         </PrimaryRoom>
       </PageLiveContext.Provider>
+
+      {footer}
     </aside>
   )
 }

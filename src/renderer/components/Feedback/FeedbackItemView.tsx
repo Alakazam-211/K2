@@ -6,17 +6,19 @@
 //   - Below it, scrolling: the short summary (`--body`), the HTML brief
 //     (it takes the stage), then comments and history, collapsed by
 //     default when there is a brief.
-//   - An action bar pinned to the bottom: quick-answer buttons (one per
-//     brief Options item, or per structured `--options`), then Answer,
-//     Resolve, Reassign, Chat with agent.
+//   - An action bar pinned to the bottom: Answer, Resolve, Reassign, and
+//     the Chat with agent / Hide chat toggle.
+//   - The right-hand chat rail (TicketAgentRail), open by default and
+//     remembered per window: the agent's session in the Agents page's
+//     Thread | Terminal view, with the quick-answer buttons (one per brief
+//     Options item, or per structured `--options`) at its bottom, under
+//     the compose area. With the rail hidden they fall back to the action
+//     bar so a pick is never out of reach.
 //
 // Status model (daemon-first, feedback_routes.rs): a quick-answer pick
 // posts `optionPick: true` → the ticket is answered. A typed Answer is free
 // text → the ticket goes to needs_discussion until the agent settles it.
 // Both land in the agent's session (wake=true) exactly as before.
-//
-// Chat with agent opens the right-hand rail (TicketAgentRail): the agent's
-// Thread plus its terminal, reusing the Agents page session surfaces.
 //
 // An UNLINKED ticket (workspace removed, TB18) is read-only: no answer,
 // no options, no reassign, no chat — only Resolve and Dismiss.
@@ -42,6 +44,7 @@ import {
   type FeedbackListRow,
   type FeedbackShow,
   type FeedbackStatus,
+  type QuickAnswerOption,
 } from './feedback-api'
 import { HtmlBriefBadge, PriorityBadge, StatusBadge } from './badges'
 import { BriefFrame } from './BriefFrame'
@@ -52,6 +55,7 @@ import { ChatMessage, ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
+import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
 
 interface FeedbackItemViewProps {
   id: string
@@ -96,7 +100,12 @@ export function FeedbackItemView({
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const [railOpen, setRailOpen] = useState(false)
+  // Open by default; remembered per window (ticket-board-chrome).
+  const [railOpen, setRailOpenState] = useState(() => readTicketBoardChrome().chatOpen)
+  const setRailOpen = useCallback((open: boolean) => {
+    setRailOpenState(open)
+    writeTicketBoardChrome({ chatOpen: open })
+  }, [])
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -169,6 +178,28 @@ export function FeedbackItemView({
   const statusRow: FeedbackListRow = { ...listRow, status: view.status }
   const assigneeNames = cardAssigneeNames(view.assignees)
   const canOpenWindow = !inOwnWindow && !isWebClient()
+  const showRail = railOpen && !unlinked
+
+  const onChanged = useCallback(() => {
+    void load()
+    onMutated()
+  }, [load, onMutated])
+
+  // The brief's Options as quick answers. They live in the chat rail; with
+  // the rail hidden they fall back to the action bar.
+  const quick = unlinked || !item ? [] : quickAnswerOptions(item, brief?.html)
+  const quickAnswers =
+    item && quick.length > 0 ? (
+      <TicketQuickAnswers
+        key={`quick-${id}`}
+        ticketId={item.id}
+        options={quick}
+        live={quickAnswersLive(item.status)}
+        acceptedAnswer={item.answer}
+        placement={showRail ? 'rail' : 'bar'}
+        onAnswered={onChanged}
+      />
+    ) : null
 
   return (
     <div className="flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap">
@@ -245,16 +276,15 @@ export function FeedbackItemView({
           title={view.title}
           expanded={expanded}
           onExpandedChange={setExpanded}
-          railOpen={railOpen}
-          onToggleRail={() => setRailOpen((o) => !o)}
-          onChanged={() => {
-            void load()
-            onMutated()
-          }}
+          railOpen={showRail}
+          onToggleRail={() => setRailOpen(!railOpen)}
+          quickAnswers={showRail ? null : quickAnswers}
+          hasQuickAnswers={quick.length > 0}
+          onChanged={onChanged}
         />
       </div>
 
-      {railOpen && !unlinked && (
+      {showRail && (
         <TicketAgentRail
           feedbackId={id}
           agentName={view.agentName}
@@ -264,6 +294,7 @@ export function FeedbackItemView({
           sessionKind={view.sessionKind}
           canonicalSessionId={item?.canonicalSessionId}
           onClose={() => setRailOpen(false)}
+          footer={quickAnswers}
         />
       )}
     </div>
@@ -286,6 +317,8 @@ function TicketBody({
   onExpandedChange,
   railOpen,
   onToggleRail,
+  quickAnswers,
+  hasQuickAnswers,
   onChanged,
 }: {
   item: FeedbackShow | null
@@ -301,6 +334,10 @@ function TicketBody({
   onExpandedChange: (v: boolean) => void
   railOpen: boolean
   onToggleRail: () => void
+  /** The quick-answer buttons when the chat rail is hidden; null while
+   *  they sit in the rail. */
+  quickAnswers: React.ReactNode
+  hasQuickAnswers: boolean
   onChanged: () => void
 }): React.JSX.Element {
   const [answering, setAnswering] = useState(false)
@@ -378,26 +415,21 @@ function TicketBody({
     )
   }
 
-  const quick = unlinked ? [] : quickAnswerOptions(item, brief?.html)
-  const quickLive = quickAnswersLive(item.status)
   const open =
     item.status === 'waiting' ||
     item.status === 'answered' ||
     item.status === 'planned' ||
     item.status === 'needs_discussion'
 
-  // Every person's message lands in the agent's session. A pick is the
-  // answer; free text starts a discussion (the daemon sets the status).
-  const send = async (text: string, optionPick: boolean): Promise<void> => {
-    const res = await commentFeedback(item.id, text, { optionPick })
-    setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
-  }
-
+  // Every person's message lands in the agent's session. Free text starts
+  // a discussion (the daemon sets the status); a pick (TicketQuickAnswers)
+  // is the answer.
   const sendAnswer = (): void => {
     const text = reply.trim()
     if (!text) return
     void submit(async () => {
-      await send(text, false)
+      const res = await commentFeedback(item.id, text, { optionPick: false })
+      setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
       setReplyAndDraft('')
       clearTicketDraft(ticketId)
       setAnswering(false)
@@ -515,32 +547,8 @@ function TicketBody({
             </p>
           )}
 
-          {quick.length > 0 && (
-            <div data-testid="ticket-quick-answers" className="mb-2 flex flex-wrap gap-1.5">
-              {quick.map((opt) => {
-                const accepted = item.answer === opt.answer
-                return (
-                  <button
-                    key={opt.answer}
-                    type="button"
-                    data-testid="ticket-quick-answer"
-                    disabled={!quickLive || busy}
-                    title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
-                    onClick={() => void submit(() => send(opt.answer, true))}
-                    className={`max-w-full truncate px-2.5 py-1 text-[11px] font-medium border transition-colors ${
-                      accepted
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : quickLive
-                          ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
-                          : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
-                    } disabled:cursor-not-allowed`}
-                  >
-                    {opt.label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
+          {/* Only while the chat rail is hidden; otherwise they sit in the rail. */}
+          {quickAnswers}
 
           {answering && (
             <div className="mb-2" data-testid="ticket-answer-box">
@@ -559,8 +567,10 @@ function TicketBody({
                   }
                 }}
                 placeholder={
-                  quick.length > 0
-                    ? 'Write a message — it starts a discussion. Pick an option above to answer.'
+                  hasQuickAnswers
+                    ? railOpen
+                      ? 'Write a message — it starts a discussion. Pick an option in the chat to answer.'
+                      : 'Write a message — it starts a discussion. Pick an option above to answer.'
                     : 'Write a message — it lands in the agent’s session and starts a discussion'
                 }
                 rows={2}
@@ -624,11 +634,96 @@ function TicketBody({
             </div>
             <span className="flex-1" />
             <ActionButton testId="ticket-action-chat" active={railOpen} onClick={onToggleRail}>
-              Chat with agent
+              {railOpen ? 'Hide chat' : 'Chat with agent'}
             </ActionButton>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** The brief's Options as one-click answers. A pick posts
+ *  `optionPick: true` → the daemon records it as the answer (answered).
+ *  `rail`: the bottom of the chat rail, under the compose area. `bar`: the
+ *  action bar, while the rail is hidden. */
+export function TicketQuickAnswers({
+  ticketId,
+  options,
+  live,
+  acceptedAnswer,
+  placement,
+  onAnswered,
+}: {
+  ticketId: string
+  options: QuickAnswerOption[]
+  live: boolean
+  acceptedAnswer: string | null
+  placement: 'rail' | 'bar'
+  onAnswered: () => void
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
+
+  const pick = async (answer: string): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await commentFeedback(ticketId, answer, { optionPick: true })
+      setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
+      onAnswered()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      data-testid="ticket-quick-answers"
+      data-placement={placement}
+      className={
+        placement === 'rail'
+          ? 'border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0 bg-[var(--color-bg)]'
+          : 'mb-2'
+      }
+    >
+      {placement === 'rail' && (
+        <div className="mb-1.5 text-[10px] text-[var(--color-text-muted)]">Pick an option to answer</div>
+      )}
+      {error && <div className="mb-1.5 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{error}</div>}
+      {deliveryMiss && (
+        <p className="mb-1.5 text-[10px] text-[var(--color-text-muted)] selectable-copy">
+          Saved. The agent did not receive it ({deliveryMiss}).
+        </p>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((opt) => {
+          const accepted = acceptedAnswer === opt.answer
+          return (
+            <button
+              key={opt.answer}
+              type="button"
+              data-testid="ticket-quick-answer"
+              disabled={!live || busy}
+              title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
+              onClick={() => void pick(opt.answer)}
+              className={`max-w-full truncate px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+                accepted
+                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                  : live
+                    ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
+                    : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
+              } disabled:cursor-not-allowed`}
+            >
+              {opt.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

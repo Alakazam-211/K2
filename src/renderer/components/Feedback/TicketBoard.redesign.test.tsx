@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // 0.43.2 tickets redesign (Rosson): the board opens on Mine, the list
-// width + collapsed state are remembered per window, the brief's Options
-// become quick-answer buttons that answer the ticket (free text starts a
-// discussion), and Chat with agent opens the right-hand rail with the
-// agent's Thread + terminal.
+// width (400 px default) + collapsed state are remembered per window, the
+// brief's Options become quick-answer buttons in the chat rail that answer
+// the ticket (free text starts a discussion), and the chat rail — open by
+// default, remembered per window — is the Agents page's Thread | Terminal
+// view (AgentSessionChrome + its View menu).
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -80,7 +81,9 @@ vi.mock('@/lib/chat-session-tab', () => ({
 
 import { TicketBoard } from './TicketBoard'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
-import { readTicketBoardChrome } from '@/lib/ticket-board-chrome'
+import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
+import ContextMenu from '@/components/ContextMenu/ContextMenu'
+import { useContextMenuStore } from '@/stores/context-menu'
 
 const NOW = 1_759_241_200
 
@@ -136,6 +139,7 @@ afterEach(() => {
   api.fetchFeedbackBrief.mockReset()
   api.commentFeedback.mockClear()
   briefCache.clear()
+  useContextMenuStore.getState().close()
 })
 
 function board(rows: FeedbackListRow[] = [mine, julies]): ReturnType<typeof render> {
@@ -170,24 +174,24 @@ describe('TicketBoard filters', () => {
 })
 
 describe('TicketBoard per-window layout', () => {
-  it('list is 300 px by default; drag-resize and collapse persist for this window', async () => {
+  it('list is 400 px by default; drag-resize and collapse persist for this window', async () => {
     board()
     const list = screen.getByTestId('ticket-list')
-    expect(list.style.width).toBe('300px')
+    expect(list.style.width).toBe('400px')
 
     const handle = screen.getByTestId('ticket-list-resize')
-    fireEvent.mouseDown(handle, { button: 0, clientX: 300 })
-    fireEvent.mouseMove(document, { clientX: 380 })
+    fireEvent.mouseDown(handle, { button: 0, clientX: 400 })
+    fireEvent.mouseMove(document, { clientX: 480 })
     fireEvent.mouseUp(document)
-    await waitFor(() => expect(screen.getByTestId('ticket-list').style.width).toBe('380px'))
-    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 380, collapsed: false })
+    await waitFor(() => expect(screen.getByTestId('ticket-list').style.width).toBe('480px'))
+    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: false, chatOpen: true })
 
     fireEvent.click(screen.getByTestId('ticket-list-collapse'))
     expect(screen.queryByTestId('ticket-list')).toBeNull()
     expect(screen.getByTestId('ticket-list-rail')).toBeTruthy()
-    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 380, collapsed: true })
+    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: true, chatOpen: true })
     // Other windows keep their own layout.
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 300, collapsed: false })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 400, collapsed: false, chatOpen: true })
 
     // A fresh board in this window comes back collapsed.
     cleanup()
@@ -201,8 +205,14 @@ describe('TicketBoard per-window layout', () => {
     expect(await screen.findByTestId('ticket-detail')).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('ticket-list-expand'))
-    expect(screen.getByTestId('ticket-list').style.width).toBe('380px')
+    expect(screen.getByTestId('ticket-list').style.width).toBe('480px')
     expect(readTicketBoardChrome('window-test').collapsed).toBe(false)
+  })
+
+  it('a width already saved for this window wins over the 400 px default', () => {
+    writeTicketBoardChrome({ listWidth: 260 }, 'window-test')
+    board()
+    expect(screen.getByTestId('ticket-list').style.width).toBe('260px')
   })
 })
 
@@ -239,54 +249,96 @@ describe('ticket detail', () => {
     expect(screen.getByTestId('brief-overlay')).toBeTruthy()
   })
 
-  it('the brief Options become quick answers; a pick answers, typed text starts a discussion', async () => {
+  it('the brief Options are quick answers in the chat rail; a pick answers, typed text starts a discussion', async () => {
     const row = makeRow({ hasBrief: true, briefBytes: 120, options: ['Yes', 'No'] })
     detail(row)
+    const rail = await screen.findByTestId('ticket-agent-rail')
     await waitFor(() =>
-      expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['SQLite', 'Postgres']),
+      expect(within(rail).getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['SQLite', 'Postgres']),
     )
-    expect(screen.getAllByTestId('ticket-quick-answer')[0].getAttribute('title')).toBe('SQLite — simple')
+    expect(within(rail).getByTestId('ticket-quick-answers').getAttribute('data-placement')).toBe('rail')
+    // Not in the action bar while the rail is open.
+    expect(within(screen.getByTestId('ticket-action-bar')).queryByTestId('ticket-quick-answer')).toBeNull()
+    expect(screen.getAllByTestId('ticket-quick-answer')).toHaveLength(2)
+    expect(within(rail).getAllByTestId('ticket-quick-answer')[0].getAttribute('title')).toBe('SQLite — simple')
 
-    fireEvent.click(screen.getAllByTestId('ticket-quick-answer')[1])
+    fireEvent.click(within(rail).getAllByTestId('ticket-quick-answer')[1])
     await waitFor(() =>
       expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'Postgres', { optionPick: true }),
     )
 
-    fireEvent.click(screen.getByTestId('ticket-action-answer'))
+    // Answer / Resolve / Reassign stay in the action bar.
+    const bar = screen.getByTestId('ticket-action-bar')
+    expect(within(bar).getByTestId('ticket-action-resolve')).toBeTruthy()
+    expect(within(bar).getByTestId('ticket-action-reassign')).toBeTruthy()
+    fireEvent.click(within(bar).getByTestId('ticket-action-answer'))
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'what about both?' } })
     fireEvent.click(screen.getByTestId('ticket-answer-send'))
     await waitFor(() =>
       expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'what about both?', { optionPick: false }),
     )
+
+    // Hiding the chat moves the picks back to the action bar; still a pick.
+    fireEvent.click(screen.getByTestId('ticket-action-chat'))
+    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    const barPicks = within(screen.getByTestId('ticket-action-bar')).getAllByTestId('ticket-quick-answer')
+    expect(barPicks.map((b) => b.textContent)).toEqual(['SQLite', 'Postgres'])
+    fireEvent.click(barPicks[0])
+    await waitFor(() =>
+      expect(api.commentFeedback).toHaveBeenCalledWith(row.id, 'SQLite', { optionPick: true }),
+    )
   })
 
-  it('Chat with agent opens the rail: the agent’s Thread + terminal in the reused split view', async () => {
+  it('the rail is open by default and is the Agents page Thread | Terminal view with its View menu', async () => {
     const row = makeRow({ sessionId: 'sess-1', sessionKind: 'sandbox' })
     cli.liveSessions = [{ sessionId: 'sess-1', agentName: 'tab-x', command: null, args: [], cwd: '/ws', isV2: true }]
     detail(row)
-    await screen.findByTestId('ticket-action-bar')
-    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
-
-    fireEvent.click(screen.getByTestId('ticket-action-chat'))
+    render(<ContextMenu />)
+    // Open without a click.
     const rail = await screen.findByTestId('ticket-agent-rail')
-    expect(rail.textContent).toContain('scout')
+    expect(screen.getByTestId('ticket-action-chat').textContent).toBe('Hide chat')
+    // The reused chrome: AgentSessionChrome's header + the shared View menu.
+    const chrome = await within(rail).findByTestId('sidecar-session-chrome')
+    expect(within(chrome).getByTestId('sidecar-session-title').textContent).toBe('scout')
+    const menu = within(chrome).getByTestId('session-view-menu')
     await within(rail).findByTestId('stub-terminal-pane')
     await waitFor(() => expect(seen.terminal.at(-1)?.overlayAddr).toBe('alpha'))
     const last = seen.terminal.at(-1)!
     expect(last.attachAgentName).toBe('tab-x')
     expect(last.sessionId).toBe('sess-1')
-    expect(last.viewTab).toBe('split')
-    expect(last.splitLeft).toBe('thread')
-    expect(last.splitRight).toBe('terminal')
+    // One pane: the shared default view (Terminal), not a custom split.
+    expect(menu.getAttribute('data-view')).toBe('terminal')
+    expect(last.viewTab).toBe('terminal')
 
-    fireEvent.click(screen.getByTestId('ticket-agent-rail-close'))
+    // The switcher flips the same pane to the Thread.
+    fireEvent.click(within(menu).getByTestId('session-view-button'))
+    const contextMenu = document.querySelector('[data-context-menu]')
+    if (!contextMenu) throw new Error('the View menu did not open')
+    const threadRow = Array.from(contextMenu.querySelectorAll('button')).find((b) =>
+      Array.from(b.querySelectorAll('span')).some((s) => s.textContent === 'Thread'),
+    )
+    if (!threadRow) throw new Error('no Thread row in the View menu')
+    fireEvent.click(threadRow)
+    await waitFor(() => expect(seen.terminal.at(-1)?.viewTab).toBe('thread'))
+    expect(within(rail).getByTestId('session-view-menu').getAttribute('data-view')).toBe('thread')
+
+    // Hide chat closes it and the window remembers.
+    fireEvent.click(screen.getByTestId('ticket-action-chat'))
     expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    expect(readTicketBoardChrome('window-test').chatOpen).toBe(false)
+    expect(screen.getByTestId('ticket-action-chat').textContent).toBe('Chat with agent')
+    cleanup()
+    detail(row)
+    await screen.findByTestId('ticket-action-bar')
+    expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    fireEvent.click(screen.getByTestId('ticket-action-chat'))
+    expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
+    expect(readTicketBoardChrome('window-test').chatOpen).toBe(true)
   })
 
   it('no terminal to show: the rail shows the Thread only, with a note', async () => {
     detail(makeRow({ sessionId: null, sessionKind: null }))
     await screen.findByTestId('ticket-action-bar')
-    fireEvent.click(screen.getByTestId('ticket-action-chat'))
     const rail = await screen.findByTestId('ticket-agent-rail')
     expect(within(rail).getByTestId('ticket-agent-rail-thread-only')).toBeTruthy()
     expect(within(rail).getByTestId('ticket-agent-rail-note').textContent).toMatch(/no terminal to show/)

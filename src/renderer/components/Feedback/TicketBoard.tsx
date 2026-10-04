@@ -1,7 +1,7 @@
 // Tickets board — the list + detail layout shared by the Tickets page and
 // the Projects page Feedback tab (0.43.2 quick redesign, Rosson).
 //
-//   - A narrow list (default 300 px) on the left, resizable with a drag
+//   - A narrow list (default 400 px) on the left, resizable with a drag
 //     handle; the detail (header + HTML brief + action bar) takes the rest.
 //   - Filters on top of the list: Mine (assigned to me, the default),
 //     Waiting on me, All, plus search. The caller may add one extra control

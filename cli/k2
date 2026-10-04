@@ -24606,6 +24606,8 @@ _mail_py() {
     M_FROM="${M_FROM:-}" M_HTML="${M_HTML:-false}" M_RAW="${M_RAW:-false}" \
     M_GET="${M_GET:-}" M_OUT="${M_OUT:-}" \
     M_TO="${M_TO:-}" M_SUBJECT="${M_SUBJECT:-}" M_TIMEOUT="${M_TIMEOUT:-}" \
+    M_SEND_AT="${M_SEND_AT:-}" M_SEND_IN="${M_SEND_IN:-}" \
+    M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
     M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_ATTACH="${M_ATTACH:-}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \

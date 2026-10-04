@@ -15,7 +15,9 @@
 //!
 //! When `square` is set, the same call paints those three buttons as sharp
 //! squares (style id `square` only). Any other style restores the system
-//! cells so AppKit draws circles again. The square is centered in the
+//! cells so AppKit draws circles again, and drops the square's bitmap
+//! from the button layer so it can't show under the circle (Zen's round
+//! lights over the Square style). The square is centered in the
 //! button frame; frame size and origin gaps are not changed.
 
 /// Pure stoplight geometry. No AppKit, so it is unit-tested on every host.
@@ -539,6 +541,7 @@ mod imp {
 
     fn restore_round(btn: id) {
         if !cell_is_ours(btn_cell(btn)) {
+            clear_square_bitmap(btn);
             remove_tracking(btn);
             return;
         }
@@ -554,6 +557,7 @@ mod imp {
         if original != nil {
             let _: () = unsafe { msg_send![btn, setCell: original] };
         }
+        clear_square_bitmap(btn);
         let _: () = unsafe { msg_send![btn, setTarget: target] };
         if let Some(action) = sel_from_nsstring(action_ns) {
             let _: () = unsafe { msg_send![btn, setAction: action] };
@@ -580,6 +584,30 @@ mod imp {
         }
         remove_tracking(btn);
         let _: () = unsafe { msg_send![btn, setNeedsDisplay: YES] };
+    }
+
+    /// Our cell draws with `drawWithFrame:` (`wantsUpdateLayer` NO), so
+    /// AppKit gives the button's own layer a bitmap backing store holding
+    /// the square. The system cell draws the circle in a SwiftUI sublayer
+    /// (`updateLayer`) and never redraws that backing store, so after
+    /// `setCell:` the old square stays in the button layer UNDER the new
+    /// circle (measured on macOS 27: `contents` + a `ContentLayer` survive
+    /// `display`). That is the "square under the round light" seen when
+    /// Zen's round lights replace the Square style's (or a Style switch
+    /// from Square). Dropping the contents removes it; the system cell
+    /// never needs them. A no-op when there is nothing to drop.
+    fn clear_square_bitmap(btn: id) {
+        if btn == nil {
+            return;
+        }
+        let layer: id = unsafe { msg_send![btn, layer] };
+        if layer == nil {
+            return;
+        }
+        let contents: id = unsafe { msg_send![layer, contents] };
+        if contents != nil {
+            let _: () = unsafe { msg_send![layer, setContents: nil] };
+        }
     }
 
     fn btn_cell(btn: id) -> id {
@@ -1754,6 +1782,44 @@ mod tests {
             },
         );
         assert_eq!(f, system_frames(WINDOW_H));
+    }
+
+    /// Square → round (Zen's round lights over the Square style, or a Style
+    /// switch) must drop the square's bitmap after the system cell is back,
+    /// on both paths, or the square stays painted under the circle (measured
+    /// on macOS 27: the button layer keeps `contents` across `display`).
+    /// AppKit can't run in `cargo test` (no main-thread window), so this
+    /// pins the call sites in the source.
+    #[test]
+    fn restoring_round_drops_the_square_bitmap() {
+        let src = include_str!("traffic_lights.rs");
+        let start = src
+            .find("    fn restore_round(btn: id) {")
+            .expect("restore_round is gone");
+        let len = src[start..]
+            .find("    fn clear_square_bitmap(btn: id) {")
+            .expect("clear_square_bitmap must follow restore_round");
+        let body = &src[start..start + len];
+        let early = body
+            .find("return;")
+            .expect("restore_round's not-ours path returns early");
+        assert!(
+            body[..early].contains("clear_square_bitmap(btn);"),
+            "the not-ours path must drop a stale square bitmap"
+        );
+        let set_cell = body
+            .find("setCell: original")
+            .expect("restore_round puts the system cell back");
+        assert!(
+            body[set_cell..].contains("clear_square_bitmap(btn);"),
+            "restore_round must drop the square bitmap after setCell: original"
+        );
+        let clear = &src[start + len..];
+        let clear = &clear[..clear.find("\n    }\n").expect("clear_square_bitmap body")];
+        assert!(
+            clear.contains("setContents: nil"),
+            "clear_square_bitmap must nil the layer contents"
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -191,6 +191,66 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     expect(lastRadius()).toBe(0.5)
   })
 
+  it('Square at 125% + Zen round: one shape per state through fullscreen, zoom and resize; leaving restores Square exactly', async () => {
+    // Rosson 2026-10-04: square lights showed under Zen's round ones. The
+    // renderer must never send both: while Zen holds the window every apply
+    // is round (Rust then drops the square bitmap, traffic_lights.rs
+    // `clear_square_bitmap`), and leaving sends Square's exact command.
+    ;(window as ZoomWindow).__k2soZoom = 1.25
+    applyStyle(() => document.documentElement.setAttribute('data-style', 'square'))
+    const squareCmd = lastInset()
+    expect(squareCmd).toEqual({ x: 0, y: 3, square: true, zoom: 1.25 })
+    const squareSpacer = spacer()
+    expect(squareSpacer).not.toBe('')
+    invoke.mockClear()
+
+    style.setChromeSource({ zen: { corners: 'system', stoplights: 'round', offset: [0, 0] } })
+    const triggers: Array<[string, () => void | Promise<void>]> = [
+      ['enter', () => {}],
+      ['resize', async () => {
+        window.dispatchEvent(new Event('resize'))
+        await nextFrame()
+      }],
+      ['fullscreenchange', async () => {
+        document.dispatchEvent(new Event('fullscreenchange'))
+        await nextFrame()
+      }],
+      ['webkitfullscreenchange', async () => {
+        document.dispatchEvent(new Event('webkitfullscreenchange'))
+        await nextFrame()
+      }],
+      ['zoom 150%', () => {
+        ;(window as ZoomWindow).__k2soZoom = 1.5
+        style.onAppZoomChange()
+      }],
+      ['zoom back 125%', () => {
+        ;(window as ZoomWindow).__k2soZoom = 1.25
+        style.onAppZoomChange()
+      }],
+      ['title change', () => style.reapplyTrafficLights()],
+    ]
+    for (const [what, run] of triggers) {
+      if (what !== 'enter') invoke.mockClear()
+      await run()
+      const calls = insetCalls()
+      expect(calls.length, what).toBeGreaterThan(0)
+      for (const c of calls) expect(c.square, what).toBe(false)
+      // The Styles spacer keeps describing Square (Z49) at every zoom.
+      expect(spacer(), what).toBe(squareSpacer)
+    }
+
+    invoke.mockClear()
+    style.setChromeSource('style')
+    expect(insetCalls()).toEqual([squareCmd])
+    expect(spacer()).toBe(squareSpacer)
+    expect(lastRadius()).toBe(0.5)
+    invoke.mockClear()
+    window.dispatchEvent(new Event('resize'))
+    await nextFrame()
+    expect(insetCalls().length).toBeGreaterThan(0)
+    for (const c of insetCalls()) expect(c).toEqual(squareCmd)
+  })
+
   it('every stoplight apply notifies (Zen recomputes its safe area on zoom)', async () => {
     const seen = vi.fn()
     const off = style.onChromeApplied(seen)

@@ -421,6 +421,13 @@ export interface FsChangedEvent {
   paths: string[]
 }
 
+/** APP-LEVEL — this computer's Zen files changed (prd-zen-mode-v1 Z12).
+ *  Payload-free: the Zen store re-reads `GET /cli/zen/get` from the LOCAL
+ *  daemon. Nothing about the file rides the frame. */
+export interface ZenChangedEvent {
+  kind: 'zen_changed'
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -447,6 +454,7 @@ export type SessionEventMessage =
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
   | FsChangedEvent
+  | ZenChangedEvent
   | ReviewQueueChangedEvent
   | ReviewChangedEvent
   | MailChangedEvent
@@ -892,6 +900,7 @@ type ProjectGroupsChangedHandler = (reason: string) => void
 type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
+type ZenChangedHandler = () => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
@@ -934,6 +943,7 @@ interface AppBusHandlers {
   fsChanged: Set<FsChangedHandler>
   mailChanged: Set<MailChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
+  zenChanged: Set<ZenChangedHandler>
 }
 
 interface BusState {
@@ -967,6 +977,7 @@ function createBusState(scopeId: string): BusState {
       fsChanged: new Set(),
       mailChanged: new Set(),
       activeChanged: new Set(),
+      zenChanged: new Set(),
     },
   }
 }
@@ -1127,6 +1138,14 @@ export function onTokenUsageChanged(
   return addHandler(busFor(scope).handlers.tokenUsageChanged, fn)
 }
 
+/** prd-zen-mode-v1 Z12 — subscribe to APP-LEVEL `zen_changed` (this
+ *  computer's `~/.k2/zen/` re-validated to a new resolved page). Payload-free
+ *  refetch signal. Zen listens on the LOCAL daemon's bus only
+ *  (`lib/zen/zen-api.ts`). */
+export function onZenChanged(scope: ServerScope, fn: ZenChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.zenChanged, fn)
+}
+
 /** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
  *  `fs_changed` (paths under a workspace mutated on the host by agents,
  *  other clients, or `/cli/fs/*`). The primary bus survives host-switch
@@ -1274,6 +1293,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
+  zen_changed: (h) => {
+    for (const fn of h.zenChanged) fn()
+  },
 }
 
 /** Dispatch one app-level frame on `bus`. `socket` names the caller for
@@ -1311,6 +1333,7 @@ export interface AppBus {
   onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
+  onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
 }
 
 const _facades = new Map<string, AppBus>()
@@ -1350,6 +1373,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
+    onZenChanged: (fn) => onZenChanged(scope, fn),
   }
   _facades.set(scope.id, facade)
   return facade

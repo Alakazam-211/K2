@@ -27,5 +27,6 @@
   "ticket_changed": "app",
   "mail_changed": "app",
   "remote_session_access_denied": "app",
-  "fs_changed": "app"
+  "fs_changed": "app",
+  "zen_changed": "app"
 }

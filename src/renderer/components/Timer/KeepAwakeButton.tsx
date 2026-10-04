@@ -163,7 +163,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
         ? `${roomLabel} is offline, so its Keep awake is unknown.`
         : `Sign in to ${roomLabel} to see its Keep awake.`
     return (
-      <div className="relative flex items-center no-drag" ref={rootRef}>
+      <div className="relative ml-0.5 flex items-center no-drag" ref={rootRef}>
         <button
           type="button"
           aria-label={title}
@@ -238,7 +238,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const lidNote = lidClosedNote(status, lidNeedsSetup)
 
   return (
-    <div className="relative flex items-center no-drag" ref={rootRef}>
+    <div className="relative ml-0.5 flex items-center no-drag" ref={rootRef}>
       <button
         type="button"
         aria-label={title}

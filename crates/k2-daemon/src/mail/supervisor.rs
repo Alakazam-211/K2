@@ -530,8 +530,16 @@ pub fn stalwart_unit_state() -> String {
 /// JMAP `x:Certificate/set` persists in RocksDB but 443/465 keep the
 /// previous acceptor until this restart. Not `hostmail disable`.
 pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
+    restart_stalwart_and_wait("TLS reload")
+}
+
+/// `systemctl restart stalwart`, then wait (bounded) for the unit to be
+/// active again. Stored listener changes only bind on a restart. Not
+/// `hostmail disable`/`enable`. Tests never touch systemd.
+pub fn restart_stalwart_and_wait(why: &str) -> Result<(), String> {
     #[cfg(test)]
     {
+        let _ = why;
         return Ok(());
     }
     #[cfg(not(test))]
@@ -547,8 +555,27 @@ pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
-        Err("stalwart unit did not become active after TLS reload restart".into())
+        Err(format!("stalwart unit did not become active after {why} restart"))
     }
+}
+
+/// True when a previous `hostmail enable` ran to completion (guided
+/// setup wrote config.json AND the final restart step is marked).
+pub(crate) fn enable_completed() -> bool {
+    is_store_initialized() && step_is_done("restart")
+}
+
+/// Steady-state management client from the singleton row (`api_url` +
+/// the vaulted ApiKey). Unlike `domains::engine_from_db` this does not
+/// require the cached status to be `running` — a boot-time caller may
+/// still see the previous daemon's `stopped`.
+pub(crate) fn mgmt_client_from_row() -> Result<StalwartClient, String> {
+    let api_url = row_field("api_url").ok_or("no api_url recorded")?;
+    let key_ref = row_field("api_key_ref").ok_or("no api_key_ref recorded")?;
+    let key = FileSecretStore::default()
+        .resolve(&key_ref)?
+        .ok_or("api key missing from the mail secret store")?;
+    Ok(StalwartClient::new(api_url, key))
 }
 
 pub fn is_already_enabled() -> bool {

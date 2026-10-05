@@ -1182,6 +1182,12 @@ async fn async_main() {
     // persists transitions onto `mail_server.status`, and raises the
     // standard `mail:server-state-changed` event on failures.
     mail::supervisor::spawn_health_loop();
+    // Boxes enabled before the IMAP listener template (0.40.147) have
+    // no imap :143 / imaps :993. Linux-only detached thread: waits for
+    // the Stalwart admin API, creates ONLY the missing IMAP listeners
+    // (create-only set, never listeners_apply), restarts Stalwart once
+    // after a create. Logs and carries on on any failure.
+    mail::imap_listeners::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();
 
     // Files-drawer multi-writer live refresh — recursive watcher over

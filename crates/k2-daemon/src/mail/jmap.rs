@@ -525,6 +525,25 @@ impl StalwartClient {
         parse_listeners(&resp)
     }
 
+    /// Full listener rows (bind / protocol / TLS mode) for the startup
+    /// IMAP reconcile. Read-only.
+    pub fn listener_rows(&self) -> Result<Vec<super::imap_listeners::ListenerRow>, String> {
+        let resp = self.registry_call("x:NetworkListener/get", serde_json::json!({}))?;
+        super::imap_listeners::parse_listener_rows(&resp)
+    }
+
+    /// CREATE-ONLY `x:NetworkListener/set` for the given templates: no
+    /// `update`, no `destroy` — every other stored listener is left
+    /// exactly as it is. This is NOT [`Self::listeners_apply`].
+    pub fn listeners_create(
+        &self,
+        templates: &[super::imap_listeners::ListenerTemplate],
+    ) -> Result<(), String> {
+        let args = super::imap_listeners::create_only_set_args(templates)?;
+        let resp = self.registry_call("x:NetworkListener/set", args)?;
+        expect_set_clean("x:NetworkListener/set", &resp)
+    }
+
     /// Bind bootstrap/recovery HTTP to loopback `:8080` (never `*:8080`
     /// / `[::]:8080`). Does not touch the public HTTPS listener
     /// (`/login` on :443 is a follow-up — do not close here).
@@ -613,29 +632,15 @@ impl StalwartClient {
                 }),
             );
         }
+        // The IMAP pair comes from the ONE template the startup
+        // reconcile also uses (`imap_listeners`), so a box enabled
+        // before these listeners existed gets byte-identical rows.
+        use super::imap_listeners::{IMAPS_IMPLICIT, IMAP_STARTTLS};
         if !has_imap {
-            create.insert(
-                "imap".to_string(),
-                serde_json::json!({
-                    "name": "imap",
-                    "bind": { "[::]:143": true },
-                    "protocol": "imap",
-                    "useTls": true,
-                    "tlsImplicit": false,
-                }),
-            );
+            create.insert(IMAP_STARTTLS.name.to_string(), IMAP_STARTTLS.body());
         }
         if !has_imaps {
-            create.insert(
-                "imaps".to_string(),
-                serde_json::json!({
-                    "name": "imaps",
-                    "bind": { "[::]:993": true },
-                    "protocol": "imap",
-                    "useTls": true,
-                    "tlsImplicit": true,
-                }),
-            );
+            create.insert(IMAPS_IMPLICIT.name.to_string(), IMAPS_IMPLICIT.body());
         }
         let args = serde_json::json!({
             "create": create,
@@ -4454,7 +4459,7 @@ pub(crate) mod tests {
     /// The REAL normal-mode session document shape: absolute URLs on
     /// the MAIL HOSTNAME (captured live 2026-07-10) — the client must
     /// rebase them onto its loopback base.
-    const NORMAL_SESSION_FIXTURE: &str = r#"{
+    pub(crate) const NORMAL_SESSION_FIXTURE: &str = r#"{
         "capabilities": { "urn:ietf:params:jmap:core": {} },
         "accounts": { "b": { "name": "admin@k2livebox.test" } },
         "primaryAccounts": { "urn:ietf:params:jmap:mail": "b", "urn:stalwart:jmap": "b" },
@@ -4790,6 +4795,15 @@ pub(crate) mod tests {
         assert_eq!(args["create"]["imap"]["name"], "imap");
         assert_eq!(args["create"]["imap"]["bind"]["[::]:143"], true);
         assert_eq!(args["create"]["imap"]["tlsImplicit"], false);
+        assert_eq!(
+            args["create"]["imap"],
+            crate::mail::imap_listeners::IMAP_STARTTLS.body(),
+            "server-config creates imap from the shared template"
+        );
+        assert!(
+            args["create"].get("imaps").is_none(),
+            "imaps already in the fixture — not re-created"
+        );
         assert_eq!(
             args["update"]["L-http"]["bind"]["127.0.0.1:8180"], true,
             "the 8080 listener becomes the loopback mgmt endpoint"

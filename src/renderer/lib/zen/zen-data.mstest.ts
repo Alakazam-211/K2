@@ -61,7 +61,6 @@ import {
   __resetZenDataForTests,
   installZenDataVerbs,
   refreshZenPreviews,
-  zenAgentRows,
   type ZenAgentRow,
 } from '@/lib/zen/zen-data'
 
@@ -108,13 +107,30 @@ let bHandle = ''
 let uninstall: (() => void) | null = null
 
 const bridgeHost: ZenBridgeHost = {
+  gardens: () => [{ id: 'g-ms', name: 'Default', index: 1 }],
+  currentGardenId: () => 'g-ms',
+  switchGarden: () => {},
+  createGarden: async () => {
+    throw new Error('unused')
+  },
+  renameGarden: async () => {},
+  deleteGarden: async () => {},
   homes: () => [{ id: 'zen-ms', name: 'Zen' }],
-  selectedHomeId: () => 'zen-ms',
-  selectHome: () => {},
   exit: () => {},
   controls: {} as never,
   page: () => BUILTIN_TEXTING_PAGE,
 }
+
+/** The Default Garden's Agents widget (it shows the Home `zen-ms`). */
+function agentsBridge(): ReturnType<typeof createZenBridge> {
+  return createZenBridge(bridgeHost, { id: 'agents', caps: ['agents:read'] })
+}
+
+function rowsNow(): ZenAgentRow[] {
+  return agentsBridge().call('agents.list') as ZenAgentRow[]
+}
+
+let unsubscribeRows: (() => void) | null = null
 
 beforeAll(async () => {
   const projA = await register(A_PORT, A_OWNER, DIR_A)
@@ -145,6 +161,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
+  unsubscribeRows?.()
   uninstall?.()
   __resetZenDataForTests()
   await homeRooms.closeAll()
@@ -156,6 +173,14 @@ describe('Zen data verbs on two real daemons', () => {
   it('previews: one thread/latest per server, with that server’s login, parsed from both answers', async () => {
     const bEntry = hostPool.store.getState().entries[B_KEY]
     expect(bEntry?.boot?.features).toContain('thread-latest')
+    // A widget on screen shows the rows (previews follow live views).
+    h.requests.length = 0
+    unsubscribeRows = agentsBridge().call('agents.subscribe', () => undefined) as () => void
+    // Its own first refresh (both servers) settles before the measured one.
+    await vi.waitFor(() => {
+      expect(h.requests.filter((u) => u.includes('/cli/thread/latest')).length).toBe(2)
+    })
+    await new Promise((r) => setTimeout(r, 50))
     h.requests.length = 0
     await refreshZenPreviews()
     const latest = h.requests.filter((u) => u.includes('/cli/thread/latest'))
@@ -170,7 +195,7 @@ describe('Zen data verbs on two real daemons', () => {
     expect(new URL(toB[0]).searchParams.get('token')).not.toBe(A_OWNER)
     expect(h.requests.some((u) => /[?&]limit=0(&|$)/.test(u))).toBe(false)
 
-    const rows: ZenAgentRow[] = zenAgentRows()
+    const rows: ZenAgentRow[] = rowsNow()
     expect(rows.map((r) => [r.address, r.state])).toEqual([
       [aRow.address, 'ok'],
       [bRow.address, 'ok'],
@@ -190,7 +215,7 @@ describe('Zen data verbs on two real daemons', () => {
     await bridge.call('conversation.open', bRow.address)
     expect(useConnectHostStore.getState().activeHost).toBe('local')
     expect(homeRooms.store.getState().entries[bRow.address]?.phase).toBe('open')
-    expect(zenAgentRows().find((r) => r.address === bRow.address)?.selected).toBe(true)
+    expect(rowsNow().find((r) => r.address === bRow.address)?.selected).toBe(true)
     // vs-live Z52: B's own resolver answered.
     expect(h.requests.some((u) => u.startsWith(`http://127.0.0.1:${B_PORT}/cli/sessions/list-for-workspace`))).toBe(true)
     // Nothing about B's agent went to A.

@@ -3,20 +3,23 @@
 //
 // It is the regular Home's picker, not a copy: `AddAgentPicker` (This server
 // / From a server, the shared `SearchableAgentList`, the Home add path that
-// also caches a remote row's picture), for the CURRENT Home. Adding writes
-// the row into that Home, and the Agents widget, which reads the selected
-// Home's rows, shows it at once. Adding keeps the picker open, like Home.
+// also caches a remote row's picture), for the Home the calling Agents
+// widget shows (prd-zen-gardens-v1 G33, G55) — never the window's selected
+// Home, which never moves. Adding writes the row into that Home, and the
+// Agents widget shows it at once. Adding keeps the picker open, like Home.
 //
 // Opens above the widget's anchor (left-aligned), else in the bottom-left
 // corner. Registered as a K2 overlay, so the required-controls check never
 // counts it as covering the page's controls. Closes on Esc, a click outside
-// it (the anchor itself toggles), a Home switch, and when Zen leaves the
-// window (this unmounts).
+// it (the anchor itself toggles), that widget's Home changing, a Garden
+// switch, and when Zen leaves the window (this unmounts).
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useHomesStore, selectedHome } from '@/stores/homes'
+import { useHomesStore } from '@/stores/homes'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { closeZenAddAgent, useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
+import { useCurrentZenGarden } from '@/lib/zen/zen-gardens'
+import { useZenGardenHomesStore } from '@/lib/zen/zen-garden-homes'
 import { AddAgentPicker } from '@/components/Home/HomeAddPanels'
 
 /** Picker width (CSS px). The Home panel insets 12px each side inside it. */
@@ -45,7 +48,12 @@ function spotFor(anchor: HTMLElement | null): Spot {
 export function ZenAddAgentPicker(): React.JSX.Element | null {
   const open = useZenAddAgentStore((s) => s.open)
   const anchor = useZenAddAgentStore((s) => s.anchor)
-  const home = useHomesStore(selectedHome)
+  const homeId = useZenAddAgentStore((s) => s.homeId)
+  const openedIn = useZenAddAgentStore((s) => s.gardenId)
+  const viewKey = useZenAddAgentStore((s) => s.viewKey)
+  const pickedNow = useZenGardenHomesStore((s) => (viewKey ? (s.picks[viewKey] ?? null) : null))
+  const home = useHomesStore((s) => s.homes.find((h) => h.id === homeId) ?? null)
+  const gardenId = useCurrentZenGarden()?.id ?? null
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [spot, setSpot] = useState<Spot>(() => spotFor(anchor))
 
@@ -53,14 +61,14 @@ export function ZenAddAgentPicker(): React.JSX.Element | null {
   // next Zen-on or lingers over the regular Home.
   useEffect(() => () => closeZenAddAgent(), [])
 
-  // The picker is for the Home on screen: a Home switch closes it.
-  const homeId = home.id
-  const firstHome = useRef(homeId)
+  // The picker is for one Home in one Garden: a Garden switch, that Home
+  // going away, or the widget's Home picker moving to another Home closes it.
   useEffect(() => {
-    if (firstHome.current === homeId) return
-    firstHome.current = homeId
-    closeZenAddAgent()
-  }, [homeId])
+    if (!open) return
+    const gardenMoved = openedIn !== null && gardenId !== null && openedIn !== gardenId
+    const homeMoved = pickedNow !== null && pickedNow !== homeId
+    if (!home || gardenMoved || homeMoved) closeZenAddAgent()
+  }, [open, home, homeId, openedIn, gardenId, pickedNow])
 
   // Place it above the anchor now and on every resize.
   useLayoutEffect(() => {
@@ -103,7 +111,7 @@ export function ZenAddAgentPicker(): React.JSX.Element | null {
     }
   }, [open, anchor])
 
-  if (!open) return null
+  if (!open || !home) return null
   return (
     <div
       ref={boxRef}

@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 Z7/Z48 (T4.9) — while Zen owns the window, the Home under
-// it is told it is hidden and parks the way a hidden tab does:
-//   - the window's own room: `PageLiveContext` goes false (its grids close);
+// prd-zen-mode-v1 Z7/Z48 (T4.9) and prd-zen-gardens-v1 G4/G49 (TG3.3) —
+// while Zen owns the window, whatever page is under it is told it is hidden
+// and parks the way a hidden tab does:
+//   - the window's own room: `PageLiveContext` goes false (its grids close)
+//     on Agents as well as Home;
+//   - Projects: its panes' `PageLiveContext` goes false;
 //   - a pinned remote room on Home: no longer `shown`, its PageLive goes
 //     false, its shell is display:none, and Home's page visibility (the tier
 //     clock) goes false. Its entry stays (Zen's conversations use it).
@@ -34,6 +37,21 @@ vi.mock('@/components/Terminal/TerminalArea', async () => {
   }
 })
 
+// Projects under Zen: the page's own pieces are stubs except what reads
+// its PageLive (a stub nav standing in for its dashboard panes).
+vi.mock('@/components/Projects/ProjectNav', async () => {
+  const React = await import('react')
+  const { PageLiveContext } = await import('@/contexts/TabVisibilityContext')
+  const Nav = (): React.JSX.Element => {
+    const pageLive = React.useContext(PageLiveContext)
+    return <div data-stub-projects-pane="" data-page-live={String(pageLive)} />
+  }
+  return { default: Nav, ProjectNavRail: Nav, CreateProjectForm: () => null }
+})
+vi.mock('@/components/TopBar/TopBarUtilities', () => ({ default: () => null }))
+vi.mock('@/components/TopBar/ServerSwitcher', () => ({ default: () => null }))
+vi.mock('@/components/TopBar/PageTabs', () => ({ default: () => null }))
+
 import { act } from 'react'
 import { cleanup, render } from '@testing-library/react'
 import { createStore } from 'zustand/vanilla'
@@ -43,10 +61,11 @@ import { roomTiers } from '@/lib/room-tiers'
 import { hostPool } from '@/lib/host-pool-instance'
 import { usePageViewStore, primaryRoomPageLive } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { useHomesStore, selectedHome } from '@/stores/homes'
-import { useZenHomesStore } from '@/lib/zen/zen-homes'
+import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { exitZen } from '@/lib/zen/zen-view'
+import ProjectsPage from '@/components/Projects/ProjectsPage'
+import { useProjectGroupsStore } from '@/stores/project-groups'
 import type { PinnedRoom } from '@/stores/room'
 import type { PresenceView } from '@/stores/server-view'
 
@@ -83,13 +102,13 @@ function showRoom(room: PinnedRoom): string {
 }
 
 function zenOn(): void {
-  act(() => useZenHomesStore.getState().setOn(selectedHome(useHomesStore.getState()).id, true))
+  act(() => useZenWindowStore.getState().setOn(true))
 }
 
 beforeEach(() => {
   Object.defineProperty(window.navigator, 'platform', { value: 'MacIntel', configurable: true })
   __resetZenAvailableForTests()
-  useZenHomesStore.setState({ on: {} })
+  useZenWindowStore.setState({ on: false, garden: null })
   useSettingsStore.setState({ settingsOpen: false })
   usePageViewStore.getState().setPage('home')
   hostPool.store.setState({ entries: {} })
@@ -103,12 +122,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('the Home under Zen parks', () => {
-  it('the window’s own room: PageLive is false on Home under Zen, true again after exit', () => {
+describe('the page under Zen parks', () => {
+  it('the window’s own room: PageLive is false under Zen on Agents and on Home, true again after exit', () => {
     expect(primaryRoomPageLive('home', true, false)).toBe(true)
     expect(primaryRoomPageLive('home', true, true)).toBe(false)
-    // Agents never shows Zen; the rule never parks it.
-    expect(primaryRoomPageLive('agents', false, true)).toBe(true)
+    // G49: Zen is a mode of the window, so Agents under it parks too.
+    expect(primaryRoomPageLive('agents', false, false)).toBe(true)
+    expect(primaryRoomPageLive('agents', false, true)).toBe(false)
     expect(primaryRoomPageLive('home', false, false)).toBe(false)
   })
 
@@ -143,5 +163,21 @@ describe('the Home under Zen parks', () => {
     expect(shell().style.display).toBe('flex')
     expect(document.querySelector('[data-stub-terminal]')?.getAttribute('data-page-live')).toBe('true')
     expect(visible).toHaveBeenLastCalledWith(true)
+  })
+
+  it('Projects under Zen: its panes’ PageLive is false, and true again after exit (G49)', () => {
+    vi.spyOn(useProjectGroupsStore.getState(), 'fetchGroups').mockResolvedValue(undefined as never)
+    useProjectGroupsStore.setState({ groups: [], selectedGroupId: null })
+    act(() => usePageViewStore.getState().setPage('projects'))
+    render(<ProjectsPage />)
+    const pane = (): string | null =>
+      document.querySelector('[data-stub-projects-pane]')?.getAttribute('data-page-live') ?? null
+    expect(pane()).toBe('true')
+    zenOn()
+    expect(pane()).toBe('false')
+    // The page stays Projects underneath.
+    expect(usePageViewStore.getState().page).toBe('projects')
+    act(() => exitZen())
+    expect(pane()).toBe('true')
   })
 })

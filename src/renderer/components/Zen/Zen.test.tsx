@@ -1,29 +1,40 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 S4 — the renderer skeleton through the real ZenHost, Zen
-// root, page, template controls, bridge, control registry and safe mode.
-// Only the edges are faked: the daemon (`daemon-cli`), the app socket
-// (`session-events`), Tauri, and layout (jsdom has none, so the control
-// check reads an injected geometry).
+// prd-zen-mode-v1 S4 and prd-zen-gardens-v1 S3/S4 — window-level Zen and
+// Gardens through the real ZenHost, Zen root, page, template controls,
+// bridge, control registry and safe mode. Only the edges are faked: the
+// daemon (`daemon-cli`), the app socket (`session-events`), Tauri, and
+// layout (jsdom has none, so the control check reads an injected geometry).
 //
 // Asserted (fail loudly):
-//   - the toggle row on regular Home enters Zen for the CURRENT Home, and
-//     every Zen config request goes to this computer's daemon;
-//   - on/off is per Home and shared across windows; the page's Home
-//     switcher only steps away, Exit turns that Home off;
-//   - Shift while toggling enters safe mode (and reads no user files);
-//   - a crashing widget drops to safe mode with the message;
-//   - a missing / invisible / unwired required control drops to safe mode
-//     after two failed checks, not one;
-//   - the escape hatch (menu event, macOS targeted menu, Linux Ctrl+Alt+Z
-//     in the capture phase, AltGr ignored) always exits, safe mode included;
-//   - an unreachable local daemon is safe mode with its cause.
+//   - the top-bar toggle turns THIS window's Zen on over whatever page it is
+//     on, and every Zen request goes to this computer's daemon (G1–G5,
+//     TG3.2); Zen on with no folder sets it up once (G22);
+//   - exit shows the same page; Settings only hides Zen; a page change
+//     turns Zen off (G34); a new window starts off, a relaunch keeps its
+//     switch (G1); keyboard focus moves into Zen (G50);
+//   - the Garden switcher lists every Garden, switches this window's Garden,
+//     and "+ New Garden" creates on the local daemon, switches to the new
+//     (empty) Garden and shows the clash copy (G25, TG4.2); a Garden deleted
+//     elsewhere moves the window to the first one (TG4.5);
+//   - a missing / invisible / unwired / undeclared Garden switcher, or one
+//     whose options miss a Garden, is safe mode after two failed checks, not
+//     one (G24, TG4.1); Shift, a crash, an unreachable or older daemon are
+//     safe mode with their cause;
+//   - the escape hatch (menu event, macOS targeted menu, Linux Ctrl+Alt+Z in
+//     the capture phase, AltGr ignored) always exits, safe mode included,
+//     and never changes the page.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+type Garden = { id: string; name: string; template: string; seedHome?: string }
 
 const h = vi.hoisted(() => ({
   calls: [] as Array<{ method: 'GET' | 'POST'; hostKey: string; route: string; data: unknown }>,
   getImpl: null as null | ((route: string, params: unknown) => unknown),
+  postImpl: null as null | ((route: string, body: unknown) => unknown),
+  gardens: [] as Garden[],
+  setUp: true,
   zenHandlers: [] as Array<{ hostKey: string; fn: () => void }>,
   sockets: [] as string[],
   closedSockets: [] as string[],
@@ -67,7 +78,8 @@ vi.mock('@/lib/daemon-cli', () => ({
   }),
   daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body?: unknown) => {
     h.calls.push({ method: 'POST', hostKey: scope.hostKey, route, data: body })
-    return { ok: true }
+    if (!h.postImpl) throw new Error(`unexpected POST ${route}`)
+    return h.postImpl(route, body)
   }),
   withHostCliSlot: async <T,>(_s: unknown, fn: () => Promise<T>): Promise<T> => fn(),
 }))
@@ -92,37 +104,60 @@ vi.mock('@/stores/session-events', async (importOriginal) => {
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { ZEN_HOMES_STORAGE_KEY, useZenHomesStore } from '@/lib/zen/zen-homes'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { __resetZenApiForTests } from '@/lib/zen/zen-api'
+import { __resetZenGardensForTests, useZenGardensStore } from '@/lib/zen/zen-gardens'
+import { __reloadZenWindowForTests, useZenWindowStore, zenWindowKey } from '@/lib/zen/zen-window'
 import { __setZenGeometryForTests, runZenControlChecksNow } from '@/lib/zen/zen-monitor'
-import type { ZenGeometry, ZenRect } from '@/lib/zen/zen-controls'
+import { ZEN_WIRING_DEADLINE_MS, type ZenGeometry, type ZenRect } from '@/lib/zen/zen-controls'
 import { useZenViewStore, zenShownNow } from '@/lib/zen/zen-view'
 import { ZenHost } from './ZenHost'
-import { ZenToggleRow } from '@/components/Home/ZenToggleRow'
+import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import { registerZenTemplateControls, registerZenWidget, type ZenTemplateControlsProps } from './zen-registry'
 import { useZenBind } from './ZenTemplateControls'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/** A resolved page as S1 answers it (docs/zen-contract.md). */
-function goodPage(version = 'v1'): unknown {
+const DEFAULT: Garden = { id: 'g-default', name: 'Default', template: 'k2.texting@1' }
+const MORNINGS: Garden = { id: 'g-mornings', name: 'Mornings', template: 'k2.blank@1' }
+
+/** `GET /cli/zen/gardens` as the daemon answers it (G13). */
+function gardensAnswer(): unknown {
+  return {
+    ok: true,
+    setUp: h.setUp,
+    gardens: h.gardens.map((g, i) => ({ ...g, index: i + 1, hasFile: true, createdAt: '2026-10-04T18:00:00Z' })),
+  }
+}
+
+/** A resolved Garden page as S1 answers it (docs/zen-contract.md). */
+function gardenPage(id: string, version = 'v1'): unknown {
+  const g = h.gardens.find((x) => x.id === id)
+  if (!g) throw new Error('unknown_garden')
+  const blank = g.template === 'k2.blank@1'
   return {
     ok: true,
     schema: 1,
     version,
-    page: {
-      template: 'k2.texting@1',
-      layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
-      widgets: [
-        { id: 'agents', kind: 'agents', column: 0, props: {}, caps: ['agents:read'], source: 'builtin' },
-        { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: ['thread:read'], source: 'builtin' },
-      ],
-      controls: ['zen-toggle', 'home-switcher', 'drag-region'],
-    },
+    garden: { id: g.id, name: g.name, index: h.gardens.indexOf(g) + 1 },
+    page: blank
+      ? {
+          template: 'k2.blank@1',
+          layout: { kind: 'columns', split: [100], minWidths: [0] },
+          widgets: [{ id: 'garden-empty', kind: 'garden-empty', column: 0, props: {}, caps: ['agents:read'], source: 'builtin' }],
+          controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+        }
+      : {
+          template: 'k2.texting@1',
+          layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+          widgets: [
+            { id: 'agents', kind: 'agents', column: 0, props: { 'home-picker': true }, caps: ['agents:read'], source: 'builtin' },
+            { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: ['thread:read'], source: 'builtin' },
+          ],
+          controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
+        },
     theme: {},
     chrome: {},
     motion: {},
@@ -132,9 +167,29 @@ function goodPage(version = 'v1'): unknown {
   }
 }
 
+function defaultGet(route: string, params: unknown): unknown {
+  if (route === 'zen/gardens') return gardensAnswer()
+  if (route === 'zen/get') return gardenPage(String((params as { garden?: string }).garden))
+  throw new Error(`unexpected GET ${route}`)
+}
+
+function defaultPost(route: string, body: unknown): unknown {
+  if (route === 'zen/setup') {
+    h.setUp = true
+    if (h.gardens.length === 0) h.gardens.push({ ...DEFAULT })
+    return { ok: true, createdFolder: true, migrated: null, gardens: [] }
+  }
+  if (route === 'zen/garden/new') {
+    const name = String((body as { name: string }).name)
+    if (h.gardens.some((g) => g.name.toLowerCase() === name.toLowerCase())) throw new Error('garden_exists')
+    const g: Garden = { id: `g-${name.toLowerCase()}`, name, template: 'k2.blank@1' }
+    h.gardens.push(g)
+    return { ok: true, garden: { ...g, index: h.gardens.length, hasFile: true } }
+  }
+  throw new Error(`unexpected POST ${route}`)
+}
+
 // ── Fake layout ─────────────────────────────────────────────────────────
-// Every element gets a sensible on-screen box; tests override one element's
-// style or box, or mark it covered.
 const styleOverride = new Map<Element, Partial<{ display: string; visibility: string; opacity: number }>>()
 const rectOverride = new Map<Element, ZenRect>()
 const covered = new Set<Element>()
@@ -172,43 +227,34 @@ beforeEach(() => {
   h.sockets.length = 0
   h.closedSockets.length = 0
   h.invokes.length = 0
-  h.getImpl = (route) => {
-    if (route === 'zen/get') return goodPage()
-    throw new Error(`unexpected GET ${route}`)
-  }
+  h.gardens = [{ ...DEFAULT }]
+  h.setUp = true
+  h.getImpl = defaultGet
+  h.postImpl = defaultPost
   setPlatform('MacIntel')
   __setZenGeometryForTests(fakeGeometry)
   styleOverride.clear()
   rectOverride.clear()
   covered.clear()
   __resetZenApiForTests()
+  __resetZenGardensForTests()
   localStorage.clear()
-  useZenHomesStore.setState({ on: {} })
+  __reloadZenWindowForTests('main')
   useZenViewStore.setState({ safe: null, epoch: 0 })
   useSettingsStore.setState({ settingsOpen: false })
-  usePageViewStore.getState().setPage('home')
+  usePageViewStore.getState().setPage('agents')
 })
 
 afterEach(() => {
   cleanup()
   for (const off of unregister.splice(0)) off()
   __setZenGeometryForTests(null)
-  // Two Homes at most survive between tests: drop the extras.
-  const s = useHomesStore.getState()
-  for (const home of s.homes.slice(1)) s.deleteHome(home.id)
 })
-
-function twoHomes(): { first: string; second: string } {
-  const first = selectedHome(useHomesStore.getState()).id
-  const second = useHomesStore.getState().createHome('Work')
-  if (!second) throw new Error('createHome refused')
-  return { first, second }
-}
 
 function mount(): void {
   render(
     <>
-      <ZenToggleRow />
+      <ZenTopBarToggle />
       <ZenHost />
     </>,
   )
@@ -218,17 +264,17 @@ function zenRoot(): HTMLElement | null {
   return document.querySelector('[data-zen-root]')
 }
 
-async function enterViaRow(shiftKey = false): Promise<void> {
-  const row = document.querySelector('[data-zen-enter]')
-  if (!row) throw new Error('no Zen toggle row')
+async function enterViaTopBar(shiftKey = false): Promise<void> {
+  const toggle = document.querySelector('[data-zen-enter]')
+  if (!toggle) throw new Error('no Zen toggle in the top bar')
   await act(async () => {
-    fireEvent.click(row, { shiftKey })
+    fireEvent.click(toggle, { shiftKey })
   })
 }
 
-async function pageReady(): Promise<void> {
+async function pageReady(template = 'k2.texting@1'): Promise<void> {
   await waitFor(() => {
-    if (!document.querySelector('[data-zen-page]')) throw new Error('Zen page not drawn')
+    if (!document.querySelector(`[data-zen-page="${template}"]`)) throw new Error(`Zen page ${template} not drawn`)
   })
 }
 
@@ -238,136 +284,243 @@ function safeReason(): string {
   return el.textContent ?? ''
 }
 
-describe('entering Zen from the regular Home', () => {
-  it('the toggle row renders on Home and starts the CURRENT Home’s Zen page from this computer’s daemon', async () => {
-    const { first, second } = twoHomes()
-    // createHome selects the new Home: the current Home is "Work".
-    expect(selectedHome(useHomesStore.getState()).id).toBe(second)
+function el(selector: string): HTMLElement {
+  const found = document.querySelector(selector)
+  if (!(found instanceof HTMLElement)) throw new Error(`no ${selector}`)
+  return found
+}
+
+function storedWindow(label = 'main'): unknown {
+  return JSON.parse(localStorage.getItem(zenWindowKey(label)) ?? 'null')
+}
+
+async function zenChanged(): Promise<void> {
+  const local = h.zenHandlers.find((z) => z.hostKey === 'local')
+  if (!local) throw new Error('no local zen_changed handler')
+  await act(async () => local.fn())
+}
+
+describe('Zen is a mode of the window (G1–G5)', () => {
+  it('the top-bar toggle turns this window’s Zen on over the page it is on, reading this computer’s daemon', async () => {
     mount()
-    const row = document.querySelector('[data-zen-toggle-row] [role="switch"]')
-    if (!row) throw new Error('no toggle row')
-    expect(row.getAttribute('aria-checked')).toBe('false')
+    const toggle = el('[data-zen-enter]')
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(toggle.getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
     expect(zenRoot()).toBeNull()
 
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
 
-    expect(useZenHomesStore.getState().on).toEqual({ [second]: true })
-    expect(useZenHomesStore.getState().on[first]).toBeUndefined()
-    expect(JSON.parse(localStorage.getItem(ZEN_HOMES_STORAGE_KEY) ?? 'null')).toEqual({
-      version: 1,
-      on: { [second]: true },
-    })
-    // The page Z10 resolved: the template band and one column per split.
-    expect(document.querySelector('[data-zen-template-bar]')).not.toBeNull()
-    expect(document.querySelectorAll('[data-zen-column]').length).toBe(2)
-    expect(document.querySelector('[data-zen-widget="agents"]')).not.toBeNull()
-    expect(document.querySelector('[data-zen-widget="conversation"]')).not.toBeNull()
+    expect(usePageViewStore.getState().page).toBe('agents')
+    expect(useZenWindowStore.getState().on).toBe(true)
+    // The window's Garden is the first, written back (G22).
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default' })
+    expect(el('[data-zen-garden-pill]').textContent).toContain('Default')
     expect(zenRoot()?.style.zIndex).toBe('150')
-    // T4.2: ensure, then get, both on the LOCAL daemon, never the window's.
+    // T4.2: the list, then the Garden's page, both on the LOCAL daemon.
     expect(h.calls.map((c) => [c.method, c.hostKey, c.route])).toEqual([
-      ['POST', 'local', 'zen/page/ensure'],
+      ['GET', 'local', 'zen/gardens'],
       ['GET', 'local', 'zen/get'],
     ])
-    expect(h.calls[0].data).toEqual({ homeId: second, name: 'Work' })
-    expect(h.calls[1].data).toEqual({ home: second })
-    // zen_changed is watched on this computer's own app socket.
+    expect(h.calls[1].data).toEqual({ garden: 'g-default' })
     expect(h.sockets).toEqual(['local'])
     expect(h.zenHandlers.map((z) => z.hostKey)).toEqual(['local'])
   })
 
-  it('entering from Settings or another page goes to Home first', async () => {
+  it('Zen on with no folder yet sets it up once, then reads (G22)', async () => {
+    h.gardens = []
+    h.setUp = false
     mount()
-    act(() => {
-      usePageViewStore.getState().setPage('projects')
-      useSettingsStore.setState({ settingsOpen: true })
-    })
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-    expect(usePageViewStore.getState().page).toBe('home')
+    expect(h.calls.map((c) => [c.method, c.hostKey, c.route])).toEqual([
+      ['GET', 'local', 'zen/gardens'],
+      ['POST', 'local', 'zen/setup'],
+      ['GET', 'local', 'zen/gardens'],
+      ['GET', 'local', 'zen/get'],
+    ])
+    expect(h.calls[1].data).toEqual({})
+  })
+
+  it('shows on every page and leaves that page put; exit shows it again (TG3.2)', async () => {
+    mount()
+    for (const page of ['agents', 'projects', 'home'] as const) {
+      act(() => usePageViewStore.getState().setPage(page))
+      await enterViaTopBar()
+      await pageReady()
+      expect([page, usePageViewStore.getState().page, zenShownNow()]).toEqual([page, page, true])
+      await act(async () => void fireEvent.click(el('[data-zen-switch]')))
+      expect(zenRoot()).toBeNull()
+      expect(usePageViewStore.getState().page).toBe(page)
+      expect(useZenWindowStore.getState().on).toBe(false)
+    }
+  })
+
+  it('Settings hides Zen without turning it off; closing Settings shows it again', async () => {
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    act(() => useSettingsStore.setState({ settingsOpen: true }))
+    expect(zenRoot()).toBeNull()
+    expect(useZenWindowStore.getState().on).toBe(true)
+    act(() => useSettingsStore.setState({ settingsOpen: false }))
+    await pageReady()
+  })
+
+  it('in Settings’ bar the toggle closes Settings and enters Zen', async () => {
+    mount()
+    act(() => useSettingsStore.setState({ settingsOpen: true }))
+    await enterViaTopBar()
+    await pageReady()
     expect(useSettingsStore.getState().settingsOpen).toBe(false)
+  })
+
+  it('a page change while Zen is on (⌘P, palette, a ticket link) turns Zen off and shows that page (G34)', async () => {
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    act(() => usePageViewStore.getState().setPage('projects'))
+    expect(zenRoot()).toBeNull()
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(usePageViewStore.getState().page).toBe('projects')
+    expect(storedWindow()).toMatchObject({ on: false })
+  })
+
+  it('a new window starts outside Zen; relaunching a window keeps its own switch (G1)', async () => {
+    localStorage.setItem(zenWindowKey('main'), JSON.stringify({ version: 1, on: true, garden: 'g-default' }))
+    act(() => __reloadZenWindowForTests('main'))
     expect(zenShownNow()).toBe(true)
+    act(() => __reloadZenWindowForTests('window-2b1c'))
+    expect(zenShownNow()).toBe(false)
+    expect(useZenWindowStore.getState()).toMatchObject({ label: 'window-2b1c', on: false, garden: null })
+    act(() => __reloadZenWindowForTests('main'))
+    mount()
+    await pageReady()
+  })
+
+  it('keyboard focus moves into Zen, off whatever (a terminal) had it (G50)', async () => {
+    const term = document.createElement('textarea')
+    term.setAttribute('data-hidden-terminal', '')
+    document.body.appendChild(term)
+    term.focus()
+    expect(document.activeElement).toBe(term)
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    expect(document.activeElement).toBe(zenRoot())
+    term.remove()
   })
 })
 
-describe('per-Home on/off', () => {
-  it('is per Home: the page’s Home switcher steps away, coming back shows Zen, and the page’s toggle turns that Home off', async () => {
-    const { first, second } = twoHomes()
+describe('Gardens (G22–G25)', () => {
+  it('the Garden switcher lists every Garden with ⌥⌘N, and a pick switches this window and reads that page', async () => {
+    h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-
-    // The template's Home pill: open it, pick the first Home.
-    const pill = document.querySelector('[data-zen-home-pill]')
-    if (!pill) throw new Error('no Home pill')
-    act(() => void fireEvent.click(pill))
-    const option = document.querySelector(`[data-zen-home-option="${first}"]`)
-    if (!option) throw new Error('no option for the first Home')
-    act(() => void fireEvent.click(option))
-    expect(selectedHome(useHomesStore.getState()).id).toBe(first)
-    // Stepped away: the first Home's Zen is off, the second's stays on.
-    expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on).toEqual({ [second]: true })
-
-    act(() => useHomesStore.getState().selectHome(second))
-    await pageReady()
-    expect(zenRoot()).not.toBeNull()
-
-    // Settings hides Zen without turning it off.
-    act(() => useSettingsStore.setState({ settingsOpen: true }))
-    expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on[second]).toBe(true)
-    act(() => useSettingsStore.setState({ settingsOpen: false }))
-    await pageReady()
-
-    // The page's Zen toggle is Exit: that Home goes off.
-    const toggle = document.querySelector('[data-zen-switch]')
-    if (!toggle) throw new Error('no Zen switch')
-    act(() => void fireEvent.click(toggle))
-    expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on).toEqual({})
-    expect(JSON.parse(localStorage.getItem(ZEN_HOMES_STORAGE_KEY) ?? 'null')).toEqual({ version: 1, on: {} })
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    const options = Array.from(document.querySelectorAll('[data-zen-garden-option]'))
+    expect(options.map((o) => [o.getAttribute('data-zen-garden-option'), o.getAttribute('data-zen-bound')])).toEqual([
+      ['g-default', 'garden-option'],
+      ['g-mornings', 'garden-option'],
+    ])
+    expect(options[1].textContent).toContain('⌥⌘2')
+    expect(el('[data-zen-new-garden]').textContent).toContain('New Garden')
+    await act(async () => void fireEvent.click(options[1]))
+    await pageReady('k2.blank@1')
+    expect(useZenWindowStore.getState().garden).toBe('g-mornings')
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-mornings' })
+    expect(h.calls.filter((c) => c.route === 'zen/get').map((c) => c.data)).toEqual([
+      { garden: 'g-default' },
+      { garden: 'g-mornings' },
+    ])
+    expect(document.querySelector('[data-zen-widget="garden-empty"]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
   })
 
-  it('another window turning the Home off (storage event) leaves Zen here too', async () => {
-    const home = selectedHome(useHomesStore.getState()).id
+  it('+ New Garden creates on the local daemon, switches to the empty Garden, and the switcher lists it after zen_changed (TG4.2)', async () => {
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-    act(() => {
-      window.dispatchEvent(
-        new StorageEvent('storage', { key: ZEN_HOMES_STORAGE_KEY, newValue: JSON.stringify({ version: 1, on: {} }) }),
-      )
-    })
-    expect(zenRoot()).toBeNull()
-    act(() => {
-      window.dispatchEvent(
-        new StorageEvent('storage', {
-          key: ZEN_HOMES_STORAGE_KEY,
-          newValue: JSON.stringify({ version: 1, on: { [home]: true } }),
-        }),
-      )
-    })
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    const input = el('[data-zen-new-garden-name]') as HTMLInputElement
+    expect(document.activeElement).toBe(input)
+    await act(async () => void fireEvent.change(input, { target: { value: 'Notes' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    await pageReady('k2.blank@1')
+    const create = h.calls.filter((c) => c.route === 'zen/garden/new')
+    expect(create.map((c) => [c.method, c.hostKey, c.data])).toEqual([['POST', 'local', { name: 'Notes' }]])
+    expect(useZenWindowStore.getState().garden).toBe('g-notes')
+    expect(h.calls.filter((c) => c.route === 'zen/get').map((c) => c.data)).toEqual([
+      { garden: 'g-default' },
+      { garden: 'g-notes' },
+    ])
+    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
+    expect(el('[data-zen-garden-pill]').textContent).toContain('Notes')
+
+    await zenChanged()
+    await waitFor(() => expect(useZenGardensStore.getState().gardens.map((g) => g.id)).toEqual(['g-default', 'g-notes']))
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    expect(
+      Array.from(document.querySelectorAll('[data-zen-garden-option]')).map((o) => o.getAttribute('data-zen-garden-option')),
+    ).toEqual(['g-default', 'g-notes'])
+  })
+
+  it('a name you already have shows the clash copy (checked here, and from the daemon’s 409)', async () => {
+    mount()
+    await enterViaTopBar()
     await pageReady()
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    const input = el('[data-zen-new-garden-name]') as HTMLInputElement
+    await act(async () => void fireEvent.change(input, { target: { value: 'default' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    await waitFor(() =>
+      expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “default”.'),
+    )
+    expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
+    // Another window made "Later" a moment ago: the daemon refuses.
+    h.gardens.push({ id: 'g-later', name: 'Later', template: 'k2.blank@1' })
+    await act(async () => void fireEvent.change(input, { target: { value: 'Later' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    await waitFor(() => expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “Later”.'))
+    expect(h.calls.filter((c) => c.route === 'zen/garden/new').length).toBe(1)
+    expect(useZenWindowStore.getState().garden).toBe('g-default')
+    // Esc cancels the field.
+    await act(async () => void fireEvent.keyDown(input, { key: 'Escape' }))
+    expect(document.querySelector('[data-zen-new-garden-name]')).toBeNull()
+  })
+
+  it('a zen_changed that drops this window’s Garden moves it to the first one (TG4.5)', async () => {
+    h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
+    localStorage.setItem(zenWindowKey('main'), JSON.stringify({ version: 1, on: false, garden: 'g-mornings' }))
+    act(() => __reloadZenWindowForTests('main'))
+    mount()
+    await enterViaTopBar()
+    await pageReady('k2.blank@1')
+    h.gardens = [{ ...DEFAULT }]
+    await zenChanged()
+    await pageReady('k2.texting@1')
+    expect(useZenWindowStore.getState().garden).toBe('g-default')
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default' })
   })
 })
 
 describe('safe mode', () => {
   it('Shift while toggling enters safe mode and reads none of the user’s files', async () => {
     mount()
-    await enterViaRow(true)
+    await enterViaTopBar(true)
     await pageReady()
     expect(safeReason()).toBe('You held Shift while turning Zen on.')
     expect(document.querySelector('[data-zen-safe-banner]')?.textContent).toContain(
       'Zen is in safe mode. Your files are untouched.',
     )
     expect(h.calls.filter((c) => c.route.startsWith('zen/'))).toEqual([])
-    // Try again reads the page.
-    const again = document.querySelector('[data-zen-try-again]')
-    if (!again) throw new Error('no Try again')
-    await act(async () => void fireEvent.click(again))
+    // Try again reads the list and the page.
+    await act(async () => void fireEvent.click(el('[data-zen-try-again]')))
     await waitFor(() => expect(document.querySelector('[data-zen-safe-banner]')).toBeNull())
-    expect(h.calls.map((c) => c.route)).toEqual(['zen/page/ensure', 'zen/get'])
+    expect(h.calls.map((c) => c.route)).toEqual(['zen/gardens', 'zen/get'])
   })
 
   it('a widget that crashes drops to safe mode with the message, and Exit Zen still works', async () => {
@@ -377,22 +530,18 @@ describe('safe mode', () => {
         throw new Error('boom')
       }),
     )
-    const home = selectedHome(useHomesStore.getState()).id
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await waitFor(() => expect(safeReason()).toBe('The page crashed: boom'))
-    // Safe mode's page still crashes here (the same widget): the last-resort
-    // panel shows with K2's banner; the menu path still exits.
     expect(document.querySelector('[data-zen-last-resort]')).not.toBeNull()
     act(() => void window.dispatchEvent(new Event('menu:zen-toggle')))
     expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on[home]).toBeUndefined()
+    expect(useZenWindowStore.getState().on).toBe(false)
     err.mockRestore()
   })
 
   it('a crash in a user page falls back to the built-in page with K2’s banner', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    // Breaks only on the user's page; the built-in safe page draws it.
     unregister.push(
       registerZenWidget('agents', () => {
         if (useZenViewStore.getState().safe === null) throw new Error('agents widget broke')
@@ -400,26 +549,26 @@ describe('safe mode', () => {
       }),
     )
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await waitFor(() => expect(safeReason()).toBe('The page crashed: agents widget broke'))
     expect(document.querySelector('[data-zen-page="k2.texting@1"]')).not.toBeNull()
     expect(document.querySelector('[data-ok-agents]')).not.toBeNull()
+    // Safe mode's page has its own Garden switcher.
+    expect(document.querySelector('[data-zen-garden-pill]')).not.toBeNull()
     expect(document.querySelector('[data-zen-last-resort]')).toBeNull()
-    const exit = document.querySelector('[data-zen-safe-exit]')
-    if (!exit) throw new Error('no Exit Zen in the banner')
-    act(() => void fireEvent.click(exit))
+    act(() => void fireEvent.click(el('[data-zen-safe-exit]')))
     expect(zenRoot()).toBeNull()
     err.mockRestore()
   })
 
-  function ControlsWithout({ omit }: { omit: 'home-switcher' | 'zen-toggle' }): (p: ZenTemplateControlsProps) => React.JSX.Element {
+  function ControlsWithout({ omit }: { omit: 'garden-switcher' | 'zen-toggle' }): (p: ZenTemplateControlsProps) => React.JSX.Element {
     return function Controls({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
       const toggle = useZenBind(bridge, 'zen-toggle')
-      const trigger = useZenBind(bridge, 'home-switcher')
+      const trigger = useZenBind(bridge, 'garden-switcher')
       const drag = useZenBind(bridge, 'drag-region')
       return (
         <div>
-          {omit !== 'home-switcher' && <button ref={trigger} data-test-trigger="">Homes</button>}
+          {omit !== 'garden-switcher' && <button ref={trigger} data-test-trigger="">Gardens</button>}
           <div ref={drag} data-zen-drag="" />
           {omit !== 'zen-toggle' && <button ref={toggle} data-zen-switch="">Zen</button>}
         </div>
@@ -427,24 +576,24 @@ describe('safe mode', () => {
     }
   }
 
-  it('a missing Home switcher: one failed check is not enough, two are safe mode', async () => {
-    unregister.push(registerZenTemplateControls('k2.texting@1', ControlsWithout({ omit: 'home-switcher' })))
+  it('a missing Garden switcher: one failed check is not enough, two are safe mode', async () => {
+    // Custom controls draw everything (no footer) but the switcher.
+    unregister.push(registerZenTemplateControls('k2.texting@1', ControlsWithout({ omit: 'garden-switcher' }), null))
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
     // The schedule's own first-paint check may already have run once.
     act(() => useZenViewStore.setState({ safe: null }))
     act(() => runZenControlChecksNow())
     act(() => runZenControlChecksNow())
-    expect(safeReason()).toBe('The Home switcher isn’t on the page.')
+    expect(safeReason()).toBe('The Garden switcher isn’t on the page.')
   })
 
   it('a single failed check (a mid-animation frame) does not trip safe mode', async () => {
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-    const toggle = document.querySelector('[data-zen-switch]')
-    if (!toggle) throw new Error('no Zen switch')
+    const toggle = el('[data-zen-switch]')
     styleOverride.set(toggle, { opacity: 0 })
     act(() => runZenControlChecksNow())
     styleOverride.delete(toggle)
@@ -456,37 +605,127 @@ describe('safe mode', () => {
     expect(safeReason()).toBe('The Zen toggle isn’t visible.')
   })
 
-  it('an invisible switcher (covered by another element) is safe mode', async () => {
+  it('an invisible Garden switcher (opacity 0) is safe mode', async () => {
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-    const pill = document.querySelector('[data-zen-home-pill]')
-    if (!pill) throw new Error('no Home pill')
-    covered.add(pill)
+    styleOverride.set(el('[data-zen-garden-pill]'), { opacity: 0 })
     act(() => runZenControlChecksNow())
     act(() => runZenControlChecksNow())
-    expect(safeReason()).toBe('The Home switcher isn’t visible.')
+    expect(safeReason()).toBe('The Garden switcher isn’t visible.')
+  })
+
+  it('a Garden switcher covered by another element is safe mode', async () => {
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    covered.add(el('[data-zen-garden-pill]'))
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(safeReason()).toBe('The Garden switcher isn’t visible.')
+  })
+
+  it('a Garden switcher under the stoplights is safe mode', async () => {
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    rectOverride.set(el('[data-zen-garden-pill]'), { left: 8, top: 6, width: 60, height: 24 })
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(safeReason()).toBe('The Garden switcher isn’t visible.')
+  })
+
+  it('a switcher whose options miss one Garden within 1 s is “not wired”', async () => {
+    h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
+    unregister.push(
+      registerZenTemplateControls(
+        'k2.texting@1',
+        function OneOption({ bridge }: ZenTemplateControlsProps) {
+          const trigger = useZenBind(bridge, 'garden-switcher')
+          const only = useZenBind(bridge, 'garden-option', 'g-default')
+          const drag = useZenBind(bridge, 'drag-region')
+          const toggle = useZenBind(bridge, 'zen-toggle')
+          return (
+            <div>
+              <button ref={trigger} data-test-trigger="">Gardens</button>
+              <button ref={only}>Default</button>
+              <div ref={drag} data-zen-drag="" />
+              <button ref={toggle} data-zen-switch="">Zen</button>
+            </div>
+          )
+        },
+        null,
+      ),
+    )
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    act(() => useZenViewStore.setState({ safe: null }))
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    // Shown, not yet activated: fine.
+    expect(document.querySelector('[data-zen-safe-banner]')).toBeNull()
+    act(() => void fireEvent.click(el('[data-test-trigger]')))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, ZEN_WIRING_DEADLINE_MS + 50))
+    })
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(safeReason()).toBe('The Garden switcher isn’t wired.')
+  }, 10_000)
+
+  it('always-shown Garden options that miss one Garden are “not wired”', async () => {
+    h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
+    unregister.push(
+      registerZenTemplateControls(
+        'k2.texting@1',
+        function AlwaysShown({ bridge }: ZenTemplateControlsProps) {
+          const only = useZenBind(bridge, 'garden-option', 'g-default')
+          const drag = useZenBind(bridge, 'drag-region')
+          const toggle = useZenBind(bridge, 'zen-toggle')
+          return (
+            <div>
+              <button ref={only}>Default</button>
+              <div ref={drag} data-zen-drag="" />
+              <button ref={toggle} data-zen-switch="">Zen</button>
+            </div>
+          )
+        },
+        null,
+      ),
+    )
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    act(() => useZenViewStore.setState({ safe: null }))
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(safeReason()).toBe('The Garden switcher isn’t wired.')
   })
 
   it('a toggle drawn without bind (bare element) is "not wired"', async () => {
     unregister.push(
-      registerZenTemplateControls('k2.texting@1', function Bare({ bridge }: ZenTemplateControlsProps) {
-        const trigger = useZenBind(bridge, 'home-switcher')
-        const drag = useZenBind(bridge, 'drag-region')
-        return (
-          <div>
-            <button ref={trigger}>Homes</button>
-            <div ref={drag} data-zen-drag="" />
-            {/* Says it is the toggle, never handed to bind. */}
-            <button data-zen-control="zen-toggle" onClick={() => undefined}>
-              Zen
-            </button>
-          </div>
-        )
-      }),
+      registerZenTemplateControls(
+        'k2.texting@1',
+        function Bare({ bridge }: ZenTemplateControlsProps) {
+          const trigger = useZenBind(bridge, 'garden-switcher')
+          const drag = useZenBind(bridge, 'drag-region')
+          return (
+            <div>
+              <button ref={trigger}>Gardens</button>
+              <div ref={drag} data-zen-drag="" />
+              {/* Says it is the toggle, never handed to bind. */}
+              <button data-zen-control="zen-toggle" onClick={() => undefined}>
+                Zen
+              </button>
+            </div>
+          )
+        },
+        null,
+      ),
     )
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
     act(() => useZenViewStore.setState({ safe: null }))
     act(() => runZenControlChecksNow())
@@ -494,18 +733,37 @@ describe('safe mode', () => {
     expect(safeReason()).toBe('The Zen toggle isn’t wired.')
   })
 
-  it('a page that does not declare the controls is safe mode', async () => {
-    h.getImpl = () => {
-      const p = goodPage() as { page: { controls: string[] } }
-      p.page.controls = ['zen-toggle', 'drag-region']
-      return p
+  it('a page that does not declare the Garden switcher is safe mode', async () => {
+    h.getImpl = (route, params) => {
+      const out = defaultGet(route, params)
+      if (route === 'zen/get') (out as { page: { controls: string[] } }).page.controls = ['zen-toggle', 'drag-region']
+      return out
     }
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
     act(() => runZenControlChecksNow())
     act(() => runZenControlChecksNow())
-    expect(safeReason()).toBe('The Home switcher isn’t declared by the page.')
+    expect(safeReason()).toBe('The Garden switcher isn’t declared by the page.')
+  })
+
+  it('both built-in templates pass the check', async () => {
+    h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    await act(async () => void fireEvent.click(el('[data-zen-garden-option="g-mornings"]')))
+    await pageReady('k2.blank@1')
+    // The blank template's footer: the Zen toggle, no Add agent.
+    expect(el('[data-zen-template-footer]').querySelector('[data-zen-switch]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-add-agent]')).toBeNull()
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
   })
 
   it('the local daemon not answering is safe mode: “Can’t reach K2 on this computer.”', async () => {
@@ -513,51 +771,64 @@ describe('safe mode', () => {
       throw new Error('connection refused')
     }
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await waitFor(() => expect(safeReason()).toBe('Can’t reach K2 on this computer.'))
   })
 
-  it('a zen_changed from this computer ends safe mode and re-reads the page', async () => {
+  it('a daemon without Gardens routes says to update it (G19)', async () => {
+    h.getImpl = () => {
+      throw new Error('unknown zen route')
+    }
     mount()
-    await enterViaRow(true)
+    await enterViaTopBar()
+    await waitFor(() =>
+      expect(safeReason()).toBe('K2 on this computer is older than this app. Update it to use Gardens.'),
+    )
+  })
+
+  it('a zen_changed from this computer ends safe mode and re-reads', async () => {
+    mount()
+    await enterViaTopBar(true)
     await pageReady()
     expect(safeReason()).toBe('You held Shift while turning Zen on.')
-    const local = h.zenHandlers.find((z) => z.hostKey === 'local')
-    if (!local) throw new Error('no local zen_changed handler')
-    await act(async () => local.fn())
+    await zenChanged()
     await waitFor(() => expect(document.querySelector('[data-zen-safe-banner]')).toBeNull())
-    expect(h.calls.map((c) => c.route)).toEqual(['zen/page/ensure', 'zen/get'])
+    expect(h.calls.map((c) => c.route)).toEqual(['zen/gardens', 'zen/get'])
   })
 
   it('a config error shows the line and keeps the last good page', async () => {
-    h.getImpl = () => {
-      const p = goodPage() as { errors: unknown[] }
-      p.errors = [{ file: 'zen.toml', line: 12, col: 3, message: "unknown color 'acent'" }]
-      return p
+    h.getImpl = (route, params) => {
+      const out = defaultGet(route, params)
+      if (route === 'zen/get') {
+        ;(out as { errors: unknown[] }).errors = [
+          { file: 'gardens/g-default.toml', line: 7, col: 3, message: "unknown color 'acent'" },
+        ]
+      }
+      return out
     }
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
     expect(document.querySelector('[data-zen-config-error]')?.textContent).toBe(
-      "zen.toml line 12: unknown color 'acent'. Showing your last good version.",
+      "gardens/g-default.toml line 7: unknown color 'acent'. Showing your last good version.",
     )
     expect(document.querySelector('[data-zen-safe-banner]')).toBeNull()
   })
 })
 
 describe('the escape hatch', () => {
-  it('macOS: the native menu’s event (targeted at this window) exits and re-enters; no webview chord', async () => {
-    const home = selectedHome(useHomesStore.getState()).id
+  it('macOS: the native menu’s event (targeted at this window) enters and exits; no webview chord; the page never changes', async () => {
     mount()
     await waitFor(() => expect(h.tauriListens.some((l) => l.event === 'menu:zen-toggle')).toBe(true))
     const menu = h.tauriListens.find((l) => l.event === 'menu:zen-toggle')
     if (!menu) throw new Error('no menu listener')
-    // Only this window's label: a broadcast would flip a shared Home per window.
+    // Only this window's label: Zen is per window.
     expect(menu.options).toEqual({ target: { kind: 'AnyLabel', label: 'main' } })
 
     act(() => menu.handler())
     await pageReady()
-    expect(useZenHomesStore.getState().on[home]).toBe(true)
+    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(usePageViewStore.getState().page).toBe('agents')
     // ⌃⌘Z typed into the webview does nothing on macOS (the accelerator owns it).
     act(() => {
       fireEvent.keyDown(window, { code: 'KeyZ', key: 'z', ctrlKey: true, metaKey: true })
@@ -565,8 +836,8 @@ describe('the escape hatch', () => {
     expect(zenRoot()).not.toBeNull()
     act(() => menu.handler())
     expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on[home]).toBeUndefined()
-    // The menu text follows this (focused) window.
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(usePageViewStore.getState().page).toBe('agents')
     expect(h.invokes.filter((i) => i.cmd === 'set_zen_menu_label').map((i) => i.args)).toEqual([
       { inZen: false },
       { inZen: true },
@@ -577,18 +848,13 @@ describe('the escape hatch', () => {
   it('Linux: Ctrl+Alt+Z exits even when a widget stops the key in the bubble phase; AltGr+Z does nothing', async () => {
     setPlatform('Linux x86_64')
     unregister.push(
-      registerZenWidget('conversation', () => (
-        <textarea data-swallow="" onKeyDown={(e) => e.stopPropagation()} />
-      )),
+      registerZenWidget('conversation', () => <textarea data-swallow="" onKeyDown={(e) => e.stopPropagation()} />),
     )
-    const home = selectedHome(useHomesStore.getState()).id
     mount()
-    await enterViaRow()
+    await enterViaTopBar()
     await pageReady()
-    // K2's own window controls + menu button are in Zen (Z25).
     expect(document.querySelector('[data-zen-chrome-cluster="left"]')).not.toBeNull()
-    const box = document.querySelector('[data-swallow]')
-    if (!box) throw new Error('no swallowing widget')
+    const box = el('[data-swallow]')
     act(() => {
       const ev = new KeyboardEvent('keydown', { code: 'KeyZ', key: 'z', ctrlKey: true, altKey: true, bubbles: true })
       Object.defineProperty(ev, 'getModifierState', { value: (k: string) => k === 'AltGraph' })
@@ -599,24 +865,22 @@ describe('the escape hatch', () => {
       box.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', key: 'z', ctrlKey: true, altKey: true, bubbles: true }))
     })
     expect(zenRoot()).toBeNull()
-    expect(useZenHomesStore.getState().on[home]).toBeUndefined()
-    // And from outside Zen it goes to Home and turns Zen on.
-    act(() => usePageViewStore.getState().setPage('agents'))
+    expect(useZenWindowStore.getState().on).toBe(false)
+    // From outside Zen it turns Zen on, over the page you are on.
+    act(() => usePageViewStore.getState().setPage('projects'))
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', key: 'z', ctrlKey: true, altKey: true }))
     })
     await pageReady()
-    expect(usePageViewStore.getState().page).toBe('home')
+    expect(usePageViewStore.getState().page).toBe('projects')
   })
 
   it('Linux: the app menu in Zen has Exit Zen Mode, and it works in safe mode', async () => {
     setPlatform('Linux x86_64')
     mount()
-    await enterViaRow(true)
+    await enterViaTopBar(true)
     await pageReady()
-    const menuButton = document.querySelector('[data-zen-app-menu]')
-    if (!menuButton) throw new Error('no menu button in Zen')
-    act(() => void fireEvent.click(menuButton))
+    act(() => void fireEvent.click(el('[data-zen-app-menu]')))
     const item = screen.getByRole('menuitem', { name: 'Exit Zen Mode' })
     await act(async () => void fireEvent.click(item))
     expect(zenRoot()).toBeNull()

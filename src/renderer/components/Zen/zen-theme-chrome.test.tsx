@@ -44,6 +44,9 @@ vi.mock('@tauri-apps/api/window', () => ({
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (scope: { hostKey: string }, route: string, params?: unknown) => {
     h.calls.push({ method: 'GET', hostKey: scope.hostKey, route, data: params })
+    if (route === 'zen/gardens') {
+      return { ok: true, setUp: true, gardens: [{ id: 'g-default', name: 'Default', index: 1, template: 'k2.texting@1' }] }
+    }
     if (route !== 'zen/get') throw new Error(`unexpected GET ${route}`)
     return h.page
   }),
@@ -70,10 +73,10 @@ vi.mock('@/stores/session-events', async (importOriginal) => {
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { useZenHomesStore } from '@/lib/zen/zen-homes'
+import { useZenWindowStore } from '@/lib/zen/zen-window'
+import { __resetZenGardensForTests } from '@/lib/zen/zen-gardens'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { __resetZenApiForTests } from '@/lib/zen/zen-api'
 import { __setZenGeometryForTests } from '@/lib/zen/zen-monitor'
@@ -101,7 +104,7 @@ function zenPage(opts: { version?: string; accent?: string; chrome?: object; the
         { id: 'agents', kind: 'agents', column: 0, props: {}, caps: ['agents:read'], source: 'builtin' },
         { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: ['thread:read'], source: 'builtin' },
       ],
-      controls: ['zen-toggle', 'home-switcher', 'drag-region'],
+      controls: ['zen-toggle', 'garden-switcher', 'drag-region'],
     },
     // The daemon's `theme` shape (store.rs `resolve`).
     theme: {
@@ -174,9 +177,8 @@ function lastNative(cmd: string): Record<string, unknown> {
 }
 
 async function enterZen(): Promise<void> {
-  const home = selectedHome(useHomesStore.getState())
   render(<ZenHost />)
-  act(() => useZenHomesStore.getState().setOn(home.id, true))
+  act(() => useZenWindowStore.getState().setOn(true))
   await waitFor(() => {
     if (!document.querySelector('[data-zen-page]')) throw new Error('Zen page not drawn')
   })
@@ -202,8 +204,9 @@ beforeEach(() => {
   setPlatform('MacIntel')
   __setZenGeometryForTests(geometry)
   __resetZenApiForTests()
+  __resetZenGardensForTests()
   localStorage.clear()
-  useZenHomesStore.setState({ on: {} })
+  useZenWindowStore.setState({ on: false, garden: null })
   useZenViewStore.setState({ safe: null, epoch: 0 })
   useZenOverlayStore.setState({ sheet: false, picker: false })
   useSettingsStore.setState({ settingsOpen: false })
@@ -403,11 +406,11 @@ describe('theme picker and cycle keys (Omarchy 2)', () => {
     ])
   })
 
-  it('a Home with its own theme pick keeps it: set, next and prev carry the Home', async () => {
-    h.page = zenPage({ theme: { scope: 'home' } })
+  it('a Garden with its own theme pick keeps it: set, next and prev carry the Garden (G16, G30)', async () => {
+    h.page = zenPage({ theme: { scope: 'garden' } })
     await enterZen()
     await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('k2-light'))
-    const homeId = selectedHome(useHomesStore.getState()).id
+    const gardenId = 'g-default'
     h.calls.length = 0
     await act(async () => {
       fireEvent.keyDown(document.body, { code: 'Period', key: '.', ctrlKey: true, metaKey: true })
@@ -423,9 +426,9 @@ describe('theme picker and cycle keys (Omarchy 2)', () => {
     await act(async () => void fireEvent.click(mine))
     await waitFor(() => expect(h.calls.filter((c) => c.method === 'POST')).toHaveLength(3))
     expect(h.calls.filter((c) => c.method === 'POST').map((c) => [c.route, c.data])).toEqual([
-      ['zen/theme/next', { home: homeId }],
-      ['zen/theme/prev', { home: homeId }],
-      ['zen/theme/set', { name: 'mine', home: homeId }],
+      ['zen/theme/next', { garden: gardenId }],
+      ['zen/theme/prev', { garden: gardenId }],
+      ['zen/theme/set', { name: 'mine', garden: gardenId }],
     ])
   })
 

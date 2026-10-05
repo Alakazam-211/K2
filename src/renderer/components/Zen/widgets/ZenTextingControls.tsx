@@ -1,42 +1,43 @@
-// prd-zen-mode-v1 Z27 — `k2.texting@1`'s own Home switcher, Zen toggle and
-// drag area, registered with `registerZenTemplateControls`. The top band
-// holds the Home switcher (top left, it names the Home you're in) and the
-// drag area; the footer under the Agents column holds the Zen toggle and
-// the Add agent button (bottom left, Rosson 2026-10-04).
+// prd-zen-mode-v1 Z27 and prd-zen-gardens-v1 G11, G24, G25, G58 — the
+// built-in templates' own controls, one component set for both
+// (`k2.texting@1`, `k2.blank@1`) and for safe mode. The top band holds the
+// Garden switcher (top left, it names the Garden you're in) and the drag
+// area; the footer under the first column holds the Zen toggle and, on the
+// texting template, the Add agent button (bottom left).
 //
 // They are the TEMPLATE's controls, drawn and laid out by the page, and they
 // bind through the bridge (`bridge.controls.bind`) exactly as a v2 user page
 // would, so K2's present / visible / wired checks cover them:
-//   - the Home switcher is a pill with the Home's name; it opens a menu of
-//     every Home (each bound as `home-option`, with its ⌥⌘N hint) and closes
-//     on a pick, Esc or a click outside;
-//   - the Zen toggle is a switch, on, that turns Zen off for this Home;
+//   - the Garden switcher is a pill with the Garden's name; it opens a menu
+//     of every Garden (each bound as `garden-option`, with its ⌥⌘N hint), a
+//     separator, then "+ New Garden", which turns into a name field: Enter
+//     creates the Garden (`gardens.create`, cap `gardens:manage`), switches
+//     to it and closes the menu; Esc cancels. Rename and delete are CLI and
+//     agent only in this cut. The menu closes on a pick, Esc or a click
+//     outside;
+//   - the Zen toggle is a switch, on, that turns Zen off in this window;
 //   - the drag area fills the top band after the switcher;
-//   - Add agent opens K2's Add agent picker for this Home (`agents.add`,
-//     the regular Home's searchable picker) above the button.
+//   - Add agent opens K2's Add agent picker for the Home of the page's first
+//     Agents widget (`agents.add`) above the button.
 
 import { useEffect, useRef, useState } from 'react'
-import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
+import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
 import { TEXTING_BAR_HEIGHT_PX, TEXTING_FOOTER_HEIGHT_PX, useZenAddAgentClick, useZenBind } from '../ZenTemplateControls'
 import { ZenWidgetStyles } from './zen-widget-kit'
 
-function HomeChoice({
+function GardenChoice({
   bridge,
-  id,
-  name,
-  index,
+  garden,
   selected,
   onPicked,
 }: {
   bridge: ZenWidgetBridge
-  id: string
-  name: string
-  index: number
+  garden: ZenGardenSummary
   selected: boolean
   onPicked(): void
 }): React.JSX.Element {
-  const ref = useZenBind(bridge, 'home-option', id)
+  const ref = useZenBind(bridge, 'garden-option', garden.id)
   return (
     <button
       ref={ref}
@@ -44,7 +45,7 @@ function HomeChoice({
       role="menuitemradio"
       aria-checked={selected}
       onClick={onPicked}
-      data-zen-home-option={id}
+      data-zen-garden-option={garden.id}
       className="flex w-full items-center gap-3 text-left"
       style={{
         minHeight: 32,
@@ -59,23 +60,119 @@ function HomeChoice({
         aria-hidden
         style={{ width: 8, height: 8, borderRadius: 999, background: selected ? 'var(--zen-accent)' : 'transparent', flexShrink: 0 }}
       />
-      <span className="min-w-0 flex-1 truncate">{name}</span>
-      {index < 9 && (
+      <span className="min-w-0 flex-1 truncate">{garden.name}</span>
+      {garden.index <= 9 && (
         <span style={{ color: 'var(--zen-text-muted)', fontSize: '0.8em', fontVariantNumeric: 'tabular-nums' }}>
-          ⌥⌘{index + 1}
+          ⌥⌘{garden.index}
         </span>
       )}
     </button>
   )
 }
 
-function HomeSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
+/** "+ New Garden": a menu item that turns into a name field. */
+function NewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDone(): void }): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  const create = (): void => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    void Promise.resolve()
+      .then(() => bridge.gardens.create(name))
+      .then(() => {
+        setBusy(false)
+        setEditing(false)
+        setName('')
+        onDone()
+      })
+      .catch((err: unknown) => {
+        setBusy(false)
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        role="menuitem"
+        data-zen-new-garden=""
+        onClick={() => setEditing(true)}
+        className="flex w-full items-center gap-3 text-left"
+        style={{ minHeight: 32, padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
+      >
+        <span aria-hidden style={{ width: 8, textAlign: 'center', color: 'var(--zen-text-muted)' }}>
+          +
+        </span>
+        <span>New Garden</span>
+      </button>
+    )
+  }
+  return (
+    <div className="flex flex-col" style={{ padding: '4px 6px', gap: 4 }}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={name}
+        disabled={busy}
+        maxLength={60}
+        aria-label="New Garden name"
+        placeholder="Garden name"
+        data-zen-new-garden-name=""
+        onChange={(e) => {
+          setName(e.target.value)
+          if (error) setError(null)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            create()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            setEditing(false)
+            setName('')
+            setError(null)
+          }
+          // Plain keys stay in the field; ⌘ / Ctrl chords reach the app.
+          if (!e.metaKey && !e.ctrlKey) e.stopPropagation()
+        }}
+        style={{
+          height: 30,
+          padding: '0 10px',
+          color: 'var(--zen-text)',
+          background: 'var(--zen-surface)',
+          border: '1px solid var(--zen-border)',
+          borderRadius: 'calc(var(--zen-radius) - 4px)',
+          font: 'inherit',
+          outline: 'none',
+        }}
+      />
+      {error && (
+        <span data-zen-new-garden-error="" style={{ fontSize: '0.8em', color: 'var(--zen-danger)', padding: '0 4px' }}>
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** The Garden switcher (G25): a pill naming this window's Garden. */
+export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
-  const trigger = useZenBind(bridge, 'home-switcher')
-  const homes = bridge.homes.list()
-  const selectedId = bridge.homes.selected()
-  const current = homes.find((h) => h.id === selectedId) ?? homes[0]
+  const trigger = useZenBind(bridge, 'garden-switcher')
+  const gardens = bridge.gardens.list()
+  const current = bridge.gardens.current()
 
   useEffect(() => {
     if (!open) return
@@ -100,9 +197,9 @@ function HomeSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Elemen
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Switch Home"
+        title="Switch Garden"
         onClick={() => setOpen((v) => !v)}
-        data-zen-home-pill=""
+        data-zen-garden-pill=""
         data-zen-soft-button=""
         className="flex items-center gap-2"
         style={{
@@ -116,7 +213,7 @@ function HomeSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Elemen
           fontWeight: 600,
         }}
       >
-        <span className="max-w-[14rem] truncate">{current?.name ?? 'Home'}</span>
+        <span className="max-w-[14rem] truncate">{current?.name ?? 'Gardens'}</span>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden style={{ color: 'var(--zen-text-muted)' }}>
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -124,12 +221,12 @@ function HomeSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Elemen
       {open && (
         <div
           role="menu"
-          data-zen-home-menu=""
+          data-zen-garden-menu=""
           className="absolute left-0 flex flex-col"
           style={{
             top: 'calc(100% + 6px)',
             zIndex: 3,
-            minWidth: 220,
+            minWidth: 240,
             padding: 4,
             gap: 2,
             background: 'var(--zen-surface-raised)',
@@ -138,17 +235,21 @@ function HomeSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Elemen
             boxShadow: '0 10px 30px rgba(0, 0, 0, 0.14)',
           }}
         >
-          {homes.map((h, i) => (
-            <HomeChoice
-              key={h.id}
+          {gardens.map((g) => (
+            <GardenChoice
+              key={g.id}
               bridge={bridge}
-              id={h.id}
-              name={h.name}
-              index={i}
-              selected={h.id === selectedId}
+              garden={g}
+              selected={g.id === current?.id}
               onPicked={() => setOpen(false)}
             />
           ))}
+          {bridge.caps.has('gardens:manage') && (
+            <>
+              <div role="separator" aria-hidden style={{ height: 1, margin: '3px 6px', background: 'var(--zen-border)' }} />
+              <NewGarden bridge={bridge} onDone={() => setOpen(false)} />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -220,7 +321,7 @@ function DragArea({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   return <div ref={ref} data-zen-drag="" className="min-w-0 flex-1 self-stretch" />
 }
 
-/** The texting template's top band. */
+/** Both templates' top band: Garden switcher + drag area. */
 export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
   return (
     <div
@@ -234,15 +335,13 @@ export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.
       }}
     >
       <ZenWidgetStyles />
-      <HomeSwitcher bridge={bridge} />
+      <ZenGardenSwitcher bridge={bridge} />
       <DragArea bridge={bridge} />
     </div>
   )
 }
 
-/** The texting template's footer under the Agents column: the Zen toggle
- *  (the way out) and Add agent, in the bottom-left corner. */
-export function ZenTextingFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
+function Footer({ addAgent, bridge }: { addAgent: boolean; bridge: ZenWidgetBridge }): React.JSX.Element {
   return (
     <div
       data-zen-template-footer=""
@@ -254,7 +353,18 @@ export function ZenTextingFooter({ bridge }: ZenTemplateControlsProps): React.JS
       }}
     >
       <ZenToggle bridge={bridge} />
-      <AddAgentButton bridge={bridge} />
+      {addAgent && <AddAgentButton bridge={bridge} />}
     </div>
   )
+}
+
+/** `k2.texting@1`'s footer under the Agents column: the Zen toggle (the
+ *  way out) and Add agent, in the bottom-left corner. */
+export function ZenTextingFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
+  return <Footer addAgent bridge={bridge} />
+}
+
+/** `k2.blank@1`'s footer: the Zen toggle only (no Add agent, G11). */
+export function ZenBlankFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
+  return <Footer addAgent={false} bridge={bridge} />
 }

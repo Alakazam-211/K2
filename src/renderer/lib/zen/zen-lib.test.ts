@@ -1,21 +1,23 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 S4 — the pure pieces: the per-Home store (Z5), the shown
-// rule, the bridge's cap check (Z33/Z34), the chord (Z30/Z55), page
-// parsing (Z10/Z13), the stoplight safe area (Z23) and where Zen exists
+// prd-zen-mode-v1 S4 and prd-zen-gardens-v1 — the pure pieces: the
+// per-window store (G1/G21, TG3.1), the shown rule (G2), the Agents
+// widget's Home picks (G27), the Garden list parse (G13), the bridge's cap
+// check (Z33/Z34, G29, TG4.3), the chord (Z30/Z55), page parsing
+// (Z10/Z13, G12, G38), the stoplight safe area (Z23) and where Zen exists
 // (Z2, Q5).
 
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'main' }) }))
 
+import { createZenWindowStore, parseZenWindowDoc, zenWindowKey, type KeyValueStorage } from './zen-window'
 import {
-  attachZenHomesStorageSync,
-  createZenHomesStore,
-  parseZenHomesDoc,
-  ZEN_HOMES_STORAGE_KEY,
-  type KeyValueStorage,
-} from './zen-homes'
+  attachZenGardenHomesStorageSync,
+  createZenGardenHomesStore,
+  ZEN_GARDEN_HOMES_KEY,
+} from './zen-garden-homes'
+import { parseZenGardenNew, parseZenGardens, windowGardenOf } from './zen-gardens'
 import { computeZenShown, zenSafeCauseText } from './zen-view'
 import { createZenBridge, registerZenVerb, ZenBridgeError, type ZenBridgeHost } from './zen-bridge'
 import { installZenChordListener, isZenChordNonMac } from './zen-shortcut'
@@ -29,43 +31,46 @@ function memKv(): KeyValueStorage & { map: Map<string, string> } {
   return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, v) }
 }
 
-describe('k2.zen.homes.v1 (Z5)', () => {
-  it('is per Home and persists; a second store (another window) reads it', () => {
+describe('k2.zen.window.v1.<label> (G1, G21, TG3.1)', () => {
+  it('is per window: on in one label leaves the other off; a relaunch (new store, same label) restores on and garden', () => {
     const kv = memKv()
-    const a = createZenHomesStore(kv)
-    a.getState().setOn('work', true)
-    a.getState().setOn('home', true)
-    a.getState().setOn('home', false)
-    expect(a.getState().on).toEqual({ work: true })
-    expect(JSON.parse(kv.map.get(ZEN_HOMES_STORAGE_KEY) ?? 'null')).toEqual({ version: 1, on: { work: true } })
-    const b = createZenHomesStore(kv)
-    expect(b.getState().on).toEqual({ work: true })
+    const main = createZenWindowStore(kv, 'main')
+    const other = createZenWindowStore(kv, 'window-x')
+    expect(main.getState().on).toBe(false)
+    expect(other.getState().on).toBe(false)
+    main.getState().setOn(true)
+    main.getState().setGarden('g-1')
+    expect(main.getState().on).toBe(true)
+    expect(other.getState().on).toBe(false)
+    expect(other.getState().garden).toBeNull()
+    expect(JSON.parse(kv.map.get(zenWindowKey('main')) ?? 'null')).toEqual({ version: 1, on: true, garden: 'g-1' })
+    expect(kv.map.has(zenWindowKey('window-x'))).toBe(false)
+    // Relaunch: the same label comes back as it was.
+    const again = createZenWindowStore(kv, 'main')
+    expect(again.getState()).toMatchObject({ label: 'main', on: true, garden: 'g-1' })
+    // A new window (a new label) starts outside Zen.
+    expect(createZenWindowStore(kv, 'window-new').getState()).toMatchObject({ on: false, garden: null })
   })
 
-  it('follows another window through the storage event, and a clear', () => {
+  it('no sync between windows: another window saving its own key changes nothing here', () => {
     const kv = memKv()
-    const store = createZenHomesStore(kv)
-    const target = new EventTarget()
-    const off = attachZenHomesStorageSync(store, target, kv)
-    const ev = (key: string | null, newValue: string | null): Event =>
-      Object.assign(new Event('storage'), { key, newValue })
-    target.dispatchEvent(ev(ZEN_HOMES_STORAGE_KEY, JSON.stringify({ version: 1, on: { x: true } })))
-    expect(store.getState().on).toEqual({ x: true })
-    target.dispatchEvent(ev('k2.homes.v1', '{}'))
-    expect(store.getState().on).toEqual({ x: true })
-    target.dispatchEvent(ev(null, null))
-    expect(store.getState().on).toEqual({})
-    off()
+    const a = createZenWindowStore(kv, 'main')
+    const b = createZenWindowStore(kv, 'window-b')
+    b.getState().setOn(true)
+    expect(a.getState().on).toBe(false)
   })
 
-  it('parses only version 1 and drops non-true values', () => {
-    expect(parseZenHomesDoc(null)).toBeNull()
-    expect(parseZenHomesDoc('junk')).toBeNull()
-    expect(parseZenHomesDoc(JSON.stringify({ version: 2, on: {} }))).toBeNull()
-    expect(parseZenHomesDoc(JSON.stringify({ version: 1, on: { a: true, b: 1, c: 'yes' } }))).toEqual({
-      version: 1,
-      on: { a: true },
-    })
+  it('parses only version 1 with a boolean on; leaves junk alone until a change', () => {
+    expect(parseZenWindowDoc(null)).toBeNull()
+    expect(parseZenWindowDoc('junk')).toBeNull()
+    expect(parseZenWindowDoc(JSON.stringify({ version: 2, on: true }))).toBeNull()
+    expect(parseZenWindowDoc(JSON.stringify({ version: 1, on: 'yes' }))).toBeNull()
+    expect(parseZenWindowDoc(JSON.stringify({ version: 1, on: true, garden: 7 }))).toEqual({ version: 1, on: true, garden: null })
+    const kv = memKv()
+    kv.map.set(zenWindowKey('main'), '{"version":9}')
+    const store = createZenWindowStore(kv, 'main')
+    expect(store.getState().on).toBe(false)
+    expect(kv.map.get(zenWindowKey('main'))).toBe('{"version":9}')
   })
 
   it('a storage that throws falls back to memory', () => {
@@ -78,29 +83,84 @@ describe('k2.zen.homes.v1 (Z5)', () => {
       },
     }
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const store = createZenHomesStore(bad)
-    store.getState().setOn('a', true)
-    expect(store.getState().on).toEqual({ a: true })
+    const store = createZenWindowStore(bad, 'main')
+    store.getState().setOn(true)
+    store.getState().setGarden('g-2')
+    expect(store.getState()).toMatchObject({ on: true, garden: 'g-2' })
+    expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
 })
 
-describe('shown (Z4/Z5)', () => {
-  it('only on Home, Settings closed, the Home on, Zen available', () => {
-    const base = { available: true, page: 'home', settingsOpen: false, homeOn: true }
+describe('the Agents widget’s Home picks (G27)', () => {
+  it('per Garden and widget, saved, and seen by another window through the storage event', () => {
+    const kv = memKv()
+    const a = createZenGardenHomesStore(kv)
+    a.getState().setPick('g-1/agents', 'h2')
+    expect(JSON.parse(kv.map.get(ZEN_GARDEN_HOMES_KEY) ?? 'null')).toEqual({ version: 1, picks: { 'g-1/agents': 'h2' } })
+    // A remount (a new store) keeps it.
+    expect(createZenGardenHomesStore(kv).getState().picks).toEqual({ 'g-1/agents': 'h2' })
+    // Another window's store follows the storage event.
+    const b = createZenGardenHomesStore(memKv())
+    const target = new EventTarget()
+    const off = attachZenGardenHomesStorageSync(b, target, kv)
+    target.dispatchEvent(
+      Object.assign(new Event('storage'), { key: ZEN_GARDEN_HOMES_KEY, newValue: kv.map.get(ZEN_GARDEN_HOMES_KEY) }),
+    )
+    expect(b.getState().picks).toEqual({ 'g-1/agents': 'h2' })
+    off()
+  })
+})
+
+describe('the Garden list (G13, G22)', () => {
+  it('parses the gardens answer, and tells "not set up" from a list', () => {
+    expect(parseZenGardens({ ok: true, setUp: false, gardens: [] })).toEqual({ setUp: false, gardens: [] })
+    const l = parseZenGardens({
+      ok: true,
+      setUp: true,
+      gardens: [
+        { id: 'g-3f9a12c0', name: 'Default', index: 1, template: 'k2.texting@1', hasFile: true, seedHome: 'h1', createdAt: 'x' },
+        { id: 'g-00000001', name: 'Notes', index: 2, template: 'k2.blank@1', hasFile: true },
+        { id: 'g-00000001', name: 'dup' },
+        { name: 'no id' },
+      ],
+    })
+    expect(l.setUp).toBe(true)
+    expect(l.gardens.map((g) => [g.id, g.name, g.index, g.template, g.seedHome])).toEqual([
+      ['g-3f9a12c0', 'Default', 1, 'k2.texting@1', 'h1'],
+      ['g-00000001', 'Notes', 2, 'k2.blank@1', null],
+    ])
+    expect(() => parseZenGardens({ ok: false, error: 'zen_local_only' })).toThrow(/zen_local_only/)
+    expect(() => parseZenGardens('x')).toThrow(/not an object/)
+    expect(parseZenGardenNew({ ok: true, garden: { id: 'g-1', name: 'N' } }).id).toBe('g-1')
+    expect(() => parseZenGardenNew({ ok: true })).toThrow(/missing/)
+  })
+
+  it('the window’s Garden is its pick when listed, else the first', () => {
+    const gardens = parseZenGardens({ gardens: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] }).gardens
+    expect(windowGardenOf(gardens, 'b')?.id).toBe('b')
+    expect(windowGardenOf(gardens, 'gone')?.id).toBe('a')
+    expect(windowGardenOf(gardens, null)?.id).toBe('a')
+    expect(windowGardenOf([], 'a')).toBeNull()
+  })
+})
+
+describe('shown (G2)', () => {
+  it('this window’s switch on, Settings closed, Zen available; the page is not part of it', () => {
+    const base = { available: true, on: true, settingsOpen: false }
     expect(computeZenShown(base)).toBe(true)
-    expect(computeZenShown({ ...base, page: 'agents' })).toBe(false)
     expect(computeZenShown({ ...base, settingsOpen: true })).toBe(false)
-    expect(computeZenShown({ ...base, homeOn: false })).toBe(false)
+    expect(computeZenShown({ ...base, on: false })).toBe(false)
     expect(computeZenShown({ ...base, available: false })).toBe(false)
   })
 
   it('names each cause', () => {
-    expect(zenSafeCauseText({ kind: 'control', control: 'home-switcher', problem: 'invisible' })).toBe(
-      'The Home switcher isn’t visible.',
+    expect(zenSafeCauseText({ kind: 'control', control: 'garden-switcher', problem: 'invisible' })).toBe(
+      'The Garden switcher isn’t visible.',
     )
     expect(zenSafeCauseText({ kind: 'crash', message: 'x' })).toBe('The page crashed: x')
     expect(zenSafeCauseText({ kind: 'unreachable', message: 'x' })).toBe('Can’t reach K2 on this computer.')
+    expect(zenSafeCauseText({ kind: 'outdated' })).toBe('K2 on this computer is older than this app. Update it to use Gardens.')
   })
 })
 
@@ -121,14 +181,25 @@ describe('desktop only (Z2, Q5)', () => {
   })
 })
 
-describe('the bridge (Z33/Z34)', () => {
-  function host(): ZenBridgeHost & { exited: number; selected: string[] } {
+describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
+  function host(): ZenBridgeHost & { exited: number; switched: string[]; created: string[] } {
     const h = {
       exited: 0,
-      selected: [] as string[],
+      switched: [] as string[],
+      created: [] as string[],
+      gardens: () => [
+        { id: 'g-a', name: 'Default', index: 1 },
+        { id: 'g-b', name: 'Notes', index: 2 },
+      ],
+      currentGardenId: () => 'g-a',
+      switchGarden: (id: string) => void h.switched.push(id),
+      createGarden: async (name: string) => {
+        h.created.push(name)
+        return { id: 'g-c', name, index: 3 }
+      },
+      renameGarden: async () => undefined,
+      deleteGarden: async () => undefined,
       homes: () => [{ id: 'a', name: 'A' }],
-      selectedHomeId: () => 'a',
-      selectHome: (id: string) => void h.selected.push(id),
       exit: () => void (h.exited += 1),
       controls: { bind: () => () => undefined, bindings: () => [], wiringFailure: () => null, dispose: () => undefined },
       page: () => BUILTIN_TEXTING_PAGE,
@@ -136,38 +207,71 @@ describe('the bridge (Z33/Z34)', () => {
     return h
   }
 
+  function codeOf(fn: () => unknown): string {
+    try {
+      fn()
+    } catch (e) {
+      if (e instanceof ZenBridgeError) return e.code
+      throw e
+    }
+    throw new Error('the call did not throw')
+  }
+
   it('an undeclared verb throws cap_not_granted', () => {
     const b = createZenBridge(host(), { id: 'w', caps: ['agents:read'] })
-    let err: unknown = null
-    try {
-      b.call('thread.post', 'x', 'hi')
-    } catch (e) {
-      err = e
-    }
-    expect(err).toBeInstanceOf(ZenBridgeError)
-    expect((err as ZenBridgeError).code).toBe('cap_not_granted')
+    expect(codeOf(() => b.call('thread.post', 'x', 'hi'))).toBe('cap_not_granted')
   })
 
-  it('a declared data verb with no implementation yet throws verb_unavailable; a registered one runs with the widget id', () => {
+  it('a declared data verb with no implementation yet throws verb_unavailable; a registered one runs with the widget, page and Garden', () => {
     const b = createZenBridge(host(), { id: 'w1', caps: ['agents:read'] })
     expect(() => b.call('agents.list')).toThrow(/verb_unavailable/)
-    const off = registerZenVerb('agents.list', (ctx) => [ctx.widgetId])
-    expect(b.call('agents.list')).toEqual(['w1'])
+    const off = registerZenVerb('agents.list', (ctx) => [ctx.widgetId, ctx.gardenId(), ctx.page().template])
+    expect(b.call('agents.list')).toEqual(['w1', 'g-a', 'k2.texting@1'])
     off()
     expect(() => b.call('agents.list')).toThrow(/verb_unavailable/)
     expect(() => registerZenVerb('zen.exit', () => null)).toThrow(/built in/)
+    expect(() => registerZenVerb('homes.list', () => null)).toThrow(/built in/)
   })
 
-  it('every page has the no-cap verbs', () => {
+  it('gardens.list / current / switch work with no caps; every page has them', () => {
     const h = host()
     const b = createZenBridge(h, { id: 'controls', caps: [] })
-    expect(b.homes.list()).toEqual([{ id: 'a', name: 'A' }])
-    b.homes.select('a')
+    expect(b.gardens.list().map((g) => g.id)).toEqual(['g-a', 'g-b'])
+    expect(b.gardens.current()).toEqual({ id: 'g-a', name: 'Default', index: 1 })
+    b.gardens.switch('g-b')
+    expect(h.switched).toEqual(['g-b'])
     b.zen.exit()
-    expect(h.selected).toEqual(['a'])
     expect(h.exited).toBe(1)
     expect(b.theme.get()).toEqual({ theme: null, chrome: null, motion: null })
     expect(() => b.call('nope' as never)).toThrow(/unknown_verb/)
+  })
+
+  it('gardens.create / rename / delete need gardens:manage; the template controls get it, a widget does not', async () => {
+    const h = host()
+    const widget = createZenBridge(h, { id: 'agents', caps: ['agents:read', 'agents:add', 'presence:read'] })
+    expect(codeOf(() => widget.call('gardens.create', 'X'))).toBe('cap_not_granted')
+    expect(codeOf(() => widget.call('gardens.rename', 'g-a', 'X'))).toBe('cap_not_granted')
+    expect(codeOf(() => widget.call('gardens.delete', 'g-a'))).toBe('cap_not_granted')
+    expect(h.created).toEqual([])
+    const controls = createZenBridge(h, { id: 'template-controls', caps: ['agents:add', 'gardens:manage'] })
+    await expect(controls.gardens.create('Mornings')).resolves.toEqual({ id: 'g-c', name: 'Mornings', index: 3 })
+    expect(h.created).toEqual(['Mornings'])
+  })
+
+  it('homes.select is gone (unknown_verb); homes.list needs agents:read', () => {
+    const b = createZenBridge(host(), { id: 'controls', caps: [] })
+    expect(codeOf(() => b.call('homes.select' as never, 'a'))).toBe('unknown_verb')
+    expect(codeOf(() => b.homes.list())).toBe('cap_not_granted')
+    const reader = createZenBridge(host(), { id: 'agents', caps: ['agents:read'] })
+    expect(reader.homes.list()).toEqual([{ id: 'a', name: 'A' }])
+  })
+
+  it('compose.draft needs thread:post; agents.home / setHome / local need agents:read', () => {
+    const none = createZenBridge(host(), { id: 'w', caps: ['thread:read'] })
+    expect(codeOf(() => none.call('compose.draft', 'a::local', 'hi'))).toBe('cap_not_granted')
+    expect(codeOf(() => none.call('agents.home'))).toBe('cap_not_granted')
+    expect(codeOf(() => none.call('agents.setHome', 'a'))).toBe('cap_not_granted')
+    expect(codeOf(() => none.call('agents.local'))).toBe('cap_not_granted')
   })
 })
 
@@ -218,7 +322,7 @@ describe('the resolved page (Z10, Z13)', () => {
         template: 'k2.texting@1',
         layout: { kind: 'columns', split: [40, 60], min_widths: [200, 300] },
         widgets: [{ id: 'a', type: 'agents', col: 0, caps: ['agents:read', 7] }],
-        controls: ['zen-toggle', { kind: 'home-switcher' }, 'drag-region'],
+        controls: ['zen-toggle', { kind: 'garden-switcher' }, 'drag-region'],
       },
       errors: [{ file: 'zen.toml', line: 7, col: 3, message: "unknown key 'acent'" }],
     })
@@ -227,7 +331,7 @@ describe('the resolved page (Z10, Z13)', () => {
     expect(p.widgets).toEqual([
       { id: 'a', kind: 'agents', column: 0, props: {}, caps: ['agents:read'], source: 'builtin' },
     ])
-    expect(p.controls).toEqual(['zen-toggle', 'home-switcher', 'drag-region'])
+    expect(p.controls).toEqual(['zen-toggle', 'garden-switcher', 'drag-region'])
     expect(zenErrorBannerText(p.errors[0])).toBe("zen.toml line 7: unknown key 'acent'. Showing your last good version.")
   })
 
@@ -248,9 +352,9 @@ describe('the resolved page (Z10, Z13)', () => {
       { name: 'paper', builtin: true, user: true, summary: 'warm', active: true },
       { name: 'mine', builtin: false, user: true, summary: '', active: false },
     ]
-    const p = parseZenGet({ version: 'v', page, theme: { name: 'paper', scope: 'home', tokens: {} }, themes })
+    const p = parseZenGet({ version: 'v', page, theme: { name: 'paper', scope: 'garden', tokens: {} }, themes })
     expect(p.activeTheme).toBe('paper')
-    expect(p.themeScope).toBe('home')
+    expect(p.themeScope).toBe('garden')
     expect(p.themes).toEqual([
       { name: 'default', builtin: true, user: false },
       { name: 'paper', builtin: true, user: true },
@@ -260,6 +364,36 @@ describe('the resolved page (Z10, Z13)', () => {
     const q = parseZenGet({ version: 'v', page, theme: { scope: 'everywhere' }, themes })
     expect(q.activeTheme).toBe('paper')
     expect(q.themeScope).toBe('global')
+  })
+
+  it('reads which Garden the page is (G12), and a blank template falls back to the blank page (G11)', () => {
+    const p = parseZenGet({ version: 'v', page: { template: 'k2.blank@1' }, garden: { id: 'g-1', name: 'Notes', index: 2 } })
+    expect(p.garden).toEqual({ id: 'g-1', name: 'Notes', index: 2 })
+    expect(p.widgets.map((w) => [w.id, w.kind, w.caps])).toEqual([
+      ['garden-empty', 'garden-empty', ['agents:read', 'thread:read', 'thread:post']],
+    ])
+    expect(p.layout.split).toEqual([100])
+    expect(parseZenGet({ version: 'v', page: {} }).garden).toBeNull()
+  })
+
+  it('G38: a Garden’s own layout as column tables, and its built-in widgets with props', () => {
+    const p = parseZenGet({
+      version: 'v',
+      page: {
+        template: 'k2.blank@1',
+        layout: { kind: 'columns', columns: [{ size: 30, 'min-width': 220 }, { size: 70 }] },
+        widgets: [
+          { id: 'work', kind: 'agents', column: 0, props: { home: 'Work', 'home-picker': true }, caps: ['agents:read'] },
+          { id: 'talk', kind: 'conversation', column: 1, props: { agents: 'work' }, caps: ['thread:read'] },
+        ],
+        controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+      },
+    })
+    expect(p.layout).toEqual({ kind: 'columns', split: [30, 70], minWidths: [220, 0] })
+    expect(p.widgets.map((w) => [w.id, w.column, w.props])).toEqual([
+      ['work', 0, { home: 'Work', 'home-picker': true }],
+      ['talk', 1, { agents: 'work' }],
+    ])
   })
 
   it('throws for no page, a non-object, or another schema', () => {

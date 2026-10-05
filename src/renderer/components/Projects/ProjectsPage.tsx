@@ -26,6 +26,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
+import { useZenShown, zenShownNow } from '@/lib/zen/zen-view'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useProjectGroupsStore } from '@/stores/project-groups'
@@ -198,6 +199,8 @@ function SelectedProjectView({
 
 export default function ProjectsPage(): React.JSX.Element | null {
   const isOpen = usePageViewStore((s) => s.page === 'projects')
+  // prd-zen-gardens-v1 G4/G49: under Zen the page's terminals park.
+  const zenShown = useZenShown()
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const revision = useProjectGroupsStore((s) => s.revision)
@@ -276,6 +279,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent): void => {
+      // prd-zen-gardens-v1 G26: under Zen, ⌘1–9 belongs to the Garden.
+      if (zenShownNow()) return
       const num = paneSwitchDigit(e)
       if (num === null) return
       e.preventDefault()
@@ -301,7 +306,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
   if (!everOpened) return null
 
   return (
-    <PageLiveContext.Provider value={isOpen}>
+    <PageLiveContext.Provider value={isOpen && !zenShown}>
     <div
       className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]"
       style={isOpen ? undefined : { display: 'none' }}

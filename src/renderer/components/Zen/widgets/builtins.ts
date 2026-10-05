@@ -1,18 +1,20 @@
-// prd-zen-mode-v1 S6 — the built-in pieces of `k2.texting@1`, plugged into
-// the S4 skeleton's registries: the Agents and Conversation widgets
-// (`registerZenWidget`), the template's own Home switcher, Zen toggle and
-// drag area (`registerZenTemplateControls`, with its bottom-left footer: Zen
-// toggle + Add agent), the v1 data verbs plus the ⌘1–9 row select
-// (`installZenDataVerbs`), and `agents.add` (`installZenAddAgentVerb`). Built-ins go through the same
-// bridge v2 user widgets will.
+// prd-zen-mode-v1 S6 and prd-zen-gardens-v1 G11, G28, G58 — the built-in
+// pieces of the two Garden templates, plugged into the skeleton's
+// registries: the Agents, Conversation and empty-Garden widgets
+// (`registerZenWidget`), the templates' own Garden switcher, Zen toggle and
+// drag area (`registerZenTemplateControls`, with the bottom-left footer:
+// Zen toggle, plus Add agent on `k2.texting@1`), the data verbs
+// (`installZenDataVerbs`), and `agents.add` (`installZenAddAgentVerb`).
+// Built-ins go through the same bridge v2 user widgets will.
 
 import { installZenDataVerbs } from '@/lib/zen/zen-data'
 import { installZenAddAgentVerb } from '@/lib/zen/zen-add-agent'
-import { BUILTIN_TEMPLATE_ID } from '@/lib/zen/zen-page'
+import { BLANK_TEMPLATE_ID, TEXTING_TEMPLATE_ID } from '@/lib/zen/zen-page'
 import { registerZenTemplateControls, registerZenWidget } from '../zen-registry'
 import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversationWidget } from './ZenConversationWidget'
-import { ZenTextingControls, ZenTextingFooter } from './ZenTextingControls'
+import { ZenGardenEmptyWidget } from './ZenGardenEmptyWidget'
+import { ZenBlankFooter, ZenTextingControls, ZenTextingFooter } from './ZenTextingControls'
 
 /** Install every built-in. Returns the uninstall. */
 export function installZenBuiltins(): () => void {
@@ -21,7 +23,9 @@ export function installZenBuiltins(): () => void {
     installZenAddAgentVerb(),
     registerZenWidget('agents', ZenAgentsWidget),
     registerZenWidget('conversation', ZenConversationWidget),
-    registerZenTemplateControls(BUILTIN_TEMPLATE_ID, ZenTextingControls, ZenTextingFooter),
+    registerZenWidget('garden-empty', ZenGardenEmptyWidget),
+    registerZenTemplateControls(TEXTING_TEMPLATE_ID, ZenTextingControls, ZenTextingFooter),
+    registerZenTemplateControls(BLANK_TEMPLATE_ID, ZenTextingControls, ZenBlankFooter),
   ]
   return () => {
     for (const off of offs.reverse()) off()

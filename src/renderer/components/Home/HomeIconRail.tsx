@@ -16,7 +16,6 @@ import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { ProjectIcon } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
-import { ZenToggleRailButton } from '@/components/Home/ZenToggleRow'
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
 
@@ -99,8 +98,6 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0">
-        {/* Zen Mode, above Add Agent (prd-zen-mode-v1 answer 2). */}
-        <ZenToggleRailButton />
         <button
           className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
           onClick={() => {

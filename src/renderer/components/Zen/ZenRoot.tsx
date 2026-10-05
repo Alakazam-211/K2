@@ -1,22 +1,25 @@
-// prd-zen-mode-v1 Z4, Z6, Z13, Z20, Z23, Z25, Z29 — the Zen layer.
+// prd-zen-mode-v1 Z4, Z6, Z13, Z20, Z23, Z25, Z29 and prd-zen-gardens-v1
+// G4, G12, G22, G23, G50 — the Zen layer.
 //
 // Fills the window (`position:fixed; inset:0; z-index:150`): above App's
 // shell, below Settings (200, which hides Zen anyway), the 400 dropdown
 // floor, Toast / Command Palette (9999) and dialogs (99998+). K2 renders no
 // top bar, PageTabs, sidebar or bottom bar while it is up.
 //
-// It reads the page for the selected Home from THIS computer's daemon, keeps
-// it live on `zen_changed`, applies the Zen theme to its own root only
-// (never `<html>`), publishes the stoplight / window-control safe area, and
-// drops into safe mode on its own when the page can't be read, crashes, or
-// fails the required-controls check.
+// It reads the Garden list and the page of this window's Garden from THIS
+// computer's daemon, keeps both live on `zen_changed`, applies the Zen
+// theme to its own root only (never `<html>`), publishes the stoplight /
+// window-control safe area, and drops into safe mode on its own when the
+// page can't be read, crashes, or fails the required-controls check. It
+// takes keyboard focus when it mounts, so no terminal hidden under it keeps
+// typing (G50).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useHomesStore, selectedHome } from '@/stores/homes'
-import { loadZenPage, useZenConfigStore, watchLocalZenChanged } from '@/lib/zen/zen-api'
+import { loadZenPage, useZenConfigStore, watchLocalZenChanged, type ZenLoadFailure } from '@/lib/zen/zen-api'
+import { currentZenGardenId, loadZenGardens, useCurrentZenGarden } from '@/lib/zen/zen-gardens'
 import { BUILTIN_TEXTING_PAGE, type ZenResolvedPage, type ZenThemeScope } from '@/lib/zen/zen-page'
-import { exitZen, useZenViewStore } from '@/lib/zen/zen-view'
+import { exitZen, useZenViewStore, type ZenSafeCause } from '@/lib/zen/zen-view'
 import {
   REDUCED_MOTION_QUERY,
   REDUCED_TRANSPARENCY_QUERY,
@@ -61,6 +64,26 @@ import { ZenPage } from './ZenPage'
 // S5: the Zen theme engine (tokens, scheme, type, shape, motion) through the
 // S4 plug-in point. Once per app session.
 installZenThemeEngine()
+
+/** A failed read as a safe-mode cause (G19: an older daemon says so). */
+function safeCauseFor(failure: ZenLoadFailure): ZenSafeCause {
+  return failure.kind === 'outdated' ? { kind: 'outdated' } : { kind: failure.kind, message: failure.message }
+}
+
+/** Read the page of this window's Garden; a Garden that went away in the
+ *  meantime re-reads the list (which moves the window to the first one). */
+async function loadCurrentPage(): Promise<void> {
+  const id = currentZenGardenId()
+  if (!id) return
+  const result = await loadZenPage(id)
+  if (result.status !== 'failed') return
+  if (/unknown_garden/.test(result.failure.message)) {
+    const list = await loadZenGardens()
+    if (list.status === 'failed' && list.failure) useZenViewStore.getState().enterSafeMode(safeCauseFor(list.failure))
+    return
+  }
+  if (currentZenGardenId() === id) useZenViewStore.getState().enterSafeMode(safeCauseFor(result.failure))
+}
 
 /** `[background] fit` as CSS (the daemon's `cover|contain|tile|center`). */
 const ZEN_BACKGROUND_FIT_CSS: Record<ZenBackgroundFit, React.CSSProperties> = {
@@ -134,16 +157,15 @@ function useZenThemeControls(
   safeRef.current = safe
 
   /** Run one switch on this computer's daemon, then re-read the page. */
-  const run = useCallback((what: string, send: (scope: ZenThemeScope, homeId: string) => Promise<void>) => {
+  const run = useCallback((what: string, send: (scope: ZenThemeScope, gardenId: string) => Promise<void>) => {
     const p = pageRef.current
-    if (safeRef.current || !p) return
+    const gardenId = currentZenGardenId()
+    if (safeRef.current || !p || !gardenId) return
     setError(null)
-    const h = selectedHome(useHomesStore.getState())
-    void send(p.themeScope, h.id)
+    void send(p.themeScope, gardenId)
       .then(() => {
         useZenOverlayStore.setState({ picker: false })
-        const now = selectedHome(useHomesStore.getState())
-        return loadZenPage(now.id, now.name)
+        return loadCurrentPage()
       })
       .catch((err: unknown) => {
         setError(`Couldn't switch ${what}: ${err instanceof Error ? err.message : String(err)}`)
@@ -152,15 +174,15 @@ function useZenThemeControls(
   }, [])
 
   const pick = useCallback(
-    (name: string) => run(`to ${name}`, (scope, homeId) => setZenTheme(name, scope, homeId)),
+    (name: string) => run(`to ${name}`, (scope, gardenId) => setZenTheme(name, scope, gardenId)),
     [run],
   )
 
   useEffect(() => {
     const uninstallKeys = installZenThemeKeys(os, window, {
       cycle: (dir) =>
-        run(dir === 1 ? 'to the next theme' : 'to the previous theme', (scope, homeId) =>
-          cycleZenTheme(dir, scope, homeId),
+        run(dir === 1 ? 'to the next theme' : 'to the previous theme', (scope, gardenId) =>
+          cycleZenTheme(dir, scope, gardenId),
         ),
       sheet: openZenCheatSheet,
     })
@@ -252,44 +274,61 @@ export function ZenRoot(): React.JSX.Element {
   const epoch = useZenViewStore((s) => s.epoch)
   const enterSafeMode = useZenViewStore((s) => s.enterSafeMode)
   const clearSafeMode = useZenViewStore((s) => s.clearSafeMode)
-  const home = useHomesStore((s) => selectedHome(s))
+  const garden = useCurrentZenGarden()
+  const gardenId = garden?.id ?? null
   const config = useZenConfigStore()
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const systemScheme = useSystemScheme()
   const reducedMotion = useMediaFlag(REDUCED_MOTION_QUERY)
   const reducedTransparency = useMediaFlag(REDUCED_TRANSPARENCY_QUERY)
   const os = useMemo(() => currentDesktopOs(), [])
   const inSafeMode = safe !== null
-  const livePage = config.homeId === home.id ? config.page : null
+  const livePage = gardenId !== null && config.gardenId === gardenId ? config.page : null
   const chrome = useZenChromeHold(livePage?.chrome ?? null, inSafeMode)
   const { area, onClusterRect } = useStoplightArea(chrome)
 
-  // Read the page for this Home (not in safe mode: safe mode never reads the
-  // user's files). A failure is safe mode with its cause.
+  // G50: keys typed after the toggle land in Zen, never in a terminal
+  // hidden underneath.
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || (document.activeElement && el.contains(document.activeElement))) return
+    el.focus({ preventScroll: true })
+  }, [])
+
+  // Read the Garden list (not in safe mode: safe mode never reads the
+  // user's files). Zen on with no folder yet sets it up once (G22). A
+  // failure is safe mode with its cause.
   useEffect(() => {
     if (inSafeMode) return
     let live = true
-    void loadZenPage(home.id, home.name).then((result) => {
-      if (!live || result.status !== 'failed') return
-      enterSafeMode({ kind: result.failure.kind, message: result.failure.message })
+    void loadZenGardens().then((result) => {
+      if (live && result.status === 'failed' && result.failure) enterSafeMode(safeCauseFor(result.failure))
     })
     return () => {
       live = false
     }
-  }, [home.id, home.name, epoch, inSafeMode, enterSafeMode])
+  }, [epoch, inSafeMode, enterSafeMode])
 
-  // `zen_changed` from this computer's daemon: re-read; it also ends safe
-  // mode (Z29).
+  // Read the page of this window's Garden, again on a Garden switch.
+  useEffect(() => {
+    if (inSafeMode || gardenId === null) return
+    void loadCurrentPage()
+  }, [gardenId, epoch, inSafeMode])
+
+  // `zen_changed` from this computer's daemon: re-read the list and the
+  // page (G15); it also ends safe mode (Z29).
   useEffect(
     () =>
       watchLocalZenChanged(() => {
         const st = useZenViewStore.getState()
         if (st.safe) st.clearSafeMode()
         else {
-          const h = selectedHome(useHomesStore.getState())
-          void loadZenPage(h.id, h.name).then((result) => {
-            if (result.status === 'failed') {
-              useZenViewStore.getState().enterSafeMode({ kind: result.failure.kind, message: result.failure.message })
+          void loadZenGardens().then((result) => {
+            if (result.status === 'failed' && result.failure) {
+              useZenViewStore.getState().enterSafeMode(safeCauseFor(result.failure))
+              return
             }
+            return loadCurrentPage()
           })
         }
       }),
@@ -300,11 +339,7 @@ export function ZenRoot(): React.JSX.Element {
   const reservedRect = area.rect
   useEffect(() => setZenReservedRects(() => [reservedRect]), [reservedRect])
 
-  const page: ZenResolvedPage | null = inSafeMode
-    ? BUILTIN_TEXTING_PAGE
-    : config.homeId === home.id && config.page
-      ? config.page
-      : null
+  const page: ZenResolvedPage | null = inSafeMode ? BUILTIN_TEXTING_PAGE : livePage
 
   const theme = zenThemeFor(page, systemScheme, inSafeMode, { reducedMotion, reducedTransparency })
   const themeTools = useZenThemeControls(os, page, inSafeMode)
@@ -324,6 +359,7 @@ export function ZenRoot(): React.JSX.Element {
     position: 'fixed',
     inset: 0,
     zIndex: 150,
+    outline: 'none',
     display: 'flex',
     flexDirection: 'column',
     background: 'var(--zen-canvas)',
@@ -354,7 +390,10 @@ export function ZenRoot(): React.JSX.Element {
 
   return (
     <div
+      ref={rootRef}
+      tabIndex={-1}
       data-zen-root=""
+      data-zen-garden={gardenId ?? undefined}
       data-zen-scheme={theme.scheme}
       data-zen-safe={inSafeMode ? '' : undefined}
       data-zen-reduced-motion={reducedMotion ? '' : undefined}
@@ -385,7 +424,7 @@ export function ZenRoot(): React.JSX.Element {
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {page ? (
         <ZenErrorBoundary
-          key={`${epoch}:${inSafeMode ? 'safe' : 'page'}`}
+          key={`${epoch}:${inSafeMode ? 'safe' : `page:${gardenId ?? ''}`}`}
           safe={inSafeMode}
           onCrash={onCrash}
           onExit={exitZen}

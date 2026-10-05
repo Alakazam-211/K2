@@ -7,9 +7,10 @@
 //   POST /cli/zen/theme/set  {name}      the picker
 //   POST /cli/zen/theme/next {}          ⌃⌘.
 //   POST /cli/zen/theme/prev {}          ⌃⌘⇧.
-// each with `home` added when the Home has its own pick (`theme.scope =
-// "home"`), so the switch changes what this Home shows. The daemon owns the
-// order and the wrap. Then the page is re-read (`zen_changed` follows too).
+// each with `garden` added when the Garden has its own pick (`theme.scope =
+// "garden"`, prd-zen-gardens-v1 G16, G30), so the switch changes what this
+// Garden shows. The daemon owns the order and the wrap. Then the page is
+// re-read (`zen_changed` follows too).
 //
 // Keys (checked against every window chord: ⌘1–9 / ⌘0, ⌘⌥1–9, ⌃1–9,
 // ⌃⌘Z, ⌘L, ⌘⇧L, ⌘⇧N, ⌘⇧Z, ⌘, ⌘K ⌘J ⌘P ⌘B ⌘⇧F, ⌘[ ⌘], ⌘= ⌘- ⌘0, and the
@@ -44,19 +45,19 @@ export function closeZenOverlays(): void {
   useZenOverlayStore.setState({ sheet: false, picker: false })
 }
 
-/** Where a switch applies: the Home itself only when the Home has its own pick. */
-function scopeBody(scope: ZenThemeScope, homeId: string): { home?: string } {
-  return scope === 'home' ? { home: homeId } : {}
+/** Where a switch applies: the Garden itself only when it has its own pick. */
+function scopeBody(scope: ZenThemeScope, gardenId: string): { garden?: string } {
+  return scope === 'garden' ? { garden: gardenId } : {}
 }
 
-/** `POST /cli/zen/theme/set {name, home?}` on this computer's daemon. */
-export async function setZenTheme(name: string, scope: ZenThemeScope, homeId: string): Promise<void> {
-  await daemonCliPost(zenLocalScope(), 'zen/theme/set', { name, ...scopeBody(scope, homeId) })
+/** `POST /cli/zen/theme/set {name, garden?}` on this computer's daemon. */
+export async function setZenTheme(name: string, scope: ZenThemeScope, gardenId: string): Promise<void> {
+  await daemonCliPost(zenLocalScope(), 'zen/theme/set', { name, ...scopeBody(scope, gardenId) })
 }
 
-/** `POST /cli/zen/theme/next|prev {home?}` on this computer's daemon. */
-export async function cycleZenTheme(dir: 1 | -1, scope: ZenThemeScope, homeId: string): Promise<void> {
-  await daemonCliPost(zenLocalScope(), dir === 1 ? 'zen/theme/next' : 'zen/theme/prev', scopeBody(scope, homeId))
+/** `POST /cli/zen/theme/next|prev {garden?}` on this computer's daemon. */
+export async function cycleZenTheme(dir: 1 | -1, scope: ZenThemeScope, gardenId: string): Promise<void> {
+  await daemonCliPost(zenLocalScope(), dir === 1 ? 'zen/theme/next' : 'zen/theme/prev', scopeBody(scope, gardenId))
 }
 
 export interface ZenKeyLike {
@@ -147,10 +148,10 @@ export function zenShortcutGroups(os: DesktopOs): ZenShortcutGroup[] {
       ],
     },
     {
-      title: 'Agents and Homes',
+      title: 'Agents and Gardens',
       rows: [
         { keys: `${cmd}1–9`, what: 'Open conversation 1–9' },
-        { keys: `${alt}1–9`, what: 'Switch to Home 1–9' },
+        { keys: `${alt}1–9`, what: 'Switch to Garden 1–9' },
         { keys: `${cmd}↑ / ${cmd}↓`, what: 'Previous / next conversation' },
       ],
     },
@@ -166,7 +167,7 @@ export function zenShortcutGroups(os: DesktopOs): ZenShortcutGroup[] {
       title: 'The rest of K2',
       rows: [
         { keys: `${cmd},`, what: 'Settings (Zen stays on)' },
-        { keys: `${cmd}P`, what: 'Projects' },
+        { keys: `${cmd}P`, what: 'Projects (leaves Zen)' },
         { keys: `${cmd}J`, what: 'Running Agents' },
         { keys: `${cmd}K`, what: 'Command Palette' },
         { keys: mac ? '⌘⇧N' : 'Ctrl+Shift+N', what: 'New window' },

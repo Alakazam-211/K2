@@ -43,7 +43,7 @@ import type { Room } from '@/stores/room'
 import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useHomeRoomsStore } from '@/stores/home-rooms'
-import { useSelectedHomeZenOn } from '@/lib/zen/zen-view'
+import { useZenShown } from '@/lib/zen/zen-view'
 import { useHomeAvatarSync } from '@/lib/home-avatars'
 
 /** True when Home is the page and the window's active workspace is a row
@@ -224,7 +224,9 @@ export function useConnectedRowNote(row: HomeRow): string | null {
 
 // ── Polling (every row's server, through the pool) ───────────────────────
 
-function useHomeStatusPoll(home: Home): void {
+/** Every row's server, through the pool (also run by Zen's data host for
+ *  the Homes a Garden shows, prd-zen-gardens-v1 G53). */
+export function useHomeStatusPoll(home: Home): void {
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const hosts = useConnectHostStore((s) => s.hosts)
   const keys = useMemo(() => homeHostKeys(home).sort(), [home])
@@ -299,12 +301,12 @@ export function HomeShellEffects(): null {
   // (prd-home-picker-and-remote-avatars-v1 S4).
   useHomeAvatarSync()
   useEffect(() => () => useHomeAddPickerStore.getState().setOpen(false), [])
-  // vs-live P31: the Zen toggle row sits inside the picker's outside-click
-  // area, so turning Zen on would leave the picker open under Zen (and back
-  // on screen when Zen exits). Zen on closes it.
-  const zenOn = useSelectedHomeZenOn()
+  // vs-live P31, prd-zen-gardens-v1 G6: Zen shown (the top-bar toggle,
+  // the chord, the app menu) closes Home's Add Agent picker, so it never
+  // waits under Zen and comes back when Zen exits.
+  const zenShown = useZenShown()
   useEffect(() => {
-    if (zenOn) useHomeAddPickerStore.getState().setOpen(false)
-  }, [zenOn])
+    if (zenShown) useHomeAddPickerStore.getState().setOpen(false)
+  }, [zenShown])
   return null
 }

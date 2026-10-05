@@ -1,19 +1,32 @@
 // prd-zen-mode-v1 S6 (Z34–Z43, vs-live Z52, Z54, Z65, Z67; Rosson's
-// 2026-10-04 answers 4–6, 9, 10) — what the v1 data verbs do.
+// 2026-10-04 answers 4–6, 9, 10) and prd-zen-gardens-v1 G26–G28, G32,
+// G52–G54, G61 — what the data verbs do.
 //
 // Every Zen widget, the built-in Agents and Conversation included, reads and
 // writes K2 only through the bridge (`zen-bridge.ts`). This module is the K2
 // side of the data verbs: `installZenDataVerbs()` registers them with
 // `registerZenVerb`. A widget never gets a scope, a token or `daemonCli*`.
 //
-// Rows (`agents.list` / `agents.subscribe`): the selected Home's rows in
-// Home order (so ⌘1–9 stays meaningful), multi-server, from the stores Home
-// already keeps:
+// Views (G27): each Agents widget in a Garden shows ONE Home — its own pick
+// (`k2.zen.gardenHomes.v1`), else its `home` prop, else the Garden's
+// `seedHome`, else the window's selected Home at that moment (then kept as
+// its pick). Never the window's selected Home live: Zen never moves the
+// Home page. With an `agent` prop it shows that one agent, filtered from
+// its Home (Rosson's answer 5). A Conversation widget follows the first
+// Agents widget, or the one its `agents` prop names. The empty-Garden
+// widget's "Ask my agent" opens a conversation with an agent on this
+// computer that needn't be on any Home. Selection is per view:
+// `<gardenId>/<widgetId>`.
+//
+// Rows (`agents.list` / `agents.subscribe`): the view's rows in Home order
+// (so ⌘1–9 stays meaningful), multi-server, from the stores Home already
+// keeps:
 //   - live status (Z39, Z65), first source that knows: an open room's own
 //     activity (its `agent_status_changed` slice), then `active-agents` for a
 //     row on the window's server, then the pool's `presence/summary`
 //     `agentActivity`. A server that sends no activity (before 0.43.2) shows
-//     no status, never "idle" (Z71);
+//     no status, never "idle" (Z71). `ZenDataHost` runs Home's row-status
+//     poll for every Home a view shows (G53);
 //   - availability from the pool (offline, sign in, no access) with Home's
 //     own row rules (`computeRowStatus`), plus "Update <server>" below the
 //     room floor;
@@ -29,7 +42,8 @@
 // "Open agents from other servers here" says; a server below the floor shows
 // "Update <server> to message this agent here". The Thread address is
 // resolved like the Agents page resolves it (`resolvePinnedChatCopyableAddress`,
-// vs-live Z52), not the row handle.
+// vs-live Z52), not the row handle. "Open in Agents" turns Zen off first
+// (G32, G54).
 //
 // Threads (`thread.*`): the live view comes from the existing overlay Thread
 // hook (`useOverlayThread`), mounted per subscribed conversation by
@@ -56,8 +70,10 @@ import {
   LOCAL_HOME_HOST,
   activeHomeHostKey,
   findWorkspaceForRow,
+  homeAddress,
   parseHomeAddress,
   savedHostForKey,
+  workspaceHandle,
 } from '@/lib/home-address'
 import { computeRowStatus } from '@/components/Home/home-room'
 import { roomRowActivity } from '@/lib/home-status'
@@ -72,8 +88,12 @@ import {
   type OverlayDoc,
   type OverlayThreadItem,
 } from '@/components/SessionView/overlayThread'
-import { registerZenVerb } from './zen-bridge'
-import { exitZen, registerZenRowSelect } from './zen-view'
+import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
+import { exitZen } from './zen-view'
+import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
+import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
+import { useZenGardensStore } from './zen-gardens'
+import { draftZenCompose } from './zen-compose-drafts'
 
 // ── Shapes a widget sees ──────────────────────────────────────────────────
 
@@ -199,8 +219,26 @@ export interface ZenFeedHandlers {
   voidCard(id: string): Promise<void>
 }
 
+/** What one widget shows (G27): one Home's rows (optionally one agent of
+ *  it), or — `homeId` null — only the agent picked in that widget (the
+ *  empty Garden's Ask my agent). */
+export interface ZenView {
+  /** `<gardenId>/<widgetId>`: the selection key, and the Home pick key. */
+  key: string
+  gardenId: string
+  /** The Agents widget the view belongs to (or the lone widget). */
+  widgetId: string
+  homeId: string | null
+  /** Single-agent mode: a row address, handle or name (the `agent` prop). */
+  agent: string | null
+}
+
 /** The feeds `ZenDataHost` renders. */
 export const zenThreadFeeds = createStore<{ feeds: ZenFeedSpec[] }>(() => ({ feeds: [] }))
+
+/** The Homes the live views show: `ZenDataHost` runs Home's row-status
+ *  poll for each (G53), since `HomeShellEffects` only runs on the Home page. */
+export const zenViewHomes = createStore<{ homeIds: string[] }>(() => ({ homeIds: [] }))
 
 /** Preview refresh while a Zen window shows rows (Z41). */
 export const ZEN_PREVIEW_MS = 15_000
@@ -208,14 +246,26 @@ export const ZEN_PREVIEW_MS = 15_000
 export const ZEN_LATEST_MAX = 50
 const PREVIEW_CHARS = 140
 
+/** The template's own controls (Add agent) act for the page's first
+ *  Agents widget. */
+export const ZEN_TEMPLATE_CONTROLS_ID = 'template-controls'
+
 const previews = new Map<string, ZenPreview>()
+/** View key → the open conversation's address. */
 const selection = new Map<string, string>()
 const conversations = new Map<string, Conversation>()
 /** The newest `conversation.open` per address (older ones give way). */
 const latestOpen = new Map<string, number>()
 const feedViews = new Map<string, ZenFeedView>()
 const feedHandlers = new Map<string, ZenFeedHandlers>()
-const rowListeners = new Set<(rows: ZenAgentRow[]) => void>()
+/** Agents on this computer that are on no Home (`agents.local`). */
+const looseRows = new Map<string, HomeRow>()
+interface RowListener {
+  view(): ZenView | null
+  cb(rows: ZenAgentRow[]): void
+  sig: string
+}
+const rowListeners = new Set<RowListener>()
 const threadListeners = new Map<string, Set<(view: ZenThreadView) => void>>()
 let generation = 0
 
@@ -294,7 +344,7 @@ function setPreview(address: string, next: ZenPreview): boolean {
   return true
 }
 
-// ── Rows ───────────────────────────────────────────────────────────────────
+// ── Row status helpers ─────────────────────────────────────────────────────
 
 function serverLabel(hostKey: string, hosts: ConnectHost[]): string | null {
   if (hostKey === LOCAL_HOME_HOST) return null
@@ -323,12 +373,171 @@ function roomActivityOf(entry: HomeRoomEntry | undefined): ReturnType<typeof roo
   return roomRowActivity(entry.room.activityView.getState(), mergePaneStatus)
 }
 
-function rowFor(row: HomeRow, index: number, home: Home): ZenAgentRow {
+
+// ── Views (G27) ────────────────────────────────────────────────────────────
+
+function propString(props: Record<string, unknown>, ...names: string[]): string | null {
+  for (const n of names) {
+    const v = props[n]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return null
+}
+
+/** The Agents widget's `home-picker` prop (G11, G38). */
+export function zenHomePickerOn(props: Record<string, unknown>): boolean {
+  return props['home-picker'] === true || props.homePicker === true || props.home_picker === true
+}
+
+/** The page's first Agents widget: column order, then declaration order. */
+export function firstAgentsWidget(page: ZenResolvedPage): ZenWidgetDecl | null {
+  let best: ZenWidgetDecl | null = null
+  for (const w of page.widgets) {
+    if (w.kind !== 'agents') continue
+    if (best === null || w.column < best.column) best = w
+  }
+  return best
+}
+
+/** A Home by id, or by name (case-insensitive). */
+function findHome(homes: readonly Home[], ref: string | null): Home | null {
+  if (!ref) return null
+  const byId = homes.find((h) => h.id === ref)
+  if (byId) return byId
+  const lower = ref.toLocaleLowerCase()
+  return homes.find((h) => h.name.toLocaleLowerCase() === lower) ?? null
+}
+
+/** The Home an Agents widget shows: its pick, its `home` prop, the
+ *  Garden's `seedHome`, else the window's selected Home now (kept). */
+export function zenHomeForWidget(gardenId: string, widget: ZenWidgetDecl): string {
+  const homes = useHomesStore.getState().homes
+  const key = zenGardenHomeKey(gardenId, widget.id)
+  const picked = findHome(homes, useZenGardenHomesStore.getState().picks[key] ?? null)
+  if (picked) return picked.id
+  const prop = findHome(homes, propString(widget.props, 'home'))
+  if (prop) return prop.id
+  const seed = findHome(homes, useZenGardensStore.getState().gardens.find((g) => g.id === gardenId)?.seedHome ?? null)
+  if (seed) return seed.id
+  const now = selectedHome(useHomesStore.getState()).id
+  // Keep it, so a later Home-page switch doesn't move this widget. Not
+  // during a render: the next microtask.
+  if (gardenId) queueMicrotask(() => useZenGardenHomesStore.getState().setPick(key, now))
+  return now
+}
+
+/** The single agent a widget is filtered to (Rosson's answer 5): its
+ *  `agent` prop, unless `mode` says the whole Home. The daemon sends every
+ *  prop, `mode` derived (`"agent"` when `agent` is set). */
+export function zenAgentFilter(props: Record<string, unknown>): string | null {
+  if (props.mode === 'home') return null
+  return propString(props, 'agent')
+}
+
+/** A widget's view of one Home (an Agents widget, or a Conversation pinned
+ *  to one agent with `agent` + `home`). */
+function homeView(gardenId: string, w: ZenWidgetDecl): ZenView {
+  return {
+    key: zenGardenHomeKey(gardenId, w.id),
+    gardenId,
+    widgetId: w.id,
+    homeId: zenHomeForWidget(gardenId, w),
+    agent: w.kind === 'conversation' ? propString(w.props, 'agent') : zenAgentFilter(w.props),
+  }
+}
+
+function agentsView(gardenId: string, w: ZenWidgetDecl): ZenView {
+  return homeView(gardenId, w)
+}
+
+function looseView(gardenId: string, widgetId: string): ZenView {
+  return { key: zenGardenHomeKey(gardenId, widgetId), gardenId, widgetId, homeId: null, agent: null }
+}
+
+/** What `widgetId` on `page` shows. Template controls act for the first
+ *  Agents widget; a Conversation pinned with `agent` (and `home`) shows
+ *  that one agent, else it follows its `agents` prop or the first Agents
+ *  widget; anything else is a loose view. */
+export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: string): ZenView | null {
+  const w = page.widgets.find((x) => x.id === widgetId)
+  if (!w) {
+    if (widgetId !== ZEN_TEMPLATE_CONTROLS_ID) return null
+    const first = firstAgentsWidget(page)
+    return first ? agentsView(gardenId, first) : null
+  }
+  if (w.kind === 'agents') return agentsView(gardenId, w)
+  if (w.kind === 'conversation') {
+    if (propString(w.props, 'agent')) return homeView(gardenId, w)
+    const named = propString(w.props, 'agents')
+    const follow =
+      (named ? page.widgets.find((x) => x.id === named && x.kind === 'agents') : undefined) ?? firstAgentsWidget(page)
+    return follow ? agentsView(gardenId, follow) : looseView(gardenId, w.id)
+  }
+  return looseView(gardenId, w.id)
+}
+
+function viewOf(ctx: ZenVerbCtx): ZenView {
+  const v = zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId)
+  if (!v) throw new Error(`zen: widget ${ctx.widgetId} has no agents`)
+  return v
+}
+
+/** The calling widget's view (null: no Agents widget to act for). */
+export function zenViewForCtx(ctx: ZenVerbCtx): ZenView | null {
+  return zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId)
+}
+
+/** The view Add agent acts for: the calling widget's own Home, else (the
+ *  template's controls, a widget that shows no Home) the page's first
+ *  Agents widget. */
+export function zenAddTargetForCtx(ctx: ZenVerbCtx): ZenView | null {
+  const own = zenViewForCtx(ctx)
+  if (own?.homeId) return own
+  const first = firstAgentsWidget(ctx.page())
+  return first ? agentsView(ctx.gardenId(), first) : null
+}
+
+/** The Home id the calling widget's view shows (null: a loose view). */
+export function zenHomeIdForCtx(ctx: ZenVerbCtx): string | null {
+  return zenViewForCtx(ctx)?.homeId ?? null
+}
+
+function matchesAgent(row: HomeRow, agent: string): boolean {
+  const a = agent.toLocaleLowerCase()
+  if (row.address === a) return true
+  const p = parseHomeAddress(row.address)
+  return (p !== null && p.handle === a) || row.label.toLocaleLowerCase() === a
+}
+
+/** A row by address: on any Home, else an agent on this computer that
+ *  `agents.local` listed. */
+function anyRow(address: string): HomeRow | null {
+  for (const h of useHomesStore.getState().homes) {
+    const r = h.rows.find((x) => x.address === address)
+    if (r) return r
+  }
+  return looseRows.get(address) ?? null
+}
+
+/** The view's rows, in Home order. */
+function viewRows(view: ZenView): HomeRow[] {
+  if (view.homeId === null) {
+    const address = selection.get(view.key)
+    const row = address ? anyRow(address) : null
+    return row ? [row] : []
+  }
+  const home = useHomesStore.getState().homes.find((h) => h.id === view.homeId)
+  if (!home) return []
+  return view.agent ? home.rows.filter((r) => matchesAgent(r, view.agent as string)) : home.rows
+}
+
+// ── Rows ───────────────────────────────────────────────────────────────────
+
+function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow {
   const host = useConnectHostStore.getState()
   const projects = useProjectsStore.getState().projects
   const parsed = parseHomeAddress(row.address)
   const hostKey = parsed?.host ?? ''
-  const connectedKey = activeHomeHostKey(host.activeHost)
   const entry: HostEntry | undefined = hostPool.store.getState().entries[hostKey]
   const roomEntry = homeRooms.store.getState().entries[row.address]
   const roomActivity = roomActivityOf(roomEntry)
@@ -415,28 +624,46 @@ function rowFor(row: HomeRow, index: number, home: Home): ZenAgentRow {
     detail,
     preview: previews.get(row.address) ?? null,
     people,
-    selected: selection.get(home.id) === row.address,
+    selected: view !== null && selection.get(view.key) === row.address,
     openable: state === 'ok',
   }
 }
 
-/** `agents.list()`: the selected Home's rows, in Home order. */
-export function zenAgentRows(): ZenAgentRow[] {
-  const home = selectedHome(useHomesStore.getState())
-  return home.rows.map((r, i) => rowFor(r, i, home))
+/** `agents.list()`: the view's rows, in Home order. */
+export function zenAgentRows(view: ZenView | null): ZenAgentRow[] {
+  if (!view) return []
+  return viewRows(view).map((r, i) => rowFor(r, i, view))
 }
 
-let lastRowsSig = ''
-let lastRows: ZenAgentRow[] = []
+function syncViewHomes(): void {
+  const ids = new Set<string>()
+  for (const l of rowListeners) {
+    const v = l.view()
+    if (v?.homeId) ids.add(v.homeId)
+  }
+  const next = [...ids].sort()
+  const prev = zenViewHomes.getState().homeIds
+  if (prev.length !== next.length || prev.some((id, i) => id !== next[i])) zenViewHomes.setState({ homeIds: next })
+}
 
 function emitRows(): void {
   if (rowListeners.size === 0) return
-  const rows = zenAgentRows()
-  const sig = JSON.stringify(rows)
-  if (sig === lastRowsSig) return
-  lastRowsSig = sig
-  lastRows = rows
-  for (const fn of [...rowListeners]) fn(rows)
+  for (const l of [...rowListeners]) {
+    if (!rowListeners.has(l)) continue
+    const rows = zenAgentRows(l.view())
+    const sig = JSON.stringify(rows)
+    if (sig === l.sig) continue
+    l.sig = sig
+    l.cb(rows)
+  }
+  syncViewHomes()
+}
+
+/** Every row a live view shows (deduplicated by address). */
+function liveRows(): ZenAgentRow[] {
+  const out = new Map<string, ZenAgentRow>()
+  for (const l of rowListeners) for (const r of zenAgentRows(l.view())) if (!out.has(r.address)) out.set(r.address, r)
+  return [...out.values()]
 }
 
 // ── Live: store subscriptions + the preview poll ──────────────────────────
@@ -453,6 +680,8 @@ function startLive(): void {
   unsubs.push(useActiveAgentsStore.subscribe(on))
   unsubs.push(usePresenceStore.subscribe(on))
   unsubs.push(hostPool.store.subscribe(on))
+  unsubs.push(useZenGardenHomesStore.subscribe(on))
+  unsubs.push(useZenGardensStore.subscribe(on))
   // Open rooms' own activity slices (Z39): re-subscribe when rooms change.
   const roomSubs = new Map<string, () => void>()
   const syncRooms = (): void => {
@@ -484,10 +713,10 @@ function startLive(): void {
     useWindowFocusStore.subscribe((s, prev) => {
       if (!s.isFocused || prev.isFocused) return
       void refreshZenPreviews()
-      const home = selectedHome(useHomesStore.getState())
-      const address = selection.get(home.id)
-      const conv = address ? conversations.get(address) : undefined
-      if (address && conv && conv.phase === 'ready' && !isConnectedHost(conv.hostKey)) homeRooms.focused(address)
+      for (const address of new Set(selection.values())) {
+        const conv = conversations.get(address)
+        if (conv && conv.phase === 'ready' && !isConnectedHost(conv.hostKey)) homeRooms.focused(address)
+      }
     }),
   )
   stopLive = () => {
@@ -511,7 +740,7 @@ const previewInFlight = new Set<string>()
 /** One preview refresh: one request per server (Z41). */
 export async function refreshZenPreviews(): Promise<void> {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-  const rows = zenAgentRows().filter((r) => r.state === 'ok')
+  const rows = liveRows().filter((r) => r.state === 'ok')
   const byHost = new Map<string, ZenAgentRow[]>()
   for (const r of rows) {
     const list = byHost.get(r.hostKey) ?? []
@@ -569,11 +798,17 @@ async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promis
 
 // ── Conversations ──────────────────────────────────────────────────────────
 
-function findRow(address: string): { home: Home; row: HomeRow; index: number } {
-  const home = selectedHome(useHomesStore.getState())
-  const index = home.rows.findIndex((r) => r.address === address)
-  if (index < 0) throw new Error(`zen: ${address} is not a row of ${home.name}`)
-  return { home, row: home.rows[index], index }
+/** The row `address` as `view` shows it: one of its rows, else (the Ask my
+ *  agent pick, an agent on another Home) a row of its own. */
+function findRow(view: ZenView, address: string): { row: HomeRow; index: number } {
+  const rows = viewRows(view)
+  const index = rows.findIndex((r) => r.address === address)
+  if (index >= 0) return { row: rows[index], index }
+  if (view.homeId === null) {
+    const loose = anyRow(address)
+    if (loose) return { row: loose, index: 0 }
+  }
+  throw new Error(`zen: ${address} is not an agent this widget shows`)
 }
 
 function setConversation(c: Conversation): void {
@@ -599,23 +834,25 @@ function syncFeeds(): void {
   if (!same) zenThreadFeeds.setState({ feeds })
 }
 
-/** `conversation.open(address, {where?})` (Z35, Z37, Z43). */
+/** `conversation.open(address, {where?})` (Z35, Z37, Z43) in `view`. */
 export async function openZenConversation(
+  view: ZenView,
   address: string,
   opts: { where?: 'zen' | 'agents' } = {},
 ): Promise<ZenAgentRow> {
-  const { home, row, index } = findRow(address)
+  const { row, index } = findRow(view, address)
   if (opts.where === 'agents') {
     await openInAgents(row)
-    return rowFor(row, index, home)
+    return rowFor(row, index, view)
   }
-  selection.set(home.id, address)
-  const current = rowFor(row, index, home)
+  // The loose view lists only its pick: select first, so the row is its own.
+  selection.set(view.key, address)
+  const current = rowFor(row, index, view)
   const gen = ++generation
   const base = { address, hostKey: current.hostKey, scope: null, threadAddr: null, workspacePath: '', generation: gen }
   if (current.state !== 'ok' && current.state !== 'checking') {
     setConversation({ ...base, phase: 'unavailable', note: current.detail ?? current.stateLabel })
-    return rowFor(row, index, home)
+    return rowFor(row, index, view)
   }
   const existing = conversations.get(address)
   latestOpen.set(address, gen)
@@ -638,7 +875,7 @@ export async function openZenConversation(
     const ws = findWorkspaceForRow(useProjectsStore.getState().projects, row)
     if (!ws) {
       setConversation({ ...base, phase: 'unavailable', note: `${row.label} is not on ${where} any more.` })
-      return rowFor(row, index, home)
+      return rowFor(row, index, view)
     }
     // MS2: the window's own room (no window switch).
     homeRooms.showPrimary()
@@ -652,11 +889,11 @@ export async function openZenConversation(
     if (!hostPool.entry(current.hostKey)?.boot?.version) await hostPool.check(current.hostKey)
     if (homeRoomVerdict(hostPool.entry(current.hostKey)?.boot) === 'switch') {
       setConversation({ ...base, phase: 'unavailable', note: `Update ${where} to message this agent here.` })
-      return rowFor(row, index, home)
+      return rowFor(row, index, view)
     }
     // In place, whatever "Open agents from other servers here" says.
     const entry = await homeRooms.open(row, current.hostKey)
-    if (stale()) return rowFor(row, index, home)
+    if (stale()) return rowFor(row, index, view)
     if (entry.phase !== 'open' || !entry.room) {
       const note =
         entry.phase === 'not-found'
@@ -665,7 +902,7 @@ export async function openZenConversation(
             ? `Update ${where} to message this agent here.`
             : `Couldn’t open ${row.label}${entry.error ? `: ${entry.error}` : '.'}`
       setConversation({ ...base, phase: 'failed', note })
-      return rowFor(row, index, home)
+      return rowFor(row, index, view)
     }
     scope = scopeForHost(current.hostKey)
     workspacePath = entry.room.cwd()
@@ -675,11 +912,11 @@ export async function openZenConversation(
     // Already resolved: keep the feed (same generation), just re-show.
     syncFeeds()
     emitRows()
-    return rowFor(row, index, home)
+    return rowFor(row, index, view)
   }
   // vs-live Z52: the Agents page's own resolver, not the row handle.
   const resolved = await resolvePinnedChatCopyableAddress(scope, workspacePath, projectId)
-  if (stale()) return rowFor(row, index, home)
+  if (stale()) return rowFor(row, index, view)
   const fallback = parseHomeAddress(address)?.handle ?? ''
   if (!resolved?.clipboard) console.warn(`[zen] no pinned Chat address for ${address}; using ${fallback}`)
   setConversation({
@@ -690,16 +927,18 @@ export async function openZenConversation(
     threadAddr: resolved?.clipboard || fallback,
     workspacePath,
   })
-  return rowFor(row, index, home)
+  return rowFor(row, index, view)
 }
 
-/** "Open in Agents" (Z43, answer 10): leave the Zen view for the agent's
- *  terminal, where its permission prompt is. A row on the window's server
- *  opens on the Agents page (Zen stays on for the Home). A row on another
- *  server only has a room on Home, so Zen turns off for this Home and Home
- *  shows that room, in place. The window's server never changes. */
+/** "Open in Agents" (Z43, answer 10, G32, G54): leave Zen for the agent's
+ *  terminal, where its permission prompt is. Zen turns off FIRST in both
+ *  branches, so the page underneath mounts live. A row on the window's
+ *  server opens on the Agents page; a row on another server only has a
+ *  room on Home, so Home shows that room, in place. The window's server
+ *  never changes. */
 async function openInAgents(row: HomeRow): Promise<void> {
   const hostKey = parseHomeAddress(row.address)?.host ?? ''
+  exitZen()
   if (isConnectedHost(hostKey)) {
     const ws = findWorkspaceForRow(useProjectsStore.getState().projects, row)
     if (ws) useProjectsStore.getState().setActiveProject(ws.id)
@@ -707,17 +946,76 @@ async function openInAgents(row: HomeRow): Promise<void> {
     usePageViewStore.getState().setPage('agents')
     return
   }
-  if (!hostPool.entry(hostKey)?.boot?.version) await hostPool.check(hostKey)
-  exitZen()
   usePageViewStore.getState().setPage('home')
+  if (!hostPool.entry(hostKey)?.boot?.version) await hostPool.check(hostKey)
   if (homeRoomVerdict(hostPool.entry(hostKey)?.boot) === 'switch') return
   await homeRooms.open(row, hostKey)
 }
 
-function closeZenConversation(): void {
-  const home = selectedHome(useHomesStore.getState())
-  selection.delete(home.id)
+function closeZenConversation(view: ZenView): void {
+  selection.delete(view.key)
   emitRows()
+}
+
+/** ⌘1–9 / ⌘0 in Zen (G52): row `index` of the page's first Agents widget;
+ *  nothing when the Garden has none. */
+export function selectZenRowOnPage(page: ZenResolvedPage, gardenId: string, index: number): void {
+  const first = firstAgentsWidget(page)
+  if (!first) return
+  const view = agentsView(gardenId, first)
+  const row = viewRows(view)[index]
+  if (!row) return
+  void openZenConversation(view, row.address).catch((err: unknown) => console.warn('[zen] open failed:', err))
+}
+
+// ── Agents on this computer (G28, G61) ────────────────────────────────────
+
+interface LocalWorkspace {
+  id: string
+  name: string
+  handle?: string | null
+}
+
+function parseLocalWorkspaces(raw: unknown): LocalWorkspace[] {
+  if (!Array.isArray(raw)) throw new Error('projects/list: not a list')
+  const out: LocalWorkspace[] = []
+  for (const w of raw) {
+    if (!isObj(w) || typeof w.id !== 'string' || typeof w.name !== 'string') continue
+    out.push({ id: w.id, name: w.name, handle: typeof w.handle === 'string' ? w.handle : null })
+  }
+  return out
+}
+
+/** This computer's workspaces: the window's own list when it is on this
+ *  computer, else one `projects/list` on the local scope. */
+async function localWorkspaces(): Promise<LocalWorkspace[]> {
+  if (useConnectHostStore.getState().activeHost === 'local') return useProjectsStore.getState().projects
+  return parseLocalWorkspaces(await daemonCliGet<unknown>(scopeForHost(LOCAL_HOME_HOST), 'projects/list'))
+}
+
+/** `agents.local()`: agents on this computer only — Home rows on this
+ *  computer across every Home, plus this computer's workspaces —
+ *  deduplicated by address. Only an agent on this computer can edit this
+ *  computer's `~/.k2/zen`. */
+export async function zenLocalAgents(view: ZenView | null): Promise<ZenAgentRow[]> {
+  const rows = new Map<string, HomeRow>()
+  for (const h of useHomesStore.getState().homes) {
+    for (const r of h.rows) if (parseHomeAddress(r.address)?.host === LOCAL_HOME_HOST && !rows.has(r.address)) rows.set(r.address, r)
+  }
+  try {
+    for (const w of await localWorkspaces()) {
+      const handle = workspaceHandle(w)
+      if (!handle) continue
+      const address = homeAddress(handle, LOCAL_HOME_HOST)
+      if (rows.has(address)) continue
+      const row: HomeRow = { address, workspaceId: w.id, label: w.name }
+      rows.set(address, row)
+      if (!anyRow(address)) looseRows.set(address, row)
+    }
+  } catch (err) {
+    console.warn('[zen] listing this computer’s agents failed:', err)
+  }
+  return [...rows.values()].map((r, i) => rowFor(r, i, view))
 }
 
 // ── Threads ────────────────────────────────────────────────────────────────
@@ -826,19 +1124,18 @@ function fn<T>(v: unknown, what: string): (arg: T) => void {
   return v as (arg: T) => void
 }
 
-function rowsSubscribe(cb: (rows: ZenAgentRow[]) => void): () => void {
-  rowListeners.add(cb)
-  const rows = zenAgentRows()
-  lastRowsSig = JSON.stringify(rows)
-  lastRows = rows
+function rowsSubscribe(ctx: ZenVerbCtx, cb: (rows: ZenAgentRow[]) => void): () => void {
+  const view = (): ZenView | null => zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId)
+  const rows = zenAgentRows(view())
+  const listener: RowListener = { view, cb, sig: JSON.stringify(rows) }
+  rowListeners.add(listener)
   startLive()
-  cb(lastRows)
+  syncViewHomes()
+  cb(rows)
   return () => {
-    rowListeners.delete(cb)
-    if (rowListeners.size === 0) {
-      stopLive?.()
-      lastRowsSig = ''
-    }
+    rowListeners.delete(listener)
+    syncViewHomes()
+    if (rowListeners.size === 0) stopLive?.()
   }
 }
 
@@ -859,21 +1156,34 @@ function threadSubscribe(address: string, cb: (view: ZenThreadView) => void): ()
   }
 }
 
-/** Register the v1 data verbs and the ⌘1–9 row select. Returns the
- *  uninstall. */
+/** Register the data verbs. Returns the uninstall. */
 export function installZenDataVerbs(): () => void {
   const offs = [
-    registerZenVerb('agents.list', () => zenAgentRows()),
-    registerZenVerb('agents.subscribe', (_ctx, cb) => rowsSubscribe(fn<ZenAgentRow[]>(cb, 'agents.subscribe callback'))),
-    registerZenVerb('presence.get', (_ctx, address) => {
-      const a = str(address, 'address')
-      return zenAgentRows().find((r) => r.address === a)?.people ?? []
+    registerZenVerb('agents.list', (ctx) => zenAgentRows(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId))),
+    registerZenVerb('agents.subscribe', (ctx, cb) => rowsSubscribe(ctx, fn<ZenAgentRow[]>(cb, 'agents.subscribe callback'))),
+    // G27: the Agents widget's own Home (view state; never `selectHome`).
+    registerZenVerb('agents.home', (ctx) => zenHomeIdForCtx(ctx)),
+    registerZenVerb('agents.setHome', (ctx, id) => {
+      const homeId = str(id, 'a Home id')
+      if (!useHomesStore.getState().homes.some((h) => h.id === homeId)) throw new Error(`zen: no Home ${homeId}`)
+      const view = viewOf(ctx)
+      if (view.homeId === null) throw new Error(`zen: widget ${ctx.widgetId} shows no Home`)
+      useZenGardenHomesStore.getState().setPick(view.key, homeId)
+      // A conversation from the old Home closes with it.
+      const open = selection.get(view.key)
+      if (open && !viewRows({ ...view, homeId }).some((r) => r.address === open)) selection.delete(view.key)
+      emitRows()
     }),
-    registerZenVerb('presence.subscribe', (_ctx, address, cb) => {
+    registerZenVerb('agents.local', (ctx) => zenLocalAgents(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId))),
+    registerZenVerb('presence.get', (ctx, address) => {
+      const a = str(address, 'address')
+      return zenAgentRows(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId)).find((r) => r.address === a)?.people ?? []
+    }),
+    registerZenVerb('presence.subscribe', (ctx, address, cb) => {
       const a = str(address, 'address')
       const f = fn<ZenPerson[]>(cb, 'presence.subscribe callback')
       let last = ''
-      return rowsSubscribe((rows) => {
+      return rowsSubscribe(ctx, (rows) => {
         const people = rows.find((r) => r.address === a)?.people ?? []
         const sig = JSON.stringify(people)
         if (sig === last) return
@@ -881,13 +1191,14 @@ export function installZenDataVerbs(): () => void {
         f(people)
       })
     }),
-    registerZenVerb('conversation.open', (_ctx, address, opts) =>
+    registerZenVerb('conversation.open', (ctx, address, opts) =>
       openZenConversation(
+        viewOf(ctx),
         str(address, 'address'),
         isObj(opts) && (opts.where === 'agents' || opts.where === 'zen') ? { where: opts.where } : {},
       ),
     ),
-    registerZenVerb('conversation.close', () => closeZenConversation()),
+    registerZenVerb('conversation.close', (ctx) => closeZenConversation(viewOf(ctx))),
     registerZenVerb('thread.subscribe', (_ctx, address, cb) =>
       threadSubscribe(str(address, 'address'), fn<ZenThreadView>(cb, 'thread.subscribe callback')),
     ),
@@ -935,11 +1246,10 @@ export function installZenDataVerbs(): () => void {
     registerZenVerb('thread.void', (_ctx, address, cardId) =>
       handlersFor(str(address, 'address')).voidCard(str(cardId, 'cardId')),
     ),
-    // Z32/Z54: ⌘1–9 in Zen selects conversation N, in place.
-    registerZenRowSelect((index) => {
-      const row = selectedHome(useHomesStore.getState()).rows[index]
-      if (!row) return
-      void openZenConversation(row.address).catch((err: unknown) => console.warn('[zen] open failed:', err))
+    // G28, G60: set a conversation's message box; never sends.
+    registerZenVerb('compose.draft', (_ctx, address, text) => {
+      if (typeof text !== 'string') throw new Error('zen bridge: compose.draft text must be a string')
+      draftZenCompose(str(address, 'address'), text)
     }),
   ]
   return () => {
@@ -956,10 +1266,10 @@ export function __resetZenDataForTests(): void {
   latestOpen.clear()
   feedViews.clear()
   feedHandlers.clear()
+  looseRows.clear()
   rowListeners.clear()
   threadListeners.clear()
   previewInFlight.clear()
-  lastRowsSig = ''
-  lastRows = []
   zenThreadFeeds.setState({ feeds: [] })
+  zenViewHomes.setState({ homeIds: [] })
 }

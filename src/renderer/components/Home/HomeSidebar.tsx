@@ -49,7 +49,6 @@ import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAv
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
-import { ZenToggleRow } from '@/components/Home/ZenToggleRow'
 
 /** Avatar color for an agent on another server (its color lives there). */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
@@ -450,12 +449,10 @@ export default function HomeSidebar(): React.JSX.Element {
         )}
       </div>
 
-      {/* Add Agent + collapse the nav — the Add Workspace bar. Zen Mode
-          (prd-zen-mode-v1, Rosson 2026-10-04 answer 2) is its own row just
-          above the two buttons. */}
+      {/* Add Agent + collapse the nav — the Add Workspace bar. (Zen Mode is
+          the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
       <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2">
         {pickerOpen && <AddAgentPicker home={home} />}
-        <ZenToggleRow />
         <div className="flex gap-2">
           <button
             className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"

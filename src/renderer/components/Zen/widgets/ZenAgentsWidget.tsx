@@ -1,8 +1,19 @@
-// prd-zen-mode-v1 Z38, Z39, Z32 (answers 4, 5, 9) — the Agents widget: the
-// Home's agents like a list of chats.
+// prd-zen-mode-v1 Z38, Z39, Z32 (answers 4, 5, 9) and prd-zen-gardens-v1
+// G27, G38 (Rosson's 2026-10-04 answer 5) — the Agents widget: a Home's
+// agents like a list of chats.
 //
-// One row per Home row, in Home order (⌘1–9 selects row N through
-// `registerZenRowSelect`, installed with the data verbs). Each row: avatar,
+// It shows ONE Home: its own pick from the Home picker in its header
+// ("Home: [Work ▾]", with the `home-picker` prop), else its `home` prop,
+// else the Garden's seed Home, else the window's selected Home when it
+// first showed. Picking a Home here never moves the Home page. Two modes,
+// by props: the whole Home (default), or one agent filtered from it
+// (`agent`: a row address, handle or name).
+//
+// Display props (the daemon sends every prop, defaults filled):
+// `server-tag`, `preview` and `status` (which live statuses show).
+//
+// One row per Home row, in Home order (⌘1–9 selects row N of the page's
+// first Agents widget). Each row: avatar,
 // name, the server when it isn't this computer, the agent's live status
 // (working, needs you, idle — no status when its server can't say), and the
 // start of its last message. No unread dots (answer 9). A row that can't be
@@ -12,12 +23,156 @@
 //
 // Everything comes through the bridge (`agents:read`).
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
+import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenWidgetStyles, initials, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
+export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
+
+function propString(props: Record<string, unknown>, name: string): string | null {
+  const v = props[name]
+  return typeof v === 'string' && v.trim() ? v.trim() : null
+}
+
+function homePickerOn(props: Record<string, unknown>): boolean {
+  return props['home-picker'] === true || props.homePicker === true || props.home_picker === true
+}
+
+function propOn(props: Record<string, unknown>, name: string): boolean {
+  return props[name] !== false
+}
+
+/** The row as this widget's display props show it. */
+function displayRow(row: ZenAgentRow, props: Record<string, unknown>): ZenAgentRow {
+  const statuses = Array.isArray(props.status) ? props.status.filter((s): s is string => typeof s === 'string') : null
+  const activity = row.activity !== null && statuses && !statuses.includes(row.activity) ? null : row.activity
+  return {
+    ...row,
+    server: propOn(props, 'server-tag') ? row.server : null,
+    preview: propOn(props, 'preview') ? row.preview : null,
+    activity,
+  }
+}
+
+/** The widget's own Home picker (G27): "Home: [Work ▾]". */
+function HomePicker({
+  homes,
+  current,
+  onPick,
+}: {
+  homes: ZenHomeSummary[]
+  current: ZenHomeSummary | null
+  onPick(id: string): void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (boxRef.current && e.target instanceof Node && !boxRef.current.contains(e.target)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div ref={boxRef} className="relative flex min-w-0 items-center gap-1.5" data-zen-home-picker="">
+      <span style={{ color: 'var(--zen-text-muted)' }}>Home:</span>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Show another Home here"
+        data-zen-home-picker-button=""
+        data-zen-soft-button=""
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-w-0 items-center gap-1"
+        style={{
+          padding: '1px 8px',
+          borderRadius: 999,
+          border: '1px solid var(--zen-border)',
+          color: 'var(--zen-text)',
+          textTransform: 'none',
+          letterSpacing: 0,
+          fontWeight: 600,
+        }}
+      >
+        <span className="max-w-[10rem] truncate">{current?.name ?? 'Pick a Home'}</span>
+        <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden style={{ color: 'var(--zen-text-muted)' }}>
+          <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-zen-home-picker-menu=""
+          className="absolute left-0 flex flex-col"
+          style={{
+            top: 'calc(100% + 4px)',
+            zIndex: 3,
+            minWidth: 180,
+            padding: 4,
+            gap: 2,
+            background: 'var(--zen-surface-raised)',
+            border: '1px solid var(--zen-border)',
+            borderRadius: 'var(--zen-radius)',
+            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.14)',
+            textTransform: 'none',
+            letterSpacing: 0,
+            fontWeight: 400,
+          }}
+        >
+          {homes.map((h) => (
+            <button
+              key={h.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={h.id === current?.id}
+              data-zen-home-choice={h.id}
+              onClick={() => {
+                setOpen(false)
+                onPick(h.id)
+              }}
+              className="flex w-full items-center text-left"
+              style={{
+                minHeight: 28,
+                padding: '4px 10px',
+                borderRadius: 'calc(var(--zen-radius) - 4px)',
+                color: 'var(--zen-text)',
+                background: h.id === current?.id ? 'var(--zen-surface)' : 'transparent',
+                fontWeight: h.id === current?.id ? 600 : 400,
+              }}
+            >
+              <span className="truncate">{h.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The widget's Home (`agents.home`), re-read as its rows change. */
+function useWidgetHome(bridge: ZenWidgetBridge, rows: ZenAgentRow[]): [string | null, (id: string) => void] {
+  const [homeId, setHomeId] = useState<string | null>(() => bridge.call('agents.home') as string | null)
+  useEffect(() => {
+    setHomeId(bridge.call('agents.home') as string | null)
+  }, [bridge, rows])
+  const pick = (id: string): void => {
+    bridge.call('agents.setHome', id)
+    setHomeId(id)
+  }
+  return [homeId, pick]
+}
 
 const ACTIVITY_TEXT = { working: 'working', 'needs-you': 'needs you', idle: 'idle' } as const
 
@@ -156,9 +311,16 @@ function AgentRow({
   )
 }
 
-export function ZenAgentsWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
+export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
   const nowSec = useNowSec()
+  const [homeId, pickHome] = useWidgetHome(bridge, rows)
+  const picker = homePickerOn(decl.props)
+  // `mode: "home"` shows the whole Home even when `agent` is set.
+  const agent = decl.props.mode === 'home' ? null : propString(decl.props, 'agent')
+  // Home names only when they show (the picker, or the single-agent note).
+  const homes = picker || (agent && rows.length === 0) ? bridge.homes.list() : []
+  const home = homes.find((h) => h.id === homeId) ?? null
   const rowsRef = useRef(rows)
   rowsRef.current = rows
   const open = (address: string): void => {
@@ -187,10 +349,16 @@ export function ZenAgentsWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
   }, [])
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget="agents">
+    <div
+      className="flex h-full min-h-0 w-full flex-col"
+      data-zen-widget="agents"
+      data-zen-widget-id={decl.id}
+      data-zen-agents-mode={agent ? 'agent' : 'home'}
+      data-zen-agents-home={homeId ?? undefined}
+    >
       <ZenWidgetStyles />
       <div
-        className="flex-shrink-0"
+        className="flex flex-shrink-0 items-center justify-between gap-3"
         style={{
           padding: '14px 18px 6px',
           fontSize: '0.78em',
@@ -200,7 +368,8 @@ export function ZenAgentsWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
           color: 'var(--zen-text-muted)',
         }}
       >
-        Agents
+        <span>{agent ? 'Agent' : 'Agents'}</span>
+        {picker && <HomePicker homes={homes} current={home} onPick={pickHome} />}
       </div>
       {rows.length === 0 ? (
         <div
@@ -208,7 +377,7 @@ export function ZenAgentsWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
           data-zen-agents-empty=""
           style={{ padding: 24, color: 'var(--zen-text-muted)' }}
         >
-          {ZEN_EMPTY_HOME}
+          {agent ? zenAgentNotOnHome(agent, home?.name ?? 'this Home') : ZEN_EMPTY_HOME}
         </div>
       ) : (
         <ul
@@ -218,7 +387,7 @@ export function ZenAgentsWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
           style={{ padding: '2px 8px 10px', gap: 2 }}
         >
           {rows.map((row) => (
-            <AgentRow key={row.address} row={row} nowSec={nowSec} onOpen={open} />
+            <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={open} />
           ))}
         </ul>
       )}

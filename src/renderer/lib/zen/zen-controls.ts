@@ -1,17 +1,18 @@
-// prd-zen-mode-v1 Z27, Z28, Z64 — the required controls: bound by K2, then
-// checked by K2.
+// prd-zen-mode-v1 Z27, Z28, Z64 and prd-zen-gardens-v1 G24 — the required
+// controls: bound by K2, then checked by K2.
 //
-// The page draws its own Zen toggle, Home switcher and drag region, in any
-// form. It hands each element to `bridge.controls.bind(kind, el, homeId?)`
+// The page draws its own Zen toggle, Garden switcher and drag region, in
+// any form. It hands each element to `bridge.controls.bind(kind, el, gardenId?)`
 // and K2 attaches the action itself, so the action can't be faked or
 // dropped:
-//   - `zen-toggle`: click / Enter / Space → exit Zen (this Home off).
+//   - `zen-toggle`: click / Enter / Space → exit Zen (this window off).
 //   - `drag-region`: mousedown → `titleBarDragOnMouseDown` (drag, and a
 //     double-click zooms).
-//   - `home-switcher`: the page's TRIGGER. K2 attaches no action (the page
+//   - `garden-switcher`: the page's TRIGGER. K2 attaches no action (the page
 //     opens its own dropdown or modal); K2 only watches for activation so
 //     it can check the options turn up.
-//   - `home-option`: one choice, with its Home id → select that Home.
+//   - `garden-option`: one choice, with its Garden id → switch this window
+//     to that Garden.
 //
 // Then K2 checks, for each required control:
 //   declared  the page's `controls` list names it;
@@ -22,8 +23,8 @@
 //             `elementFromPoint` at its centre lands on it or inside it;
 //   wired     bound through `bind` (an element marked `data-zen-control`
 //             that was never bound is "not wired"), and activating the
-//             switcher trigger binds a `home-option` for every Home within
-//             1 s.
+//             switcher trigger binds a `garden-option` for every Garden
+//             within 1 s.
 // Two failed checks in a row are a failure (Z28): one bad frame mid
 // animation isn't.
 
@@ -31,9 +32,9 @@ import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { ZEN_REQUIRED_CONTROLS, type ZenControlKind } from './zen-page'
 import type { ZenControlProblem } from './zen-view'
 
-export type ZenBindKind = ZenControlKind | 'home-option'
+export type ZenBindKind = ZenControlKind | 'garden-option'
 
-export const ZEN_BIND_KINDS: readonly ZenBindKind[] = ['zen-toggle', 'home-switcher', 'home-option', 'drag-region']
+export const ZEN_BIND_KINDS: readonly ZenBindKind[] = ['zen-toggle', 'garden-switcher', 'garden-option', 'drag-region']
 
 export interface ZenRect {
   left: number
@@ -71,25 +72,25 @@ export const domZenGeometry: ZenGeometry = {
 /** What a bound control does. */
 export interface ZenControlActions {
   exit(): void
-  selectHome(id: string): void
-  /** Every Home id, in order (`homes.list()`). */
-  homeIds(): string[]
+  selectGarden(id: string): void
+  /** Every Garden id, in order (`gardens.list()`). */
+  gardenIds(): string[]
 }
 
 export interface ZenBinding {
   readonly kind: ZenBindKind
   readonly el: HTMLElement
-  readonly homeId: string | null
+  readonly gardenId: string | null
 }
 
 export const ZEN_WIRING_DEADLINE_MS = 1000
 
 export interface ZenControlRegistry {
   /** Bind `el` as `kind`. Returns the unbind. Throws on a bad kind, or a
-   *  `home-option` without a Home id (a page bug, loud). */
-  bind(kind: ZenBindKind, el: HTMLElement, homeId?: string): () => void
+   *  `garden-option` without a Garden id (a page bug, loud). */
+  bind(kind: ZenBindKind, el: HTMLElement, gardenId?: string): () => void
   bindings(): readonly ZenBinding[]
-  /** Set when a switcher activation didn't bind every Home in time; cleared
+  /** Set when a switcher activation didn't bind every Garden in time; cleared
    *  by a later activation that did. */
   wiringFailure(): ZenControlKind | null
   dispose(): void
@@ -108,26 +109,26 @@ export function createControlRegistry(
   let wiring: ZenControlKind | null = null
   let pending: unknown = null
 
-  const optionsCoverHomes = (): boolean => {
+  const optionsCoverGardens = (): boolean => {
     const bound = new Set(
-      list.filter((b) => b.kind === 'home-option' && b.el.isConnected && b.homeId).map((b) => b.homeId as string),
+      list.filter((b) => b.kind === 'garden-option' && b.el.isConnected && b.gardenId).map((b) => b.gardenId as string),
     )
-    return actions.homeIds().every((id) => bound.has(id))
+    return actions.gardenIds().every((id) => bound.has(id))
   }
 
   const onTriggerActivated = (): void => {
     if (pending !== null) timers.clearTimeout(pending)
     pending = timers.setTimeout(() => {
       pending = null
-      wiring = optionsCoverHomes() ? null : 'home-switcher'
+      wiring = optionsCoverGardens() ? null : 'garden-switcher'
     }, ZEN_WIRING_DEADLINE_MS)
   }
 
   return {
-    bind(kind, el, homeId) {
+    bind(kind, el, gardenId) {
       if (!ZEN_BIND_KINDS.includes(kind)) throw new Error(`zen controls: unknown control kind "${String(kind)}"`)
       if (!(el instanceof HTMLElement)) throw new Error(`zen controls: bind("${kind}") needs an element`)
-      if (kind === 'home-option' && !homeId) throw new Error('zen controls: a home-option needs its Home id')
+      if (kind === 'garden-option' && !gardenId) throw new Error('zen controls: a garden-option needs its Garden id')
       const offs: Array<() => void> = []
       const on = <K extends keyof HTMLElementEventMap>(type: K, fn: (e: HTMLElementEventMap[K]) => void): void => {
         el.addEventListener(type, fn)
@@ -142,8 +143,8 @@ export function createControlRegistry(
         })
       }
       if (kind === 'zen-toggle') activate(() => actions.exit())
-      else if (kind === 'home-option') activate(() => actions.selectHome(homeId as string))
-      else if (kind === 'home-switcher') activate(onTriggerActivated)
+      else if (kind === 'garden-option') activate(() => actions.selectGarden(gardenId as string))
+      else if (kind === 'garden-switcher') activate(onTriggerActivated)
       else {
         on('mousedown', (e) => titleBarDragOnMouseDown(e as unknown as Parameters<typeof titleBarDragOnMouseDown>[0]))
       }
@@ -154,7 +155,7 @@ export function createControlRegistry(
       const binding = {
         kind,
         el,
-        homeId: homeId ?? null,
+        gardenId: gardenId ?? null,
         off: () => {
           for (const off of offs) off()
           if (addedNoDrag) el.classList.remove('no-drag')
@@ -244,7 +245,7 @@ export function checkZenControls(input: {
   geometry: ZenGeometry
   /** Stoplight / window-control rects the controls must stay clear of. */
   reserved: readonly ZenRect[]
-  homeIds: readonly string[]
+  gardenIds: readonly string[]
   /** The page root, searched for `data-zen-control` elements never bound. */
   root: Element | null
 }): ZenControlCheck {
@@ -254,28 +255,28 @@ export function checkZenControls(input: {
     if (!input.declared.includes(control)) return { ok: false, control, problem: 'undeclared' }
     const marked = input.root ? Array.from(input.root.querySelectorAll(`[data-zen-control="${control}"]`)) : []
     if (marked.some((el) => !el.hasAttribute('data-zen-bound'))) return { ok: false, control, problem: 'not-wired' }
-    if (control === 'home-switcher') {
-      const triggers = bound.filter((b) => b.kind === 'home-switcher')
-      const options = bound.filter((b) => b.kind === 'home-option')
+    if (control === 'garden-switcher') {
+      const triggers = bound.filter((b) => b.kind === 'garden-switcher')
+      const options = bound.filter((b) => b.kind === 'garden-option')
       if (triggers.length === 0 && options.length === 0) {
         return { ok: false, control, problem: marked.length > 0 ? 'not-wired' : 'missing' }
       }
       if (triggers.length > 0) {
         const live = triggers.filter((b) => b.el.isConnected)
         if (live.length === 0) return { ok: false, control, problem: 'missing' }
-        if (!live.some((b) => zenControlVisible(b.el, 'home-switcher', geometry, reserved))) {
+        if (!live.some((b) => zenControlVisible(b.el, 'garden-switcher', geometry, reserved))) {
           return { ok: false, control, problem: 'invisible' }
         }
       } else {
-        // Always-shown Homes: every Home has a visible option.
+        // Always-shown Gardens: every Garden has a visible option.
         const live = options.filter((b) => b.el.isConnected)
-        const ids = new Set(live.map((b) => b.homeId))
-        if (!input.homeIds.every((id) => ids.has(id))) return { ok: false, control, problem: 'not-wired' }
-        if (!live.every((b) => zenControlVisible(b.el, 'home-option', geometry, reserved))) {
+        const ids = new Set(live.map((b) => b.gardenId))
+        if (!input.gardenIds.every((id) => ids.has(id))) return { ok: false, control, problem: 'not-wired' }
+        if (!live.every((b) => zenControlVisible(b.el, 'garden-option', geometry, reserved))) {
           return { ok: false, control, problem: 'invisible' }
         }
       }
-      if (registry.wiringFailure() === 'home-switcher') return { ok: false, control, problem: 'not-wired' }
+      if (registry.wiringFailure() === 'garden-switcher') return { ok: false, control, problem: 'not-wired' }
       continue
     }
     const mine = bound.filter((b) => b.kind === control)

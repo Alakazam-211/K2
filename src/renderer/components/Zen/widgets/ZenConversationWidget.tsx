@@ -10,6 +10,11 @@
 // indicator shows under the last message. When it waits for a permission
 // prompt Zen can't show, a banner offers "Open in Agents". Older messages
 // load on scroll. The message box is `ZenCompose`.
+//
+// prd-zen-gardens-v1 G38 (Rosson's answer 5): it follows an Agents widget
+// (`agents` prop, else the page's first), or, with `agent` (and `home`),
+// is pinned to that one agent with no list needed. Display props:
+// `compose`, `attachments`, `load-older` (the daemon sends every prop).
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
@@ -138,7 +143,24 @@ function TypingIndicator(): React.JSX.Element {
   )
 }
 
-function Conversation({ bridge, row }: { bridge: ZenWidgetBridge; row: ZenAgentRow }): React.JSX.Element {
+/** One agent's conversation (also the empty Garden's Ask my agent). */
+export interface ZenConversationOptions {
+  compose: boolean
+  attachments: boolean
+  loadOlder: boolean
+}
+
+const ALL_ON: ZenConversationOptions = { compose: true, attachments: true, loadOlder: true }
+
+export function ZenConversation({
+  bridge,
+  row,
+  options = ALL_ON,
+}: {
+  bridge: ZenWidgetBridge
+  row: ZenAgentRow
+  options?: ZenConversationOptions
+}): React.JSX.Element {
   const view = useZenThread(bridge, row.address)
   const nowSec = useNowSec()
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -164,14 +186,14 @@ function Conversation({ bridge, row }: { bridge: ZenWidgetBridge; row: ZenAgentR
     [bridge, row.address],
   )
   const loadOlder = useCallback(() => {
-    if (!view || !view.hasMore || view.loadingOlder || items.length === 0) return
+    if (!options.loadOlder || !view || !view.hasMore || view.loadingOlder || items.length === 0) return
     const el = listRef.current
     if (el) heightBeforeOlder.current = el.scrollHeight
     const minSeq = items.reduce((m, it) => Math.min(m, it.seq), Number.POSITIVE_INFINITY)
     void (bridge.call('thread.read', row.address, { beforeSeq: minSeq }) as Promise<unknown>).catch((err: unknown) =>
       console.warn('[zen] load older failed:', err),
     )
-  }, [bridge, row.address, view, items])
+  }, [bridge, row.address, view, items, options.loadOlder])
 
   // Keep the newest message in view unless the user scrolled up; keep the
   // reading position when older messages arrive on top.
@@ -312,7 +334,7 @@ function Conversation({ bridge, row }: { bridge: ZenWidgetBridge; row: ZenAgentR
             {note}
           </div>
         )}
-        {ready && view.hasMore && (
+        {ready && view.hasMore && options.loadOlder && (
           <button
             type="button"
             data-zen-load-older=""
@@ -345,26 +367,55 @@ function Conversation({ bridge, row }: { bridge: ZenWidgetBridge; row: ZenAgentR
         {ready && row.working && <TypingIndicator />}
       </div>
 
-      <ZenCompose bridge={bridge} address={row.address} label={row.label} disabled={!ready || note !== null} />
+      {options.compose && (
+        <ZenCompose
+          bridge={bridge}
+          address={row.address}
+          label={row.label}
+          disabled={!ready || note !== null}
+          attachments={options.attachments}
+        />
+      )}
     </div>
   )
 }
 
-export function ZenConversationWidget({ bridge }: ZenWidgetProps): React.JSX.Element {
+export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
-  const row = rows.find((r) => r.selected) ?? null
+  const pinned = typeof decl.props.agent === 'string' && decl.props.agent.trim() !== ''
+  // Pinned: the one agent (its list is that agent); else the followed
+  // widget's selection.
+  const row = pinned ? (rows[0] ?? null) : (rows.find((r) => r.selected) ?? null)
+  const options: ZenConversationOptions = {
+    compose: decl.props.compose !== false,
+    attachments: decl.props.attachments !== false,
+    loadOlder: decl.props['load-older'] !== false,
+  }
+  // A pinned conversation opens itself.
+  const opened = useRef<string | null>(null)
+  useEffect(() => {
+    if (!pinned || !row || row.selected || opened.current === row.address) return
+    opened.current = row.address
+    void Promise.resolve()
+      .then(() => bridge.call('conversation.open', row.address))
+      .catch((err: unknown) => console.warn('[zen] open pinned conversation failed:', err))
+  }, [bridge, pinned, row])
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget="conversation">
       <ZenWidgetStyles />
       {row ? (
-        <Conversation key={row.address} bridge={bridge} row={row} />
+        <ZenConversation key={row.address} bridge={bridge} row={row} options={options} />
       ) : (
         <div
           className="flex flex-1 items-center justify-center text-center"
           data-zen-conversation-none=""
           style={{ padding: 24, color: 'var(--zen-text-muted)' }}
         >
-          {rows.length > 0 ? 'Pick an agent to message.' : ''}
+          {pinned
+            ? `${String(decl.props.agent)} isn’t on this Home.`
+            : rows.length > 0
+              ? 'Pick an agent to message.'
+              : ''}
         </div>
       )}
     </div>

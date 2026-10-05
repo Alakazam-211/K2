@@ -1,18 +1,19 @@
-// prd-zen-mode-v1 Z9, Z10, Z15 — the resolved Zen page, as the renderer
-// reads it from `GET /cli/zen/get?home=<id>` on THIS computer's daemon.
+// prd-zen-mode-v1 Z9, Z10, Z15 and prd-zen-gardens-v1 G10–G12, G24, G38 —
+// the resolved page of one Garden, as the renderer reads it from
+// `GET /cli/zen/get?garden=<id>` on THIS computer's daemon.
 //
-// The daemon resolves template + `zen.toml` + the Home's page override and
-// returns the structure; the renderer draws from that structure even in v1
-// (only the theme is the user's in v1). Every body is parsed here, at the
-// boundary: nothing past `parseZenGet` sees raw JSON. The inner shapes of
-// `layout`, `widgets` and `controls` are this client's reading of the
-// contract; see `docs/zen-contract.md`.
+// The daemon resolves the Garden's template (`k2.texting@1` or
+// `k2.blank@1`), the Garden file's layout and built-in widgets (G38), and
+// the theme stack, and returns the structure; the renderer draws from it.
+// Every body is parsed here, at the boundary: nothing past `parseZenGet`
+// sees raw JSON. The inner shapes of `layout`, `widgets` and `controls` are
+// this client's reading of the contract; see `docs/zen-contract.md`.
 //
 // The built-in `k2.texting@1` page is also the safe-mode page (Z29): safe
 // mode never reads the user's files, so it renders `BUILTIN_TEXTING_PAGE`.
 
-/** The three controls every Zen page must draw (Z27). */
-export const ZEN_REQUIRED_CONTROLS = ['zen-toggle', 'home-switcher', 'drag-region'] as const
+/** The three controls every Garden page must draw (G24). */
+export const ZEN_REQUIRED_CONTROLS = ['zen-toggle', 'garden-switcher', 'drag-region'] as const
 export type ZenControlKind = (typeof ZEN_REQUIRED_CONTROLS)[number]
 
 /** One validation finding, with where it is (Z13). */
@@ -56,8 +57,17 @@ export interface ZenThemeEntry {
   user: boolean
 }
 
-/** Where the active theme was picked: for every Home, or this Home only. */
-export type ZenThemeScope = 'global' | 'home'
+/** Where the active theme was picked: for every Garden, or this Garden
+ *  only (G16). */
+export type ZenThemeScope = 'global' | 'garden'
+
+/** Which Garden the page is (G12). */
+export interface ZenPageGarden {
+  id: string
+  name: string
+  /** 1-based position in the Garden list. */
+  index: number
+}
 
 export interface ZenResolvedPage {
   schema: 1
@@ -72,8 +82,10 @@ export interface ZenResolvedPage {
   theme: unknown
   /** The active theme's name (`theme.name`), null when the daemon sends none. */
   activeTheme: string | null
-  /** `theme.scope`: a switch keeps it (a Home's own pick stays the Home's). */
+  /** `theme.scope`: a switch keeps it (a Garden's own pick stays the Garden's). */
   themeScope: ZenThemeScope
+  /** The Garden the daemon resolved (null when it sends none). */
+  garden: ZenPageGarden | null
   /** Themes to pick from, in the daemon's order (empty when it sends none). */
   themes: ZenThemeEntry[]
   chrome: unknown
@@ -83,10 +95,15 @@ export interface ZenResolvedPage {
   lastGoodAt: string | null
 }
 
+/** The Default Garden's template (G11). */
 export const BUILTIN_TEMPLATE_ID = 'k2.texting@1'
+export const TEXTING_TEMPLATE_ID = BUILTIN_TEMPLATE_ID
+/** A new Garden's template: one column holding the empty-Garden widget (G11). */
+export const BLANK_TEMPLATE_ID = 'k2.blank@1'
 
 /** `k2.texting@1` as the renderer knows it: the safe-mode page, and the
- *  fallback for any part of a resolved page the daemon left out. */
+ *  fallback for any part of a resolved page the daemon left out. Mirrors
+ *  the daemon's template (`crates/k2-core/src/zen/template-k2-texting-1.toml`). */
 export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
   schema: 1,
   version: 'builtin',
@@ -97,7 +114,7 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       id: 'agents',
       kind: 'agents',
       column: 0,
-      props: {},
+      props: { 'home-picker': true },
       caps: ['agents:read', 'agents:add', 'presence:read'],
       source: 'builtin',
     },
@@ -105,15 +122,16 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       id: 'conversation',
       kind: 'conversation',
       column: 1,
-      props: {},
+      props: { agents: 'agents' },
       caps: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       source: 'builtin',
     },
   ],
-  controls: [...ZEN_REQUIRED_CONTROLS],
+  controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
   theme: null,
   activeTheme: null,
   themeScope: 'global',
+  garden: null,
   themes: [],
   chrome: null,
   motion: null,
@@ -121,6 +139,31 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
   warnings: [],
   lastGoodAt: null,
 }) as ZenResolvedPage
+
+/** `k2.blank@1`: one column holding the empty-Garden widget, and the
+ *  Garden switcher, drag area and Zen toggle (no Add agent). Mirrors the
+ *  daemon's `template-k2-blank-1.toml`. */
+export const BUILTIN_BLANK_PAGE: ZenResolvedPage = Object.freeze({
+  ...BUILTIN_TEXTING_PAGE,
+  template: BLANK_TEMPLATE_ID,
+  layout: { kind: 'columns', split: [100], minWidths: [320] },
+  widgets: [
+    {
+      id: 'garden-empty',
+      kind: 'garden-empty',
+      column: 0,
+      props: {},
+      caps: ['agents:read', 'thread:read', 'thread:post'],
+      source: 'builtin',
+    },
+  ],
+  controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+}) as ZenResolvedPage
+
+/** The built-in page of a template id (texting for any other id). */
+export function builtinPageFor(template: string): ZenResolvedPage {
+  return template === BLANK_TEMPLATE_ID ? BUILTIN_BLANK_PAGE : BUILTIN_TEXTING_PAGE
+}
 
 /** The daemon sent something this client can't read as a Zen page. */
 export class ZenPageParseError extends Error {
@@ -153,9 +196,28 @@ function parseIssues(raw: unknown): ZenIssue[] {
   return out
 }
 
-function parseLayout(raw: unknown): ZenLayout {
-  const fallback = BUILTIN_TEXTING_PAGE.layout
+/** G38: `[[layout.column]]` tables (`size` percent, `min-width` px), when
+ *  the daemon sends the column list instead of `split` / `minWidths`. */
+function columnsLayout(raw: unknown[]): ZenLayout | null {
+  const split: number[] = []
+  const mins: number[] = []
+  for (const c of raw) {
+    if (!isObj(c)) return null
+    const size = num(c.size)
+    if (size === null || size <= 0) return null
+    split.push(size)
+    mins.push(Math.max(0, num(c.minWidth ?? c['min-width'] ?? c.min_width) ?? 0))
+  }
+  return split.length > 0 ? { kind: 'columns', split, minWidths: mins } : null
+}
+
+function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
+  const fallback = builtin.layout
   if (!isObj(raw)) return { ...fallback, split: [...fallback.split], minWidths: [...fallback.minWidths] }
+  if (!Array.isArray(raw.split) && Array.isArray(raw.columns)) {
+    const cols = columnsLayout(raw.columns)
+    if (cols) return cols
+  }
   const split = Array.isArray(raw.split) ? raw.split.map(num).filter((n): n is number => n !== null && n > 0) : []
   const cols = split.length > 0 ? split : [...fallback.split]
   const rawMins = raw.minWidths ?? raw.min_widths
@@ -168,8 +230,8 @@ function parseLayout(raw: unknown): ZenLayout {
   return { kind: 'columns', split: cols, minWidths: mins.slice(0, cols.length) }
 }
 
-function parseWidgets(raw: unknown, columns: number): ZenWidgetDecl[] {
-  if (!Array.isArray(raw)) return BUILTIN_TEXTING_PAGE.widgets.map((w) => ({ ...w, caps: [...w.caps] }))
+function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): ZenWidgetDecl[] {
+  if (!Array.isArray(raw)) return builtin.widgets.map((w) => ({ ...w, props: { ...w.props }, caps: [...w.caps] }))
   const out: ZenWidgetDecl[] = []
   raw.forEach((w, idx) => {
     if (!isObj(w)) return
@@ -212,6 +274,15 @@ function parseThemes(raw: unknown): ZenThemeEntry[] {
   return out
 }
 
+function parseGarden(raw: unknown): ZenPageGarden | null {
+  if (!isObj(raw) || typeof raw.id !== 'string' || !raw.id) return null
+  return {
+    id: raw.id,
+    name: typeof raw.name === 'string' ? raw.name : raw.id,
+    index: num(raw.index) ?? 0,
+  }
+}
+
 /**
  * Parse a `GET /cli/zen/get` body. Throws `ZenPageParseError` when there is
  * no page to draw (not an object, `ok: false` without a page, no `page`).
@@ -228,7 +299,9 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
   if (raw.schema !== undefined && raw.schema !== 1) {
     throw new ZenPageParseError(`this K2 reads Zen schema 1, the page is schema ${String(raw.schema)}`)
   }
-  const layout = parseLayout(page.layout)
+  const template = typeof page.template === 'string' ? page.template : BUILTIN_TEMPLATE_ID
+  const builtin = builtinPageFor(template)
+  const layout = parseLayout(page.layout, builtin)
   const themes = parseThemes(raw.themes)
   const named = isObj(raw.theme) && typeof raw.theme.name === 'string' && raw.theme.name ? raw.theme.name : null
   const flagged = Array.isArray(raw.themes)
@@ -237,13 +310,14 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
   return {
     schema: 1,
     version: typeof raw.version === 'string' ? raw.version : String(raw.version ?? ''),
-    template: typeof page.template === 'string' ? page.template : BUILTIN_TEMPLATE_ID,
+    template,
     layout,
-    widgets: parseWidgets(page.widgets, layout.split.length),
+    widgets: parseWidgets(page.widgets, layout.split.length, builtin),
     controls: parseControls(page.controls),
     theme: raw.theme ?? null,
     activeTheme: named ?? flagged?.name ?? null,
-    themeScope: isObj(raw.theme) && raw.theme.scope === 'home' ? 'home' : 'global',
+    themeScope: isObj(raw.theme) && raw.theme.scope === 'garden' ? 'garden' : 'global',
+    garden: parseGarden(raw.garden),
     themes,
     chrome: raw.chrome ?? null,
     motion: raw.motion ?? null,

@@ -1,4 +1,5 @@
-// prd-zen-mode-v1 Z6, Z30, Z53, Z55, Z60 — Zen's host, mounted by
+// prd-zen-mode-v1 Z6, Z30, Z53, Z55, Z60 and prd-zen-gardens-v1 G34, G62 —
+// Zen's host, mounted by
 // ConnectionGate beside `HomeRoomsHost` as an always-present child of every
 // gate branch, OUTSIDE the keyed `<App>`: a server switch never remounts
 // Zen. It lives in the App chunk (read lazily by the gate), so its stores
@@ -9,21 +10,19 @@
 //     targeted at this window; the Linux / Windows app menu, a DOM event)
 //     and, on Linux / Windows only, the Ctrl+Alt+Z capture listener;
 //   - the macOS menu label (Enter / Exit Zen Mode) for the focused window;
-//   - `homes.json` upkeep (`POST /cli/zen/homes/sync`) on Home create,
-//     rename and delete, once this computer has used Zen;
+//   - a page change while Zen is on in this window (⌘P, palette
+//     navigation, a ticket link, Open in Agents) turns Zen off (G34);
 //   - leaving Zen ends safe mode (Z29).
 // The Zen layer itself renders only while this window shows Zen.
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useHomesStore } from '@/stores/homes'
 import { useWindowFocusStore } from '@/stores/window-focus'
-import { anyZenHomeOn } from '@/lib/zen/zen-homes'
-import { syncZenHomes } from '@/lib/zen/zen-api'
+import { usePageViewStore } from '@/stores/page-view'
 import { currentDesktopOs, zenAvailable } from '@/lib/zen/zen-platform'
 import { installZenChordListener, ZEN_MENU_EVENT } from '@/lib/zen/zen-shortcut'
-import { toggleZenFromEscape, useZenShown, useZenViewStore } from '@/lib/zen/zen-view'
+import { exitZen, toggleZenFromEscape, useZenShown, useZenViewStore, zenOnNow } from '@/lib/zen/zen-view'
 import { ZenRoot } from './ZenRoot'
 import { ZenDataHost } from './ZenDataHost'
 
@@ -75,32 +74,24 @@ function useZenMenuLabel(shown: boolean): void {
   }, [isMac, focused, shown])
 }
 
-/** Z11: keep `homes.json` (id → name) current once Zen is in use here. */
-function useZenHomesSync(): void {
-  const homes = useHomesStore((s) => s.homes)
-  const key = homes.map((h) => `${h.id}\u0000${h.name}`).join('\u0001')
-  const first = useRef(true)
-  useEffect(() => {
-    if (first.current) {
-      first.current = false
-      return
-    }
-    if (!anyZenHomeOn()) return
-    const t = setTimeout(() => {
-      void syncZenHomes(useHomesStore.getState().homes).catch((err: unknown) =>
-        console.warn('[zen] homes/sync failed:', err),
-      )
-    }, 300)
-    return () => clearTimeout(t)
-  }, [key])
+/** G34: switching to another app page leaves Zen. A Garden that surfaces
+ *  those things keeps them inside Zen (it never changes the page). */
+function useZenExitsOnPageChange(): void {
+  useEffect(
+    () =>
+      usePageViewStore.subscribe((s, prev) => {
+        if (s.page !== prev.page && zenOnNow()) exitZen()
+      }),
+    [],
+  )
 }
 
 function ZenHostInner(): React.JSX.Element | null {
   const shown = useZenShown()
   useZenEscapeHatch()
   useZenMenuLabel(shown)
-  useZenHomesSync()
-  // Leaving Zen (exit, Settings, another page, another Home) ends safe mode.
+  useZenExitsOnPageChange()
+  // Leaving Zen (exit, Settings, another page) ends safe mode.
   useEffect(() => {
     if (!shown && useZenViewStore.getState().safe) useZenViewStore.setState({ safe: null })
   }, [shown])

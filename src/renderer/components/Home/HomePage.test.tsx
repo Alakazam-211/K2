@@ -568,22 +568,21 @@ describe('Home — the Agents page shell', () => {
     expect(screen.queryByRole('dialog', { name: 'Add Agent' })).toBeNull()
   })
 
-  it('turning Zen on closes the open picker (P31)', async () => {
-    const { useZenHomesStore } = await import('@/lib/zen/zen-homes')
+  it('Zen shown (here: the chord, no click on Home) closes the open picker (P31, G6)', async () => {
+    const { toggleZenFromEscape, exitZen } = await import('@/lib/zen/zen-view')
     const { zenAvailable } = await import('@/lib/zen/zen-platform')
     if (!zenAvailable()) throw new Error('Zen is not available in this test environment')
     render(<Shell />)
     fireEvent.click(screen.getByText('Add Agent'))
     expect(screen.getByRole('dialog', { name: 'Add Agent' })).toBeTruthy()
-    const homeId = useHomesStore.getState().homes[0].id
     try {
       await act(async () => {
-        useZenHomesStore.getState().setOn(homeId, true)
+        toggleZenFromEscape()
       })
       expect(useHomeAddPickerStore.getState().open).toBe(false)
     } finally {
       await act(async () => {
-        useZenHomesStore.getState().setOn(homeId, false)
+        exitZen()
       })
     }
   })

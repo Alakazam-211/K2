@@ -87,25 +87,27 @@ describe('theme keys', () => {
     expect(isZenCheatSheetKey(key('Slash', '/', { ctrlKey: true, altKey: true }), 'windows')).toBe(true)
   })
 
-  it('set, next and prev go to this computer’s daemon; a Home’s own pick stays the Home’s', async () => {
+  it('set, next and prev go to this computer’s daemon; a Garden’s own pick stays the Garden’s (G16, G30)', async () => {
     posts.length = 0
-    await setZenTheme('paper', 'global', 'h1')
-    await cycleZenTheme(1, 'global', 'h1')
-    await cycleZenTheme(-1, 'global', 'h1')
-    await setZenTheme('midnight', 'home', 'h1')
-    await cycleZenTheme(1, 'home', 'h1')
-    await cycleZenTheme(-1, 'home', 'h1')
+    await setZenTheme('paper', 'global', 'g-1')
+    await cycleZenTheme(1, 'global', 'g-1')
+    await cycleZenTheme(-1, 'global', 'g-1')
+    await setZenTheme('midnight', 'garden', 'g-1')
+    await cycleZenTheme(1, 'garden', 'g-1')
+    await cycleZenTheme(-1, 'garden', 'g-1')
     expect(posts).toEqual([
       { hostKey: 'local', route: 'zen/theme/set', body: { name: 'paper' } },
       { hostKey: 'local', route: 'zen/theme/next', body: {} },
       { hostKey: 'local', route: 'zen/theme/prev', body: {} },
-      { hostKey: 'local', route: 'zen/theme/set', body: { name: 'midnight', home: 'h1' } },
-      { hostKey: 'local', route: 'zen/theme/next', body: { home: 'h1' } },
-      { hostKey: 'local', route: 'zen/theme/prev', body: { home: 'h1' } },
+      { hostKey: 'local', route: 'zen/theme/set', body: { name: 'midnight', garden: 'g-1' } },
+      { hostKey: 'local', route: 'zen/theme/next', body: { garden: 'g-1' } },
+      { hostKey: 'local', route: 'zen/theme/prev', body: { garden: 'g-1' } },
     ])
   })
 
   it('the cheat sheet lists every Zen shortcut per platform', () => {
+    const rows = zenShortcutGroups('mac').flatMap((g) => g.rows)
+    expect(rows.find((r) => r.keys === '⌥⌘1–9')?.what).toBe('Switch to Garden 1–9')
     const mac = zenShortcutGroups('mac').flatMap((g) => g.rows.map((r) => r.keys))
     for (const k of ['⌃⌘Z', '⌃⌘.', '⌃⌘⇧.', '⌘1–9', '⌥⌘1–9']) expect(mac).toContain(k)
     const linux = zenShortcutGroups('linux').flatMap((g) => g.rows.map((r) => r.keys))

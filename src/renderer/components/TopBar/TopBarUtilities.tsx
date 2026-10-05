@@ -5,8 +5,10 @@ import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
+import { zenAvailable } from '@/lib/zen/zen-platform'
 import { TopBarFollowRoomContext } from './top-bar-scope'
 import TopBarPipe from './TopBarPipe'
+import ZenTopBarToggle from './ZenTopBarToggle'
 
 /** True when this page passed drawer or close controls after the last pipe. */
 export function hasTopBarPageToggles(children: ReactNode): boolean {
@@ -16,7 +18,9 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
 /**
  * Right-cluster body shared with TopBar: presence, usage, pipe, timer,
  * keep awake, cheat sheet, pipe, mode, then a pipe only when that page has
- * its own toggles.
+ * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
+ * LAST item: right of the drawer toggles on Agents and Home
+ * (prd-zen-gardens-v1 G5, G63).
  * No Agents run button — pass it as `leading` from TopBar only.
  *
  * 0.43.2 Z36: `followRoom` (TopBar only) lets presence, usage, Keep awake
@@ -47,6 +51,12 @@ export default function TopBarUtilities({
       <ModeToggle />
       {pageToggles ? <TopBarPipe /> : null}
       {children}
+      {zenAvailable() ? (
+        <>
+          <TopBarPipe />
+          <ZenTopBarToggle />
+        </>
+      ) : null}
     </div>
     </TopBarFollowRoomContext.Provider>
   )

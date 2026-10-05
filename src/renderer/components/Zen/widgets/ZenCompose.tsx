@@ -7,15 +7,23 @@
 // the bridge (`thread.post`, cap `thread:post`), which runs the existing
 // attach path (local paths as they are, or an upload to the agent's own
 // server) and the one compose send. A failed send puts the text back.
+//
+// Drafts survive switching conversations (this window only). A draft set
+// from outside (`compose.draft`, prd-zen-gardens-v1 G28/G60: Ask my agent)
+// shows at once, with the caret at the end of its first line, and is never
+// sent until the person sends it.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
+import {
+  __resetZenComposeDraftsForTests,
+  keepZenComposeDraft,
+  onZenComposeDraft,
+  zenComposeDraft,
+} from '@/lib/zen/zen-compose-drafts'
 
 type Attachment = { kind: 'path'; path: string; name: string } | { kind: 'file'; file: File; name: string }
-
-/** Drafts survive switching conversations (this window only). */
-const drafts = new Map<string, string>()
 
 const baseName = (p: string): string => p.split(/[/\\]/).pop() || p
 
@@ -24,13 +32,16 @@ export function ZenCompose({
   address,
   label,
   disabled,
+  attachments: allowAttachments = true,
 }: {
   bridge: ZenWidgetBridge
   address: string
   label: string
   disabled: boolean
+  /** The `attachments` prop: "+" and drops (default on). */
+  attachments?: boolean
 }): React.JSX.Element {
-  const [draft, setDraftState] = useState(() => drafts.get(address) ?? '')
+  const [draft, setDraftState] = useState(() => zenComposeDraft(address))
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,13 +51,32 @@ export function ZenCompose({
     (next: string | ((cur: string) => string)) => {
       setDraftState((cur) => {
         const v = typeof next === 'function' ? next(cur) : next
-        if (v) drafts.set(address, v)
-        else drafts.delete(address)
+        keepZenComposeDraft(address, v)
         return v
       })
     },
     [address],
   )
+
+  // A draft from outside (Ask my agent): show it, caret after the first line.
+  const caretAt = useRef<number | null>(null)
+  useEffect(
+    () =>
+      onZenComposeDraft(address, (text) => {
+        const nl = text.indexOf('\n')
+        caretAt.current = nl < 0 ? text.length : nl
+        setDraftState(text)
+      }),
+    [address],
+  )
+  useEffect(() => {
+    const el = ref.current
+    const at = caretAt.current
+    if (!el || at === null || el.disabled) return
+    caretAt.current = null
+    el.focus()
+    el.setSelectionRange(at, at)
+  })
 
   // Auto-grow up to ~8 lines.
   useEffect(() => {
@@ -92,6 +122,7 @@ export function ZenCompose({
   }, [])
 
   const onDrop = useCallback((e: React.DragEvent) => {
+    if (!allowAttachments) return
     const list = e.dataTransfer?.files
     if (!list || list.length === 0) return
     e.preventDefault()
@@ -103,7 +134,7 @@ export function ZenCompose({
       next.push(path ? { kind: 'path', path, name: baseName(path) } : { kind: 'file', file: f, name: f.name || 'file' })
     }
     setAttachments((cur) => [...cur, ...next])
-  }, [])
+  }, [allowAttachments])
 
   const canSend = !disabled && !sending && (draft.trim().length > 0 || attachments.length > 0)
 
@@ -157,6 +188,7 @@ export function ZenCompose({
           border: '1px solid var(--zen-border)',
         }}
       >
+        {allowAttachments && (
         <button
           type="button"
           aria-label="Attach files"
@@ -170,6 +202,7 @@ export function ZenCompose({
         >
           +
         </button>
+        )}
         <textarea
           ref={ref}
           rows={1}
@@ -237,5 +270,5 @@ export function ZenCompose({
 
 /** Tests only. */
 export function __resetZenDraftsForTests(): void {
-  drafts.clear()
+  __resetZenComposeDraftsForTests()
 }

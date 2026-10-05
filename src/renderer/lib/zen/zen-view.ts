@@ -1,27 +1,27 @@
-// prd-zen-mode-v1 Z4, Z5, Z29, Z30 (Rosson 2026-10-04 answers 1–3) — is
+// prd-zen-mode-v1 Z29, Z30 and prd-zen-gardens-v1 G1–G3, G21, G34 — is
 // this window showing Zen, and the gestures that change it.
 //
-// Shown = Zen exists here (desktop, a main-layout window), the page is Home,
-// Settings is closed, and the window's selected Home has Zen on. Everything
-// that has to behave differently under Zen asks `zenShownNow()` (event
-// handlers) or `useZenShown()` (React): one selector, never a copy.
+// Zen is a mode of the window (G1). Shown = Zen exists here (desktop, a
+// main-layout window), this window's switch is on, and Settings is closed
+// (G2). The page doesn't matter: Zen covers whatever page the window is on,
+// and that page stays put underneath. Everything that has to behave
+// differently under Zen asks `zenShownNow()` (event handlers) or
+// `useZenShown()` (React): one selector, never a copy.
 //
-// Gestures:
-//   - enter (the toggle row on regular Home, or the escape chord off Zen):
-//     go to Home, turn the selected Home's Zen on. Shift held → safe mode.
-//   - exit (the page's own Zen toggle, the app menu, the chord): turn that
-//     Home's Zen OFF.
-//   - step away (Settings, ⌘P, the page's Home switcher picking another
-//     Home): Zen stays on for the Home; coming back shows Zen again.
+// Gestures (G3):
+//   - enter (the top-bar toggle, the app menu, the escape chord off Zen):
+//     close Settings, turn this window's switch on. Shift held → safe mode.
+//     Never a page change.
+//   - exit (the page's own Zen toggle, the app menu, the chord in Zen, or a
+//     page change while Zen is on, G34): turn this window's switch off.
+//   - Settings (⌘,) hides Zen without turning it off.
 //
 // Safe mode (Z29) is per window and never written anywhere: it lasts until
 // Try again, a `zen_changed`, or leaving Zen.
 
 import { create } from 'zustand'
-import { useHomesStore, selectedHome } from '@/stores/homes'
-import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { useZenHomesStore } from './zen-homes'
+import { useZenWindowStore } from './zen-window'
 import { zenAvailable } from './zen-platform'
 import type { ZenControlKind } from './zen-page'
 
@@ -32,12 +32,13 @@ export type ZenSafeCause =
   | { kind: 'control'; control: ZenControlKind; problem: ZenControlProblem }
   | { kind: 'unreachable'; message: string }
   | { kind: 'unreadable'; message: string }
+  | { kind: 'outdated' }
 
 export type ZenControlProblem = 'undeclared' | 'missing' | 'not-wired' | 'invisible'
 
 const CONTROL_NAME: Record<ZenControlKind, string> = {
   'zen-toggle': 'The Zen toggle',
-  'home-switcher': 'The Home switcher',
+  'garden-switcher': 'The Garden switcher',
   'drag-region': 'The window drag area',
 }
 
@@ -47,6 +48,9 @@ const PROBLEM_TEXT: Record<ZenControlProblem, string> = {
   'not-wired': 'isn’t wired',
   invisible: 'isn’t visible',
 }
+
+/** G19: the daemon on this computer has no Gardens routes. */
+export const ZEN_OUTDATED_TEXT = 'K2 on this computer is older than this app. Update it to use Gardens.'
 
 /** The banner's cause line (Z29). */
 export function zenSafeCauseText(cause: ZenSafeCause): string {
@@ -61,6 +65,8 @@ export function zenSafeCauseText(cause: ZenSafeCause): string {
       return 'Can’t reach K2 on this computer.'
     case 'unreadable':
       return `K2 on this computer sent a Zen page this app can’t read: ${cause.message}`
+    case 'outdated':
+      return ZEN_OUTDATED_TEXT
   }
 }
 
@@ -89,79 +95,62 @@ export const useZenViewStore = create<ZenViewState>((set, get) => ({
   },
 }))
 
-/** Pure: the shown rule (Z5). */
-export function computeZenShown(input: {
-  available: boolean
-  page: string
-  settingsOpen: boolean
-  homeOn: boolean
-}): boolean {
-  return input.available && input.page === 'home' && !input.settingsOpen && input.homeOn
-}
-
-/** Is Zen on for the window's selected Home? */
-function selectedHomeOn(): boolean {
-  const home = selectedHome(useHomesStore.getState())
-  return useZenHomesStore.getState().on[home.id] === true
+/** Pure: the shown rule (G2). The page is not part of it. */
+export function computeZenShown(input: { available: boolean; on: boolean; settingsOpen: boolean }): boolean {
+  return input.available && input.on && !input.settingsOpen
 }
 
 /** Event handlers: is this window showing Zen right now? */
 export function zenShownNow(): boolean {
   return computeZenShown({
     available: zenAvailable(),
-    page: usePageViewStore.getState().page,
+    on: useZenWindowStore.getState().on,
     settingsOpen: useSettingsStore.getState().settingsOpen,
-    homeOn: selectedHomeOn(),
   })
 }
 
 /** React: is this window showing Zen? */
 export function useZenShown(): boolean {
-  const page = usePageViewStore((s) => s.page)
+  const on = useZenWindowStore((s) => s.on)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
-  const homeId = useHomesStore((s) => selectedHome(s).id)
-  const homeOn = useZenHomesStore((s) => s.on[homeId] === true)
-  return computeZenShown({ available: zenAvailable(), page, settingsOpen, homeOn })
+  return computeZenShown({ available: zenAvailable(), on, settingsOpen })
 }
 
-/** React: is Zen on for the selected Home (whether or not it is shown)? */
-export function useSelectedHomeZenOn(): boolean {
-  const homeId = useHomesStore((s) => selectedHome(s).id)
-  return useZenHomesStore((s) => s.on[homeId] === true)
+/** Is Zen switched on in this window (shown, or hidden by Settings)? */
+export function zenOnNow(): boolean {
+  return zenAvailable() && useZenWindowStore.getState().on
 }
 
-/** Enter Zen for the window's selected Home (the toggle row; the chord off
- *  Zen). `safe` (Shift held) starts it in safe mode. */
+/** Enter Zen in this window (the top-bar toggle; the chord off Zen; the app
+ *  menu). `safe` (Shift held) starts it in safe mode. The page underneath
+ *  stays where it is (G2). */
 export function enterZen(opts: { safe?: boolean } = {}): void {
   if (!zenAvailable()) return
-  const home = selectedHome(useHomesStore.getState())
   useSettingsStore.getState().closeSettings()
-  usePageViewStore.getState().setPage('home')
   useZenViewStore.setState((s) => ({ safe: opts.safe ? { kind: 'shift' } : null, epoch: s.epoch + 1 }))
-  useZenHomesStore.getState().setOn(home.id, true)
+  useZenWindowStore.getState().setOn(true)
 }
 
-/** Exit Zen: turn the selected Home's Zen OFF (Z5, answer 3). */
+/** Exit Zen: turn this window's switch off. The page you were on shows. */
 export function exitZen(): void {
-  const home = selectedHome(useHomesStore.getState())
-  useZenHomesStore.getState().setOn(home.id, false)
+  useZenWindowStore.getState().setOn(false)
   useZenViewStore.setState({ safe: null })
 }
 
 /** The escape hatch (menu item, ⌃⌘Z / Ctrl+Alt+Z): in Zen, exit; not in
- *  Zen, go to Home and turn Zen on for the selected Home (Z30). */
+ *  Zen, enter (Z30, G26). */
 export function toggleZenFromEscape(): void {
   if (!zenAvailable()) return
   if (zenShownNow()) exitZen()
   else enterZen()
 }
 
-// Z32/Z54: ⌘1–9 / ⌘0 in Zen select conversation N (the Home's row N) and
-// never switch the window's server. The Agents widget (S6) registers the
-// in-place opener; until then the chord does nothing in Zen.
+// Z32 / G26 / G52: ⌘1–9 / ⌘0 in Zen select row N of the page's first
+// Agents widget, and never switch the window's server. The data verbs
+// register the opener; until then the chord does nothing in Zen.
 let zenRowSelect: ((index: number) => void) | null = null
 
-/** S6 plug-in point: what ⌘N does in Zen. Returns the unregister. */
+/** Plug-in point: what ⌘N does in Zen. Returns the unregister. */
 export function registerZenRowSelect(fn: (index: number) => void): () => void {
   zenRowSelect = fn
   return () => {

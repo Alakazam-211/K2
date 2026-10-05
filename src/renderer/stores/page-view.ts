@@ -26,11 +26,11 @@ export function isRoomPage(page: AppPage): boolean {
 }
 
 /** `PageLiveContext` for the window's own (primary) room: true while its
- *  terminals may hold grids. Agents always; Home only while a room is shown
- *  and Zen is not covering it (prd-zen-mode-v1 Z7/Z48: the Home under Zen
- *  parks like a hidden tab). */
+ *  terminals may hold grids. Agents, and Home while a room is shown — never
+ *  while Zen covers the window (prd-zen-gardens-v1 G4/G49: Zen is a mode of
+ *  the window, so whatever page is under it parks like a hidden tab). */
 export function primaryRoomPageLive(page: AppPage, homeRoomShown: boolean, zenShown: boolean): boolean {
-  return page === 'agents' || (page === 'home' && homeRoomShown && !zenShown)
+  return !zenShown && (page === 'agents' || (page === 'home' && homeRoomShown))
 }
 
 interface PageViewState {

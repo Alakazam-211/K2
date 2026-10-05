@@ -1,20 +1,33 @@
-// prd-zen-mode-v1 Z10, Z27, Z28, Z33 — one resolved Zen page on screen.
+// prd-zen-mode-v1 Z10, Z27, Z28, Z33 and prd-zen-gardens-v1 G24, G29, G38,
+// G52 — one Garden's resolved page on screen.
 //
 // Draws the template's controls, then the layout host: one column per
 // `layout.split` entry, each holding the widgets placed in it. Every widget
 // gets its own `ZenWidgetBridge` built with the caps its source declared
 // (Z33); the template's controls get the template bridge (no-cap verbs plus
-// `agents.add`). The template's footer, if any, sits under the first column
-// (the bottom-left corner). The page owns the control registry (Z27) and,
-// outside safe mode, the check schedule (Z28).
+// `agents.add` and `gardens:manage`). The template's footer, if any, sits
+// under the first column (the bottom-left corner). The page owns the
+// control registry (Z27, G24: Zen toggle, Garden switcher, drag area), and,
+// outside safe mode, the check schedule (Z28). While it is on screen, ⌘1–9
+// opens row N of its first Agents widget (G52).
 //
 // S5 / S6 plug in without touching this file: widgets by kind and template
 // controls by template id (`zen-registry.tsx`), data verbs on the bridge
 // (`registerZenVerb`), and the theme on the root (`registerZenThemeEngine`).
 
 import { useEffect, useMemo, useRef } from 'react'
-import { useHomesStore, selectedHome } from '@/stores/homes'
+import { useHomesStore } from '@/stores/homes'
 import { useWindowFocusStore } from '@/stores/window-focus'
+import {
+  createZenGarden,
+  currentZenGardenId,
+  deleteZenGarden,
+  renameZenGarden,
+  switchZenGarden,
+  useZenGardensStore,
+} from '@/lib/zen/zen-gardens'
+import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
+import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { createZenBridge, type ZenBridgeHost, type ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import {
   checkZenControls,
@@ -30,13 +43,21 @@ import {
   zenReservedRects,
 } from '@/lib/zen/zen-monitor'
 import type { ZenResolvedPage } from '@/lib/zen/zen-page'
-import { exitZen } from '@/lib/zen/zen-view'
+import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
 import { ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenTemplateFooterFor, zenWidgetFor } from './zen-registry'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
 function homeSummaries(): Array<{ id: string; name: string }> {
   return useHomesStore.getState().homes.map((h) => ({ id: h.id, name: h.name }))
+}
+
+function gardenSummaries(): Array<{ id: string; name: string; index: number }> {
+  return useZenGardensStore.getState().gardens.map((g, i) => ({ id: g.id, name: g.name, index: i + 1 }))
+}
+
+function gardenIds(): string[] {
+  return useZenGardensStore.getState().gardens.map((g) => g.id)
 }
 
 export function ZenPage({
@@ -52,9 +73,9 @@ export function ZenPage({
   banner: React.ReactNode
   onControlFailure(failure: ControlFailure): void
 }): React.JSX.Element {
-  // Re-render on Home changes: the template's switcher lists them.
-  useHomesStore((s) => s.homes)
-  useHomesStore((s) => s.selectedId)
+  // Re-render on Garden changes: the template's switcher lists them.
+  useZenGardensStore((s) => s.gardens)
+  useZenWindowStore((s) => s.garden)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const pageRef = useRef(page)
   pageRef.current = page
@@ -65,8 +86,8 @@ export function ZenPage({
     () =>
       createControlRegistry({
         exit: () => exitZen(),
-        selectHome: (id) => useHomesStore.getState().selectHome(id),
-        homeIds: () => useHomesStore.getState().homes.map((h) => h.id),
+        selectGarden: (id) => switchZenGarden(id),
+        gardenIds,
       }),
     [],
   )
@@ -74,9 +95,16 @@ export function ZenPage({
 
   const host = useMemo<ZenBridgeHost>(
     () => ({
+      gardens: gardenSummaries,
+      currentGardenId: () => currentZenGardenId() ?? '',
+      switchGarden: (id) => switchZenGarden(id),
+      createGarden: async (name) => {
+        const g = await createZenGarden(name)
+        return { id: g.id, name: g.name, index: g.index }
+      },
+      renameGarden: (id, name) => renameZenGarden(id, name),
+      deleteGarden: (id) => deleteZenGarden(id),
       homes: homeSummaries,
-      selectedHomeId: () => selectedHome(useHomesStore.getState()).id,
-      selectHome: (id) => useHomesStore.getState().selectHome(id),
       exit: () => exitZen(),
       controls: registry,
       page: () => pageRef.current,
@@ -84,7 +112,15 @@ export function ZenPage({
     [registry],
   )
 
-  const controlsBridge = useMemo(() => createZenBridge(host, { id: 'template-controls', caps: ZEN_TEMPLATE_CONTROL_CAPS }), [host])
+  const controlsBridge = useMemo(
+    () => createZenBridge(host, { id: ZEN_TEMPLATE_CONTROLS_ID, caps: ZEN_TEMPLATE_CONTROL_CAPS }),
+    [host],
+  )
+  // G52: ⌘1–9 / ⌘0 opens row N of this page's first Agents widget.
+  useEffect(
+    () => registerZenRowSelect((index) => selectZenRowOnPage(pageRef.current, currentZenGardenId() ?? '', index)),
+    [],
+  )
   const widgetBridges = useMemo(() => {
     const m = new Map<string, ZenWidgetBridge>()
     for (const w of page.widgets) m.set(w.id, createZenBridge(host, { id: w.id, caps: w.caps }))
@@ -102,7 +138,7 @@ export function ZenPage({
           registry,
           geometry: zenGeometry(),
           reserved: zenReservedRects(),
-          homeIds: useHomesStore.getState().homes.map((h) => h.id),
+          gardenIds: gardenIds(),
           root: rootRef.current,
         }),
       ),

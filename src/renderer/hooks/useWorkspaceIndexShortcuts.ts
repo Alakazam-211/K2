@@ -9,6 +9,7 @@ import { openHomeRow } from '@/lib/home-open'
 import { homeRowOpenableNow } from '@/components/Home/home-room'
 import { homeSwitchDigit } from '@/lib/home-shortcuts'
 import { zenSelectRow, zenShownNow } from '@/lib/zen/zen-view'
+import { switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
 
 /**
  * Cmd+1–9 / Cmd+0 and Cmd+Option+1–9 — pick a workspace (or a Home row) by
@@ -26,11 +27,20 @@ import { zenSelectRow, zenShownNow } from '@/lib/zen/zen-view'
  *   named Home INSTEAD of the Agents workspace switch. Off Home that chord
  *   is the Agents switch as before; the two never both fire. Like every
  *   chord here it fires with focus in a terminal or text field.
+ * - Zen (prd-zen-gardens-v1 G26/G51): checked FIRST, on any page. While
+ *   the window shows Zen, Cmd+Option+1–9 switches to Garden N and never
+ *   reaches the Home switch or the Agents workspace switch; Cmd+1–9 / Cmd+0
+ *   open row N of the Garden's first Agents widget (nothing without one).
  */
 export function useWorkspaceIndexShortcuts(): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       const homeN = homeSwitchDigit(e)
+      if (homeN !== null && zenShownNow()) {
+        e.preventDefault()
+        switchZenGardenByIndex(homeN - 1)
+        return
+      }
       if (homeN !== null && usePageViewStore.getState().page === 'home') {
         e.preventDefault()
         const target = useHomesStore.getState().homes[homeN - 1]
@@ -60,8 +70,9 @@ export function useWorkspaceIndexShortcuts(): void {
       e.preventDefault()
       const targetIdx = num === 0 ? 9 : num - 1
 
-      // prd-zen-mode-v1 Z32/Z54: in Zen, conversation N; never a window
-      // server switch (`openHomeRow` may switch).
+      // prd-zen-mode-v1 Z32/Z54, G52: in Zen, conversation N of the
+      // Garden's first Agents widget; never a window server switch
+      // (`openHomeRow` may switch).
       if (zenShownNow()) {
         zenSelectRow(targetIdx)
         return

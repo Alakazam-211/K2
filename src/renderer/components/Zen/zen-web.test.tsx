@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 Z2 (T4.1) — the hosted web client has no Zen: no toggle
-// row, no Zen layer, no escape hatch, no app-menu item, and no request to
-// `/cli/zen/*` (fetch spy), whatever is stored in `k2.zen.homes.v1`.
+// prd-zen-mode-v1 Z2 (T4.1), prd-zen-gardens-v1 G5 — the hosted web client
+// has no Zen: no top-bar toggle, no Zen layer, no escape hatch, no app-menu
+// item, and no request to `/cli/zen/*` (fetch spy), whatever is stored in
+// this window's `k2.zen.window.v1.<label>`.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,13 +18,12 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'ma
 import { act } from 'react'
 import { cleanup, render } from '@testing-library/react'
 import { webFeatures } from '@/web/features'
-import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
-import { useZenHomesStore } from '@/lib/zen/zen-homes'
+import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { __resetZenAvailableForTests, zenAvailable } from '@/lib/zen/zen-platform'
 import { enterZen, toggleZenFromEscape, zenShownNow } from '@/lib/zen/zen-view'
 import { ZenHost } from './ZenHost'
-import { ZenToggleRow, ZenToggleRailButton } from '@/components/Home/ZenToggleRow'
+import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import AppMenuPanel from '@/components/TopBar/AppMenuPanel'
 
 afterEach(() => cleanup())
@@ -40,21 +40,19 @@ describe('no Zen on the web client', () => {
     expect(webFeatures.zen).toBe(false)
     expect(zenAvailable()).toBe(false)
 
-    // Even with this Home stored as on in another (desktop) window.
+    // Even with this window's switch stored as on.
     act(() => {
       usePageViewStore.getState().setPage('home')
-      useZenHomesStore.getState().setOn(selectedHome(useHomesStore.getState()).id, true)
+      useZenWindowStore.getState().setOn(true)
     })
     render(
       <>
-        <ZenToggleRow />
-        <ZenToggleRailButton />
+        <ZenTopBarToggle />
         <ZenHost />
         <AppMenuPanel onClose={() => undefined} />
       </>,
     )
-    expect(document.querySelector('[data-zen-toggle-row]')).toBeNull()
-    expect(document.querySelector('[data-zen-enter-rail]')).toBeNull()
+    expect(document.querySelector('[data-zen-enter]')).toBeNull()
     expect(document.querySelector('[data-zen-root]')).toBeNull()
     expect(document.body.textContent).not.toContain('Zen Mode')
     expect(zenShownNow()).toBe(false)

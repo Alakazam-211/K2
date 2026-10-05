@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 Z27/Z28/Z64 (T4.5) — the required-controls registry and
+// prd-zen-mode-v1 Z27/Z28/Z64 (T4.5) and prd-zen-gardens-v1 G24 (TG4.1) —
+// the required-controls registry and
 // check, against an injected layout. Each failing shape maps to its cause:
 // opacity, 10×10, off screen, under the stoplight rect, covered, not
 // registered, bypassing bind, a switcher whose activation binds no options
@@ -39,9 +40,9 @@ const geo: ZenGeometry = {
   elementFromPoint: () => (last && !covered.has(last) ? last : document.body),
 }
 
-const HOMES = ['h1', 'h2']
+const GARDENS = ['g1', 'g2']
 let root: HTMLDivElement
-let actions: { exit: ReturnType<typeof vi.fn>; selectHome: ReturnType<typeof vi.fn>; homeIds: () => string[] }
+let actions: { exit: ReturnType<typeof vi.fn>; selectGarden: ReturnType<typeof vi.fn>; gardenIds: () => string[] }
 let registry: ZenControlRegistry
 
 function el(tag = 'button', attrs: Record<string, string> = {}): HTMLElement {
@@ -66,13 +67,13 @@ function goodPage(): { toggle: HTMLElement; trigger: HTMLElement; drag: HTMLElem
   const drag = el('div')
   rects.set(drag, { left: 300, top: 8, width: 400, height: 28 })
   registry.bind('zen-toggle', toggle)
-  registry.bind('home-switcher', trigger)
+  registry.bind('garden-switcher', trigger)
   registry.bind('drag-region', drag)
   return { toggle, trigger, drag }
 }
 
-function check(declared: string[] = ['zen-toggle', 'home-switcher', 'drag-region'], reserved: ZenRect[] = []) {
-  return checkZenControls({ declared, registry, geometry: geo, reserved, homeIds: HOMES, root })
+function check(declared: string[] = ['zen-toggle', 'garden-switcher', 'drag-region'], reserved: ZenRect[] = []) {
+  return checkZenControls({ declared, registry, geometry: geo, reserved, gardenIds: GARDENS, root })
 }
 
 beforeEach(() => {
@@ -81,7 +82,7 @@ beforeEach(() => {
   style.clear()
   rects.clear()
   covered.clear()
-  actions = { exit: vi.fn(), selectHome: vi.fn(), homeIds: () => HOMES }
+  actions = { exit: vi.fn(), selectGarden: vi.fn(), gardenIds: () => GARDENS }
   registry = createControlRegistry(actions)
 })
 
@@ -92,20 +93,20 @@ afterEach(() => {
 })
 
 describe('binding', () => {
-  it('K2 attaches the actions: toggle → exit (click, Enter, Space); option → select its Home; trigger → nothing', () => {
+  it('K2 attaches the actions: toggle → exit (click, Enter, Space); option → switch to its Garden; trigger → nothing', () => {
     const { toggle, trigger } = goodPage()
     const option = el()
-    registry.bind('home-option', option, 'h2')
+    registry.bind('garden-option', option, 'g2')
     toggle.click()
     toggle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
     toggle.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
     toggle.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
     expect(actions.exit).toHaveBeenCalledTimes(3)
     option.click()
-    expect(actions.selectHome).toHaveBeenCalledWith('h2')
+    expect(actions.selectGarden).toHaveBeenCalledWith('g2')
     trigger.click()
     expect(actions.exit).toHaveBeenCalledTimes(3)
-    expect(actions.selectHome).toHaveBeenCalledTimes(1)
+    expect(actions.selectGarden).toHaveBeenCalledTimes(1)
   })
 
   it('Z64: bound controls get .no-drag (the drag region does not); unbinding removes listener and marks', () => {
@@ -123,9 +124,9 @@ describe('binding', () => {
     expect(actions.exit).not.toHaveBeenCalled()
   })
 
-  it('refuses a bad kind and an option with no Home id, loudly', () => {
+  it('refuses a bad kind and an option with no Garden id, loudly', () => {
     expect(() => registry.bind('nope' as never, el())).toThrow(/unknown control kind/)
-    expect(() => registry.bind('home-option', el())).toThrow(/needs its Home id/)
+    expect(() => registry.bind('garden-option', el())).toThrow(/needs its Garden id/)
   })
 })
 
@@ -137,7 +138,7 @@ describe('the check', () => {
 
   it('undeclared', () => {
     goodPage()
-    expect(check(['zen-toggle', 'drag-region'])).toEqual({ ok: false, control: 'home-switcher', problem: 'undeclared' })
+    expect(check(['zen-toggle', 'drag-region'])).toEqual({ ok: false, control: 'garden-switcher', problem: 'undeclared' })
   })
 
   it('not registered → missing; detached → missing', () => {
@@ -146,9 +147,9 @@ describe('the check', () => {
     const drag = el('div')
     rects.set(drag, { left: 300, top: 8, width: 400, height: 28 })
     registry.bind('drag-region', drag)
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'missing' })
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'missing' })
     const trigger = el()
-    registry.bind('home-switcher', trigger)
+    registry.bind('garden-switcher', trigger)
     expect(check()).toEqual({ ok: true })
     toggle.remove()
     expect(check()).toEqual({ ok: false, control: 'zen-toggle', problem: 'missing' })
@@ -165,7 +166,7 @@ describe('the check', () => {
   ])('an invisible switcher (%s) → invisible', (_name, apply) => {
     const { trigger } = goodPage()
     apply(trigger)
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'invisible' })
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'invisible' })
   })
 
   it('a toggle under the macOS stoplights → invisible', () => {
@@ -189,35 +190,35 @@ describe('the check', () => {
     expect(check()).toEqual({ ok: false, control: 'zen-toggle', problem: 'not-wired' })
   })
 
-  it('always-shown Homes: options for every Home, else not wired', () => {
+  it('always-shown Gardens: options for every Garden, else not wired', () => {
     const toggle = el()
     const drag = el('div')
     rects.set(drag, { left: 300, top: 8, width: 400, height: 28 })
     registry.bind('zen-toggle', toggle)
     registry.bind('drag-region', drag)
-    registry.bind('home-option', el(), 'h1')
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'not-wired' })
-    registry.bind('home-option', el(), 'h2')
+    registry.bind('garden-option', el(), 'g1')
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'not-wired' })
+    registry.bind('garden-option', el(), 'g2')
     expect(check()).toEqual({ ok: true })
   })
 
-  it('a trigger whose activation binds no options within 1 s → not wired; options for only some Homes → not wired; all → ok', () => {
+  it('a trigger whose activation binds no options within 1 s → not wired; options for only some Gardens → not wired; all → ok', () => {
     vi.useFakeTimers()
     const { trigger } = goodPage()
     trigger.click()
     vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS)
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'not-wired' })
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'not-wired' })
 
     trigger.click()
-    registry.bind('home-option', el(), 'h1')
+    registry.bind('garden-option', el(), 'g1')
     vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS)
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'not-wired' })
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'not-wired' })
 
     trigger.click()
-    registry.bind('home-option', el(), 'h2')
+    registry.bind('garden-option', el(), 'g2')
     vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS - 1)
     // Not decided yet: the earlier failure still stands until the deadline.
-    expect(check()).toEqual({ ok: false, control: 'home-switcher', problem: 'not-wired' })
+    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'not-wired' })
     vi.advanceTimersByTime(1)
     expect(check()).toEqual({ ok: true })
   })

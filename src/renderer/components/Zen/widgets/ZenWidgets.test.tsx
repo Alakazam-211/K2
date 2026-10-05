@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// prd-zen-mode-v1 S6 — the built-in Agents and Conversation widgets and the
-// texting template's controls, through the real ZenHost, Zen root, page,
+// prd-zen-mode-v1 S6 and prd-zen-gardens-v1 S4–S6 — the built-in Agents,
+// Conversation and empty-Garden widgets and the templates' controls,
+// through the real ZenHost, Zen root, page,
 // bridge, data verbs, Home rooms logic (`createHomeRooms`), overlay Thread
 // hook and compose send. Only the edges are faked: the daemons
 // (`daemon-cli`, keyed by each request's server), sockets, Tauri, the
@@ -23,8 +24,15 @@
 //   - the template's own controls pass the required-controls check, with
 //     the Zen toggle in the footer under the Agents column (bottom left);
 //   - Add agent opens the Home's shared picker (`agents.add`), adds to the
-//     current Home, the row shows in the Agents widget at once, and the
-//     picker closes on Esc, a Home switch and leaving Zen.
+//     Home the widget shows, the row shows in the Agents widget at once, and
+//     the picker closes on Esc, the widget's Home changing and leaving Zen;
+//   - the Agents widget's own Home picker (G27): its rows follow the pick,
+//     the Home page's selection never moves, the pick survives a remount and
+//     reaches another window; the Garden's seed Home comes first;
+//   - single-agent and whole-Home modes, and a Garden's own layout (G38);
+//   - ⌘⌥1–9 switches Gardens in Zen and workspaces outside it (G26);
+//   - the empty Garden's Ask my agent (G28): only this computer's agents,
+//     the draft in the box, nothing posted until you send.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -47,6 +55,9 @@ const h = vi.hoisted(() => ({
   threads: {} as Record<string, unknown[]>,
   latest: {} as Record<string, { preview: string; seq: number; via?: string }>,
   pageCaps: null as null | Record<string, string[]>,
+  gardens: [] as Array<{ id: string; name: string; template: string; seedHome?: string }>,
+  pages: {} as Record<string, { layout: unknown; widgets: unknown[]; template: string }>,
+  localProjects: null as null | unknown[],
   sockets: [] as FakeWs[],
   picked: ['/Users/me/shot.png'] as string[],
   remoteDrops: [] as Array<{ hostKey: string; paths: string[]; workspacePath: string | undefined }>,
@@ -84,24 +95,44 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (scope: { hostKey: string }, route: string, params?: Record<string, unknown>) => {
     h.calls.push({ method: 'GET', hostKey: scope.hostKey, route, data: params ?? {} })
     const p = params ?? {}
+    if (route === 'zen/gardens') {
+      return { ok: true, setUp: true, gardens: h.gardens.map((g, i) => ({ ...g, index: i + 1, hasFile: true })) }
+    }
     if (route === 'zen/get') {
+      const id = String(p.garden)
+      const g = h.gardens.find((x) => x.id === id)
+      if (!g) throw new Error('unknown_garden')
       const caps = h.pageCaps ?? {
         agents: ['agents:read', 'presence:read'],
         conversation: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       }
+      const custom = h.pages[id]
+      const page = custom
+        ? { ...custom, controls: ['garden-switcher', 'drag-region', 'zen-toggle'] }
+        : g.template === 'k2.blank@1'
+          ? {
+              template: 'k2.blank@1',
+              layout: { kind: 'columns', split: [100], minWidths: [0] },
+              widgets: [
+                { id: 'garden-empty', kind: 'garden-empty', column: 0, props: {}, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+              ],
+              controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+            }
+          : {
+              template: 'k2.texting@1',
+              layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+              widgets: [
+                { id: 'agents', kind: 'agents', column: 0, props: { 'home-picker': true }, caps: caps.agents, source: 'builtin' },
+                { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: caps.conversation, source: 'builtin' },
+              ],
+              controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
+            }
       return {
         ok: true,
         schema: 1,
         version: 'v1',
-        page: {
-          template: 'k2.texting@1',
-          layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
-          widgets: [
-            { id: 'agents', kind: 'agents', column: 0, props: {}, caps: caps.agents, source: 'builtin' },
-            { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: caps.conversation, source: 'builtin' },
-          ],
-          controls: ['zen-toggle', 'home-switcher', 'drag-region'],
-        },
+        garden: { id: g.id, name: g.name, index: h.gardens.indexOf(g) + 1 },
+        page,
         theme: {},
         chrome: {},
         motion: {},
@@ -109,6 +140,10 @@ vi.mock('@/lib/daemon-cli', () => ({
         warnings: [],
         lastGoodAt: null,
       }
+    }
+    if (route === 'projects/list' && scope.hostKey === 'local') {
+      if (!h.localProjects) throw new Error('unexpected GET projects/list on local')
+      return h.localProjects
     }
     if (route === 'thread/latest') {
       const addrs = String(p.addrs).split(',')
@@ -153,7 +188,6 @@ vi.mock('@/lib/daemon-cli', () => ({
       return { ok: true, id: item.id, seq: item.seq, from: 'you', body: item.doc.body, kind: 'text', via: 'compose', conversation_id: `c-${addr}` }
     }
     if (route === 'thread/answer') return { ok: true, id: body?.id, status: 'answered', answer: body?.answer }
-    if (route === 'zen/page/ensure' || route === 'zen/homes/sync') return { ok: true }
     throw new Error(`unexpected POST ${route} on ${scope.hostKey}`)
   }),
   withHostCliSlot: async <T,>(_s: unknown, fn: () => Promise<T>): Promise<T> => fn(),
@@ -290,7 +324,9 @@ import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { hostPool } from '@/lib/host-pool-instance'
 import { homeRooms } from '@/stores/home-rooms'
 import { noteServerVersion } from '@/kessel/server-scope'
-import { useZenHomesStore } from '@/lib/zen/zen-homes'
+import { useZenWindowStore } from '@/lib/zen/zen-window'
+import { __resetZenGardensForTests, useZenGardensStore } from '@/lib/zen/zen-gardens'
+import { useZenGardenHomesStore, ZEN_GARDEN_HOMES_KEY } from '@/lib/zen/zen-garden-homes'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { __resetZenApiForTests } from '@/lib/zen/zen-api'
 import { __setZenGeometryForTests, runZenControlChecksNow } from '@/lib/zen/zen-monitor'
@@ -299,12 +335,15 @@ import { openZenCheatSheet } from '@/lib/zen/zen-theme-switch'
 import { __resetZenDataForTests } from '@/lib/zen/zen-data'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
 import { ZenBridgeError, createZenBridge } from '@/lib/zen/zen-bridge'
+import { BUILTIN_TEXTING_PAGE } from '@/lib/zen/zen-page'
 import type { ZenGeometry } from '@/lib/zen/zen-controls'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { ZenHost } from '../ZenHost'
 import { installZenBuiltins } from './builtins'
 import { __resetZenDraftsForTests } from './ZenCompose'
 import { zenEmptyThreadText, zenPermissionText } from './ZenConversationWidget'
+import { zenGardenAskDraft } from './ZenGardenEmptyWidget'
+import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -453,7 +492,15 @@ beforeEach(() => {
   noteServerVersion(B, '0.43.4', ['thread-latest'])
   noteServerVersion(C, '0.43.4', ['thread-latest'])
   noteServerVersion(D, '0.43.0', [])
-  useZenHomesStore.setState({ on: { h1: true } })
+  h.gardens = [
+    { id: 'g-default', name: 'Default', template: 'k2.texting@1' },
+    { id: 'g-notes', name: 'Notes', template: 'k2.blank@1' },
+  ]
+  h.pages = {}
+  h.localProjects = null
+  __resetZenGardensForTests()
+  useZenGardenHomesStore.setState({ picks: {} })
+  useZenWindowStore.setState({ on: true, garden: 'g-default' })
   useZenViewStore.setState({ safe: null, epoch: 0 })
   useSettingsStore.setState({ settingsOpen: false })
   usePageViewStore.getState().setPage('home')
@@ -530,6 +577,22 @@ async function typeAndSend(text: string): Promise<void> {
   })
 }
 
+/** Pick `homeId` in the (first) Agents widget's own Home picker. */
+async function pickWidgetHome(homeId: string, widget = 'agents'): Promise<void> {
+  const box = document.querySelector(`[data-zen-widget-id="${widget}"]`)
+  if (!box) throw new Error(`no Agents widget ${widget}`)
+  const button = box.querySelector('[data-zen-home-picker-button]')
+  if (!(button instanceof HTMLElement)) throw new Error('no Home picker in the widget')
+  await act(async () => {
+    fireEvent.click(button)
+  })
+  const choice = box.querySelector(`[data-zen-home-choice="${homeId}"]`)
+  if (!(choice instanceof HTMLElement)) throw new Error(`no Home ${homeId} in the widget's picker`)
+  await act(async () => {
+    fireEvent.click(choice)
+  })
+}
+
 describe('Agents widget', () => {
   it('rows follow the Home’s order, and ⌘1–9 selects row N in place', async () => {
     await mountZen()
@@ -554,16 +617,14 @@ describe('Agents widget', () => {
     expect(h.switched).toEqual([])
     expect(useConnectHostStore.getState().activeHost).toBe('local')
 
-    // An empty Home says so.
-    act(() => {
-      useZenHomesStore.setState({ on: { h1: true, h2: true } })
-      useHomesStore.getState().selectHome('h2')
-    })
+    // An empty Home says so (picked in the widget's own Home picker).
+    await pickWidgetHome('h2')
     await waitFor(() =>
       expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(
         'This Home has no agents yet. Use Add agent to add some.',
       ),
     )
+    expect(useHomesStore.getState().selectedId).toBe('h1')
   })
 
   it('live status: the window’s server, an open pinned room, and the pool; a server that can’t say shows none', async () => {
@@ -765,10 +826,12 @@ describe('Conversation widget', () => {
     await act(async () => {
       fireEvent.click(banner?.querySelector('[data-zen-open-in-agents]') as HTMLElement)
     })
-    // The window's own server: the Agents page, that workspace; Zen stays on.
+    // The window's own server: Zen turns off FIRST (G32/G54), then the
+    // Agents page shows that workspace, live.
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(document.querySelector('[data-zen-root]')).toBeNull()
     expect(usePageViewStore.getState().page).toBe('agents')
     expect(useProjectsStore.getState().activeProjectId).toBe('p1')
-    expect(useZenHomesStore.getState().on.h1).toBe(true)
     expect(h.switched).toEqual([])
   })
 
@@ -782,7 +845,7 @@ describe('Conversation widget', () => {
     await act(async () => {
       fireEvent.click(button)
     })
-    await waitFor(() => expect(useZenHomesStore.getState().on.h1).toBeUndefined())
+    await waitFor(() => expect(useZenWindowStore.getState().on).toBe(false))
     expect(usePageViewStore.getState().page).toBe('home')
     expect(homeRooms.store.getState().shown).toBe(ROWS.sales.address)
     expect(h.switched).toEqual([])
@@ -799,15 +862,16 @@ describe('Conversation widget', () => {
   })
 })
 
-describe('texting template controls', () => {
-  it('draws its own Home switcher, Zen toggle and drag area, and they pass the required-controls check', async () => {
+describe('template controls (G24, G25, G58)', () => {
+  it('draws its own Garden switcher, Zen toggle and drag area, and they pass the required-controls check', async () => {
     await mountZen()
     const bar = document.querySelector('[data-zen-texting-controls]')
-    if (!bar) throw new Error('the S6 template controls are not registered')
-    expect(bar.querySelector('[data-zen-home-pill]')?.getAttribute('data-zen-bound')).toBe('home-switcher')
+    if (!bar) throw new Error('the template controls are not registered')
+    expect(bar.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound')).toBe('garden-switcher')
+    expect(bar.querySelector('[data-zen-garden-pill]')?.textContent).toContain('Default')
     expect(bar.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound')).toBe('drag-region')
-    // The Zen toggle left the top band for the bottom-left footer: under
-    // the Agents column (column 0), after its box, with Add agent beside it.
+    // The Zen toggle sits in the bottom-left footer: under the Agents
+    // column (column 0), after its box, with Add agent beside it.
     expect(bar.querySelector('[data-zen-switch]')).toBeNull()
     const footer = document.querySelector('[data-zen-texting-footer]')
     if (!footer) throw new Error('no template footer')
@@ -822,17 +886,20 @@ describe('texting template controls', () => {
     expect(footerKids).toEqual(['toggle', 'add'])
     // The other column has no footer: the conversation runs to the bottom.
     expect(document.querySelector('[data-zen-column-slot="1"]')?.children.length).toBe(1)
+    // No Home switcher anywhere in Zen any more.
+    expect(document.querySelector('[data-zen-home-pill], [data-zen-home-option]')).toBeNull()
 
-    // Wired: activating the switcher binds an option for every Home in 1 s.
+    // Wired: activating the switcher binds an option for every Garden in 1 s.
     await act(async () => {
-      fireEvent.click(bar.querySelector('[data-zen-home-pill]') as HTMLElement)
+      fireEvent.click(bar.querySelector('[data-zen-garden-pill]') as HTMLElement)
     })
-    const options = Array.from(document.querySelectorAll('[data-zen-home-option]'))
-    expect(options.map((o) => [o.getAttribute('data-zen-home-option'), o.getAttribute('data-zen-bound')])).toEqual([
-      ['h1', 'home-option'],
-      ['h2', 'home-option'],
+    const options = Array.from(document.querySelectorAll('[data-zen-garden-option]'))
+    expect(options.map((o) => [o.getAttribute('data-zen-garden-option'), o.getAttribute('data-zen-bound')])).toEqual([
+      ['g-default', 'garden-option'],
+      ['g-notes', 'garden-option'],
     ])
     expect(options[1].textContent).toContain('⌥⌘2')
+    expect(document.querySelector('[data-zen-new-garden]')?.textContent).toContain('New Garden')
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1100))
     })
@@ -840,21 +907,20 @@ describe('texting template controls', () => {
     act(() => runZenControlChecksNow())
     expect(useZenViewStore.getState().safe).toBeNull()
 
-    // A Home option switches Homes (steps away; Zen stays on for h1).
+    // A Garden option switches this window's Garden; the Home page never moves.
     await act(async () => {
       fireEvent.click(options[1] as HTMLElement)
     })
-    expect(selectedHome(useHomesStore.getState()).id).toBe('h2')
-    expect(document.querySelector('[data-zen-home-menu]')).toBeNull()
-    expect(useZenHomesStore.getState().on.h1).toBe(true)
-    act(() => useHomesStore.getState().selectHome('h1'))
+    expect(useZenWindowStore.getState().garden).toBe('g-notes')
+    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    await waitFor(() => expect(document.querySelector('[data-zen-page="k2.blank@1"]')).not.toBeNull())
 
-    // The Zen toggle exits: this Home off.
-    await waitFor(() => expect(document.querySelector('[data-zen-switch]')).not.toBeNull())
+    // The Zen toggle exits: this window off.
     await act(async () => {
       fireEvent.click(document.querySelector('[data-zen-switch]') as HTMLElement)
     })
-    expect(useZenHomesStore.getState().on.h1).toBeUndefined()
+    expect(useZenWindowStore.getState().on).toBe(false)
   }, 10_000)
 })
 
@@ -1122,7 +1188,7 @@ describe('Zen Add agent', () => {
     return b
   }
 
-  it('opens the Home’s shared picker, adds to the current Home, and the row shows in the Agents widget', async () => {
+  it('opens the Home’s shared picker, adds to the Home the widget shows, and the row shows in the Agents widget', async () => {
     act(() => {
       useProjectsStore.setState({
         projects: [
@@ -1203,22 +1269,28 @@ describe('Zen Add agent', () => {
     expect(picker()).toBeNull()
   }, 10_000)
 
-  it('closes on a Home switch and when leaving Zen, and stays shut on the next Zen-on', async () => {
+  it('closes when the widget’s Home changes and when leaving Zen, and stays shut on the next Zen-on', async () => {
     await mountZen()
     await act(async () => {
       fireEvent.click(addButton())
     })
     expect(picker()?.getAttribute('data-zen-add-agent-picker')).toBe('h1')
 
-    // A Home switch (Zen on for both) closes it.
-    act(() => {
-      useZenHomesStore.setState({ on: { h1: true, h2: true } })
-      useHomesStore.getState().selectHome('h2')
-    })
+    // The widget's Home picker moving to another Home closes it.
+    await pickWidgetHome('h2')
     await waitFor(() => expect(picker()).toBeNull())
     expect(useZenAddAgentStore.getState().open).toBe(false)
-    act(() => useHomesStore.getState().selectHome('h1'))
-    await waitFor(() => expect(document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]')).not.toBeNull())
+    // Opened again, it is for the widget's new Home; the Home page's own
+    // selection never moved.
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()?.getAttribute('data-zen-add-agent-picker')).toBe('h2')
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' })
+    })
+    await pickWidgetHome('h1')
 
     // Open, then leave Zen with the bottom-left toggle: gone, store closed.
     await act(async () => {
@@ -1230,13 +1302,13 @@ describe('Zen Add agent', () => {
     await act(async () => {
       fireEvent.click(toggle)
     })
-    expect(useZenHomesStore.getState().on.h1).toBeUndefined()
+    expect(useZenWindowStore.getState().on).toBe(false)
     await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
     expect(picker()).toBeNull()
     expect(useZenAddAgentStore.getState()).toMatchObject({ open: false, anchor: null })
 
     // Zen on again: the picker stays shut.
-    act(() => useZenHomesStore.setState({ on: { h1: true, h2: true } }))
+    act(() => useZenWindowStore.getState().setOn(true))
     await waitFor(() => expect(document.querySelector('[data-zen-texting-footer]')).not.toBeNull())
     expect(picker()).toBeNull()
   }, 10_000)
@@ -1244,14 +1316,20 @@ describe('Zen Add agent', () => {
   it('agents.add is a bridge verb behind agents:add: a widget without the cap is refused, one with it opens the same picker', async () => {
     await mountZen()
     const hostStub = {
-      homes: () => [],
-      selectedHomeId: () => 'h1',
-      selectHome: () => {},
-      exit: () => {},
-      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
-      page: () => {
+      gardens: () => [{ id: 'g-default', name: 'Default', index: 1 }],
+      currentGardenId: () => 'g-default',
+      switchGarden: () => {},
+      createGarden: async () => {
         throw new Error('unused')
       },
+      renameGarden: async () => {},
+      deleteGarden: async () => {},
+      homes: () => [],
+      exit: () => {},
+      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
+      // A v2-style widget on the Default Garden's page: it acts for the
+      // page's first Agents widget (Home h1).
+      page: () => BUILTIN_TEXTING_PAGE,
     }
     const reader = createZenBridge(hostStub as never, { id: 'agents', caps: ['agents:read'] })
     let refused: unknown = null
@@ -1283,6 +1361,408 @@ describe('Zen Add agent', () => {
   })
 })
 
+/** Render Zen and wait for the window's Garden page. */
+async function mountGarden(template: string): Promise<void> {
+  render(
+    <>
+      <Shortcuts />
+      <ZenHost />
+    </>,
+  )
+  await waitFor(() => {
+    if (!document.querySelector(`[data-zen-page="${template}"]`)) throw new Error(`${template} not drawn`)
+  })
+}
+
+function widgetRows(widget: string): string[] {
+  const box = document.querySelector(`[data-zen-widget-id="${widget}"]`)
+  if (!box) throw new Error(`no widget ${widget}`)
+  return Array.from(box.querySelectorAll('[data-zen-agent-row]')).map((e) => e.getAttribute('data-zen-agent-row') ?? '')
+}
+
+describe('the Agents widget’s Home picker (G27, TG4.4)', () => {
+  it('a pick changes its rows, never the Home page’s selection, is saved, and survives a remount', async () => {
+    act(() => useHomesStore.getState().addRow('h2', ROWS.sales))
+    await mountZen()
+    expect(document.querySelector('[data-zen-home-picker-button]')?.textContent).toContain('Work')
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    await pickWidgetHome('h2')
+    await waitFor(() => expect(widgetRows('agents')).toEqual([ROWS.sales.address]))
+    expect(document.querySelector('[data-zen-home-picker-button]')?.textContent).toContain('Personal')
+    // The Home page never moved.
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    expect(JSON.parse(localStorage.getItem(ZEN_GARDEN_HOMES_KEY) ?? 'null')).toEqual({
+      version: 1,
+      picks: { 'g-default/agents': 'h2' },
+    })
+    // Remount (leave Zen and come back): still Personal.
+    act(() => useZenWindowStore.getState().setOn(false))
+    await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
+    act(() => useZenWindowStore.getState().setOn(true))
+    await waitFor(() => expect(widgetRows('agents')).toEqual([ROWS.sales.address]))
+  })
+
+  it('switching the Home page’s Home doesn’t change the widget; another window’s pick (storage event) does', async () => {
+    await mountZen()
+    // Settles the widget's first Home as its own pick (the window's Home then).
+    await waitFor(() => expect(useZenGardenHomesStore.getState().picks['g-default/agents']).toBe('h1'))
+    act(() => useHomesStore.getState().selectHome('h2'))
+    expect(rowAddresses()).toEqual([ROWS.cortana.address, ROWS.sales.address, ROWS.julie.address, ROWS.ops.address])
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: ZEN_GARDEN_HOMES_KEY,
+          newValue: JSON.stringify({ version: 1, picks: { 'g-default/agents': 'h2' } }),
+        }),
+      )
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')).not.toBeNull())
+  })
+
+  it('the Garden’s seed Home comes first', async () => {
+    h.gardens[0].seedHome = 'h2'
+    render(
+      <>
+        <Shortcuts />
+        <ZenHost />
+      </>,
+    )
+    await waitFor(() =>
+      expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(
+        'This Home has no agents yet. Use Add agent to add some.',
+      ),
+    )
+    expect(document.querySelector('[data-zen-home-picker-button]')?.textContent).toContain('Personal')
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+  })
+
+  it('Add agent adds to the Home picked in the widget', async () => {
+    act(() => {
+      useProjectsStore.setState({
+        projects: [
+          ...(useProjectsStore.getState().projects as never[]),
+          { id: 'p2', name: 'atlas', handle: 'atlas', path: '/w/atlas', color: '#3366aa', workspaces: [{ id: 'w2', type: 'main', name: 'main' }] },
+        ] as never,
+      })
+    })
+    await mountZen()
+    await pickWidgetHome('h2')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]') as HTMLElement)
+    })
+    const p = document.querySelector('[data-zen-add-agent-picker]')
+    if (!(p instanceof HTMLElement)) throw new Error('Add agent did not open')
+    expect(p.getAttribute('data-zen-add-agent-picker')).toBe('h2')
+    expect(p.textContent).toContain('Add an agent to Personal')
+    const thisServer = Array.from(p.querySelectorAll('button')).find((b) => b.textContent?.includes('This server'))
+    if (!thisServer) throw new Error('no This server')
+    await act(async () => {
+      fireEvent.click(thisServer)
+    })
+    const atlas = p.querySelector('[data-ws-filter-value="p2"]')
+    if (!(atlas instanceof HTMLElement)) throw new Error('atlas is not in the picker')
+    await act(async () => {
+      fireEvent.click(atlas)
+    })
+    const homes = useHomesStore.getState().homes
+    expect(homes.find((x) => x.id === 'h2')?.rows.map((r) => r.address)).toEqual(['atlas::local'])
+    expect(homes.find((x) => x.id === 'h1')?.rows.map((r) => r.address)).not.toContain('atlas::local')
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    await waitFor(() => expect(widgetRows('agents')).toEqual(['atlas::local']))
+  })
+})
+
+describe('built-in widgets: modes and layout (G38, answer 5)', () => {
+  beforeEach(() => {
+    h.gardens.push({ id: 'g-layout', name: 'Layout', template: 'k2.blank@1' })
+    h.pages['g-layout'] = {
+      template: 'k2.blank@1',
+      layout: { kind: 'columns', columns: [{ size: 60, 'min-width': 300 }, { size: 40 }] },
+      widgets: [
+        { id: 'talk', kind: 'conversation', column: 0, props: { agents: 'solo' }, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+        // As the daemon sends them: every prop present, `mode` derived.
+        { id: 'solo', kind: 'agents', column: 1, props: { mode: 'agent', home: 'Work', agent: 'sales', 'home-picker': false }, caps: ['agents:read'], source: 'builtin' },
+        { id: 'whole', kind: 'agents', column: 1, props: { mode: 'home', home: 'Personal', 'home-picker': false }, caps: ['agents:read'], source: 'builtin' },
+      ],
+    }
+    useHomesStore.getState().addRow('h2', ROWS.cortana)
+    useZenWindowStore.setState({ garden: 'g-layout' })
+  })
+
+  it('places each widget in its column, with the Garden’s sizes', async () => {
+    await mountGarden('k2.blank@1')
+    const slot0 = document.querySelector('[data-zen-column-slot="0"]') as HTMLElement
+    const slot1 = document.querySelector('[data-zen-column-slot="1"]') as HTMLElement
+    expect(slot0.style.flex).toBe('60 1 0%')
+    expect(slot0.style.minWidth).toBe('300px')
+    expect(slot1.style.flex).toBe('40 1 0%')
+    expect(Array.from(document.querySelectorAll('[data-zen-column="0"] [data-zen-widget]')).map((w) => w.getAttribute('data-zen-widget'))).toEqual([
+      'conversation',
+    ])
+    expect(Array.from(document.querySelectorAll('[data-zen-column="1"] [data-zen-widget]')).map((w) => w.getAttribute('data-zen-widget-id'))).toEqual([
+      'solo',
+      'whole',
+    ])
+    // The blank template's controls stay: switcher and Zen toggle, no Add agent.
+    expect(document.querySelector('[data-zen-garden-pill]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-switch]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-add-agent]')).toBeNull()
+  })
+
+  it('single-agent mode shows one agent filtered from its Home; whole-Home mode shows the Home', async () => {
+    await mountGarden('k2.blank@1')
+    await waitFor(() => expect(widgetRows('solo')).toEqual([ROWS.sales.address]))
+    expect(document.querySelector('[data-zen-widget-id="solo"]')?.getAttribute('data-zen-agents-mode')).toBe('agent')
+    expect(document.querySelector('[data-zen-widget-id="solo"]')?.getAttribute('data-zen-agents-home')).toBe('h1')
+    expect(widgetRows('whole')).toEqual([ROWS.cortana.address])
+    expect(document.querySelector('[data-zen-widget-id="whole"]')?.getAttribute('data-zen-agents-mode')).toBe('home')
+    expect(document.querySelector('[data-zen-widget-id="whole"]')?.getAttribute('data-zen-agents-home')).toBe('h2')
+    // No `home-picker` prop: no picker.
+    expect(document.querySelector('[data-zen-home-picker]')).toBeNull()
+
+    // The conversation follows the widget its `agents` prop names.
+    await act(async () => {
+      fireEvent.click(document.querySelector(`[data-zen-widget-id="solo"] [data-zen-agent-row="${ROWS.sales.address}"]`) as HTMLElement)
+    })
+    await waitFor(() =>
+      expect(document.querySelector('[data-zen-column="0"] [data-zen-conversation]')?.getAttribute('data-zen-conversation')).toBe(
+        ROWS.sales.address,
+      ),
+    )
+    // Selecting in the other widget doesn't drive this conversation.
+    await act(async () => {
+      fireEvent.click(document.querySelector(`[data-zen-widget-id="whole"] [data-zen-agent-row="${ROWS.cortana.address}"]`) as HTMLElement)
+    })
+    expect(document.querySelector('[data-zen-column="0"] [data-zen-conversation]')?.getAttribute('data-zen-conversation')).toBe(
+      ROWS.sales.address,
+    )
+  })
+
+  it('`mode: "home"` shows the whole Home even with an `agent` set', async () => {
+    h.pages['g-layout'].widgets = [
+      { id: 'w', kind: 'agents', column: 0, props: { mode: 'home', home: 'Work', agent: 'sales' }, caps: ['agents:read'], source: 'builtin' },
+    ]
+    h.pages['g-layout'].layout = { kind: 'columns', split: [100] }
+    await mountGarden('k2.blank@1')
+    await waitFor(() => expect(widgetRows('w').length).toBe(4))
+  })
+
+  it('a Conversation pinned with `agent` + `home` opens that agent on its own, with no list', async () => {
+    h.pages['g-layout'].widgets = [
+      { id: 'pin', kind: 'conversation', column: 0, props: { agent: 'cortana', home: 'Work', compose: true, attachments: false, 'load-older': true }, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+    ]
+    h.pages['g-layout'].layout = { kind: 'columns', split: [100] }
+    await mountGarden('k2.blank@1')
+    await threadReady(ROWS.cortana.address)
+    expect(document.querySelector('[data-zen-agent-row]')).toBeNull()
+    // `attachments: false`: no "+" in the box.
+    expect(document.querySelector('[data-zen-attach]')).toBeNull()
+    expect(composeInput()).toBeTruthy()
+  })
+
+  it('display props: no preview, no server tag, only the statuses asked for, no compose box', async () => {
+    h.pages['g-layout'].widgets = [
+      { id: 'w', kind: 'agents', column: 0, props: { mode: 'home', home: 'Work', preview: false, 'server-tag': false, status: ['needs-you'] }, caps: ['agents:read'], source: 'builtin' },
+      { id: 'c', kind: 'conversation', column: 1, props: { agents: 'w', compose: false }, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+    ]
+    h.pages['g-layout'].layout = { kind: 'columns', split: [50, 50] }
+    await mountGarden('k2.blank@1')
+    await waitFor(() => expect(widgetRows('w').length).toBe(4))
+    // Previews arrive but aren't shown; the akzm tag isn't drawn; idle isn't shown.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect(document.querySelector('[data-zen-preview]')).toBeNull()
+    expect(document.querySelector('[data-zen-server-tag]')).toBeNull()
+    expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('unknown')
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    expect(document.querySelector('[data-zen-compose]')).toBeNull()
+  })
+
+  it('an agent that isn’t on the widget’s Home says so', async () => {
+    h.pages['g-layout'].widgets = [
+      { id: 'solo', kind: 'agents', column: 0, props: { home: 'Personal', agent: 'sales' }, caps: ['agents:read'], source: 'builtin' },
+    ]
+    h.pages['g-layout'].layout = { kind: 'columns', split: [100] }
+    await mountGarden('k2.blank@1')
+    await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe('sales isn’t on Personal.'))
+  })
+})
+
+describe('Garden shortcuts (G26, G52, TG3.6)', () => {
+  function spyWorkspaceSwitch(): ReturnType<typeof vi.fn> {
+    const spy = vi.fn()
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/cortana', color: '#c2662d', pinned: true, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+      ] as never,
+      setActiveWorkspace: spy as never,
+    })
+    useTerminalSettingsStore.setState({ shortcutLayout: 'cmd-active-cmdshift-pinned' })
+    return spy
+  }
+
+  it('in Zen on the Agents page, ⌘⌥2 switches to Garden 2 and never switches a workspace or a Home', async () => {
+    const spy = spyWorkspaceSwitch()
+    usePageViewStore.getState().setPage('agents')
+    await mountZen()
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '™', code: 'Digit2', metaKey: true, altKey: true })
+    })
+    expect(useZenWindowStore.getState().garden).toBe('g-notes')
+    await waitFor(() => expect(document.querySelector('[data-zen-page="k2.blank@1"]')).not.toBeNull())
+    expect(spy).not.toHaveBeenCalled()
+    expect(useHomesStore.getState().selectedId).toBe('h1')
+    expect(usePageViewStore.getState().page).toBe('agents')
+    // ⌘⌥9 past the end does nothing.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'ª', code: 'Digit9', metaKey: true, altKey: true })
+    })
+    expect(useZenWindowStore.getState().garden).toBe('g-notes')
+    // ⌘1 in a Garden with no Agents widget does nothing.
+    const before = h.calls.length
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '1', code: 'Digit1', metaKey: true })
+    })
+    expect(h.calls.slice(before).filter((c) => c.route === 'thread' || c.route === 'sessions/list-for-workspace')).toEqual([])
+    expect(spy).not.toHaveBeenCalled()
+    // ⌘⌥1 back: ⌘1 opens row 1 of the first Agents widget.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '¡', code: 'Digit1', metaKey: true, altKey: true })
+    })
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '1', code: 'Digit1', metaKey: true })
+    })
+    await waitFor(() => expect(rowEl(ROWS.cortana.address).hasAttribute('data-selected')).toBe(true))
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('outside Zen, ⌘⌥1 is the Agents workspace switch again', async () => {
+    const spy = spyWorkspaceSwitch()
+    usePageViewStore.getState().setPage('agents')
+    useZenWindowStore.setState({ on: false })
+    render(<Shortcuts />)
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '¡', code: 'Digit1', metaKey: true, altKey: true })
+    })
+    expect(spy).toHaveBeenCalledWith('p1', 'w1')
+    expect(useZenWindowStore.getState().garden).toBe('g-default')
+  })
+})
+
+describe('the empty Garden: Ask my agent (G28, TG5.1)', () => {
+  beforeEach(() => {
+    useZenWindowStore.setState({ garden: 'g-notes' })
+    useProjectsStore.setState({
+      projects: [
+        ...(useProjectsStore.getState().projects as never[]),
+        { id: 'p2', name: 'atlas', handle: 'atlas', path: '/w/atlas', color: '#3366aa', workspaces: [{ id: 'w2', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+  })
+
+  it('says so, and offers only this computer’s agents', async () => {
+    await mountGarden('k2.blank@1')
+    expect(document.querySelector('[data-zen-garden-empty-title]')?.textContent).toBe('This Garden is empty.')
+    expect(document.querySelector('[data-zen-garden-empty-ask]')?.textContent).toBe(
+      'Ask your agents to add things to this Garden.',
+    )
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-my-agent]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-ask-agent]').length).toBe(2))
+    const offered = Array.from(document.querySelectorAll('[data-zen-ask-agent]')).map((e) => e.getAttribute('data-zen-ask-agent'))
+    // Home rows on this computer, then this computer's other workspaces;
+    // never an agent on another server.
+    expect(offered).toEqual(['cortana::local', 'atlas::local'])
+    expect(offered).not.toContain(ROWS.sales.address)
+  })
+
+  it('a pick opens its conversation with the request drafted, not sent; sending posts it on this computer', async () => {
+    await mountGarden('k2.blank@1')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-my-agent]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-ask-agent="cortana::local"]')).not.toBeNull())
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-agent="cortana::local"]') as HTMLElement)
+    })
+    await threadReady('cortana::local')
+    const draft = zenGardenAskDraft({ id: 'g-notes', name: 'Notes' })
+    expect(draft).toBe(
+      'In my Zen Garden "Notes" (id g-notes), please add: \n(Use the k2-zen skill and k2 zen garden; check with k2 zen validate.)',
+    )
+    await waitFor(() => expect(composeInput().value).toBe(draft))
+    // The caret waits after "please add: ".
+    expect(document.activeElement).toBe(composeInput())
+    expect(composeInput().selectionStart).toBe(draft.indexOf('\n'))
+    expect(h.calls.some((c) => c.route === 'thread/post')).toBe(false)
+
+    const finished = draft.replace('please add: ', 'please add: a clock')
+    await typeAndSend(finished)
+    await waitFor(() => expect(h.calls.filter((c) => c.route === 'thread/post').length).toBe(1))
+    expect(h.calls.filter((c) => c.route === 'thread/post').map((c) => [c.hostKey, c.data])).toEqual([
+      ['local', { addr: 'cortana-main', text: finished, via: 'compose' }],
+    ])
+  })
+
+  it('leaving the Garden and coming back shows the empty page again', async () => {
+    await mountGarden('k2.blank@1')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-my-agent]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-ask-agent="atlas::local"]')).not.toBeNull())
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-agent="atlas::local"]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-asking="atlas::local"]')).not.toBeNull())
+    act(() => useZenWindowStore.getState().setGarden('g-default'))
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
+    act(() => useZenWindowStore.getState().setGarden('g-notes'))
+    await waitFor(() => expect(document.querySelector('[data-zen-ask-my-agent]')).not.toBeNull())
+    expect(document.querySelector('[data-zen-asking]')).toBeNull()
+  })
+
+  it('with no agents on this computer it says so', async () => {
+    useProjectsStore.setState({ projects: [] as never })
+    useHomesStore.setState({
+      homes: [
+        { id: 'h1', name: 'Work', rows: [ROWS.sales, ROWS.julie] },
+        { id: 'h2', name: 'Personal', rows: [] },
+      ],
+      selectedId: 'h1',
+    })
+    await mountGarden('k2.blank@1')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-my-agent]') as HTMLElement)
+    })
+    await waitFor(() =>
+      expect(document.querySelector('[data-zen-no-local-agents]')?.textContent).toBe(
+        'No agents on this computer yet. Add one from Home.',
+      ),
+    )
+    expect(document.querySelector('[data-zen-ask-agent]')).toBeNull()
+  })
+
+  it('on another server, this computer’s agents come from the local daemon’s list', async () => {
+    h.localProjects = [{ id: 'lp9', name: 'nova', handle: 'nova', path: '/w/nova' }]
+    act(() => useConnectHostStore.setState({ activeHost: useConnectHostStore.getState().hosts[0] }))
+    await mountGarden('k2.blank@1')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-my-agent]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-ask-agent]').length).toBe(2))
+    expect(Array.from(document.querySelectorAll('[data-zen-ask-agent]')).map((e) => e.getAttribute('data-zen-ask-agent'))).toEqual([
+      'cortana::local',
+      'nova::local',
+    ])
+    // One read of this computer's list (the window's own server keeps its own).
+    expect(h.calls.filter((c) => c.route === 'projects/list' && c.hostKey === 'local').length).toBe(1)
+  })
+})
+
 describe('S6 source ratchets', () => {
   const RENDERER = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const read = (p: string): string => readFileSync(join(RENDERER, p), 'utf8')
@@ -1308,7 +1788,14 @@ describe('S6 source ratchets', () => {
   })
 
   it('widgets never hold a scope or a daemon call: only the bridge', () => {
-    for (const f of ['ZenAgentsWidget.tsx', 'ZenConversationWidget.tsx', 'ZenCompose.tsx', 'ZenTextingControls.tsx', 'zen-widget-kit.tsx']) {
+    for (const f of [
+      'ZenAgentsWidget.tsx',
+      'ZenConversationWidget.tsx',
+      'ZenCompose.tsx',
+      'ZenTextingControls.tsx',
+      'ZenGardenEmptyWidget.tsx',
+      'zen-widget-kit.tsx',
+    ]) {
       const src = read(`components/Zen/widgets/${f}`)
       expect([f, /daemonCli|scopeForHost|primaryScope|primaryRoom|useOverlayThread|ServerScope/.test(src)]).toEqual([f, false])
     }

@@ -6,6 +6,8 @@
 //     lib/zen/zen-shortcut.ts, and it installs nothing on macOS (tested in
 //     zen-lib.test.ts). The menu item carries the accelerator.
 //   - Z8/T4.2: Zen config never resolves the window's server.
+//   - prd-zen-gardens-v1 TG3.5 (G6, G21): Home has no Zen row any more, and
+//     nothing imports the retired per-Home store.
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -63,5 +65,15 @@ describe('Zen source ratchets', () => {
         .join('\n')
     const hits = files.filter((f) => /\bprimaryScope\(/.test(code(f))).map(rel)
     expect(hits).toEqual([])
+  })
+
+  it('TG3.5: no Zen toggle row under components/Home, and no import of the per-Home Zen store', () => {
+    const home = walk(join(RENDERER, 'components', 'Home'), [])
+    expect(home.length).toBeGreaterThan(5)
+    expect(home.map(rel).filter((f) => /ZenToggleRow/.test(f))).toEqual([])
+    expect(home.filter((f) => readFileSync(f, 'utf8').includes('ZenToggleRow')).map(rel)).toEqual([])
+    const all = walk(RENDERER, [])
+    expect(all.filter((f) => /zen-homes|k2\.zen\.homes\.v1|useZenHomesStore/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([])
+    expect(all.map(rel).filter((f) => f === 'lib/zen/zen-homes.ts')).toEqual([])
   })
 })

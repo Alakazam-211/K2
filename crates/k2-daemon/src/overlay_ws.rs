@@ -2,6 +2,17 @@
 //!
 //! Distinct from `/cli/sessions/events` (the 256-slot session_events bus)
 //! and from grid-WS. Frames: `{collection, seq, id, doc?}`.
+//!
+//! Thread sync: every overlay write route (`thread/post|ask|secret|answer|
+//! void`, compose prose that voids cards, `k2 msg` chatter) publishes one
+//! frame here, and every client view of a Thread subscribes and merges by
+//! id. This socket is the only push path, so it must not die quietly:
+//!
+//! - the server sends a WS Ping every [`ping_interval`] (20 s), so an idle
+//!   Thread is not cut by the tunnel edge (HAProxy `timeout tunnel 1h`, the
+//!   web edge's idle cut) and a dead peer is found by the failed write;
+//! - a subscriber that lags the bus is CLOSED, never silently skipped, so
+//!   the client reconnects and catches up with `GET /cli/thread?since_seq=`.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -20,6 +31,17 @@ use k2_core::skin::SkinPass;
 pub const OVERLAY_WS_PATH: &str = "/cli/overlay/events";
 
 const BUS_CAP: usize = 1024;
+
+/// Keepalive ping cadence: 20 s by default. `K2_OVERLAY_WS_PING_MS`
+/// overrides it (the headless test uses a short one).
+pub fn ping_interval() -> std::time::Duration {
+    let ms = std::env::var("K2_OVERLAY_WS_PING_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(20_000);
+    std::time::Duration::from_millis(ms)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OverlayFrame {
@@ -153,9 +175,16 @@ pub async fn serve_overlay_events_connection(
     };
     let (mut write, mut read) = ws.split();
     let mut rx = subscribe();
+    let mut keepalive = tokio::time::interval(ping_interval());
+    keepalive.tick().await; // burn the immediate first tick
 
     loop {
         tokio::select! {
+            _ = keepalive.tick() => {
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
             incoming = read.next() => {
                 match incoming {
                     Some(Ok(Message::Ping(p))) => {
@@ -182,7 +211,16 @@ pub async fn serve_overlay_events_connection(
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        // Frames were dropped for this subscriber. Skipping
+                        // them would leave its Thread silently behind; close
+                        // so the client reconnects and catches up by seq.
+                        log_debug!(
+                            "[daemon/overlay_ws] subscriber lagged {n} frames; closing for resync"
+                        );
+                        let _ = write.send(Message::Close(None)).await;
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }

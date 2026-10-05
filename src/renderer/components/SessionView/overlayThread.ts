@@ -177,10 +177,69 @@ export async function postThreadCompose(
   return { ok: true, item }
 }
 
+/**
+ * The oldest seq a Thread list holds while older pages are still on the
+ * server (`hasMore`), else 0. A frame for an id the list doesn't have,
+ * below this seq, is an older card changing (it shows when its page loads);
+ * every other new id joins the list.
+ */
+export function threadWindowFloor(items: OverlayThreadItem[], hasMore: boolean): number {
+  if (!hasMore || items.length === 0) return 0
+  return items.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+}
+
+function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
+  return a.seq === b.seq && JSON.stringify(a.doc) === JSON.stringify(b.doc)
+}
+
+/**
+ * Thread sync: merge rows from any source (a socket frame, a catch-up
+ * `GET thread?since_seq=`, this window's own send) into a list BY ID.
+ * A known id takes the incoming doc (a card answered elsewhere); a new id
+ * is added; the list stays in seq order. Never a duplicate, whoever sent
+ * it and however many paths deliver it. Returns `current` itself when
+ * nothing changed.
+ */
+export function mergeThreadItems(
+  current: OverlayThreadItem[],
+  incoming: OverlayThreadItem[],
+): OverlayThreadItem[] {
+  let next: OverlayThreadItem[] | null = null
+  for (const raw of incoming) {
+    if (!raw.id || !isThreadSurfaceItem({ ...raw, collection: raw.collection || 'thread' })) continue
+    const item: OverlayThreadItem = { ...raw, collection: 'thread' }
+    const list: OverlayThreadItem[] = next ?? current
+    const at = list.findIndex((it) => it.id === item.id)
+    if (at >= 0) {
+      const merged: OverlayThreadItem = {
+        ...list[at],
+        ...item,
+        conversation_id: item.conversation_id ?? list[at].conversation_id,
+      }
+      if (sameItem(list[at], merged)) continue
+      next ??= current.slice()
+      next[at] = merged
+    } else {
+      next ??= current.slice()
+      next.push(item)
+    }
+  }
+  if (!next) return current
+  next.sort((a, b) => a.seq - b.seq)
+  return next
+}
+
+/**
+ * Apply one overlay socket frame to a Thread list (merge by id). `floorSeq`
+ * is `threadWindowFloor(items, hasMore)`. A frame never drops because its
+ * seq is at or below the newest seq seen: another sender's message can
+ * reach this window after its own later send came back (the send's answer
+ * and the socket are two connections).
+ */
 export function applyOverlayFrame(
   items: OverlayThreadItem[],
   frame: OverlayWsFrame,
-  snapshotSeq: number,
+  floorSeq: number,
 ): OverlayThreadItem[] {
   if (frame.collection !== 'thread') return items
   const seq = overlaySeq(frame.seq)
@@ -190,24 +249,17 @@ export function applyOverlayFrame(
   if (!doc || isChatterDoc(doc)) return items
   const existing = items.findIndex((it) => it.id === id)
   if (existing >= 0) {
-    const next = items.slice()
-    next[existing] = {
-      ...items[existing],
-      seq: Number.isFinite(seq) ? seq : items[existing].seq,
-      doc,
-      collection: 'thread',
-    }
-    return next
+    return mergeThreadItems(items, [
+      { ...items[existing], seq: Number.isFinite(seq) ? seq : items[existing].seq, doc, collection: 'thread' },
+    ])
   }
-  // New id: drop only true replays (seq already in the snapshot). Missing
-  // seq still appends — compose ingest must not vanish if seq is omitted.
-  if (Number.isFinite(seq) && seq <= snapshotSeq) return items
-  const next = [
-    ...items,
-    { collection: 'thread', seq: Number.isFinite(seq) ? seq : snapshotSeq + 1, id, doc },
-  ]
-  next.sort((a, b) => a.seq - b.seq)
-  return next
+  // New id below the loaded window: an older card changing; its page has it.
+  if (Number.isFinite(seq) && seq < floorSeq) return items
+  // Missing seq still appends (after the newest) — never vanish.
+  const newest = items.reduce((m, it) => (it.seq > m ? it.seq : m), 0)
+  return mergeThreadItems(items, [
+    { collection: 'thread', seq: Number.isFinite(seq) ? seq : newest + 1, id, doc },
+  ])
 }
 
 /** Chatter tab walks the Chatter collection only. Never mix in Thread. */

@@ -1,18 +1,68 @@
+// One live view of a Thread (the Agents page Thread pane, a Home room's
+// Thread, a Zen Garden conversation — every surface mounts this hook).
+//
+// Thread sync (Rosson 2026-10-04: "a message added from a Garden doesn't
+// show in the Thread elsewhere"). The daemon owns the Thread: every write
+// route, whoever sends it, publishes one frame on `WS /cli/overlay/events`
+// (overlay_ws.rs). This hook keeps its list converged on that truth:
+//
+//   1. Snapshot `GET thread?addr=&limit=25`, then open the overlay socket
+//      for the snapshot's conversation.
+//   2. Once the socket is open, catch up `GET thread?since_seq=` — anything
+//      written between the snapshot and the subscribe.
+//   3. Every frame, catch-up row and this window's own send merges BY ID
+//      (`mergeThreadItems`): no duplicates, a card answered elsewhere
+//      updates in place, and a frame is never dropped for having a lower
+//      seq than one this window already saw.
+//   4. The socket reconnects when it closes (daemon restart, network flap,
+//      the edge cutting it) with jittered backoff, then re-syncs the loaded
+//      window (`since_seq` = oldest loaded − 1, which also picks up card
+//      status changes). Window focus, `online` and the tab becoming visible
+//      re-sync too (a socket can sit half-open after sleep).
+//   5. If the address now resolves to another conversation (the pinned
+//      Chat changed), the hook starts over on the new one.
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { getDaemonWs, daemonWsBase } from '@/kessel/daemon-ws'
+import { jittered } from '@/lib/backoff'
 import {
   applyOverlayFrame,
   mergeOlderOverlayItems,
+  mergeThreadItems,
   OVERLAY_PAGE_SIZE,
   releaseOverlayWebSocket,
   subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
+  threadWindowFloor,
   type OverlayThreadItem,
   type OverlayWsFrame,
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+
+/** First reconnect delay (doubles to the cap, jittered). */
+let reconnectBaseMs = 1_000
+const RECONNECT_MAX_MS = 15_000
+/** Focus / visibility re-syncs at most this often per view. */
+const RESYNC_MIN_GAP_MS = 10_000
+
+/** Tests only: a short first reconnect delay. */
+export function setOverlayReconnectBaseForTests(ms: number | null): void {
+  reconnectBaseMs = ms ?? 1_000
+}
+
+function newestSeq(items: OverlayThreadItem[]): number {
+  return items.reduce((m, it) => (it.seq > m ? it.seq : m), 0)
+}
+
+/** Re-sync from just below the oldest loaded row: new rows AND status
+ *  changes on the rows already shown. */
+function resyncSince(items: OverlayThreadItem[]): number {
+  if (items.length === 0) return 0
+  const oldest = items.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+  return Math.max(0, oldest - 1)
+}
 
 export function useOverlayThread(opts: {
   /** The server this room lives on (Home M1). */
@@ -42,7 +92,8 @@ export function useOverlayThread(opts: {
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [loaded, setLoaded] = useState(false)
-  const snapshotSeqRef = useRef(0)
+  /** Bumped when the address moved to another conversation: start over. */
+  const [epoch, setEpoch] = useState(0)
   const itemsRef = useRef(items)
   const hasMoreRef = useRef(false)
   const loadingOlderRef = useRef(false)
@@ -64,33 +115,62 @@ export function useOverlayThread(opts: {
     setLoaded(false)
     let cancelled = false
     let ws: WebSocket | null = null
+    let connecting = false
+    let conv = ''
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let backoffMs = reconnectBaseMs
+    let lastResyncAt = 0
+    let catchUpChain: Promise<void> = Promise.resolve()
 
-    async function boot(): Promise<void> {
-      try {
-        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, limit: OVERLAY_PAGE_SIZE })
+    /** `GET thread?since_seq=` merged by id. Serialized; never throws. */
+    function catchUp(since: number): Promise<void> {
+      catchUpChain = catchUpChain.then(async () => {
         if (cancelled) return
-        const snap = threadItemsFromSnapshot(raw)
-        const conv = snap.conversation_id || conversationId || ''
-        const lastSeq = snap.items.reduce((m, it) => (it.seq > m ? it.seq : m), 0)
-        snapshotSeqRef.current = lastSeq
-        setItems(snap.items)
-        setHasMore(snap.has_more)
-        setResolvedConv(conv)
-        setError(null)
-        setLoaded(true)
-        if (!conv) return
+        try {
+          const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, since_seq: since, limit: 0 })
+          if (cancelled) return
+          const snap = threadItemsFromSnapshot(raw)
+          if (snap.conversation_id && conv && snap.conversation_id !== conv) {
+            // The address points at another conversation now (the pinned
+            // Chat changed): this socket is on the old one. Start over.
+            setEpoch((e) => e + 1)
+            return
+          }
+          setItems((prev) => mergeThreadItems(prev, snap.items))
+        } catch (e) {
+          // The socket's reconnect (or the next focus) tries again.
+          console.warn('[thread] catch-up failed:', e)
+        }
+      })
+      return catchUpChain
+    }
 
+    function scheduleReconnect(): void {
+      if (cancelled || retryTimer !== null) return
+      const delay = jittered(backoffMs)
+      backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS)
+      retryTimer = setTimeout(() => {
+        retryTimer = null
+        void connect(() => resyncSince(itemsRef.current))
+      }, delay)
+    }
+
+    /** Open the overlay socket; on open, catch up from `sinceOnOpen()`. */
+    async function connect(sinceOnOpen: () => number): Promise<void> {
+      if (cancelled || !conv || connecting || (ws && ws.readyState <= 1)) return
+      connecting = true
+      try {
         const creds = await getDaemonWs(scope)
         if (cancelled) return
         const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
         // MS70: through the per-server dial queue.
-        ws = await openQueuedWebSocket(scope, url)
+        const sock = await openQueuedWebSocket(scope, url)
         if (cancelled) {
-          releaseOverlayWebSocket(ws)
-          ws = null
+          releaseOverlayWebSocket(sock)
           return
         }
-        ws.onmessage = (ev) => {
+        ws = sock
+        sock.onmessage = (ev) => {
           const rawFrame = typeof ev.data === 'string' ? ev.data : null
           if (!rawFrame) return
           let frame: OverlayWsFrame
@@ -99,14 +179,76 @@ export function useOverlayThread(opts: {
           } catch {
             return
           }
-          // Read the seq NOW: a deferred updater would see the bump below
-          // and drop this new frame as a replay.
-          const seenSeq = snapshotSeqRef.current
-          setItems((prev) => applyOverlayFrame(prev, frame, seenSeq))
-          if (frame.collection === 'thread' && typeof frame.seq === 'number' && Number.isFinite(frame.seq)) {
-            snapshotSeqRef.current = Math.max(snapshotSeqRef.current, frame.seq)
-          }
+          setItems((prev) => applyOverlayFrame(prev, frame, threadWindowFloor(prev, hasMoreRef.current)))
         }
+        const lost = (): void => {
+          if (ws !== sock) return
+          ws = null
+          sock.onclose = null
+          sock.onerror = null
+          sock.onmessage = null
+          scheduleReconnect()
+        }
+        sock.onclose = lost
+        // WebKit can fire error without a following close.
+        sock.onerror = lost
+        const opened = (): void => {
+          if (cancelled || ws !== sock) return
+          backoffMs = reconnectBaseMs
+          lastResyncAt = Date.now()
+          void catchUp(sinceOnOpen())
+        }
+        if (sock.readyState === 1) opened()
+        else sock.onopen = opened
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[thread] overlay socket failed:', e)
+          scheduleReconnect()
+        }
+      } finally {
+        connecting = false
+      }
+    }
+
+    /** Window focus / visible / online: reconnect now if the socket is
+     *  gone, else re-sync (a socket can sit half-open after sleep). */
+    function wake(): void {
+      if (cancelled || !conv) return
+      if (!ws || ws.readyState > 1) {
+        if (connecting) return
+        if (retryTimer !== null) {
+          clearTimeout(retryTimer)
+          retryTimer = null
+        }
+        backoffMs = reconnectBaseMs
+        void connect(() => resyncSince(itemsRef.current))
+        return
+      }
+      const now = Date.now()
+      if (now - lastResyncAt < RESYNC_MIN_GAP_MS) return
+      lastResyncAt = now
+      void catchUp(resyncSince(itemsRef.current))
+    }
+    const onVisibility = (): void => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') wake()
+    }
+
+    async function boot(): Promise<void> {
+      try {
+        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, limit: OVERLAY_PAGE_SIZE })
+        if (cancelled) return
+        const snap = threadItemsFromSnapshot(raw)
+        conv = snap.conversation_id || conversationId || ''
+        const snapNewest = newestSeq(snap.items)
+        setItems(snap.items)
+        setHasMore(snap.has_more)
+        setResolvedConv(conv)
+        setError(null)
+        setLoaded(true)
+        if (!conv) return
+        // Gap catch-up: whatever was written between the snapshot and the
+        // subscribe.
+        await connect(() => snapNewest)
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : String(e))
@@ -116,29 +258,35 @@ export function useOverlayThread(opts: {
     }
 
     void boot()
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', wake)
+      window.addEventListener('online', wake)
+    }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
-      if (ws) releaseOverlayWebSocket(ws)
+      if (retryTimer !== null) clearTimeout(retryTimer)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', wake)
+        window.removeEventListener('online', wake)
+      }
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
+      if (ws) {
+        ws.onclose = null
+        releaseOverlayWebSocket(ws)
+        ws = null
+      }
     }
-  }, [scope, addr, conversationId, enabled])
+  }, [scope, addr, conversationId, enabled, epoch])
 
+  // This window's own sends (any surface: the Agents page compose bar, Zen,
+  // Home) land at once, merged by id with the socket's echo.
   useEffect(() => {
     if (!enabled) return
     return subscribeOverlayThreadLive((item) => {
       const conv = resolvedConv || conversationId || ''
-      if (item.conversation_id && conv && item.conversation_id !== conv) {
-        return
-      }
-      snapshotSeqRef.current = Math.max(snapshotSeqRef.current, item.seq)
-      setItems((prev) => {
-        const existing = prev.findIndex((it) => it.id === item.id)
-        if (existing >= 0) {
-          const next = prev.slice()
-          next[existing] = { ...prev[existing], ...item, collection: 'thread' }
-          return next
-        }
-        return [...prev, { ...item, collection: 'thread' }].sort((a, b) => a.seq - b.seq)
-      })
+      if (item.conversation_id && item.conversation_id !== conv) return
+      setItems((prev) => mergeThreadItems(prev, [item]))
     })
   }, [conversationId, resolvedConv, enabled])
 
@@ -200,10 +348,7 @@ export function useOverlayThread(opts: {
               via: 'compose',
             },
           }
-          snapshotSeqRef.current = Math.max(snapshotSeqRef.current, res.seq)
-          setItems((prev) =>
-            prev.some((it) => it.id === item.id) ? prev : [...prev, item].sort((a, b) => a.seq - b.seq),
-          )
+          setItems((prev) => mergeThreadItems(prev, [item]))
           if (res.conversation_id) setResolvedConv(res.conversation_id)
         }
       } finally {

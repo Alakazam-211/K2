@@ -7,12 +7,14 @@ import {
   isChatterSurfaceItem,
   isThreadSurfaceItem,
   mergeOlderOverlayItems,
+  mergeThreadItems,
   overlayItemFromThreadPost,
   OVERLAY_PAGE_SIZE,
   overlaySeq,
   releaseOverlayWebSocket,
   subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
+  threadWindowFloor,
   type OverlayThreadItem,
 } from './overlayThread'
 
@@ -351,5 +353,65 @@ describe('releaseOverlayWebSocket', () => {
     }
     releaseOverlayWebSocket(ws)
     expect(closed).toBe(true)
+  })
+})
+
+describe('Thread sync: merge by id (every source, no duplicates)', () => {
+  const row = (seq: number, id: string, body = 'x', from = 'sales'): OverlayThreadItem => ({
+    collection: 'thread',
+    seq,
+    id,
+    doc: { id, kind: 'text', from, body },
+  })
+
+  it('mergeThreadItems adds new ids in seq order and never duplicates a known id', () => {
+    const start = [row(1, 'a'), row(3, 'c')]
+    const merged = mergeThreadItems(start, [row(2, 'b'), row(3, 'c'), row(4, 'd'), row(2, 'b')])
+    expect(merged.map((it) => it.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('mergeThreadItems takes the incoming doc for a known id (a card answered elsewhere)', () => {
+    const start = [row(1, 'a', 'before')]
+    const merged = mergeThreadItems(start, [row(1, 'a', 'after')])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].doc.body).toBe('after')
+  })
+
+  it('mergeThreadItems returns the same list when nothing changed (no re-render)', () => {
+    const start = [row(1, 'a'), row(2, 'b')]
+    expect(mergeThreadItems(start, [row(2, 'b')])).toBe(start)
+    expect(mergeThreadItems(start, [])).toBe(start)
+  })
+
+  it('mergeThreadItems never lets chatter into the Thread', () => {
+    const start = [row(1, 'a')]
+    const chatter: OverlayThreadItem = { collection: 'chatter', seq: 2, id: 'x', doc: chatterDoc }
+    const chatterKind: OverlayThreadItem = { collection: 'thread', seq: 3, id: 'y', doc: chatterDoc }
+    expect(mergeThreadItems(start, [chatter, chatterKind])).toBe(start)
+  })
+
+  it('a frame from another sender lands even when its seq is below one this list already has', () => {
+    // This window's own send (seq 3) came back before the agent's reply
+    // (seq 2) reached the socket: the reply is new, not a replay.
+    const start = [row(1, 'a'), row(3, 'own', 'my send', 'rosson')]
+    const after = applyOverlayFrame(
+      start,
+      { collection: 'thread', seq: 2, id: 'reply', doc: { id: 'reply', kind: 'text', from: 'sales', body: 'reply' } },
+      threadWindowFloor(start, false),
+    )
+    expect(after.map((it) => it.id)).toEqual(['a', 'reply', 'own'])
+  })
+
+  it('threadWindowFloor: an older card changing below the loaded page waits for its page', () => {
+    const page = [row(26, 'p26'), row(27, 'p27')]
+    expect(threadWindowFloor(page, true)).toBe(26)
+    expect(threadWindowFloor(page, false)).toBe(0)
+    const frame = { collection: 'thread', seq: 4, id: 'old-card', doc: { id: 'old-card', kind: 'text', from: 'k2', body: 'x' } }
+    expect(applyOverlayFrame(page, frame, threadWindowFloor(page, true))).toBe(page)
+    expect(applyOverlayFrame(page, frame, threadWindowFloor(page, false)).map((it) => it.id)).toEqual([
+      'old-card',
+      'p26',
+      'p27',
+    ])
   })
 })

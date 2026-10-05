@@ -1248,8 +1248,15 @@ describe('Conversation widget', () => {
     // One keep-alive to that server for the open (Z37).
     expect(h.keepAlive).toEqual([{ hostKey: B, projectId: 'bp1' }])
     // The Thread is read on B, at the address the Agents page resolves.
-    const reads = h.calls.filter((c) => c.route === 'thread' && c.hostKey === B)
-    expect(reads.map((c) => c.data.addr)).toEqual(['sales-desk'])
+    // One snapshot, then (socket open) one catch-up from its newest seq.
+    const reads = (): unknown[] =>
+      h.calls.filter((c) => c.route === 'thread' && c.hostKey === B).map((c) => [c.data.addr, c.data.since_seq ?? null])
+    await waitFor(() =>
+      expect(reads()).toEqual([
+        ['sales-desk', null],
+        ['sales-desk', 7],
+      ]),
+    )
     expect(h.sockets.map((s) => s.hostKey)).toEqual([B])
     expect(document.querySelector('[data-zen-message="b7"]')?.textContent).toContain('Draft is in your inbox.')
     // Header names the server.
@@ -1262,9 +1269,11 @@ describe('Conversation widget', () => {
     await threadReady(ROWS.cortana.address)
     expect(useProjectsStore.getState().activeProjectId).toBe('p1')
     // vs-live Z52: the resolved pinned Chat address, not the row handle.
-    expect(h.calls.filter((c) => c.route === 'thread' && c.hostKey === 'local').map((c) => [c.hostKey, c.data.addr])).toEqual([
-      ['local', 'cortana-main'],
-    ])
+    expect(
+      h.calls
+        .filter((c) => c.route === 'thread' && c.hostKey === 'local' && c.data.since_seq === undefined)
+        .map((c) => [c.hostKey, c.data.addr]),
+    ).toEqual([['local', 'cortana-main']])
     const agentMsg = document.querySelector('[data-zen-message="a1"]')
     expect(agentMsg?.hasAttribute('data-mine')).toBe(false)
     expect(document.querySelector('[data-zen-message="a2"] [data-testid="thread-choice-card"]')).not.toBeNull()
@@ -1298,6 +1307,40 @@ describe('Conversation widget', () => {
     expect(h.calls.filter((c) => c.route === 'thread/answer').map((c) => [c.hostKey, c.data])).toEqual([
       ['local', { addr: 'cortana-main', id: 'a2', answer: 'Ship' }],
     ])
+  })
+
+  it('Thread sync: a message from another place lands once, and the Garden’s own send plus its echo is one bubble', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    await typeAndSend('Ship it.')
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-message][data-mine]').length).toBe(1))
+    const own = h.threads[threadKey('local', 'cortana-main')].at(-1) as { seq: number; id: string }
+    const ws = h.sockets.find((s) => s.hostKey === 'local' && s.onmessage !== null)
+    if (!ws?.onmessage) throw new Error('no overlay socket')
+    const push = (frame: unknown): void => {
+      act(() => ws.onmessage?.({ data: JSON.stringify(frame) }))
+    }
+    // The daemon echoes the Garden's own send.
+    push(own)
+    // A message sent from the Agents page Thread (or another person) that
+    // raced the Garden's send: a lower seq, reaching the socket after the
+    // send's answer. It used to be dropped as a "replay".
+    const other = {
+      collection: 'thread',
+      seq: own.seq - 1,
+      id: 'elsewhere1',
+      doc: { id: 'elsewhere1', kind: 'text', from: 'cortana', body: 'Sent from the Agents page.' },
+    }
+    push(other)
+    push(other)
+    await waitFor(() =>
+      expect(document.querySelector('[data-zen-message="elsewhere1"]')?.textContent).toContain('Sent from the Agents page.'),
+    )
+    expect(document.querySelectorAll(`[data-zen-message="${own.id}"]`).length).toBe(1)
+    expect(document.querySelectorAll('[data-zen-message="elsewhere1"]').length).toBe(1)
+    const order = [...document.querySelectorAll('[data-zen-message]')].map((e) => e.getAttribute('data-zen-message'))
+    expect(order.indexOf('elsewhere1')).toBeLessThan(order.indexOf(own.id))
   })
 
   it('a widget without thread:post is refused by the bridge (built-ins go through it too)', async () => {

@@ -1005,6 +1005,8 @@ describe('the nav rail (Garden 1)', () => {
       await mountZen()
       const css = document.querySelector('[data-zen-widget="nav-rail"] style[data-zen-nav-rail-glass]')?.textContent ?? ''
       expect(css).toBe(ZEN_NAV_RAIL_CSS)
+      // Rosson 2026-10-04: no gradient inside the pill (the glass is its edge).
+      expect(css).not.toMatch(/gradient\(/)
       expect(css).toContain('backdrop-filter: blur(14px) saturate(180%)')
       expect(css).toContain('-webkit-backdrop-filter: blur(14px) saturate(180%)')
       expect(css).toContain('var(--zen-accent)')

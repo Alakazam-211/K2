@@ -19,8 +19,8 @@
 // Motion's shared layout (`layoutId`, scoped per rail so two rails never
 // trade pills); the glass is plain CSS that WebKit draws (no SVG filters in
 // `backdrop-filter`): a low-alpha accent tint over the surface, backdrop
-// blur + saturate, a light rim, a top highlight, a soft shadow and a faint
-// diagonal sheen. The rail under it is a shared Zen glass tile, like every
+// blur + saturate, a light rim, a top highlight, a soft shadow; the inside
+// is flat (no sheen gradient, Rosson 2026-10-04). The rail under it is a shared Zen glass tile, like every
 // other Zen tile. Colours are Zen tokens only. Reduced motion: no slide,
 // the pill just appears on the new item. Reduced transparency: a solid
 // tint, no blur, no sheen.
@@ -54,8 +54,6 @@ export function zenNavPillMotion(
 // dimmer, and a deeper shadow. Every colour comes from a Zen token or plain
 // white/black at low alpha, so each Zen theme tints it.
 const PILL_TINT = 'color-mix(in srgb, var(--zen-accent) 16%, color-mix(in srgb, var(--zen-surface-raised) 52%, transparent))'
-const PILL_SHEEN =
-  'linear-gradient(135deg, rgb(255 255 255 / 0.34) 0%, rgb(255 255 255 / 0.08) 38%, transparent 56%, rgb(255 255 255 / 0.10) 100%)'
 
 /** The rail's styles: the glass pill and the hover glow. The rail itself is
  *  a shared Zen glass tile (`data-zen-glass`, `lib/zen/zen-glass.ts`). */
@@ -65,17 +63,15 @@ export const ZEN_NAV_RAIL_CSS = `
   --zen-nav-pill-rim: color-mix(in srgb, var(--zen-accent) 22%, rgb(255 255 255 / 0.62));
   --zen-nav-pill-highlight: rgb(255 255 255 / 0.75);
   --zen-nav-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px color-mix(in srgb, var(--zen-accent) 18%, transparent);
-  --zen-nav-pill-sheen: ${PILL_SHEEN};
 }
 [data-zen-root][data-zen-scheme="dark"] [data-zen-widget="nav-rail"] {
   --zen-nav-pill-tint: color-mix(in srgb, var(--zen-accent) 22%, color-mix(in srgb, var(--zen-surface-raised) 48%, transparent));
   --zen-nav-pill-rim: color-mix(in srgb, var(--zen-accent) 26%, rgb(255 255 255 / 0.16));
   --zen-nav-pill-highlight: rgb(255 255 255 / 0.22);
   --zen-nav-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 16px rgb(0 0 0 / 0.30);
-  --zen-nav-pill-sheen: linear-gradient(135deg, rgb(255 255 255 / 0.14) 0%, rgb(255 255 255 / 0.03) 40%, transparent 58%, rgb(255 255 255 / 0.05) 100%);
 }
 [data-zen-root] [data-zen-nav-pill] {
-  background: var(--zen-nav-pill-sheen), var(--zen-nav-pill-tint);
+  background: var(--zen-nav-pill-tint); /* flat inside; no sheen gradient (Rosson 2026-10-04) */
   -webkit-backdrop-filter: blur(14px) saturate(180%);
   backdrop-filter: blur(14px) saturate(180%);
   border: 1px solid var(--zen-nav-pill-rim);

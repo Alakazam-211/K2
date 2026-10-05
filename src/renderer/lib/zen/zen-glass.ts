@@ -4,7 +4,7 @@
 //
 // The recipe is the Tickets view's panels and the usage tool's pill, made
 // one definition:
-//   - a translucent Zen surface (`--zen-surface` at 62%),
+//   - a flat Zen surface inside (no see-through gradient; Rosson 2026-10-04),
 //   - backdrop blur + saturate (with the `-webkit-` prefix: WebKit draws
 //     it; no SVG filters, no `url(`),
 //   - a soft edge (the Zen border mixed with a little text colour),
@@ -29,8 +29,10 @@ export const ZEN_GLASS_PROPS = { [ZEN_GLASS_ATTR]: '' } as const
 /** The glass tokens, on the Zen root. */
 export const ZEN_GLASS_TOKENS_CSS = `
 [data-zen-root] {
-  --zen-glass: color-mix(in srgb, var(--zen-surface) 62%, transparent);
-  --zen-glass-raised: color-mix(in srgb, var(--zen-surface-raised) 78%, transparent);
+  /* Rosson 2026-10-04: a flat inside — no backdrop showing through as a
+     gradient. The glass is the edge: rim, top highlight, shadow. */
+  --zen-glass: var(--zen-surface);
+  --zen-glass-raised: var(--zen-surface-raised);
   --zen-glass-edge: color-mix(in srgb, var(--zen-border) 55%, color-mix(in srgb, var(--zen-text) 14%, transparent));
   --zen-glass-blur: blur(22px) saturate(1.5);
   --zen-glass-sheen: inset 0 1px 0 color-mix(in srgb, white 22%, transparent);

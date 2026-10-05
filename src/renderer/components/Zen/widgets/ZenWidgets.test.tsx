@@ -341,6 +341,7 @@ import { useZenViewStore } from '@/lib/zen/zen-view'
 import { openZenCheatSheet } from '@/lib/zen/zen-theme-switch'
 import { __resetZenDataForTests } from '@/lib/zen/zen-data'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
+import { requestZenComposeFocus, useZenComposeFocusStore, ZEN_COMPOSE_FOCUS_TTL_MS } from '@/lib/zen/zen-compose-focus'
 import { ZenBridgeError, createZenBridge } from '@/lib/zen/zen-bridge'
 import { BUILTIN_TEXTING_PAGE } from '@/lib/zen/zen-page'
 import type { ZenGeometry } from '@/lib/zen/zen-controls'
@@ -693,6 +694,72 @@ describe('Agents widget', () => {
   })
 })
 
+// Rosson 2026-10-04: picking an agent puts the caret in its message box.
+describe('picking an agent focuses its message box', () => {
+  const focusedLabel = (): string | null => document.activeElement?.getAttribute('aria-label') ?? null
+
+  it('a row click focuses “Message <agent>” once it opens; first render and ⌘1–9 never do', async () => {
+    await mountZen()
+    // First render: nothing selected, nothing focused in a box.
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+
+    // ⌘2 opens sales, but is not a pick: focus stays put.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '2', code: 'Digit2', metaKey: true })
+    })
+    await threadReady(ROWS.sales.address)
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+
+    // A click on cortana: its box takes the caret.
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    await waitFor(() => expect(focusedLabel()).toBe('Message cortana'))
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+
+    // A remote update re-renders the box: focus is not taken back from
+    // elsewhere.
+    ;(document.activeElement as HTMLElement).blur()
+    act(() => useActiveAgentsStore.setState({ paneStatuses: new Map() }))
+    act(() => useHomesStore.getState().moveRow('h1', 1, 0))
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+  })
+
+  it('a pick waits for a remote conversation to open, and never steals focus from a field you started typing in', async () => {
+    await mountZen()
+    // The remote row opens a room first; the caret follows when it is ready.
+    await select(ROWS.sales.address)
+    await threadReady(ROWS.sales.address)
+    await waitFor(() => expect(focusedLabel()).toBe('Message sales'))
+
+    // A pick, then typing in another field before the box is ready: the
+    // request is dropped, the field keeps focus.
+    const other = document.createElement('input')
+    document.body.appendChild(other)
+    act(() => requestZenComposeFocus(ROWS.cortana.address))
+    other.focus()
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '1', code: 'Digit1', metaKey: true })
+    })
+    await threadReady(ROWS.cortana.address)
+    expect(document.activeElement).toBe(other)
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+    other.remove()
+  })
+
+  it('a stale request (older than the TTL) is dropped', async () => {
+    await mountZen()
+    useZenComposeFocusStore.setState({
+      request: { address: ROWS.cortana.address, at: Date.now() - ZEN_COMPOSE_FOCUS_TTL_MS - 1 },
+    })
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '1', code: 'Digit1', metaKey: true })
+    })
+    await threadReady(ROWS.cortana.address)
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+  })
+})
+
 describe('Conversation widget', () => {
   it('a remote row opens in place with "Open agents from other servers here" off', async () => {
     expect(useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
@@ -909,6 +976,15 @@ describe('template controls (G24, G25, G58)', () => {
     expect(bar.querySelector('[data-zen-add-agent]')).toBeNull()
     // No Home switcher anywhere in Zen any more.
     expect(document.querySelector('[data-zen-home-pill], [data-zen-home-option]')).toBeNull()
+    // Rosson 2026-10-04: every Zen button shows a pointer on hover (the
+    // agent rows keep the list's default arrow, like a chat list).
+    for (const sel of ['[data-zen-switch]', '[data-zen-add-agent]', '[data-zen-garden-pill]', '[data-zen-theme-button]', '[data-zen-home-picker-button]']) {
+      expect(document.querySelector(sel)?.classList.contains('cursor-pointer'), sel).toBe(true)
+    }
+    const bare = Array.from(document.querySelectorAll('[data-zen-root] button')).filter(
+      (b) => !b.classList.contains('cursor-pointer') && !b.hasAttribute('data-zen-agent-row'),
+    )
+    expect(bare.map((b) => b.outerHTML.slice(0, 80))).toEqual([])
 
     // Wired: activating the switcher binds an option for every Garden in 1 s.
     await act(async () => {
@@ -1289,13 +1365,18 @@ describe('Zen Add agent', () => {
     ])
     await waitFor(() => expect(rowAddresses()).toContain('atlas::local'))
     expect(rowEl('atlas::local').querySelector('[data-zen-agent-name]')?.textContent).toBe('atlas')
-    // Adding keeps it open (like Home); atlas is now checked.
-    expect(picker()).not.toBeNull()
-    await waitFor(() =>
-      expect(document.querySelector('[data-ws-filter-value="p2"]')?.getAttribute('data-row-state')).toBe('checked'),
-    )
+    // Rosson 2026-10-04: adding closes the picker and opens atlas, with the
+    // caret in its message box.
+    expect(picker()).toBeNull()
+    await waitFor(() => expect(rowEl('atlas::local').getAttribute('data-selected')).toBe(''))
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message atlas'))
+    expect(useZenAddAgentStore.getState().open).toBe(false)
 
     // The button toggles it closed (its press doesn't count as outside).
+    await act(async () => {
+      fireEvent.click(addButton())
+    })
+    expect(picker()).not.toBeNull()
     await act(async () => {
       fireEvent.mouseDown(addButton())
       fireEvent.click(addButton())
@@ -1722,6 +1803,7 @@ describe('the empty Garden: Ask my agent (G28, TG5.1)', () => {
 
   it('says so, and offers only this computer’s agents', async () => {
     await mountGarden('k2.blank@1')
+    expect(document.querySelector('[data-zen-ask-my-agent]')?.classList.contains('cursor-pointer')).toBe(true)
     expect(document.querySelector('[data-zen-garden-empty-title]')?.textContent).toBe('This Garden is empty.')
     expect(document.querySelector('[data-zen-garden-empty-ask]')?.textContent).toBe(
       'Ask your agents to add things to this Garden.',
@@ -1827,7 +1909,7 @@ describe('S6 source ratchets', () => {
   it('Zen Add agent reuses the Home picker and its add path (no copy)', () => {
     const zen = read('components/Zen/ZenAddAgent.tsx')
     expect(zen).toContain("import { AddAgentPicker } from '@/components/Home/HomeAddPanels'")
-    expect(zen).toContain('<AddAgentPicker home={home} />')
+    expect(zen).toContain('<AddAgentPicker home={home} onAdded={noteZenAgentAdded} />')
     expect(zen).not.toContain('addRow(')
     expect(zen).not.toContain("from '@/components/ui/SearchableAgentList'")
     const panels = read('components/Home/HomeAddPanels.tsx')

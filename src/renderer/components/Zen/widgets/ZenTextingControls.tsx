@@ -49,7 +49,7 @@ function GardenChoice({
       aria-checked={selected}
       onClick={onPicked}
       data-zen-garden-option={garden.id}
-      className="flex w-full items-center gap-3 text-left"
+      className="flex w-full items-center gap-3 text-left cursor-pointer"
       style={{
         minHeight: 32,
         padding: '6px 10px',
@@ -110,7 +110,7 @@ function NewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDone(): void
         role="menuitem"
         data-zen-new-garden=""
         onClick={() => setEditing(true)}
-        className="flex w-full items-center gap-3 text-left"
+        className="flex w-full items-center gap-3 text-left cursor-pointer"
         style={{ minHeight: 32, padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
       >
         <span aria-hidden style={{ width: 8, textAlign: 'center', color: 'var(--zen-text-muted)' }}>
@@ -204,7 +204,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
         onClick={() => setOpen((v) => !v)}
         data-zen-garden-pill=""
         data-zen-soft-button=""
-        className="flex items-center gap-2"
+        className="flex items-center gap-2 cursor-pointer"
         style={{
           height: 30,
           minWidth: 24,
@@ -271,7 +271,7 @@ function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
       title="Exit Zen Mode"
       data-zen-switch=""
       data-zen-soft-button=""
-      className="flex items-center gap-2"
+      className="flex items-center gap-2 cursor-pointer"
       style={{ height: 30, minWidth: 24, flexShrink: 0, padding: '0 6px 0 12px', borderRadius: 999, color: 'var(--zen-text)' }}
     >
       <span style={{ fontWeight: 600, fontSize: '0.9em' }}>Zen</span>

@@ -32,7 +32,7 @@ function MenuButton({ side }: { side: 'left' | 'right' }): React.JSX.Element {
         title="Menu"
         data-zen-app-menu=""
         onClick={() => setOpen((v) => !v)}
-        className="flex h-full items-center px-2"
+        className="flex h-full items-center px-2 cursor-pointer"
         style={{ color: 'var(--zen-text-muted)' }}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>

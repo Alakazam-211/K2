@@ -295,7 +295,7 @@ export function ZenConversation({
                 (err: unknown) => console.warn('[zen] open in Agents failed:', err),
               )
             }}
-            className="flex-shrink-0"
+            className="flex-shrink-0 cursor-pointer disabled:cursor-default"
             style={{
               padding: '4px 12px',
               borderRadius: 999,
@@ -336,6 +336,7 @@ export function ZenConversation({
         )}
         {ready && view.hasMore && options.loadOlder && (
           <button
+            className="cursor-pointer disabled:cursor-default"
             type="button"
             data-zen-load-older=""
             data-zen-soft-button=""

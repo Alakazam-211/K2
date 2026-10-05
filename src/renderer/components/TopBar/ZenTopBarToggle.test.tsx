@@ -100,6 +100,8 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
 
   it('a click turns this window’s Zen on over the current page; Shift starts safe mode', () => {
     render(<TopBarUtilities />)
+    // Rosson 2026-10-04: a pointer on hover.
+    expect(document.querySelector('[data-zen-enter]')?.classList.contains('cursor-pointer')).toBe(true)
     act(() => void fireEvent.click(document.querySelector('[data-zen-enter]') as HTMLElement))
     expect(useZenWindowStore.getState().on).toBe(true)
     expect(useZenViewStore.getState().safe).toBeNull()

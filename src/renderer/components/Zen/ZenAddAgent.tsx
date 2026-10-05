@@ -6,7 +6,8 @@
 // also caches a remote row's picture), for the Home the calling Agents
 // widget shows (prd-zen-gardens-v1 G33, G55) — never the window's selected
 // Home, which never moves. Adding writes the row into that Home, and the
-// Agents widget shows it at once. Adding keeps the picker open, like Home.
+// Agents widget shows it at once. Adding closes the picker and opens that
+// agent's conversation with the caret in its box (Rosson 2026-10-04).
 //
 // Opens above the widget's anchor (left-aligned), else in the bottom-left
 // corner. Registered as a K2 overlay, so the required-controls check never
@@ -17,7 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useHomesStore } from '@/stores/homes'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
-import { closeZenAddAgent, useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
+import { closeZenAddAgent, noteZenAgentAdded, useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
 import { useCurrentZenGarden } from '@/lib/zen/zen-gardens'
 import { useZenGardenHomesStore } from '@/lib/zen/zen-garden-homes'
 import { AddAgentPicker } from '@/components/Home/HomeAddPanels'
@@ -126,7 +127,7 @@ export function ZenAddAgentPicker(): React.JSX.Element | null {
         zIndex: 30,
       }}
     >
-      <AddAgentPicker home={home} />
+      <AddAgentPicker home={home} onAdded={noteZenAgentAdded} />
     </div>
   )
 }

@@ -44,7 +44,7 @@ export class ZenErrorBoundary extends React.Component<Props, State> {
             <p>Zen can’t draw this window: {this.state.error.message}</p>
             <button
               type="button"
-              className="mt-3 px-3 py-1"
+              className="mt-3 px-3 py-1 cursor-pointer"
               style={{ border: '1px solid var(--zen-border)', borderRadius: 'var(--zen-radius)' }}
               onClick={this.props.onExit}
             >

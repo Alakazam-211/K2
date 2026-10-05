@@ -96,6 +96,7 @@ export function ZenThemePicker({
             const isActive = t.name === active
             return (
               <button
+                className="cursor-pointer"
                 key={t.name}
                 type="button"
                 role="option"
@@ -133,6 +134,7 @@ export function ZenThemePicker({
         </div>
       )}
       <button
+        className="cursor-pointer"
         type="button"
         aria-label={active ? `Theme: ${active}` : 'Themes'}
         aria-haspopup="listbox"
@@ -212,6 +214,7 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
           <h2 style={{ margin: 0, fontSize: '1.15em', fontWeight: 600 }}>Zen shortcuts</h2>
           <button
+            className="cursor-pointer"
             type="button"
             onClick={closeZenOverlays}
             style={{ border: 0, background: 'transparent', color: 'var(--zen-text-muted)', cursor: 'pointer', font: 'inherit' }}

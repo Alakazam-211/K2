@@ -12,6 +12,10 @@
 // from outside (`compose.draft`, prd-zen-gardens-v1 G28/G60: Ask my agent)
 // shows at once, with the caret at the end of its first line, and is never
 // sent until the person sends it.
+//
+// When the person picks this agent (a row click, or Add agent), the box
+// takes keyboard focus once it can be typed in (`zen-compose-focus`).
+// Nothing else focuses it: not first render, not a remote update.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -22,6 +26,7 @@ import {
   onZenComposeDraft,
   zenComposeDraft,
 } from '@/lib/zen/zen-compose-drafts'
+import { takeZenComposeFocus, useZenComposeFocusStore } from '@/lib/zen/zen-compose-focus'
 
 type Attachment = { kind: 'path'; path: string; name: string } | { kind: 'file'; file: File; name: string }
 
@@ -77,6 +82,17 @@ export function ZenCompose({
     el.focus()
     el.setSelectionRange(at, at)
   })
+
+  // A pick of this agent: focus the box once it can be typed in.
+  const focusRequest = useZenComposeFocusStore((s) => s.request)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || disabled || focusRequest?.address !== address) return
+    if (!takeZenComposeFocus(address, el)) return
+    el.focus({ preventScroll: true })
+    const end = el.value.length
+    el.setSelectionRange(end, end)
+  }, [focusRequest, address, disabled])
 
   // Auto-grow up to ~8 lines.
   useEffect(() => {
@@ -170,7 +186,7 @@ export function ZenCompose({
                 aria-label={`Remove ${a.name}`}
                 data-zen-soft-button=""
                 onClick={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
-                className="flex items-center justify-center"
+                className="flex items-center justify-center cursor-pointer disabled:cursor-default"
                 style={{ width: 18, height: 18, borderRadius: 999, color: 'var(--zen-text-muted)' }}
               >
                 ×
@@ -197,7 +213,7 @@ export function ZenCompose({
           data-zen-soft-button=""
           disabled={disabled}
           onClick={pick}
-          className="flex flex-shrink-0 items-center justify-center"
+          className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
           style={{ width: 32, height: 32, borderRadius: 999, color: 'var(--zen-text-muted)', fontSize: 20, lineHeight: 1 }}
         >
           +
@@ -243,7 +259,7 @@ export function ZenCompose({
           data-zen-send=""
           disabled={!canSend}
           onClick={() => void send()}
-          className="flex flex-shrink-0 items-center justify-center"
+          className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
           style={{
             width: 32,
             height: 32,

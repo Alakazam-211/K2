@@ -27,6 +27,7 @@ import {
 } from '@/lib/zen/zen-gardens'
 import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
 import { useZenWindowStore } from '@/lib/zen/zen-window'
+import { cancelZenComposeFocus } from '@/lib/zen/zen-compose-focus'
 import { createZenBridge, type ZenBridgeHost, type ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import {
   checkZenControls,
@@ -94,6 +95,8 @@ export function ZenPage({
     [],
   )
   useEffect(() => () => registry.dispose(), [registry])
+  // A pick's pending caret never outlives the page (a Garden switch, exit).
+  useEffect(() => () => cancelZenComposeFocus(), [])
 
   const host = useMemo<ZenBridgeHost>(
     () => ({

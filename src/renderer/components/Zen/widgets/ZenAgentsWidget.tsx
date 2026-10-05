@@ -35,6 +35,9 @@ import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenWidgetStyles, initials, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
 import { useZenAddAgentClick } from '../ZenTemplateControls'
+import { requestZenComposeFocus } from '@/lib/zen/zen-compose-focus'
+import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
+import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
@@ -102,7 +105,7 @@ function HomePicker({
         data-zen-home-picker-button=""
         data-zen-soft-button=""
         onClick={() => setOpen((v) => !v)}
-        className="flex min-w-0 items-center gap-1"
+        className="flex min-w-0 items-center gap-1 cursor-pointer"
         style={{
           padding: '1px 8px',
           borderRadius: 999,
@@ -149,7 +152,7 @@ function HomePicker({
                 setOpen(false)
                 onPick(h.id)
               }}
-              className="flex w-full items-center text-left"
+              className="flex w-full items-center text-left cursor-pointer"
               style={{
                 minHeight: 28,
                 padding: '4px 10px',
@@ -331,7 +334,7 @@ function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element
         onClick={onClick}
         data-zen-add-agent=""
         data-zen-soft-button=""
-        className="no-drag flex items-center gap-3 text-left"
+        className="no-drag flex items-center gap-3 text-left cursor-pointer"
         style={{
           padding: '8px 12px',
           borderRadius: 'var(--zen-radius)',
@@ -373,6 +376,23 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   }
   const openRef = useRef(open)
   openRef.current = open
+  // A row the person clicked: open it, and put the caret in its box.
+  const pick = (address: string): void => {
+    requestZenComposeFocus(address)
+    open(address)
+  }
+
+  // An agent added through this widget's Add agent: open it the same way.
+  const gardenId = bridge.gardens.current()?.id ?? ''
+  const added = useZenAddAgentStore((s) => s.added)
+  const handledAdd = useRef(added?.seq ?? 0)
+  useEffect(() => {
+    if (!added || added.seq === handledAdd.current) return
+    handledAdd.current = added.seq
+    if (added.viewKey !== zenGardenHomeKey(gardenId, decl.id)) return
+    requestZenComposeFocus(added.address)
+    openRef.current(added.address)
+  }, [added, gardenId, decl.id])
 
   // Z32: ⌘↑ / ⌘↓ move between conversations.
   useEffect(() => {
@@ -430,7 +450,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
           style={{ padding: '2px 8px 10px', gap: 2 }}
         >
           {rows.map((row) => (
-            <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={open} />
+            <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={pick} />
           ))}
         </ul>
       )}

@@ -79,7 +79,7 @@ function Chooser({
               data-zen-ask-agent={r.address}
               data-zen-soft-button=""
               onClick={() => onPick(r)}
-              className="flex w-full items-center gap-3 text-left"
+              className="flex w-full items-center gap-3 text-left cursor-pointer disabled:cursor-default"
               style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
             >
               <span
@@ -103,6 +103,7 @@ function Chooser({
         </div>
       )}
       <button
+        className="cursor-pointer disabled:cursor-default"
         type="button"
         data-zen-ask-cancel=""
         data-zen-soft-button=""
@@ -193,6 +194,7 @@ export function ZenGardenEmptyWidget({ bridge, decl }: ZenWidgetProps): React.JS
         <Chooser rows={phase.rows} error={phase.error} onPick={pick} onCancel={() => setPhase({ kind: 'empty' })} />
       ) : (
         <button
+          className="cursor-pointer disabled:cursor-default"
           type="button"
           data-zen-ask-my-agent=""
           disabled={phase.kind === 'talking'}

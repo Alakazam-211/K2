@@ -45,10 +45,10 @@ export function ZenSafeBanner({
           {zenSafeCauseText(cause)}
         </div>
       </div>
-      <button type="button" className="no-drag" style={buttonStyle} onClick={onTryAgain} data-zen-try-again="">
+      <button type="button" className="no-drag cursor-pointer" style={buttonStyle} onClick={onTryAgain} data-zen-try-again="">
         Try again
       </button>
-      <button type="button" className="no-drag" style={buttonStyle} onClick={onExit} data-zen-safe-exit="">
+      <button type="button" className="no-drag cursor-pointer" style={buttonStyle} onClick={onExit} data-zen-safe-exit="">
         Exit Zen
       </button>
     </div>

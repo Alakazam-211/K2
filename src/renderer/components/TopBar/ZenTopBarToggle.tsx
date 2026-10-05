@@ -30,7 +30,7 @@ export default function ZenTopBarToggle(): React.JSX.Element | null {
       title={title}
       data-zen-enter=""
       onClick={(e) => enterZen({ safe: e.shiftKey })}
-      className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
       style={{
         // @ts-expect-error -- Electron-specific CSS property
         WebkitAppRegion: 'no-drag',

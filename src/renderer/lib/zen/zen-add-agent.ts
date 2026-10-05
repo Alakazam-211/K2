@@ -18,7 +18,9 @@
 //
 // Returns whether the picker is open after the call. The picker closes on
 // Esc, a click outside it, that widget's Home changing, a Garden switch,
-// and when Zen leaves the window (`ZenAddAgentPicker` unmounts).
+// when Zen leaves the window (`ZenAddAgentPicker` unmounts), and when the
+// person adds an agent: Zen then opens that agent's conversation with the
+// caret in its box (Rosson 2026-10-04; `added`, read by the Agents widget).
 
 import { create } from 'zustand'
 import { registerZenVerb, ZenBridgeError, type ZenVerbCtx } from './zen-bridge'
@@ -35,11 +37,13 @@ export interface ZenAddAgentState {
   gardenId: string | null
   /** The Agents widget's Home-pick key (`<gardenId>/<widgetId>`). */
   viewKey: string | null
+  /** The last agent the picker added, for the widget that opened it. */
+  added: { viewKey: string; address: string; seq: number } | null
 }
 
 const CLOSED = { open: false, anchor: null, homeId: null, gardenId: null, viewKey: null } as const
 
-export const useZenAddAgentStore = create<ZenAddAgentState>(() => ({ ...CLOSED }))
+export const useZenAddAgentStore = create<ZenAddAgentState>(() => ({ ...CLOSED, added: null }))
 
 export function openZenAddAgent(
   target: { homeId: string; gardenId: string; viewKey: string },
@@ -54,6 +58,16 @@ export function closeZenAddAgent(): void {
   const s = useZenAddAgentStore.getState()
   if (!s.open && s.anchor === null && s.homeId === null) return
   useZenAddAgentStore.setState({ ...CLOSED })
+}
+
+let addSeq = 0
+
+/** The picker added `address` to its Home: close it, and tell the widget
+ *  that opened it (it opens the conversation and focuses the box). */
+export function noteZenAgentAdded(address: string): void {
+  const viewKey = useZenAddAgentStore.getState().viewKey
+  closeZenAddAgent()
+  if (viewKey) useZenAddAgentStore.setState({ added: { viewKey, address, seq: ++addSeq } })
 }
 
 export interface ZenAgentsAddOptions {

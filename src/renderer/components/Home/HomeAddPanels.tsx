@@ -78,9 +78,10 @@ export function listedIconUrl(v: unknown): string | null {
   return typeof v === 'string' && v.startsWith('data:image/') ? v : null
 }
 
-function addTo(home: Home, hostKey: string, w: ListedWorkspace): void {
+/** Add `w` to `home`; returns the row's address (null: no handle). */
+function addTo(home: Home, hostKey: string, w: ListedWorkspace): string | null {
   const h = workspaceHandle(w)
-  if (!h) return
+  if (!h) return null
   const address = homeAddress(h, hostKey)
   useHomesStore.getState().addRow(home.id, {
     address,
@@ -89,6 +90,7 @@ function addTo(home: Home, hostKey: string, w: ListedWorkspace): void {
   })
   // Cache the row's picture from this listing right away (picker-and-remote-avatars S4).
   putHomeAvatarOnAdd(hostKey, address, w)
+  return address
 }
 
 /** Rename repair from a freshly listed server: rows on `hostKey` whose
@@ -157,7 +159,15 @@ function useOnHome(home: Home): ReadonlySet<string> {
   return useMemo(() => new Set(home.rows.map((r) => r.address)), [home.rows])
 }
 
-function ThisServerList({ home, onBack }: { home: Home; onBack: () => void }): React.JSX.Element {
+function ThisServerList({
+  home,
+  onBack,
+  onAdded,
+}: {
+  home: Home
+  onBack: () => void
+  onAdded?: (address: string) => void
+}): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const projects = useProjectsStore((s) => s.projects)
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
@@ -197,7 +207,8 @@ function ThisServerList({ home, onBack }: { home: Home; onBack: () => void }): R
 
   const onPick = (value: string): void => {
     const ws = useProjectsStore.getState().projects.find((p) => p.id === value)
-    if (ws) addTo(home, hostKey, ws)
+    const address = ws ? addTo(home, hostKey, ws) : null
+    if (address) onAdded?.(address)
   }
 
   return (
@@ -223,13 +234,16 @@ type PickerMode = 'menu' | 'this' | 'server'
 
 /** The one Add Agent picker: This server, or From a server (desktop).
  *  `avatarFor` supplies a cached image for a row on another server when
- *  its listing has none (S4's avatar cache). */
+ *  its listing has none (S4's avatar cache). `onAdded` hears each row the
+ *  picker added (its address), after it is on the Home (Zen opens it). */
 export function AddAgentPicker({
   home,
   avatarFor,
+  onAdded,
 }: {
   home: Home
   avatarFor?: HomeAvatarLookup
+  onAdded?: (address: string) => void
 }): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const [mode, setMode] = useState<PickerMode>('menu')
@@ -253,8 +267,10 @@ export function AddAgentPicker({
           )}
         </>
       )}
-      {mode === 'this' && <ThisServerList home={home} onBack={() => setMode('menu')} />}
-      {mode === 'server' && <FromServerList home={home} avatarFor={avatarFor} onBack={() => setMode('menu')} />}
+      {mode === 'this' && <ThisServerList home={home} onBack={() => setMode('menu')} onAdded={onAdded} />}
+      {mode === 'server' && (
+        <FromServerList home={home} avatarFor={avatarFor} onBack={() => setMode('menu')} onAdded={onAdded} />
+      )}
     </div>
   )
 }
@@ -380,10 +396,12 @@ function FromServerList({
   home,
   avatarFor,
   onBack,
+  onAdded,
 }: {
   home: Home
   avatarFor?: HomeAvatarLookup
   onBack: () => void
+  onAdded?: (address: string) => void
 }): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
@@ -545,7 +563,8 @@ function FromServerList({
 
   const onPick = (value: string): void => {
     const hit = valueMap.current.get(value)
-    if (hit) addTo(home, hit.hostKey, hit.w)
+    const address = hit ? addTo(home, hit.hostKey, hit.w) : null
+    if (address) onAdded?.(address)
   }
 
   return (

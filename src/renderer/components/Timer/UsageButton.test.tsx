@@ -259,4 +259,36 @@ describe('UsageButton', () => {
     expect(screen.getByTestId('subscription-usage-whose').textContent).toBe("These numbers are Remote box's logins, not this computer's.")
     expect(menu.textContent).not.toContain('laptop')
   })
+
+  it('shows a calm Off (air-gap) state, not a number or an error, when the daemon is air-gapped', async () => {
+    const checkedAt = new Date().toISOString()
+    const airgapDoc = {
+      airgap: true,
+      reason: 'Off in air-gap mode',
+      harnesses: ['claude', 'codex', 'grok'].map((harness) => ({
+        harness,
+        plan: '',
+        windows: [],
+        checkedAt,
+        status: 'Off in air-gap mode',
+      })),
+    }
+    h.daemonCliGet.mockResolvedValue(airgapDoc)
+    h.daemonCliPost.mockResolvedValue(airgapDoc)
+    render(<UsageButton />)
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-airgap').textContent).toBe('Off (air-gap)')
+    })
+    const chip = screen.getByTestId('subscription-usage')
+    expect(chip.textContent).not.toContain('%')
+    expect(chip.textContent).not.toContain('Usage')
+    fireEvent.click(chip)
+    const menu = await screen.findByTestId('subscription-usage-menu')
+    expect(screen.getByTestId('usage-airgap-note').textContent).toBe(
+      'Off in air-gap mode. K2 does not check subscription usage while air-gap is on.',
+    )
+    expect(menu.textContent).not.toContain('Nothing is signed in')
+    expect(menu.textContent).not.toContain('Claude')
+    expect(menu.querySelector('[role="progressbar"]')).toBeNull()
+  })
 })

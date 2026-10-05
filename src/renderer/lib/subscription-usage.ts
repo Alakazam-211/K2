@@ -20,6 +20,13 @@ export interface HarnessUsage {
 
 export interface SubscriptionDoc {
   harnesses: HarnessUsage[]
+  /** The daemon is in air-gap mode: it does not check usage at all. */
+  airgap?: true
+}
+
+/** True when the daemon said it skips the usage check for air-gap. */
+export function isAirgapped(doc: SubscriptionDoc | null | undefined): boolean {
+  return doc?.airgap === true
 }
 
 /** Clock-menu probes. Anything else is absent — do not invent a row. */
@@ -73,7 +80,7 @@ export function parseSubscriptionDoc(raw: unknown): SubscriptionDoc {
     const row = parseHarness(h)
     if (row) harnesses.push(row)
   }
-  return { harnesses }
+  return raw.airgap === true ? { harnesses, airgap: true } : { harnesses }
 }
 
 export function visibleHarnesses(doc: SubscriptionDoc | null | undefined): HarnessUsage[] {
@@ -120,7 +127,7 @@ function chipWindows<W extends { label: string }>(harness: ProbedHarness, window
 export function buttonChips(
   doc: SubscriptionDoc | null,
 ): { harness: ProbedHarness; used: number }[] {
-  if (!doc) return []
+  if (!doc || isAirgapped(doc)) return []
   const chips: { harness: ProbedHarness; used: number }[] = []
   for (const row of visibleHarnesses(doc)) {
     if (!isProbedHarness(row.harness)) continue

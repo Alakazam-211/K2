@@ -4,6 +4,11 @@
 //! and stores windows only — never an access token, refresh token, or
 //! `auth.json` body. The renderer reads `GET /cli/usage/subscriptions`
 //! and asks for a probe with `POST /cli/usage/subscriptions/refresh`.
+//!
+//! Air-gap ([`k2_core::airgap::enabled`]) stops every probe: no
+//! `api.anthropic.com` GET and no `codex` / `grok` child. Both routes then
+//! answer [`airgap_doc`] (`"airgap": true` plus a row per harness whose
+//! status is [`STATUS_AIRGAP`]) instead of a stale number or an error.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -33,6 +38,8 @@ const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 pub const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
 pub const STATUS_SIGN_IN_EXPIRED: &str = "Sign-in expired";
 pub const STATUS_NO_WINDOW: &str = "No usage window";
+/// Row status while air-gap is on. An older renderer prints it as-is.
+pub const STATUS_AIRGAP: &str = "Off in air-gap mode";
 
 const HARNESS_CLAUDE: &str = "claude";
 const HARNESS_CODEX: &str = "codex";
@@ -137,6 +144,47 @@ fn test_io_slot() -> &'static Mutex<Option<Arc<dyn UsageIo>>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+#[cfg(test)]
+fn test_airgap_slot() -> &'static Mutex<Option<bool>> {
+    static SLOT: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Air-gap gate for every probe path. Tests pin it through
+/// `test_airgap_slot` so a parallel test that sets `K2_AIRGAP` cannot flip it.
+fn airgap_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) {
+        return on;
+    }
+    k2_core::airgap::enabled()
+}
+
+/// The answer to both usage routes while air-gap is on. Nothing is probed
+/// and the cache is neither read nor written, so no old number shows.
+pub fn airgap_doc() -> Value {
+    let now = Utc::now().to_rfc3339();
+    let harnesses: Vec<HarnessUsage> = PROBED_HARNESSES
+        .iter()
+        .map(|name| HarnessUsage {
+            harness: (*name).to_string(),
+            plan: String::new(),
+            windows: Vec::new(),
+            checked_at: now.clone(),
+            status: STATUS_AIRGAP.to_string(),
+        })
+        .collect();
+    json!({
+        "airgap": true,
+        "reason": STATUS_AIRGAP,
+        "harnesses": harnesses,
+    })
+}
+
+fn airgap_response() -> CliResponse {
+    CliResponse::ok_json(airgap_doc().to_string())
+}
+
 fn probe_denied() -> bool {
     std::env::var_os("K2_SUBSCRIPTION_PROBE").as_deref() == Some(std::ffi::OsStr::new("deny"))
 }
@@ -149,6 +197,9 @@ pub fn cache_path() -> PathBuf {
 
 /// `GET /cli/usage/subscriptions`. Reads the cache. Writes nothing.
 pub fn handle_get() -> CliResponse {
+    if airgap_on() {
+        return airgap_response();
+    }
     let path = cache_path();
     if !path.is_file() {
         return ok_doc(&SubscriptionFile {
@@ -169,6 +220,9 @@ pub fn handle_get() -> CliResponse {
 /// runs here — the caller must be off the connection task (`spawn_blocking`
 /// or the background loop).
 pub fn handle_refresh() -> CliResponse {
+    if airgap_on() {
+        return airgap_response();
+    }
     let now = Utc::now();
     if let Some(doc) = fresh_cache(now) {
         return ok_doc(&doc);
@@ -189,14 +243,20 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
         interval.tick().await;
         loop {
             interval.tick().await;
-            let _ = tokio::task::spawn_blocking(|| {
-                if let Err(e) = probe_and_write(io_for_probe().as_ref()) {
-                    k2_core::log_debug!("[usage] subscription probe failed: {e}");
-                }
-            })
-            .await;
+            let _ = tokio::task::spawn_blocking(background_tick).await;
         }
     })
+}
+
+/// One background fire. Returns whether it probed. Air-gap skips it.
+fn background_tick() -> bool {
+    if airgap_on() {
+        return false;
+    }
+    if let Err(e) = probe_and_write(io_for_probe().as_ref()) {
+        k2_core::log_debug!("[usage] subscription probe failed: {e}");
+    }
+    true
 }
 
 fn io_for_probe() -> Arc<dyn UsageIo> {
@@ -289,6 +349,10 @@ fn read_cache_file() -> Result<SubscriptionFile, String> {
 /// Probe Claude, Codex, and Grok, then atomic-replace the cache.
 /// A failed read of an existing file does not truncate it.
 fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
+    // Belt for any caller that missed the route/loop gate.
+    if airgap_on() {
+        return Err(k2_core::airgap::TEACHING.to_string());
+    }
     probe_hits().fetch_add(1, Ordering::SeqCst);
     let now_wall = SystemTime::now();
     let now = Utc::now();
@@ -1577,10 +1641,14 @@ mod tests {
         let _home = crate::test_support::TempHome::new();
         probe_hits().store(0, Ordering::SeqCst);
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
+        // Air-gap off unless a test says otherwise; immune to a parallel
+        // test that sets K2_AIRGAP.
+        set_airgap(false);
         let prev_deny = std::env::var_os("K2_SUBSCRIPTION_PROBE");
         std::env::set_var("K2_SUBSCRIPTION_PROBE", "deny");
         f();
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         match prev_deny {
             Some(v) => std::env::set_var("K2_SUBSCRIPTION_PROBE", v),
             None => std::env::remove_var("K2_SUBSCRIPTION_PROBE"),
@@ -1589,6 +1657,143 @@ mod tests {
 
     fn install(io: Arc<dyn UsageIo>) {
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(io);
+    }
+
+    fn set_airgap(on: bool) {
+        *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(on);
+    }
+
+    fn signed_in_script() -> Arc<ScriptIo> {
+        Arc::new(ScriptIo {
+            login: ClaudeLogin::Token {
+                access_token: "LEAK-ACCESS".into(),
+                expires_at: Some(future_expiry_secs()),
+                plan: "Max 20x".into(),
+            },
+            body: Mutex::new(Ok(usage_body())),
+            gets: AtomicUsize::new(0),
+            codex: Mutex::new(CodexOutcome::NotSignedIn),
+            grok: Mutex::new(GrokOutcome::NotSignedIn),
+        })
+    }
+
+    fn assert_airgap_body(body: &str) {
+        let v: Value = serde_json::from_str(body).expect("airgap body is JSON");
+        assert_eq!(v["airgap"], json!(true), "{body}");
+        assert_eq!(v["reason"], json!(STATUS_AIRGAP), "{body}");
+        let rows = v["harnesses"].as_array().expect("harnesses array");
+        let names: Vec<&str> = rows
+            .iter()
+            .map(|r| r["harness"].as_str().expect("harness name"))
+            .collect();
+        assert_eq!(names, vec![HARNESS_CLAUDE, HARNESS_CODEX, HARNESS_GROK]);
+        for row in rows {
+            assert_eq!(row["status"], json!(STATUS_AIRGAP), "{body}");
+            assert_eq!(row["windows"], json!([]), "air-gap must not show a stale number: {body}");
+        }
+    }
+
+    #[test]
+    fn airgap_background_tick_makes_no_http_call_and_spawns_no_cli() {
+        with_isolated(|| {
+            set_airgap(true);
+            // PanicIo panics on any login read, GET, codex or grok spawn.
+            install(Arc::new(PanicIo));
+            assert!(!background_tick(), "air-gap tick must not probe");
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 0);
+            assert!(!cache_path().exists(), "air-gap tick must not write the cache");
+        });
+    }
+
+    #[test]
+    fn airgap_probe_and_write_refuses_before_any_io() {
+        with_isolated(|| {
+            set_airgap(true);
+            let err = probe_and_write(&PanicIo).expect_err("air-gap must refuse");
+            assert_eq!(err, k2_core::airgap::TEACHING);
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn airgap_refresh_route_reports_airgap_and_does_not_probe() {
+        with_isolated(|| {
+            set_airgap(true);
+            install(Arc::new(PanicIo));
+            let response = handle_refresh();
+            assert_eq!(response.status, "200 OK");
+            assert_airgap_body(&response.body);
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 0);
+            assert!(!cache_path().exists());
+        });
+    }
+
+    #[test]
+    fn airgap_get_route_reports_airgap_not_the_stale_cache() {
+        with_isolated(|| {
+            let now = Utc::now();
+            let doc = SubscriptionFile {
+                harnesses: vec![harness(
+                    HARNESS_CLAUDE,
+                    vec![UsageWindow {
+                        label: "Weekly".into(),
+                        used: 0.42,
+                        resets_at: future_reset(now),
+                    }],
+                    "",
+                    &now.to_rfc3339(),
+                )],
+            };
+            write_cache(&doc).expect("seed");
+            set_airgap(true);
+            let response = crate::cli::dispatch(
+                "/cli/usage/subscriptions",
+                &std::collections::HashMap::new(),
+            );
+            assert_eq!(response.status, "200 OK");
+            assert_airgap_body(&response.body);
+            assert!(!response.body.contains("0.42"), "{}", response.body);
+        });
+    }
+
+    #[test]
+    fn without_airgap_tick_and_refresh_still_probe() {
+        with_isolated(|| {
+            set_airgap(false);
+            let io = signed_in_script();
+            install(io.clone());
+            assert!(background_tick(), "tick must probe without air-gap");
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 1);
+            assert_eq!(io.gets.load(Ordering::SeqCst), 1);
+            let written = read_cache_file().expect("cache written");
+            assert_eq!(written.harnesses.len(), 3);
+
+            let stale = (Utc::now() - chrono::Duration::seconds(16)).to_rfc3339();
+            let mut doc = written;
+            for h in &mut doc.harnesses {
+                h.checked_at = stale.clone();
+            }
+            write_cache(&doc).expect("age cache");
+            let response = handle_refresh();
+            assert_eq!(response.status, "200 OK");
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 2);
+            assert!(!response.body.contains("\"airgap\""), "{}", response.body);
+            assert!(response.body.contains("Max 20x"), "{}", response.body);
+
+            let get = handle_get();
+            assert_eq!(get.status, "200 OK");
+            assert!(!get.body.contains("\"airgap\""), "{}", get.body);
+        });
+    }
+
+    #[test]
+    fn airgap_gate_reads_the_shared_helper() {
+        let head = include_str!("subscription_usage.rs")
+            .split("mod tests")
+            .next()
+            .expect("module head");
+        assert!(head.contains("k2_core::airgap::enabled()"));
+        assert!(!head.contains("var(\"K2_AIRGAP\")"), "use the airgap helper, not the env var");
     }
 
     fn token_login(expires_at: Option<i64>) -> ClaudeLogin {

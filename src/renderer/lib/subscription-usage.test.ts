@@ -7,6 +7,7 @@ import {
   buttonLabel,
   formatResetsIn,
   harnessName,
+  isAirgapped,
   isSignedIn,
   isStale,
   parseSubscriptionDoc,
@@ -301,6 +302,16 @@ describe('parseSubscriptionDoc', () => {
     ]) {
       expect(parseSubscriptionDoc(raw)).toEqual(EMPTY)
     }
+  })
+
+  it('keeps the daemon air-gap flag and drops every chip for it', () => {
+    const row = { harness: 'claude', plan: '', windows: [], checkedAt: '2026-10-05T00:00:00Z', status: 'Off in air-gap mode' }
+    const got = parseSubscriptionDoc({ airgap: true, reason: 'Off in air-gap mode', harnesses: [row] })
+    expect(got).toEqual({ airgap: true, harnesses: [row] })
+    expect(isAirgapped(got)).toBe(true)
+    expect(buttonChips(got)).toEqual([])
+    expect(isAirgapped(parseSubscriptionDoc({ airgap: 'yes', harnesses: [row] }))).toBe(false)
+    expect('airgap' in parseSubscriptionDoc({ harnesses: [row] })).toBe(false)
   })
 
   it('keeps a well-formed doc as it is', () => {

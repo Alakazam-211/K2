@@ -9,6 +9,7 @@ import {
   buttonChips,
   formatResetsIn,
   harnessName,
+  isAirgapped,
   isSignedIn,
   percentUsed,
   visibleHarnesses,
@@ -77,8 +78,10 @@ export default function UsageButton(): React.JSX.Element {
   }, [open])
 
   const roomLabel = target.label
+  // The daemon is in air-gap mode: it never checks usage, so say so calmly.
+  const airgap = serverState === 'ok' && isAirgapped(doc)
   const chips = serverState === 'ok' ? buttonChips(doc) : []
-  const rows = doc && serverState === 'ok' ? visibleHarnesses(doc).filter(isSignedIn) : []
+  const rows = doc && serverState === 'ok' && !airgap ? visibleHarnesses(doc).filter(isSignedIn) : []
   const anySignedIn = rows.length > 0
   // A view-only room (an older server) only reads (Z16).
   const mayRefresh = serverState === 'ok' && scopeMayWrite(target.scope, 'usage/subscriptions/refresh')
@@ -116,6 +119,8 @@ export default function UsageButton(): React.JSX.Element {
           <span data-testid="usage-server-state">offline</span>
         ) : serverState === 'signin' ? (
           <span data-testid="usage-server-state">Sign in</span>
+        ) : airgap ? (
+          <span data-testid="usage-airgap">Off (air-gap)</span>
         ) : chips.length > 0 ? (
           chips.map((chip) => (
             <span key={chip.harness} className="flex items-center gap-1" data-testid={`usage-chip-${chip.harness}`}>
@@ -143,6 +148,10 @@ export default function UsageButton(): React.JSX.Element {
             <p className="text-[12px] text-[var(--color-text-secondary)]">{roomLabel} is offline.</p>
           ) : serverState === 'signin' ? (
             <p className="text-[12px] text-[var(--color-text-secondary)]">Sign in to {roomLabel} to see its usage.</p>
+          ) : airgap ? (
+            <p data-testid="usage-airgap-note" className="text-[12px] text-[var(--color-text-secondary)]">
+              Off in air-gap mode. K2 does not check subscription usage while air-gap is on.
+            </p>
           ) : rows.length === 0 || !anySignedIn ? (
             <p className="text-[12px] text-[var(--color-text-secondary)]">
               Nothing is signed in

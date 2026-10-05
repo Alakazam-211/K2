@@ -2,8 +2,8 @@
 // pieces of the two Garden templates, plugged into the skeleton's
 // registries: the Agents, Conversation and empty-Garden widgets
 // (`registerZenWidget`), the templates' own Garden switcher, Zen toggle and
-// drag area (`registerZenTemplateControls`, with the bottom-left footer:
-// Zen toggle, plus Add agent on `k2.texting@1`), the data verbs
+// drag area (`registerZenTemplateControls`, one top band; Add agent is the
+// Agents widget's last row), the data verbs
 // (`installZenDataVerbs`), and `agents.add` (`installZenAddAgentVerb`).
 // Built-ins go through the same bridge v2 user widgets will.
 
@@ -14,7 +14,7 @@ import { registerZenTemplateControls, registerZenWidget } from '../zen-registry'
 import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversationWidget } from './ZenConversationWidget'
 import { ZenGardenEmptyWidget } from './ZenGardenEmptyWidget'
-import { ZenBlankFooter, ZenTextingControls, ZenTextingFooter } from './ZenTextingControls'
+import { ZenTextingControls } from './ZenTextingControls'
 
 /** Install every built-in. Returns the uninstall. */
 export function installZenBuiltins(): () => void {
@@ -24,8 +24,8 @@ export function installZenBuiltins(): () => void {
     registerZenWidget('agents', ZenAgentsWidget),
     registerZenWidget('conversation', ZenConversationWidget),
     registerZenWidget('garden-empty', ZenGardenEmptyWidget),
-    registerZenTemplateControls(TEXTING_TEMPLATE_ID, ZenTextingControls, ZenTextingFooter),
-    registerZenTemplateControls(BLANK_TEMPLATE_ID, ZenTextingControls, ZenBlankFooter),
+    registerZenTemplateControls(TEXTING_TEMPLATE_ID, ZenTextingControls),
+    registerZenTemplateControls(BLANK_TEMPLATE_ID, ZenTextingControls),
   ]
   return () => {
     for (const off of offs.reverse()) off()

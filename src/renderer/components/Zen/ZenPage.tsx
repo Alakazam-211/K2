@@ -5,10 +5,9 @@
 // `layout.split` entry, each holding the widgets placed in it. Every widget
 // gets its own `ZenWidgetBridge` built with the caps its source declared
 // (Z33); the template's controls get the template bridge (no-cap verbs plus
-// `agents.add` and `gardens:manage`). The template's footer, if any, sits
-// under the first column (the bottom-left corner). The page owns the
-// control registry (Z27, G24: Zen toggle, Garden switcher, drag area), and,
-// outside safe mode, the check schedule (Z28). While it is on screen, ⌘1–9
+// `agents.add` and `gardens:manage`). The page owns the control registry
+// (Z27, G24: the Zen toggle and Garden switcher are checked; the drag area
+// is bound only), and, outside safe mode, the check schedule (Z28). While it is on screen, ⌘1–9
 // opens row N of its first Agents widget (G52).
 //
 // S5 / S6 plug in without touching this file: widgets by kind and template
@@ -44,9 +43,12 @@ import {
 } from '@/lib/zen/zen-monitor'
 import type { ZenResolvedPage } from '@/lib/zen/zen-page'
 import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
-import { ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenTemplateFooterFor, zenWidgetFor } from './zen-registry'
+import { ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenWidgetFor } from './zen-registry'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
+
+/** How long the window must stop resizing before the check runs (ms). */
+export const ZEN_RESIZE_SETTLE_MS = 300
 
 function homeSummaries(): Array<{ id: string; name: string }> {
   return useHomesStore.getState().homes.map((h) => ({ id: h.id, name: h.name }))
@@ -159,11 +161,23 @@ export function ZenPage({
       clearTimeout(second)
     }
   }, [safe, runCheck, page.version])
+  // After a resize settles: a burst of resize events mid-animation (full
+  // screen, a window snap) is many frames, not two separate checks.
   useEffect(() => {
     if (safe) return
-    const onResize = (): void => runCheck()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onResize = (): void => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        runCheck()
+      }, ZEN_RESIZE_SETTLE_MS)
+    }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => {
+      if (timer !== null) clearTimeout(timer)
+      window.removeEventListener('resize', onResize)
+    }
   }, [safe, runCheck])
   useEffect(() => {
     if (safe || !focused) return
@@ -172,7 +186,6 @@ export function ZenPage({
   }, [safe, focused, runCheck])
 
   const Controls = zenTemplateControlsFor(page.template)
-  const Footer = zenTemplateFooterFor(page.template)
   const { layout } = page
   return (
     <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template}>
@@ -210,7 +223,6 @@ export function ZenPage({
                   return <Widget key={w.id} decl={w} bridge={bridge} />
                 })}
             </div>
-            {col === 0 && Footer && <Footer bridge={controlsBridge} />}
           </div>
         ))}
       </div>

@@ -21,13 +21,20 @@
 // Selecting a row opens its conversation in place (`conversation.open`):
 // never a window server switch. ⌘↑ / ⌘↓ move between conversations.
 //
-// Everything comes through the bridge (`agents:read`).
+// The list ends with an "Add agent" row in its bottom-left corner (Rosson
+// 2026-10-04: part of the list, not a floating page control). It opens K2's
+// Add agent picker for THIS widget's Home through the bridge (`agents.add`,
+// cap `agents:add`) above the row. It shows in whole-Home mode when the
+// widget holds the cap; a one-agent widget has nothing to add to.
+//
+// Everything comes through the bridge (`agents:read`, `agents:add`).
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenWidgetStyles, initials, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
+import { useZenAddAgentClick } from '../ZenTemplateControls'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
@@ -311,6 +318,42 @@ function AgentRow({
   )
 }
 
+/** The list's last row: Add agent (bottom left of the widget). */
+function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
+  const { ref, onClick } = useZenAddAgentClick(bridge)
+  return (
+    <div className="flex flex-shrink-0 items-center" data-zen-agents-footer="" style={{ padding: '0 8px 10px' }}>
+      <button
+        ref={ref}
+        type="button"
+        aria-haspopup="dialog"
+        title="Add an agent to this Home"
+        onClick={onClick}
+        data-zen-add-agent=""
+        data-zen-soft-button=""
+        className="no-drag flex items-center gap-3 text-left"
+        style={{
+          padding: '8px 12px',
+          borderRadius: 'var(--zen-radius)',
+          color: 'var(--zen-text-muted)',
+          background: 'transparent',
+        }}
+      >
+        <span
+          aria-hidden
+          className="flex flex-shrink-0 items-center justify-center"
+          style={{ width: 28, height: 28, borderRadius: 999, border: '1.5px dashed var(--zen-border)' }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+            <path d="M6 1.5v9M1.5 6h9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span style={{ fontWeight: 600, fontSize: '0.9em' }}>Add agent</span>
+      </button>
+    </div>
+  )
+}
+
 export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
   const nowSec = useNowSec()
@@ -391,6 +434,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
           ))}
         </ul>
       )}
+      {!agent && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
     </div>
   )
 }

@@ -21,8 +21,11 @@
 //   - attachments go through the existing attach path (local paths, or an
 //     upload to the agent's server);
 //   - "Open in Agents" shows for a permission prompt;
-//   - the template's own controls pass the required-controls check, with
-//     the Zen toggle in the footer under the Agents column (bottom left);
+//   - the template's own controls pass the required-controls check, all in
+//     the top band: Garden switcher top left, then the theme control
+//     immediately left of the Zen toggle in the top-right corner;
+//   - Add agent is the Agents widget's last row (bottom left, inside the
+//     list), not a page control;
 //   - Add agent opens the Home's shared picker (`agents.add`), adds to the
 //     Home the widget shows, the row shows in the Agents widget at once, and
 //     the picker closes on Esc, the widget's Home changing and leaving Zen;
@@ -103,7 +106,7 @@ vi.mock('@/lib/daemon-cli', () => ({
       const g = h.gardens.find((x) => x.id === id)
       if (!g) throw new Error('unknown_garden')
       const caps = h.pageCaps ?? {
-        agents: ['agents:read', 'presence:read'],
+        agents: ['agents:read', 'agents:add', 'presence:read'],
         conversation: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       }
       const custom = h.pages[id]
@@ -134,6 +137,10 @@ vi.mock('@/lib/daemon-cli', () => ({
         garden: { id: g.id, name: g.name, index: h.gardens.indexOf(g) + 1 },
         page,
         theme: {},
+        themes: [
+          { name: 'default', builtin: true, user: false },
+          { name: 'paper', builtin: true, user: false },
+        ],
         chrome: {},
         motion: {},
         errors: [],
@@ -400,8 +407,8 @@ const fakeGeometry: ZenGeometry = {
   rect(el) {
     lastRected = el
     if (el.hasAttribute('data-zen-drag')) return { left: 300, top: 8, width: 500, height: 28 }
-    // The footer under the Agents column: bottom left.
-    if (el.closest('[data-zen-template-footer]')) return { left: 14, top: 756, width: 80, height: 30 }
+    // The top-right cluster: theme control, then the Zen toggle.
+    if (el.hasAttribute('data-zen-switch')) return { left: 1110, top: 11, width: 76, height: 30 }
     return { left: 120, top: 8, width: 80, height: 28 }
   },
   style() {
@@ -493,7 +500,7 @@ beforeEach(() => {
   noteServerVersion(C, '0.43.4', ['thread-latest'])
   noteServerVersion(D, '0.43.0', [])
   h.gardens = [
-    { id: 'g-default', name: 'Default', template: 'k2.texting@1' },
+    { id: 'g-default', name: 'Garden 1', template: 'k2.texting@1' },
     { id: 'g-notes', name: 'Notes', template: 'k2.blank@1' },
   ]
   h.pages = {}
@@ -868,24 +875,38 @@ describe('template controls (G24, G25, G58)', () => {
     const bar = document.querySelector('[data-zen-texting-controls]')
     if (!bar) throw new Error('the template controls are not registered')
     expect(bar.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound')).toBe('garden-switcher')
-    expect(bar.querySelector('[data-zen-garden-pill]')?.textContent).toContain('Default')
+    expect(bar.querySelector('[data-zen-garden-pill]')?.textContent).toContain('Garden 1')
     expect(bar.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound')).toBe('drag-region')
-    // The Zen toggle sits in the bottom-left footer: under the Agents
-    // column (column 0), after its box, with Add agent beside it.
-    expect(bar.querySelector('[data-zen-switch]')).toBeNull()
-    const footer = document.querySelector('[data-zen-texting-footer]')
-    if (!footer) throw new Error('no template footer')
-    expect(footer.parentElement?.getAttribute('data-zen-column-slot')).toBe('0')
-    expect(footer.previousElementSibling?.getAttribute('data-zen-column')).toBe('0')
-    expect(footer.previousElementSibling?.querySelector('[data-zen-widget="agents"]')).not.toBeNull()
+    // Rosson 2026-10-04: the Zen toggle is back in the top-right corner (the
+    // top bar's spot outside Zen), with the theme control immediately left
+    // of it. Band order: switcher, drag area, [theme, toggle].
+    expect(Array.from(bar.children).filter((c) => c.tagName !== 'STYLE').map((c) =>
+      c.hasAttribute('data-zen-garden-pill') || c.querySelector('[data-zen-garden-pill]')
+        ? 'switcher'
+        : c.hasAttribute('data-zen-drag')
+          ? 'drag'
+          : c.hasAttribute('data-zen-top-right')
+            ? 'top-right'
+            : c.tagName,
+    )).toEqual(['switcher', 'drag', 'top-right'])
+    const topRight = bar.querySelector('[data-zen-top-right]') as HTMLElement
+    expect(Array.from(topRight.children).map((c) =>
+      c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') ? 'toggle' : c.tagName,
+    )).toEqual(['theme', 'toggle'])
     expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
-    expect(footer.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
-    const footerKids = Array.from(footer.children).map((c) =>
-      c.hasAttribute('data-zen-switch') ? 'toggle' : c.hasAttribute('data-zen-add-agent') ? 'add' : c.tagName,
-    )
-    expect(footerKids).toEqual(['toggle', 'add'])
-    // The other column has no footer: the conversation runs to the bottom.
+    expect(topRight.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
+    // No footer under any column any more: both columns run to the bottom.
+    expect(document.querySelector('[data-zen-template-footer]')).toBeNull()
+    expect(document.querySelector('[data-zen-column-slot="0"]')?.children.length).toBe(1)
     expect(document.querySelector('[data-zen-column-slot="1"]')?.children.length).toBe(1)
+    // Add agent is the Agents widget's last row (bottom left inside it).
+    const agents = document.querySelector('[data-zen-widget="agents"]') as HTMLElement
+    const add = agents.querySelector('[data-zen-add-agent]')
+    expect(add).not.toBeNull()
+    expect(agents.lastElementChild?.hasAttribute('data-zen-agents-footer')).toBe(true)
+    expect(agents.lastElementChild?.contains(add)).toBe(true)
+    expect(document.querySelectorAll('[data-zen-add-agent]').length).toBe(1)
+    expect(bar.querySelector('[data-zen-add-agent]')).toBeNull()
     // No Home switcher anywhere in Zen any more.
     expect(document.querySelector('[data-zen-home-pill], [data-zen-home-option]')).toBeNull()
 
@@ -922,6 +943,42 @@ describe('template controls (G24, G25, G58)', () => {
     })
     expect(useZenWindowStore.getState().on).toBe(false)
   }, 10_000)
+})
+
+// Rosson 2026-10-04 bug: "Zen Safe Mode keeps popping up" though the Zen
+// toggle is on the page. Opening the Garden menu and closing it again
+// within a second (a second click on the pill) left a sticky wiring
+// failure, so the next two scheduled checks put the window in safe mode.
+describe('no false safe mode (Rosson 2026-10-04)', () => {
+  it('opening and closing the Garden menu quickly, then two scheduled checks: still not safe mode', async () => {
+    await mountZen()
+    const pill = document.querySelector('[data-zen-garden-pill]') as HTMLElement
+    await act(async () => {
+      fireEvent.click(pill)
+    })
+    expect(document.querySelector('[data-zen-garden-menu]')).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(pill)
+    })
+    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1100))
+    })
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+    expect(document.querySelector('[data-zen-safe]')).toBeNull()
+  }, 10_000)
+
+  it('Enter on the Garden pill opens the menu (the check does not swallow it)', async () => {
+    await mountZen()
+    const pill = document.querySelector('[data-zen-garden-pill]') as HTMLElement
+    const e = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    await act(async () => {
+      pill.dispatchEvent(e)
+    })
+    expect(e.defaultPrevented).toBe(false)
+  })
 })
 
 // Zen v1 bug (Rosson): agent messages drew white text on Zen's light agent
@@ -1170,8 +1227,8 @@ describe('Zen text follows Zen tokens, never the app Style', () => {
 
 describe('Zen Add agent', () => {
   function addButton(): HTMLElement {
-    const el = document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]')
-    if (!(el instanceof HTMLElement)) throw new Error('no Add agent button in the footer')
+    const el = document.querySelector('[data-zen-widget="agents"] [data-zen-agents-footer] [data-zen-add-agent]')
+    if (!(el instanceof HTMLElement)) throw new Error('no Add agent row in the Agents widget')
     return el
   }
 
@@ -1292,13 +1349,13 @@ describe('Zen Add agent', () => {
     })
     await pickWidgetHome('h1')
 
-    // Open, then leave Zen with the bottom-left toggle: gone, store closed.
+    // Open, then leave Zen with the top-right toggle: gone, store closed.
     await act(async () => {
       fireEvent.click(addButton())
     })
     expect(picker()).not.toBeNull()
-    const toggle = document.querySelector('[data-zen-texting-footer] [data-zen-switch]')
-    if (!(toggle instanceof HTMLElement)) throw new Error('no Zen toggle in the footer')
+    const toggle = document.querySelector('[data-zen-top-right] [data-zen-switch]')
+    if (!(toggle instanceof HTMLElement)) throw new Error('no Zen toggle top right')
     await act(async () => {
       fireEvent.click(toggle)
     })
@@ -1309,14 +1366,14 @@ describe('Zen Add agent', () => {
 
     // Zen on again: the picker stays shut.
     act(() => useZenWindowStore.getState().setOn(true))
-    await waitFor(() => expect(document.querySelector('[data-zen-texting-footer]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-zen-add-agent]')).not.toBeNull())
     expect(picker()).toBeNull()
   }, 10_000)
 
   it('agents.add is a bridge verb behind agents:add: a widget without the cap is refused, one with it opens the same picker', async () => {
     await mountZen()
     const hostStub = {
-      gardens: () => [{ id: 'g-default', name: 'Default', index: 1 }],
+      gardens: () => [{ id: 'g-default', name: 'Garden 1', index: 1 }],
       currentGardenId: () => 'g-default',
       switchGarden: () => {},
       createGarden: async () => {
@@ -1327,7 +1384,7 @@ describe('Zen Add agent', () => {
       homes: () => [],
       exit: () => {},
       controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
-      // A v2-style widget on the Default Garden's page: it acts for the
+      // A v2-style widget on Garden 1's page: it acts for the
       // page's first Agents widget (Home h1).
       page: () => BUILTIN_TEXTING_PAGE,
     }
@@ -1448,7 +1505,7 @@ describe('the Agents widget’s Home picker (G27, TG4.4)', () => {
     await mountZen()
     await pickWidgetHome('h2')
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-zen-texting-footer] [data-zen-add-agent]') as HTMLElement)
+      fireEvent.click(document.querySelector('[data-zen-widget="agents"] [data-zen-add-agent]') as HTMLElement)
     })
     const p = document.querySelector('[data-zen-add-agent-picker]')
     if (!(p instanceof HTMLElement)) throw new Error('Add agent did not open')

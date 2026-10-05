@@ -60,6 +60,7 @@ import { ZenErrorBoundary } from './ZenErrorBoundary'
 import { ZenConfigErrorBanner, ZenSafeBanner } from './ZenBanners'
 import { ZenChromeCluster, zenClusterSide } from './ZenChromeCluster'
 import { ZenPage } from './ZenPage'
+import { ZenK2TopRightContext } from './ZenTemplateControls'
 
 // S5: the Zen theme engine (tokens, scheme, type, shape, motion) through the
 // S4 plug-in point. Once per app session.
@@ -382,6 +383,13 @@ export function ZenRoot(): React.JSX.Element {
   )
   const onCrash = useCallback((message: string) => enterSafeMode({ kind: 'crash', message }), [enterSafeMode])
 
+  // K2's theme control, drawn by the template immediately left of its Zen
+  // toggle (top right). None in safe mode: safe mode never changes the theme.
+  const topRight =
+    page && !inSafeMode ? (
+      <ZenThemePicker themes={page.themes} active={page.activeTheme} onPick={themeTools.pick} error={themeTools.error} />
+    ) : null
+
   const banner = safe ? (
     <ZenSafeBanner cause={safe} onTryAgain={clearSafeMode} onExit={exitZen} />
   ) : page && page.errors.length > 0 ? (
@@ -421,6 +429,7 @@ export function ZenRoot(): React.JSX.Element {
         />
       )}
       <ZenChromeCluster os={os} onRect={onClusterRect} />
+      <ZenK2TopRightContext.Provider value={topRight}>
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {page ? (
         <ZenErrorBoundary
@@ -438,14 +447,7 @@ export function ZenRoot(): React.JSX.Element {
         </div>
       )}
       </div>
-      {page && !inSafeMode && (
-        <ZenThemePicker
-          themes={page.themes}
-          active={page.activeTheme}
-          onPick={themeTools.pick}
-          error={themeTools.error}
-        />
-      )}
+      </ZenK2TopRightContext.Provider>
       <ZenShortcutSheet os={os} />
       <ZenAddAgentPicker />
     </div>

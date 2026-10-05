@@ -1,9 +1,11 @@
 // prd-zen-mode-v1 Z27 and prd-zen-gardens-v1 G11, G24, G25, G58 — the
 // built-in templates' own controls, one component set for both
-// (`k2.texting@1`, `k2.blank@1`) and for safe mode. The top band holds the
-// Garden switcher (top left, it names the Garden you're in) and the drag
-// area; the footer under the first column holds the Zen toggle and, on the
-// texting template, the Add agent button (bottom left).
+// (`k2.texting@1`, `k2.blank@1`) and for safe mode, all in one top band:
+// the Garden switcher (top left, it names the Garden you're in), the drag
+// area, and the top-right cluster — K2's theme control, then the Zen toggle
+// in the top-right corner, where the top bar's Zen toggle is outside Zen
+// (Rosson 2026-10-04). Add agent is no longer a page control: it is the
+// last row of the Agents widget (`ZenAgentsWidget`).
 //
 // They are the TEMPLATE's controls, drawn and laid out by the page, and they
 // bind through the bridge (`bridge.controls.bind`) exactly as a v2 user page
@@ -16,14 +18,15 @@
 //     agent only in this cut. The menu closes on a pick, Esc or a click
 //     outside;
 //   - the Zen toggle is a switch, on, that turns Zen off in this window;
-//   - the drag area fills the top band after the switcher;
-//   - Add agent opens K2's Add agent picker for the Home of the page's first
-//     Agents widget (`agents.add`) above the button.
+//   - the drag area fills the top band between the switcher and the
+//     top-right cluster;
+//   - K2's theme control (`ZenK2TopRightItems`, drawn by the Zen root, none
+//     in safe mode) sits immediately left of the toggle.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
-import { TEXTING_BAR_HEIGHT_PX, TEXTING_FOOTER_HEIGHT_PX, useZenAddAgentClick, useZenBind } from '../ZenTemplateControls'
+import { TEXTING_BAR_HEIGHT_PX, useZenBind, ZenK2TopRightItems } from '../ZenTemplateControls'
 import { ZenWidgetStyles } from './zen-widget-kit'
 
 function GardenChoice({
@@ -286,42 +289,15 @@ function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   )
 }
 
-function AddAgentButton({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
-  const { ref, onClick } = useZenAddAgentClick(bridge)
-  return (
-    <button
-      ref={ref}
-      type="button"
-      aria-haspopup="dialog"
-      title="Add an agent to this Home"
-      onClick={onClick}
-      data-zen-add-agent=""
-      data-zen-soft-button=""
-      className="no-drag flex items-center gap-1.5"
-      style={{
-        height: 30,
-        flexShrink: 0,
-        padding: '0 12px 0 10px',
-        borderRadius: 999,
-        color: 'var(--zen-text)',
-        border: '1px solid var(--zen-border)',
-        background: 'var(--zen-surface)',
-      }}
-    >
-      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden style={{ color: 'var(--zen-text-muted)' }}>
-        <path d="M6 1.5v9M1.5 6h9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      </svg>
-      <span style={{ fontWeight: 600, fontSize: '0.9em' }}>Add agent</span>
-    </button>
-  )
-}
-
 function DragArea({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const ref = useZenBind(bridge, 'drag-region')
   return <div ref={ref} data-zen-drag="" className="min-w-0 flex-1 self-stretch" />
 }
 
-/** Both templates' top band: Garden switcher + drag area. */
+/** Both templates' top band (and safe mode's): the Garden switcher top
+ *  left, the drag area, then the top-right cluster — K2's theme control
+ *  immediately left of the Zen toggle, the same corner the top bar's Zen
+ *  toggle sits in outside Zen (Rosson 2026-10-04). */
 export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
   return (
     <div
@@ -337,34 +313,10 @@ export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.
       <ZenWidgetStyles />
       <ZenGardenSwitcher bridge={bridge} />
       <DragArea bridge={bridge} />
+      <div data-zen-top-right="" className="no-drag flex flex-shrink-0 items-center gap-2">
+        <ZenK2TopRightItems />
+        <ZenToggle bridge={bridge} />
+      </div>
     </div>
   )
-}
-
-function Footer({ addAgent, bridge }: { addAgent: boolean; bridge: ZenWidgetBridge }): React.JSX.Element {
-  return (
-    <div
-      data-zen-template-footer=""
-      data-zen-texting-footer=""
-      className="flex flex-shrink-0 items-center gap-2"
-      style={{
-        height: `calc(${TEXTING_FOOTER_HEIGHT_PX}px + var(--zen-gap, 0px))`,
-        paddingTop: 'var(--zen-gap, 0px)',
-      }}
-    >
-      <ZenToggle bridge={bridge} />
-      {addAgent && <AddAgentButton bridge={bridge} />}
-    </div>
-  )
-}
-
-/** `k2.texting@1`'s footer under the Agents column: the Zen toggle (the
- *  way out) and Add agent, in the bottom-left corner. */
-export function ZenTextingFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
-  return <Footer addAgent bridge={bridge} />
-}
-
-/** `k2.blank@1`'s footer: the Zen toggle only (no Add agent, G11). */
-export function ZenBlankFooter({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
-  return <Footer addAgent={false} bridge={bridge} />
 }

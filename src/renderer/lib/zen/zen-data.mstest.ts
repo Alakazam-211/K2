@@ -107,7 +107,7 @@ let bHandle = ''
 let uninstall: (() => void) | null = null
 
 const bridgeHost: ZenBridgeHost = {
-  gardens: () => [{ id: 'g-ms', name: 'Default', index: 1 }],
+  gardens: () => [{ id: 'g-ms', name: 'Garden 1', index: 1 }],
   currentGardenId: () => 'g-ms',
   switchGarden: () => {},
   createGarden: async () => {
@@ -121,7 +121,7 @@ const bridgeHost: ZenBridgeHost = {
   page: () => BUILTIN_TEXTING_PAGE,
 }
 
-/** The Default Garden's Agents widget (it shows the Home `zen-ms`). */
+/** Garden 1's Agents widget (it shows the Home `zen-ms`). */
 function agentsBridge(): ReturnType<typeof createZenBridge> {
   return createZenBridge(bridgeHost, { id: 'agents', caps: ['agents:read'] })
 }

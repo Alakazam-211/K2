@@ -120,8 +120,10 @@ import { useZenBind } from './ZenTemplateControls'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const DEFAULT: Garden = { id: 'g-default', name: 'Default', template: 'k2.texting@1' }
+const DEFAULT: Garden = { id: 'g-default', name: 'Garden 1', template: 'k2.texting@1' }
 const MORNINGS: Garden = { id: 'g-mornings', name: 'Mornings', template: 'k2.blank@1' }
+/** The second Garden setup makes (Rosson 2026-10-04): empty, to build. */
+const GARDEN_2: Garden = { id: 'g-garden2', name: 'Garden 2', template: 'k2.blank@1' }
 
 /** `GET /cli/zen/gardens` as the daemon answers it (G13). */
 function gardensAnswer(): unknown {
@@ -176,7 +178,7 @@ function defaultGet(route: string, params: unknown): unknown {
 function defaultPost(route: string, body: unknown): unknown {
   if (route === 'zen/setup') {
     h.setUp = true
-    if (h.gardens.length === 0) h.gardens.push({ ...DEFAULT })
+    if (h.gardens.length === 0) h.gardens.push({ ...DEFAULT }, { ...GARDEN_2 })
     return { ok: true, createdFolder: true, migrated: null, gardens: [] }
   }
   if (route === 'zen/garden/new') {
@@ -315,7 +317,7 @@ describe('Zen is a mode of the window (G1–G5)', () => {
     expect(useZenWindowStore.getState().on).toBe(true)
     // The window's Garden is the first, written back (G22).
     expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default' })
-    expect(el('[data-zen-garden-pill]').textContent).toContain('Default')
+    expect(el('[data-zen-garden-pill]').textContent).toContain('Garden 1')
     expect(zenRoot()?.style.zIndex).toBe('150')
     // T4.2: the list, then the Garden's page, both on the LOCAL daemon.
     expect(h.calls.map((c) => [c.method, c.hostKey, c.route])).toEqual([
@@ -340,6 +342,13 @@ describe('Zen is a mode of the window (G1–G5)', () => {
       ['GET', 'local', 'zen/get'],
     ])
     expect(h.calls[1].data).toEqual({})
+    // The window opens Garden 1 (texting); Garden 2 (empty) is in the switcher.
+    expect(h.calls[3].data).toEqual({ garden: 'g-default' })
+    expect(el('[data-zen-garden-pill]').textContent).toContain('Garden 1')
+    await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
+    expect(
+      Array.from(document.querySelectorAll('[data-zen-garden-option]')).map((o) => o.textContent?.replace(/⌥⌘\d$/, '')),
+    ).toEqual(['Garden 1', 'Garden 2'])
   })
 
   it('shows on every page and leaves that page put; exit shows it again (TG3.2)', async () => {
@@ -474,10 +483,10 @@ describe('Gardens (G22–G25)', () => {
     await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
     await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
     const input = el('[data-zen-new-garden-name]') as HTMLInputElement
-    await act(async () => void fireEvent.change(input, { target: { value: 'default' } }))
+    await act(async () => void fireEvent.change(input, { target: { value: 'garden 1' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
     await waitFor(() =>
-      expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “default”.'),
+      expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “garden 1”.'),
     )
     expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
     // Another window made "Later" a moment ago: the daemon refuses.
@@ -578,7 +587,7 @@ describe('safe mode', () => {
 
   it('a missing Garden switcher: one failed check is not enough, two are safe mode', async () => {
     // Custom controls draw everything (no footer) but the switcher.
-    unregister.push(registerZenTemplateControls('k2.texting@1', ControlsWithout({ omit: 'garden-switcher' }), null))
+    unregister.push(registerZenTemplateControls('k2.texting@1', ControlsWithout({ omit: 'garden-switcher' })))
     mount()
     await enterViaTopBar()
     await pageReady()
@@ -648,13 +657,12 @@ describe('safe mode', () => {
           return (
             <div>
               <button ref={trigger} data-test-trigger="">Gardens</button>
-              <button ref={only}>Default</button>
+              <button ref={only}>Garden 1</button>
               <div ref={drag} data-zen-drag="" />
               <button ref={toggle} data-zen-switch="">Zen</button>
             </div>
           )
         },
-        null,
       ),
     )
     mount()
@@ -685,13 +693,12 @@ describe('safe mode', () => {
           const toggle = useZenBind(bridge, 'zen-toggle')
           return (
             <div>
-              <button ref={only}>Default</button>
+              <button ref={only}>Garden 1</button>
               <div ref={drag} data-zen-drag="" />
               <button ref={toggle} data-zen-switch="">Zen</button>
             </div>
           )
         },
-        null,
       ),
     )
     mount()
@@ -721,7 +728,6 @@ describe('safe mode', () => {
             </div>
           )
         },
-        null,
       ),
     )
     mount()
@@ -758,8 +764,8 @@ describe('safe mode', () => {
     await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
     await act(async () => void fireEvent.click(el('[data-zen-garden-option="g-mornings"]')))
     await pageReady('k2.blank@1')
-    // The blank template's footer: the Zen toggle, no Add agent.
-    expect(el('[data-zen-template-footer]').querySelector('[data-zen-switch]')).not.toBeNull()
+    // The blank template: the Zen toggle top right, no Add agent (no Agents widget).
+    expect(el('[data-zen-top-right]').querySelector('[data-zen-switch]')).not.toBeNull()
     expect(document.querySelector('[data-zen-add-agent]')).toBeNull()
     act(() => runZenControlChecksNow())
     act(() => runZenControlChecksNow())

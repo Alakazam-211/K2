@@ -119,7 +119,7 @@ describe('the Garden list (G13, G22)', () => {
       ok: true,
       setUp: true,
       gardens: [
-        { id: 'g-3f9a12c0', name: 'Default', index: 1, template: 'k2.texting@1', hasFile: true, seedHome: 'h1', createdAt: 'x' },
+        { id: 'g-3f9a12c0', name: 'Garden 1', index: 1, template: 'k2.texting@1', hasFile: true, seedHome: 'h1', createdAt: 'x' },
         { id: 'g-00000001', name: 'Notes', index: 2, template: 'k2.blank@1', hasFile: true },
         { id: 'g-00000001', name: 'dup' },
         { name: 'no id' },
@@ -127,7 +127,7 @@ describe('the Garden list (G13, G22)', () => {
     })
     expect(l.setUp).toBe(true)
     expect(l.gardens.map((g) => [g.id, g.name, g.index, g.template, g.seedHome])).toEqual([
-      ['g-3f9a12c0', 'Default', 1, 'k2.texting@1', 'h1'],
+      ['g-3f9a12c0', 'Garden 1', 1, 'k2.texting@1', 'h1'],
       ['g-00000001', 'Notes', 2, 'k2.blank@1', null],
     ])
     expect(() => parseZenGardens({ ok: false, error: 'zen_local_only' })).toThrow(/zen_local_only/)
@@ -188,7 +188,7 @@ describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
       switched: [] as string[],
       created: [] as string[],
       gardens: () => [
-        { id: 'g-a', name: 'Default', index: 1 },
+        { id: 'g-a', name: 'Garden 1', index: 1 },
         { id: 'g-b', name: 'Notes', index: 2 },
       ],
       currentGardenId: () => 'g-a',
@@ -237,7 +237,7 @@ describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
     const h = host()
     const b = createZenBridge(h, { id: 'controls', caps: [] })
     expect(b.gardens.list().map((g) => g.id)).toEqual(['g-a', 'g-b'])
-    expect(b.gardens.current()).toEqual({ id: 'g-a', name: 'Default', index: 1 })
+    expect(b.gardens.current()).toEqual({ id: 'g-a', name: 'Garden 1', index: 1 })
     b.gardens.switch('g-b')
     expect(h.switched).toEqual(['g-b'])
     b.zen.exit()

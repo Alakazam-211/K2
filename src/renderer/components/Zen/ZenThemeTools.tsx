@@ -2,9 +2,9 @@
 // in-Zen theme picker and the Zen shortcut cheat sheet, both drawn by K2
 // with `--zen-*` tokens only (never Styles tokens).
 //
-// - Theme picker: a small swatch button in the top-right corner of the
-//   template's top band (the bottom-left corner is the template's: its Zen
-//   toggle and Add agent button, Rosson 2026-10-04). It lists
+// - Theme picker: a small swatch button in the template's top-right
+//   cluster, immediately left of the Zen toggle (Rosson 2026-10-04; the
+//   template places it through `ZenK2TopRightContext`). It lists
 //   the daemon's themes (built-in ones marked), checks the active one, and
 //   switches on click. ⌃⌘. / ⌃⌘⇧. (Ctrl+Alt+. / Ctrl+Alt+Shift+.) cycle.
 // - Cheat sheet: `?` (not while typing), ⌃⌘/ (Ctrl+Alt+/), the macOS View
@@ -66,11 +66,10 @@ export function ZenThemePicker({
       data-zen-theme-picker=""
       className="no-drag"
       style={{
-        position: 'absolute',
-        // Centred in the template's top band (52px, or the stoplight band
-        // when that is taller), left of Windows' controls.
-        top: 'calc((max(52px, var(--zen-stoplight-safe-top, 0px)) - 26px) / 2)',
-        right: 'calc(var(--zen-stoplight-safe-right, 0px) + 14px)',
+        // In the template's top-right cluster, left of the Zen toggle; the
+        // list opens below, right-aligned, over the page.
+        position: 'relative',
+        flexShrink: 0,
         zIndex: 20,
       }}
     >

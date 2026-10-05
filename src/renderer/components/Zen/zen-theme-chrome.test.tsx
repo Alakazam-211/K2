@@ -45,7 +45,7 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (scope: { hostKey: string }, route: string, params?: unknown) => {
     h.calls.push({ method: 'GET', hostKey: scope.hostKey, route, data: params })
     if (route === 'zen/gardens') {
-      return { ok: true, setUp: true, gardens: [{ id: 'g-default', name: 'Default', index: 1, template: 'k2.texting@1' }] }
+      return { ok: true, setUp: true, gardens: [{ id: 'g-default', name: 'Garden 1', index: 1, template: 'k2.texting@1' }] }
     }
     if (route !== 'zen/get') throw new Error(`unexpected GET ${route}`)
     return h.page

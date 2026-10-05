@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.44.1 — IMAP for older mail servers, and air-gap fixes
+
+- **IMAP on older mail servers.** A server that turned on hosted email before 0.40.147 never got IMAP on ports 143 (STARTTLS) and 993 (TLS). On startup, the daemon now adds whichever of those two is missing and restarts the mail server once. If both are already there, it does nothing. Nothing else in the mail setup changes.
+- **Air-gap stops the usage check.** With air-gap on, K2 no longer checks your Claude, Codex or Grok usage, so nothing goes out to those services in the background. The usage chip reads "Off (air-gap)".
+- **Reverse DNS reads right.** `k2 hostmail ptr set` judges "aligned" by what k2.dev actually published. If this machine's DNS cache still has the old name, you get a note saying it clears on its own, instead of "not aligned".
+
 ## 0.44.0 — Zen Gardens
 
 - **Zen Mode.** The ensō at the top right of the top bar turns a window into Zen: a calm, personal page instead of the admin panel. ⌃⌘Z leaves Zen from anywhere (Ctrl+Alt+Z on Linux). Hold Shift when turning it on for safe mode. Zen is per window, and it's on the Mac and Linux desktop app only.

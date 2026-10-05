@@ -25,7 +25,7 @@ use toml_edit::{Item, TableLike, Value};
 
 /// The only schema this K2 reads.
 pub const SCHEMA_VERSION: i64 = 1;
-/// The Default Garden's page template (the texting page).
+/// Garden 1's page template (the texting page).
 pub const TEMPLATE_ID: &str = "k2.texting@1";
 /// The template every new Garden starts from: empty, with Ask my agent.
 pub const BLANK_TEMPLATE_ID: &str = "k2.blank@1";

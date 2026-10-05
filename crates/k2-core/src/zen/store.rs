@@ -46,8 +46,13 @@ pub const ACTIVE_FILE: &str = "active.json";
 pub const BACKGROUND_HISTORY: &str = "background";
 /// The record a deleted Garden leaves next to its snapshots.
 pub const DELETED_RECORD: &str = "deleted.json";
-/// The name of the first Garden on a new computer (Q5).
-pub const DEFAULT_GARDEN_NAME: &str = "Default";
+/// The name of the first Garden on a new computer (Q5; Rosson 2026-10-04):
+/// the texting page (`k2.texting@1`).
+pub const DEFAULT_GARDEN_NAME: &str = "Garden 1";
+/// The second Garden setup makes (Rosson 2026-10-04): empty
+/// (`k2.blank@1`), for the user to ask their agents to build. Made once,
+/// with Garden 1; deleting it never brings it back.
+pub const SECOND_GARDEN_NAME: &str = "Garden 2";
 /// Garden names are 1 to this many characters (G9).
 pub const MAX_GARDEN_NAME: usize = 60;
 
@@ -294,7 +299,8 @@ pub struct SnapshotInfo {
 pub struct SetupOutcome {
     pub created_folder: bool,
     pub created_zen: bool,
-    /// The Default Garden was made (there was no Garden).
+    /// The first Gardens were made (there was no Garden): Garden 1 and
+    /// Garden 2. Answered as `createdDefault`.
     pub created_default: bool,
     pub gardens: Vec<GardenEntry>,
 }
@@ -366,7 +372,8 @@ impl ZenFiles {
 
     /// Set up (G14): the folder holds a Garden list, from `gardens.json` or
     /// rebuilt from `gardens/*.toml`. A folder without one (for example a
-    /// leftover from before Gardens) is not set up; `setup` adds Default.
+    /// leftover from before Gardens) is not set up; `setup` adds Garden 1
+    /// and Garden 2.
     pub fn is_set_up(&self) -> bool {
         self.exists() && !self.gardens().is_empty()
     }
@@ -596,9 +603,10 @@ impl ZenFiles {
     }
 
     /// G14: create the folder, `zen.toml` and, when there is no Garden,
-    /// `gardens.json` with **Default** (`k2.texting@1`) plus its stub. A
-    /// list rebuilt from files is written down. Idempotent; never
-    /// overwrites a file.
+    /// `gardens.json` with **Garden 1** (`k2.texting@1`) and **Garden 2**
+    /// (`k2.blank@1`, empty), each with its stub. A list rebuilt from files
+    /// is written down. Idempotent; never overwrites a file. Only an empty
+    /// list seeds, so a deleted Garden 2 never comes back.
     pub fn setup(&self) -> Result<SetupOutcome, ZenError> {
         let _g = list_lock();
         let created_folder = !self.exists();
@@ -612,15 +620,21 @@ impl ZenFiles {
         let (mut list, source) = self.read_list();
         let mut created_default = false;
         if list.is_empty() {
-            let g = GardenEntry {
-                id: self.new_id(&list),
-                name: DEFAULT_GARDEN_NAME.to_string(),
-                template: schema::TEMPLATE_ID.to_string(),
-                created_at: Self::now(),
-                seed_home: None,
-            };
-            self.write_stub_if_missing(&g)?;
-            list.push(g);
+            let at = Self::now();
+            for (name, template) in [
+                (DEFAULT_GARDEN_NAME, schema::TEMPLATE_ID),
+                (SECOND_GARDEN_NAME, schema::BLANK_TEMPLATE_ID),
+            ] {
+                let g = GardenEntry {
+                    id: self.new_id(&list),
+                    name: name.to_string(),
+                    template: template.to_string(),
+                    created_at: at.clone(),
+                    seed_home: None,
+                };
+                self.write_stub_if_missing(&g)?;
+                list.push(g);
+            }
             self.write_list(&list)?;
             created_default = true;
         } else if source != ListSource::File {

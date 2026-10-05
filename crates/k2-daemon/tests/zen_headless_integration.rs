@@ -2,8 +2,8 @@
 //! the REAL `k2-daemon` binary under a temp HOME with no client attached.
 //!
 //! - TG1.1: before setup, `gardens` is 200 `setUp:false` and `garden/new` is
-//!   404 `zen_not_set_up`; `setup` makes Default on `k2.texting@1` (Garden
-//!   switcher, never the Home switcher); a Garden made over plain HTTP gets
+//!   404 `zen_not_set_up`; `setup` makes Garden 1 on `k2.texting@1` (Garden
+//!   switcher, never the Home switcher) and Garden 2 on `k2.blank@1`, once; a Garden made over plain HTTP gets
 //!   the empty `k2.blank@1` page; create, rename, reorder, delete and a page
 //!   save each emit exactly ONE `zen_changed`; a no-op rename emits none;
 //!   the last Garden can't go; a deleted Garden is 404 `unknown_garden`.
@@ -226,7 +226,7 @@ fn login_as(port: u16, owner: &str, username: &str, role: &str) -> String {
 
 
 /// POST `setup` as the app does when Zen is first turned on. Returns the
-/// answer and the Default Garden's id.
+/// answer and Garden 1's id.
 fn setup(port: u16, tok: &str) -> (J, String) {
     let (s, v) = call(port, "POST", &format!("/cli/zen/setup?token={tok}"), Some("{}"));
     assert_eq!(s, 200, "setup: {v}");
@@ -308,22 +308,34 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
     assert_eq!(v["error"], "zen_not_set_up");
     assert!(!zen_dir(&home.0).exists(), "nothing but setup creates ~/.k2/zen");
 
-    // setup: folder, gardens.json with one Default on k2.texting@1.
+    // setup: folder, gardens.json with Garden 1 on k2.texting@1 and
+    // Garden 2 on k2.blank@1 (Rosson 2026-10-04).
     let (v, default_id) = setup(port, &tok);
     assert_eq!(v["createdFolder"], true, "{v}");
+    assert_eq!(v["createdDefault"], true, "{v}");
     assert!(v["migrated"].is_null(), "per-Home Zen never shipped: nothing migrates: {v}");
-    assert_eq!(v["gardens"].as_array().map(Vec::len), Some(1), "{v}");
-    assert_eq!(v["gardens"][0]["name"], "Default", "{v}");
+    assert_eq!(v["gardens"].as_array().map(Vec::len), Some(2), "{v}");
+    assert_eq!(v["gardens"][0]["name"], "Garden 1", "{v}");
     assert_eq!(v["gardens"][0]["template"], "k2.texting@1", "{v}");
     assert_eq!(v["gardens"][0]["index"], 1, "{v}");
+    assert_eq!(v["gardens"][1]["name"], "Garden 2", "{v}");
+    assert_eq!(v["gardens"][1]["template"], "k2.blank@1", "{v}");
+    assert_eq!(v["gardens"][1]["index"], 2, "{v}");
+    let two_id = v["gardens"][1]["id"].as_str().expect("Garden 2 id").to_string();
+    let (s, g2) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two_id}"), None);
+    assert_eq!(s, 200, "{g2}");
+    let g2_widgets: Vec<&str> = g2["page"]["widgets"].as_array().expect("widgets").iter().filter_map(|w| w["kind"].as_str()).collect();
+    assert_eq!(g2_widgets, vec!["garden-empty"], "Garden 2 holds only the empty-Garden widget: {g2}");
     let list: J = serde_json::from_str(&std::fs::read_to_string(zen_dir(&home.0).join("gardens.json")).expect("gardens.json"))
         .expect("gardens.json JSON");
     assert_eq!(list["gardens"][0]["id"], default_id.as_str(), "{list}");
-    assert!(zen_dir(&home.0).join(format!("gardens/{default_id}.toml")).is_file(), "Default's stub");
+    assert!(zen_dir(&home.0).join(format!("gardens/{default_id}.toml")).is_file(), "Garden 1's stub");
+    assert!(zen_dir(&home.0).join(format!("gardens/{two_id}.toml")).is_file(), "Garden 2's stub");
     let (s, again) = call(port, "POST", &format!("/cli/zen/setup?token={tok}"), Some("{}"));
     assert_eq!(s, 200, "{again}");
     assert_eq!(again["createdFolder"], false, "setup is idempotent: {again}");
-    assert_eq!(again["gardens"].as_array().map(Vec::len), Some(1), "{again}");
+    assert_eq!(again["createdDefault"], false, "setup is idempotent: {again}");
+    assert_eq!(again["gardens"].as_array().map(Vec::len), Some(2), "{again}");
     let (_, g0) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={default_id}"), None);
     assert_eq!(g0["page"]["template"], "k2.texting@1", "{g0}");
     let kinds = control_kinds(&g0);
@@ -350,7 +362,7 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         let notes = v["garden"]["id"].as_str().expect("id").to_string();
         assert!(notes.starts_with("g-") && notes.len() == 10 && notes[2..].chars().all(|c| c.is_ascii_hexdigit()), "{notes}");
         assert_eq!(v["garden"]["template"], "k2.blank@1", "{v}");
-        assert_eq!(v["garden"]["index"], 2, "{v}");
+        assert_eq!(v["garden"]["index"], 3, "{v}");
         assert_eq!(v["file"], format!("gardens/{notes}.toml"), "{v}");
         assert!(zen_dir(&home_dir).join(format!("gardens/{notes}.toml")).is_file(), "stub on disk");
         expect_one_event(&events, before, "a create");
@@ -363,7 +375,9 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         assert_eq!(widgets[0]["kind"], "garden-empty", "{e}");
         assert_eq!(widgets[0]["caps"], serde_json::json!(["agents:read", "thread:read", "thread:post"]), "{e}");
         assert_eq!(control_kinds(&e), vec!["garden-switcher", "drag-region", "zen-toggle"], "{e}");
-        assert_eq!(e["garden"], serde_json::json!({"id": notes, "name": "Notes", "index": 2}), "{e}");
+        let toggle = e["page"]["controls"].as_array().expect("controls").iter().find(|c| c["kind"] == "zen-toggle").expect("zen-toggle");
+        assert_eq!(toggle["placement"], "top-right", "the Zen toggle sits top right: {e}");
+        assert_eq!(e["garden"], serde_json::json!({"id": notes, "name": "Notes", "index": 3}), "{e}");
         assert_eq!(e["errors"], serde_json::json!([]), "{e}");
         let (_, by_name) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden=notes"), None);
         assert_eq!(by_name["garden"]["id"], notes.as_str(), "a name selects, case aside");
@@ -393,12 +407,12 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         assert_eq!(s, 200, "{v}");
         assert_eq!(v["gardens"][0]["id"], notes.as_str(), "{v}");
         expect_one_event(&events, before, "a reorder");
-        let (s, v) = call(port, "POST", &format!("/cli/zen/garden/reorder?token={tok}"), Some(&format!(r#"{{"garden":"{notes}","to":3}}"#)));
+        let (s, v) = call(port, "POST", &format!("/cli/zen/garden/reorder?token={tok}"), Some(&format!(r#"{{"garden":"{notes}","to":4}}"#)));
         assert_eq!(s, 400, "{v}");
         let (_, l) = call(port, "GET", &format!("/cli/zen/gardens?token={tok}"), None);
         assert_eq!(l["setUp"], true);
         let names: Vec<&str> = l["gardens"].as_array().expect("gardens").iter().filter_map(|g| g["name"].as_str()).collect();
-        assert_eq!(names, vec!["Launch room", "Default"], "{l}");
+        assert_eq!(names, vec!["Launch room", "Garden 1", "Garden 2"], "{l}");
 
         // A page save (the watcher): once. A broken one keeps the last good page.
         let page = zen_dir(&home_dir).join(format!("gardens/{notes}.toml"));
@@ -440,13 +454,19 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         let (s, v) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={notes}"), None);
         assert_eq!(s, 404, "{v}");
         assert_eq!(v["error"], "unknown_garden", "{v}");
-        assert_eq!(v["gardens"], serde_json::json!([default_id]), "{v}");
+        assert_eq!(v["gardens"], serde_json::json!([default_id, two_id]), "{v}");
         let (s, h) = call(port, "GET", &format!("/cli/zen/history?token={tok}&garden={notes}"), None);
         assert_eq!(s, 200, "history still lists a deleted Garden by id: {h}");
         assert_eq!(h["files"][0]["deleted"], true, "{h}");
 
-        // The last Garden stays.
-        let (s, v) = call(port, "POST", &format!("/cli/zen/garden/delete?token={tok}"), Some(r#"{"garden":"Default"}"#));
+        // Garden 2 can go, and setup never brings it back; the last Garden stays.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/garden/delete?token={tok}"), Some(r#"{"garden":"Garden 2"}"#));
+        assert_eq!(s, 200, "{v}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/setup?token={tok}"), Some("{}"));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["createdDefault"], false, "{v}");
+        assert_eq!(v["gardens"].as_array().map(Vec::len), Some(1), "a deleted Garden 2 stays deleted: {v}");
+        let (s, v) = call(port, "POST", &format!("/cli/zen/garden/delete?token={tok}"), Some(r#"{"garden":"Garden 1"}"#));
         assert_eq!(s, 409, "{v}");
         assert_eq!(v["error"], "last_garden", "{v}");
         assert_eq!(v["message"], "That's your last Garden.", "{v}");
@@ -462,7 +482,7 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         let (_, m) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden=Mornings"), None);
         assert_eq!(m["theme"]["name"], "midnight", "{m}");
         assert_eq!(m["theme"]["scope"], "garden", "{m}");
-        let (_, dflt) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden=Default"), None);
+        let (_, dflt) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={default_id}"), None);
         assert_eq!(dflt["theme"]["name"], "default", "other Gardens follow the global theme: {dflt}");
         let (_, l) = call(port, "GET", &format!("/cli/zen/gardens?token={tok}"), None);
         assert_eq!(l["gardens"][0]["theme"], "midnight", "{l}");
@@ -564,7 +584,7 @@ async fn t1_1_t1_2_headless_zen_toml_last_good_and_restart() {
     assert_eq!(st["setUp"], true);
     assert_eq!(st["watching"], true, "{st}");
     assert_eq!(st["gardens"][0]["id"], g.as_str(), "{st}");
-    assert_eq!(st["gardens"][0]["name"], "Default", "{st}");
+    assert_eq!(st["gardens"][0]["name"], "Garden 1", "{st}");
     assert!(st.get("pages").is_none(), "status lists gardens, not pages: {st}");
 
     collector.abort();
@@ -652,9 +672,9 @@ async fn tg1_2_tg1_3_policy_removed_routes_keep_alive_and_no_grant_route() {
                 ("GET", "/cli/zen/status", None),
                 ("POST", "/cli/zen/setup", Some("{}")),
                 ("POST", "/cli/zen/garden/new", Some(r#"{"name":"Evil"}"#)),
-                ("POST", "/cli/zen/garden/rename", Some(r#"{"garden":"Default","name":"Evil"}"#)),
-                ("POST", "/cli/zen/garden/reorder", Some(r#"{"garden":"Default","to":1}"#)),
-                ("POST", "/cli/zen/garden/delete", Some(r#"{"garden":"Default"}"#)),
+                ("POST", "/cli/zen/garden/rename", Some(r#"{"garden":"Garden 1","name":"Evil"}"#)),
+                ("POST", "/cli/zen/garden/reorder", Some(r#"{"garden":"Garden 1","to":1}"#)),
+                ("POST", "/cli/zen/garden/delete", Some(r#"{"garden":"Garden 1"}"#)),
                 ("POST", "/cli/zen/reset", Some("{}")),
                 ("GET", "/cli/zen/theme/list", None),
                 ("POST", "/cli/zen/theme/set", Some(r#"{"name":"paper"}"#)),
@@ -669,7 +689,7 @@ async fn tg1_2_tg1_3_policy_removed_routes_keep_alive_and_no_grant_route() {
         }
         let (_, l) = call(port, "GET", &format!("/cli/zen/gardens?token={tok}"), None);
         let names: Vec<&str> = l["gardens"].as_array().expect("gardens").iter().filter_map(|x| x["name"].as_str()).collect();
-        assert_eq!(names, vec!["Default"], "refused requests wrote nothing: {l}");
+        assert_eq!(names, vec!["Garden 1", "Garden 2"], "refused requests wrote nothing: {l}");
         assert!(!zen_dir(&home.0).join("themes/evil").exists(), "a refused theme/new wrote nothing");
         assert!(!zen_dir(&home.0).join("active.json").exists(), "a refused theme switch wrote nothing");
 
@@ -866,7 +886,7 @@ async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
         assert_eq!(v["theme"], "midnight", "prev wraps back: {v}");
 
         // Per Garden: the Garden's pick beats the global one; clear drops it.
-        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper","garden":"Default"}"#));
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper","garden":"Garden 1"}"#));
         assert_eq!(s, 200, "{v}");
         assert_eq!(v["scope"], "garden", "{v}");
         assert_eq!(v["garden"], gid.as_str(), "{v}");
@@ -875,7 +895,7 @@ async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
         assert_eq!(g["theme"]["scope"], "garden", "{g}");
         let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={other}"), None);
         assert_eq!(g["theme"]["name"], "midnight", "global stays for the other Garden: {g}");
-        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"garden":"Default","clear":true}"#));
+        let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"garden":"Garden 1","clear":true}"#));
         assert_eq!(s, 200, "{v}");
         assert_eq!(v["theme"], "midnight", "{v}");
         assert_eq!(v["scope"], "global", "{v}");

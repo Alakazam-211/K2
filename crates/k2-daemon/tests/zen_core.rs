@@ -36,12 +36,14 @@ fn temp_root(tag: &str) -> (TempRoot, ZenFiles) {
     (TempRoot(dir), ZenFiles::new(zen_dir))
 }
 
-/// Zen set up the way the app does it: `setup` makes Default.
+/// Zen set up the way the app does it: `setup` makes Garden 1 (texting)
+/// and Garden 2 (empty).
 fn set_up(tag: &str) -> (TempRoot, ZenFiles) {
     let (t, f) = temp_root(tag);
     let out = f.setup().expect("setup");
     assert!(out.created_folder && out.created_zen && out.created_default, "first setup creates all: {out:?}");
-    assert_eq!(out.gardens.len(), 1, "{out:?}");
+    let names: Vec<&str> = out.gardens.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(names, vec!["Garden 1", "Garden 2"], "{out:?}");
     (t, f)
 }
 
@@ -133,11 +135,12 @@ fn builtin_theme_is_clean_and_resolves_every_token() {
     assert_eq!(rt.motion["reducedMotion"], "instant");
 }
 
-/// TG1.6: every template is data, declares the three required controls
+/// TG1.6: every template is data, declares the two required controls
 /// (G24: Garden switcher, not Home switcher) and only known caps.
 #[test]
 fn template_page_is_data_with_required_controls_and_known_caps() {
-    assert_eq!(zen::REQUIRED_CONTROLS, &["zen-toggle", "garden-switcher", "drag-region"]);
+    // Rosson 2026-10-04: exactly two required controls.
+    assert_eq!(zen::REQUIRED_CONTROLS, &["zen-toggle", "garden-switcher"]);
     assert!(zen::BRIDGE_CAPS.contains(&"gardens:manage"), "G29: gardens:manage is a bridge cap");
     let ids: Vec<&str> = zen::TEMPLATES.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, vec!["k2.texting@1", "k2.blank@1"]);
@@ -197,13 +200,17 @@ fn template_page_is_data_with_required_controls_and_known_caps() {
     let want: Vec<(String, String, Option<i64>)> = [
         ("garden-switcher", "top-left", None),
         ("drag-region", "top", None),
-        ("zen-toggle", "bottom-left", Some(0)),
-        ("add-agent", "bottom-left", Some(0)),
+        // Rosson 2026-10-04: the Zen toggle top right; Add agent is the
+        // Agents widget's last row.
+        ("zen-toggle", "top-right", None),
+        ("add-agent", "widget-bottom-left", None),
     ]
     .into_iter()
     .map(|(k, p, c)| (k.to_string(), p.to_string(), c))
     .collect();
     assert_eq!(placed, want, "{page}");
+    let add = page["controls"].as_array().expect("controls").iter().find(|c| c["kind"] == "add-agent").expect("add-agent");
+    assert_eq!(add["widget"], "agents", "Add agent belongs to the Agents widget: {add}");
     // The blank template: one column holding the empty-Garden widget, no Add agent.
     let blank = zen::template_page(zen::BLANK_TEMPLATE_ID).expect("blank");
     assert_eq!(blank["layout"]["split"], json!([100]), "{blank}");
@@ -538,7 +545,7 @@ fn t1_6_history_keeps_20_and_reset_snapshots_first_and_spares_gardens_json() {
     let out = f.reset(&page, None).expect("reset page");
     assert_eq!(out.file, format!("gardens/{g}.toml"));
     let stub = std::fs::read_to_string(f.path_of(&page)).expect("page stub");
-    assert!(stub.contains("\"Default\"") && stub.contains("template = \"k2.texting@1\""), "{stub}");
+    assert!(stub.contains("\"Garden 1\"") && stub.contains("template = \"k2.texting@1\""), "{stub}");
     let n = f.new_garden("Notes", None, None, None).expect("notes");
     write(&f, &garden(&n.id), "schema = 1\n[shape]\ngap = 20\n");
     f.reset(&garden(&n.id), None).expect("reset notes");
@@ -546,7 +553,8 @@ fn t1_6_history_keeps_20_and_reset_snapshots_first_and_spares_gardens_json() {
     assert!(stub.contains("\"Notes\"") && stub.contains("template = \"k2.blank@1\""), "a blank Garden resets to the blank stub: {stub}");
 }
 
-/// TG1.1 (core half): setup makes Default on the texting template; a new
+/// TG1.1 (core half): setup makes Garden 1 on the texting template and
+/// Garden 2 on the empty one (Rosson 2026-10-04), once; a new
 /// Garden is `g-` + 8 hex on the blank template with the empty widget and a
 /// stub on disk; the daemon honours each page's template (G40).
 #[test]
@@ -560,21 +568,29 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     let out = f.setup().expect("setup");
     assert!(out.created_folder && out.created_default);
     let list = f.gardens();
-    assert_eq!(list.len(), 1);
+    assert_eq!(list.len(), 2, "{list:?}");
     let d = &list[0];
-    assert_eq!(d.name, "Default");
+    assert_eq!(d.name, "Garden 1");
     assert_eq!(d.template, "k2.texting@1");
+    let two = list[1].clone();
+    assert_eq!((two.name.as_str(), two.template.as_str()), ("Garden 2", "k2.blank@1"), "{two:?}");
+    assert_ne!(two.id, d.id);
+    assert!(f.path_of(&garden(&two.id)).is_file(), "Garden 2 has its stub");
+    let g2 = f.resolve(Some(&two.id)).expect("Garden 2");
+    assert_eq!(kinds_of(&g2["page"], "widgets"), vec!["garden-empty"], "Garden 2 holds only the empty-Garden widget: {g2}");
+    assert_eq!(g2["garden"]["index"], 2, "{g2}");
+    assert_eq!(g2["errors"], json!([]), "{g2}");
     assert!(d.id.starts_with("g-") && d.id.len() == 10 && d.id[2..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "id shape: {}", d.id);
-    assert!(f.path_of(&garden(&d.id)).is_file(), "Default has its stub");
+    assert!(f.path_of(&garden(&d.id)).is_file(), "Garden 1 has its stub");
     let g = f.resolve(None).expect("first Garden");
-    assert_eq!(g["garden"], json!({ "id": d.id, "name": "Default", "index": 1 }), "{g}");
+    assert_eq!(g["garden"], json!({ "id": d.id, "name": "Garden 1", "index": 1 }), "{g}");
     assert!(g.get("home").is_none(), "G12: no `home` in the answer: {g}");
     assert_eq!(g["page"]["template"], "k2.texting@1");
     assert!(kinds_of(&g["page"], "controls").contains(&"garden-switcher".to_string()), "{g}");
     // Setup is idempotent.
     let again = f.setup().expect("setup again");
     assert!(!again.created_folder && !again.created_default, "{again:?}");
-    assert_eq!(f.gardens().len(), 1);
+    assert_eq!(f.gardens().len(), 2, "setup again makes nothing new");
 
     let n = f.new_garden("  Notes\u{7}  ", None, None, None).expect("new");
     assert_eq!(n.name, "Notes", "trimmed, control characters dropped");
@@ -585,7 +601,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     let e = f.resolve(Some(&n.id)).expect("empty Garden");
     assert_eq!(e["page"]["template"], "k2.blank@1", "{e}");
     assert_eq!(kinds_of(&e["page"], "widgets"), vec!["garden-empty"], "{e}");
-    assert_eq!(e["garden"]["index"], 2);
+    assert_eq!(e["garden"]["index"], 3);
     assert_eq!(e["errors"], json!([]), "the stub validates: {e}");
     assert_eq!(f.resolve(Some("notes")).expect("by name")["garden"]["id"], n.id, "a name selects, case aside");
 
@@ -613,10 +629,19 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     match f.resolve(Some("nowhere")) {
         Err(ZenError::UnknownGarden { garden, known }) => {
             assert_eq!(garden, "nowhere");
-            assert_eq!(known, vec![d.id.clone(), n.id.clone()]);
+            assert_eq!(known, vec![d.id.clone(), two.id.clone(), n.id.clone()]);
         }
         other => panic!("an unknown Garden must be UnknownGarden, got {other:?}"),
     }
+
+    // A deleted Garden 2 never comes back: setup seeds only an empty list.
+    f.delete_garden(&two.id).expect("delete Garden 2");
+    let again = f.setup().expect("setup after deleting Garden 2");
+    assert!(!again.created_default, "{again:?}");
+    let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
+    assert_eq!(names, vec!["Garden 1".to_string(), "Notes".to_string()], "Garden 2 stays deleted");
+    // "Garden 2" is a free name again.
+    f.new_garden("Garden 2", None, None, None).expect("a new Garden 2");
 }
 
 /// TG1.6: the Garden list's rules (names, positions, seedHome, deletes)
@@ -637,14 +662,14 @@ fn garden_list_crud_rules_and_fingerprint() {
     let long = "x".repeat(61);
     assert!(matches!(f.new_garden(&long, None, None, None), Err(ZenError::BadRequest(_))), "61 characters is too long");
     f.new_garden(&"y".repeat(60), None, None, None).expect("60 characters is fine");
-    match f.new_garden("DEFAULT", None, None, None) {
+    match f.new_garden("GARDEN 1", None, None, None) {
         Err(ZenError::GardenExists(m)) => assert!(m.contains("You already have a Garden called"), "{m}"),
         other => panic!("a case clash must be GardenExists, got {other:?}"),
     }
     assert!(matches!(f.new_garden("x", Some("dashboard"), None, None), Err(ZenError::BadRequest(_))));
     assert!(matches!(f.new_garden("x", None, Some("../evil"), None), Err(ZenError::BadRequest(_))));
     assert!(matches!(f.new_garden("x", None, None, Some(0)), Err(ZenError::BadRequest(_))));
-    assert!(matches!(f.new_garden("x", None, None, Some(4)), Err(ZenError::BadRequest(_))), "n+1 is the last position");
+    assert!(matches!(f.new_garden("x", None, None, Some(5)), Err(ZenError::BadRequest(_))), "n+1 is the last position");
 
     let fp1 = f.refresh().expect("fp1");
     assert_ne!(fp1, fp0, "a create moves the fingerprint");
@@ -661,7 +686,7 @@ fn garden_list_crud_rules_and_fingerprint() {
     let (_, changed) = f.rename_garden(&m.id, "Mornings").expect("same name");
     assert!(!changed, "the same name changes nothing");
     assert_eq!(f.refresh().expect("same fp"), fp2, "a no-op rename keeps the fingerprint");
-    assert!(matches!(f.rename_garden(&m.id, "default"), Err(ZenError::GardenExists(_))));
+    assert!(matches!(f.rename_garden(&m.id, "garden 1"), Err(ZenError::GardenExists(_))));
     let (g, changed) = f.rename_garden("mornings", "Dawn").expect("rename by name");
     assert!(changed && g.name == "Dawn" && g.id == m.id, "ids are stable: {g:?}");
     let fp3 = f.refresh().expect("fp3");
@@ -671,12 +696,12 @@ fn garden_list_crud_rules_and_fingerprint() {
 
     // Reorder: 1-based, out of range refused, same place a no-op.
     assert!(matches!(f.reorder_garden(&m.id, 0), Err(ZenError::BadRequest(_))));
-    assert!(matches!(f.reorder_garden(&m.id, 4), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.reorder_garden(&m.id, 5), Err(ZenError::BadRequest(_))));
     let (_, moved) = f.reorder_garden(&m.id, 1).expect("same place");
     assert!(!moved);
-    let (list, moved) = f.reorder_garden("Dawn", 3).expect("to the end");
+    let (list, moved) = f.reorder_garden("Dawn", 4).expect("to the end");
     assert!(moved);
-    assert_eq!(list[2].id, m.id, "{list:?}");
+    assert_eq!(list[3].id, m.id, "{list:?}");
     assert_ne!(f.refresh().expect("fp4"), fp3, "a reorder moves the fingerprint");
     assert_eq!(f.snapshots(&garden(&m.id)).len(), snaps_before, "rename and reorder never touch history");
     assert!(matches!(f.rename_garden("nowhere", "x"), Err(ZenError::UnknownGarden { .. })));
@@ -707,7 +732,7 @@ fn delete_moves_the_page_to_history_and_the_last_garden_stays() {
     .expect("record JSON");
     assert_eq!(rec["name"], "Notes", "{rec}");
     assert!(rec["deletedAt"].is_string(), "{rec}");
-    assert_eq!(f.gardens().len(), 1);
+    assert_eq!(f.gardens().len(), 2, "Garden 1 and Garden 2 are left");
     assert!(!f.read_active().gardens.contains_key(&n.id), "its theme pick goes with it");
     assert_ne!(f.refresh().expect("after"), fp, "a delete moves the fingerprint");
     match f.resolve(Some(&n.id)) {
@@ -724,6 +749,7 @@ fn delete_moves_the_page_to_history_and_the_last_garden_stays() {
     assert!(all["files"].as_array().expect("files").iter().any(|x| x["garden"] == n.id), "{all}");
     assert!(f.garden_file(&n.id, false).is_err(), "only history may name a deleted Garden");
 
+    f.delete_garden("Garden 2").expect("delete Garden 2");
     match f.delete_garden(&d) {
         Err(ZenError::LastGarden) => {}
         other => panic!("the last Garden must stay, got {other:?}"),
@@ -765,7 +791,7 @@ fn list_is_rebuilt_from_files_and_an_unreadable_list_is_kept() {
     let (list, source) = f.read_list();
     assert!(matches!(source, ListSource::Unreadable(_)), "{source:?}");
     ids = list.iter().map(|g| g.id.clone()).collect();
-    assert_eq!(ids.len(), 3, "rebuilt from the three files: {ids:?}");
+    assert_eq!(ids.len(), 4, "rebuilt from the four files: {ids:?}");
     f.rename_garden(&n.id, "Notes again").expect("rename writes the list");
     let kept: Vec<_> = std::fs::read_dir(f.history_root().join(GARDENS_FILE)).expect("kept dir").flatten().collect();
     assert_eq!(kept.len(), 1, "the unreadable list is kept, not overwritten");
@@ -860,7 +886,8 @@ fn no_route_level_name_reaches_daemon_owned_files_and_grants_are_ignored() {
 }
 
 /// A folder left from before Gardens (no list) is not set up, and setup
-/// adds Default without touching the old files (no migration, Rosson).
+/// adds Garden 1 and Garden 2 without touching the old files (no
+/// migration, Rosson).
 #[test]
 fn a_leftover_folder_without_gardens_is_not_set_up_and_setup_ignores_old_files() {
     let (_t, f) = temp_root("leftover");
@@ -872,8 +899,8 @@ fn a_leftover_folder_without_gardens_is_not_set_up_and_setup_ignores_old_files()
     assert!(matches!(f.refresh(), Err(ZenError::NotSetUp)));
     let out = f.setup().expect("setup");
     assert!(!out.created_folder && out.created_default, "{out:?}");
-    assert_eq!(f.gardens().len(), 1);
-    assert_eq!(f.gardens()[0].name, "Default");
+    let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
+    assert_eq!(names, vec!["Garden 1".to_string(), "Garden 2".to_string()]);
     assert!(f.root().join("pages/home-1.toml").is_file() && f.root().join("homes.json").is_file(), "old files are ignored, not touched");
     let g = f.resolve(None).expect("resolve");
     assert_eq!(g["theme"]["name"], "paper", "the global pick survives: {g}");
@@ -1080,7 +1107,7 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     assert_eq!(pg["theme"]["tokens"]["shape"]["radius"], 5);
 
     // Another theme: zen.toml still applies; the default override doesn't.
-    write(&f, &garden(&g), &zen::store::garden_stub(&g, "Default", zen::TEMPLATE_ID));
+    write(&f, &garden(&g), &zen::store::garden_stub(&g, "Garden 1", zen::TEMPLATE_ID));
     write(&f, &ZenFile::Zen, "schema = 1\n[shape]\nradius = 5\n");
     f.set_theme(Some("paper"), None).expect("paper");
     let p = f.resolve(Some(&g)).expect("paper resolve");
@@ -1134,8 +1161,8 @@ fn cycling_order_wraps_and_a_garden_pick_beats_the_global_one() {
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "zeta", "prev wraps backwards");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "alpha");
 
-    // Per Garden: cycling for Default starts from what it shows (the global).
-    let w = f.cycle_theme(1, Some("Default")).expect("garden next");
+    // Per Garden: cycling for Garden 1 starts from what it shows (the global).
+    let w = f.cycle_theme(1, Some("Garden 1")).expect("garden next");
     assert_eq!((w.theme.as_str(), w.scope.as_str(), w.garden.as_deref()), ("zeta", "garden", Some(one.as_str())));
     assert_eq!(f.active_theme(None).name, "alpha", "the global pick is untouched");
     let r = f.resolve(Some(&one)).expect("w");

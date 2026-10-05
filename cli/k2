@@ -33582,8 +33582,9 @@ cmd_help_zen() {
 k2 zen — build Zen Gardens on this computer (~/.k2/zen)
 
 Zen Mode is a mode of a K2 desktop window. In Zen the window shows a Garden:
-a personal page on this computer. The Default Garden is the texting page; a
-new Garden starts empty, and agents fill it by editing its file,
+a personal page on this computer. Zen starts with two Gardens: Garden 1 is
+the texting page, and Garden 2 is empty, for you to ask your agents to build.
+A new Garden starts empty too, and agents fill it by editing its file,
 gardens/<id>.toml (K2's built-in widgets in columns, plus theme tables).
 ~/.k2/zen holds only your changes on top of K2's read-only themes and
 templates: gardens/<id>.toml (one Garden), zen.toml (every Garden) and

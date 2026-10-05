@@ -44,9 +44,11 @@ pub fn generate_k2_zen_skill() -> String {
 Zen Mode is a mode of a K2 desktop window. In Zen the window shows a **Garden**:\n\
 a personal page that lives on THIS computer. The human can have as many Gardens\n\
 as they like and switches between them with the Garden switcher (or Cmd+Option+1-9).\n\
-The **Default** Garden is the texting page: a Home's agents beside the\n\
-conversation with the one picked. Every new Garden starts **empty**, with\n\
-\"Ask your agents to add things to this Garden\" and an Ask my agent button.\n\n\
+Zen starts with two Gardens. **Garden 1** is the texting page: a Home's agents\n\
+beside the conversation with the one picked. **Garden 2** is empty: it's there\n\
+for the human to ask you to build it. Garden 2 and every new Garden start\n\
+**empty**, with \"Ask your agents to add things to this Garden\" and an Ask my\n\
+agent button.\n\n\
 When the human asks you to add something to a Garden, you edit that Garden's\n\
 file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
 `~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
@@ -298,7 +300,8 @@ When the computer asks for reduced motion, every Zen animation is instant.\n\n",
     s.push_str("## Controls\n\nEvery Garden page carries the required controls, which K2 binds and checks itself: ");
     s.push_str(&ticks(REQUIRED_CONTROLS));
     s.push_str(
-        ". They come from the template, so a Garden file can't drop or move them. If one\n\
+        " (the Zen toggle, top right, and the Garden switcher, top left). They come from\n\
+the template, so a Garden file can't drop or move them. If one\n\
 is hidden, covered or unusable, Zen drops to safe mode. The human can always\n\
 leave with Exit Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n\
 ## Bridge verbs and caps\n\n\

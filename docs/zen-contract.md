@@ -32,18 +32,23 @@ Gardens." `zen-v1` stays and means the theme routes exist.
   an id wins).
 - **Index** is **1-based** everywhere (the first Garden is `index: 1`;
   ⌘⌥1 is Garden 1).
-- **Templates:** `k2.texting@1` (the Default Garden: Agents beside
-  Conversation) and `k2.blank@1` (every new Garden: the empty-Garden widget).
+- **Templates:** `k2.texting@1` (Garden 1: Agents beside Conversation)
+  and `k2.blank@1` (Garden 2 and every new Garden: the empty-Garden widget).
+- **First Gardens** (Rosson, 2026-10-04): `setup` on an empty list makes
+  **Garden 1** (`k2.texting@1`) and **Garden 2** (`k2.blank@1`, nothing in
+  it but the empty-Garden widget: ask your agents to build it). Only an
+  empty list seeds, so running `setup` again makes nothing, and a deleted
+  Garden 2 never comes back.
 - **No migration.** Per-Home Zen never shipped (Rosson, 2026-10-04). A folder
   left from that era (`pages/`, `homes.json`) is ignored, and it counts as not
-  set up until `setup` adds Default.
+  set up until `setup` adds Garden 1 and Garden 2.
 
 ## Requests
 
 | Call | When | Body or query | Answer |
 |---|---|---|---|
 | `GET /cli/zen/gardens` | Zen turns on in a window; every local `zen_changed` | none | `{ok, setUp, gardens: [Garden]}`. **Always 200**: `setUp: false, gardens: []` when Zen isn't set up, so "not set up" differs from "down" |
-| `POST /cli/zen/setup` | Turning Zen on when `gardens` said `setUp: false` (once) | `{}` | `{ok, path, createdFolder, createdDefault, migrated: null, gardens: [Garden], changed}`. Idempotent. The only route that creates `~/.k2/zen` |
+| `POST /cli/zen/setup` | Turning Zen on when `gardens` said `setUp: false` (once) | `{}` | `{ok, path, createdFolder, createdDefault, migrated: null, gardens: [Garden], changed}`. `createdDefault`: this call made Garden 1 and Garden 2. Idempotent. The only route that creates `~/.k2/zen` |
 | `GET /cli/zen/get` | Showing a Garden; Try again; every `zen_changed` | `?garden=<id|name>` (omit for the first Garden) | the page answer below |
 | `POST /cli/zen/garden/new` | **+ New Garden** in the switcher | `{name, template?: "blank"\|"texting", seedHome?, at?}` | `{ok, garden: Garden, file, path, changed}` |
 | `POST /cli/zen/garden/rename` | CLI and agents (Q6) | `{garden, name}` | `{ok, garden: Garden, changed}`; the same name again is `changed: false` and emits nothing |
@@ -111,8 +116,8 @@ A restore verb is later (Q8).
     "controls": [                  // always the template's; a Garden file can't change them
       { "kind": "garden-switcher", "placement": "top-left" },
       { "kind": "drag-region", "placement": "top" },
-      { "kind": "zen-toggle", "placement": "bottom-left", "column": 0 },
-      { "kind": "add-agent", "placement": "bottom-left", "column": 0 }      // texting only
+      { "kind": "zen-toggle", "placement": "top-right" },
+      { "kind": "add-agent", "placement": "widget-bottom-left", "widget": "agents" }   // texting only
     ]
   },
   "theme": { … }, "themes": [ … ], "chrome": { … }, "motion": { … },     // see Themes
@@ -132,15 +137,16 @@ the window into safe mode.
 
 ### Templates
 
-| | `k2.texting@1` (Default) | `k2.blank@1` (new Gardens) |
+| | `k2.texting@1` (Garden 1) | `k2.blank@1` (Garden 2, new Gardens) |
 |---|---|---|
 | layout | 2 columns, `[34, 66]`, min `[240, 360]` | 1 column, `[100]`, min `[320]` |
 | widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`) | `garden-empty` (column 0) |
 | controls | `garden-switcher`, `drag-region`, `zen-toggle`, `add-agent` | `garden-switcher`, `drag-region`, `zen-toggle` |
 
-**Required controls** (G24): `zen-toggle`, `garden-switcher`, `drag-region`.
-Every template declares all three; `home-switcher` and `home-option` are gone
-from Zen. The renderer binds `garden-option` (with its Garden id) the way it
+**Required controls** (G24; Rosson, 2026-10-04: exactly two):
+`zen-toggle`, `garden-switcher`. Every template declares both, plus
+`drag-region`, which K2 binds for window drag but never checks.
+`home-switcher` and `home-option` are gone from Zen. The renderer binds `garden-option` (with its Garden id) the way it
 bound `home-option`. Template controls get the caps `agents:add` and
 `gardens:manage` (G29); widgets never get `gardens:manage`.
 
@@ -455,3 +461,19 @@ this contract, where it reads more loosely or decides something:
    `gardens.create/rename/delete` (`gardens:manage`, template controls
    only), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
    (`agents:read`), `compose.draft` (`thread:post`); `homes.select` is gone.
+9. **Placement** (Rosson, 2026-10-04). One top band for both templates and
+   safe mode: the Garden switcher top left, the drag strip, then the
+   top-right cluster — K2's theme control immediately left of the Zen
+   toggle, which sits in the window's top-right corner (where the top bar's
+   Zen toggle is outside Zen; clear of Windows' controls via
+   `--zen-stoplight-safe-right`). No footer under any column. **Add agent**
+   is the Agents widget's last row (its bottom-left corner), shown in
+   whole-Home mode when the widget holds `agents:add`; it opens the picker
+   for that widget's own Home.
+10. **The required-controls check** (Z27/Z28) checks the two required
+    controls only. The switcher's wiring rule: after the trigger is
+    activated, every Garden must get a bound `garden-option` within 1 s. It
+    passes the moment that happens (closing the menu inside the second is
+    fine), and an activation while the options are already bound (the click
+    that closes the menu) passes at once. K2 never cancels Enter/Space on the
+    trigger. A resize runs the check once, 300 ms after resizing stops.

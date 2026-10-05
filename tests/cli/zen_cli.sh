@@ -5,7 +5,7 @@
 # Boots the worktree's k2-daemon under a temp HOME (never the real ~/.k2,
 # never a production daemon), then:
 #   - before Zen is set up: every verb exits 3 with the top-bar sentence;
-#   - setup over curl (as the app does) makes Default;
+#   - setup over curl (as the app does) makes Garden 1 (texting) and Garden 2 (empty);
 #   - garden new/list/rename/reorder/delete; a name clash and the last
 #     Garden exit 1; a Garden made over curl gets the empty template;
 #   - zen.toml with `acent` at line 7 → `zen.toml:7:3: unknown key 'acent'`, exit 1;
@@ -102,7 +102,7 @@ echo "== not set up (TG2.1) =="
 NOT_SET_UP="Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar."
 capture zen theme list
 assert_eq "zen theme list before setup exits 3" "$rc" "3"
-for verb in validate path history reload "garden list" "garden new Notes" "garden rename Default Home" "garden reorder Default 1" "garden delete Default"; do
+for verb in validate path history reload "garden list" "garden new Notes" "garden rename Notes Home" "garden reorder Notes 1" "garden delete Notes"; do
     # shellcheck disable=SC2086
     capture zen $verb
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
@@ -114,15 +114,20 @@ echo "== set up (as the app does) =="
 resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
 assert_contains "setup created the folder" "$resp" '"createdFolder":true'
 DEFAULT_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["gardens"][0]["id"])')"
+SECOND_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["gardens"][1]["id"])')"
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
+assert_contains "setup again makes nothing new" "$resp" '"createdDefault":false'
 capture zen path
 assert_eq "zen path exit" "$rc" "0"
 assert_eq "zen path prints the folder" "$out" "$ZEN"
 capture zen garden list
 assert_eq "garden list exit" "$rc" "0"
-assert_eq "garden list shows Default" "$out" "  1  $DEFAULT_ID  Default  k2.texting@1"
+assert_eq "garden list shows Garden 1 and Garden 2" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1
+  2  $SECOND_ID  Garden 2  k2.blank@1"
 capture zen validate
 assert_eq "fresh setup validates" "$rc" "0"
 assert_contains "validate ok line" "$out" "ok: zen.toml, gardens/$DEFAULT_ID.toml"
+assert_contains "validate covers Garden 2" "$out" "gardens/$SECOND_ID.toml"
 
 echo "== gardens (TG2.1) =="
 capture zen garden new Notes
@@ -137,7 +142,7 @@ got="$(printf '%s' "$out" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 print(",".join("%s:%s:%s" % (g["index"], g["name"], g["template"]) for g in d["gardens"]))')"
-assert_eq "list --json parses with the new entry" "$got" "1:Default:k2.texting@1,2:Notes:k2.blank@1"
+assert_eq "list --json parses with the new entry" "$got" "1:Garden 1:k2.texting@1,2:Garden 2:k2.blank@1,3:Notes:k2.blank@1"
 capture zen garden new notes
 assert_eq "a name clash exits 1" "$rc" "1"
 assert_contains "clash message" "$out" "You already have a Garden called"
@@ -149,9 +154,9 @@ assert_contains "--at 1 puts it first" "$(printf '%s\n' "$out" | sed -n 1p)" "1 
 capture zen garden rename "Launch room" Mornings
 assert_eq "rename exit" "$rc" "0"
 assert_contains "rename says so" "$out" "Garden $LAUNCH_ID is now"
-capture zen garden reorder Mornings 3
+capture zen garden reorder Mornings 4
 assert_eq "reorder exit" "$rc" "0"
-assert_contains "reorder lists the new order" "$(printf '%s\n' "$out" | sed -n 3p)" "3  $LAUNCH_ID  Mornings"
+assert_contains "reorder lists the new order" "$(printf '%s\n' "$out" | sed -n 4p)" "4  $LAUNCH_ID  Mornings"
 capture zen garden reorder Mornings 9
 assert_eq "reorder out of range exits 1" "$rc" "1"
 capture zen garden reorder Mornings first
@@ -244,11 +249,15 @@ assert_contains "delete says where the page went" "$out" "its page is kept in .h
 capture zen history --garden "$CURL_ID"
 assert_eq "history of a deleted Garden by id" "$rc" "0"
 assert_contains "history marks it deleted" "$out" "Garden deleted"
-for g in "$LAUNCH_ID" Notes; do
+for g in "$LAUNCH_ID" Notes "Garden 2"; do
     capture zen garden delete "$g"
     assert_eq "delete $g" "$rc" "0"
 done
-capture zen garden delete Default
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
+assert_contains "setup never brings a deleted Garden 2 back" "$resp" '"createdDefault":false'
+capture zen garden list
+assert_eq "only Garden 1 is left" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1"
+capture zen garden delete "Garden 1"
 assert_eq "the last Garden exits 1" "$rc" "1"
 assert_eq "the last Garden says so" "$out" "That's your last Garden."
 
@@ -275,15 +284,15 @@ active="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.
 assert_eq "an unknown name changes nothing" "$active" "midnight"
 capture zen theme set
 assert_eq "set with no name exits 2" "$rc" "2"
-capture zen theme set paper --garden Default
+capture zen theme set paper --garden "Garden 1"
 assert_eq "set --garden exit" "$rc" "0"
 assert_eq "set --garden says so" "$out" "theme paper for Garden $DEFAULT_ID"
-capture zen theme list --garden Default
+capture zen theme list --garden "Garden 1"
 assert_contains "list --garden marks paper" "$out" "* paper"
 assert_contains "list --garden notes the pick" "$out" "Garden $DEFAULT_ID: its own pick"
 capture zen garden list
-assert_contains "garden list stars a Garden with its own theme" "$out" "* 1  $DEFAULT_ID  Default"
-capture zen theme set --garden Default --clear
+assert_contains "garden list stars a Garden with its own theme" "$out" "* 1  $DEFAULT_ID  Garden 1"
+capture zen theme set --garden "Garden 1" --clear
 assert_eq "clear exit" "$rc" "0"
 assert_eq "clear says so" "$out" "Garden $DEFAULT_ID follows this computer: theme midnight"
 capture zen theme set paper --home Work
@@ -341,7 +350,7 @@ echo "== doctor =="
 capture zen doctor
 assert_eq "doctor exit" "$rc" "0"
 assert_contains "doctor reports the watcher" "$out" "ok   watcher"
-assert_contains "doctor reports the Garden list" "$out" "ok   gardens.json: 1 Garden(s): Default"
+assert_contains "doctor reports the Garden list" "$out" "ok   gardens.json: 1 Garden(s): Garden 1"
 assert_contains "doctor reports the templates" "$out" "ok   templates"
 
 echo "== agents can't grant =="

@@ -1,5 +1,5 @@
 # Built-in Zen page template `k2.texting@1` (prd-zen-mode-v1 Z10,
-# prd-zen-gardens-v1 G11): the Default Garden.
+# prd-zen-gardens-v1 G11): Garden 1, the first Garden.
 #
 # Data, not special code: `/cli/zen/get?garden=` returns this layout, these
 # widgets and these controls as the resolved page, and the renderer draws
@@ -51,11 +51,13 @@ compose = true
 attachments = true
 load-older = true
 
-# Controls (Z27, G24). The page draws them; K2 binds and checks the required
-# three (`zen-toggle`, `garden-switcher`, `drag-region`). The top band holds
-# the Garden switcher (top left) and the drag strip; the footer under the
-# Agents column (column 0) holds the Zen toggle, the way out, and Add agent
-# (bottom left). K2 draws its own theme swatch in the top-right corner.
+# Controls (Z27, G24). The page draws them; K2 binds them and checks the
+# required two (`zen-toggle`, `garden-switcher`). The drag strip is bound for
+# window drag but never checked. One top band: the Garden switcher (top
+# left), the drag strip, then the top-right cluster — K2's theme control
+# immediately left of the Zen toggle, the way out, in the top-right corner
+# (where the top bar's Zen toggle is outside Zen). Add agent is the Agents
+# widget's last row, in its bottom-left corner.
 [[control]]
 kind = "garden-switcher"
 placement = "top-left"
@@ -66,11 +68,11 @@ placement = "top"
 
 [[control]]
 kind = "zen-toggle"
-placement = "bottom-left"
-column = 0
+placement = "top-right"
 
-# Optional: opens K2's Add agent picker for the Agents widget's Home (`agents.add`).
+# Optional: opens K2's Add agent picker for the Agents widget's Home
+# (`agents.add`). Drawn by that widget as its list's last row.
 [[control]]
 kind = "add-agent"
-placement = "bottom-left"
-column = 0
+placement = "widget-bottom-left"
+widget = "agents"

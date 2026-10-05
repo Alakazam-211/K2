@@ -6,8 +6,8 @@
 //! layered over read-only defaults built into K2:
 //!
 //! - built-in themes ([`BUILTIN_THEMES`], embedded TOML) and the built-in
-//!   page templates `k2.texting@1` (the Default Garden) and `k2.blank@1`
-//!   (every new Garden) are the defaults; app updates replace them and
+//!   page templates `k2.texting@1` (Garden 1) and `k2.blank@1`
+//!   (Garden 2 and every new Garden) are the defaults; app updates replace them and
 //!   never touch user files;
 //! - `themes/<name>/theme.toml` (+ an optional background image) is a
 //!   user theme bundle, or the user's override of the built-in of that
@@ -134,7 +134,7 @@ pub fn builtin_theme_layer(name: &str) -> Option<&'static Layer> {
         .get(name)
 }
 
-/// The `k2.texting@1` template (Z10): the Default Garden.
+/// The `k2.texting@1` template (Z10): Garden 1, the first Garden.
 pub const TEXTING_TEMPLATE_TOML: &str = include_str!("template-k2-texting-1.toml");
 /// The `k2.blank@1` template (G11): every new Garden.
 pub const BLANK_TEMPLATE_TOML: &str = include_str!("template-k2-blank-1.toml");
@@ -145,9 +145,12 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     (schema::BLANK_TEMPLATE_ID, BLANK_TEMPLATE_TOML),
 ];
 
-/// Required page controls (Z27, G24). Every template's `controls` names all
-/// three; a Garden file can't drop one (its `[[control]]` is ignored).
-pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher", "drag-region"];
+/// Required page controls (Z27, G24; Rosson 2026-10-04: exactly two, the
+/// Zen toggle and the Garden switcher). Every template's `controls` names
+/// both; a Garden file can't drop one (its `[[control]]` is ignored). The
+/// templates also declare `drag-region`, which K2 binds for window drag but
+/// never checks.
+pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher"];
 
 /// Bridge caps (Z34, G29). `thread:*` reuse the app-gateway names;
 /// `agents:read`, `agents:add` and `presence:read` are Zen-bridge only.
@@ -260,7 +263,7 @@ pub fn template_page(id: &str) -> Option<J> {
         .cloned()
 }
 
-/// The `k2.texting@1` page (the Default Garden's).
+/// The `k2.texting@1` page (Garden 1's).
 pub fn texting_page() -> J {
     template_page(TEMPLATE_ID).unwrap_or_else(|| panic!("TEMPLATES must carry {TEMPLATE_ID}"))
 }

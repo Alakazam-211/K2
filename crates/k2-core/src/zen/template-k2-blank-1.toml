@@ -1,5 +1,5 @@
 # Built-in Zen page template `k2.blank@1` (prd-zen-gardens-v1 G11, G28):
-# every new Garden starts here.
+# Garden 2 (made by setup) and every new Garden start here.
 #
 # One column holding the `garden-empty` widget: "This Garden is empty. Ask
 # your agents to add things to this Garden." plus an Ask my agent button.
@@ -22,7 +22,9 @@ kind = "garden-empty"
 column = 0
 caps = ["agents:read", "thread:read", "thread:post"]
 
-# Controls (G24). K2 binds and checks the required three. No Add agent: a
+# Controls (G24). K2 binds them and checks the required two (`zen-toggle`,
+# `garden-switcher`); the drag strip is bound, never checked. Same top band
+# as Garden 1: switcher top left, Zen toggle top right. No Add agent: a
 # blank Garden has no Agents widget to add to.
 [[control]]
 kind = "garden-switcher"
@@ -34,5 +36,4 @@ placement = "top"
 
 [[control]]
 kind = "zen-toggle"
-placement = "bottom-left"
-column = 0
+placement = "top-right"

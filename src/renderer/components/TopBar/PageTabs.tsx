@@ -157,9 +157,9 @@ export default function PageTabs(): React.JSX.Element {
       <PageTab
         selected={!settingsOpen && page === 'home'}
         onSelect={() => select('home')}
-        title="Home — your agents from any server"
+        title="My Home — your own page on this computer: your agents from any server. Other people on the server don't see it."
       >
-        Home
+        My Home
       </PageTab>
       <PageTab
         selected={!settingsOpen && page === 'agents'}

@@ -60,17 +60,17 @@ function tabs(container: HTMLElement): HTMLButtonElement[] {
 }
 
 describe('PageTabs — Home tab', () => {
-  it('order is gear, Home, Agents, Projects, Tickets', () => {
+  it('order is gear, My Home, Agents, Projects, Tickets', () => {
     const { container } = render(<PageTabs />)
     const list = tabs(container)
-    expect(list.map((b) => b.getAttribute('title')?.split(' ')[0])).toEqual([
+    expect(list.map((b) => b.getAttribute('title')?.split(/ [—(]/)[0])).toEqual([
       'Settings',
-      'Home',
+      'My Home',
       'Agents',
       'Projects',
       'Tickets',
     ])
-    expect(list.slice(1).map((b) => b.textContent)).toEqual(['Home', 'Agents', 'Projects', 'Tickets'])
+    expect(list.slice(1).map((b) => b.textContent)).toEqual(['My Home', 'Agents', 'Projects', 'Tickets'])
   })
 
   it('selecting Home sets the page and does not open Settings', () => {

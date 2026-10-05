@@ -30,10 +30,7 @@ export const ZEN_TICKETS_GLASS_CSS = `
   --zen-glass: ${GLASS};
   --zen-glass-edge: ${GLASS_EDGE};
   --zen-glass-blur: blur(22px) saturate(1.5);
-  background:
-    radial-gradient(60% 55% at 12% 8%, color-mix(in srgb, var(--zen-accent) 16%, transparent), transparent 70%),
-    radial-gradient(55% 60% at 92% 92%, color-mix(in srgb, var(--zen-working) 12%, transparent), transparent 70%),
-    radial-gradient(40% 45% at 70% 20%, color-mix(in srgb, var(--zen-needs-you) 8%, transparent), transparent 70%);
+  background: transparent; /* Rosson 2026-10-04: no background gradient */
   border-radius: var(--zen-radius);
 }
 [data-zen-root] [data-zen-tickets] [data-testid="ticket-board"] { gap: var(--zen-gap); padding: 0; background: transparent; }

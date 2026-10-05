@@ -2578,6 +2578,8 @@ describe('S6 source ratchets', () => {
     expect(view).toContain("import { TicketsPageBoard } from '@/components/Feedback/FeedbackPage'")
     expect(view).toContain('<TicketRailTerminalContext.Provider value={false}>')
     expect(view).not.toContain('<TicketBoard')
+    // Rosson 2026-10-04: no background gradient behind the Tickets view.
+    expect(view).not.toMatch(/gradient\(/)
     const page = read('components/Feedback/FeedbackPage.tsx')
     expect(page).toContain('<TicketsPageBoardView data={data} />')
     // The Agents view uses the app's own focus-group dropdown.

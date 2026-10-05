@@ -3,12 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.43.4 — Zen Gardens
+## 0.44.0 — Zen Gardens
 
 - **Zen Mode.** The ensō at the top right of the top bar turns a window into Zen: a calm, personal page instead of the admin panel. ⌃⌘Z leaves Zen from anywhere (Ctrl+Alt+Z on Linux). Hold Shift when turning it on for safe mode. Zen is per window, and it's on the Mac and Linux desktop app only.
 - **Gardens.** Inside Zen you see your Gardens. They're personal pages kept on this computer, and nobody else on the server sees them. Garden 1 has a thin rail (My Home, Agents, Projects, Tickets) beside your agents and a conversation. Garden 2 starts empty: ask your agents to build it, or click Start with the default. ⌘⌥1–9 switches Gardens. + New Garden asks whether to start with the default or empty.
 - **Inside Garden 1.** My Home shows your Homes' agents. Agents shows this server's agents, with a GROUP: picker when focus groups are on. Tickets shows the Tickets board in glass, with chat only. Projects is coming soon. Picking an agent, or coming back to it, puts the cursor in its message box. Agents' pictures show where they have one.
-- **Themes.** Basic (K2 blue), Midnight and Paper. ⌃⌘. cycles them, and each Garden can have its own. The usage chip and the theme control sit at the top right, and every tile has the same soft glass.
+- **Themes.** Basic (K2 blue), Midnight and Paper. ⌃⌘. cycles them, and each Garden can have its own. The usage chip and the theme control sit at the top right, and every tile has the same soft glass edge.
 - **Agents can build it.** `k2 zen garden list|new|rename|reorder|delete|template` and the k2-zen skill let your agents arrange and restyle Gardens for you. Settings → Gardens manages them too.
 - **My Home.** The Home tab is now called My Home, and its tooltip says it's your own page on this computer.
 - **Thread stays in sync.** A message sent from a Garden, the Agents page, Home, another window, another person, or an agent now shows up live in every view of that Thread. A view that loses its connection reconnects and catches up by itself.

@@ -34,7 +34,9 @@ export const ZEN_GLASS_TOKENS_CSS = `
   --zen-glass: var(--zen-surface);
   --zen-glass-raised: var(--zen-surface-raised);
   --zen-glass-edge: color-mix(in srgb, var(--zen-border) 55%, color-mix(in srgb, var(--zen-text) 14%, transparent));
-  --zen-glass-blur: blur(22px) saturate(1.5);
+  /* No backdrop blur: the inside is solid, and WebKit left stale blurred
+     layers behind after a theme switch (paper → basic). Rosson 2026-10-04. */
+  --zen-glass-blur: none;
   --zen-glass-sheen: inset 0 1px 0 color-mix(in srgb, white 22%, transparent);
   --zen-glass-shadow: 0 10px 30px color-mix(in srgb, black 8%, transparent);
 }

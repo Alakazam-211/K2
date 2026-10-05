@@ -1000,15 +1000,15 @@ describe('the nav rail (Garden 1)', () => {
       expect(zenNavPillMotion(true, 'pill')).toEqual({ mode: 'instant', layoutId: undefined, transition: { duration: 0 } })
     })
 
-    it('glass in WebKit terms: blur + saturate, Zen tokens only, no SVG filter, solid under reduced transparency', async () => {
+    it('glass in WebKit terms: no blur, no gradient, Zen tokens only, no SVG filter, solid under reduced transparency', async () => {
       setReducedMotion(false)
       await mountZen()
       const css = document.querySelector('[data-zen-widget="nav-rail"] style[data-zen-nav-rail-glass]')?.textContent ?? ''
       expect(css).toBe(ZEN_NAV_RAIL_CSS)
       // Rosson 2026-10-04: no gradient inside the pill (the glass is its edge).
       expect(css).not.toMatch(/gradient\(/)
-      expect(css).toContain('backdrop-filter: blur(14px) saturate(180%)')
-      expect(css).toContain('-webkit-backdrop-filter: blur(14px) saturate(180%)')
+      // No backdrop blur on the pill (stale WebKit layers after a theme switch).
+      expect(css).not.toMatch(/blur\(/)
       expect(css).toContain('var(--zen-accent)')
       expect(css).toContain('[data-zen-scheme="dark"]')
       expect(css).not.toMatch(/url\(/)

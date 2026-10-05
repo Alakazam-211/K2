@@ -28,14 +28,16 @@ describe('the shared Zen glass', () => {
     expect(ZEN_GLASS_PROPS).toEqual({ 'data-zen-glass': '' })
   })
 
-  it('the Tickets panels’ and usage chip’s recipe: translucent surface, blur + saturate with the -webkit- prefix, soft edge, sheen + shadow', () => {
+  it('the Tickets panels’ and usage chip’s recipe: solid surface inside, no backdrop blur, soft edge, top highlight + shadow', () => {
     expect(GLASS_TOKENS.sort()).toEqual(
       ['--zen-glass', '--zen-glass-blur', '--zen-glass-edge', '--zen-glass-raised', '--zen-glass-shadow', '--zen-glass-sheen'].sort(),
     )
     // Flat inside (Rosson 2026-10-04): the fill is the solid surface.
     expect(ZEN_GLASS_TOKENS_CSS).toContain('--zen-glass: var(--zen-surface);')
     expect(ZEN_GLASS_TOKENS_CSS).toContain('--zen-glass-raised: var(--zen-surface-raised);')
-    expect(ZEN_GLASS_TOKENS_CSS).toContain('--zen-glass-blur: blur(22px) saturate(1.5);')
+    // No backdrop blur (stale WebKit layers after a theme switch, Rosson 2026-10-04).
+    expect(ZEN_GLASS_TOKENS_CSS).toContain('--zen-glass-blur: none;')
+    expect(ZEN_GLASS_TOKENS_CSS).not.toMatch(/blur\(/)
     expect(ZEN_GLASS_TOKENS_CSS).toContain(
       '--zen-glass-edge: color-mix(in srgb, var(--zen-border) 55%, color-mix(in srgb, var(--zen-text) 14%, transparent));',
     )

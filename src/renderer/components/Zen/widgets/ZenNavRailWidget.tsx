@@ -72,8 +72,8 @@ export const ZEN_NAV_RAIL_CSS = `
 }
 [data-zen-root] [data-zen-nav-pill] {
   background: var(--zen-nav-pill-tint); /* flat inside; no sheen gradient (Rosson 2026-10-04) */
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
-  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: none; /* no blur: stale WebKit layers after a theme switch */
+  backdrop-filter: none;
   border: 1px solid var(--zen-nav-pill-rim);
 }
 [data-zen-root] [data-zen-nav] { transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }

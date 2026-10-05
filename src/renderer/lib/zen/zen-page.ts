@@ -12,8 +12,11 @@
 // The built-in `k2.texting@1` page is also the safe-mode page (Z29): safe
 // mode never reads the user's files, so it renders `BUILTIN_TEXTING_PAGE`.
 
-/** The three controls every Garden page must draw (G24). */
-export const ZEN_REQUIRED_CONTROLS = ['zen-toggle', 'garden-switcher', 'drag-region'] as const
+/** The two controls every Garden page must draw and K2 checks (G24,
+ *  Rosson 2026-10-04): the Zen toggle (the way out) and the Garden
+ *  switcher. The drag region is still drawn and bound (it moves the
+ *  window) but is not checked, so it can never put a window in safe mode. */
+export const ZEN_REQUIRED_CONTROLS = ['zen-toggle', 'garden-switcher'] as const
 export type ZenControlKind = (typeof ZEN_REQUIRED_CONTROLS)[number]
 
 /** One validation finding, with where it is (Z13). */
@@ -95,7 +98,7 @@ export interface ZenResolvedPage {
   lastGoodAt: string | null
 }
 
-/** The Default Garden's template (G11). */
+/** The first Garden's template, "Garden 1" (G11). */
 export const BUILTIN_TEMPLATE_ID = 'k2.texting@1'
 export const TEXTING_TEMPLATE_ID = BUILTIN_TEMPLATE_ID
 /** A new Garden's template: one column holding the empty-Garden widget (G11). */

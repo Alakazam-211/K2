@@ -39,7 +39,6 @@ export type ZenControlProblem = 'undeclared' | 'missing' | 'not-wired' | 'invisi
 const CONTROL_NAME: Record<ZenControlKind, string> = {
   'zen-toggle': 'The Zen toggle',
   'garden-switcher': 'The Garden switcher',
-  'drag-region': 'The window drag area',
 }
 
 const PROBLEM_TEXT: Record<ZenControlProblem, string> = {

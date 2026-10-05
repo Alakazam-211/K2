@@ -178,10 +178,13 @@ describe('the check', () => {
     expect(check(undefined, [lights])).toEqual({ ok: true })
   })
 
-  it('the drag region needs 120×12', () => {
+  it('only two controls are required (Rosson 2026-10-04): a tiny, covered, unbound or undeclared drag region never fails', () => {
     const { drag } = goodPage()
-    rects.set(drag, { left: 300, top: 8, width: 100, height: 28 })
-    expect(check()).toEqual({ ok: false, control: 'drag-region', problem: 'invisible' })
+    rects.set(drag, { left: 300, top: 8, width: 100, height: 4 })
+    covered.add(drag)
+    expect(check()).toEqual({ ok: true })
+    drag.remove()
+    expect(check(['zen-toggle', 'garden-switcher'])).toEqual({ ok: true })
   })
 
   it('an element marked as a control but never bound → not wired', () => {
@@ -216,11 +219,74 @@ describe('the check', () => {
 
     trigger.click()
     registry.bind('garden-option', el(), 'g2')
-    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS - 1)
-    // Not decided yet: the earlier failure still stands until the deadline.
-    expect(check()).toEqual({ ok: false, control: 'garden-switcher', problem: 'not-wired' })
-    vi.advanceTimersByTime(1)
+    // Every Garden has an option inside the second: wired at once.
     expect(check()).toEqual({ ok: true })
+    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS)
+    expect(check()).toEqual({ ok: true })
+  })
+})
+
+// Rosson 2026-10-04 bug: "Zen Safe Mode keeps popping up" with the Zen
+// toggle right there. The switcher's 1 s wiring deadline read the options
+// AT the deadline, so a menu opened and shut inside that second (a second
+// click on the pill, Esc, a click outside, picking the Garden you're on)
+// left a sticky `not-wired`, and the next two scheduled checks put the
+// window in safe mode. Enter / Space on the pill were also swallowed
+// (preventDefault), so the menu never opened from the keyboard and the
+// deadline failed the same way.
+describe('no false safe mode from the Garden switcher', () => {
+  function openMenu(): Array<() => void> {
+    return GARDENS.map((id) => registry.bind('garden-option', el(), id))
+  }
+
+  it('a menu opened and closed inside 1 s is wired', () => {
+    vi.useFakeTimers()
+    const { trigger } = goodPage()
+    trigger.click()
+    const offs = openMenu()
+    vi.advanceTimersByTime(200)
+    for (const off of offs) off()
+    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS)
+    expect(registry.wiringFailure()).toBeNull()
+    expect(check()).toEqual({ ok: true })
+  })
+
+  it('the click that closes an open menu is not a fresh activation that must bind options', () => {
+    vi.useFakeTimers()
+    const { trigger } = goodPage()
+    trigger.click()
+    const offs = openMenu()
+    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS + 500)
+    expect(check()).toEqual({ ok: true })
+    // Second click on the pill: the menu is still open when K2 sees it,
+    // then the page closes it.
+    trigger.click()
+    for (const off of offs) off()
+    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS)
+    expect(check()).toEqual({ ok: true })
+  })
+
+  it('Enter / Space on the trigger are not swallowed (the button still opens its menu)', () => {
+    const { trigger } = goodPage()
+    for (const key of ['Enter', ' ']) {
+      const e = new KeyboardEvent('keydown', { key, cancelable: true })
+      trigger.dispatchEvent(e)
+      expect(e.defaultPrevented).toBe(false)
+    }
+  })
+
+  it('two scheduled checks after a quick open/close never reach safe mode', () => {
+    vi.useFakeTimers()
+    const onFail = vi.fn()
+    const streak = createControlStreak(onFail)
+    const { trigger } = goodPage()
+    trigger.click()
+    const offs = openMenu()
+    for (const off of offs) off()
+    vi.advanceTimersByTime(ZEN_WIRING_DEADLINE_MS * 3)
+    streak.record(check())
+    streak.record(check())
+    expect(onFail).not.toHaveBeenCalled()
   })
 })
 

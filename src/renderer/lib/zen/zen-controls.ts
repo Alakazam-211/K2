@@ -1,5 +1,7 @@
 // prd-zen-mode-v1 Z27, Z28, Z64 and prd-zen-gardens-v1 G24 — the required
-// controls: bound by K2, then checked by K2.
+// controls: bound by K2, then checked by K2. Two are required (Rosson
+// 2026-10-04): the Zen toggle and the Garden switcher. The drag region is
+// bound for its behaviour only and never checked.
 //
 // The page draws its own Zen toggle, Garden switcher and drag region, in
 // any form. It hands each element to `bridge.controls.bind(kind, el, gardenId?)`
@@ -9,12 +11,13 @@
 //   - `drag-region`: mousedown → `titleBarDragOnMouseDown` (drag, and a
 //     double-click zooms).
 //   - `garden-switcher`: the page's TRIGGER. K2 attaches no action (the page
-//     opens its own dropdown or modal); K2 only watches for activation so
-//     it can check the options turn up.
+//     opens its own dropdown or modal) and never cancels its keys (Enter /
+//     Space must still open it); K2 only watches for activation so it can
+//     check the options turn up.
 //   - `garden-option`: one choice, with its Garden id → switch this window
 //     to that Garden.
 //
-// Then K2 checks, for each required control:
+// Then K2 checks, for each of the two required controls:
 //   declared  the page's `controls` list names it;
 //   present   it is bound and the element is connected;
 //   visible   displayed, opacity ≥ 0.3 (through its ancestors), a box of at
@@ -24,7 +27,11 @@
 //   wired     bound through `bind` (an element marked `data-zen-control`
 //             that was never bound is "not wired"), and activating the
 //             switcher trigger binds a `garden-option` for every Garden
-//             within 1 s.
+//             within 1 s. Once every Garden had an option inside that
+//             second the activation passed, even if the menu closed again
+//             before the second was up; an activation while the options
+//             are already bound (the click that closes the menu) passes
+//             at once.
 // Two failed checks in a row are a failure (Z28): one bad frame mid
 // animation isn't.
 
@@ -32,7 +39,7 @@ import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { ZEN_REQUIRED_CONTROLS, type ZenControlKind } from './zen-page'
 import type { ZenControlProblem } from './zen-view'
 
-export type ZenBindKind = ZenControlKind | 'garden-option'
+export type ZenBindKind = ZenControlKind | 'garden-option' | 'drag-region'
 
 export const ZEN_BIND_KINDS: readonly ZenBindKind[] = ['zen-toggle', 'garden-switcher', 'garden-option', 'drag-region']
 
@@ -116,7 +123,19 @@ export function createControlRegistry(
     return actions.gardenIds().every((id) => bound.has(id))
   }
 
+  const settle = (): void => {
+    if (pending !== null) timers.clearTimeout(pending)
+    pending = null
+    wiring = null
+  }
+
   const onTriggerActivated = (): void => {
+    // The options are bound right now (the menu is open and this is the
+    // click that closes it): wired.
+    if (optionsCoverGardens()) {
+      settle()
+      return
+    }
     if (pending !== null) timers.clearTimeout(pending)
     pending = timers.setTimeout(() => {
       pending = null
@@ -134,17 +153,19 @@ export function createControlRegistry(
         el.addEventListener(type, fn)
         offs.push(() => el.removeEventListener(type, fn))
       }
-      const activate = (fn: () => void): void => {
+      const activate = (fn: () => void, own = true): void => {
         on('click', () => fn())
         on('keydown', (e) => {
           if (!ACTIVATE_KEYS.has(e.key)) return
-          e.preventDefault()
+          // K2's own action replaces the key's default (no second click).
+          // The switcher's action is the page's: its key must still click.
+          if (own) e.preventDefault()
           fn()
         })
       }
       if (kind === 'zen-toggle') activate(() => actions.exit())
       else if (kind === 'garden-option') activate(() => actions.selectGarden(gardenId as string))
-      else if (kind === 'garden-switcher') activate(onTriggerActivated)
+      else if (kind === 'garden-switcher') activate(onTriggerActivated, false)
       else {
         on('mousedown', (e) => titleBarDragOnMouseDown(e as unknown as Parameters<typeof titleBarDragOnMouseDown>[0]))
       }
@@ -163,6 +184,8 @@ export function createControlRegistry(
         },
       }
       list.push(binding)
+      // Every Garden now has an option inside the activation's second: wired.
+      if (kind === 'garden-option' && pending !== null && optionsCoverGardens()) settle()
       return () => {
         const i = list.indexOf(binding)
         if (i < 0) return
@@ -238,7 +261,7 @@ function isZenK2Overlay(hit: Element): boolean {
 
 export type ZenControlCheck = { ok: true } | { ok: false; control: ZenControlKind; problem: ZenControlProblem }
 
-/** One full check of the three required controls (Z27). */
+/** One full check of the two required controls (Z27, G24). */
 export function checkZenControls(input: {
   declared: readonly string[]
   registry: ZenControlRegistry

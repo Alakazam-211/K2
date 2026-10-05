@@ -89,7 +89,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `k2-zen` skill (prd-zen-mode-v1 Z18). Written only when this daemon
 /// has `~/.k2/zen/` (Z68). v1 = first ship. v2 = theme bundles, `[font]`,
 /// terminal palette, backgrounds, `k2 zen theme` (Omarchy additions).
-pub const SKILL_VERSION_ZEN: u32 = 2;
+/// v3 = Zen Gardens: `k2 zen garden`, `--garden`, layout + built-in widgets.
+pub const SKILL_VERSION_ZEN: u32 = 3;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

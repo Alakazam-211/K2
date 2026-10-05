@@ -1,20 +1,21 @@
 //! Watch `~/.k2/zen/` and announce changes (prd-zen-mode-v1 Z12, vs-live Z61).
 //!
 //! Shape follows `charter_compose_watch` and the 0.40.104 RSS lesson:
-//! - DIRECTORIES, non-recursive (`zen/`, `zen/pages/`, `zen/themes/` and
+//! - DIRECTORIES, non-recursive (`zen/`, `zen/gardens/`, `zen/themes/` and
 //!   each `zen/themes/<name>/`), so editor rename-saves are seen and
 //!   `.history/` is never walked;
 //! - the bounded `notify_bound` channel (`try_send`, drop on full), so a
 //!   burst can't grow memory;
 //! - `should_observe` drops Access/Other kinds before paths are touched;
-//! - a path filter that keeps only `zen.toml`, `pages/<id>.toml`,
+//! - a path filter that keeps only `zen.toml`, `gardens/<id>.toml`,
 //!   `themes/<name>/theme.toml` and a theme's background images (never
-//!   `.history/`, `homes.json`, `active.json`, `grants.json` or editor temp
-//!   files);
+//!   `.history/`, `gardens.json`, `active.json`, `grants.json` or editor
+//!   temp files): `gardens.json` is written only by routes, which emit
+//!   themselves (G18);
 //! - a 250 ms trailing debounce: a burst of saves is one re-validate.
 //!
-//! Started lazily: at boot only when the folder exists, otherwise by the
-//! first `POST /cli/zen/page/ensure`. One watcher per process.
+//! Started lazily: at boot only when Zen is set up, otherwise by
+//! `POST /cli/zen/setup`. One watcher per process.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use k2_core::log_debug;
 use k2_core::zen::schema::image_ext;
-use k2_core::zen::store::{valid_home_id, PAGES_DIR, THEMES_DIR, THEME_FILE, ZEN_FILE};
+use k2_core::zen::store::{valid_garden_id, GARDENS_DIR, THEMES_DIR, THEME_FILE, ZEN_FILE};
 use k2_core::zen::valid_theme_name;
 
 use crate::notify_bound::{should_observe, DroppingHandler, NOTIFY_CHANNEL_BOUND};
@@ -45,7 +46,8 @@ pub fn is_running() -> bool {
     RUNNING.load(Ordering::Relaxed)
 }
 
-/// Boot hook: baseline + watch only when this computer has set Zen up.
+/// Boot hook: baseline + watch only when this computer has set Zen up
+/// (it has a Garden list). Per-Home pages never shipped: nothing migrates.
 pub fn start_at_boot() {
     if k2_core::zen::is_set_up() {
         crate::zen_routes::prime();
@@ -94,9 +96,9 @@ fn root_forms(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// True for `<root>/zen.toml`, `<root>/pages/<id>.toml`, `<root>/pages`,
+/// True for `<root>/zen.toml`, `<root>/gardens/<id>.toml`, `<root>/gardens`,
 /// `<root>/themes`, `<root>/themes/<name>`, `<root>/themes/<name>/theme.toml`
-/// and a theme's image files. Everything else (`.history/…`, `homes.json`,
+/// and a theme's image files. Everything else (`.history/…`, `gardens.json`,
 /// `active.json`, `grants.json`, `zen.toml.swp`, `.#zen.toml`, atomic-write
 /// temp files) is ignored.
 pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
@@ -106,12 +108,12 @@ pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
     let Some(parent) = path.parent() else { return false };
     let is_root = |p: &Path| roots.iter().any(|r| r == p);
     if is_root(parent) {
-        return name == ZEN_FILE || name == PAGES_DIR || name == THEMES_DIR;
+        return name == ZEN_FILE || name == GARDENS_DIR || name == THEMES_DIR;
     }
     let parent_name = parent.file_name().and_then(|n| n.to_str());
     let grand = parent.parent();
-    if parent_name == Some(PAGES_DIR) && grand.is_some_and(is_root) {
-        return name.strip_suffix(".toml").is_some_and(valid_home_id);
+    if parent_name == Some(GARDENS_DIR) && grand.is_some_and(is_root) {
+        return name.strip_suffix(".toml").is_some_and(valid_garden_id);
     }
     if parent_name == Some(THEMES_DIR) && grand.is_some_and(is_root) {
         return valid_theme_name(name);
@@ -148,9 +150,9 @@ pub(crate) fn watch_loop(
     watcher
         .watch(root, RecursiveMode::NonRecursive)
         .map_err(|e| format!("watch {}: {e}", root.display()))?;
-    let pages = root.join(PAGES_DIR);
+    let gardens = root.join(GARDENS_DIR);
     let themes = root.join(THEMES_DIR);
-    let mut pages_watched = false;
+    let mut gardens_watched = false;
     let mut themes_watched = false;
     let mut theme_watched: BTreeSet<PathBuf> = BTreeSet::new();
     let mut last_scan = Instant::now() - THEME_RESCAN;
@@ -160,10 +162,10 @@ pub(crate) fn watch_loop(
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        if !pages_watched && pages.is_dir() {
-            pages_watched = watcher.watch(&pages, RecursiveMode::NonRecursive).is_ok();
-        } else if pages_watched && !pages.is_dir() {
-            pages_watched = false;
+        if !gardens_watched && gardens.is_dir() {
+            gardens_watched = watcher.watch(&gardens, RecursiveMode::NonRecursive).is_ok();
+        } else if gardens_watched && !gardens.is_dir() {
+            gardens_watched = false;
         }
         if !themes_watched && themes.is_dir() {
             themes_watched = watcher.watch(&themes, RecursiveMode::NonRecursive).is_ok();
@@ -216,7 +218,7 @@ mod tests {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        std::fs::create_dir_all(dir.join(PAGES_DIR)).expect("mkdir zen/pages");
+        std::fs::create_dir_all(dir.join(GARDENS_DIR)).expect("mkdir zen/gardens");
         std::fs::write(dir.join(ZEN_FILE), "schema = 1\n").expect("write zen.toml");
         dir
     }
@@ -226,25 +228,32 @@ mod tests {
         let root = PathBuf::from("/tmp/k2zen");
         let roots = vec![root.clone()];
         assert!(is_zen_source(&roots, &root.join("zen.toml")));
-        assert!(is_zen_source(&roots, &root.join("pages/abc-123.toml")));
-        assert!(is_zen_source(&roots, &root.join("pages")));
+        assert!(is_zen_source(&roots, &root.join("gardens/g-3f9a12c0.toml")));
+        assert!(is_zen_source(&roots, &root.join("gardens/abc-123.toml")));
+        assert!(is_zen_source(&roots, &root.join("gardens")));
         assert!(is_zen_source(&roots, &root.join("themes")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset/theme.toml")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset/background.jpg")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset/wall.PNG")));
         for no in [
+            "gardens.json",
             "homes.json",
             "grants.json",
+            "pages",
+            "pages/abc-123.toml",
+            ".history/gardens/g-3f9a12c0.toml/20261004T120000000Z-000.toml",
+            ".history/gardens/g-3f9a12c0.toml/deleted.json",
             ".history",
             ".history/zen.toml/20261004T120000000Z-000.toml",
             "zen.toml.swp",
             ".zen.toml.swp",
             ".#zen.toml",
             "zen.toml~",
-            "pages/abc.toml.tmp",
-            "pages/.hidden.toml",
-            "pages/sub/x.toml",
+            "gardens/abc.toml.tmp",
+            "gardens/.hidden.toml",
+            "gardens/sub/x.toml",
+            "gardens/a b.toml",
             "active.json",
             "themes/Sunset/theme.toml",
             "themes/sunset/notes.md",
@@ -258,8 +267,9 @@ mod tests {
         assert!(!is_zen_source(&roots, Path::new("/elsewhere/zen.toml")));
     }
 
-    /// T1.7: a 500-write burst is one re-validate; `.history/`, `homes.json`
-    /// and `grants.json` writes are none; the channel is the shared bound.
+    /// T1.7 / TG1.7: a 500-write burst to one Garden page is one
+    /// re-validate; `.history/`, `gardens.json`, `grants.json` and `pages/`
+    /// writes are none; the channel is the shared bound.
     #[test]
     fn burst_is_one_change_and_daemon_files_are_none() {
         assert_eq!(NOTIFY_CHANNEL_BOUND, 256, "zen watch must use the shared bounded channel");
@@ -278,9 +288,9 @@ mod tests {
         };
         std::thread::sleep(Duration::from_millis(500));
 
+        let page = root.join(GARDENS_DIR).join("g-3f9a12c0.toml");
         for i in 0..500 {
-            std::fs::write(root.join(ZEN_FILE), format!("schema = 1\n# save {i}\n"))
-                .expect("burst write");
+            std::fs::write(&page, format!("schema = 1\n# save {i}\n")).expect("burst write");
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         while count.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
@@ -295,22 +305,24 @@ mod tests {
             std::fs::write(hist.join(format!("20261004T1200{i:02}000Z-000.toml")), "schema = 1\n")
                 .expect("history write");
         }
-        std::fs::write(root.join("homes.json"), "{}").expect("homes write");
+        std::fs::write(root.join("gardens.json"), "{}").expect("gardens.json write");
         std::fs::write(root.join("grants.json"), "{}").expect("grants write");
+        std::fs::create_dir_all(root.join("pages")).expect("mkdir pages");
+        std::fs::write(root.join("pages").join("home-1.toml"), "schema = 1\n").expect("pages write");
         std::fs::write(root.join(".zen.toml.swp"), "x").expect("swap write");
         std::thread::sleep(Duration::from_millis(1200));
         assert_eq!(
             count.load(Ordering::SeqCst),
             1,
-            ".history/, homes.json, grants.json and swap files must never trigger the watcher"
+            ".history/, gardens.json, grants.json, pages/ and swap files must never trigger the watcher"
         );
 
-        std::fs::write(root.join(PAGES_DIR).join("home-1.toml"), "schema = 1\n").expect("page write");
+        std::fs::write(root.join(ZEN_FILE), "schema = 1\n# zen save\n").expect("zen.toml write");
         let deadline = Instant::now() + Duration::from_secs(5);
         while count.load(Ordering::SeqCst) == 1 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(count.load(Ordering::SeqCst), 2, "a page save must re-validate");
+        assert_eq!(count.load(Ordering::SeqCst), 2, "a zen.toml save must re-validate");
 
         stop.store(true, Ordering::SeqCst);
         handle.join().expect("watch thread");

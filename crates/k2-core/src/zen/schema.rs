@@ -4,8 +4,13 @@
 //! every error and warning carries `file:line:col`. A clean file becomes a
 //! flat [`Layer`] (`"colors.light.canvas" → "#fff"`); layers stack
 //! built-in theme → `themes/<name>/theme.toml` → `zen.toml` →
-//! `pages/<home>.toml` and resolve into the JSON `/cli/zen/get` returns
+//! `gardens/<id>.toml` and resolve into the JSON `/cli/zen/get` returns
 //! (tokens, font, terminal palette, background, chrome, motion).
+//!
+//! A Garden file (prd-zen-gardens-v1 G10, G38) may also name its template
+//! and lay out K2's built-in widgets. Those land in the layer under
+//! `page.template`, `page.layout` and `page.widgets`, so they ride the same
+//! last-good, history and fingerprint path as the theme keys.
 //!
 //! Every token, range and preset lives in the constants below. The `k2-zen`
 //! skill is generated from the same constants, so a token added here without
@@ -20,8 +25,12 @@ use toml_edit::{Item, TableLike, Value};
 
 /// The only schema this K2 reads.
 pub const SCHEMA_VERSION: i64 = 1;
-/// The only page template Zen v1 has.
+/// The Default Garden's page template (the texting page).
 pub const TEMPLATE_ID: &str = "k2.texting@1";
+/// The template every new Garden starts from: empty, with Ask my agent.
+pub const BLANK_TEMPLATE_ID: &str = "k2.blank@1";
+/// Every page template K2 ships (G11).
+pub const TEMPLATE_IDS: &[&str] = &[TEMPLATE_ID, BLANK_TEMPLATE_ID];
 /// Files over this size are refused (they are themes, not data).
 pub const MAX_FILE_BYTES: usize = 64 * 1024;
 /// Minimum contrast of `text` and `accent` against `canvas` (Z13).
@@ -187,10 +196,206 @@ pub const THEME_TABLES: &[&str] =
 /// Tables only a theme bundle (`themes/<name>/theme.toml`) may carry: the
 /// background image lives next to the bundle's own file.
 pub const BUNDLE_TABLES: &[&str] = &["background"];
-/// Top-level keys that open in Zen v2: warned and ignored in v1.
-pub const V2_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls"];
-/// The warning for [`V2_TABLES`] (Z9).
-pub const V2_WARNING: &str = "layout and widgets open in Zen v2; this table is ignored";
+/// Top-level keys that only a Garden file may carry (G38).
+pub const PAGE_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls", "caps"];
+/// The warning for `[[control]]` in a Garden file: controls always come
+/// from the template, so a page can't drop a required control (G38).
+pub const CONTROL_WARNING: &str =
+    "controls come from the page's template (K2 binds and checks them); this table is ignored";
+
+// ── Garden pages: layout and built-in widgets (G38) ─────────────────────
+
+/// `[layout] kind`.
+pub const LAYOUT_KINDS: &[&str] = &["columns"];
+/// A Garden page has 1 to this many `[[layout.column]]`.
+pub const MAX_COLUMNS: usize = 3;
+/// `[[layout.column]] min-width`, px, 0..=this.
+pub const COLUMN_MIN_WIDTH_MAX: f64 = 800.0;
+/// At most this many `[[widget]]` on one page.
+pub const MAX_WIDGETS: usize = 12;
+/// Longest text prop (a Home or agent name).
+pub const MAX_PROP_TEXT: usize = 200;
+
+/// Built-in widget kinds a Garden file may place, with what they show.
+pub const WIDGET_KINDS: &[(&str, &str)] = &[
+    (
+        "agents",
+        "a Home's agents with live status (working, idle, needs you) and their last message; the whole Home, or one agent filtered from it",
+    ),
+    (
+        "conversation",
+        "one agent's Thread and a box to message it: the agent picked in an Agents widget, or one agent pinned by name",
+    ),
+];
+/// Kinds only a template places (never a Garden file).
+pub const TEMPLATE_WIDGET_KINDS: &[(&str, &str)] = &[(
+    "garden-empty",
+    "the empty-Garden message with Ask my agent; shown until the Garden's file declares widgets",
+)];
+
+/// The Agents widget's live statuses (decision 9: no unread tracking).
+pub const AGENT_STATUSES: &[&str] = &["working", "idle", "needs-you"];
+/// The Agents widget's modes (Rosson 2026-10-04, answer 5).
+pub const AGENTS_MODES: &[&str] = &["home", "agent"];
+/// The Agents widget's row orders.
+pub const AGENTS_ORDERS: &[&str] = &["home"];
+
+/// The type of a widget prop.
+#[derive(Debug, Clone, Copy)]
+pub enum PropType {
+    Bool,
+    /// A short string (a name, an id or an address).
+    Text,
+    OneOf(&'static [&'static str]),
+    /// A list whose items come from the set, no repeats.
+    SubsetOf(&'static [&'static str]),
+}
+
+/// One prop of a built-in widget kind. `default` is JSON; `None` means
+/// unset unless the page sets it (or, for `agents.mode`, derived).
+#[derive(Debug, Clone, Copy)]
+pub struct WidgetProp {
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub ty: PropType,
+    pub default: Option<&'static str>,
+    pub doc: &'static str,
+}
+
+pub const WIDGET_PROPS: &[WidgetProp] = &[
+    WidgetProp {
+        kind: "agents",
+        name: "mode",
+        ty: PropType::OneOf(AGENTS_MODES),
+        default: None,
+        doc: "`home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`). Default: `agent` when `agent` is set, else `home`",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "home",
+        ty: PropType::Text,
+        default: None,
+        doc: "the Home to show, by name or id. Default: the Garden's starting Home, else the window's Home",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "agent",
+        ty: PropType::Text,
+        default: None,
+        doc: "one agent's name or address in that Home: the widget shows only that agent (`mode = \"agent\"`)",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "home-picker",
+        ty: PropType::Bool,
+        default: Some("false"),
+        doc: "a Home picker in the widget's header; the pick belongs to this Garden and never moves the Home page",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "order",
+        ty: PropType::OneOf(AGENTS_ORDERS),
+        default: Some("\"home\""),
+        doc: "row order: the Home's own order",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "server-tag",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "tag rows from another server with its name",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "preview",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "show each agent's last message",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "status",
+        ty: PropType::SubsetOf(AGENT_STATUSES),
+        default: Some("[\"working\", \"idle\", \"needs-you\"]"),
+        doc: "which live statuses to show",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "agents",
+        ty: PropType::Text,
+        default: None,
+        doc: "the id of the Agents widget whose picked agent this shows. Default: the page's first Agents widget",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "agent",
+        ty: PropType::Text,
+        default: None,
+        doc: "pin one agent's conversation by name or address (no Agents widget needed); not with `agents`",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "home",
+        ty: PropType::Text,
+        default: None,
+        doc: "with `agent`: the Home to look that agent up in, by name or id",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "compose",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "show the box to message the agent",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "attachments",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "allow attachments in the box",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "load-older",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "load older messages on scroll",
+    },
+];
+
+/// The props of a widget kind.
+pub fn widget_props(kind: &str) -> impl Iterator<Item = &'static WidgetProp> + '_ {
+    WIDGET_PROPS.iter().filter(move |p| p.kind == kind)
+}
+
+/// A widget id: letters, digits, `-` and `_`, starting with a letter or
+/// digit, up to 64 (the same rule as a Garden id).
+pub fn valid_widget_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Fill a widget's unset props with K2's defaults and derive `agents.mode`.
+/// Applied to template widgets and Garden widgets alike, so the renderer
+/// always reads every prop.
+pub fn normalize_props(kind: &str, props: &mut Map<String, J>) {
+    for p in widget_props(kind) {
+        if props.contains_key(p.name) {
+            continue;
+        }
+        if let Some(d) = p.default {
+            let v: J = serde_json::from_str(d)
+                .unwrap_or_else(|e| panic!("WIDGET_PROPS default for {}.{} is not JSON: {e}", p.kind, p.name));
+            props.insert(p.name.to_string(), v);
+        }
+    }
+    if kind == "agents" && !props.contains_key("mode") {
+        let mode = if props.contains_key("agent") { "agent" } else { "home" };
+        props.insert("mode".into(), json!(mode));
+    }
+}
 
 /// One error or warning with its position (1-based line and column).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,10 +416,11 @@ impl Diagnostic {
 /// Which kind of file is being checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
-    /// `zen.toml`: the theme for every Home.
+    /// `zen.toml`: the theme for every Garden.
     Zen,
-    /// `pages/<home>.toml`: the template line plus an optional theme override.
-    Page,
+    /// `gardens/<id>.toml`: the template line, an optional theme override,
+    /// and optional `[layout]` + `[[widget]]` for built-in widgets (G38).
+    Garden,
     /// `themes/<name>/theme.toml`: a theme bundle (or the user's override
     /// of a built-in theme), plus `[background]`.
     Theme,
@@ -244,6 +450,8 @@ impl Checked {
 struct Ctx<'a> {
     file: &'a str,
     src: &'a str,
+    /// A Garden file's template when it doesn't name one (its list entry's).
+    default_template: &'a str,
     line_starts: Vec<usize>,
     out: Checked,
     /// Where each layer key was set, for cross-checks after the walk.
@@ -258,7 +466,7 @@ impl<'a> Ctx<'a> {
                 line_starts.push(i + 1);
             }
         }
-        Ctx { file, src, line_starts, out: Checked::default(), pos: BTreeMap::new() }
+        Ctx { file, src, default_template: TEMPLATE_ID, line_starts, out: Checked::default(), pos: BTreeMap::new() }
     }
 
     fn at_offset(&self, off: usize) -> (usize, usize) {
@@ -748,9 +956,23 @@ fn check_animation(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
 }
 
 /// Check one file's text. `base` is every layer below this file, builtin
-/// included (it supplies curves and the canvas for the contrast check).
+/// included (it supplies curves and the canvas for the contrast check). A
+/// Garden file checked here defaults to the texting template; the store
+/// uses [`check_garden`] with the Garden's own.
 pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
+    check_with(file, src, kind, base, TEMPLATE_ID)
+}
+
+/// Check a Garden file whose list entry names `default_template` (used when
+/// the file has no `template` line): its widgets' columns and links are
+/// checked against that template when the file doesn't replace them.
+pub fn check_garden(file: &str, src: &str, base: &Layer, default_template: &str) -> Checked {
+    check_with(file, src, FileKind::Garden, base, default_template)
+}
+
+fn check_with(file: &str, src: &str, kind: FileKind, base: &Layer, default_template: &str) -> Checked {
     let mut ctx = Ctx::new(file, src);
+    ctx.default_template = default_template;
     if src.len() > MAX_FILE_BYTES {
         ctx.error((1, 1), format!("this file is {} bytes; Zen files must be under 64 KB", src.len()));
         return ctx.out;
@@ -766,6 +988,7 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
     };
     let root = doc.as_table();
     let mut saw_schema = false;
+    let mut page_pos: Option<(usize, usize)> = None;
     for (k, item) in root.iter() {
         let pos = key_pos(&ctx, root, k, item, (1, 1));
         match k {
@@ -783,27 +1006,44 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
                     }
                 }
             }
-            "template" if kind == FileKind::Page => match item.as_value().and_then(Value::as_str) {
-                Some(TEMPLATE_ID) => {}
+            "template" if kind == FileKind::Garden => match item.as_value().and_then(Value::as_str) {
+                Some(t) if TEMPLATE_IDS.contains(&t) => {
+                    page_pos.get_or_insert(pos);
+                    ctx.set("page.template".into(), json!(t), pos)
+                }
                 Some(other) => {
                     let p = item_pos(&ctx, item, pos);
-                    ctx.error(p, format!("unknown template '{other}'; Zen v1 has one template: {TEMPLATE_ID}"));
+                    ctx.error(p, format!("unknown template '{other}'; Zen templates are: {}", TEMPLATE_IDS.join(", ")));
                 }
                 None => {
                     let p = item_pos(&ctx, item, pos);
-                    ctx.error(p, format!("template must be the string \"{TEMPLATE_ID}\""));
+                    ctx.error(p, format!("template must be a string, one of: {}", TEMPLATE_IDS.join(", ")));
                 }
             },
             "template" if kind == FileKind::Theme => {
-                ctx.error(pos, "unknown key 'template' in a theme; the template line belongs in pages/<home-id>.toml")
+                ctx.error(pos, "unknown key 'template' in a theme; the template line belongs in gardens/<id>.toml")
             }
-            "template" => ctx.error(pos, "unknown key 'template' in zen.toml; the template line belongs in pages/<home-id>.toml"),
+            "template" => ctx.error(pos, "unknown key 'template' in zen.toml; the template line belongs in gardens/<id>.toml"),
             "type" => ctx.error(pos, "[type] is now [font] (family, size, line-height): one font for Zen and its terminals"),
             "background" if kind != FileKind::Theme => ctx.error(
                 pos,
                 "[background] belongs in a theme bundle (~/.k2/zen/themes/<name>/theme.toml), next to its image; make one with k2 zen theme new <name>",
             ),
-            k if V2_TABLES.contains(&k) => ctx.warn(pos, V2_WARNING),
+            k if PAGE_TABLES.contains(&k) && kind != FileKind::Garden => ctx.error(
+                pos,
+                format!("[{k}] belongs in a Garden file (~/.k2/zen/gardens/<id>.toml); list them with k2 zen garden list"),
+            ),
+            "control" | "controls" => ctx.warn(pos, CONTROL_WARNING),
+            "caps" => ctx.error(pos, "a page can't name caps: built-in widgets get K2's caps"),
+            "widgets" => ctx.error(pos, "use one [[widget]] block per widget (not `widgets`)"),
+            "layout" => {
+                page_pos.get_or_insert(pos);
+                check_layout(&mut ctx, item, pos);
+            }
+            "widget" => {
+                page_pos.get_or_insert(pos);
+                check_widgets(&mut ctx, item, pos);
+            }
             "theme" => {
                 if let Some(t) = require_table(&mut ctx, item, pos, "theme") {
                     check_theme(&mut ctx, t, pos);
@@ -851,8 +1091,8 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
             }
             other => {
                 let mut allowed: Vec<&str> = vec!["schema"];
-                if kind == FileKind::Page {
-                    allowed.push("template");
+                if kind == FileKind::Garden {
+                    allowed.extend_from_slice(&["template", "layout", "widget"]);
                 }
                 allowed.extend_from_slice(THEME_TABLES);
                 if kind == FileKind::Theme {
@@ -865,9 +1105,467 @@ pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
     if !saw_schema {
         ctx.error((1, 1), "missing `schema = 1` (the first line of every Zen file)");
     }
+    if kind == FileKind::Garden {
+        if let Some(at) = page_pos {
+            cross_check_page(&mut ctx, at);
+        }
+    }
     cross_check(&mut ctx, base);
     ctx.out.positions = std::mem::take(&mut ctx.pos);
     ctx.out
+}
+
+/// The tables of `[[name]]` (or `name = [{…}, …]`). `None` for any other shape.
+fn tables_of(item: &Item) -> Option<Vec<&dyn TableLike>> {
+    if let Some(a) = item.as_array_of_tables() {
+        return Some(a.iter().map(|t| t as &dyn TableLike).collect());
+    }
+    let arr = item.as_value().and_then(Value::as_array)?;
+    arr.iter().map(|v| v.as_inline_table().map(|t| t as &dyn TableLike)).collect()
+}
+
+/// Position of a table in an array: its first key, else the fallback.
+fn table_pos(ctx: &Ctx, t: &dyn TableLike, fallback: (usize, usize)) -> (usize, usize) {
+    t.iter()
+        .next()
+        .map(|(k, item)| key_pos(ctx, t, k, item, fallback))
+        .unwrap_or(fallback)
+}
+
+/// `[layout]`: `kind = "columns"` and 1–3 `[[layout.column]]` whose
+/// `size` (percent) adds up to 100. Sets `page.layout`.
+fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
+    let Some(t) = require_table(ctx, item, at, "layout") else { return };
+    let mut kind: Option<String> = None;
+    let mut columns: Vec<J> = Vec::new();
+    let mut ok = true;
+    let mut saw_columns = false;
+    for (k, v) in t.iter() {
+        let pos = key_pos(ctx, t, k, v, at);
+        match k {
+            "kind" => match v.as_value().and_then(Value::as_str) {
+                Some(s) if LAYOUT_KINDS.contains(&s) => kind = Some(s.to_string()),
+                Some(s) => {
+                    let p = item_pos(ctx, v, pos);
+                    ctx.error(p, format!("layout kind '{s}' is not one of: {}", LAYOUT_KINDS.join(", ")));
+                    ok = false;
+                }
+                None => {
+                    let p = item_pos(ctx, v, pos);
+                    ctx.error(p, format!("layout kind must be a string: {}", LAYOUT_KINDS.join(", ")));
+                    ok = false;
+                }
+            },
+            "column" => {
+                saw_columns = true;
+                let Some(cols) = tables_of(v) else {
+                    ctx.error(pos, "columns are [[layout.column]] blocks, each with size and min-width");
+                    ok = false;
+                    continue;
+                };
+                if cols.is_empty() || cols.len() > MAX_COLUMNS {
+                    ctx.error(pos, format!("a Garden page has 1 to {MAX_COLUMNS} columns; this one has {}", cols.len()));
+                    ok = false;
+                    continue;
+                }
+                let mut sum = 0.0;
+                for (i, c) in cols.iter().enumerate() {
+                    let cpos = table_pos(ctx, *c, pos);
+                    let mut col = Map::new();
+                    let mut size = None;
+                    for (ck, cv) in c.iter() {
+                        let kp = key_pos(ctx, *c, ck, cv, cpos);
+                        match ck {
+                            "size" => match cv.as_value().and_then(as_number) {
+                                Some(n) if n > 0.0 && n <= 100.0 => size = Some(n),
+                                _ => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.error(p, "column size is a percent of the width, more than 0 and at most 100");
+                                    ok = false;
+                                }
+                            },
+                            "min-width" => match cv.as_value().and_then(as_number) {
+                                Some(n) if (0.0..=COLUMN_MIN_WIDTH_MAX).contains(&n) => {
+                                    col.insert("min-width".into(), num_json(n));
+                                }
+                                _ => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.error(p, format!("column min-width is px, 0 to {}", num_json(COLUMN_MIN_WIDTH_MAX)));
+                                    ok = false;
+                                }
+                            },
+                            "widget" => match cv.as_value().and_then(Value::as_str) {
+                                Some(w) => {
+                                    let wp = item_pos(ctx, cv, kp);
+                                    ctx.pos.insert(format!("page.layout.column.{i}.widget"), wp);
+                                    col.insert("widget".into(), json!(w));
+                                }
+                                None => {
+                                    let p = item_pos(ctx, cv, kp);
+                                    ctx.error(p, "column widget must be a widget id (a string)");
+                                    ok = false;
+                                }
+                            },
+                            other => {
+                                ctx.error(kp, unknown_key(other, "[[layout.column]]", &["size", "min-width", "widget"]));
+                                ok = false;
+                            }
+                        }
+                    }
+                    match size {
+                        Some(n) => {
+                            sum += n;
+                            col.insert("size".into(), num_json(n));
+                        }
+                        None => {
+                            if c.get("size").is_none() {
+                                ctx.error(cpos, "each [[layout.column]] needs a size (percent of the width)");
+                            }
+                            ok = false;
+                        }
+                    }
+                    col.entry("min-width").or_insert(json!(0));
+                    columns.push(J::Object(col));
+                }
+                if ok && (sum - 100.0).abs() > 0.01 {
+                    ctx.error(pos, format!("column sizes add up to {}; they must add up to 100", num_json(sum)));
+                    ok = false;
+                }
+            }
+            other => {
+                ctx.error(pos, unknown_key(other, "[layout]", &["kind", "column"]));
+                ok = false;
+            }
+        }
+    }
+    if t.get("kind").is_none() {
+        ctx.error(at, "[layout] needs kind = \"columns\"");
+        ok = false;
+    }
+    if !saw_columns {
+        ctx.error(at, "[layout] needs 1 to 3 [[layout.column]] blocks");
+        ok = false;
+    }
+    if ok {
+        ctx.pos.insert("page.layout".into(), at);
+        ctx.set("page.layout".into(), json!({ "kind": kind, "columns": columns }), at);
+    }
+}
+
+fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> Option<J> {
+    let vp = item_pos(ctx, v, pos);
+    let what = format!("{}.{}", p.kind, p.name);
+    match p.ty {
+        PropType::Bool => match v.as_value().and_then(Value::as_bool) {
+            Some(b) => Some(json!(b)),
+            None => {
+                ctx.error(vp, format!("{what} must be true or false"));
+                None
+            }
+        },
+        PropType::Text => match v.as_value().and_then(Value::as_str).map(str::trim) {
+            Some(s) if !s.is_empty() && s.chars().count() <= MAX_PROP_TEXT && !s.chars().any(char::is_control) => {
+                Some(json!(s))
+            }
+            _ => {
+                ctx.error(vp, format!("{what} must be a name or id (text, 1 to {MAX_PROP_TEXT} characters)"));
+                None
+            }
+        },
+        PropType::OneOf(allowed) => match v.as_value().and_then(Value::as_str) {
+            Some(s) if allowed.contains(&s) => Some(json!(s)),
+            _ => {
+                ctx.error(vp, format!("{what} must be one of: {}", allowed.join(", ")));
+                None
+            }
+        },
+        PropType::SubsetOf(allowed) => {
+            let items: Option<Vec<&str>> = v
+                .as_value()
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().map(|x| x.as_str()).collect::<Option<Vec<_>>>());
+            match items {
+                Some(xs)
+                    if !xs.is_empty()
+                        && xs.iter().all(|x| allowed.contains(x))
+                        && xs.iter().collect::<std::collections::BTreeSet<_>>().len() == xs.len() =>
+                {
+                    Some(json!(xs))
+                }
+                _ => {
+                    ctx.error(vp, format!("{what} must be a list of one or more of: {} (no repeats)", allowed.join(", ")));
+                    None
+                }
+            }
+        }
+    }
+}
+
+/// `[[widget]]`: K2's built-in widgets placed in columns. Sets
+/// `page.widgets` (props normalized with K2's defaults; caps are never
+/// read from the file).
+fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
+    let Some(tables) = tables_of(item) else {
+        ctx.error(at, "widgets are [[widget]] blocks (one per widget), each with id, kind and column");
+        return;
+    };
+    if tables.is_empty() {
+        ctx.error(at, "declare at least one [[widget]], or leave them out to keep the template's");
+        return;
+    }
+    if tables.len() > MAX_WIDGETS {
+        ctx.error(at, format!("a Garden page holds at most {MAX_WIDGETS} widgets; this one has {}", tables.len()));
+        return;
+    }
+    let kinds: Vec<&str> = WIDGET_KINDS.iter().map(|(k, _)| *k).collect();
+    let mut out: Vec<J> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    let mut ok = true;
+    for (i, t) in tables.iter().enumerate() {
+        let tpos = table_pos(ctx, *t, at);
+        // Kind first: it decides which props are allowed.
+        let kind = match t.get("kind") {
+            None => {
+                ctx.error(tpos, format!("each [[widget]] needs a kind: {}", kinds.join(", ")));
+                ok = false;
+                None
+            }
+            Some(v) => {
+                let kp = key_pos(ctx, *t, "kind", v, tpos);
+                let vp = item_pos(ctx, v, kp);
+                match v.as_value().and_then(Value::as_str) {
+                    Some(k) if kinds.contains(&k) => Some(k.to_string()),
+                    Some(k) if TEMPLATE_WIDGET_KINDS.iter().any(|(n, _)| *n == k) => {
+                        ctx.error(
+                            vp,
+                            format!(
+                                "'{k}' comes from the blank template and shows until the Garden has widgets; place {} instead",
+                                kinds.join(" or ")
+                            ),
+                        );
+                        ok = false;
+                        None
+                    }
+                    Some(k) => {
+                        ctx.error(vp, format!("unknown widget kind '{k}'; built-in widgets are: {}", kinds.join(", ")));
+                        ok = false;
+                        None
+                    }
+                    None => {
+                        ctx.error(vp, format!("widget kind must be a string: {}", kinds.join(", ")));
+                        ok = false;
+                        None
+                    }
+                }
+            }
+        };
+        let mut w = Map::new();
+        let mut props = Map::new();
+        for (k, v) in t.iter() {
+            let pos = key_pos(ctx, *t, k, v, tpos);
+            match k {
+                "kind" => {}
+                "id" => match v.as_value().and_then(Value::as_str) {
+                    Some(id) if valid_widget_id(id) => {
+                        if ids.iter().any(|x| x == id) {
+                            let p = item_pos(ctx, v, pos);
+                            ctx.error(p, format!("widget id '{id}' is used twice; ids must be unique on the page"));
+                            ok = false;
+                        } else {
+                            ids.push(id.to_string());
+                            w.insert("id".into(), json!(id));
+                        }
+                    }
+                    _ => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(p, "widget id must be letters, digits, - and _ (up to 64), starting with a letter or digit");
+                        ok = false;
+                    }
+                },
+                "column" => match v.as_value() {
+                    Some(Value::Integer(n)) if *n.value() >= 0 && (*n.value() as usize) < MAX_COLUMNS => {
+                        let cp = item_pos(ctx, v, pos);
+                        ctx.pos.insert(format!("page.widget.{i}.column"), cp);
+                        w.insert("column".into(), json!(*n.value()));
+                    }
+                    _ => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(p, format!("widget column is a column number, 0 to {}", MAX_COLUMNS - 1));
+                        ok = false;
+                    }
+                },
+                "caps" => {
+                    ctx.error(pos, "a page can't name caps: built-in widgets get K2's caps");
+                    ok = false;
+                }
+                "props" => {
+                    let Some(pt) = require_table(ctx, v, pos, "widget.props") else {
+                        ok = false;
+                        continue;
+                    };
+                    let Some(kind) = kind.as_deref() else { continue };
+                    let allowed: Vec<&str> = widget_props(kind).map(|p| p.name).collect();
+                    for (pk, pv) in pt.iter() {
+                        let ppos = key_pos(ctx, pt, pk, pv, pos);
+                        match widget_props(kind).find(|p| p.name == pk) {
+                            Some(p) => match check_prop(ctx, p, pv, ppos) {
+                                Some(val) => {
+                                    let vp = item_pos(ctx, pv, ppos);
+                                    ctx.pos.insert(format!("page.widget.{i}.props.{pk}"), vp);
+                                    props.insert(pk.to_string(), val);
+                                }
+                                None => ok = false,
+                            },
+                            None => {
+                                ctx.error(ppos, unknown_key(pk, &format!("a {kind} widget's props"), &allowed));
+                                ok = false;
+                            }
+                        }
+                    }
+                }
+                other => {
+                    ctx.error(pos, unknown_key(other, "[[widget]]", &["id", "kind", "column", "props"]));
+                    ok = false;
+                }
+            }
+        }
+        if t.get("id").is_none() {
+            ctx.error(tpos, "each [[widget]] needs an id (letters, digits, - and _)");
+            ok = false;
+        }
+        if t.get("column").is_none() {
+            ctx.error(tpos, "each [[widget]] needs a column (0 is the first)");
+            ok = false;
+        }
+        let Some(kind) = kind else { continue };
+        // Rosson 2026-10-04 (answer 5): one agent filtered from a Home, or the
+        // whole Home.
+        let prop_at = |ctx: &Ctx, name: &str| ctx.pos.get(&format!("page.widget.{i}.props.{name}")).copied().unwrap_or(tpos);
+        if kind == "agents" {
+            match (props.get("mode").and_then(J::as_str), props.contains_key("agent")) {
+                (Some("agent"), false) => {
+                    let p = prop_at(ctx, "mode");
+                    ctx.error(p, "mode = \"agent\" needs agent = \"<name or address>\": the one agent to show");
+                    ok = false;
+                }
+                (Some("home"), true) => {
+                    let p = prop_at(ctx, "agent");
+                    ctx.error(
+                        p,
+                        "agent filters the widget to one agent; use mode = \"agent\" (or drop mode), or drop agent to show the whole Home",
+                    );
+                    ok = false;
+                }
+                _ => {}
+            }
+        }
+        if kind == "conversation" {
+            if props.contains_key("agents") && props.contains_key("agent") {
+                let p = prop_at(ctx, "agent");
+                ctx.error(p, "a Conversation either follows an Agents widget (agents) or pins one agent (agent), not both");
+                ok = false;
+            }
+            if props.contains_key("home") && !props.contains_key("agent") {
+                let p = prop_at(ctx, "home");
+                ctx.error(
+                    p,
+                    "home picks where `agent` is looked up; set agent too, or follow an Agents widget with agents = \"<widget id>\"",
+                );
+                ok = false;
+            }
+        }
+        normalize_props(&kind, &mut props);
+        w.insert("kind".into(), json!(kind));
+        w.insert("props".into(), J::Object(props));
+        out.push(J::Object(w));
+    }
+    if ok {
+        ctx.pos.insert("page.widgets".into(), at);
+        ctx.set("page.widgets".into(), J::Array(out), at);
+    }
+}
+
+/// G38 rules that need the whole page: every widget's column exists, a
+/// Conversation's `agents` names an Agents widget, and a column's `widget`
+/// names a widget on the page. Widgets or columns the file leaves out come
+/// from its template.
+fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
+    let template = ctx
+        .out
+        .layer
+        .get("page.template")
+        .and_then(J::as_str)
+        .unwrap_or(ctx.default_template)
+        .to_string();
+    let file_layout = ctx.out.layer.get("page.layout").cloned();
+    let file_widgets = ctx.out.layer.get("page.widgets").cloned();
+    if file_layout.is_none() && file_widgets.is_none() {
+        return;
+    }
+    let Some(tpl) = super::template_page(&template) else { return };
+    let ncols = match &file_layout {
+        Some(l) => l["columns"].as_array().map_or(0, Vec::len),
+        None => tpl["layout"]["columns"].as_array().map_or(0, Vec::len),
+    };
+    let widgets: Vec<J> = match &file_widgets {
+        Some(w) => w.as_array().cloned().unwrap_or_default(),
+        None => tpl["widgets"].as_array().cloned().unwrap_or_default(),
+    };
+    let from_file = file_widgets.is_some();
+    let layout_at = ctx.pos.get("page.layout").copied().unwrap_or(at);
+    let agents_ids: Vec<String> =
+        widgets.iter().filter(|x| x["kind"] == "agents").filter_map(|x| x["id"].as_str().map(str::to_string)).collect();
+    for (i, w) in widgets.iter().enumerate() {
+        let id = w["id"].as_str().unwrap_or("?").to_string();
+        let col = w["column"].as_u64().unwrap_or(0) as usize;
+        if col >= ncols {
+            if from_file {
+                let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
+                ctx.error(
+                    p,
+                    format!("widget '{id}' is in column {col}, but this page has {ncols} column(s) (0 to {})", ncols.saturating_sub(1)),
+                );
+            } else {
+                ctx.error(
+                    layout_at,
+                    format!(
+                        "the template's widget '{id}' sits in column {col}, but this layout has {ncols} column(s); add [[widget]] blocks for this layout"
+                    ),
+                );
+            }
+        }
+        if w["kind"] == "conversation" && from_file {
+            let pinned = w["props"]["agent"].is_string();
+            match w["props"]["agents"].as_str() {
+                Some(target) if !agents_ids.iter().any(|a| a == target) => {
+                    let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);
+                    let known = if agents_ids.is_empty() { String::new() } else { format!(" ({})", agents_ids.join(", ")) };
+                    ctx.error(p, format!("conversation '{id}' follows '{target}', which is not an Agents widget on this page{known}"));
+                }
+                None if !pinned && agents_ids.is_empty() => {
+                    let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
+                    ctx.error(
+                        p,
+                        format!(
+                            "conversation '{id}' has no agent to show: add an Agents widget, or pin one with agent = \"<name or address>\""
+                        ),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(l) = &file_layout {
+        let ids: Vec<&str> = widgets.iter().filter_map(|w| w["id"].as_str()).collect();
+        for (i, c) in l["columns"].as_array().into_iter().flatten().enumerate() {
+            if let Some(w) = c["widget"].as_str() {
+                if !ids.contains(&w) {
+                    let p = ctx.pos.get(&format!("page.layout.column.{i}.widget")).copied().unwrap_or(layout_at);
+                    ctx.error(p, format!("column {i} names widget '{w}', which is not on this page"));
+                }
+            }
+        }
+    }
 }
 
 /// Checks that need the layers below: curve names and contrast.
@@ -947,7 +1645,7 @@ fn ease_css(b: &[f64]) -> String {
     format!("cubic-bezier({}, {}, {}, {})", f(b[0]), f(b[1]), f(b[2]), f(b[3]))
 }
 
-/// The resolved theme, chrome and motion for one Home.
+/// The resolved theme, chrome and motion for one Garden.
 ///
 /// `tokens` is `{scheme, colors: {light, dark}, shape}`; `font` is
 /// `{family, stack, monospace, size, lineHeight, terminal: {family, stack,

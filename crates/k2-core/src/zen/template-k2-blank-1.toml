@@ -1,0 +1,38 @@
+# Built-in Zen page template `k2.blank@1` (prd-zen-gardens-v1 G11, G28):
+# every new Garden starts here.
+#
+# One column holding the `garden-empty` widget: "This Garden is empty. Ask
+# your agents to add things to this Garden." plus an Ask my agent button.
+# When the Garden's file declares `[[widget]]`, those widgets replace it;
+# the controls below stay.
+id = "k2.blank@1"
+schema = 1
+
+[layout]
+kind = "columns"
+
+[[layout.column]]
+widget = "garden-empty"
+size = 100
+min-width = 320
+
+[[widget]]
+id = "garden-empty"
+kind = "garden-empty"
+column = 0
+caps = ["agents:read", "thread:read", "thread:post"]
+
+# Controls (G24). K2 binds and checks the required three. No Add agent: a
+# blank Garden has no Agents widget to add to.
+[[control]]
+kind = "garden-switcher"
+placement = "top-left"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "bottom-left"
+column = 0

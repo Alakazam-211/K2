@@ -236,8 +236,8 @@ async fn t2_1_thread_latest_previews_errors_limits_and_refusals() {
             assert_eq!(r.status, 403, "app pass on {p}: {}", r.body);
             assert_eq!(r.json()["error"], "zen_local_only", "{p}: {}", r.body);
         }
-        let r = http(port, "POST", &format!("/cli/zen/page/ensure?token={pass}"), Some(r#"{"homeId":"x","name":"x"}"#));
+        let r = http(port, "POST", &format!("/cli/zen/setup?token={pass}"), Some("{}"));
         assert_eq!(r.status, 403, "{}", r.body);
-        assert!(!k2_core::zen::is_set_up(), "a refused ensure must not set Zen up");
+        assert!(!k2_core::zen::is_set_up(), "a refused setup must not set Zen up");
     });
 }

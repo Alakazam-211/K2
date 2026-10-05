@@ -784,16 +784,21 @@ pub const ROUTES: &[Route] = &[
     get("/cli/workspaces/list", Member),
     post("/cli/workspaces/set-nav-visible", Member),
     get("/cli/worktree", Member),
-    // Zen Mode v1 (prd-zen-mode-v1 Z15, vs-live Z59/Z62): Member floor so a
-    // Member's own desktop works; every handler then requires the LOCAL
-    // owner token and answers 403 `zen_local_only` to anything else.
+    // Zen Mode (prd-zen-mode-v1 Z15, vs-live Z59/Z62; prd-zen-gardens-v1
+    // G13/G45): Member floor so a Member's own desktop works; every handler
+    // then requires the LOCAL owner token and answers 403 `zen_local_only`
+    // to anything else. `page/ensure` and `homes/sync` are gone (G13).
     get("/cli/zen/doctor", Member),
+    post("/cli/zen/garden/delete", Member),
+    post("/cli/zen/garden/new", Member),
+    post("/cli/zen/garden/rename", Member),
+    post("/cli/zen/garden/reorder", Member),
+    get("/cli/zen/gardens", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),
-    post("/cli/zen/homes/sync", Member),
-    post("/cli/zen/page/ensure", Member),
     post("/cli/zen/reload", Member),
     post("/cli/zen/reset", Member),
+    post("/cli/zen/setup", Member),
     get("/cli/zen/status", Member),
     get("/cli/zen/theme/list", Member),
     post("/cli/zen/theme/new", Member),

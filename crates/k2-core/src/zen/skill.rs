@@ -1,21 +1,23 @@
-//! The `k2-zen` skill (prd-zen-mode-v1 Z18, T3.2).
+//! The `k2-zen` skill (prd-zen-mode-v1 Z18, T3.2; prd-zen-gardens-v1 G36).
 //!
-//! Generated from [`super::schema`] so every token, range, curve and preset
-//! the validator accepts is documented; a new token without docs fails the
-//! content test. Written into a workspace only when this daemon has a
-//! `~/.k2/zen/` folder (Z68), so agents on headless servers never see it.
+//! Generated from [`super::schema`] and the template tables so every token,
+//! range, curve, preset, widget kind and widget prop the validator accepts
+//! is documented; a new one without docs fails the content test. Written
+//! into a workspace only when this daemon has set Zen up (Z68), so agents
+//! on headless servers never see it.
 
 use super::schema::{
-    ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BEZIER_Y_MAX, BEZIER_Y_MIN,
-    BUILTIN_BEZIERS, COLOR_TOKENS, CORNERS, FONT_FAMILIES, MAX_BACKGROUND_BYTES, MIN_CONTRAST,
-    NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID,
-    TERMINAL_PARTNER, TERMINAL_TOKENS, V2_WARNING,
+    PropType, ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BEZIER_Y_MAX,
+    BEZIER_Y_MIN, BLANK_TEMPLATE_ID, BUILTIN_BEZIERS, COLOR_TOKENS, COLUMN_MIN_WIDTH_MAX, CONTROL_WARNING,
+    CORNERS, FONT_FAMILIES, LAYOUT_KINDS, MAX_BACKGROUND_BYTES, MAX_COLUMNS, MAX_WIDGETS, MIN_CONTRAST,
+    NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID, TEMPLATE_WIDGET_KINDS,
+    TERMINAL_PARTNER, TERMINAL_TOKENS, WIDGET_KINDS, WIDGET_PROPS,
 };
-use super::{BRIDGE_CAPS, BUILTIN_THEMES, DEFAULT_THEME, REQUIRED_CONTROLS};
+use super::{BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
-    "Restyle Zen Mode (~/.k2/zen): themes, tokens, font, terminal colours, backgrounds, motion, chrome, validate, reset; agents request, never grant";
+    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent), themes, tokens, font, motion, validate, reset; agents request, never grant";
 
 fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
@@ -25,22 +27,144 @@ fn fmt_num(n: f64) -> String {
     }
 }
 
+fn prop_type(t: PropType) -> String {
+    match t {
+        PropType::Bool => "true or false".into(),
+        PropType::Text => "text".into(),
+        PropType::OneOf(xs) => format!("one of {}", ticks(xs)),
+        PropType::SubsetOf(xs) => format!("a list from {}", ticks(xs)),
+    }
+}
+
 /// The skill body (markdown, no frontmatter).
 pub fn generate_k2_zen_skill() -> String {
     let mut s = String::new();
     s.push_str(
-        "# K2 Zen\n\n\
-Zen Mode is a second face for a Home in the K2 desktop app: the Home's agents\n\
-in a list, the conversation with one agent, and a box to message it. Its look\n\
-comes from files on THIS computer that you may edit when the human asks you\n\
-to restyle Zen.\n\n\
-## Themes, defaults and your changes\n\n\
-K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
+        "# K2 Zen Gardens\n\n\
+Zen Mode is a mode of a K2 desktop window. In Zen the window shows a **Garden**:\n\
+a personal page that lives on THIS computer. The human can have as many Gardens\n\
+as they like and switches between them with the Garden switcher (or Cmd+Option+1-9).\n\
+The **Default** Garden is the texting page: a Home's agents beside the\n\
+conversation with the one picked. Every new Garden starts **empty**, with\n\
+\"Ask your agents to add things to this Garden\" and an Ask my agent button.\n\n\
+When the human asks you to add something to a Garden, you edit that Garden's\n\
+file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
+`~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
+## Gardens\n\n\
+- `k2 zen garden list [--json]`: index, id, name, template; `*` marks a Garden with its own theme.\n\
+- `k2 zen garden new <name> [--texting] [--at <n>]`: a new Garden (empty, or `--texting` for the\n\
+  texting page) at position n (default: the end). Prints its id and file.\n\
+- `k2 zen garden rename <garden> <name>`: names are 1 to 60 characters and unique (case aside).\n\
+- `k2 zen garden reorder <garden> <position>`: positions are 1-based.\n\
+- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n\
+`<garden>` is an id (`g-3f9a12c0`) or a name. Ids never change, so renaming or\n\
+reordering never touches the file. Only the human turns Zen on (the Zen toggle in\n\
+the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
+## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n\
+- `gardens/<id>.toml`: one Garden's page: its template, its layout of K2's built-in\n\
+  widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n\
+- `zen.toml`: the human's theme changes for every Garden, on top of the active theme.\n\
+- `themes/<name>/theme.toml`: a theme bundle (colours, font, terminal palette,\n\
+  optional background image next to it).\n\
+- `gardens.json`: the Garden list. K2 writes it. **Never write gardens.json**; use `k2 zen garden`.\n\
+- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
+- `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**\n\
+- `grants.json`: widget permissions (Zen v2). Only the K2 app writes it, when the\n\
+  human clicks Allow. **Never write grants.json**, never ask the human to paste\n\
+  into it, and never edit it to give yourself or a widget a permission. You may\n\
+  request a permission by telling the human what and why; the human grants it in\n\
+  the app. Built-in widgets get their caps from K2; nothing is grantable yet.\n\n\
+## Workflow\n\n\
+1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).\n\
+2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n\
+3. Run `k2 zen validate --garden <id>` before you tell the human it's done. It prints\n\
+   `file:line:col: message` and exits 1 on any error. A file with errors is NOT\n\
+   shown: Zen keeps the last good version and shows the error line.\n\
+4. Undo with `k2 zen history --garden <id>` then `k2 zen reset --garden <id> --to <snapshot>`,\n\
+   or `k2 zen reset --garden <id>` for the Garden's empty stub.\n\
+5. `k2 zen reload` re-reads now; `k2 zen doctor` checks the setup; `k2 zen path`\n\
+   prints the folder.\n\n\
+`k2 zen` talks only to the K2 on this computer (each person's Gardens live on\n\
+their own computer), so only an agent on this computer can edit them.\n\n\
+## A Garden page\n\n",
+    );
+    s.push_str(&format!(
+        "```toml\n\
+schema = 1\n\
+template = \"{BLANK_TEMPLATE_ID}\"   # or \"{TEMPLATE_ID}\"\n\
+\n\
+[layout]\n\
+kind = \"columns\"\n\
+[[layout.column]]\n\
+size = 40          # percent of the width; the sizes add up to 100\n\
+min-width = 240    # px\n\
+[[layout.column]]\n\
+size = 60\n\
+min-width = 360\n\
+\n\
+[[widget]]\n\
+id = \"work\"\n\
+kind = \"agents\"\n\
+column = 0\n\
+[widget.props]\n\
+home = \"Work\"      # the whole Home\n\
+\n\
+[[widget]]\n\
+id = \"talk\"\n\
+kind = \"conversation\"\n\
+column = 1\n\
+[widget.props]\n\
+agents = \"work\"    # shows the agent picked in the \"work\" widget\n\
+\n\
+[colors.light]     # theme tables restyle this Garden only\n\
+accent = \"#065f46\"\n\
+```\n\n\
+Templates: `{TEMPLATE_ID}` (the texting page: Agents beside Conversation) and\n\
+`{BLANK_TEMPLATE_ID}` (empty). The template gives the page its controls and,\n\
+until the file declares its own, its layout and widgets.\n\n\
+- `[layout]`: `kind` is {}; 1 to {MAX_COLUMNS} `[[layout.column]]`, each with `size`\n\
+  (percent, the sizes add up to 100) and `min-width` (px, 0 to {}).\n\
+- `[[widget]]`: `id` (letters, digits, - and _; unique), `kind`, `column` (0 is the\n\
+  first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}.\n\
+  When the file declares any `[[widget]]`, they replace the template's widgets.\n\
+- A page never names caps: built-in widgets get K2's caps (`caps` is an error).\n\
+- `[[control]]` is warned and ignored: \"{CONTROL_WARNING}\".\n\
+- Unknown kinds, props and keys are errors at their line.\n\n",
+        ticks(LAYOUT_KINDS),
+        fmt_num(COLUMN_MIN_WIDTH_MAX),
+    ));
+    s.push_str("### Built-in widgets\n\n");
+    for (kind, what) in WIDGET_KINDS {
+        let caps = BUILTIN_WIDGET_CAPS.iter().find(|(k, _)| k == kind).map(|(_, c)| ticks(c)).unwrap_or_default();
+        s.push_str(&format!("**`{kind}`**: {what}. K2 grants it {caps}.\n\n"));
+        for p in WIDGET_PROPS.iter().filter(|p| p.kind == *kind) {
+            let default = p.default.map(|d| format!(" Default `{d}`.")).unwrap_or_default();
+            s.push_str(&format!("- `{}` ({}): {}.{default}\n", p.name, prop_type(p.ty), p.doc));
+        }
+        s.push('\n');
+    }
+    for (kind, what) in TEMPLATE_WIDGET_KINDS {
+        s.push_str(&format!("`{kind}` is {what}. Only the template places it; a Garden file can't.\n\n"));
+    }
+    s.push_str(
+        "### A whole Home, or one agent\n\n\
+- **Whole Home:** `kind = \"agents\"` with `home = \"<Home name or id>\"`: every agent of that\n\
+  Home, with a Conversation beside it (`agents = \"<that widget's id>\"`). Add\n\
+  `home-picker = true` to let the human switch Homes inside the widget.\n\
+- **One agent:** `kind = \"agents\"` with `agent = \"<name or address>\"` (and `home` to say\n\
+  which Home it is in): only that agent's row. Or skip the list and pin the\n\
+  conversation itself: `kind = \"conversation\"` with `agent = \"<name>\"` and `home`.\n\
+- Picking a Home in a Garden never changes the Home page.\n\n",
+    );
+
+    s.push_str("## Themes, defaults and your changes\n\n");
+    s.push_str(
+        "K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
 human's changes, layered on top. App updates never touch those files. For one\n\
-Home the stack is: K2's `default` theme, then K2's copy of the active theme,\n\
-then `themes/<active>/theme.toml`, then `zen.toml`, then `pages/<home-id>.toml`.\n\
+Garden the stack is: K2's `default` theme, then K2's copy of the active theme,\n\
+then `themes/<active>/theme.toml`, then `zen.toml`, then `gardens/<id>.toml`.\n\
 A later file wins key by key; anything a file leaves out comes from below.\n\n\
-One theme is active for the computer, and a Home may pick its own. K2 keeps\n\
+One theme is active for the computer, and a Garden may pick its own. K2 keeps\n\
 that pick; change it only with `k2 zen theme`.\n\n\
 Built-in themes: ",
     );
@@ -55,53 +179,24 @@ Built-in themes: ",
         ". Every other theme sits on top of `{DEFAULT_THEME}`.\n\n\
 - `k2 zen theme list` lists the themes (built in, and the human's own).\n\
 - `k2 zen theme next` / `k2 zen theme prev` cycle them; `k2 zen theme set <name>` picks one.\n\
-  Add `--home <name|id>` for one Home; `k2 zen theme set --home <name> --clear` drops a Home's pick.\n\
+  Add `--garden <name|id>` for one Garden; `k2 zen theme set --garden <name> --clear` drops a Garden's pick.\n\
 - `k2 zen theme new <name> [--from <theme>]` starts a theme bundle in\n\
   `~/.k2/zen/themes/<name>/` from a copy of a theme (default: K2's theme of that\n\
   name, else `{DEFAULT_THEME}`). Using a built-in's name makes an override of it.\n\
 - `k2 zen reset --theme <name>` clears it: an override is removed (K2's theme\n\
-  shows again); a theme only the human has goes back to a copy of `{DEFAULT_THEME}`.\n\n"
+  shows again); a theme only the human has goes back to a copy of `{DEFAULT_THEME}`.\n\n\
+To make a theme: `k2 zen theme new <name>`, edit `~/.k2/zen/themes/<name>/theme.toml`,\n\
+add a background image next to it if asked, run `k2 zen validate`, then\n\
+`k2 zen theme set <name>` (or `--garden <id>` for one Garden).\n\n"
     ));
     s.push_str(
-        "To make a theme for the human: `k2 zen theme new <name>`, edit\n\
-`~/.k2/zen/themes/<name>/theme.toml`, add a background image next to it if\n\
-asked, run `k2 zen validate`, then `k2 zen theme set <name>`.\n\n\
-## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n\
-- `themes/<name>/theme.toml`: a theme bundle (colours, font, terminal palette,\n\
-  optional background image next to it). Switching themes changes all of them.\n\
-- `zen.toml`: the human's changes for every Home, on top of whichever theme is\n\
-  active (empty at first). Keep theme-specific colours in the theme instead.\n\
-- `pages/<home-id>.toml`: one page per Home. `schema = 1`, `template = \"",
-    );
-    s.push_str(TEMPLATE_ID);
-    s.push_str(
-        "\"`,\n  then any theme table below to override for that Home only.\n\
-- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
-- `homes.json`: Home id to name. K2 writes it. **Never write homes.json.**\n\
-- `.history/`: the last 20 good versions of each file. K2 writes it. **Never write .history/.**\n\
-- `grants.json`: widget permissions (Zen v2). Only the K2 app writes it, when the\n\
-  human clicks Allow. **Never write grants.json**, never ask the human to paste\n\
-  into it, and never edit it to give yourself or a widget a permission. You may\n\
-  request a permission by telling the human what and why; the human grants it in\n\
-  the app. Zen v1 has no grantable widgets: K2 ignores grants.json entirely.\n\n\
-## Workflow\n\n\
-1. Edit `~/.k2/zen/zen.toml` (or a page). Every Zen window reloads on save.\n\
-2. Run `k2 zen validate` before you tell the human it's done. It prints\n\
-   `file:line:col: message` and exits 1 on any error. A file with errors\n\
-   is NOT shown: Zen keeps the last good version and shows the error line.\n\
-3. Undo with `k2 zen history` then `k2 zen reset --to <snapshot>`, or\n\
-   `k2 zen reset` for the default theme. Add `--home <name|id>` for a page.\n\
-4. `k2 zen reload` re-reads now; `k2 zen doctor` checks the setup;\n\
-   `k2 zen pages` lists the Homes; `k2 zen path` prints the folder.\n\n\
-`k2 zen` talks only to the K2 on this computer (each person's Zen lives on\n\
-their own computer). Zen isn't set up until the human turns it on from Home.\n\n\
-## Rules every file follows\n\n\
+        "## Rules every file follows\n\n\
 - The first line is `schema = 1`. This K2 reads Zen schema 1 only.\n\
 - Unknown keys are errors, with the line and a \"did you mean\".\n\
-- No raw CSS, no selectors, no fonts from the network.\n\
-- Agents never write grants.json, homes.json, active.json or .history/: K2 owns them.\n",
+- No raw CSS, no selectors, no HTML, no fonts from the network.\n\
+- `[layout]`, `[[widget]]` and `template` belong only in `gardens/<id>.toml`.\n\
+- Agents never write grants.json, gardens.json, active.json or .history/: K2 owns them.\n\n",
     );
-    s.push_str(&format!("- `[layout]` and `[[widget]]` are warned and ignored: \"{V2_WARNING}\".\n\n"));
 
     s.push_str("## Tokens\n\n### `[theme]`\n\n");
     s.push_str(&format!("- `scheme`: {} (auto follows the computer).\n\n", ticks(SCHEMES)));
@@ -200,35 +295,26 @@ set, so `global = [1, 8, \"glide\"]` slows everything you haven't tuned.\n\
 When the computer asks for reduced motion, every Zen animation is instant.\n\n",
     );
 
-    s.push_str("## The page (template ");
-    s.push_str(TEMPLATE_ID);
-    s.push_str(
-        ")\n\nZen v1 ships one page: the Agents widget (the Home's agents, in Home order, each\n\
-with its live status: working, idle or needs you, plus its last message) beside the\n\
-Conversation widget (that agent's Thread and a box to message it). The Home\n\
-switcher sits top left, the Zen toggle and Add agent bottom left under the\n\
-Agents list, and K2's theme swatch top right. Layout and\n\
-widgets are fixed in v1; you change only the theme. The page always carries the\n\
-required controls, which K2 binds and checks itself: ",
-    );
+    s.push_str("## Controls\n\nEvery Garden page carries the required controls, which K2 binds and checks itself: ");
     s.push_str(&ticks(REQUIRED_CONTROLS));
     s.push_str(
-        ". If one is hidden, covered or unusable, Zen drops to safe mode.\n\
-The human can always leave with Exit Zen Mode (Ctrl+Cmd+Z on macOS,\n\
-Ctrl+Alt+Z on Linux and Windows).\n\n\
+        ". They come from the template, so a Garden file can't drop or move them. If one\n\
+is hidden, covered or unusable, Zen drops to safe mode. The human can always\n\
+leave with Exit Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n\
 ## Bridge verbs and caps\n\n\
 Every widget reaches K2 only through the Zen bridge; each verb needs a cap\n\
-the widget declares. Caps: ",
+the widget is granted. Caps: ",
     );
     s.push_str(&ticks(BRIDGE_CAPS));
     s.push_str(
         ".\n\n\
-- `agents.list()`, `agents.subscribe(cb)`, `conversation.open(address)`, `conversation.close()`: `agents:read`\n\
-- `agents.add({anchor, toggle})`: `agents:add` (opens K2's Add agent picker for this Home; the human picks)\n\
+- `agents.list()`, `agents.subscribe(cb)`, `agents.home()`, `agents.setHome(id)`, `agents.local()`, `homes.list()`, `conversation.open(address)`, `conversation.close()`: `agents:read`\n\
+- `agents.add({anchor, toggle})`: `agents:add` (opens K2's Add agent picker for the widget's Home; the human picks)\n\
 - `presence.get(address)`, `presence.subscribe(cb)`: `presence:read`\n\
 - `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
-- `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`: `thread:post`\n\
-- `homes.list()`, `homes.select(id)`, `zen.exit()`, `controls.bind(kind, element, homeId?)`, `theme.get()`: no cap\n\n\
+- `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`, `compose.draft(address, text)`: `thread:post`\n\
+- `gardens.create(name)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the template's controls only)\n\
+- `gardens.list()`, `gardens.current()`, `gardens.switch(id)`, `zen.exit()`, `controls.bind(kind, element, gardenId?)`, `theme.get()`: no cap\n\n\
 Built-in widgets get their caps from K2. In Zen v2, a user widget asks for caps in\n\
 its manifest and the human grants them in the K2 app. Agents request caps; they\n\
 never grant them.\n",

@@ -1,4 +1,4 @@
-# Your Zen changes for every Home on this computer.
+# Your Zen changes for every Garden on this computer.
 #
 # Zen's look comes from a theme. K2's built-in themes are read-only and
 # live inside the app; this file holds only YOUR changes, layered on top
@@ -6,7 +6,7 @@
 #
 #   k2 zen theme list         the themes (built in, and yours)
 #   k2 zen theme next | prev  cycle them
-#   k2 zen theme set <name>   pick one (add --home <name> for one Home)
+#   k2 zen theme set <name>   pick one (add --garden <name> for one Garden)
 #   k2 zen theme new <name>   start your own theme bundle, with a
 #                             background image and terminal colours, in
 #                             ~/.k2/zen/themes/<name>/
@@ -18,7 +18,7 @@
 #
 # Tables: [theme] [colors.light] [colors.dark] [font] [shape]
 # [terminal.light] [terminal.dark] [chrome] [bezier] [animation].
-# A Home can override any of them in ~/.k2/zen/pages/<home-id>.toml.
+# A Garden can override any of them in ~/.k2/zen/gardens/<id>.toml.
 # Save and every Zen window changes. A mistake keeps the last good version
 # on screen with the file and line; check with `k2 zen validate`.
 # `k2 zen reset` brings this file back to empty.

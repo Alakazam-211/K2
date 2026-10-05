@@ -1,4 +1,5 @@
-//! The `~/.k2/zen/` folder (prd-zen-mode-v1 Z8, Z11, Z13, Z14).
+//! The `~/.k2/zen/` folder (prd-zen-mode-v1 Z8, Z11, Z13, Z14;
+//! prd-zen-gardens-v1 G8–G18).
 //!
 //! Everything here is a pure function of what is on disk, so a restart
 //! changes nothing: the live ("last good") version of a file is the file
@@ -7,12 +8,18 @@
 //! writes snapshots: every clean file whose content differs from its newest
 //! snapshot is copied in, and each file keeps [`HISTORY_KEEP`].
 //!
+//! Gardens: `gardens.json` is the list (ids, names, order, templates), and
+//! each Garden's page is `gardens/<id>.toml`. Only the daemon writes the
+//! list, through the `garden/*` routes. A deleted Garden's page moves into
+//! `.history/gardens/<id>.toml/`; nothing here ever deletes a user file.
+//!
 //! Every function takes the folder from [`ZenFiles::root`], so tests run on
 //! a temp folder and never touch the real `~/.k2/zen`.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
@@ -22,35 +29,53 @@ use super::schema::{self, Checked, Diagnostic, FileKind, Layer};
 /// Snapshots kept per file (Z14).
 pub const HISTORY_KEEP: usize = 20;
 pub const ZEN_FILE: &str = "zen.toml";
-pub const PAGES_DIR: &str = "pages";
+/// One page per Garden: `gardens/<id>.toml` (G10).
+pub const GARDENS_DIR: &str = "gardens";
+/// The Garden list (G9). Daemon-written, atomic, never watched.
+pub const GARDENS_FILE: &str = "gardens.json";
 pub const HISTORY_DIR: &str = ".history";
-pub const HOMES_FILE: &str = "homes.json";
 /// Reserved for v2 widget grants. v1 never reads or writes it.
 pub const GRANTS_FILE: &str = "grants.json";
 /// User theme bundles: `themes/<name>/theme.toml` plus an optional image.
 pub const THEMES_DIR: &str = "themes";
 pub const THEME_FILE: &str = "theme.toml";
-/// The active theme, globally and per Home. Daemon-written (`k2 zen theme
-/// set|next|prev`), never hand-edited, never watched.
+/// The active theme, globally and per Garden. Daemon-written (`k2 zen
+/// theme set|next|prev`), never hand-edited, never watched.
 pub const ACTIVE_FILE: &str = "active.json";
 /// Where the last good background image of each theme is kept.
 pub const BACKGROUND_HISTORY: &str = "background";
+/// The record a deleted Garden leaves next to its snapshots.
+pub const DELETED_RECORD: &str = "deleted.json";
+/// The name of the first Garden on a new computer (Q5).
+pub const DEFAULT_GARDEN_NAME: &str = "Default";
+/// Garden names are 1 to this many characters (G9).
+pub const MAX_GARDEN_NAME: usize = 60;
+
+/// Serialises every change to the Garden list (routes run on worker
+/// threads; two `garden/new` at once must not lose one).
+static LIST_LOCK: Mutex<()> = Mutex::new(());
+
+fn list_lock() -> std::sync::MutexGuard<'static, ()> {
+    LIST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// One of the three kinds of user-editable Zen file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ZenFile {
     Zen,
-    Page(String),
+    /// `gardens/<id>.toml`.
+    Garden(String),
     /// `themes/<name>/theme.toml`.
     Theme(String),
 }
 
 impl ZenFile {
-    /// `zen.toml` or `pages/<id>.toml`: the name errors and history use.
+    /// `zen.toml`, `gardens/<id>.toml` or `themes/<name>/theme.toml`: the
+    /// name errors and history use.
     pub fn label(&self) -> String {
         match self {
             ZenFile::Zen => ZEN_FILE.to_string(),
-            ZenFile::Page(id) => format!("{PAGES_DIR}/{id}.toml"),
+            ZenFile::Garden(id) => format!("{GARDENS_DIR}/{id}.toml"),
             ZenFile::Theme(name) => format!("{THEMES_DIR}/{name}/{THEME_FILE}"),
         }
     }
@@ -58,14 +83,14 @@ impl ZenFile {
     pub fn kind(&self) -> FileKind {
         match self {
             ZenFile::Zen => FileKind::Zen,
-            ZenFile::Page(_) => FileKind::Page,
+            ZenFile::Garden(_) => FileKind::Garden,
             ZenFile::Theme(_) => FileKind::Theme,
         }
     }
 
-    /// Accepts `zen.toml` (or `zen`), `pages/<id>.toml` and
+    /// Accepts `zen.toml` (or `zen`), `gardens/<id>.toml` and
     /// `themes/<name>/theme.toml` (or `themes/<name>`). Anything else
-    /// (`grants.json`, `homes.json`, `active.json`, `../x`) is refused: no
+    /// (`grants.json`, `gardens.json`, `active.json`, `../x`) is refused: no
     /// route may name a file the daemon owns.
     pub fn parse(s: &str) -> Result<ZenFile, ZenError> {
         let t = s.trim();
@@ -73,12 +98,17 @@ impl ZenFile {
             return Ok(ZenFile::Zen);
         }
         if let Some(id) = t
-            .strip_prefix("pages/")
+            .strip_prefix("gardens/")
             .and_then(|r| r.strip_suffix(".toml"))
         {
-            if valid_home_id(id) {
-                return Ok(ZenFile::Page(id.to_string()));
+            if valid_garden_id(id) {
+                return Ok(ZenFile::Garden(id.to_string()));
             }
+        }
+        if t.starts_with("pages/") {
+            return Err(ZenError::BadRequest(
+                "Zen pages are Gardens now: gardens/<id>.toml (list them with k2 zen garden list)".into(),
+            ));
         }
         if let Some(rest) = t.strip_prefix("themes/") {
             let name = rest.strip_suffix(&format!("/{THEME_FILE}")).unwrap_or(rest);
@@ -87,40 +117,63 @@ impl ZenFile {
             }
         }
         Err(ZenError::BadRequest(format!(
-            "'{t}' is not a Zen file you can name; use zen.toml, pages/<home-id>.toml or themes/<name>/theme.toml"
+            "'{t}' is not a Zen file you can name; use zen.toml, gardens/<id>.toml or themes/<name>/theme.toml"
         )))
     }
 }
 
-/// A Home id: what `createHome` makes (a UUID) or any short slug.
-pub fn valid_home_id(id: &str) -> bool {
+/// A Garden id (G9): `g-` + 8 hex for a new Garden, or any short slug.
+/// Letters, digits, `-` and `_`, starting with a letter or digit, up to 64.
+pub fn valid_garden_id(id: &str) -> bool {
     let mut chars = id.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
         && id.len() <= 64
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn clean_name(name: &str) -> Result<String, ZenError> {
-    let n: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+/// A Garden name (G9): trimmed, control characters dropped, 1 to 60.
+pub fn clean_garden_name(name: &str) -> Result<String, ZenError> {
+    let n: String = name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
     if n.is_empty() {
-        return Err(ZenError::BadRequest("a Home needs a name".into()));
+        return Err(ZenError::BadRequest("a Garden needs a name".into()));
     }
-    if n.chars().count() > 200 {
-        return Err(ZenError::BadRequest("a Home name must be 200 characters or fewer".into()));
+    if n.chars().count() > MAX_GARDEN_NAME {
+        return Err(ZenError::BadRequest(format!(
+            "a Garden name must be {MAX_GARDEN_NAME} characters or fewer"
+        )));
     }
     Ok(n)
 }
 
+/// The template a `garden/new` body names: `blank` (default) or `texting`,
+/// or a full template id.
+pub fn template_choice(t: Option<&str>) -> Result<&'static str, ZenError> {
+    match t.map(str::trim) {
+        None | Some("") | Some("blank") | Some(schema::BLANK_TEMPLATE_ID) => Ok(schema::BLANK_TEMPLATE_ID),
+        Some("texting") | Some(schema::TEMPLATE_ID) => Ok(schema::TEMPLATE_ID),
+        Some(other) => Err(ZenError::BadRequest(format!(
+            "unknown template '{other}'; use blank or texting"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZenError {
-    /// The folder doesn't exist: Zen was never turned on on this computer.
+    /// The folder or its Garden list doesn't exist: Zen was never turned on
+    /// on this computer.
     NotSetUp,
     BadRequest(String),
     NotFound(String),
     /// A theme name that is neither built in nor in `themes/`.
     UnknownTheme { name: String, known: Vec<String> },
+    /// A Garden id or name that isn't in the list (G12).
+    UnknownGarden { garden: String, known: Vec<String> },
     /// `theme new` onto a theme that already has a user file.
     Conflict(String),
+    /// `garden/new` or `garden/rename` onto a name in use (case aside).
+    GardenExists(String),
+    /// `garden/delete` of the only Garden.
+    LastGarden,
     Io(String),
 }
 
@@ -133,31 +186,67 @@ impl std::fmt::Display for ZenError {
                 "no theme '{name}' on this computer; themes: {}. Make one with k2 zen theme new {name}",
                 known.join(", ")
             ),
-            ZenError::BadRequest(m) | ZenError::NotFound(m) | ZenError::Conflict(m) | ZenError::Io(m) => {
-                f.write_str(m)
-            }
+            ZenError::UnknownGarden { garden, .. } => write!(
+                f,
+                "no Garden '{garden}' on this computer; list them with k2 zen garden list"
+            ),
+            ZenError::LastGarden => f.write_str(LAST_GARDEN),
+            ZenError::BadRequest(m)
+            | ZenError::NotFound(m)
+            | ZenError::Conflict(m)
+            | ZenError::GardenExists(m)
+            | ZenError::Io(m) => f.write_str(m),
         }
     }
 }
 
-/// Z17's sentence, shared by the routes and the CLI.
+/// G46's sentence, shared by the routes and the CLI.
 pub const NOT_SET_UP: &str =
-    "Zen isn't set up on this computer. Turn it on from Home in the K2 app.";
+    "Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar.";
+/// G35's sentence for `garden/delete` of the only Garden.
+pub const LAST_GARDEN: &str = "That's your last Garden.";
 
 fn io(e: std::io::Error, what: &Path) -> ZenError {
     ZenError::Io(format!("{}: {e}", what.display()))
 }
 
+fn default_entry_template() -> String {
+    schema::BLANK_TEMPLATE_ID.to_string()
+}
+
+/// One Garden in `gardens.json` (G9). Order is the list's order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HomeEntry {
+pub struct GardenEntry {
     pub id: String,
     pub name: String,
+    /// The template the Garden was made with; its page file may name
+    /// another (G10).
+    #[serde(default = "default_entry_template")]
+    pub template: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    /// The Home the Agents widget starts on (G27). Only `garden/new` sets it.
+    #[serde(rename = "seedHome", default, skip_serializing_if = "Option::is_none")]
+    pub seed_home: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct HomesFile {
+struct GardensFile {
     version: u32,
-    homes: Vec<HomeEntry>,
+    gardens: Vec<GardenEntry>,
+}
+
+/// Where the Garden list came from (for `doctor`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListSource {
+    /// `gardens.json`.
+    File,
+    /// No `gardens.json`; rebuilt from `gardens/*.toml` (G9).
+    Rebuilt,
+    /// `gardens.json` doesn't parse; rebuilt from the files.
+    Unreadable(String),
+    /// Neither exists: not set up.
+    Missing,
 }
 
 /// Where a file's live version came from.
@@ -201,15 +290,20 @@ pub struct SnapshotInfo {
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct EnsureOutcome {
-    #[serde(rename = "createdFolder")]
+#[derive(Debug, Clone)]
+pub struct SetupOutcome {
     pub created_folder: bool,
-    #[serde(rename = "createdZen")]
     pub created_zen: bool,
-    #[serde(rename = "createdPage")]
-    pub created_page: bool,
-    pub file: String,
+    /// The Default Garden was made (there was no Garden).
+    pub created_default: bool,
+    pub gardens: Vec<GardenEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteOutcome {
+    pub deleted: GardenEntry,
+    /// The snapshot the page moved to (`None` when it had no file).
+    pub snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,16 +364,23 @@ impl ZenFiles {
         self.root.is_dir()
     }
 
+    /// Set up (G14): the folder holds a Garden list, from `gardens.json` or
+    /// rebuilt from `gardens/*.toml`. A folder without one (for example a
+    /// leftover from before Gardens) is not set up; `setup` adds Default.
+    pub fn is_set_up(&self) -> bool {
+        self.exists() && !self.gardens().is_empty()
+    }
+
     fn require(&self) -> Result<(), ZenError> {
-        if self.exists() {
+        if self.is_set_up() {
             Ok(())
         } else {
             Err(ZenError::NotSetUp)
         }
     }
 
-    pub fn pages_dir(&self) -> PathBuf {
-        self.root.join(PAGES_DIR)
+    pub fn gardens_dir(&self) -> PathBuf {
+        self.root.join(GARDENS_DIR)
     }
 
     pub fn history_root(&self) -> PathBuf {
@@ -294,15 +395,15 @@ impl ZenFiles {
         self.history_root().join(f.label())
     }
 
-    /// Ids of `pages/*.toml` with a valid id, sorted.
-    pub fn page_ids(&self) -> Vec<String> {
-        let mut out: Vec<String> = fs::read_dir(self.pages_dir())
+    /// Ids of `gardens/*.toml` with a valid id, sorted.
+    pub fn garden_file_ids(&self) -> Vec<String> {
+        let mut out: Vec<String> = fs::read_dir(self.gardens_dir())
             .map(|rd| {
                 rd.flatten()
                     .filter_map(|e| {
                         let name = e.file_name().to_string_lossy().to_string();
                         let id = name.strip_suffix(".toml")?.to_string();
-                        (valid_home_id(&id) && e.path().is_file()).then_some(id)
+                        (valid_garden_id(&id) && e.path().is_file()).then_some(id)
                     })
                     .collect()
             })
@@ -311,137 +412,357 @@ impl ZenFiles {
         out
     }
 
-    pub fn read_homes(&self) -> Vec<HomeEntry> {
-        fs::read_to_string(self.root.join(HOMES_FILE))
-            .ok()
-            .and_then(|s| serde_json::from_str::<HomesFile>(&s).ok())
-            .map(|h| h.homes)
-            .unwrap_or_default()
+    /// The template a Garden file names on its `template` line, if any.
+    fn file_template(&self, id: &str) -> Option<&'static str> {
+        let text = fs::read_to_string(self.path_of(&ZenFile::Garden(id.to_string()))).ok()?;
+        let v: toml::Value = toml::from_str(&text).ok()?;
+        let t = v.get("template")?.as_str()?;
+        schema::TEMPLATE_IDS.iter().copied().find(|x| *x == t)
     }
 
-    fn write_homes(&self, homes: &[HomeEntry]) -> Result<(), ZenError> {
-        let path = self.root.join(HOMES_FILE);
-        let body = serde_json::to_string_pretty(&HomesFile { version: 1, homes: homes.to_vec() })
+    /// The Garden list and where it came from (G9). A missing or unreadable
+    /// `gardens.json` is rebuilt from `gardens/*.toml` (id order, name = id);
+    /// nothing is written or deleted here.
+    pub fn read_list(&self) -> (Vec<GardenEntry>, ListSource) {
+        let path = self.root.join(GARDENS_FILE);
+        let unreadable = match fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<GardensFile>(&text) {
+                Ok(f) => {
+                    let mut seen: Vec<String> = Vec::new();
+                    let list: Vec<GardenEntry> = f
+                        .gardens
+                        .into_iter()
+                        .filter(|g| valid_garden_id(&g.id))
+                        .filter(|g| {
+                            let fresh = !seen.contains(&g.id);
+                            seen.push(g.id.clone());
+                            fresh
+                        })
+                        .map(|mut g| {
+                            if !schema::TEMPLATE_IDS.contains(&g.template.as_str()) {
+                                g.template = schema::BLANK_TEMPLATE_ID.to_string();
+                            }
+                            g
+                        })
+                        .collect();
+                    return (list, ListSource::File);
+                }
+                Err(e) => Some(format!("{GARDENS_FILE} doesn't parse: {e}")),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(format!("can't read {GARDENS_FILE}: {e}")),
+        };
+        let ids = self.garden_file_ids();
+        let rebuilt: Vec<GardenEntry> = ids
+            .into_iter()
+            .map(|id| GardenEntry {
+                name: id.clone(),
+                template: self.file_template(&id).unwrap_or(schema::BLANK_TEMPLATE_ID).to_string(),
+                created_at: mtime_rfc3339(&self.path_of(&ZenFile::Garden(id.clone()))).unwrap_or_default(),
+                seed_home: None,
+                id,
+            })
+            .collect();
+        let source = match (unreadable, rebuilt.is_empty()) {
+            (Some(msg), _) => ListSource::Unreadable(msg),
+            (None, false) => ListSource::Rebuilt,
+            (None, true) => ListSource::Missing,
+        };
+        (rebuilt, source)
+    }
+
+    /// The Garden list, in order.
+    pub fn gardens(&self) -> Vec<GardenEntry> {
+        self.read_list().0
+    }
+
+    /// Write `gardens.json` atomically. An existing file that doesn't parse
+    /// is moved into `.history/gardens.json/` first, never overwritten.
+    fn write_list(&self, list: &[GardenEntry]) -> Result<(), ZenError> {
+        let path = self.root.join(GARDENS_FILE);
+        if let Ok(text) = fs::read_to_string(&path) {
+            if serde_json::from_str::<GardensFile>(&text).is_err() {
+                let dir = self.history_root().join(GARDENS_FILE);
+                fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
+                let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ").to_string();
+                let dst = dir.join(format!("{stamp}-unreadable.json"));
+                fs::rename(&path, &dst).map_err(|e| io(e, &dst))?;
+            }
+        }
+        let body = serde_json::to_string_pretty(&GardensFile { version: 1, gardens: list.to_vec() })
             .map_err(|e| ZenError::Io(e.to_string()))?;
         crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
     }
 
-    /// A Home id from an id or a name (`k2 zen reset --home Work`).
-    pub fn find_home(&self, id_or_name: &str) -> Option<String> {
+    /// A Garden by id, else by name (case-insensitive, exact), with its
+    /// 0-based position.
+    pub fn find_garden(&self, id_or_name: &str) -> Option<(usize, GardenEntry)> {
         let want = id_or_name.trim();
-        let homes = self.read_homes();
-        if let Some(h) = homes.iter().find(|h| h.id == want) {
-            return Some(h.id.clone());
+        let list = self.gardens();
+        if let Some(i) = list.iter().position(|g| g.id == want) {
+            return Some((i, list[i].clone()));
         }
-        if let Some(h) = homes.iter().find(|h| h.name.eq_ignore_ascii_case(want)) {
-            return Some(h.id.clone());
+        let lower = want.to_lowercase();
+        list.iter().position(|g| g.name.to_lowercase() == lower).map(|i| (i, list[i].clone()))
+    }
+
+    /// [`ZenFiles::find_garden`] or 404 `unknown_garden` (G12).
+    pub fn garden(&self, id_or_name: &str) -> Result<(usize, GardenEntry), ZenError> {
+        self.find_garden(id_or_name).ok_or_else(|| ZenError::UnknownGarden {
+            garden: id_or_name.trim().to_string(),
+            known: self.gardens().into_iter().map(|g| g.id).collect(),
+        })
+    }
+
+    /// The file a `garden` selector names. `deleted` also accepts the id of
+    /// a Garden that only lives in `.history/` (for `history`, G17).
+    pub fn garden_file(&self, id_or_name: &str, deleted: bool) -> Result<ZenFile, ZenError> {
+        match self.find_garden(id_or_name) {
+            Some((_, g)) => Ok(ZenFile::Garden(g.id)),
+            None => {
+                let id = id_or_name.trim();
+                let f = ZenFile::Garden(id.to_string());
+                if deleted && valid_garden_id(id) && self.history_dir(&f).is_dir() {
+                    Ok(f)
+                } else {
+                    Err(self.garden(id_or_name).err().unwrap_or(ZenError::NotFound(id.to_string())))
+                }
+            }
         }
-        (valid_home_id(want) && self.path_of(&ZenFile::Page(want.to_string())).is_file())
-            .then(|| want.to_string())
+    }
+
+    /// The template a Garden resolves to when its file doesn't name one.
+    pub fn default_template(&self, id: &str) -> String {
+        self.gardens()
+            .into_iter()
+            .find(|g| g.id == id)
+            .map(|g| g.template)
+            .unwrap_or_else(default_entry_template)
+    }
+
+    fn name_taken(list: &[GardenEntry], name: &str, except: Option<&str>) -> bool {
+        let lower = name.to_lowercase();
+        list.iter().any(|g| Some(g.id.as_str()) != except && g.name.to_lowercase() == lower)
+    }
+
+    fn exists_message(name: &str) -> ZenError {
+        ZenError::GardenExists(format!("You already have a Garden called \u{201c}{name}\u{201d}."))
+    }
+
+    /// A fresh `g-` + 8 hex id, unused by the list, the files and history.
+    fn new_id(&self, list: &[GardenEntry]) -> String {
+        loop {
+            let hex = uuid::Uuid::new_v4().simple().to_string();
+            let id = format!("g-{}", &hex[..8]);
+            let f = ZenFile::Garden(id.clone());
+            if !list.iter().any(|g| g.id == id) && !self.path_of(&f).exists() && !self.history_dir(&f).exists() {
+                return id;
+            }
+        }
+    }
+
+    fn now() -> String {
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// Write a Garden's stub page when it has no file. Never overwrites.
+    fn write_stub_if_missing(&self, g: &GardenEntry) -> Result<(), ZenError> {
+        let path = self.path_of(&ZenFile::Garden(g.id.clone()));
+        if path.exists() {
+            return Ok(());
+        }
+        let dir = self.gardens_dir();
+        fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
+        crate::fs_atomic::atomic_write_str(&path, &garden_stub(&g.id, &g.name, &g.template)).map_err(|e| io(e, &path))
     }
 
     /// The stub for a file: an empty set of changes for `zen.toml`, the
-    /// template line plus an empty `[theme]` for a page, and a copy of the
-    /// default theme for a user theme.
+    /// template line and comments for a Garden, and a copy of the default
+    /// theme for a user theme.
     pub fn stub(&self, f: &ZenFile) -> String {
         match f {
             ZenFile::Zen => super::DEFAULT_ZEN_TOML.to_string(),
             ZenFile::Theme(name) => theme_starter(name, &super::BUILTIN_THEMES[0]),
-            ZenFile::Page(id) => {
-                let name = self
-                    .read_homes()
+            ZenFile::Garden(id) => {
+                let (name, template) = self
+                    .gardens()
                     .into_iter()
-                    .find(|h| &h.id == id)
-                    .map(|h| h.name)
-                    .unwrap_or_else(|| id.clone());
-                page_stub(id, &name)
+                    .find(|g| &g.id == id)
+                    .map(|g| (g.name, g.template))
+                    .unwrap_or_else(|| (id.clone(), default_entry_template()));
+                garden_stub(id, &name, &template)
             }
         }
     }
 
-    /// Z11: create the folder, `zen.toml` and `pages/<id>.toml` if missing.
-    /// Never overwrites a file. Records the Home's name in `homes.json`.
-    pub fn ensure_page(&self, id: &str, name: &str) -> Result<EnsureOutcome, ZenError> {
-        if !valid_home_id(id) {
-            return Err(ZenError::BadRequest(format!(
-                "'{id}' is not a Home id (letters, digits, - and _, up to 64)"
-            )));
-        }
-        let name = clean_name(name)?;
+    /// G14: create the folder, `zen.toml` and, when there is no Garden,
+    /// `gardens.json` with **Default** (`k2.texting@1`) plus its stub. A
+    /// list rebuilt from files is written down. Idempotent; never
+    /// overwrites a file.
+    pub fn setup(&self) -> Result<SetupOutcome, ZenError> {
+        let _g = list_lock();
         let created_folder = !self.exists();
-        fs::create_dir_all(self.pages_dir()).map_err(|e| io(e, &self.pages_dir()))?;
+        let dir = self.gardens_dir();
+        fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
         let zen = self.path_of(&ZenFile::Zen);
         let created_zen = !zen.exists();
         if created_zen {
-            crate::fs_atomic::atomic_write_str(&zen, super::DEFAULT_ZEN_TOML)
-                .map_err(|e| io(e, &zen))?;
+            crate::fs_atomic::atomic_write_str(&zen, super::DEFAULT_ZEN_TOML).map_err(|e| io(e, &zen))?;
         }
-        let mut homes = self.read_homes();
-        match homes.iter_mut().find(|h| h.id == id) {
-            Some(h) if h.name == name => {}
-            Some(h) => {
-                h.name = name.clone();
-                self.write_homes(&homes)?;
-            }
-            None => {
-                homes.push(HomeEntry { id: id.to_string(), name: name.clone() });
-                self.write_homes(&homes)?;
-            }
+        let (mut list, source) = self.read_list();
+        let mut created_default = false;
+        if list.is_empty() {
+            let g = GardenEntry {
+                id: self.new_id(&list),
+                name: DEFAULT_GARDEN_NAME.to_string(),
+                template: schema::TEMPLATE_ID.to_string(),
+                created_at: Self::now(),
+                seed_home: None,
+            };
+            self.write_stub_if_missing(&g)?;
+            list.push(g);
+            self.write_list(&list)?;
+            created_default = true;
+        } else if source != ListSource::File {
+            self.write_list(&list)?;
         }
-        let f = ZenFile::Page(id.to_string());
-        let page = self.path_of(&f);
-        let created_page = !page.exists();
-        if created_page {
-            crate::fs_atomic::atomic_write_str(&page, &page_stub(id, &name))
-                .map_err(|e| io(e, &page))?;
-        }
-        Ok(EnsureOutcome { created_folder, created_zen, created_page, file: f.label() })
+        Ok(SetupOutcome { created_folder, created_zen, created_default, gardens: list })
     }
 
-    /// Z11: replace `homes.json` with the renderer's list. A page whose Home
-    /// is gone moves into `.history/` (restorable with reset). An empty list
-    /// archives nothing: K2 never deletes the last Home, so it is a bug.
-    /// Returns `(written, archived ids)`; nothing is written when Zen was
-    /// never set up.
-    pub fn sync_homes(&self, homes: Vec<HomeEntry>) -> Result<(bool, Vec<String>), ZenError> {
-        let mut clean: Vec<HomeEntry> = Vec::new();
-        for h in homes {
-            if !valid_home_id(&h.id) {
-                return Err(ZenError::BadRequest(format!("'{}' is not a Home id", h.id)));
+    /// G13 `garden/new`: a Garden named `name` on `template` (default
+    /// `k2.blank@1`) at 1-based position `at` (default the end), with its
+    /// stub page. Agents can't set Zen up: no list is 404 `zen_not_set_up`.
+    pub fn new_garden(
+        &self,
+        name: &str,
+        template: Option<&str>,
+        seed_home: Option<&str>,
+        at: Option<usize>,
+    ) -> Result<GardenEntry, ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        let name = clean_garden_name(name)?;
+        let template = template_choice(template)?;
+        if let Some(h) = seed_home {
+            if !valid_garden_id(h) {
+                return Err(ZenError::BadRequest(format!("'{h}' is not a Home id")));
             }
-            let name = clean_name(&h.name)?;
-            if !clean.iter().any(|c| c.id == h.id) {
-                clean.push(HomeEntry { id: h.id, name });
+        }
+        let mut list = self.gardens();
+        if Self::name_taken(&list, &name, None) {
+            return Err(Self::exists_message(&name));
+        }
+        let pos = match at {
+            None => list.len(),
+            Some(n) if n >= 1 && n <= list.len() + 1 => n - 1,
+            Some(n) => {
+                return Err(ZenError::BadRequest(format!(
+                    "position {n} is outside 1 to {}",
+                    list.len() + 1
+                )))
             }
+        };
+        let g = GardenEntry {
+            id: self.new_id(&list),
+            name,
+            template: template.to_string(),
+            created_at: Self::now(),
+            seed_home: seed_home.map(str::to_string),
+        };
+        self.write_stub_if_missing(&g)?;
+        list.insert(pos, g.clone());
+        self.write_list(&list)?;
+        Ok(g)
+    }
+
+    /// G13 `garden/rename`. Returns the entry and whether the name changed
+    /// (the same name is a no-op that writes nothing). Ids are stable, so
+    /// history and the page file are untouched (G17).
+    pub fn rename_garden(&self, garden: &str, name: &str) -> Result<(GardenEntry, bool), ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        let (i, mut g) = self.garden(garden)?;
+        let name = clean_garden_name(name)?;
+        if g.name == name {
+            return Ok((g, false));
         }
-        if !self.exists() {
-            return Ok((false, Vec::new()));
+        let mut list = self.gardens();
+        if Self::name_taken(&list, &name, Some(&g.id)) {
+            return Err(Self::exists_message(&name));
         }
-        self.write_homes(&clean)?;
-        let mut archived = Vec::new();
-        if clean.is_empty() {
-            return Ok((true, archived));
+        g.name = name;
+        list[i] = g.clone();
+        self.write_list(&list)?;
+        Ok((g, true))
+    }
+
+    /// G13 `garden/reorder`: move a Garden to 1-based position `to`.
+    /// Returns the list and whether it moved.
+    pub fn reorder_garden(&self, garden: &str, to: i64) -> Result<(Vec<GardenEntry>, bool), ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        let (i, g) = self.garden(garden)?;
+        let mut list = self.gardens();
+        if to < 1 || to as usize > list.len() {
+            return Err(ZenError::BadRequest(format!("position {to} is outside 1 to {}", list.len())));
         }
-        // A deleted Home's own theme pick goes with it.
+        let to = to as usize - 1;
+        if to == i {
+            return Ok((list, false));
+        }
+        list.remove(i);
+        list.insert(to, g);
+        self.write_list(&list)?;
+        Ok((list, true))
+    }
+
+    /// G13/G17 `garden/delete`: the page moves into
+    /// `.history/gardens/<id>.toml/` (with a `deleted.json` record of the
+    /// list entry), the entry leaves the list, and its theme pick goes. The
+    /// last Garden can't be deleted (409 `last_garden`). Nothing is removed
+    /// from disk without a copy in history.
+    pub fn delete_garden(&self, garden: &str) -> Result<DeleteOutcome, ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        let (i, g) = self.garden(garden)?;
+        let mut list = self.gardens();
+        if list.len() <= 1 {
+            return Err(ZenError::LastGarden);
+        }
+        let f = ZenFile::Garden(g.id.clone());
+        let path = self.path_of(&f);
+        let snapshot = if path.is_file() {
+            let dst = self.snapshot_slot(&f)?;
+            fs::rename(&path, &dst).map_err(|e| io(e, &dst))?;
+            dst.file_name().map(|n| n.to_string_lossy().to_string())
+        } else {
+            None
+        };
+        let dir = self.history_dir(&f);
+        fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
+        let mut record = serde_json::to_value(&g).map_err(|e| ZenError::Io(e.to_string()))?;
+        record["deletedAt"] = json!(Self::now());
+        record["snapshot"] = json!(snapshot);
+        let rec = dir.join(DELETED_RECORD);
+        let body = serde_json::to_string_pretty(&record).map_err(|e| ZenError::Io(e.to_string()))?;
+        crate::fs_atomic::atomic_write_str(&rec, &(body + "\n")).map_err(|e| io(e, &rec))?;
+        list.remove(i);
+        self.write_list(&list)?;
         let mut active = self.read_active();
-        let before = active.homes.len();
-        active.homes.retain(|id, _| clean.iter().any(|h| &h.id == id));
-        if active.homes.len() != before {
+        if active.gardens.remove(&g.id).is_some() {
             self.write_active(&active)?;
         }
-        for id in self.page_ids() {
-            if clean.iter().any(|h| h.id == id) {
-                continue;
-            }
-            let f = ZenFile::Page(id.clone());
-            let path = self.path_of(&f);
-            let text = fs::read_to_string(&path).map_err(|e| io(e, &path))?;
-            self.write_snapshot(&f, &text)?;
-            fs::remove_file(&path).map_err(|e| io(e, &path))?;
-            self.prune(&f);
-            archived.push(id);
+        self.prune(&f);
+        Ok(DeleteOutcome { deleted: g, snapshot })
+    }
+
+    /// Check one file's text with the rules for its kind. A Garden page is
+    /// checked against its own default template (G38).
+    fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
+        match f {
+            ZenFile::Garden(id) => schema::check_garden(&f.label(), text, base, &self.default_template(id)),
+            _ => schema::check(&f.label(), text, f.kind(), base),
         }
-        Ok((true, archived))
     }
 
     fn read_current(&self, f: &ZenFile) -> Option<Result<String, String>> {
@@ -455,7 +776,7 @@ impl ZenFiles {
 
     fn check_text(&self, f: &ZenFile, text: &Result<String, String>, base: &Layer) -> Checked {
         match text {
-            Ok(t) => schema::check(&f.label(), t, f.kind(), base),
+            Ok(t) => self.check_src(f, t, base),
             Err(msg) => Checked {
                 errors: vec![Diagnostic { file: f.label(), line: 1, col: 1, message: msg.clone() }],
                 ..Checked::default()
@@ -490,7 +811,9 @@ impl ZenFiles {
         fs::read_to_string(self.history_dir(f).join(name)).ok()
     }
 
-    fn write_snapshot(&self, f: &ZenFile, text: &str) -> Result<String, ZenError> {
+    /// The path of a new snapshot of `f` (its folder made): names sort by
+    /// time and stay strictly increasing even if the clock steps back.
+    fn snapshot_slot(&self, f: &ZenFile) -> Result<PathBuf, ZenError> {
         let dir = self.history_dir(f);
         fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
         let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ").to_string();
@@ -498,23 +821,24 @@ impl ZenFiles {
         let mut seq = 0u32;
         loop {
             let name = format!("{stamp}-{seq:03}.toml");
-            // Keep names strictly increasing even if the clock steps back.
             let after_newest = newest.as_deref().map_or(true, |n| name.as_str() > n);
             let path = dir.join(&name);
             if after_newest && !path.exists() {
-                crate::fs_atomic::atomic_write_str(&path, text).map_err(|e| io(e, &path))?;
-                return Ok(name);
+                return Ok(path);
             }
             seq += 1;
             if seq > 999 {
                 // Clock behind the newest snapshot: continue after it.
                 let base = newest.as_deref().unwrap_or("0").trim_end_matches(".toml").to_string();
-                let name = format!("{base}x.toml");
-                let path = dir.join(&name);
-                crate::fs_atomic::atomic_write_str(&path, text).map_err(|e| io(e, &path))?;
-                return Ok(name);
+                return Ok(dir.join(format!("{base}x.toml")));
             }
         }
+    }
+
+    fn write_snapshot(&self, f: &ZenFile, text: &str) -> Result<String, ZenError> {
+        let path = self.snapshot_slot(f)?;
+        crate::fs_atomic::atomic_write_str(&path, text).map_err(|e| io(e, &path))?;
+        Ok(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
     }
 
     fn prune(&self, f: &ZenFile) {
@@ -549,7 +873,7 @@ impl ZenFiles {
         }
         for snap in self.snapshots(f) {
             let Some(t) = self.snapshot_text(f, &snap.name) else { continue };
-            let c = schema::check(&f.label(), &t, f.kind(), base);
+            let c = self.check_src(f, &t, base);
             if c.is_clean() {
                 return Effective {
                     layer: c.layer,
@@ -634,7 +958,8 @@ impl ZenFiles {
         ZenError::UnknownTheme { name: name.to_string(), known: self.theme_names() }
     }
 
-    /// `active.json`, or the empty default (global `default`, no Home picks).
+    /// `active.json`, or the empty default (global `default`, no Garden
+    /// picks). A pre-Gardens `homes` map is ignored (never released).
     pub fn read_active(&self) -> ActiveFile {
         fs::read_to_string(self.root.join(ACTIVE_FILE))
             .ok()
@@ -644,19 +969,21 @@ impl ZenFiles {
 
     fn write_active(&self, a: &ActiveFile) -> Result<(), ZenError> {
         let path = self.root.join(ACTIVE_FILE);
-        let body = serde_json::to_string_pretty(a).map_err(|e| ZenError::Io(e.to_string()))?;
+        let mut a = a.clone();
+        a.version = ACTIVE_VERSION;
+        let body = serde_json::to_string_pretty(&a).map_err(|e| ZenError::Io(e.to_string()))?;
         crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
     }
 
-    /// The theme a Home shows (decision 8): its own pick, else the global
-    /// one, else `default`. A pick whose theme is gone is reported in
-    /// `missing` and skipped.
-    pub fn active_theme(&self, home: Option<&str>) -> ActiveTheme {
+    /// The theme a Garden shows (G16): its own pick, else the global one,
+    /// else `default`. A pick whose theme is gone is reported in `missing`
+    /// and skipped. `garden` is a Garden id.
+    pub fn active_theme(&self, garden: Option<&str>) -> ActiveTheme {
         let a = self.read_active();
         let mut missing = None;
         let mut chain: Vec<(String, &'static str)> = Vec::new();
-        if let Some(n) = home.and_then(|id| a.homes.get(id)) {
-            chain.push((n.clone(), "home"));
+        if let Some(n) = garden.and_then(|id| a.gardens.get(id)) {
+            chain.push((n.clone(), "garden"));
         }
         if let Some(n) = &a.theme {
             chain.push((n.clone(), "global"));
@@ -685,13 +1012,13 @@ impl ZenFiles {
     }
 
     /// What a file is checked over: a theme over its built-in parent,
-    /// `zen.toml` over the global theme, a page over its Home's theme plus
+    /// `zen.toml` over the global theme, a Garden over its own theme plus
     /// `zen.toml`.
     fn base_for(&self, f: &ZenFile) -> Layer {
         match f {
             ZenFile::Theme(name) => Self::theme_parent(name).clone(),
             ZenFile::Zen => self.theme_stack(&self.active_theme(None).name).2,
-            ZenFile::Page(id) => {
+            ZenFile::Garden(id) => {
                 let tbase = self.theme_stack(&self.active_theme(Some(id)).name).2;
                 let zen = self.effective(&ZenFile::Zen, &tbase);
                 schema::merge(&[&tbase, &zen.layer])
@@ -699,55 +1026,52 @@ impl ZenFiles {
         }
     }
 
-    fn home_id(&self, home: &str) -> Result<String, ZenError> {
-        self.find_home(home).ok_or_else(|| {
-            ZenError::NotFound(format!("no Home '{home}' on this computer; list them with k2 zen pages"))
-        })
+    fn garden_id(&self, garden: &str) -> Result<String, ZenError> {
+        self.garden(garden).map(|(_, g)| g.id)
     }
 
-    /// `k2 zen theme set`: pick `name` globally, or for one Home. `name`
-    /// None with a Home clears that Home's pick (it follows the global one
-    /// again). An unknown name changes nothing.
-    pub fn set_theme(&self, name: Option<&str>, home: Option<&str>) -> Result<ThemeSwitch, ZenError> {
+    /// `k2 zen theme set`: pick `name` globally, or for one Garden (id or
+    /// name). `name` None with a Garden clears that Garden's pick (it
+    /// follows the global one again). An unknown name changes nothing.
+    pub fn set_theme(&self, name: Option<&str>, garden: Option<&str>) -> Result<ThemeSwitch, ZenError> {
         self.require()?;
-        let home_id = home.map(|h| self.home_id(h)).transpose()?;
+        let garden_id = garden.map(|g| self.garden_id(g)).transpose()?;
         if let Some(n) = name {
             if !self.theme_exists(n) {
                 return Err(self.unknown_theme(n));
             }
         }
         let mut a = self.read_active();
-        a.version = 1;
-        match (&home_id, name) {
+        match (&garden_id, name) {
             (Some(id), Some(n)) => {
-                a.homes.insert(id.clone(), n.to_string());
+                a.gardens.insert(id.clone(), n.to_string());
             }
             (Some(id), None) => {
-                a.homes.remove(id);
+                a.gardens.remove(id);
             }
             (None, Some(n)) => a.theme = Some(n.to_string()),
             (None, None) => {
                 return Err(ZenError::BadRequest(
-                    "theme set needs a theme name, or a Home to clear (--home <name> --clear)".into(),
+                    "theme set needs a theme name, or a Garden to clear (--garden <name> --clear)".into(),
                 ))
             }
         }
         self.write_active(&a)?;
-        let now = self.active_theme(home_id.as_deref());
-        Ok(ThemeSwitch { theme: now.name, scope: now.scope.to_string(), home: home_id })
+        let now = self.active_theme(garden_id.as_deref());
+        Ok(ThemeSwitch { theme: now.name, scope: now.scope.to_string(), garden: garden_id })
     }
 
     /// `k2 zen theme next|prev`: step through [`ZenFiles::themes`] (wrapping)
-    /// from what the Home (or the computer) shows now.
-    pub fn cycle_theme(&self, step: i64, home: Option<&str>) -> Result<ThemeSwitch, ZenError> {
+    /// from what the Garden (or the computer) shows now.
+    pub fn cycle_theme(&self, step: i64, garden: Option<&str>) -> Result<ThemeSwitch, ZenError> {
         self.require()?;
-        let home_id = home.map(|h| self.home_id(h)).transpose()?;
+        let garden_id = garden.map(|g| self.garden_id(g)).transpose()?;
         let names = self.theme_names();
-        let current = self.active_theme(home_id.as_deref()).name;
+        let current = self.active_theme(garden_id.as_deref()).name;
         let n = names.len() as i64;
         let i = names.iter().position(|x| *x == current).unwrap_or(0) as i64;
         let next = names[(((i + step) % n + n) % n) as usize].clone();
-        self.set_theme(Some(&next), home_id.as_deref())
+        self.set_theme(Some(&next), garden_id.as_deref())
     }
 
     /// `k2 zen theme new <name>`: start a user theme bundle from a copy of
@@ -878,10 +1202,10 @@ impl ZenFiles {
     }
 
     /// GET `/cli/zen/theme/list`.
-    pub fn theme_list(&self, home: Option<&str>) -> Result<J, ZenError> {
+    pub fn theme_list(&self, garden: Option<&str>) -> Result<J, ZenError> {
         self.require()?;
-        let home_id = home.map(|h| self.home_id(h)).transpose()?;
-        let active = self.active_theme(home_id.as_deref());
+        let garden_id = garden.map(|g| self.garden_id(g)).transpose()?;
+        let active = self.active_theme(garden_id.as_deref());
         let a = self.read_active();
         Ok(json!({
             "ok": true,
@@ -889,38 +1213,64 @@ impl ZenFiles {
             "scope": active.scope,
             "missing": active.missing,
             "global": a.theme.clone().unwrap_or_else(|| super::DEFAULT_THEME.to_string()),
-            "home": home_id,
-            "homeTheme": home_id.as_deref().and_then(|id| a.homes.get(id).cloned()),
+            "garden": garden_id,
+            "gardenTheme": garden_id.as_deref().and_then(|id| a.gardens.get(id).cloned()),
             "themes": self.themes_json(&active.name),
         }))
     }
 
-    /// GET `/cli/zen/get` body (Z15). `home` None resolves the global theme
-    /// and `zen.toml` over the template with no page override.
-    pub fn resolve(&self, home: Option<&str>) -> Result<J, ZenError> {
-        self.require()?;
-        if let Some(id) = home {
-            if !valid_home_id(id) {
-                return Err(ZenError::BadRequest(format!("'{id}' is not a Home id")));
-            }
+    /// One Garden as `GET /cli/zen/gardens` lists it (G13): 1-based
+    /// `index`, whether its page file exists, and its own theme pick.
+    pub fn garden_json(&self, index: usize, g: &GardenEntry, active: &ActiveFile) -> J {
+        let mut v = json!({
+            "id": g.id,
+            "name": g.name,
+            "index": index + 1,
+            "template": g.template,
+            "hasFile": self.path_of(&ZenFile::Garden(g.id.clone())).is_file(),
+            "createdAt": g.created_at,
+            "theme": active.gardens.get(&g.id),
+        });
+        if let Some(h) = &g.seed_home {
+            v["seedHome"] = json!(h);
         }
-        let active = self.active_theme(home);
+        v
+    }
+
+    /// Every Garden, in order, as `GET /cli/zen/gardens` lists them.
+    pub fn gardens_json(&self) -> Vec<J> {
+        let active = self.read_active();
+        self.gardens().iter().enumerate().map(|(i, g)| self.garden_json(i, g, &active)).collect()
+    }
+
+    /// GET `/cli/zen/get` body (Z15, G12) for a Garden (id or name; `None`
+    /// is the first). The page is the Garden's template with its file's
+    /// layout and widgets (G38); the theme stack ends with its file.
+    pub fn resolve(&self, garden: Option<&str>) -> Result<J, ZenError> {
+        self.require()?;
+        let (index, entry) = match garden {
+            Some(sel) => self.garden(sel)?,
+            None => {
+                let first = self.gardens().into_iter().next().ok_or(ZenError::NotSetUp)?;
+                (0, first)
+            }
+        };
+        let id = entry.id.clone();
+        let active = self.active_theme(Some(&id));
         let (parent, theme, tbase) = self.theme_stack(&active.name);
         let zen = self.effective(&ZenFile::Zen, &tbase);
         let base = schema::merge(&[&tbase, &zen.layer]);
-        let page = home.map(|id| self.effective(&ZenFile::Page(id.to_string()), &base));
-        let empty = Layer::new();
-        let user = schema::merge(&[&theme.layer, &zen.layer, page.as_ref().map_or(&empty, |p| &p.layer)]);
+        let gfile = ZenFile::Garden(id.clone());
+        let page = self.effective(&gfile, &base);
+        let user = schema::merge(&[&theme.layer, &zen.layer, &page.layer]);
         let rt = schema::resolve(parent, &user);
 
         let mut errors = theme.errors.clone();
         errors.extend(zen.errors.iter().cloned());
+        errors.extend(page.errors.iter().cloned());
         let mut warnings = theme.warnings.clone();
         warnings.extend(zen.warnings.iter().cloned());
-        if let Some(p) = &page {
-            errors.extend(p.errors.iter().cloned());
-            warnings.extend(p.warnings.iter().cloned());
-        }
+        warnings.extend(page.warnings.iter().cloned());
         if let Some(m) = &active.missing {
             warnings.push(Diagnostic {
                 file: ACTIVE_FILE.to_string(),
@@ -950,28 +1300,25 @@ impl ZenFiles {
         if let Some(bg) = background {
             theme_json["background"] = bg;
         }
+        let garden_json = json!({ "id": id, "name": entry.name, "index": index + 1 });
         let versioned = json!({
-            "page": super::texting_page(),
+            "garden": garden_json,
+            "page": super::garden_page(&page.layer, &entry.template),
             "theme": theme_json,
             "chrome": rt.chrome,
             "motion": rt.motion,
         });
         let version = schema::fnv_hex(versioned.to_string().as_bytes());
-        let last_good_at = [theme.at.clone(), zen.at.clone(), page.as_ref().and_then(|p| p.at.clone())]
-            .into_iter()
-            .flatten()
-            .max();
+        let last_good_at = [theme.at.clone(), zen.at.clone(), page.at.clone()].into_iter().flatten().max();
         let mut sources = serde_json::Map::new();
         sources.insert(ZenFile::Theme(active.name.clone()).label(), theme.origin.as_json());
         sources.insert(ZenFile::Zen.label(), zen.origin.as_json());
-        if let (Some(id), Some(p)) = (home, &page) {
-            sources.insert(ZenFile::Page(id.to_string()).label(), p.origin.as_json());
-        }
+        sources.insert(gfile.label(), page.origin.as_json());
         Ok(json!({
             "ok": true,
             "schema": schema::SCHEMA_VERSION,
             "version": version,
-            "home": home,
+            "garden": versioned["garden"],
             "page": versioned["page"],
             "theme": versioned["theme"],
             "themes": self.themes_json(&active.name),
@@ -984,11 +1331,23 @@ impl ZenFiles {
         }))
     }
 
-    /// Every file `validate`/`refresh` looks at: `zen.toml`, each page and
-    /// each user theme.
+    /// Garden ids with a list entry or a page file: the list's order, then
+    /// files the list doesn't name.
+    fn garden_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.gardens().into_iter().map(|g| g.id).collect();
+        for id in self.garden_file_ids() {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
+    /// Every file `validate`/`refresh` looks at: `zen.toml`, each Garden's
+    /// page and each user theme.
     fn all_files(&self) -> Vec<ZenFile> {
         let mut out = vec![ZenFile::Zen];
-        out.extend(self.page_ids().into_iter().map(ZenFile::Page));
+        out.extend(self.garden_ids().into_iter().map(ZenFile::Garden));
         out.extend(self.user_theme_names().into_iter().map(ZenFile::Theme));
         out
     }
@@ -1046,12 +1405,17 @@ impl ZenFiles {
 
     /// Re-read the folder: snapshot every clean file with new content (Z14),
     /// keep each theme's last good background, and return a fingerprint of
-    /// the live state (active theme included) plus its diagnostics. Two
-    /// calls with nothing effectively changed return the same fingerprint,
-    /// so a caller emits `zen_changed` only when it moves (Z12).
+    /// the live state (active theme and the Garden list included, G41) plus
+    /// its diagnostics. Two calls with nothing effectively changed return
+    /// the same fingerprint, so a caller emits `zen_changed` only when it
+    /// moves (Z12): a Garden create, rename, reorder or delete moves it.
     pub fn refresh(&self) -> Result<String, ZenError> {
         self.require()?;
         let mut state = serde_json::Map::new();
+        state.insert(
+            GARDENS_FILE.to_string(),
+            serde_json::to_value(self.gardens()).map_err(|e| ZenError::Io(e.to_string()))?,
+        );
         state.insert(
             ACTIVE_FILE.to_string(),
             serde_json::to_value(self.read_active()).map_err(|e| ZenError::Io(e.to_string()))?,
@@ -1072,8 +1436,8 @@ impl ZenFiles {
         }
         let zen_eff = self.refresh_one(&ZenFile::Zen, &self.base_for(&ZenFile::Zen))?;
         state.insert(ZenFile::Zen.label(), effective_state(&zen_eff));
-        for id in self.page_ids() {
-            let f = ZenFile::Page(id);
+        for id in self.garden_ids() {
+            let f = ZenFile::Garden(id);
             let eff = self.refresh_one(&f, &self.base_for(&f))?;
             state.insert(f.label(), effective_state(&eff));
         }
@@ -1082,7 +1446,7 @@ impl ZenFiles {
 
     fn refresh_one(&self, f: &ZenFile, base: &Layer) -> Result<Effective, ZenError> {
         if let Some(Ok(text)) = self.read_current(f) {
-            if schema::check(&f.label(), &text, f.kind(), base).is_clean() {
+            if self.check_src(f, &text, base).is_clean() {
                 let newest = self.snapshots(f).into_iter().next();
                 let same = newest
                     .as_ref()
@@ -1105,11 +1469,13 @@ impl ZenFiles {
             None => self.all_files(),
         };
         if target.is_none() {
-            // Pages of deleted Homes and deleted themes live only in history.
-            if let Ok(rd) = fs::read_dir(self.history_root().join(PAGES_DIR)) {
-                for e in rd.flatten() {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if let Ok(f) = ZenFile::parse(&format!("{PAGES_DIR}/{name}")) {
+            // Deleted Gardens and deleted themes live only in history.
+            if let Ok(rd) = fs::read_dir(self.history_root().join(GARDENS_DIR)) {
+                let mut names: Vec<String> =
+                    rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+                names.sort();
+                for name in names {
+                    if let Ok(f) = ZenFile::parse(&format!("{GARDENS_DIR}/{name}")) {
                         if !files.contains(&f) {
                             files.push(f);
                         }
@@ -1138,12 +1504,17 @@ impl ZenFiles {
                     .map(|s| {
                         let clean = self
                             .snapshot_text(f, &s.name)
-                            .map(|t| schema::check(&f.label(), &t, f.kind(), &b).is_clean())
+                            .map(|t| self.check_src(f, &t, &b).is_clean())
                             .unwrap_or(false);
                         json!({ "name": s.name, "at": s.at, "bytes": s.bytes, "clean": clean })
                     })
                     .collect();
-                json!({ "file": f.label(), "exists": self.path_of(f).is_file(), "snapshots": snaps })
+                let mut v = json!({ "file": f.label(), "exists": self.path_of(f).is_file(), "snapshots": snaps });
+                if let ZenFile::Garden(id) = f {
+                    v["garden"] = json!(id);
+                    v["deleted"] = json!(!self.gardens().iter().any(|g| &g.id == id));
+                }
+                v
             })
             .collect();
         Ok(json!({ "ok": true, "keep": HISTORY_KEEP, "files": out }))
@@ -1151,11 +1522,11 @@ impl ZenFiles {
 
     /// POST `/cli/zen/reset` (Z14, Omarchy addition 3): keep the current
     /// file as a snapshot first, then restore snapshot `to`, or clear the
-    /// user's changes when `to` is None: `zen.toml` and pages go back to
-    /// their empty stubs, an override of a built-in theme is removed (the
-    /// built-in shows again), and a theme only the user has goes back to a
-    /// copy of `default`. Never touches `homes.json`, `active.json` or
-    /// `grants.json`.
+    /// user's changes when `to` is None: `zen.toml` and Garden pages go back
+    /// to their stubs (a Garden's to its template's, G17), an override of a
+    /// built-in theme is removed (the built-in shows again), and a theme
+    /// only the user has goes back to a copy of `default`. Never touches
+    /// `gardens.json`, `active.json` or `grants.json`.
     pub fn reset(&self, f: &ZenFile, to: Option<&str>) -> Result<ResetOutcome, ZenError> {
         self.require()?;
         if let ZenFile::Theme(name) = f {
@@ -1256,19 +1627,49 @@ impl ZenFiles {
                 if lines.is_empty() { format!("{} file(s) clean", v["files"].as_array().map_or(0, Vec::len)) } else { lines.join("; ") },
             ));
         }
-        let homes = self.read_homes();
-        let orphans: Vec<String> = self
-            .page_ids()
-            .into_iter()
-            .filter(|id| !homes.iter().any(|h| &h.id == id))
+        let (list, source) = self.read_list();
+        let orphans: Vec<String> =
+            self.garden_file_ids().into_iter().filter(|id| !list.iter().any(|g| &g.id == id)).collect();
+        let names = list.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", ");
+        let (ok, detail) = match (&source, orphans.is_empty()) {
+            (ListSource::File, true) => (true, format!("{} Garden(s): {names}", list.len())),
+            (ListSource::File, false) => (
+                false,
+                format!("pages with no Garden in gardens.json: {} (k2 zen garden list shows the Gardens)", orphans.join(", ")),
+            ),
+            (ListSource::Rebuilt, _) => (
+                false,
+                format!("gardens.json is missing; the list was rebuilt from gardens/*.toml ({names}). Any k2 zen garden change writes it again"),
+            ),
+            (ListSource::Unreadable(m), _) => (
+                false,
+                format!("{m}; the list was rebuilt from gardens/*.toml ({names}). The next k2 zen garden change keeps the bad file in .history/"),
+            ),
+            (ListSource::Missing, _) => (false, format!("no Gardens. {NOT_SET_UP}")),
+        };
+        checks.push(check("gardens.json", ok, detail));
+        let bad_templates: Vec<String> = schema::TEMPLATE_IDS
+            .iter()
+            .filter(|t| {
+                let page = super::template_page(t);
+                let kinds: Vec<String> = page
+                    .as_ref()
+                    .and_then(|p| p["controls"].as_array().cloned())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|c| c["kind"].as_str().map(str::to_string))
+                    .collect();
+                !super::REQUIRED_CONTROLS.iter().all(|r| kinds.iter().any(|k| k == r))
+            })
+            .map(|t| t.to_string())
             .collect();
         checks.push(check(
-            "homes.json",
-            orphans.is_empty(),
-            if orphans.is_empty() {
-                format!("{} Home(s)", homes.len())
+            "templates",
+            bad_templates.is_empty(),
+            if bad_templates.is_empty() {
+                format!("{} built in, each with the required controls", schema::TEMPLATE_IDS.len())
             } else {
-                format!("pages with no Home in homes.json: {}", orphans.join(", "))
+                format!("missing a required control: {}", bad_templates.join(", "))
             },
         ));
         let grants = self.root.join(GRANTS_FILE).exists();
@@ -1291,7 +1692,11 @@ fn effective_state(e: &Effective) -> J {
     json!({ "layer": e.layer, "errors": e.errors, "warnings": e.warnings })
 }
 
-/// `active.json`: the global theme and each Home's own pick. Daemon-written.
+/// `active.json`'s version since Gardens (G16).
+pub const ACTIVE_VERSION: u32 = 2;
+
+/// `active.json`: the global theme and each Garden's own pick (G16).
+/// Daemon-written.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveFile {
     #[serde(default)]
@@ -1299,14 +1704,14 @@ pub struct ActiveFile {
     #[serde(default)]
     pub theme: Option<String>,
     #[serde(default)]
-    pub homes: BTreeMap<String, String>,
+    pub gardens: BTreeMap<String, String>,
 }
 
-/// The theme a Home shows and where the pick came from.
+/// The theme a Garden shows and where the pick came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveTheme {
     pub name: String,
-    /// `"home"` (the Home's own pick) or `"global"`.
+    /// `"garden"` (the Garden's own pick) or `"global"`.
     pub scope: &'static str,
     /// A pick that names a theme that is gone (skipped).
     pub missing: Option<String>,
@@ -1325,10 +1730,11 @@ pub struct ThemeInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ThemeSwitch {
-    /// The theme now shown (for `home`, or globally).
+    /// The theme now shown (for `garden`, or globally).
     pub theme: String,
     pub scope: String,
-    pub home: Option<String>,
+    /// The Garden id, when the switch was for one Garden.
+    pub garden: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1432,20 +1838,54 @@ pub fn theme_starter(name: &str, from: &super::BuiltinTheme) -> String {
     )
 }
 
-/// The stub `page/ensure` writes and `reset` restores for a page.
-pub fn page_stub(id: &str, name: &str) -> String {
+/// The stub a new Garden gets and `reset` restores (G10, G17): the
+/// template line plus comments that name the Garden. It sets nothing.
+pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    let body = if template == schema::BLANK_TEMPLATE_ID {
+        format!(
+            "# This Garden starts empty. Place K2's built-in widgets with [layout]\n\
+             # and [[widget]] blocks, for example a Home's agents beside a\n\
+             # conversation:\n\
+             #\n\
+             #   [layout]\n\
+             #   kind = \"columns\"\n\
+             #   [[layout.column]]\n\
+             #   size = 40\n\
+             #   min-width = 240\n\
+             #   [[layout.column]]\n\
+             #   size = 60\n\
+             #   min-width = 360\n\
+             #\n\
+             #   [[widget]]\n\
+             #   id = \"agents\"\n\
+             #   kind = \"agents\"          # a whole Home, or one agent (mode = \"agent\")\n\
+             #   column = 0\n\
+             #   [widget.props]\n\
+             #   home = \"Work\"            # a Home's name or id\n\
+             #\n\
+             #   [[widget]]\n\
+             #   id = \"talk\"\n\
+             #   kind = \"conversation\"    # follows the Agents widget\n\
+             #   column = 1\n\
+             #\n\
+             # Theme tables ([colors.light], [font], [shape], ...) restyle this\n\
+             # Garden only. Check with `k2 zen validate --garden {id}`.\n"
+        )
+    } else {
+        format!(
+            "# This Garden is the texting page: a Home's agents beside the\n\
+             # conversation with the one you pick. Theme tables ([colors.light],\n\
+             # [font], [shape], ...) restyle this Garden only; [layout] and\n\
+             # [[widget]] rearrange K2's built-in widgets (the k2-zen skill has\n\
+             # the grammar). Check with `k2 zen validate --garden {id}`.\n"
+        )
+    };
     format!(
-        "# Zen page for the Home \"{name}\" (id {id}).\n\
+        "# Zen Garden \"{name}\" (id {id}).\n\
          #\n\
-         # Zen v1 uses the built-in texting template. Add a [theme], [colors.light],\n\
-         # [colors.dark], [type], [shape], [chrome], [bezier] or [animation] table\n\
-         # below to override ~/.k2/zen/zen.toml for this Home only.\n\
-         # Check your edit with `k2 zen validate`.\n\
+         {body}\
          schema = 1\n\
-         template = \"{template}\"\n\
-         \n\
-         [theme]\n",
-        template = schema::TEMPLATE_ID,
+         template = \"{template}\"\n"
     )
 }

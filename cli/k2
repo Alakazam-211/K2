@@ -15135,19 +15135,30 @@ cmd_schema() {
     },
     {
       "name": "zen",
-      "usage": "k2 zen <theme|validate|reload|reset|history|doctor|pages|path> ...",
-      "description": "Restyle Zen Mode on this computer (~/.k2/zen: themes/<name>/, zen.toml, pages/<home-id>.toml; K2's built-in themes are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
+      "usage": "k2 zen <garden|theme|validate|reload|reset|history|doctor|path> ...",
+      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
       "args": [],
       "flags": [
-        {"name": "--home", "arg": "name|id", "description": "A Home's page (pages/<id>.toml) instead of zen.toml."},
+        {"name": "--garden", "arg": "name|id", "description": "A Garden's page (gardens/<id>.toml) instead of zen.toml."},
         {"name": "--theme", "arg": "name", "description": "A theme bundle (themes/<name>/theme.toml) instead of zen.toml."},
-        {"name": "--file", "arg": "zen.toml|pages/<id>.toml|themes/<name>/theme.toml", "description": "Name the file directly."},
+        {"name": "--file", "arg": "zen.toml|gardens/<id>.toml|themes/<name>/theme.toml", "description": "Name the file directly."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen garden",
+      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>> [--json]",
+      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one. <garden> is an id or a name.",
+      "args": [{"name": "garden", "required": false}, {"name": "name|position", "required": false}],
+      "flags": [
+        {"name": "--texting", "arg": null, "description": "new: start from the texting template (k2.texting@1) instead of the empty one (k2.blank@1)."},
+        {"name": "--at", "arg": "n", "description": "new: 1-based position (default: the end)."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
     },
     {
       "name": "zen validate",
-      "usage": "k2 zen validate [--home <name|id> | --theme <name> | --file <file>] [--json]",
+      "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --file <file>] [--json]",
       "description": "Validate what is on disk now; prints file:line:col: message per error and exits 1 on errors. Never changes what Zen shows.",
       "args": [],
       "flags": [
@@ -15165,48 +15176,39 @@ cmd_schema() {
     },
     {
       "name": "zen reset",
-      "usage": "k2 zen reset [--home <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]",
-      "description": "Keep the current file as a snapshot, then restore a snapshot or clear your changes (an override of a built-in theme is removed). Never touches homes.json, active.json or grants.json.",
+      "usage": "k2 zen reset [--garden <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]",
+      "description": "Keep the current file as a snapshot, then restore a snapshot or clear your changes (a Garden goes back to its template's stub; an override of a built-in theme is removed). Never touches gardens.json, active.json or grants.json.",
       "args": [],
       "flags": [
-        {"name": "--to", "arg": "snapshot", "description": "Snapshot name from k2 zen history (default: the default theme / page stub)."}
+        {"name": "--to", "arg": "snapshot", "description": "Snapshot name from k2 zen history (default: the empty stub / K2's theme)."}
       ]
     },
     {
       "name": "zen history",
-      "usage": "k2 zen history [--home <name|id> | --theme <name> | --file <file>] [--json]",
-      "description": "The last 20 good versions of each Zen file, newest first.",
+      "usage": "k2 zen history [--garden <name|id> | --theme <name> | --file <file>] [--json]",
+      "description": "The last 20 good versions of each Zen file, newest first, including deleted Gardens (by id).",
       "args": [],
       "flags": [
-        {"name": "--json", "arg": null, "description": "{ok, keep, files:[{file, exists, snapshots}]}."}
+        {"name": "--json", "arg": null, "description": "{ok, keep, files:[{file, exists, snapshots, garden?, deleted?}]}."}
       ]
     },
     {
       "name": "zen doctor",
       "usage": "k2 zen doctor [--json]",
-      "description": "Check the Zen folder, files, Homes, watcher and history on this computer.",
+      "description": "Check the Zen folder, Garden list, templates, files, watcher and history on this computer.",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "{ok, setUp, path, checks}."}
       ]
     },
     {
-      "name": "zen pages",
-      "usage": "k2 zen pages [--json]",
-      "description": "This computer's Homes (id, name) and whether each has a page file.",
-      "args": [],
-      "flags": [
-        {"name": "--json", "arg": null, "description": "Status JSON."}
-      ]
-    },
-    {
       "name": "zen theme",
-      "usage": "k2 zen theme <list|next|prev|set <name>|new <name>> [--home <name|id>] [--json]",
-      "description": "The active Zen theme (one for this computer, plus an optional pick per Home). list shows K2's built-in themes and yours; next/prev cycle them; set picks one (exit 1 and the list on an unknown name); new copies a theme into ~/.k2/zen/themes/<name>/ to edit.",
+      "usage": "k2 zen theme <list|next|prev|set <name>|new <name>> [--garden <name|id>] [--json]",
+      "description": "The active Zen theme (one for this computer, plus an optional pick per Garden). list shows K2's built-in themes and yours; next/prev cycle them; set picks one (exit 1 and the list on an unknown name); new copies a theme into ~/.k2/zen/themes/<name>/ to edit.",
       "args": [{"name": "name", "required": false}],
       "flags": [
-        {"name": "--home", "arg": "name|id", "description": "list/next/prev/set: that Home's own pick instead of the computer's."},
-        {"name": "--clear", "arg": null, "description": "set --home <name> --clear: the Home follows the computer's theme again."},
+        {"name": "--garden", "arg": "name|id", "description": "list/next/prev/set: that Garden's own pick instead of the computer's."},
+        {"name": "--clear", "arg": null, "description": "set --garden <name> --clear: the Garden follows the computer's theme again."},
         {"name": "--from", "arg": "theme", "description": "new: the theme to copy (default: K2's theme of that name, else default)."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
@@ -33568,64 +33570,77 @@ cmd_store() {
     esac
 }
 
-# ── Zen Mode — k2 zen (prd-zen-mode-v1 Z17, S3) ──────────────────────
+# ── Zen Mode — k2 zen (prd-zen-mode-v1 Z17; prd-zen-gardens-v1 G35) ──
 # `~/.k2/zen/` belongs to THIS computer's K2. Every verb talks to the
 # local daemon's /cli/zen/* routes, which answer only this computer's own
 # owner token. There is deliberately no `grant` verb: agents may request a
 # permission from the human, never grant one (Z19). The `k2-zen` skill
-# documents tokens, motion grammar, chrome and bridge verbs.
+# documents Gardens, the page grammar, tokens, motion and bridge verbs.
 
 cmd_help_zen() {
     cat <<'EOF'
-k2 zen — restyle Zen Mode on this computer (~/.k2/zen)
+k2 zen — build Zen Gardens on this computer (~/.k2/zen)
 
-Zen Mode is a second face for a Home in the K2 desktop app. Its look comes
-from a theme. K2's built-in themes are read-only and live inside the app;
-~/.k2/zen holds only your changes on top: themes/<name>/ (your theme
-bundles, or overrides of K2's), zen.toml (every Home) and
-pages/<home-id>.toml (one Home). Edit a file, then validate. A file with
+Zen Mode is a mode of a K2 desktop window. In Zen the window shows a Garden:
+a personal page on this computer. The Default Garden is the texting page; a
+new Garden starts empty, and agents fill it by editing its file,
+gardens/<id>.toml (K2's built-in widgets in columns, plus theme tables).
+~/.k2/zen holds only your changes on top of K2's read-only themes and
+templates: gardens/<id>.toml (one Garden), zen.toml (every Garden) and
+themes/<name>/ (your theme bundles). Edit a file, then validate. A file with
 errors is not shown: Zen keeps the last good version and shows the error line.
 
 USAGE
-  k2 zen theme list [--home <name|id>] [--json]
-  k2 zen theme next | prev [--home <name|id>] [--json]
-  k2 zen theme set <name> [--home <name|id>] [--json]
-  k2 zen theme set --home <name|id> --clear
+  k2 zen garden list [--json]
+  k2 zen garden new <name> [--texting] [--at <n>] [--json]
+  k2 zen garden rename <garden> <name> [--json]
+  k2 zen garden reorder <garden> <position> [--json]
+  k2 zen garden delete <garden> [--json]
+  k2 zen theme list [--garden <name|id>] [--json]
+  k2 zen theme next | prev [--garden <name|id>] [--json]
+  k2 zen theme set <name> [--garden <name|id>] [--json]
+  k2 zen theme set --garden <name|id> --clear
   k2 zen theme new <name> [--from <theme>] [--json]
-  k2 zen validate [--home <name|id> | --theme <name> | --file <file>] [--json]
+  k2 zen validate [--garden <name|id> | --theme <name> | --file <file>] [--json]
   k2 zen reload [--json]
-  k2 zen reset [--home <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]
-  k2 zen history [--home <name|id> | --theme <name> | --file <file>] [--json]
+  k2 zen reset [--garden <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]
+  k2 zen history [--garden <name|id> | --theme <name> | --file <file>] [--json]
   k2 zen doctor [--json]
-  k2 zen pages [--json]
   k2 zen path
 
 COMMANDS
+  garden    The Gardens on this computer. list (* = its own theme); new makes
+            an empty Garden (--texting: the texting page) and prints its id
+            and file; rename and reorder (1-based) keep the id; delete moves
+            the page into .history/ (the last Garden stays). <garden> is an
+            id or a name.
   theme     The active theme: one for this computer, plus an optional pick
-            per Home (--home). list shows K2's themes and yours (* = active);
-            next/prev cycle them; set picks one; new copies a theme into
-            ~/.k2/zen/themes/<name>/ for you to edit (colours, font, terminal
-            colours, a background image). An unknown name exits 1.
+            per Garden (--garden). list shows K2's themes and yours (* =
+            active); next/prev cycle them; set picks one; new copies a theme
+            into ~/.k2/zen/themes/<name>/ for you to edit. An unknown name
+            exits 1.
   validate  Check what is on disk now. Prints file:line:col: message for
             each error and exits 1; exits 0 when every file is clean.
   reload    Re-read now (the daemon also watches the folder) and print errors.
   reset     Keep the current file as a snapshot, then restore --to <snapshot>,
-            or clear your changes: zen.toml and pages go back to empty, an
-            override of a built-in theme is removed. Defaults to zen.toml.
-  history   List the last 20 good versions of each file (newest first).
-  doctor    Check the folder, files, Homes, watcher and history.
-  pages     List this computer's Homes and whether each has a page file.
+            or clear your changes: zen.toml goes back to empty, a Garden to
+            its template's stub, an override of a built-in theme is removed.
+            Defaults to zen.toml.
+  history   List the last 20 good versions of each file (newest first),
+            deleted Gardens included.
+  doctor    Check the folder, Garden list, templates, watcher and history.
   path      Print the Zen folder.
 
 RULES
-  Run `k2 zen validate` before you say a restyle is done.
-  Never write grants.json, homes.json, active.json or .history/: K2 writes them.
+  "In my Zen Garden ... (id g-...)" means: edit ~/.k2/zen/gardens/<id>.toml.
+  Run `k2 zen validate --garden <id>` before you say it's done.
+  Never write grants.json, gardens.json, active.json or .history/: K2 writes them.
   Agents request permissions from the human; they never grant them.
-  Load the k2-zen skill for every token, range, curve and animation name.
+  Load the k2-zen skill for the page grammar, every widget prop and token.
 
 EXIT
   0 ok · 1 errors (validate) or a refused request · 3 Zen isn't set up on
-  this computer (turn it on from Home in the K2 app).
+  this computer (turn it on with the Zen toggle in the K2 app's top bar).
 EOF
 }
 
@@ -33636,7 +33651,7 @@ import json, os, sys
 verb = os.environ["ZEN_VERB"]
 as_json = os.environ.get("ZEN_JSON") == "true"
 raw = os.environ.get("ZEN_RAW") or ""
-NOT_SET_UP = "Zen isn\x27t set up on this computer. Turn it on from Home in the K2 app."
+NOT_SET_UP = "Zen isn\x27t set up on this computer. Turn it on with the Zen toggle in the K2 app\x27s top bar."
 if not raw.strip():
     print("Error: no response from the K2 daemon on this computer", file=sys.stderr)
     sys.exit(1)
@@ -33646,7 +33661,7 @@ except Exception:
     print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr)
     sys.exit(1)
 err = d.get("error") if isinstance(d, dict) else None
-if err == "zen_not_set_up" or (verb in ("path", "pages") and d.get("setUp") is False):
+if err == "zen_not_set_up" or (verb in ("path", "garden-list") and d.get("setUp") is False):
     if as_json:
         print(json.dumps(d, separators=(",", ":")))
     print(d.get("message") or NOT_SET_UP, file=sys.stderr)
@@ -33654,10 +33669,9 @@ if err == "zen_not_set_up" or (verb in ("path", "pages") and d.get("setUp") is F
 if err is not None:
     if as_json:
         print(json.dumps(d, separators=(",", ":")))
-    if err == "unknown_theme":
-        print("Error: %s" % d.get("message"), file=sys.stderr)
-        sys.exit(1)
-    if err == "zen_local_only":
+    if err == "last_garden":
+        print(d.get("message") or "That\x27s your last Garden.", file=sys.stderr)
+    elif err == "zen_local_only":
         print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner.", file=sys.stderr)
     elif isinstance(err, dict):
         print("Error: %s" % (err.get("hint") or err.get("message") or err), file=sys.stderr)
@@ -33672,6 +33686,9 @@ if as_json:
 
 def diag(e, warn=False):
     return "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
+
+def garden_line(g):
+    return "%s %d  %s  %s  %s" % ("*" if g.get("theme") else " ", g.get("index"), g.get("id"), g.get("name"), g.get("template"))
 
 if verb in ("validate", "reload"):
     errs = d.get("errors") or []
@@ -33694,7 +33711,12 @@ elif verb == "reset":
 elif verb == "history":
     for f in d.get("files") or []:
         snaps = f.get("snapshots") or []
-        print("%s (%d snapshot%s%s)" % (f.get("file"), len(snaps), "" if len(snaps) == 1 else "s", "" if f.get("exists", True) else ", file deleted"))
+        note = ""
+        if f.get("deleted"):
+            note = ", Garden deleted"
+        elif not f.get("exists", True):
+            note = ", file deleted"
+        print("%s (%d snapshot%s%s)" % (f.get("file"), len(snaps), "" if len(snaps) == 1 else "s", note))
         for s in snaps:
             print("  %s  %s%s" % (s.get("name"), s.get("at"), "" if s.get("clean") else "  (has errors)"))
 elif verb == "doctor":
@@ -33702,14 +33724,24 @@ elif verb == "doctor":
         print("%s %s: %s" % ("ok  " if c.get("ok") else "FAIL", c.get("name"), c.get("detail")))
     if not d.get("ok"):
         sys.exit(1)
-elif verb == "pages":
-    pages = d.get("pages") or []
-    if not pages:
-        print("no Homes yet")
-    for p in pages:
-        print("%s  %s  %s" % (p.get("id"), p.get("name") or "(no Home)", "page" if p.get("hasFile") else "template"))
 elif verb == "path":
     print(d.get("path"))
+elif verb == "garden-list":
+    for g in d.get("gardens") or []:
+        print(garden_line(g))
+elif verb == "garden-new":
+    g = d.get("garden") or {}
+    print(g.get("id"))
+    print(d.get("path"))
+elif verb == "garden-rename":
+    g = d.get("garden") or {}
+    print("Garden %s is now “%s”%s" % (g.get("id"), g.get("name"), "" if d.get("changed") else " (unchanged)"))
+elif verb == "garden-reorder":
+    for g in d.get("gardens") or []:
+        print(garden_line(g))
+elif verb == "garden-delete":
+    snap = d.get("snapshot")
+    print("deleted Garden %s (“%s”)%s" % (d.get("deleted"), d.get("name"), "; its page is kept in .history as %s" % snap if snap else ""))
 elif verb == "theme-list":
     for t in d.get("themes") or []:
         tags = []
@@ -33721,15 +33753,15 @@ elif verb == "theme-list":
         if t.get("summary"):
             line += "  " + t["summary"]
         print(line)
-    if d.get("home"):
-        print("Home %s: %s" % (d["home"], ("its own pick" if d.get("homeTheme") else "follows this computer")))
+    if d.get("garden"):
+        print("Garden %s: %s" % (d["garden"], ("its own pick" if d.get("gardenTheme") else "follows this computer")))
     if d.get("missing"):
         print("theme \x27%s\x27 doesn\x27t exist any more; showing %s" % (d["missing"], d.get("active")), file=sys.stderr)
 elif verb == "theme-switch":
-    if d.get("home") and d.get("scope") == "home":
-        print("theme %s for Home %s" % (d.get("theme"), d["home"]))
-    elif d.get("home"):
-        print("Home %s follows this computer: theme %s" % (d["home"], d.get("theme")))
+    if d.get("garden") and d.get("scope") == "garden":
+        print("theme %s for Garden %s" % (d.get("theme"), d["garden"]))
+    elif d.get("garden"):
+        print("Garden %s follows this computer: theme %s" % (d["garden"], d.get("theme")))
     else:
         print("theme %s for this computer" % d.get("theme"))
 elif verb == "theme-new":
@@ -33740,18 +33772,24 @@ elif verb == "theme-new":
 '
 }
 
-# Parse --home/--file/--to/--json into ZEN_* globals.
+_zen_no_home() {
+    echo "Error: --home is gone: Zen pages are Gardens now. Use --garden <name|id> (k2 zen garden list)." >&2
+    exit 2
+}
+
+# Parse --garden/--file/--theme/--to/--json into ZEN_* globals.
 _zen_args() {
-    ZEN_AS_JSON=false; ZEN_HOME_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""
+    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) ZEN_AS_JSON=true; shift ;;
-            --home)
-                [ -n "${2:-}" ] || { echo "Error: --home needs a Home name or id" >&2; exit 2; }
-                ZEN_HOME_SEL="$2"; shift 2 ;;
-            --home=*) ZEN_HOME_SEL="${1#*=}"; shift ;;
+            --garden)
+                [ -n "${2:-}" ] || { echo "Error: --garden needs a Garden name or id (see k2 zen garden list)" >&2; exit 2; }
+                ZEN_GARDEN_SEL="$2"; shift 2 ;;
+            --garden=*) ZEN_GARDEN_SEL="${1#*=}"; shift ;;
+            --home|--home=*) _zen_no_home ;;
             --file)
-                [ -n "${2:-}" ] || { echo "Error: --file needs zen.toml or pages/<id>.toml" >&2; exit 2; }
+                [ -n "${2:-}" ] || { echo "Error: --file needs zen.toml, gardens/<id>.toml or themes/<name>/theme.toml" >&2; exit 2; }
                 ZEN_FILE_SEL="$2"; shift 2 ;;
             --file=*) ZEN_FILE_SEL="${1#*=}"; shift ;;
             --to)
@@ -33766,29 +33804,117 @@ _zen_args() {
         esac
     done
     local n=0
-    [ -n "$ZEN_HOME_SEL" ] && n=$((n + 1))
+    [ -n "$ZEN_GARDEN_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_FILE_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_THEME_SEL" ] && n=$((n + 1))
     if [ "$n" -gt 1 ]; then
-        echo "Error: pass one of --home, --theme or --file" >&2
+        echo "Error: pass one of --garden, --theme or --file" >&2
         exit 2
     fi
 }
 
-# k2 zen theme <list|next|prev|set|new> (Omarchy additions 2-3). The daemon
-# owns the active theme (active.json); an unknown name exits 1 and lists
-# the themes.
-cmd_zen_theme() {
+# k2 zen garden <list|new|rename|delete|reorder> (G35). The daemon owns
+# gardens.json; this only calls its routes.
+cmd_zen_garden() {
     local verb="${1:-}"
     shift || true
-    local as_json=false home="" from="" clear=false name="" raw body
+    local as_json=false texting=false at="" raw body
+    local -a pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
-            --home)
-                [ -n "${2:-}" ] || { echo "Error: --home needs a Home name or id" >&2; exit 2; }
-                home="$2"; shift 2 ;;
-            --home=*) home="${1#*=}"; shift ;;
+            --texting) texting=true; shift ;;
+            --at)
+                [ -n "${2:-}" ] || { echo "Error: --at needs a position (1 is the first)" >&2; exit 2; }
+                at="$2"; shift 2 ;;
+            --at=*) at="${1#*=}"; shift ;;
+            --) shift; while [ $# -gt 0 ]; do pos+=("$1"); shift; done ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    if [ -n "$at" ] && ! [[ "$at" =~ ^[0-9]+$ ]]; then
+        echo "Error: --at needs a whole number (1 is the first)" >&2
+        exit 2
+    fi
+    if [ "$verb" != "new" ] && { [ "$texting" = true ] || [ -n "$at" ]; }; then
+        echo "Error: --texting and --at are for k2 zen garden new" >&2
+        exit 2
+    fi
+    local n=${#pos[@]}
+    case "$verb" in
+        list)
+            [ "$n" -eq 0 ] || { echo "Error: k2 zen garden list takes only --json" >&2; exit 2; }
+            raw=$(cli_request "/cli/zen/gardens")
+            _zen_print garden-list "$as_json" "$raw"
+            ;;
+        new)
+            [ "$n" -ge 1 ] || { echo "Error: k2 zen garden new needs a name" >&2; exit 2; }
+            body=$(ZN="${pos[*]}" ZT="$texting" ZA="$at" python3 -c '
+import json, os
+b = {"name": os.environ["ZN"]}
+if os.environ.get("ZT") == "true":
+    b["template"] = "texting"
+if os.environ.get("ZA"):
+    b["at"] = int(os.environ["ZA"])
+print(json.dumps(b))
+')
+            raw=$(cli_post_json "/cli/zen/garden/new" "$body")
+            _zen_print garden-new "$as_json" "$raw"
+            ;;
+        rename)
+            [ "$n" -ge 2 ] || { echo "Error: k2 zen garden rename needs a Garden and a new name" >&2; exit 2; }
+            body=$(ZG="${pos[0]}" ZN="${pos[*]:1}" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "name": os.environ["ZN"]}))
+')
+            raw=$(cli_post_json "/cli/zen/garden/rename" "$body")
+            _zen_print garden-rename "$as_json" "$raw"
+            ;;
+        reorder)
+            [ "$n" -eq 2 ] || { echo "Error: k2 zen garden reorder needs a Garden and a position (1 is the first)" >&2; exit 2; }
+            [[ "${pos[1]}" =~ ^[0-9]+$ ]] || { echo "Error: the position must be a whole number (1 is the first)" >&2; exit 2; }
+            body=$(ZG="${pos[0]}" ZP="${pos[1]}" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "to": int(os.environ["ZP"])}))
+')
+            raw=$(cli_post_json "/cli/zen/garden/reorder" "$body")
+            _zen_print garden-reorder "$as_json" "$raw"
+            ;;
+        delete)
+            [ "$n" -eq 1 ] || { echo "Error: k2 zen garden delete needs one Garden (an id or a name)" >&2; exit 2; }
+            body=$(ZG="${pos[0]}" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"]}))
+')
+            raw=$(cli_post_json "/cli/zen/garden/delete" "$body")
+            _zen_print garden-delete "$as_json" "$raw"
+            ;;
+        ""|help|--help|-h)
+            cmd_help_zen
+            ;;
+        *)
+            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, delete)" >&2
+            exit 2
+            ;;
+    esac
+}
+
+# k2 zen theme <list|next|prev|set|new> (Omarchy additions 2-3, G16). The
+# daemon owns the active theme (active.json); an unknown name exits 1 and
+# lists the themes.
+cmd_zen_theme() {
+    local verb="${1:-}"
+    shift || true
+    local as_json=false garden="" from="" clear=false name="" raw body
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --garden)
+                [ -n "${2:-}" ] || { echo "Error: --garden needs a Garden name or id" >&2; exit 2; }
+                garden="$2"; shift 2 ;;
+            --garden=*) garden="${1#*=}"; shift ;;
+            --home|--home=*) _zen_no_home ;;
             --from)
                 [ -n "${2:-}" ] || { echo "Error: --from needs a theme name" >&2; exit 2; }
                 from="$2"; shift 2 ;;
@@ -33802,32 +33928,32 @@ cmd_zen_theme() {
     done
     case "$verb" in
         list)
-            [ -z "$name$from" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme list takes only --home and --json" >&2; exit 2; }
+            [ -z "$name$from" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme list takes only --garden and --json" >&2; exit 2; }
             local -a q=()
-            [ -n "$home" ] && q+=("home=$(urlencode "$home")")
+            [ -n "$garden" ] && q+=("garden=$(urlencode "$garden")")
             raw=$(cli_request "/cli/zen/theme/list" ${q[@]+"${q[@]}"})
             _zen_print theme-list "$as_json" "$raw"
             ;;
         next|prev)
-            [ -z "$name$from" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme $verb takes only --home and --json" >&2; exit 2; }
-            body=$(ZH="$home" python3 -c 'import json, os; print(json.dumps({"home": os.environ["ZH"]} if os.environ.get("ZH") else {}))')
+            [ -z "$name$from" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme $verb takes only --garden and --json" >&2; exit 2; }
+            body=$(ZG="$garden" python3 -c 'import json, os; print(json.dumps({"garden": os.environ["ZG"]} if os.environ.get("ZG") else {}))')
             raw=$(cli_post_json "/cli/zen/theme/$verb" "$body")
             _zen_print theme-switch "$as_json" "$raw"
             ;;
         set)
             [ -z "$from" ] || { echo "Error: --from is for k2 zen theme new" >&2; exit 2; }
             if [ "$clear" = true ]; then
-                [ -n "$home" ] && [ -z "$name" ] || { echo "Error: --clear takes --home <name> and no theme name" >&2; exit 2; }
+                [ -n "$garden" ] && [ -z "$name" ] || { echo "Error: --clear takes --garden <name> and no theme name" >&2; exit 2; }
             else
                 [ -n "$name" ] || { echo "Error: k2 zen theme set needs a theme name (see k2 zen theme list)" >&2; exit 2; }
             fi
-            body=$(ZN="$name" ZH="$home" ZC="$clear" python3 -c '
+            body=$(ZN="$name" ZG="$garden" ZC="$clear" python3 -c '
 import json, os
 b = {}
 if os.environ.get("ZN"):
     b["name"] = os.environ["ZN"]
-if os.environ.get("ZH"):
-    b["home"] = os.environ["ZH"]
+if os.environ.get("ZG"):
+    b["garden"] = os.environ["ZG"]
 if os.environ.get("ZC") == "true":
     b["clear"] = True
 print(json.dumps(b))
@@ -33836,7 +33962,7 @@ print(json.dumps(b))
             _zen_print theme-switch "$as_json" "$raw"
             ;;
         new)
-            [ -z "$home" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme new takes a name, --from and --json" >&2; exit 2; }
+            [ -z "$garden" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme new takes a name, --from and --json" >&2; exit 2; }
             [ -n "$name" ] || { echo "Error: k2 zen theme new needs a name (lower-case letters, digits, - and _)" >&2; exit 2; }
             body=$(ZN="$name" ZF="$from" python3 -c '
 import json, os
@@ -33867,7 +33993,7 @@ cmd_zen() {
             _zen_args "$@"
             [ -z "$ZEN_TO" ] || { echo "Error: --to is for k2 zen reset" >&2; exit 2; }
             local -a q=()
-            [ -n "$ZEN_HOME_SEL" ] && q+=("home=$(urlencode "$ZEN_HOME_SEL")")
+            [ -n "$ZEN_GARDEN_SEL" ] && q+=("garden=$(urlencode "$ZEN_GARDEN_SEL")")
             [ -n "$ZEN_FILE_SEL" ] && q+=("file=$(urlencode "$ZEN_FILE_SEL")")
             [ -n "$ZEN_THEME_SEL" ] && q+=("theme=$(urlencode "$ZEN_THEME_SEL")")
             raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
@@ -33875,7 +34001,7 @@ cmd_zen() {
             ;;
         reload)
             _zen_args "$@"
-            if [ -n "$ZEN_HOME_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
+            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
                 echo "Error: k2 zen reload takes only --json" >&2
                 exit 2
             fi
@@ -33885,10 +34011,10 @@ cmd_zen() {
         reset)
             _zen_args "$@"
             local body
-            body=$(ZH="$ZEN_HOME_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" ZM="$ZEN_THEME_SEL" python3 -c '
+            body=$(ZG="$ZEN_GARDEN_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" ZM="$ZEN_THEME_SEL" python3 -c '
 import json, os
 b = {}
-for k, e in (("home", "ZH"), ("file", "ZF"), ("to", "ZT"), ("theme", "ZM")):
+for k, e in (("garden", "ZG"), ("file", "ZF"), ("to", "ZT"), ("theme", "ZM")):
     if os.environ.get(e):
         b[k] = os.environ[e]
 print(json.dumps(b))
@@ -33896,9 +34022,9 @@ print(json.dumps(b))
             raw=$(cli_post_json "/cli/zen/reset" "$body")
             _zen_print reset "$ZEN_AS_JSON" "$raw"
             ;;
-        doctor|pages|path)
+        doctor|path)
             _zen_args "$@"
-            if [ -n "$ZEN_HOME_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
+            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
                 echo "Error: k2 zen $sub takes only --json" >&2
                 exit 2
             fi
@@ -33909,8 +34035,15 @@ print(json.dumps(b))
             fi
             _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
             ;;
+        garden|gardens)
+            cmd_zen_garden "$@"
+            ;;
         theme|themes)
             cmd_zen_theme "$@"
+            ;;
+        pages)
+            echo "Error: there is no 'k2 zen pages' any more: Zen pages are Gardens now. Use k2 zen garden list." >&2
+            exit 2
             ;;
         ""|help|--help|-h)
             cmd_help_zen

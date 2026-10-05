@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# k2 zen (prd-zen-mode-v1 Z17, T3.1) against a REAL headless daemon.
+# k2 zen (prd-zen-mode-v1 Z17, T3.1; prd-zen-gardens-v1 G35, TG2.1)
+# against a REAL headless daemon.
 #
 # Boots the worktree's k2-daemon under a temp HOME (never the real ~/.k2,
 # never a production daemon), then:
-#   - before Zen is set up: validate/path/pages exit 3 with the sentence;
+#   - before Zen is set up: every verb exits 3 with the top-bar sentence;
+#   - setup over curl (as the app does) makes Default;
+#   - garden new/list/rename/reorder/delete; a name clash and the last
+#     Garden exit 1; a Garden made over curl gets the empty template;
 #   - zen.toml with `acent` at line 7 → `zen.toml:7:3: unknown key 'acent'`, exit 1;
-#   - clean → exit 0; history lists snapshots; reset --to restores one;
-#   - --home resolves a Home by name; doctor reports the watcher;
-#   - there is no grant verb, and nothing writes grants.json;
-#   - themes: list/next/prev/set/new, per-Home picks, an unknown name exits 1,
-#     reset --theme clears an override, and a curl-only switch (no CLI, no
-#     client) shows up in /cli/zen/get.
+#   - --garden resolves a Garden by name; --home and `pages` are gone;
+#   - history (deleted Gardens included) and reset --to;
+#   - themes: list/next/prev/set/new, per-Garden picks, an unknown name
+#     exits 1, reset --theme clears an override, and a curl-only switch (no
+#     CLI, no client) shows up in /cli/zen/get;
+#   - there is no grant verb, and nothing writes grants.json.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
 
 set -euo pipefail
@@ -88,34 +92,85 @@ echo "== help =="
 capture zen --help
 assert_eq "zen --help exit" "$rc" "0"
 assert_contains "help names validate" "$out" "k2 zen validate"
+assert_contains "help names garden new" "$out" "k2 zen garden new <name>"
 assert_contains "help states the grant rule" "$out" "Never write grants.json"
 capture help zen
 assert_eq "k2 help zen exit" "$rc" "0"
 assert_contains "k2 help zen" "$out" "k2 zen reset"
 
-echo "== not set up =="
+echo "== not set up (TG2.1) =="
+NOT_SET_UP="Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar."
 capture zen theme list
 assert_eq "zen theme list before setup exits 3" "$rc" "3"
-for verb in validate path pages history reload; do
-    capture zen "$verb"
+for verb in validate path history reload "garden list" "garden new Notes" "garden rename Default Home" "garden reorder Default 1" "garden delete Default"; do
+    # shellcheck disable=SC2086
+    capture zen $verb
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
-    assert_contains "zen $verb before setup says so" "$out" "Zen isn't set up on this computer. Turn it on from Home in the K2 app."
+    assert_contains "zen $verb before setup says so" "$out" "$NOT_SET_UP"
 done
 [ ! -e "$ZEN" ] && ok "no CLI verb creates ~/.k2/zen" || bad "a CLI verb created ~/.k2/zen"
 
 echo "== set up (as the app does) =="
-resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/page/ensure?token=$TOKEN" \
-    -H 'Content-Type: application/json' --data-raw '{"homeId":"home-1","name":"Work"}')"
-assert_contains "page/ensure created the folder" "$resp" '"createdFolder":true'
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
+assert_contains "setup created the folder" "$resp" '"createdFolder":true'
+DEFAULT_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["gardens"][0]["id"])')"
 capture zen path
 assert_eq "zen path exit" "$rc" "0"
 assert_eq "zen path prints the folder" "$out" "$ZEN"
-capture zen pages
-assert_eq "zen pages exit" "$rc" "0"
-assert_contains "zen pages lists the Home" "$out" "home-1  Work  page"
+capture zen garden list
+assert_eq "garden list exit" "$rc" "0"
+assert_eq "garden list shows Default" "$out" "  1  $DEFAULT_ID  Default  k2.texting@1"
 capture zen validate
 assert_eq "fresh setup validates" "$rc" "0"
-assert_contains "validate ok line" "$out" "ok: zen.toml, pages/home-1.toml"
+assert_contains "validate ok line" "$out" "ok: zen.toml, gardens/$DEFAULT_ID.toml"
+
+echo "== gardens (TG2.1) =="
+capture zen garden new Notes
+assert_eq "garden new exit" "$rc" "0"
+NOTES_ID="$(printf '%s\n' "$out" | sed -n 1p)"
+case "$NOTES_ID" in g-????????) ok "garden new prints a g- id ($NOTES_ID)" ;; *) bad "garden new id: $(printf %q "$out")" ;; esac
+assert_eq "garden new prints the file" "$(printf '%s\n' "$out" | sed -n 2p)" "$ZEN/gardens/$NOTES_ID.toml"
+[ -f "$ZEN/gardens/$NOTES_ID.toml" ] && ok "the stub is on disk" || bad "no stub for $NOTES_ID"
+capture zen garden list --json
+assert_eq "garden list --json exit" "$rc" "0"
+got="$(printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(",".join("%s:%s:%s" % (g["index"], g["name"], g["template"]) for g in d["gardens"]))')"
+assert_eq "list --json parses with the new entry" "$got" "1:Default:k2.texting@1,2:Notes:k2.blank@1"
+capture zen garden new notes
+assert_eq "a name clash exits 1" "$rc" "1"
+assert_contains "clash message" "$out" "You already have a Garden called"
+capture zen garden new Launch room --texting --at 1
+assert_eq "garden new --texting --at exit" "$rc" "0"
+LAUNCH_ID="$(printf '%s\n' "$out" | sed -n 1p)"
+capture zen garden list
+assert_contains "--at 1 puts it first" "$(printf '%s\n' "$out" | sed -n 1p)" "1  $LAUNCH_ID  Launch room  k2.texting@1"
+capture zen garden rename "Launch room" Mornings
+assert_eq "rename exit" "$rc" "0"
+assert_contains "rename says so" "$out" "Garden $LAUNCH_ID is now"
+capture zen garden reorder Mornings 3
+assert_eq "reorder exit" "$rc" "0"
+assert_contains "reorder lists the new order" "$(printf '%s\n' "$out" | sed -n 3p)" "3  $LAUNCH_ID  Mornings"
+capture zen garden reorder Mornings 9
+assert_eq "reorder out of range exits 1" "$rc" "1"
+capture zen garden reorder Mornings first
+assert_eq "reorder needs a number" "$rc" "2"
+capture zen garden new
+assert_eq "garden new with no name exits 2" "$rc" "2"
+capture zen garden rename Nowhere x
+assert_eq "an unknown Garden exits 1" "$rc" "1"
+assert_contains "unknown Garden message" "$out" "no Garden 'Nowhere'"
+
+echo "== headless curl create → empty template =="
+resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/garden/new?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{"name":"Curl made"}')"
+CURL_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["garden"]["id"])')"
+got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&garden=$CURL_ID" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+p = d["page"]
+print(p["template"], ",".join(w["kind"] for w in p["widgets"]), ",".join(c["kind"] for c in p["controls"]), d["garden"]["name"])')"
+assert_eq "get returns the empty template" "$got" "k2.blank@1 garden-empty garden-switcher,drag-region,zen-toggle Curl made"
 
 echo "== T3.1 error with file:line:col =="
 printf 'schema = 1\n[theme]\nscheme = "auto"\n\n[colors.light]\ncanvas = "#faf7f2"\n  acent = "#fff"\n' >"$ZEN/zen.toml"
@@ -137,19 +192,28 @@ assert_eq "clean validate exits 0" "$rc" "0"
 capture zen reload
 assert_eq "clean reload exits 0" "$rc" "0"
 
-echo "== page by Home name =="
-printf 'schema = 1\ntemplate = "k2.texting@1"\n[font]\nsize = 40\n' >"$ZEN/pages/home-1.toml"
-capture zen validate --home Work
-assert_eq "--home Work validate exits 1" "$rc" "1"
-assert_contains "page error names the page file" "$out" "pages/home-1.toml:4:8: font.size = 40 is out of range"
-capture zen validate --home Nowhere
-assert_eq "unknown Home exits 1" "$rc" "1"
-assert_contains "unknown Home message" "$out" "no Home 'Nowhere'"
-capture zen reset --home Work
-assert_eq "reset --home Work exits 0" "$rc" "0"
-assert_contains "reset page to its stub" "$out" "reset pages/home-1.toml to default"
+echo "== a Garden page by name =="
+printf 'schema = 1\n[[widget]]\nid = "work"\nkind = "agents"\ncolumn = 0\n[widget.props]\nhom = "Work"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "--garden Notes validate exits 1" "$rc" "1"
+assert_contains "page error names the Garden file" "$out" "gardens/$NOTES_ID.toml:7:1: unknown key 'hom'"
+printf 'schema = 1\n[[widget]]\nid = "work"\nkind = "agents"\ncolumn = 0\n[widget.props]\nhome = "Work"\nagent = "cortana"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden "$NOTES_ID"
+assert_eq "a one-agent widget validates" "$rc" "0"
+capture zen validate --garden Nowhere
+assert_eq "unknown Garden exits 1" "$rc" "1"
+capture zen reset --garden Notes
+assert_eq "reset --garden Notes exits 0" "$rc" "0"
+assert_contains "reset the page to its stub" "$out" "reset gardens/$NOTES_ID.toml to default"
+grep -Fq 'template = "k2.blank@1"' "$ZEN/gardens/$NOTES_ID.toml" && ok "a blank Garden resets to the blank stub" || bad "stub template"
 capture zen validate
 assert_eq "after page reset everything validates" "$rc" "0"
+capture zen validate --home Work
+assert_eq "--home is gone (exit 2)" "$rc" "2"
+assert_contains "--home points at --garden" "$out" "Use --garden"
+capture zen pages
+assert_eq "zen pages is gone (exit 2)" "$rc" "2"
+assert_contains "zen pages points at garden list" "$out" "k2 zen garden list"
 
 echo "== history and reset --to =="
 capture zen history --json
@@ -170,6 +234,23 @@ assert_eq "zen.toml is the snapshot" "$(cat "$ZEN/zen.toml")" "$want"
 capture zen reset --to 19990101T000000000Z-000
 assert_eq "unknown snapshot exits 1" "$rc" "1"
 assert_contains "unknown snapshot message" "$out" "no snapshot"
+
+echo "== delete =="
+capture zen garden delete "Curl made"
+assert_eq "delete exit" "$rc" "0"
+assert_contains "delete names the Garden" "$out" "deleted Garden $CURL_ID"
+assert_contains "delete says where the page went" "$out" "its page is kept in .history"
+[ ! -f "$ZEN/gardens/$CURL_ID.toml" ] && ok "the page left gardens/" || bad "page still in gardens/"
+capture zen history --garden "$CURL_ID"
+assert_eq "history of a deleted Garden by id" "$rc" "0"
+assert_contains "history marks it deleted" "$out" "Garden deleted"
+for g in "$LAUNCH_ID" Notes; do
+    capture zen garden delete "$g"
+    assert_eq "delete $g" "$rc" "0"
+done
+capture zen garden delete Default
+assert_eq "the last Garden exits 1" "$rc" "1"
+assert_eq "the last Garden says so" "$out" "That's your last Garden."
 
 echo "== themes =="
 capture zen theme list
@@ -194,15 +275,19 @@ active="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.
 assert_eq "an unknown name changes nothing" "$active" "midnight"
 capture zen theme set
 assert_eq "set with no name exits 2" "$rc" "2"
-capture zen theme set paper --home Work
-assert_eq "set --home exit" "$rc" "0"
-assert_eq "set --home says so" "$out" "theme paper for Home home-1"
-capture zen theme list --home Work
-assert_contains "list --home marks paper" "$out" "* paper"
-assert_contains "list --home notes the pick" "$out" "Home home-1: its own pick"
-capture zen theme set --home Work --clear
+capture zen theme set paper --garden Default
+assert_eq "set --garden exit" "$rc" "0"
+assert_eq "set --garden says so" "$out" "theme paper for Garden $DEFAULT_ID"
+capture zen theme list --garden Default
+assert_contains "list --garden marks paper" "$out" "* paper"
+assert_contains "list --garden notes the pick" "$out" "Garden $DEFAULT_ID: its own pick"
+capture zen garden list
+assert_contains "garden list stars a Garden with its own theme" "$out" "* 1  $DEFAULT_ID  Default"
+capture zen theme set --garden Default --clear
 assert_eq "clear exit" "$rc" "0"
-assert_eq "clear says so" "$out" "Home home-1 follows this computer: theme midnight"
+assert_eq "clear says so" "$out" "Garden $DEFAULT_ID follows this computer: theme midnight"
+capture zen theme set paper --home Work
+assert_eq "theme --home is gone (exit 2)" "$rc" "2"
 
 capture zen theme new sunset
 assert_eq "theme new exit" "$rc" "0"
@@ -226,7 +311,7 @@ assert_contains "list shows the user theme last" "$out" "  sunset  (yours)"
 echo "== headless switch via curl =="
 resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{"name":"sunset"}')"
 assert_contains "curl theme/set answers" "$resp" '"theme":"sunset"'
-got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&home=home-1" | python3 -c '
+got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&garden=$DEFAULT_ID" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 t = d["theme"]
@@ -236,6 +321,8 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/t
 assert_eq "GET theme/set is 405" "$code" "405"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" --data-raw '{"name":"neon"}')"
 assert_eq "curl unknown theme is 404" "$code" "404"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/page/ensure?token=$TOKEN" --data-raw '{"homeId":"h","name":"x"}')"
+assert_eq "the old page/ensure route is gone" "$code" "405"
 
 echo "== reset --theme clears an override =="
 capture zen theme new paper
@@ -254,6 +341,8 @@ echo "== doctor =="
 capture zen doctor
 assert_eq "doctor exit" "$rc" "0"
 assert_contains "doctor reports the watcher" "$out" "ok   watcher"
+assert_contains "doctor reports the Garden list" "$out" "ok   gardens.json: 1 Garden(s): Default"
+assert_contains "doctor reports the templates" "$out" "ok   templates"
 
 echo "== agents can't grant =="
 capture zen grant thread:post
@@ -261,8 +350,8 @@ assert_eq "no grant verb" "$rc" "2"
 assert_contains "grant refusal says why" "$out" "Agents never grant permissions"
 capture zen reset --file grants.json
 assert_eq "reset can't name grants.json" "$rc" "1"
-capture zen validate --file homes.json
-assert_eq "validate can't name homes.json" "$rc" "1"
+capture zen validate --file gardens.json
+assert_eq "validate can't name gardens.json" "$rc" "1"
 [ ! -e "$ZEN/grants.json" ] && ok "nothing wrote grants.json" || bad "grants.json exists"
 
 echo "== a token that isn't this computer's owner =="

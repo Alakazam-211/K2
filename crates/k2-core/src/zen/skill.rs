@@ -47,8 +47,10 @@ as they like and switches between them with the Garden switcher (or Cmd+Option+1
 Zen starts with two Gardens. **Garden 1** is the texting page: a Home's agents\n\
 beside the conversation with the one picked. **Garden 2** is empty: it's there\n\
 for the human to ask you to build it. Garden 2 and every new Garden start\n\
-**empty**, with \"Ask your agents to add things to this Garden\" and an Ask my\n\
-agent button.\n\n\
+**empty**, with \"Ask your agents to add things to this Garden\", an Ask my\n\
+agent button and **Start with the default** (which turns that Garden into the\n\
+texting page). + New Garden asks the human: start with the default, or start\n\
+empty and ask you.\n\n\
 When the human asks you to add something to a Garden, you edit that Garden's\n\
 file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
 `~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
@@ -58,6 +60,9 @@ file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\
   texting page) at position n (default: the end). Prints its id and file.\n\
 - `k2 zen garden rename <garden> <name>`: names are 1 to 60 characters and unique (case aside).\n\
 - `k2 zen garden reorder <garden> <position>`: positions are 1-based.\n\
+- `k2 zen garden template <garden> texting|blank [--force]`: turn a Garden into the texting\n\
+  page (the default) or an empty page; same id, name and place. The old file is kept in\n\
+  `.history/`. A file with its own layout, widgets or theme tables needs `--force`.\n\
 - `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n\
 `<garden>` is an id (`g-3f9a12c0`) or a name. Ids never change, so renaming or\n\
 reordering never touches the file. Only the human turns Zen on (the Zen toggle in\n\
@@ -163,7 +168,7 @@ until the file declares its own, its layout and widgets.\n\n\
     s.push_str(
         "K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
 human's changes, layered on top. App updates never touch those files. For one\n\
-Garden the stack is: K2's `default` theme, then K2's copy of the active theme,\n\
+Garden the stack is: K2's `basic` theme, then K2's copy of the active theme,\n\
 then `themes/<active>/theme.toml`, then `zen.toml`, then `gardens/<id>.toml`.\n\
 A later file wins key by key; anything a file leaves out comes from below.\n\n\
 One theme is active for the computer, and a Garden may pick its own. K2 keeps\n\
@@ -316,7 +321,8 @@ the widget is granted. Caps: ",
 - `presence.get(address)`, `presence.subscribe(cb)`: `presence:read`\n\
 - `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
 - `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`, `compose.draft(address, text)`: `thread:post`\n\
-- `gardens.create(name)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the template's controls only)\n\
+- `gardens.create(name, template?)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the template's controls only)\n\
+- `gardens.useTemplate(template, {force})`: `gardens:template` (the `garden-empty` widget's Start with the default; only the Garden it is on)\n\
 - `focusGroups.get()`, `focusGroups.set(id)`, `focusGroups.subscribe(cb)`: `agents:read` (the app's focus groups, for the Agents view)\n\
 - `app.open(page)` (`home`, `agents`, `projects` or `tickets`: switches the Garden's view in this window, inside Zen; Zen stays on), `app.current()`, `app.subscribeCurrent(fn)`, `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
 - `gardens.list()`, `gardens.current()`, `gardens.switch(id)`, `zen.exit()`, `controls.bind(kind, element, gardenId?)`, `theme.get()`: no cap\n\n\

@@ -2,7 +2,7 @@
 // re-points every Styles variable at a Zen token inside the Zen root. These
 // ratchets fail when a Styles variable exists that the shield doesn't cover
 // (it would leak the user's Style into Zen), when the shield points at
-// anything but Zen's own variables, or when the default theme's text and
+// anything but Zen's own variables, or when the basic theme's text and
 // fill pairs drop under WCAG AA (4.5:1).
 
 import { describe, expect, it } from 'vitest'
@@ -82,11 +82,11 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-/** `[colors.<scheme>]` from the daemon's built-in default theme. */
+/** `[colors.<scheme>]` from the daemon's built-in `basic` theme. */
 function tomlColors(scheme: 'light' | 'dark'): Record<string, string> {
-  const toml = readFileSync(join(REPO, 'crates', 'k2-core', 'src', 'zen', 'themes', 'default.toml'), 'utf8')
+  const toml = readFileSync(join(REPO, 'crates', 'k2-core', 'src', 'zen', 'themes', 'basic.toml'), 'utf8')
   const start = toml.indexOf(`[colors.${scheme}]`)
-  if (start < 0) throw new Error(`default.toml has no [colors.${scheme}]`)
+  if (start < 0) throw new Error(`basic.toml has no [colors.${scheme}]`)
   const body = toml.slice(start).split('\n').slice(1)
   const out: Record<string, string> = {}
   for (const line of body) {

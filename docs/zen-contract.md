@@ -54,6 +54,7 @@ Gardens." `zen-v1` stays and means the theme routes exist.
 | `POST /cli/zen/garden/new` | **+ New Garden** in the switcher | `{name, template?: "blank"\|"texting", seedHome?, at?}` | `{ok, garden: Garden, file, path, changed}` |
 | `POST /cli/zen/garden/rename` | CLI and agents (Q6) | `{garden, name}` | `{ok, garden: Garden, changed}`; the same name again is `changed: false` and emits nothing |
 | `POST /cli/zen/garden/reorder` | CLI and agents | `{garden, to}` (`to` is 1-based) | `{ok, gardens: [Garden], changed}` |
+| `POST /cli/zen/garden/template` | **Start with the default** on an empty Garden; `k2 zen garden template` | `{garden, template: "texting"\|"blank", force?}` | `{ok, garden: Garden, template, file, path, snapshot, replaced: [key], changed}`. Turns the Garden into that template's stub with the **same id, name and place**; the list entry names the template. The old file is kept in `.history/gardens/<id>.toml/` first (`snapshot`). A Garden already on the template with nothing of its own is `changed: false` (nothing written, no event). A file with its own top-level keys (layout, widgets, theme tables) is 409 `garden_has_changes` unless `force`; `replaced` lists what `force` replaced |
 | `POST /cli/zen/garden/delete` | CLI and agents | `{garden}` | `{ok, deleted: <id>, name, snapshot, gardens: [Garden], changed}` |
 | `POST /cli/zen/theme/set` · `next` · `prev` · `new`, `GET /cli/zen/theme/list` | theme picker and keys | see Themes | |
 | `GET /cli/zen/status` | CLI | none | `{ok, setUp, path, gardens: [Garden], watching, message}` |
@@ -82,6 +83,7 @@ Gardens." `zen-v1` stays and means the theme routes exist.
 | 404 | `unknown_garden` | `{garden, gardens: [ids], message}`: no Garden with that id or name |
 | 409 | `garden_exists` | `garden/new` or `garden/rename` onto a name in use (case aside). `message`: "You already have a Garden called “Notes”." |
 | 409 | `last_garden` | `garden/delete` of the only Garden. `message`: "That's your last Garden." |
+| 409 | `garden_has_changes` | `garden/template` without `force` onto a Garden whose file sets its own layout, widgets or theme tables (or doesn't parse). `{garden, keys: [top-level key], message}`. Nothing is written |
 | 400 | `bad_request` | a name that is empty or over 60 characters, `at`/`to` outside the list, an unknown `template`, an unknown body field (bodies are strict), or the old `home` key/query |
 | 404 / 409 | `unknown_theme` / `theme_exists` | as before (Themes) |
 
@@ -125,7 +127,7 @@ A restore verb is later (Q8).
   "errors":   [{ "file": "gardens/g-3f9a12c0.toml", "line": 7, "col": 1, "message": "…" }],
   "warnings": [ … same shape … ],
   "lastGoodAt": "2026-10-04T18:00:00Z",
-  "sources": { "zen.toml": "file", "gardens/g-3f9a12c0.toml": "snapshot:…", "themes/default/theme.toml": "default" }
+  "sources": { "zen.toml": "file", "gardens/g-3f9a12c0.toml": "snapshot:…", "themes/basic/theme.toml": "default" }
 }
 ```
 
@@ -141,7 +143,7 @@ the window into safe mode.
 | | `k2.texting@1` (Garden 1) | `k2.blank@1` (Garden 2, new Gardens) |
 |---|---|---|
 | layout | 2 columns, `[34, 66]`, min `[240, 360]` | 1 column, `[100]`, min `[320]` |
-| widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`), `nav-rail` (id `nav`, column 0) | `garden-empty` (column 0) |
+| widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`), `nav-rail` (id `nav`, column 0) | `garden-empty` (column 0; caps `agents:read`, `thread:read`, `thread:post`, `gardens:template`) |
 | controls | `garden-switcher`, `drag-region`, `zen-toggle`, `add-agent` | `garden-switcher`, `drag-region`, `zen-toggle` |
 
 **Required controls** (G24; Rosson, 2026-10-04: exactly two):
@@ -149,7 +151,9 @@ the window into safe mode.
 `drag-region`, which K2 binds for window drag but never checks.
 `home-switcher` and `home-option` are gone from Zen. The renderer binds `garden-option` (with its Garden id) the way it
 bound `home-option`. Template controls get the caps `agents:add` and
-`gardens:manage` (G29); widgets never get `gardens:manage`.
+`gardens:manage` (G29); widgets never get `gardens:manage`. The built-in
+`garden-empty` widget alone gets `gardens:template` (Start with the
+default on its own Garden).
 
 ### `Widget`
 
@@ -256,7 +260,8 @@ follow. Theme tables restyle that Garden only.
 
 ```jsonc
 "theme": {
-  "name": "default",            // the active theme for this Garden
+  "name": "basic",              // the active theme for this Garden (its id, lower case)
+  "label": "Basic",             // what people see (Rosson, 2026-10-04): a built-in's label, else the id with a capital
   "builtin": true,              // shipped inside K2 (read-only)
   "user": false,                // ~/.k2/zen/themes/<name>/theme.toml exists (for a built-in: an override)
   "scope": "global",            // "garden" when the Garden has its own pick
@@ -277,7 +282,7 @@ follow. Theme tables restyle that Garden only.
     "file": "background.png", "fit": "cover", "opacity": 1, "lastGood": false
   }
 },
-"themes": [ { "name": "default", "builtin": true, "user": false, "summary": "…", "active": true }, … ]
+"themes": [ { "name": "basic", "label": "Basic", "builtin": true, "user": false, "summary": "…", "active": true }, … ]
 ```
 
 - **Font.** `font.stack` is the CSS `font-family` for the Zen root.
@@ -302,13 +307,16 @@ follow. Theme tables restyle that Garden only.
   `lastGood: true`. The renderer should paint `dataUrl` under the Zen root
   with `fit` (`cover|contain|tile|center`) and `opacity`.
 - **Layering.** For one Garden the stack is, lowest first:
-  1. K2's built-in `default` theme;
+  1. K2's built-in `basic` theme;
   2. K2's built-in copy of the active theme;
   3. `themes/<active>/theme.toml`;
   4. `zen.toml`;
   5. `gardens/<id>.toml`.
 
-  The built-ins are `default`, `paper` and `midnight`. They are embedded in
+  The built-ins are `basic`, `paper` and `midnight` (Rosson, 2026-10-04:
+  `basic` was called `default`; a saved pick of `default` in an existing
+  `active.json` reads as `basic`, quietly, unless the person has a theme of
+  their own called `default`). They are embedded in
   the daemon and read-only. `~/.k2/zen` holds only the user's changes, and
   the `zen.toml` stub is empty. Page templates are the same: the built-in
   `k2.texting@1` and `k2.blank@1` are the defaults, and a Garden file holds
@@ -317,7 +325,7 @@ follow. Theme tables restyle that Garden only.
 - **Errors.** A theme file with errors keeps its last good version, the
   same way as `zen.toml`. The errors come back in `errors` with
   `file: "themes/<name>/theme.toml"`. If a theme pick points to a deleted
-  theme, `default` is shown and a warning is added for `active.json`.
+  theme, `basic` is shown and a warning is added for `active.json`.
 
 | Call | Body | Answer |
 |---|---|---|
@@ -339,12 +347,12 @@ Source: `src/renderer/lib/zen/zen-theme-engine.ts`, `zen-chrome.ts`,
 daemon's `theme` shape from the section above. Only the names below are
 read. Any other key is ignored, logged once, and never reaches CSS. A value
 that is present but doesn't parse keeps the last good value for that key. A
-key left out gets K2's default, which is the built-in `themes/default.toml`;
+key left out gets K2's default, which is the built-in `themes/basic.toml`;
 `zen-theme-engine.test.ts` checks that the two match.
 
 ```jsonc
 "theme": {
-  "name": "default", "builtin": true, "user": false,
+  "name": "basic", "builtin": true, "user": false,
   "scope": "global",                   // "garden": a switch carries the Garden (Flag 7)
   "tokens": {
     "scheme": "auto",                  // auto | light | dark
@@ -360,7 +368,7 @@ key left out gets K2's default, which is the built-in `themes/default.toml`;
                              "dark":  { … } } },
   "background": { "dataUrl": "data:image/png;base64,…", "fit": "cover", "opacity": 1 }  // optional
 },
-"themes": [{ "name": "default", "builtin": true, "user": false, "active": true }, …],
+"themes": [{ "name": "basic", "label": "Basic", "builtin": true, "user": false, "active": true }, …],   // the picker shows `label` (else the id with a capital) and sends `name`
 "chrome": { "corners": "system", "stoplights": "round", "stoplight-offset": [0, 0] },
 "motion": { "animations": { "<name>": { "on": true, "speed": 3, "bezier": [0.22, 1, 0.36, 1], "style": "popin 92%" }, … } }
 ```
@@ -467,11 +475,22 @@ this contract, where it reads more loosely or decides something:
    Keep that 404 for unknown Zen GET routes.
 2. **Setup.** After `POST /cli/zen/setup` the renderer re-reads
    `GET /cli/zen/gardens` instead of using `setup`'s `gardens`.
-3. **New Garden.** The switcher sends `{name}` only (the daemon's default
-   template, `blank`) and reads `garden` from the answer; the window switches
-   to it at once and the list is re-read on the `zen_changed` that follows.
-   Names are checked case-insensitively before posting, and a 409
-   `garden_exists` shows "You already have a Garden called “<name>”.".
+3. **New Garden** (Rosson, 2026-10-04). After the name, the switcher offers
+   **Start with the default** (`template: "texting"`, Garden 1's layout;
+   the selected choice) or **Start empty and ask my agent**
+   (`template: "blank"`; the new Garden's empty-Garden widget then opens
+   Ask my agent by itself, once). It sends `{name, template}` and reads
+   `garden` from the answer; the window switches to it at once and the list
+   is re-read on the `zen_changed` that follows. Names are checked
+   case-insensitively before the choice, and a 409 `garden_exists` goes back
+   to the name with "You already have a Garden called “<name>”.".
+3a. **Start with the default** (Rosson, 2026-10-04). The empty-Garden widget
+   shows it next to Ask my agent only while the Garden is empty (the blank
+   template with only its `garden-empty` widget). It sends
+   `garden/template {garden: <this Garden>, template: "texting"}` with no
+   confirmation (nothing is lost); on 409 `garden_has_changes` it asks once
+   and resends with `force: true`. The page switches on the `zen_changed`
+   that follows, like any other change.
 4. **`unknown_garden`** on `get` re-reads the list; the window moves to the
    first Garden. A window's stored Garden that the list lacks is replaced by
    the first one.
@@ -488,8 +507,11 @@ this contract, where it reads more loosely or decides something:
    the window's selected Home at first show (then kept). It never moves the
    Home page.
 8. **Bridge verbs** `gardens.list/current/switch` (no cap),
-   `gardens.create/rename/delete` (`gardens:manage`, template controls
-   only), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
+   `gardens.create(name, template?, {ask})`/`rename`/`delete`
+   (`gardens:manage`, template controls only), `gardens.empty()` and
+   `gardens.useTemplate(template, {force})` (`gardens:template`, the
+   `garden-empty` widget only; it acts on the Garden on screen, never
+   another), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
    (`agents:read`), `focusGroups.get/set/subscribe` (`agents:read`, the
    Agents view's dropdown; `set` never switches workspaces),
    `compose.draft` (`thread:post`), `app.open(page)` / `app.current()` /

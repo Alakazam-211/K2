@@ -129,8 +129,8 @@ function zenPage(opts: { version?: string; accent?: string; chrome?: object; the
       ...opts.theme,
     },
     themes: [
-      { name: 'k2-light', builtin: true, user: false, active: true },
-      { name: 'k2-dark', builtin: true, user: false, active: false },
+      { name: 'k2-light', label: 'K2 Light', builtin: true, user: false, active: true },
+      { name: 'k2-dark', label: 'K2 Dark', builtin: true, user: false, active: false },
       { name: 'mine', builtin: false, user: true, active: false },
     ],
     chrome: opts.chrome ?? { corners: 'square', stoplights: 'square', 'stoplight-offset': [6, 4] },
@@ -375,11 +375,18 @@ describe('native chrome: held while Zen is shown, restored on leave (macOS)', ()
 describe('theme picker and cycle keys (Omarchy 2)', () => {
   it('shows the active theme, switches on click through this computer’s daemon, and cycles with ⌃⌘. / ⌃⌘⇧.', async () => {
     await enterZen()
-    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('k2-light'))
+    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('K2 Light'))
     const button = document.querySelector('[data-zen-theme-button]')
     if (!button) throw new Error('no theme button')
     act(() => void fireEvent.click(button))
     expect(document.querySelector('[data-zen-theme-option="k2-light"]')?.getAttribute('aria-selected')).toBe('true')
+    // Rosson 2026-10-04: the picker shows capitalized names (the daemon's
+    // label, else the id with a capital); the id is what a switch sends.
+    expect(Array.from(document.querySelectorAll('[data-zen-theme-option]')).map((b) => [b.getAttribute('data-zen-theme-option'), b.textContent])).toEqual([
+      ['k2-light', '✓K2 Lightbuilt in'],
+      ['k2-dark', 'K2 Darkbuilt in'],
+      ['mine', 'Mine'],
+    ])
     h.calls.length = 0
     const mine = document.querySelector('[data-zen-theme-option="mine"]')
     if (!mine) throw new Error('no option')
@@ -410,7 +417,7 @@ describe('theme picker and cycle keys (Omarchy 2)', () => {
   it('a Garden with its own theme pick keeps it: set, next and prev carry the Garden (G16, G30)', async () => {
     h.page = zenPage({ theme: { scope: 'garden' } })
     await enterZen()
-    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('k2-light'))
+    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('K2 Light'))
     const gardenId = 'g-default'
     h.calls.length = 0
     await act(async () => {
@@ -481,7 +488,7 @@ describe('shortcut cheat sheet (Omarchy 4)', () => {
   it('Linux: Ctrl+Alt+. cycles and Ctrl+Alt+/ opens the sheet; AltGr does neither', async () => {
     setPlatform('Linux x86_64')
     await enterZen()
-    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('k2-light'))
+    await waitFor(() => expect(document.querySelector('[data-zen-active-theme]')?.textContent).toBe('K2 Light'))
     const altGr = (init: KeyboardEventInit): KeyboardEvent => {
       const ev = new KeyboardEvent('keydown', { bubbles: true, ...init })
       Object.defineProperty(ev, 'getModifierState', { value: (k: string) => k === 'AltGraph' })

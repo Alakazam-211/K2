@@ -15,7 +15,8 @@
 //!
 //! No route writes `grants.json` (Z19): it is reserved for v2, where only a
 //! click in the K2 app may write it. `.history/` is written only as a side
-//! effect of the clean-save snapshot, `reset` and `garden/delete`.
+//! effect of the clean-save snapshot, `reset`, `garden/template` and
+//! `garden/delete`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,6 +38,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/new",
     "/cli/zen/garden/rename",
     "/cli/zen/garden/reorder",
+    "/cli/zen/garden/template",
     "/cli/zen/reload",
     "/cli/zen/reset",
     "/cli/zen/setup",
@@ -105,6 +107,10 @@ fn err(e: ZenError) -> CliResponse {
         ZenError::Conflict(m) => resp("409 Conflict", json!({ "ok": false, "error": "theme_exists", "message": m })),
         ZenError::GardenExists(m) => resp("409 Conflict", json!({ "ok": false, "error": "garden_exists", "message": m })),
         ZenError::LastGarden => resp("409 Conflict", json!({ "ok": false, "error": "last_garden", "message": message })),
+        ZenError::GardenHasChanges { garden, keys } => resp(
+            "409 Conflict",
+            json!({ "ok": false, "error": "garden_has_changes", "garden": garden, "keys": keys, "message": message }),
+        ),
         ZenError::Io(m) => resp("500 Internal Server Error", json!({ "ok": false, "error": "io", "message": m })),
     }
 }
@@ -367,6 +373,39 @@ fn handle_garden_reorder(body: &[u8]) -> Result<J, ZenError> {
     Ok(json!({ "ok": true, "gardens": f.gardens_json(), "changed": changed }))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemplateGardenBody {
+    garden: String,
+    template: String,
+    #[serde(default)]
+    force: bool,
+}
+
+/// POST `/cli/zen/garden/template` (Rosson 2026-10-04, "Start with the
+/// default"): turn one Garden into `texting` (Garden 1's page) or `blank`,
+/// same id, name and place. The old file is kept in history first; a file
+/// with its own changes is 409 `garden_has_changes` unless `force`. A
+/// Garden already on the template is a no-op (`changed:false`, no event).
+fn handle_garden_template(body: &[u8]) -> Result<J, ZenError> {
+    let b: TemplateGardenBody = parse_body(body, "garden/template takes {garden, template, force?}")?;
+    let f = files();
+    let out = f.set_garden_template(&b.garden, &b.template, b.force)?;
+    let changed = if out.changed { refresh_and_emit()? } else { false };
+    let (index, g) = f.garden(&out.garden.id)?;
+    let file = ZenFile::Garden(g.id.clone());
+    Ok(json!({
+        "ok": true,
+        "garden": f.garden_json(index, &g, &f.read_active()),
+        "template": out.template,
+        "file": file.label(),
+        "path": f.path_of(&file).display().to_string(),
+        "snapshot": out.snapshot,
+        "replaced": out.replaced,
+        "changed": changed,
+    }))
+}
+
 fn handle_reload() -> Result<J, ZenError> {
     let f = files();
     if !f.is_set_up() {
@@ -511,6 +550,7 @@ pub fn handle(path: &str, owner: bool, params: &HashMap<String, String>, body: &
         "/cli/zen/garden/rename" => handle_garden_rename(body),
         "/cli/zen/garden/delete" => handle_garden_delete(body),
         "/cli/zen/garden/reorder" => handle_garden_reorder(body),
+        "/cli/zen/garden/template" => handle_garden_template(body),
         "/cli/zen/reload" => handle_reload(),
         "/cli/zen/reset" => handle_reset(body),
         _ => unreachable!("checked against GET_ROUTES/POST_ROUTES above"),

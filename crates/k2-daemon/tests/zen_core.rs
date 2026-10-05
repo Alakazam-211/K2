@@ -125,7 +125,7 @@ fn builtin_theme_is_clean_and_resolves_every_token() {
     assert_eq!(rt.font["size"], 14);
     assert_eq!(rt.font["lineHeight"], 1.45);
     assert_eq!(rt.font["terminal"]["family"], "meslo", "a proportional family pairs with meslo in terminals");
-    assert!(rt.background.is_none(), "the default theme has no background");
+    assert!(rt.background.is_none(), "the basic theme has no background");
     assert_eq!(rt.tokens["scheme"], "auto");
     assert_eq!(rt.chrome["corners"], "system");
     assert_eq!(rt.chrome["stoplights"], "round");
@@ -223,7 +223,12 @@ fn template_page_is_data_with_required_controls_and_known_caps() {
     let blank = zen::template_page(zen::BLANK_TEMPLATE_ID).expect("blank");
     assert_eq!(blank["layout"]["split"], json!([100]), "{blank}");
     assert_eq!(kinds_of(&blank, "widgets"), vec!["garden-empty"], "{blank}");
-    assert_eq!(blank["widgets"][0]["caps"], json!(["agents:read", "thread:read", "thread:post"]), "{blank}");
+    // Rosson 2026-10-04: Start with the default turns THIS Garden into the
+    // texting page (`gardens.useTemplate`), the only write a widget gets.
+    assert_eq!(blank["widgets"][0]["caps"], json!(["agents:read", "thread:read", "thread:post", "gardens:template"]), "{blank}");
+    assert!(zen::BRIDGE_CAPS.contains(&"gardens:template"), "gardens:template is a bridge cap");
+    let with_template: Vec<&str> = zen::BUILTIN_WIDGET_CAPS.iter().filter(|(_, c)| c.contains(&"gardens:template")).map(|(k, _)| *k).collect();
+    assert_eq!(with_template, vec!["garden-empty"], "only the empty-Garden widget may switch its Garden's template");
     assert_eq!(kinds_of(&blank, "controls"), vec!["garden-switcher", "drag-region", "zen-toggle"], "{blank}");
     assert!(zen::template_page("k2.unknown@1").is_none());
 }
@@ -996,6 +1001,7 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
             "gardens.create(",
             "gardens.rename(",
             "gardens.delete(",
+            "gardens.useTemplate(",
             "presence.get(",
             "thread.read(",
             "thread.post(",
@@ -1014,9 +1020,17 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
         let shown = b.iter().map(|v| if v.fract() == 0.0 { format!("{}", *v as i64) } else { format!("{v}") }).collect::<Vec<_>>().join(", ");
         assert!(body.contains(&format!("`{name}` [{shown}]")), "skill must show {name}'s points [{shown}]");
     }
-    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 6, "G36: k2-zen skill v6 (the rail switches views inside Zen)");
     assert!(!body.contains("leaves Zen in this window"), "v6: the rail no longer leaves Zen");
     assert!(body.contains("`app.current()`"), "v6: app.current is documented");
+    for must in ["k2 zen garden template <garden> texting|blank [--force]", "gardens.useTemplate(", "Start with the default", "`basic`"] {
+        assert!(body.contains(must), "skill must mention {must}");
+    }
+    assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
+    assert_eq!(
+        k2_core::skills::version::SKILL_VERSION_ZEN,
+        7,
+        "k2-zen skill v7 (garden template + Start with the default; the default theme is basic; v6 was the rail views)"
+    );
 }
 
 fn temp_dot(tag: &str) -> PathBuf {
@@ -1059,7 +1073,18 @@ fn png(extra: usize) -> Vec<u8> {
 
 #[test]
 fn every_builtin_theme_is_clean_complete_and_distinct() {
-    assert_eq!(zen::BUILTIN_THEMES[0].name, zen::DEFAULT_THEME, "default comes first");
+    // Rosson 2026-10-04: K2's own theme is `basic` (it was `default`).
+    assert_eq!(zen::DEFAULT_THEME, "basic");
+    assert_eq!(zen::BUILTIN_THEMES[0].name, zen::DEFAULT_THEME, "basic comes first");
+    let names: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.name).collect();
+    assert_eq!(names, vec!["basic", "paper", "midnight"], "no built-in is called default any more");
+    // Rosson 2026-10-04: ids stay lower case; people see capitalized names.
+    let labels: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.label).collect();
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight"]);
+    assert_eq!(zen::theme_label("basic"), "Basic");
+    assert_eq!(zen::theme_label("sunset"), "Sunset", "a user theme shows its id with a capital");
+    assert_eq!(zen::theme_label("k2-light"), "K2-light");
+    assert!(zen::BUILTIN_THEMES[0].toml.starts_with("# Zen theme \"basic\""), "themes/basic.toml is embedded");
     let mut versions = std::collections::BTreeSet::new();
     for t in zen::BUILTIN_THEMES {
         let c = zen::check_builtin_theme(t.name).expect("built in");
@@ -1094,18 +1119,18 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     assert_eq!(stub, zen::DEFAULT_ZEN_TOML);
     assert!(check_zen(&stub).layer.is_empty(), "the zen.toml stub sets nothing");
     let base = f.resolve(Some(&g)).expect("base");
-    assert_eq!(base["theme"]["name"], "default");
+    assert_eq!(base["theme"]["name"], "basic");
     assert_eq!(base["theme"]["builtin"], true);
     assert_eq!(base["theme"]["user"], false);
     assert_eq!(base["theme"]["scope"], "global");
     assert_eq!(base["theme"]["tokens"]["colors"]["light"]["accent"], "#2563eb");
 
     // Override the built-in: the user's value wins, the rest stays K2's.
-    let out = f.new_theme("default", None).expect("override default");
-    assert_eq!(out.from, "default");
-    let ov = ZenFile::Theme("default".into());
+    let out = f.new_theme("basic", None).expect("override basic");
+    assert_eq!(out.from, "basic");
+    let ov = ZenFile::Theme("basic".into());
     let text = std::fs::read_to_string(f.path_of(&ov)).expect("override text");
-    assert!(text.contains("started from K2's \"default\""), "{text}");
+    assert!(text.contains("started from K2's \"basic\""), "{text}");
     assert!(check_theme(&text).is_clean(), "the starter validates:\n{}", diag_list(&check_theme(&text)));
     let same = f.resolve(Some(&g)).expect("same");
     assert_eq!(same["theme"]["tokens"], base["theme"]["tokens"], "a fresh copy looks the same");
@@ -1125,7 +1150,7 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     assert_eq!(pg["theme"]["tokens"]["colors"]["light"]["accent"], "#065f46", "the Garden beats zen.toml");
     assert_eq!(pg["theme"]["tokens"]["shape"]["radius"], 5);
 
-    // Another theme: zen.toml still applies; the default override doesn't.
+    // Another theme: zen.toml still applies; the basic override doesn't.
     write(&f, &garden(&g), &zen::store::garden_stub(&g, "Garden 1", zen::TEMPLATE_ID));
     write(&f, &ZenFile::Zen, "schema = 1\n[shape]\nradius = 5\n");
     f.set_theme(Some("paper"), None).expect("paper");
@@ -1134,14 +1159,14 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     assert_eq!(p["theme"]["tokens"]["colors"]["light"]["accent"], "#2f5d8a");
     assert_eq!(p["theme"]["tokens"]["shape"]["radius"], 5, "zen.toml applies on every theme");
     assert_eq!(p["theme"]["font"]["family"], "serif");
-    assert_eq!(p["theme"]["tokens"]["colors"]["dark"]["canvas"], "#121316", "paper's unset keys come from default");
+    assert_eq!(p["theme"]["tokens"]["colors"]["dark"]["canvas"], "#121316", "paper's unset keys come from basic");
 
-    // reset --theme default: snapshot, then the override is gone.
-    f.set_theme(Some("default"), None).expect("back");
+    // reset --theme basic: snapshot, then the override is gone.
+    f.set_theme(Some("basic"), None).expect("back");
     let r = f.reset(&ov, None).expect("reset override");
     assert_eq!(r.restored, "builtin");
     let kept = r.snapshot.expect("the override is kept as a snapshot");
-    assert!(std::fs::read_to_string(f.history_root().join("themes/default/theme.toml").join(&kept)).expect("snap").contains("#1d4ed8"));
+    assert!(std::fs::read_to_string(f.history_root().join("themes/basic/theme.toml").join(&kept)).expect("snap").contains("#1d4ed8"));
     assert!(!f.path_of(&ov).exists(), "reset removes the override");
     let back = f.resolve(Some(&g)).expect("back");
     assert_eq!(back["theme"]["tokens"]["colors"]["light"]["accent"], "#2563eb", "the built-in shows again");
@@ -1150,14 +1175,14 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     f.reset(&ov, Some(&kept)).expect("undo");
     assert_eq!(f.resolve(Some(&g)).expect("undo")["theme"]["tokens"]["colors"]["light"]["accent"], "#1d4ed8");
 
-    // A user-only theme resets to a copy of default; reset never touches active.json.
+    // A user-only theme resets to a copy of basic; reset never touches active.json.
     f.new_theme("mine", Some("midnight")).expect("mine");
     let active_before = std::fs::read(f.root().join(ACTIVE_FILE)).expect("active.json");
     write(&f, &ZenFile::Theme("mine".into()), "schema = 1\n[shape]\ngap = 4\n");
     let r = f.reset(&ZenFile::Theme("mine".into()), None).expect("reset mine");
     assert_eq!(r.restored, "default");
     let t = std::fs::read_to_string(f.path_of(&ZenFile::Theme("mine".into()))).expect("mine");
-    assert!(t.contains("started from K2's \"default\""), "{t}");
+    assert!(t.contains("started from K2's \"basic\""), "{t}");
     assert_eq!(std::fs::read(f.root().join(ACTIVE_FILE)).expect("active"), active_before);
 }
 
@@ -1171,12 +1196,14 @@ fn cycling_order_wraps_and_a_garden_pick_beats_the_global_one() {
     f.new_theme("zeta", None).expect("zeta");
     f.new_theme("alpha", None).expect("alpha");
     let names: Vec<String> = f.themes().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, vec!["default", "paper", "midnight", "alpha", "zeta"], "built-ins first, then the user's by name");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "alpha", "zeta"], "built-ins first, then the user's by name");
+    let labels: Vec<String> = f.themes().into_iter().map(|t| t.label).collect();
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Alpha", "Zeta"], "lists show capitalized names");
     let mut seen = Vec::new();
     for _ in 0..5 {
         seen.push(f.cycle_theme(1, None).expect("next").theme);
     }
-    assert_eq!(seen, vec!["paper", "midnight", "alpha", "zeta", "default"], "next walks the list and wraps");
+    assert_eq!(seen, vec!["paper", "midnight", "alpha", "zeta", "basic"], "next walks the list and wraps");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "zeta", "prev wraps backwards");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "alpha");
 
@@ -1214,7 +1241,7 @@ fn unknown_theme_names_are_refused_and_change_nothing() {
     match f.set_theme(Some("neon"), None) {
         Err(ZenError::UnknownTheme { name, known }) => {
             assert_eq!(name, "neon");
-            assert_eq!(known, vec!["default", "paper", "midnight"]);
+            assert_eq!(known, vec!["basic", "paper", "midnight"]);
         }
         other => panic!("an unknown theme must be UnknownTheme, got {other:?}"),
     }
@@ -1232,14 +1259,151 @@ fn unknown_theme_names_are_refused_and_change_nothing() {
     }
     assert_eq!(ZenFile::parse("themes/mine/theme.toml").expect("theme"), ZenFile::Theme("mine".into()));
 
-    // The active theme's folder is deleted by hand: default, with a warning.
+    // The active theme's folder is deleted by hand: basic, with a warning.
     f.set_theme(Some("mine"), None).expect("mine");
     std::fs::remove_dir_all(f.theme_dir("mine")).expect("rm mine");
     let r = f.resolve(Some(&g)).expect("resolve");
-    assert_eq!(r["theme"]["name"], "default", "{r}");
+    assert_eq!(r["theme"]["name"], "basic", "{r}");
     let w = r["warnings"].as_array().expect("warnings");
     assert!(w.iter().any(|d| d["file"] == "active.json" && d["message"].as_str().is_some_and(|m| m.contains("theme 'mine' doesn't exist"))), "{r}");
     assert_eq!(r["errors"], json!([]));
+}
+
+/// Rosson 2026-10-04: `default` is `basic` now. Zen never shipped, so
+/// nothing is migrated, except that a saved pick of `default` in an
+/// existing `active.json` reads as `basic`, quietly (no warning), unless
+/// the person has a theme of their own called `default`.
+#[test]
+fn a_saved_default_pick_reads_as_basic_quietly() {
+    let (_t, f) = set_up("alias");
+    let one = gid(&f, 0);
+    let two = gid(&f, 1);
+    std::fs::write(
+        f.root().join(ACTIVE_FILE),
+        format!(r#"{{"version":2,"theme":"default","gardens":{{"{two}":"default"}}}}"#),
+    )
+    .expect("write active.json");
+    let a = f.read_active();
+    assert_eq!(a.theme.as_deref(), Some("basic"), "{a:?}");
+    assert_eq!(a.gardens.get(&two).map(String::as_str), Some("basic"), "{a:?}");
+    let t = f.active_theme(Some(&one));
+    assert_eq!((t.name.as_str(), t.scope, t.missing.as_deref()), ("basic", "global", None));
+    let t2 = f.active_theme(Some(&two));
+    assert_eq!((t2.name.as_str(), t2.scope, t2.missing.as_deref()), ("basic", "garden", None));
+    for g in [&one, &two] {
+        let r = f.resolve(Some(g)).expect("resolve");
+        assert_eq!(r["theme"]["name"], "basic", "{r}");
+        assert_eq!(r["warnings"], json!([]), "the alias is quiet: {r}");
+        assert_eq!(r["errors"], json!([]), "{r}");
+    }
+    let list = f.theme_list(None).expect("list");
+    assert_eq!(list["active"], "basic", "{list}");
+    assert_eq!(list["global"], "basic", "{list}");
+    assert!(list["missing"].is_null(), "{list}");
+    let doctor = f.doctor_checks();
+    let themes = doctor.iter().find(|c| c["name"] == "themes").expect("themes check");
+    assert_eq!(themes["ok"], true, "the doctor doesn't flag the alias: {themes}");
+    // A switch writes the new name; `default` is never written back.
+    f.cycle_theme(1, None).expect("next");
+    let raw = std::fs::read_to_string(f.root().join(ACTIVE_FILE)).expect("active.json");
+    assert!(raw.contains("\"paper\"") && !raw.contains("\"default\""), "{raw}");
+
+    // `default` is not a built-in name any more: set refuses it.
+    assert!(matches!(f.set_theme(Some("default"), None), Err(ZenError::UnknownTheme { .. })));
+    // The person's own theme called `default` is theirs: no alias.
+    f.new_theme("default", None).expect("a user theme called default");
+    f.set_theme(Some("default"), None).expect("pick it");
+    assert_eq!(f.read_active().theme.as_deref(), Some("default"));
+    let r = f.resolve(Some(&one)).expect("resolve");
+    assert_eq!((r["theme"]["name"].as_str(), r["theme"]["builtin"].as_bool()), (Some("default"), Some(false)), "{r}");
+}
+
+/// Rosson 2026-10-04, "Start with the default": `garden/template` turns a
+/// Garden into Garden 1's texting page (or back to empty), keeping its id,
+/// name and place; the old file goes to history first; idempotent; a file
+/// with its own layout, widgets or theme tables needs `force`.
+#[test]
+fn garden_template_starts_a_garden_over_with_the_default() {
+    let (t, f) = temp_root("template-unset");
+    assert!(matches!(f.set_garden_template("Garden 2", "texting", false), Err(ZenError::NotSetUp)));
+    drop(t);
+    let (_t, f) = set_up("template");
+    let two = gid(&f, 1);
+    let before = f.gardens();
+    assert_eq!(before[1].template, zen::BLANK_TEMPLATE_ID);
+    let fp0 = f.refresh().expect("fp0");
+    let stub = std::fs::read_to_string(f.path_of(&garden(&two))).expect("Garden 2 stub");
+
+    let out = f.set_garden_template("Garden 2", "texting", false).expect("texting");
+    assert!(out.changed, "{out:?}");
+    assert_eq!(out.template, zen::TEMPLATE_ID);
+    assert!(out.replaced.is_empty(), "an empty Garden loses nothing: {out:?}");
+    assert_eq!((out.garden.id.as_str(), out.garden.name.as_str()), (two.as_str(), "Garden 2"));
+    let after = f.gardens();
+    assert_eq!(after.iter().map(|g| (&g.id, &g.name)).collect::<Vec<_>>(), before.iter().map(|g| (&g.id, &g.name)).collect::<Vec<_>>(), "same ids, names, order");
+    assert_eq!(after[1].template, zen::TEMPLATE_ID, "the list names the new template");
+    assert_eq!(after[1].created_at, before[1].created_at, "it is the same Garden");
+    let text = std::fs::read_to_string(f.path_of(&garden(&two))).expect("new file");
+    assert_eq!(text, zen::store::garden_stub(&two, "Garden 2", zen::TEMPLATE_ID));
+    let snap = out.snapshot.clone().expect("the old file is kept");
+    assert_eq!(
+        std::fs::read_to_string(f.history_root().join(format!("gardens/{two}.toml")).join(&snap)).expect("snapshot"),
+        stub,
+        "history holds the empty stub"
+    );
+    let page = f.resolve(Some(&two)).expect("resolve");
+    assert_eq!(page["page"]["template"], zen::TEMPLATE_ID, "{page}");
+    assert_eq!(kinds_of(&page["page"], "widgets"), vec!["agents", "conversation", "nav-rail"], "Garden 1's page: {page}");
+    assert_eq!(page["page"], zen::texting_page(), "exactly the default layout");
+    assert_eq!(page["garden"], json!({"id": two, "name": "Garden 2", "index": 2}), "{page}");
+    assert_eq!(page["errors"], json!([]), "{page}");
+    let fp1 = f.refresh().expect("fp1");
+    assert_ne!(fp0, fp1, "the switch moves the fingerprint (one zen_changed)");
+
+    // Idempotent: nothing written, nothing moved.
+    let n_snaps = f.snapshots(&garden(&two)).len();
+    let again = f.set_garden_template(&two, "texting", false).expect("again");
+    assert!(!again.changed && again.snapshot.is_none(), "{again:?}");
+    assert_eq!(std::fs::read_to_string(f.path_of(&garden(&two))).expect("file"), text);
+    assert_eq!(f.snapshots(&garden(&two)).len(), n_snaps);
+    assert_eq!(f.refresh().expect("fp2"), fp1, "a no-op moves nothing");
+    // And back to empty, the same way.
+    let blank = f.set_garden_template("garden 2", "blank", false).expect("blank");
+    assert!(blank.changed);
+    assert_eq!(f.gardens()[1].template, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(f.resolve(Some(&two)).expect("blank")["page"]["template"], zen::BLANK_TEMPLATE_ID);
+
+    // A Garden with its own widgets and colors: refused without force,
+    // nothing written; force replaces them and keeps them in history.
+    let mine = "schema = 1\ntemplate = \"k2.blank@1\"\n[[widget]]\nid = \"work\"\nkind = \"agents\"\ncolumn = 0\n[colors.light]\naccent = \"#065f46\"\n";
+    write(&f, &garden(&two), mine);
+    assert_eq!(f.garden_own_keys(&two).expect("keys"), vec!["colors".to_string(), "widget".to_string()]);
+    match f.set_garden_template(&two, "texting", false) {
+        Err(ZenError::GardenHasChanges { garden, keys }) => {
+            assert_eq!(garden, two);
+            assert_eq!(keys, vec!["colors", "widget"]);
+        }
+        other => panic!("own changes need force, got {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(f.path_of(&garden(&two))).expect("file"), mine, "a refusal writes nothing");
+    assert_eq!(f.gardens()[1].template, zen::BLANK_TEMPLATE_ID);
+    let forced = f.set_garden_template(&two, "texting", true).expect("force");
+    assert_eq!(forced.replaced, vec!["colors", "widget"]);
+    let kept = forced.snapshot.expect("kept");
+    assert_eq!(
+        std::fs::read_to_string(f.history_root().join(format!("gardens/{two}.toml")).join(&kept)).expect("snapshot"),
+        mine,
+        "the replaced file is in history"
+    );
+    // A file that doesn't parse counts as changes too.
+    write(&f, &garden(&two), "schema = 1\n[[widget\n");
+    assert!(matches!(f.set_garden_template(&two, "blank", false), Err(ZenError::GardenHasChanges { .. })));
+
+    // Bad input.
+    assert!(matches!(f.set_garden_template("Nowhere", "texting", false), Err(ZenError::UnknownGarden { .. })));
+    assert!(matches!(f.set_garden_template(&two, "dashboard", false), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.set_garden_template(&two, " ", false), Err(ZenError::BadRequest(_))));
+    assert!(!f.root().join("grants.json").exists(), "garden/template never writes grants.json");
 }
 
 #[test]

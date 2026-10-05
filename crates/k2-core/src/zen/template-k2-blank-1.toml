@@ -2,7 +2,9 @@
 # Garden 2 (made by setup) and every new Garden start here.
 #
 # One column holding the `garden-empty` widget: "This Garden is empty. Ask
-# your agents to add things to this Garden." plus an Ask my agent button.
+# your agents to add things to this Garden." plus an Ask my agent button
+# and "Start with the default", which turns this Garden into Garden 1's
+# texting page (`gardens.useTemplate`, cap `gardens:template`).
 # When the Garden's file declares `[[widget]]`, those widgets replace it;
 # the controls below stay.
 id = "k2.blank@1"
@@ -20,7 +22,7 @@ min-width = 320
 id = "garden-empty"
 kind = "garden-empty"
 column = 0
-caps = ["agents:read", "thread:read", "thread:post"]
+caps = ["agents:read", "thread:read", "thread:post", "gardens:template"]
 
 # Controls (G24). K2 binds them and checks the required two (`zen-toggle`,
 # `garden-switcher`); the drag strip is bound, never checked. Same top band

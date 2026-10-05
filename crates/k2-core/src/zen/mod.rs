@@ -22,7 +22,7 @@
 //! - `.history/` (the last 20 good versions of each file, and deleted
 //!   Gardens) is the daemon's own.
 //!
-//! The stack for one Garden: built-in `default` → built-in `<active>` →
+//! The stack for one Garden: built-in `basic` → built-in `<active>` →
 //! `themes/<active>/theme.toml` → `zen.toml` → `gardens/<id>.toml`. `grants.json` is reserved for v2 widget grants: v1 never
 //! reads or writes it, and only the daemon may ever write it, in answer to
 //! a click in the K2 app (Z19). No route, CLI verb or agent can grant.
@@ -52,32 +52,44 @@ pub use store::{GardenEntry, ZenError, ZenFile, ZenFiles};
 /// themes, so `~/.k2/zen` holds only the user's changes.
 pub const DEFAULT_ZEN_TOML: &str = include_str!("default-zen.toml");
 
-/// The theme every other theme starts from, and the one a new computer uses.
-pub const DEFAULT_THEME: &str = "default";
+/// The theme every other theme starts from, and the one a new computer uses:
+/// K2's built-in `basic` (Rosson 2026-10-04: renamed from `default`).
+pub const DEFAULT_THEME: &str = "basic";
+
+/// The built-in theme's name before it was `basic`. Zen never shipped, so
+/// nothing is migrated; a saved pick of it in `active.json` reads as
+/// [`DEFAULT_THEME`], quietly, unless the person has a theme of that name.
+pub const DEFAULT_THEME_ALIAS: &str = "default";
 
 /// A theme built into K2: read-only, embedded in the binary.
 #[derive(Debug, Clone, Copy)]
 pub struct BuiltinTheme {
+    /// The id (lower case): `k2 zen theme set <name>`, `active.json`, the folder.
     pub name: &'static str,
+    /// The name people see (Rosson 2026-10-04: capitalized, "Basic").
+    pub label: &'static str,
     pub summary: &'static str,
     pub toml: &'static str,
 }
 
-/// Built-in themes, in cycle order (`k2 zen theme next`). `default` is
+/// Built-in themes, in cycle order (`k2 zen theme next`). `basic` is
 /// first and complete; every other theme sits on top of it.
 pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
     BuiltinTheme {
         name: DEFAULT_THEME,
+        label: "Basic",
         summary: "clean, smooth, simple: warm light, soft dark, follows the computer",
-        toml: include_str!("themes/default.toml"),
+        toml: include_str!("themes/basic.toml"),
     },
     BuiltinTheme {
         name: "paper",
+        label: "Paper",
         summary: "always light, serif type, ink-blue accent",
         toml: include_str!("themes/paper.toml"),
     },
     BuiltinTheme {
         name: "midnight",
+        label: "Midnight",
         summary: "always dark, cool blue, JetBrains Mono everywhere",
         toml: include_str!("themes/midnight.toml"),
     },
@@ -87,20 +99,34 @@ pub fn builtin_theme(name: &str) -> Option<&'static BuiltinTheme> {
     BUILTIN_THEMES.iter().find(|t| t.name == name)
 }
 
+/// The name a theme shows in the picker and theme lists: a built-in's
+/// label ("Basic"), else the id with its first letter capitalized
+/// ("sunset" → "Sunset"). Ids stay lower case everywhere else.
+pub fn theme_label(name: &str) -> String {
+    if let Some(t) = builtin_theme(name) {
+        return t.label.to_string();
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// The label a built-in's diagnostics carry.
 fn builtin_label(name: &str) -> String {
     format!("builtin:{name}")
 }
 
-/// A built-in theme checked over the default (the default over nothing).
+/// A built-in theme checked over `basic` (`basic` over nothing).
 pub fn check_builtin_theme(name: &str) -> Option<schema::Checked> {
     let t = builtin_theme(name)?;
     let base = if name == DEFAULT_THEME { Layer::new() } else { builtin_layer().clone() };
     Some(schema::check(&builtin_label(name), t.toml, FileKind::Theme, &base))
 }
 
-/// The full built-in layer of a theme: `default` merged with the named
-/// built-in (just `default` for `default`). `None` when not built in.
+/// The full built-in layer of a theme: `basic` merged with the named
+/// built-in (just `basic` for `basic`). `None` when not built in.
 pub fn builtin_theme_layer(name: &str) -> Option<&'static Layer> {
     static LAYERS: OnceLock<std::collections::BTreeMap<&'static str, Layer>> = OnceLock::new();
     LAYERS
@@ -159,7 +185,9 @@ pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher"];
 /// (create, rename, delete Gardens) is granted by K2 to the template's
 /// controls only, never to a widget. `app:navigate` (the `nav-rail`
 /// widget) switches the Garden's rail view (inside Zen) and reads the top
-/// bar's badges.
+/// bar's badges. `gardens:template` (the `garden-empty` widget's "Start
+/// with the default") turns the Garden the widget is on into a built-in
+/// template (`gardens.useTemplate`), never another Garden.
 pub const BRIDGE_CAPS: &[&str] = &[
     "agents:read",
     "agents:add",
@@ -167,6 +195,7 @@ pub const BRIDGE_CAPS: &[&str] = &[
     "thread:read",
     "thread:post",
     "gardens:manage",
+    "gardens:template",
     "app:navigate",
 ];
 
@@ -175,7 +204,7 @@ pub const BRIDGE_CAPS: &[&str] = &[
 pub const BUILTIN_WIDGET_CAPS: &[(&str, &[&str])] = &[
     ("agents", &["agents:read", "agents:add", "presence:read"]),
     ("conversation", &["agents:read", "presence:read", "thread:read", "thread:post"]),
-    ("garden-empty", &["agents:read", "thread:read", "thread:post"]),
+    ("garden-empty", &["agents:read", "thread:read", "thread:post", "gardens:template"]),
     ("nav-rail", &["app:navigate"]),
 ];
 
@@ -317,14 +346,14 @@ pub fn is_set_up() -> bool {
     ZenFiles::local().is_set_up()
 }
 
-/// The built-in `default` theme's layer. Every built-in must be clean (a
+/// The built-in `basic` theme's layer. Every built-in must be clean (a
 /// daemon test pins that).
 pub fn builtin_layer() -> &'static Layer {
     builtin_theme_layer(DEFAULT_THEME)
         .unwrap_or_else(|| panic!("BUILTIN_THEMES must carry '{DEFAULT_THEME}'"))
 }
 
-/// The built-in `default` theme fully checked, for tests and the doctor.
+/// The built-in `basic` theme fully checked, for tests and the doctor.
 pub fn check_builtin() -> schema::Checked {
     check_builtin_theme(DEFAULT_THEME)
         .unwrap_or_else(|| panic!("BUILTIN_THEMES must carry '{DEFAULT_THEME}'"))

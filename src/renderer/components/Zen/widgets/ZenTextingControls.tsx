@@ -12,9 +12,10 @@
 // would, so K2's present / visible / wired checks cover them:
 //   - the Garden switcher is a pill with the Garden's name; it opens a menu
 //     of every Garden (each bound as `garden-option`, with its ⌥⌘N hint), a
-//     separator, then "+ New Garden", which turns into a name field: Enter
-//     creates the Garden (`gardens.create`, cap `gardens:manage`), switches
-//     to it and closes the menu; Esc cancels. Rename and delete are CLI and
+//     separator, then "+ New Garden" (`ZenNewGarden`): a name field, then
+//     Start with the default or Start empty and ask my agent, which creates
+//     the Garden (`gardens.create`, cap `gardens:manage`), switches to it
+//     and closes the menu; Esc steps back. Rename and delete are CLI and
 //     agent only in this cut. The menu closes on a pick, Esc or a click
 //     outside;
 //   - the Zen toggle is a switch, on, that turns Zen off in this window;
@@ -29,6 +30,7 @@ import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
 import { TEXTING_BAR_HEIGHT_PX, useZenBind, ZenK2TopRightItems } from '../ZenTemplateControls'
 import { ZenWidgetStyles } from './zen-widget-kit'
+import { ZenNewGarden } from './ZenNewGarden'
 
 function GardenChoice({
   bridge,
@@ -71,102 +73,6 @@ function GardenChoice({
         </span>
       )}
     </button>
-  )
-}
-
-/** "+ New Garden": a menu item that turns into a name field. */
-function NewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDone(): void }): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus()
-  }, [editing])
-
-  const create = (): void => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    void Promise.resolve()
-      .then(() => bridge.gardens.create(name))
-      .then(() => {
-        setBusy(false)
-        setEditing(false)
-        setName('')
-        onDone()
-      })
-      .catch((err: unknown) => {
-        setBusy(false)
-        setError(err instanceof Error ? err.message : String(err))
-      })
-  }
-
-  if (!editing) {
-    return (
-      <button
-        type="button"
-        role="menuitem"
-        data-zen-new-garden=""
-        onClick={() => setEditing(true)}
-        className="flex w-full items-center gap-3 text-left cursor-pointer"
-        style={{ minHeight: 32, padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
-      >
-        <span aria-hidden style={{ width: 8, textAlign: 'center', color: 'var(--zen-text-muted)' }}>
-          +
-        </span>
-        <span>New Garden</span>
-      </button>
-    )
-  }
-  return (
-    <div className="flex flex-col" style={{ padding: '4px 6px', gap: 4 }}>
-      <input
-        ref={inputRef}
-        type="text"
-        value={name}
-        disabled={busy}
-        maxLength={60}
-        aria-label="New Garden name"
-        placeholder="Garden name"
-        data-zen-new-garden-name=""
-        onChange={(e) => {
-          setName(e.target.value)
-          if (error) setError(null)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-            e.preventDefault()
-            create()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            e.stopPropagation()
-            setEditing(false)
-            setName('')
-            setError(null)
-          }
-          // Plain keys stay in the field; ⌘ / Ctrl chords reach the app.
-          if (!e.metaKey && !e.ctrlKey) e.stopPropagation()
-        }}
-        style={{
-          height: 30,
-          padding: '0 10px',
-          color: 'var(--zen-text)',
-          background: 'var(--zen-surface)',
-          border: '1px solid var(--zen-border)',
-          borderRadius: 'calc(var(--zen-radius) - 4px)',
-          font: 'inherit',
-          outline: 'none',
-        }}
-      />
-      {error && (
-        <span data-zen-new-garden-error="" style={{ fontSize: '0.8em', color: 'var(--zen-danger)', padding: '0 4px' }}>
-          {error}
-        </span>
-      )}
-    </div>
   )
 }
 
@@ -251,7 +157,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
           {bridge.caps.has('gardens:manage') && (
             <>
               <div role="separator" aria-hidden style={{ height: 1, margin: '3px 6px', background: 'var(--zen-border)' }} />
-              <NewGarden bridge={bridge} onDone={() => setOpen(false)} />
+              <ZenNewGarden bridge={bridge} onDone={() => setOpen(false)} />
             </>
           )}
         </div>

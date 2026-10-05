@@ -113,6 +113,9 @@ const bridgeHost: ZenBridgeHost = {
   createGarden: async () => {
     throw new Error('unused')
   },
+  useGardenTemplate: async () => {
+    throw new Error('unused')
+  },
   renameGarden: async () => {},
   deleteGarden: async () => {},
   homes: () => [{ id: 'zen-ms', name: 'Zen' }],

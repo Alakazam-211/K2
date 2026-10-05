@@ -53,7 +53,10 @@ export interface ZenWidgetDecl {
 /** One theme the daemon offers (Omarchy additions 1–3): K2's built-in
  *  read-only themes and the user's own under `~/.k2/zen/themes/`. */
 export interface ZenThemeEntry {
+  /** The id (lower case): what a switch sends. */
   name: string
+  /** What the picker shows: "Basic", "Paper", "Midnight" (Rosson 2026-10-04). */
+  label: string
   /** Shipped inside K2 (read-only). */
   builtin: boolean
   /** `~/.k2/zen/themes/<name>/theme.toml` exists (for a built-in: an override). */
@@ -158,7 +161,7 @@ export const BUILTIN_BLANK_PAGE: ZenResolvedPage = Object.freeze({
       kind: 'garden-empty',
       column: 0,
       props: {},
-      caps: ['agents:read', 'thread:read', 'thread:post'],
+      caps: ['agents:read', 'thread:read', 'thread:post', 'gardens:template'],
       source: 'builtin',
     },
   ],
@@ -266,6 +269,12 @@ function parseControls(raw: unknown): string[] {
   return out
 }
 
+/** A theme's display name when the daemon sends none: the id with its
+ *  first letter capitalized (`basic` → `Basic`). */
+export function zenThemeLabel(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
 function parseThemes(raw: unknown): ZenThemeEntry[] {
   if (!Array.isArray(raw)) return []
   const out: ZenThemeEntry[] = []
@@ -274,7 +283,8 @@ function parseThemes(raw: unknown): ZenThemeEntry[] {
     const name = typeof t === 'string' ? t : isObj(t) && typeof t.name === 'string' ? t.name : null
     if (!name || seen.has(name)) continue
     seen.add(name)
-    out.push({ name, builtin: isObj(t) && t.builtin === true, user: isObj(t) && t.user === true })
+    const label = isObj(t) && typeof t.label === 'string' && t.label.trim() ? t.label : zenThemeLabel(name)
+    out.push({ name, label, builtin: isObj(t) && t.builtin === true, user: isObj(t) && t.user === true })
   }
   return out
 }

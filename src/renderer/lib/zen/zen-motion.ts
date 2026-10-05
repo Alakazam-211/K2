@@ -56,7 +56,7 @@ export const ZEN_BUILTIN_BEZIERS: Record<string, [number, number, number, number
   overshot: [0.34, 1.56, 0.64, 1],
 }
 
-/** One animation line: `[on, speed, curve, style?]` (the default theme). */
+/** One animation line: `[on, speed, curve, style?]` (the `basic` theme). */
 export interface ZenAnimationLine {
   on: boolean
   speed: number
@@ -65,7 +65,7 @@ export interface ZenAnimationLine {
 }
 
 /** The default template's motion: gentle `glide` curves (Z44). Mirrors the
- *  daemon's built-in `themes/default.toml` `[animation]` table. */
+ *  daemon's built-in `themes/basic.toml` `[animation]` table. */
 export const ZEN_DEFAULT_ANIMATIONS: Record<string, ZenAnimationLine> = {
   global: { on: true, speed: 3, curve: 'glide' },
   zenIn: { on: true, speed: 4, curve: 'glide', style: 'fade' },

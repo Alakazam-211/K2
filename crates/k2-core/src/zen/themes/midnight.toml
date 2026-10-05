@@ -1,5 +1,5 @@
 # Zen theme "midnight": always dark, cool blue, JetBrains Mono everywhere.
-# Built into K2 (read-only). It sits on top of "default": anything not
+# Built into K2 (read-only). It sits on top of "basic": anything not
 # set here comes from there. `k2 zen theme new midnight` makes an override.
 schema = 1
 

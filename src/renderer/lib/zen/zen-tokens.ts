@@ -9,7 +9,7 @@
 // range) is never passed through as CSS. The daemon's schema
 // (`crates/k2-core/src/zen/schema.rs`) is the source of truth for names and
 // ranges; `zen-theme-engine.test.ts` checks the two agree with the daemon's
-// built-in `themes/default.toml` and its `FONT_FAMILIES` table.
+// built-in `themes/basic.toml` and its `FONT_FAMILIES` table.
 
 /** Colour tokens, the same keys in `colors.light` and `colors.dark`.
  *  (Decision 9, 2026-10-04: no unread tracking, so `idle`, not `unread`.) */
@@ -122,7 +122,7 @@ export type ZenSchemeMode = 'auto' | 'light' | 'dark'
  * K2's default Zen template theme (Z44): clean, smooth and simple. Solid
  * surfaces, no blur, no glass, generous spacing, one accent (K2 blue); a cool light
  * scheme and a soft dark one. Byte-for-byte the daemon's built-in
- * `themes/default.toml`, so safe mode and a fresh install look the same.
+ * `themes/basic.toml`, so safe mode and a fresh install look the same.
  */
 export const ZEN_DEFAULT_COLORS: Record<'light' | 'dark', Record<ZenColorToken, string>> = {
   light: {
@@ -283,7 +283,7 @@ export function zenTerminalVar(key: ZenTerminalKey): string {
   return `--zen-term-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
 }
 
-/** K2's default terminal palettes: the daemon's built-in `themes/default.toml`
+/** K2's default terminal palettes: the daemon's built-in `themes/basic.toml`
  *  `[terminal.light]` / `[terminal.dark]`. */
 export const ZEN_DEFAULT_TERMINAL: Record<'light' | 'dark', ZenTerminalPalette> = {
   light: {

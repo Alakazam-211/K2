@@ -11,7 +11,11 @@
 #   - zen.toml with `acent` at line 7 → `zen.toml:7:3: unknown key 'acent'`, exit 1;
 #   - --garden resolves a Garden by name; --home and `pages` are gone;
 #   - history (deleted Gardens included) and reset --to;
-#   - themes: list/next/prev/set/new, per-Garden picks, an unknown name
+#   - garden template: Start with the default (texting) and back to blank,
+#     same id/name/place, the old file kept in history, idempotent, a file
+#     with its own widgets needs --force, GET is 405;
+#   - themes (K2's are basic, paper, midnight; a saved `default` pick reads
+#     as basic, quietly): list/next/prev/set/new, per-Garden picks, an unknown name
 #     exits 1, reset --theme clears an override, and a curl-only switch (no
 #     CLI, no client) shows up in /cli/zen/get;
 #   - there is no grant verb, and nothing writes grants.json.
@@ -93,6 +97,7 @@ capture zen --help
 assert_eq "zen --help exit" "$rc" "0"
 assert_contains "help names validate" "$out" "k2 zen validate"
 assert_contains "help names garden new" "$out" "k2 zen garden new <name>"
+assert_contains "help names garden template" "$out" "k2 zen garden template <garden> texting|blank [--force]"
 assert_contains "help states the grant rule" "$out" "Never write grants.json"
 capture help zen
 assert_eq "k2 help zen exit" "$rc" "0"
@@ -102,7 +107,7 @@ echo "== not set up (TG2.1) =="
 NOT_SET_UP="Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar."
 capture zen theme list
 assert_eq "zen theme list before setup exits 3" "$rc" "3"
-for verb in validate path history reload "garden list" "garden new Notes" "garden rename Notes Home" "garden reorder Notes 1" "garden delete Notes"; do
+for verb in validate path history reload "garden list" "garden new Notes" "garden rename Notes Home" "garden reorder Notes 1" "garden template Notes texting" "garden delete Notes"; do
     # shellcheck disable=SC2086
     capture zen $verb
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
@@ -176,6 +181,50 @@ d = json.load(sys.stdin)
 p = d["page"]
 print(p["template"], ",".join(w["kind"] for w in p["widgets"]), ",".join(c["kind"] for c in p["controls"]), d["garden"]["name"])')"
 assert_eq "get returns the empty template" "$got" "k2.blank@1 garden-empty garden-switcher,drag-region,zen-toggle Curl made"
+
+echo "== garden template: Start with the default =="
+two_snaps() { python3 -c 'import os,sys; d=sys.argv[1]; print(len([n for n in os.listdir(d) if n.endswith(".toml")]) if os.path.isdir(d) else 0)' "$ZEN/.history/gardens/$SECOND_ID.toml"; }
+before_snaps="$(two_snaps)"
+capture zen garden template "Garden 2" texting
+assert_eq "template texting exit" "$rc" "0"
+assert_contains "template says what it did" "$out" "Garden $SECOND_ID (“Garden 2”) is now k2.texting@1"
+assert_contains "template names the kept snapshot" "$out" "its previous file is kept as snapshot"
+grep -Fq 'template = "k2.texting@1"' "$ZEN/gardens/$SECOND_ID.toml" && ok "Garden 2's file is the texting stub" || bad "Garden 2's file: $(cat "$ZEN/gardens/$SECOND_ID.toml")"
+[ "$(two_snaps)" -gt 0 ] && ok "the old file is in .history ($before_snaps -> $(two_snaps))" || bad "no snapshot of Garden 2"
+capture zen garden list
+assert_contains "same id, name and place, now texting" "$out" "  2  $SECOND_ID  Garden 2  k2.texting@1"
+got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&garden=$SECOND_ID" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["page"]["template"], ",".join(w["kind"] for w in d["page"]["widgets"]), len(d["errors"]))')"
+assert_eq "get shows Garden 1's page on Garden 2" "$got" "k2.texting@1 agents,conversation,nav-rail 0"
+capture zen garden template "$SECOND_ID" texting
+assert_eq "template again exits 0" "$rc" "0"
+assert_contains "template again is a no-op" "$out" "is already k2.texting@1 (unchanged)"
+capture zen garden template "Garden 2" blank --json
+assert_eq "template blank exit" "$rc" "0"
+assert_contains "template blank --json" "$out" '"template": "k2.blank@1"'
+grep -Fq 'template = "k2.blank@1"' "$ZEN/gardens/$SECOND_ID.toml" && ok "Garden 2 is empty again" || bad "Garden 2 not blank"
+capture zen garden template "Garden 2" fancy
+assert_eq "an unknown template exits 2" "$rc" "2"
+capture zen garden template "Garden 2"
+assert_eq "template with no template exits 2" "$rc" "2"
+capture zen garden template Nowhere texting
+assert_eq "template on an unknown Garden exits 1" "$rc" "1"
+assert_contains "unknown Garden says so" "$out" "no Garden 'Nowhere'"
+capture zen garden rename "Garden 2" x --force
+assert_eq "--force is only for template" "$rc" "2"
+printf 'schema = 1\ntemplate = "k2.blank@1"\n[[widget]]\nid = "work"\nkind = "agents"\ncolumn = 0\n' >"$ZEN/gardens/$CURL_ID.toml"
+capture zen reload
+capture zen garden template "Curl made" texting
+assert_eq "a Garden with its own widgets needs --force" "$rc" "1"
+assert_contains "the refusal names what it has" "$out" "has its own changes (widget)"
+grep -Fq '[[widget]]' "$ZEN/gardens/$CURL_ID.toml" && ok "a refused template wrote nothing" || bad "the refused template changed the file"
+capture zen garden template "Curl made" texting --force
+assert_eq "--force goes ahead" "$rc" "0"
+grep -Fq 'template = "k2.texting@1"' "$ZEN/gardens/$CURL_ID.toml" && ok "--force wrote the texting stub" || bad "no texting stub"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/garden/template?token=$TOKEN")"
+assert_eq "GET garden/template is 405" "$code" "405"
 
 echo "== T3.1 error with file:line:col =="
 printf 'schema = 1\n[theme]\nscheme = "auto"\n\n[colors.light]\ncanvas = "#faf7f2"\n  acent = "#fff"\n' >"$ZEN/zen.toml"
@@ -262,23 +311,27 @@ assert_eq "the last Garden exits 1" "$rc" "1"
 assert_eq "the last Garden says so" "$out" "That's your last Garden."
 
 echo "== themes =="
+# Rosson's test machine saved the old name: it reads as basic, quietly.
+printf '{"version":2,"theme":"default","gardens":{}}\n' >"$ZEN/active.json"
 capture zen theme list
 assert_eq "theme list exit" "$rc" "0"
-assert_contains "list marks the active default" "$out" "* default  (built in)"
-assert_contains "list shows paper" "$out" "  paper  (built in)"
-assert_contains "list shows midnight" "$out" "  midnight  (built in)"
+assert_contains "a saved default pick reads as basic" "$out" "* basic  Basic  (built in)"
+case "$out" in *"doesn't exist"*) bad "the default alias warned: $out" ;; *) ok "the default alias is quiet" ;; esac
+case "$out" in *" default "*) bad "list still names default: $out" ;; *) ok "no theme is called default any more" ;; esac
+assert_contains "list shows paper" "$out" "  paper  Paper  (built in)"
+assert_contains "list shows midnight" "$out" "  midnight  Midnight  (built in)"
 capture zen theme next
 assert_eq "theme next exit" "$rc" "0"
 assert_eq "next goes to paper" "$out" "theme paper for this computer"
 capture zen theme next
 assert_eq "next goes to midnight" "$out" "theme midnight for this computer"
 capture zen theme next
-assert_eq "next wraps to default" "$out" "theme default for this computer"
+assert_eq "next wraps to basic" "$out" "theme basic for this computer"
 capture zen theme prev
 assert_eq "prev wraps to midnight" "$out" "theme midnight for this computer"
 capture zen theme set neon
 assert_eq "unknown theme exits 1" "$rc" "1"
-assert_contains "unknown theme says so" "$out" "no theme 'neon' on this computer; themes: default, paper, midnight"
+assert_contains "unknown theme says so" "$out" "no theme 'neon' on this computer; themes: basic, paper, midnight"
 capture zen theme list --json
 active="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["active"])')"
 assert_eq "an unknown name changes nothing" "$active" "midnight"
@@ -300,7 +353,7 @@ assert_eq "theme --home is gone (exit 2)" "$rc" "2"
 
 capture zen theme new sunset
 assert_eq "theme new exit" "$rc" "0"
-assert_contains "theme new names the file" "$out" "made $ZEN/themes/sunset/theme.toml from default"
+assert_contains "theme new names the file" "$out" "made $ZEN/themes/sunset/theme.toml from basic"
 [ -f "$ZEN/themes/sunset/theme.toml" ] && ok "theme new wrote the bundle" || bad "no themes/sunset/theme.toml"
 capture zen theme new sunset
 assert_eq "theme new never overwrites" "$rc" "1"
@@ -315,7 +368,7 @@ assert_eq "bad theme token exits 1" "$rc" "1"
 assert_contains "theme error has file:line:col" "$out" "themes/sunset/theme.toml:3:1: unknown key 'bluee'"
 printf 'schema = 1\n[colors.dark]\naccent = "#ff9e64"\n' >"$ZEN/themes/sunset/theme.toml"
 capture zen theme list
-assert_contains "list shows the user theme last" "$out" "  sunset  (yours)"
+assert_contains "list shows the user theme last" "$out" "  sunset  Sunset  (yours)"
 
 echo "== headless switch via curl =="
 resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{"name":"sunset"}')"
@@ -325,7 +378,7 @@ import json, sys
 d = json.load(sys.stdin)
 t = d["theme"]
 print(t["name"], t["builtin"], t["tokens"]["colors"]["dark"]["accent"], t["font"]["family"], "bg" if "background" in t else "nobg", ",".join(x["name"] for x in d["themes"]))')"
-assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg default,paper,midnight,sunset"
+assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg basic,paper,midnight,sunset"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN")"
 assert_eq "GET theme/set is 405" "$code" "405"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" --data-raw '{"name":"neon"}')"
@@ -338,7 +391,7 @@ capture zen theme new paper
 assert_eq "override paper" "$rc" "0"
 assert_contains "override copies K2's paper" "$out" "from paper"
 capture zen theme list
-assert_contains "list marks the override" "$out" "paper  (built in, your override)"
+assert_contains "list marks the override" "$out" "paper  Paper  (built in, your override)"
 capture zen reset --theme paper
 assert_eq "reset --theme exit" "$rc" "0"
 assert_contains "reset drops the override" "$out" "reset themes/paper/theme.toml to builtin"

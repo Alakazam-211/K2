@@ -31,7 +31,7 @@ export const MAC_TITLEBAR_BAND_PX = 28
 /** `[chrome] stoplight-offset` range, px (daemon `STOPLIGHT_OFFSET_MAX`). */
 export const ZEN_STOPLIGHT_OFFSET_MAX = 24
 
-/** K2's default Zen chrome (the daemon's built-in `themes/default.toml` `[chrome]`). */
+/** K2's default Zen chrome (the daemon's built-in `themes/basic.toml` `[chrome]`). */
 export const ZEN_DEFAULT_CHROME: ZenChromeSource = Object.freeze({
   corners: 'system',
   stoplights: 'round',

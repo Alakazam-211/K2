@@ -19,9 +19,16 @@ import {
 } from './zen-garden-homes'
 import { parseZenGardenNew, parseZenGardens, windowGardenOf } from './zen-gardens'
 import { computeZenShown, zenSafeCauseText } from './zen-view'
-import { createZenBridge, registerZenVerb, ZenBridgeError, type ZenBridgeHost } from './zen-bridge'
+import { createZenBridge, isEmptyZenGardenPage, registerZenVerb, ZenBridgeError, type ZenBridgeHost } from './zen-bridge'
 import { installZenChordListener, isZenChordNonMac } from './zen-shortcut'
-import { BUILTIN_TEXTING_PAGE, parseZenGet, ZenPageParseError, zenErrorBannerText } from './zen-page'
+import {
+  BUILTIN_BLANK_PAGE,
+  BUILTIN_TEXTING_PAGE,
+  parseZenGet,
+  ZenPageParseError,
+  zenErrorBannerText,
+  type ZenResolvedPage,
+} from './zen-page'
 import { macStoplightArea } from './zen-chrome'
 import { isZenWindow, zenSupportedOn, ZEN_WINDOWS_ENABLED } from './zen-platform'
 import { TRAFFIC_LIGHT_SPACER_BASE_PX } from '@/lib/desktop-chrome'
@@ -205,27 +212,36 @@ describe('desktop only (Z2, Q5)', () => {
 })
 
 describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
-  function host(): ZenBridgeHost & { exited: number; switched: string[]; created: string[] } {
+  function host(
+    page: ZenResolvedPage = BUILTIN_TEXTING_PAGE,
+  ): ZenBridgeHost & { exited: number; switched: string[]; created: string[]; made: unknown[]; templated: unknown[] } {
     const h = {
       exited: 0,
       switched: [] as string[],
       created: [] as string[],
+      made: [] as unknown[],
+      templated: [] as unknown[],
       gardens: () => [
         { id: 'g-a', name: 'Garden 1', index: 1 },
         { id: 'g-b', name: 'Notes', index: 2 },
       ],
       currentGardenId: () => 'g-a',
       switchGarden: (id: string) => void h.switched.push(id),
-      createGarden: async (name: string) => {
+      createGarden: async (name: string, template?: string, opts?: unknown) => {
         h.created.push(name)
+        h.made.push([name, template, opts])
         return { id: 'g-c', name, index: 3 }
+      },
+      useGardenTemplate: async (id: string, template: string, force: boolean) => {
+        h.templated.push([id, template, force])
+        return { changed: true }
       },
       renameGarden: async () => undefined,
       deleteGarden: async () => undefined,
       homes: () => [{ id: 'a', name: 'A' }],
       exit: () => void (h.exited += 1),
       controls: { bind: () => () => undefined, bindings: () => [], wiringFailure: () => null, dispose: () => undefined },
-      page: () => BUILTIN_TEXTING_PAGE,
+      page: () => page,
     }
     return h
   }
@@ -279,6 +295,40 @@ describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
     const controls = createZenBridge(h, { id: 'template-controls', caps: ['agents:add', 'gardens:manage'] })
     await expect(controls.gardens.create('Mornings')).resolves.toEqual({ id: 'g-c', name: 'Mornings', index: 3 })
     expect(h.created).toEqual(['Mornings'])
+    // Rosson 2026-10-04: + New Garden says what the Garden starts as.
+    await controls.gardens.create('Desk', 'texting')
+    await controls.gardens.create('Ideas', 'blank', { ask: true })
+    expect(h.made.slice(1)).toEqual([
+      ['Desk', 'texting', {}],
+      ['Ideas', 'blank', { ask: true }],
+    ])
+    expect(codeOf(() => controls.call('gardens.create', 'X', 'dashboard'))).toBe('unknown_verb')
+  })
+
+  it('gardens.empty / useTemplate need gardens:template (the empty-Garden widget only) and act on the Garden on screen', async () => {
+    const blank = host(BUILTIN_BLANK_PAGE)
+    const controls = createZenBridge(blank, { id: 'template-controls', caps: ['agents:add', 'gardens:manage'] })
+    expect(codeOf(() => controls.call('gardens.useTemplate', 'texting'))).toBe('cap_not_granted')
+    expect(codeOf(() => controls.call('gardens.empty'))).toBe('cap_not_granted')
+    const caps = ['agents:read', 'thread:read', 'thread:post', 'gardens:template']
+    const widget = createZenBridge(blank, { id: 'garden-empty', caps })
+    expect(widget.call('gardens.empty')).toBe(true)
+    await expect(widget.call('gardens.useTemplate', 'texting') as Promise<unknown>).resolves.toEqual({ changed: true })
+    await widget.call('gardens.useTemplate', 'texting', { force: true })
+    // Never another Garden: the id is the one on screen, whatever is passed.
+    await widget.call('gardens.useTemplate', 'blank', { force: 'yes', garden: 'g-b' })
+    expect(blank.templated).toEqual([
+      ['g-a', 'texting', false],
+      ['g-a', 'texting', true],
+      ['g-a', 'blank', false],
+    ])
+    expect(codeOf(() => widget.call('gardens.useTemplate', 'dashboard'))).toBe('unknown_verb')
+    expect(codeOf(() => widget.call('gardens.useTemplate'))).toBe('unknown_verb')
+    // Not empty: Garden 1's page, or a blank Garden with widgets of its own.
+    expect(createZenBridge(host(BUILTIN_TEXTING_PAGE), { id: 'garden-empty', caps }).call('gardens.empty')).toBe(false)
+    const own = { ...BUILTIN_BLANK_PAGE, widgets: [...BUILTIN_BLANK_PAGE.widgets, { ...BUILTIN_TEXTING_PAGE.widgets[0], column: 0 }] }
+    expect(isEmptyZenGardenPage(own)).toBe(false)
+    expect(isEmptyZenGardenPage(BUILTIN_BLANK_PAGE)).toBe(true)
   })
 
   it('homes.select is gone (unknown_verb); homes.list needs agents:read', () => {
@@ -371,7 +421,7 @@ describe('the resolved page (Z10, Z13)', () => {
   it('reads the daemon’s active theme, its scope and the theme list', () => {
     const page = { template: 'k2.texting@1' }
     const themes = [
-      { name: 'default', builtin: true, user: false, summary: 'clean', active: false },
+      { name: 'basic', builtin: true, user: false, summary: 'clean', active: false },
       { name: 'paper', builtin: true, user: true, summary: 'warm', active: true },
       { name: 'mine', builtin: false, user: true, summary: '', active: false },
     ]
@@ -379,9 +429,9 @@ describe('the resolved page (Z10, Z13)', () => {
     expect(p.activeTheme).toBe('paper')
     expect(p.themeScope).toBe('garden')
     expect(p.themes).toEqual([
-      { name: 'default', builtin: true, user: false },
-      { name: 'paper', builtin: true, user: true },
-      { name: 'mine', builtin: false, user: true },
+      { name: 'basic', label: 'Basic', builtin: true, user: false },
+      { name: 'paper', label: 'Paper', builtin: true, user: true },
+      { name: 'mine', label: 'Mine', builtin: false, user: true },
     ])
     // No `theme.name`: the list's `active` flag names it; an odd scope is global.
     const q = parseZenGet({ version: 'v', page, theme: { scope: 'everywhere' }, themes })
@@ -393,7 +443,7 @@ describe('the resolved page (Z10, Z13)', () => {
     const p = parseZenGet({ version: 'v', page: { template: 'k2.blank@1' }, garden: { id: 'g-1', name: 'Notes', index: 2 } })
     expect(p.garden).toEqual({ id: 'g-1', name: 'Notes', index: 2 })
     expect(p.widgets.map((w) => [w.id, w.kind, w.caps])).toEqual([
-      ['garden-empty', 'garden-empty', ['agents:read', 'thread:read', 'thread:post']],
+      ['garden-empty', 'garden-empty', ['agents:read', 'thread:read', 'thread:post', 'gardens:template']],
     ])
     expect(p.layout.split).toEqual([100])
     expect(parseZenGet({ version: 'v', page: {} }).garden).toBeNull()

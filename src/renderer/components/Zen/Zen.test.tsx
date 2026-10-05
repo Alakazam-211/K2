@@ -14,9 +14,11 @@
 //     turns Zen off (G34); a new window starts off, a relaunch keeps its
 //     switch (G1); keyboard focus moves into Zen (G50);
 //   - the Garden switcher lists every Garden, switches this window's Garden,
-//     and "+ New Garden" creates on the local daemon, switches to the new
-//     (empty) Garden and shows the clash copy (G25, TG4.2); a Garden deleted
-//     elsewhere moves the window to the first one (TG4.5);
+//     and "+ New Garden" asks how it starts (Start with the default = the
+//     texting page, selected; Start empty and ask my agent = blank), creates
+//     on the local daemon, switches to the new Garden and shows the clash
+//     copy (G25, TG4.2; Rosson 2026-10-04); a Garden deleted elsewhere moves
+//     the window to the first one (TG4.5);
 //   - a missing / invisible / unwired / undeclared Garden switcher, or one
 //     whose options miss a Garden, is safe mode after two failed checks, not
 //     one (G24, TG4.1); Shift, a crash, an unreachable or older daemon are
@@ -184,7 +186,8 @@ function defaultPost(route: string, body: unknown): unknown {
   if (route === 'zen/garden/new') {
     const name = String((body as { name: string }).name)
     if (h.gardens.some((g) => g.name.toLowerCase() === name.toLowerCase())) throw new Error('garden_exists')
-    const g: Garden = { id: `g-${name.toLowerCase()}`, name, template: 'k2.blank@1' }
+    const template = (body as { template?: string }).template === 'texting' ? 'k2.texting@1' : 'k2.blank@1'
+    const g: Garden = { id: `g-${name.toLowerCase()}`, name, template }
     h.gardens.push(g)
     return { ok: true, garden: { ...g, index: h.gardens.length, hasFile: true } }
   }
@@ -453,7 +456,7 @@ describe('Gardens (G22–G25)', () => {
     expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
   })
 
-  it('+ New Garden creates on the local daemon, switches to the empty Garden, and the switcher lists it after zen_changed (TG4.2)', async () => {
+  it('+ New Garden asks how it starts: Start with the default makes Garden 1’s page, Start empty makes an empty Garden (TG4.2)', async () => {
     mount()
     await enterViaTopBar()
     await pageReady()
@@ -463,10 +466,32 @@ describe('Gardens (G22–G25)', () => {
     expect(document.activeElement).toBe(input)
     await act(async () => void fireEvent.change(input, { target: { value: 'Notes' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
-    await pageReady('k2.blank@1')
-    const create = h.calls.filter((c) => c.route === 'zen/garden/new')
-    expect(create.map((c) => [c.method, c.hostKey, c.data])).toEqual([['POST', 'local', { name: 'Notes' }]])
-    expect(useZenWindowStore.getState().garden).toBe('g-notes')
+    // After the name, a clear choice; nothing is made yet.
+    expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
+    expect(el('[data-zen-new-garden-named]').textContent).toBe('“Notes”')
+    const choices = Array.from(document.querySelectorAll('[data-zen-new-garden-choice]'))
+    expect(choices.map((c) => [c.getAttribute('data-zen-new-garden-choice'), c.querySelector('span')?.textContent])).toEqual([
+      ['texting', 'Start with the default'],
+      ['blank', 'Start empty and ask my agent'],
+    ])
+    // The default is the selected choice: focused, so Enter takes it.
+    expect(choices[0].hasAttribute('data-zen-new-garden-selected')).toBe(true)
+    expect(choices[1].hasAttribute('data-zen-new-garden-selected')).toBe(false)
+    expect(document.activeElement).toBe(choices[0])
+    for (const c of choices) expect(c.classList.contains('cursor-pointer')).toBe(true)
+    // ↓ moves to the other choice; Esc goes back to the name, kept.
+    await act(async () => void fireEvent.keyDown(choices[0], { key: 'ArrowDown' }))
+    expect(document.activeElement).toBe(choices[1])
+    await act(async () => void fireEvent.keyDown(choices[1], { key: 'Escape' }))
+    expect((el('[data-zen-new-garden-name]') as HTMLInputElement).value).toBe('Notes')
+    expect(el('[data-zen-garden-menu]')).not.toBeNull()
+    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Enter' }))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="texting"]')))
+    await waitFor(() => expect(useZenWindowStore.getState().garden).toBe('g-notes'))
+    await pageReady('k2.texting@1')
+    expect(h.calls.filter((c) => c.route === 'zen/garden/new').map((c) => [c.method, c.hostKey, c.data])).toEqual([
+      ['POST', 'local', { name: 'Notes', template: 'texting' }],
+    ])
     expect(h.calls.filter((c) => c.route === 'zen/get').map((c) => c.data)).toEqual([
       { garden: 'g-default' },
       { garden: 'g-notes' },
@@ -480,6 +505,21 @@ describe('Gardens (G22–G25)', () => {
     expect(
       Array.from(document.querySelectorAll('[data-zen-garden-option]')).map((o) => o.getAttribute('data-zen-garden-option')),
     ).toEqual(['g-default', 'g-notes'])
+
+    // Start empty and ask my agent: an empty Garden.
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    await act(async () => void fireEvent.change(el('[data-zen-new-garden-name]'), { target: { value: 'Ideas' } }))
+    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Enter' }))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="blank"]')))
+    await pageReady('k2.blank@1')
+    expect(useZenWindowStore.getState().garden).toBe('g-ideas')
+    expect(h.calls.filter((c) => c.route === 'zen/garden/new').map((c) => c.data)).toEqual([
+      { name: 'Notes', template: 'texting' },
+      { name: 'Ideas', template: 'blank' },
+    ])
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
   })
 
   it('a name you already have shows the clash copy (checked here, and from the daemon’s 409)', async () => {
@@ -491,19 +531,24 @@ describe('Gardens (G22–G25)', () => {
     const input = el('[data-zen-new-garden-name]') as HTMLInputElement
     await act(async () => void fireEvent.change(input, { target: { value: 'garden 1' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
-    await waitFor(() =>
-      expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “garden 1”.'),
-    )
+    expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “garden 1”.')
+    expect(document.querySelector('[data-zen-new-garden-start]')).toBeNull()
+    await act(async () => void fireEvent.change(input, { target: { value: '   ' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    expect(el('[data-zen-new-garden-error]').textContent).toBe('A Garden name is 1 to 60 characters.')
     expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
-    // Another window made "Later" a moment ago: the daemon refuses.
+    // Another window made "Later" a moment ago: the daemon refuses, and the
+    // name field comes back with the reason.
     h.gardens.push({ id: 'g-later', name: 'Later', template: 'k2.blank@1' })
     await act(async () => void fireEvent.change(input, { target: { value: 'Later' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="texting"]')))
     await waitFor(() => expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “Later”.'))
+    expect((el('[data-zen-new-garden-name]') as HTMLInputElement).value).toBe('Later')
     expect(h.calls.filter((c) => c.route === 'zen/garden/new').length).toBe(1)
     expect(useZenWindowStore.getState().garden).toBe('g-default')
     // Esc cancels the field.
-    await act(async () => void fireEvent.keyDown(input, { key: 'Escape' }))
+    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Escape' }))
     expect(document.querySelector('[data-zen-new-garden-name]')).toBeNull()
   })
 

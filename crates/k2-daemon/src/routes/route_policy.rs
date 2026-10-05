@@ -793,6 +793,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/garden/new", Member),
     post("/cli/zen/garden/rename", Member),
     post("/cli/zen/garden/reorder", Member),
+    post("/cli/zen/garden/template", Member),
     get("/cli/zen/gardens", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),

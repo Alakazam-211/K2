@@ -179,6 +179,10 @@ pub enum ZenError {
     GardenExists(String),
     /// `garden/delete` of the only Garden.
     LastGarden,
+    /// `garden/template` onto a Garden whose file sets things the template
+    /// switch would replace (its own layout, widgets or theme tables), with
+    /// no `force`. `keys` are the file's own top-level keys.
+    GardenHasChanges { garden: String, keys: Vec<String> },
     Io(String),
 }
 
@@ -196,6 +200,11 @@ impl std::fmt::Display for ZenError {
                 "no Garden '{garden}' on this computer; list them with k2 zen garden list"
             ),
             ZenError::LastGarden => f.write_str(LAST_GARDEN),
+            ZenError::GardenHasChanges { keys, .. } => write!(
+                f,
+                "this Garden's file has its own changes ({}); starting over replaces them (the file is kept in history). Pass force to go ahead",
+                keys.join(", ")
+            ),
             ZenError::BadRequest(m)
             | ZenError::NotFound(m)
             | ZenError::Conflict(m)
@@ -217,6 +226,22 @@ fn io(e: std::io::Error, what: &Path) -> ZenError {
 
 fn default_entry_template() -> String {
     schema::BLANK_TEMPLATE_ID.to_string()
+}
+
+/// What `garden/template` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateOutcome {
+    /// The Garden's list entry after the switch.
+    pub garden: GardenEntry,
+    /// The full template id it is on now.
+    pub template: &'static str,
+    /// False when the Garden already was that template with nothing of its
+    /// own (nothing written, nothing announced).
+    pub changed: bool,
+    /// The snapshot that holds the previous file (`.history/gardens/<id>.toml/`).
+    pub snapshot: Option<String>,
+    /// The file's own top-level keys that the switch replaced (`force`).
+    pub replaced: Vec<String>,
 }
 
 /// One Garden in `gardens.json` (G9). Order is the list's order.
@@ -770,6 +795,73 @@ impl ZenFiles {
         Ok(DeleteOutcome { deleted: g, snapshot })
     }
 
+    /// A Garden file's own top-level keys: everything but `schema` and
+    /// `template` (its layout, widgets and theme tables). `Ok(vec![])` for no
+    /// file or a bare stub; `Err` when the file isn't TOML text.
+    pub fn garden_own_keys(&self, id: &str) -> Result<Vec<String>, String> {
+        let f = ZenFile::Garden(id.to_string());
+        let text = match self.read_current(&f) {
+            None => return Ok(Vec::new()),
+            Some(t) => t?,
+        };
+        let v: toml::Value = toml::from_str(&text).map_err(|e| format!("{} doesn't parse: {e}", f.label()))?;
+        let table = v.as_table().ok_or_else(|| format!("{} is not a TOML table", f.label()))?;
+        let mut keys: Vec<String> = table.keys().filter(|k| *k != "schema" && *k != "template").cloned().collect();
+        keys.sort();
+        Ok(keys)
+    }
+
+    /// `garden/template` (Rosson 2026-10-04, "Start with the default"): turn
+    /// one Garden into a built-in template, keeping its id, name and place.
+    /// The Garden's file becomes that template's stub and its list entry
+    /// names the template. The previous file is kept as a snapshot first
+    /// (`.history/gardens/<id>.toml/`). Idempotent: a Garden already on the
+    /// template with nothing of its own changes nothing. A file that sets
+    /// its own layout, widgets or theme tables is refused with
+    /// [`ZenError::GardenHasChanges`] unless `force` (nothing is lost
+    /// either way: the snapshot keeps it).
+    pub fn set_garden_template(&self, garden: &str, template: &str, force: bool) -> Result<TemplateOutcome, ZenError> {
+        let _g = list_lock();
+        self.require()?;
+        if template.trim().is_empty() {
+            return Err(ZenError::BadRequest("garden/template needs a template: texting or blank".into()));
+        }
+        let tid = template_choice(Some(template))?;
+        let (i, mut g) = self.garden(garden)?;
+        let f = ZenFile::Garden(g.id.clone());
+        let own = match self.garden_own_keys(&g.id) {
+            Ok(k) => k,
+            Err(_) => vec!["the whole file (it doesn't parse)".to_string()],
+        };
+        let path = self.path_of(&f);
+        let on_template = self.file_template(&g.id).unwrap_or(g.template.as_str()) == tid;
+        if own.is_empty() && on_template && g.template == tid && path.is_file() {
+            return Ok(TemplateOutcome { garden: g, template: tid, changed: false, snapshot: None, replaced: Vec::new() });
+        }
+        if !own.is_empty() && !force {
+            return Err(ZenError::GardenHasChanges { garden: g.id, keys: own });
+        }
+        let mut kept = None;
+        if let Some(Ok(current)) = self.read_current(&f) {
+            let newest = self.snapshots(&f).into_iter().next();
+            kept = Some(match newest {
+                Some(s) if self.snapshot_text(&f, &s.name).as_deref() == Some(current.as_str()) => s.name,
+                _ => self.write_snapshot(&f, &current)?,
+            });
+        }
+        let dir = self.gardens_dir();
+        fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
+        crate::fs_atomic::atomic_write_str(&path, &garden_stub(&g.id, &g.name, tid)).map_err(|e| io(e, &path))?;
+        if g.template != tid {
+            let mut list = self.gardens();
+            g.template = tid.to_string();
+            list[i] = g.clone();
+            self.write_list(&list)?;
+        }
+        self.prune(&f);
+        Ok(TemplateOutcome { garden: g, template: tid, changed: true, snapshot: kept, replaced: own })
+    }
+
     /// Check one file's text with the rules for its kind. A Garden page is
     /// checked against its own default template (G38).
     fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
@@ -945,6 +1037,7 @@ impl ZenFiles {
             .iter()
             .map(|t| ThemeInfo {
                 name: t.name.to_string(),
+                label: t.label.to_string(),
                 builtin: true,
                 user: user.iter().any(|u| u == t.name),
                 summary: Some(t.summary.to_string()),
@@ -952,7 +1045,7 @@ impl ZenFiles {
             .collect();
         for u in user {
             if super::builtin_theme(&u).is_none() {
-                out.push(ThemeInfo { name: u, builtin: false, user: true, summary: None });
+                out.push(ThemeInfo { label: super::theme_label(&u), name: u, builtin: false, user: true, summary: None });
             }
         }
         out
@@ -972,13 +1065,27 @@ impl ZenFiles {
         ZenError::UnknownTheme { name: name.to_string(), known: self.theme_names() }
     }
 
-    /// `active.json`, or the empty default (global `default`, no Garden
-    /// picks). A pre-Gardens `homes` map is ignored (never released).
+    /// `active.json`, or the empty default (global `basic`, no Garden
+    /// picks). A pre-Gardens `homes` map is ignored (never released). A
+    /// pick of `default` (the built-in's name before it was `basic`) reads
+    /// as `basic`, quietly, unless the person has a theme called `default`.
     pub fn read_active(&self) -> ActiveFile {
-        fs::read_to_string(self.root.join(ACTIVE_FILE))
+        let mut a: ActiveFile = fs::read_to_string(self.root.join(ACTIVE_FILE))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let alias = super::DEFAULT_THEME_ALIAS;
+        let picks_alias = a.theme.as_deref() == Some(alias) || a.gardens.values().any(|n| n == alias);
+        if picks_alias && !self.path_of(&ZenFile::Theme(alias.to_string())).is_file() {
+            let basic = || super::DEFAULT_THEME.to_string();
+            if a.theme.as_deref() == Some(alias) {
+                a.theme = Some(basic());
+            }
+            for n in a.gardens.values_mut().filter(|n| n.as_str() == alias) {
+                *n = basic();
+            }
+        }
+        a
     }
 
     fn write_active(&self, a: &ActiveFile) -> Result<(), ZenError> {
@@ -990,7 +1097,7 @@ impl ZenFiles {
     }
 
     /// The theme a Garden shows (G16): its own pick, else the global one,
-    /// else `default`. A pick whose theme is gone is reported in `missing`
+    /// else `basic`. A pick whose theme is gone is reported in `missing`
     /// and skipped. `garden` is a Garden id.
     pub fn active_theme(&self, garden: Option<&str>) -> ActiveTheme {
         let a = self.read_active();
@@ -1012,7 +1119,7 @@ impl ZenFiles {
     }
 
     /// The built-in layer a theme sits on: its own built-in (over
-    /// `default`), or `default` for a theme only the user has.
+    /// `basic`), or `basic` for a theme only the user has.
     fn theme_parent(name: &str) -> &'static Layer {
         super::builtin_theme_layer(name).unwrap_or_else(super::builtin_layer)
     }
@@ -1089,7 +1196,7 @@ impl ZenFiles {
     }
 
     /// `k2 zen theme new <name>`: start a user theme bundle from a copy of
-    /// `from` (default: the built-in of the same name, else `default`).
+    /// `from` (default: the built-in of the same name, else `basic`).
     /// Never overwrites. Doesn't switch to it.
     pub fn new_theme(&self, name: &str, from: Option<&str>) -> Result<NewThemeOutcome, ZenError> {
         self.require()?;
@@ -1304,6 +1411,7 @@ impl ZenFiles {
         let me = info.iter().find(|t| t.name == active.name);
         let mut theme_json = json!({
             "name": active.name,
+            "label": super::theme_label(&active.name),
             "builtin": me.is_some_and(|t| t.builtin),
             "user": me.is_some_and(|t| t.user),
             "scope": active.scope,
@@ -1539,7 +1647,7 @@ impl ZenFiles {
     /// user's changes when `to` is None: `zen.toml` and Garden pages go back
     /// to their stubs (a Garden's to its template's, G17), an override of a
     /// built-in theme is removed (the built-in shows again), and a theme
-    /// only the user has goes back to a copy of `default`. Never touches
+    /// only the user has goes back to a copy of `basic`. Never touches
     /// `gardens.json`, `active.json` or `grants.json`.
     pub fn reset(&self, f: &ZenFile, to: Option<&str>) -> Result<ResetOutcome, ZenError> {
         self.require()?;
@@ -1734,6 +1842,9 @@ pub struct ActiveTheme {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ThemeInfo {
     pub name: String,
+    /// What people see: "Basic", "Paper", "Midnight", or the user theme's
+    /// id with a capital first letter.
+    pub label: String,
     /// Built into K2 (read-only).
     pub builtin: bool,
     /// The user has `themes/<name>/theme.toml` (for a built-in: an override).

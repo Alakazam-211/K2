@@ -1,5 +1,5 @@
 # Zen theme "paper": always light, serif type, ink-blue accent.
-# Built into K2 (read-only). It sits on top of "default": anything not
+# Built into K2 (read-only). It sits on top of "basic": anything not
 # set here comes from there. `k2 zen theme new paper` makes an override.
 schema = 1
 

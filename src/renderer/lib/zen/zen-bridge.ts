@@ -12,8 +12,12 @@
 //     `gardens.switch` (every page must have a Garden switcher), `zen.exit`,
 //     `controls.bind`, `theme.get`;
 //   - `gardens:manage` (granted by K2 to the template's own controls, never
-//     to a widget in v1): `gardens.create`, `gardens.rename`,
-//     `gardens.delete`;
+//     to a widget in v1): `gardens.create(name, template?, {ask})`,
+//     `gardens.rename`, `gardens.delete`;
+//   - `gardens:template` (the built-in `garden-empty` widget only):
+//     `gardens.empty()` says whether the Garden on screen is the empty page,
+//     and `gardens.useTemplate(template, {force})` turns THAT Garden (never
+//     another) into a built-in template: "Start with the default";
 //   - `agents:read`: `homes.list` (Home names, for the Agents widget's Home
 //     picker), `agents.home` / `agents.setHome` (that picker's view state),
 //     `agents.local` (the agents on this computer, for Ask my agent), and
@@ -40,6 +44,7 @@
 
 import type { ZenControlRegistry, ZenBindKind } from './zen-controls'
 import type { ZenResolvedPage } from './zen-page'
+import { BLANK_TEMPLATE_ID } from './zen-page'
 
 export const ZEN_VERBS = {
   'agents.list': 'agents:read',
@@ -74,6 +79,8 @@ export const ZEN_VERBS = {
   'gardens.create': 'gardens:manage',
   'gardens.rename': 'gardens:manage',
   'gardens.delete': 'gardens:manage',
+  'gardens.empty': 'gardens:template',
+  'gardens.useTemplate': 'gardens:template',
   'zen.exit': null,
   'controls.bind': null,
   'theme.get': null,
@@ -124,6 +131,23 @@ export interface ZenHomeSummary {
   name: string
 }
 
+/** What a Garden starts as, or turns into (Rosson 2026-10-04): `texting`
+ *  is Garden 1's page ("the default"), `blank` the empty page an agent
+ *  builds. */
+export type ZenGardenTemplate = 'texting' | 'blank'
+
+/** `gardens.create` options: `ask` opens Ask my agent on the new (empty)
+ *  Garden once it shows. */
+export interface ZenGardenCreateOptions {
+  ask?: boolean
+}
+
+/** What `gardens.useTemplate` did: `changed` is false when the Garden
+ *  already was that template with nothing of its own. */
+export interface ZenGardenTemplateResult {
+  changed: boolean
+}
+
 export interface ZenGardenSummary {
   id: string
   name: string
@@ -137,7 +161,9 @@ export interface ZenBridgeHost {
   /** The Garden on screen ('' before the list is read). */
   currentGardenId(): string
   switchGarden(id: string): void
-  createGarden(name: string): Promise<ZenGardenSummary>
+  createGarden(name: string, template?: ZenGardenTemplate, opts?: ZenGardenCreateOptions): Promise<ZenGardenSummary>
+  /** Turn Garden `id` into a built-in template (`garden/template`). */
+  useGardenTemplate(id: string, template: ZenGardenTemplate, force: boolean): Promise<ZenGardenTemplateResult>
   renameGarden(id: string, name: string): Promise<void>
   deleteGarden(id: string): Promise<void>
   /** Every Home, in `k2.homes.v1` order. */
@@ -157,7 +183,7 @@ export interface ZenWidgetBridge {
     list(): ZenGardenSummary[]
     current(): ZenGardenSummary | null
     switch(id: string): void
-    create(name: string): Promise<ZenGardenSummary>
+    create(name: string, template?: ZenGardenTemplate, opts?: ZenGardenCreateOptions): Promise<ZenGardenSummary>
   }
   homes: { list(): ZenHomeSummary[] }
   zen: { exit(): void }
@@ -173,10 +199,28 @@ const BUILTIN_VERBS = new Set<ZenVerb>([
   'gardens.create',
   'gardens.rename',
   'gardens.delete',
+  'gardens.empty',
+  'gardens.useTemplate',
   'zen.exit',
   'controls.bind',
   'theme.get',
 ])
+
+const GARDEN_TEMPLATES: readonly ZenGardenTemplate[] = ['texting', 'blank']
+
+function needTemplate(verb: ZenVerb, v: unknown, optional: boolean): ZenGardenTemplate | undefined {
+  if (v === undefined && optional) return undefined
+  if (typeof v !== 'string' || !GARDEN_TEMPLATES.includes(v as ZenGardenTemplate)) {
+    throw new ZenBridgeError('unknown_verb', verb, 'needs a template: texting or blank')
+  }
+  return v as ZenGardenTemplate
+}
+
+/** Whether a resolved page is the empty Garden: the blank template showing
+ *  only its own empty-Garden widget (no widgets of the Garden's own). */
+export function isEmptyZenGardenPage(p: ZenResolvedPage): boolean {
+  return p.template === BLANK_TEMPLATE_ID && p.widgets.length === 1 && p.widgets[0].kind === 'garden-empty'
+}
 
 function needString(verb: ZenVerb, v: unknown, what: string): string {
   if (typeof v !== 'string' || !v.trim()) throw new ZenBridgeError('unknown_verb', verb, `needs ${what}`)
@@ -195,10 +239,22 @@ export function createZenBridge(host: ZenBridgeHost, widget: { id: string; caps:
     'gardens.list': () => host.gardens(),
     'gardens.current': () => current(),
     'gardens.switch': (id) => host.switchGarden(needString('gardens.switch', id, 'a Garden id')),
-    'gardens.create': (name) => host.createGarden(needString('gardens.create', name, 'a name')),
+    'gardens.create': (name, template, opts) =>
+      host.createGarden(
+        needString('gardens.create', name, 'a name'),
+        needTemplate('gardens.create', template, true),
+        (opts ?? {}) as ZenGardenCreateOptions,
+      ),
     'gardens.rename': (id, name) =>
       host.renameGarden(needString('gardens.rename', id, 'a Garden id'), needString('gardens.rename', name, 'a name')),
     'gardens.delete': (id) => host.deleteGarden(needString('gardens.delete', id, 'a Garden id')),
+    'gardens.empty': () => isEmptyZenGardenPage(host.page()),
+    'gardens.useTemplate': (template, opts) => {
+      const id = host.currentGardenId()
+      if (!id) throw new ZenBridgeError('unknown_verb', 'gardens.useTemplate', 'no Garden on screen')
+      const force = (opts as { force?: unknown } | undefined)?.force === true
+      return host.useGardenTemplate(id, needTemplate('gardens.useTemplate', template, false) as ZenGardenTemplate, force)
+    },
     'zen.exit': () => host.exit(),
     'controls.bind': (kind, el, gardenId) =>
       host.controls.bind(kind as ZenBindKind, el as HTMLElement, gardenId as string | undefined),
@@ -232,7 +288,7 @@ export function createZenBridge(host: ZenBridgeHost, widget: { id: string; caps:
       list: () => call('gardens.list') as ZenGardenSummary[],
       current: () => call('gardens.current') as ZenGardenSummary | null,
       switch: (id) => void call('gardens.switch', id),
-      create: (name) => call('gardens.create', name) as Promise<ZenGardenSummary>,
+      create: (name, template, opts) => call('gardens.create', name, template, opts) as Promise<ZenGardenSummary>,
     },
     homes: { list: () => call('homes.list') as ZenHomeSummary[] },
     zen: { exit: () => void call('zen.exit') },

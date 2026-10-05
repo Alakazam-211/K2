@@ -15147,12 +15147,13 @@ cmd_schema() {
     },
     {
       "name": "zen garden",
-      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>> [--json]",
-      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one. <garden> is an id or a name.",
+      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>|template <garden> texting|blank [--force]> [--json]",
+      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one. <garden> is an id or a name.",
       "args": [{"name": "garden", "required": false}, {"name": "name|position", "required": false}],
       "flags": [
         {"name": "--texting", "arg": null, "description": "new: start from the texting template (k2.texting@1) instead of the empty one (k2.blank@1)."},
         {"name": "--at", "arg": "n", "description": "new: 1-based position (default: the end)."},
+        {"name": "--force", "arg": null, "description": "template: go ahead when the Garden's file has its own layout, widgets or theme tables (they are kept in .history/)."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
     },
@@ -15209,7 +15210,7 @@ cmd_schema() {
       "flags": [
         {"name": "--garden", "arg": "name|id", "description": "list/next/prev/set: that Garden's own pick instead of the computer's."},
         {"name": "--clear", "arg": null, "description": "set --garden <name> --clear: the Garden follows the computer's theme again."},
-        {"name": "--from", "arg": "theme", "description": "new: the theme to copy (default: K2's theme of that name, else default)."},
+        {"name": "--from", "arg": "theme", "description": "new: the theme to copy (default: K2's theme of that name, else basic)."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
     },
@@ -33596,6 +33597,7 @@ USAGE
   k2 zen garden new <name> [--texting] [--at <n>] [--json]
   k2 zen garden rename <garden> <name> [--json]
   k2 zen garden reorder <garden> <position> [--json]
+  k2 zen garden template <garden> texting|blank [--force] [--json]
   k2 zen garden delete <garden> [--json]
   k2 zen theme list [--garden <name|id>] [--json]
   k2 zen theme next | prev [--garden <name|id>] [--json]
@@ -33612,14 +33614,17 @@ USAGE
 COMMANDS
   garden    The Gardens on this computer. list (* = its own theme); new makes
             an empty Garden (--texting: the texting page) and prints its id
-            and file; rename and reorder (1-based) keep the id; delete moves
-            the page into .history/ (the last Garden stays). <garden> is an
-            id or a name.
+            and file; rename and reorder (1-based) keep the id; template
+            turns a Garden into the texting page (texting, the default) or an
+            empty page (blank), keeping its id, name and place and the old
+            file in .history/ (--force when the file has its own layout,
+            widgets or theme tables); delete moves the page into .history/
+            (the last Garden stays). <garden> is an id or a name.
   theme     The active theme: one for this computer, plus an optional pick
             per Garden (--garden). list shows K2's themes and yours (* =
             active); next/prev cycle them; set picks one; new copies a theme
-            into ~/.k2/zen/themes/<name>/ for you to edit. An unknown name
-            exits 1.
+            into ~/.k2/zen/themes/<name>/ for you to edit. K2's themes are
+            basic, paper and midnight. An unknown name exits 1.
   validate  Check what is on disk now. Prints file:line:col: message for
             each error and exits 1; exits 0 when every file is clean.
   reload    Re-read now (the daemon also watches the folder) and print errors.
@@ -33672,6 +33677,8 @@ if err is not None:
         print(json.dumps(d, separators=(",", ":")))
     if err == "last_garden":
         print(d.get("message") or "That\x27s your last Garden.", file=sys.stderr)
+    elif err == "garden_has_changes":
+        print("Error: Garden %s has its own changes (%s). Add --force to start it over; the file is kept in .history/." % (d.get("garden"), ", ".join(d.get("keys") or [])), file=sys.stderr)
     elif err == "zen_local_only":
         print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner.", file=sys.stderr)
     elif isinstance(err, dict):
@@ -33740,6 +33747,14 @@ elif verb == "garden-rename":
 elif verb == "garden-reorder":
     for g in d.get("gardens") or []:
         print(garden_line(g))
+elif verb == "garden-template":
+    g = d.get("garden") or {}
+    if d.get("changed"):
+        print("Garden %s (“%s”) is now %s" % (g.get("id"), g.get("name"), d.get("template")))
+        if d.get("snapshot"):
+            print("its previous file is kept as snapshot %s (k2 zen reset --garden %s --to %s to undo)" % (d["snapshot"], g.get("id"), d["snapshot"]))
+    else:
+        print("Garden %s (“%s”) is already %s (unchanged)" % (g.get("id"), g.get("name"), d.get("template")))
 elif verb == "garden-delete":
     snap = d.get("snapshot")
     print("deleted Garden %s (“%s”)%s" % (d.get("deleted"), d.get("name"), "; its page is kept in .history as %s" % snap if snap else ""))
@@ -33750,7 +33765,7 @@ elif verb == "theme-list":
             tags.append("built in")
         if t.get("user"):
             tags.append("your override" if t.get("builtin") else "yours")
-        line = "%s %s  (%s)" % ("*" if t.get("active") else " ", t.get("name"), ", ".join(tags))
+        line = "%s %s  %s  (%s)" % ("*" if t.get("active") else " ", t.get("name"), t.get("label") or t.get("name"), ", ".join(tags))
         if t.get("summary"):
             line += "  " + t["summary"]
         print(line)
@@ -33819,12 +33834,13 @@ _zen_args() {
 cmd_zen_garden() {
     local verb="${1:-}"
     shift || true
-    local as_json=false texting=false at="" raw body
+    local as_json=false texting=false force=false at="" raw body
     local -a pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
             --texting) texting=true; shift ;;
+            --force) force=true; shift ;;
             --at)
                 [ -n "${2:-}" ] || { echo "Error: --at needs a position (1 is the first)" >&2; exit 2; }
                 at="$2"; shift 2 ;;
@@ -33840,6 +33856,10 @@ cmd_zen_garden() {
     fi
     if [ "$verb" != "new" ] && { [ "$texting" = true ] || [ -n "$at" ]; }; then
         echo "Error: --texting and --at are for k2 zen garden new" >&2
+        exit 2
+    fi
+    if [ "$verb" != "template" ] && [ "$force" = true ]; then
+        echo "Error: --force is for k2 zen garden template" >&2
         exit 2
     fi
     local n=${#pos[@]}
@@ -33882,6 +33902,22 @@ print(json.dumps({"garden": os.environ["ZG"], "to": int(os.environ["ZP"])}))
             raw=$(cli_post_json "/cli/zen/garden/reorder" "$body")
             _zen_print garden-reorder "$as_json" "$raw"
             ;;
+        template)
+            [ "$n" -eq 2 ] || { echo "Error: k2 zen garden template needs a Garden and a template: texting (the default) or blank" >&2; exit 2; }
+            case "${pos[1]}" in
+                texting|blank) ;;
+                *) echo "Error: unknown template '${pos[1]}'; use texting (the default) or blank" >&2; exit 2 ;;
+            esac
+            body=$(ZG="${pos[0]}" ZT="${pos[1]}" ZF="$force" python3 -c '
+import json, os
+b = {"garden": os.environ["ZG"], "template": os.environ["ZT"]}
+if os.environ.get("ZF") == "true":
+    b["force"] = True
+print(json.dumps(b))
+')
+            raw=$(cli_post_json "/cli/zen/garden/template" "$body")
+            _zen_print garden-template "$as_json" "$raw"
+            ;;
         delete)
             [ "$n" -eq 1 ] || { echo "Error: k2 zen garden delete needs one Garden (an id or a name)" >&2; exit 2; }
             body=$(ZG="${pos[0]}" python3 -c '
@@ -33895,7 +33931,7 @@ print(json.dumps({"garden": os.environ["ZG"]}))
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, delete)" >&2
+            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete)" >&2
             exit 2
             ;;
     esac

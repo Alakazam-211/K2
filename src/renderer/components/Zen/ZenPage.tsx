@@ -27,6 +27,7 @@ import {
   currentZenGardenId,
   deleteZenGarden,
   renameZenGarden,
+  setZenGardenTemplate,
   switchZenGarden,
   useZenGardensStore,
 } from '@/lib/zen/zen-gardens'
@@ -120,10 +121,11 @@ export function ZenPage({
       gardens: gardenSummaries,
       currentGardenId: () => currentZenGardenId() ?? '',
       switchGarden: (id) => switchZenGarden(id),
-      createGarden: async (name) => {
-        const g = await createZenGarden(name)
+      createGarden: async (name, template, opts) => {
+        const g = await createZenGarden(name, template, opts)
         return { id: g.id, name: g.name, index: g.index }
       },
+      useGardenTemplate: (id, template, force) => setZenGardenTemplate(id, template, force),
       renameGarden: (id, name) => renameZenGarden(id, name),
       deleteGarden: (id) => deleteZenGarden(id),
       homes: homeSummaries,

@@ -11,7 +11,7 @@
 //   - reduced motion wins (every duration 0ms, every keyframe none), reduced
 //     transparency wins (nothing see-through);
 //   - `auto` follows this computer's scheme; safe mode ignores the page;
-//   - the renderer's default theme is the daemon's built-in `themes/default.toml`,
+//   - the renderer's default theme is the daemon's built-in `themes/basic.toml`,
 //     and its font stacks are the daemon's `FONT_FAMILIES`;
 //   - the daemon's real `/cli/zen/get` theme shape reads with nothing rejected.
 
@@ -275,12 +275,12 @@ describe('motion: Hyprland curves and animation lines', () => {
   })
 })
 
-describe('the default template theme is the daemon’s built-in themes/default.toml', () => {
-  const toml = readFileSync(resolve(process.cwd(), 'crates/k2-core/src/zen/themes/default.toml'), 'utf8')
+describe('the default template theme is the daemon’s built-in themes/basic.toml', () => {
+  const toml = readFileSync(resolve(process.cwd(), 'crates/k2-core/src/zen/themes/basic.toml'), 'utf8')
 
   function table(name: string): Record<string, string> {
     const m = new RegExp(`^\\[${name.replace('.', '\\.')}\\]\\n([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, 'm').exec(toml)
-    if (!m) throw new Error(`no [${name}] in themes/default.toml`)
+    if (!m) throw new Error(`no [${name}] in themes/basic.toml`)
     const out: Record<string, string> = {}
     for (const line of m[1].split('\n')) {
       const kv = /^([A-Za-z-]+)\s*=\s*("[^"]*"|\[[^\]]*\]|[^#\s]+)/.exec(line.trim())

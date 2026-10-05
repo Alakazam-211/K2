@@ -1,12 +1,12 @@
-# Zen theme "default": clean, smooth, simple. Built into K2 (read-only).
+# Zen theme "basic": clean, smooth, simple. Built into K2 (read-only).
 #
 # Cool light scheme, soft dark scheme, K2 blue accent, `scheme = "auto"` follows this
 # computer's light/dark setting. Every other theme starts from this one,
 # so it sets every token.
 #
-# To change it, make an override: `k2 zen theme new default` copies this
-# file to ~/.k2/zen/themes/default/theme.toml, where your edits sit on
-# top of K2's copy. `k2 zen reset --theme default` drops your override.
+# To change it, make an override: `k2 zen theme new basic` copies this
+# file to ~/.k2/zen/themes/basic/theme.toml, where your edits sit on
+# top of K2's copy. `k2 zen reset --theme basic` drops your override.
 # App updates never touch your files.
 schema = 1
 

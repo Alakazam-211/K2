@@ -7,7 +7,12 @@
 // (`zen-window.ts`). Requests go to `scopeForHost('local')` only:
 //   GET  /cli/zen/gardens                    the list (`setUp:false` = no folder yet)
 //   POST /cli/zen/setup {}                   make the folder + Default (once, on Zen-on)
-//   POST /cli/zen/garden/new {name}          + New Garden (blank template)
+//   POST /cli/zen/garden/new {name, template} + New Garden: "Start with the
+//                                            default" (texting) or "Start
+//                                            empty and ask my agent" (blank)
+//   POST /cli/zen/garden/template {garden, template, force?}
+//                                            Start with the default on an
+//                                            empty Garden (same id, name, place)
 //   POST /cli/zen/garden/rename {garden, name}
 //   POST /cli/zen/garden/delete {garden}
 // and the list is re-read on every local `zen_changed`.
@@ -19,6 +24,8 @@
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { zenLocalScope, zenLoadFailure, type ZenLoadFailure } from './zen-api'
+import type { ZenGardenCreateOptions, ZenGardenTemplate, ZenGardenTemplateResult } from './zen-bridge'
+import { requestZenGardenAsk } from './zen-garden-ask'
 import { ZenPageParseError } from './zen-page'
 import { useZenWindowStore } from './zen-window'
 
@@ -180,7 +187,7 @@ export function switchZenGardenByIndex(index: number): void {
 
 /** Why a Garden change was refused. */
 export class ZenGardenError extends Error {
-  readonly code: 'garden_exists' | 'last_garden' | 'bad_name' | 'failed'
+  readonly code: 'garden_exists' | 'last_garden' | 'bad_name' | 'has_changes' | 'failed'
   constructor(code: ZenGardenError['code'], message: string) {
     super(message)
     this.name = 'ZenGardenError'
@@ -202,10 +209,16 @@ function mapError(err: unknown, name: string): ZenGardenError {
   return new ZenGardenError('failed', msg)
 }
 
-/** `+ New Garden` (G25): create a blank Garden named `name`, add it to the
- *  list at once, and switch this window to it. The `zen_changed` that
- *  follows re-reads the list. */
-export async function createZenGarden(name: string): Promise<ZenGarden> {
+/** `+ New Garden` (G25; Rosson 2026-10-04): create a Garden named `name`
+ *  on `template` (`texting`: Garden 1's page, "the default"; `blank`:
+ *  empty), add it to the list at once, and switch this window to it. With
+ *  `ask`, the empty Garden opens Ask my agent once it shows. The
+ *  `zen_changed` that follows re-reads the list. */
+export async function createZenGarden(
+  name: string,
+  template: ZenGardenTemplate = 'blank',
+  opts: ZenGardenCreateOptions = {},
+): Promise<ZenGarden> {
   const clean = cleanName(name)
   if (clean.length === 0 || [...clean].length > 60) {
     throw new ZenGardenError('bad_name', 'A Garden name is 1 to 60 characters.')
@@ -216,7 +229,9 @@ export async function createZenGarden(name: string): Promise<ZenGarden> {
   }
   let garden: ZenGarden
   try {
-    garden = parseZenGardenNew(await daemonCliPost<unknown>(zenLocalScope(), 'zen/garden/new', { name: clean }))
+    garden = parseZenGardenNew(
+      await daemonCliPost<unknown>(zenLocalScope(), 'zen/garden/new', { name: clean, template }),
+    )
   } catch (err) {
     throw err instanceof ZenPageParseError ? err : mapError(err, clean)
   }
@@ -225,8 +240,49 @@ export async function createZenGarden(name: string): Promise<ZenGarden> {
     const gardens = [...st.gardens, { ...garden, index: st.gardens.length + 1 }]
     useZenGardensStore.setState({ gardens, setUp: true })
   }
+  if (opts.ask && template === 'blank') requestZenGardenAsk(garden.id)
   useZenWindowStore.getState().setGarden(garden.id)
   return garden
+}
+
+/** The copy when Start with the default would replace a Garden's own
+ *  changes (409 `garden_has_changes`). */
+export const ZEN_GARDEN_HAS_CHANGES_TEXT =
+  'This Garden has changes of its own. Starting with the default replaces them; K2 keeps the old page in its history.'
+
+/** Start with the default (Rosson 2026-10-04): turn Garden `id` into
+ *  `template`, keeping its id, name and place (`POST garden/template`).
+ *  The daemon keeps the old file in history and announces the change with
+ *  one `zen_changed`, which re-reads the page in every window showing it.
+ *  A Garden with its own layout, widgets or theme tables is refused with
+ *  `has_changes` unless `force`. */
+export async function setZenGardenTemplate(
+  id: string,
+  template: ZenGardenTemplate,
+  force = false,
+): Promise<ZenGardenTemplateResult> {
+  let raw: unknown
+  try {
+    raw = await daemonCliPost<unknown>(
+      zenLocalScope(),
+      'zen/garden/template',
+      force ? { garden: id, template, force: true } : { garden: id, template },
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/garden_has_changes/.test(msg)) throw new ZenGardenError('has_changes', ZEN_GARDEN_HAS_CHANGES_TEXT)
+    throw mapError(err, id)
+  }
+  const g = isObj(raw) ? parseGarden(raw.garden, 0) : null
+  if (!g || !isObj(raw) || typeof raw.changed !== 'boolean') {
+    throw new ZenPageParseError('the Garden is missing from the garden/template answer')
+  }
+  // The list names the new template at once; zen_changed re-reads it.
+  const st = useZenGardensStore.getState()
+  if (st.gardens.some((x) => x.id === g.id && x.template !== g.template)) {
+    useZenGardensStore.setState({ gardens: st.gardens.map((x) => (x.id === g.id ? { ...x, template: g.template } : x)) })
+  }
+  return { changed: raw.changed }
 }
 
 /** Rename (CLI and agents in this cut; the bridge verb behind `gardens:manage`). */

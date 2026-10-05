@@ -118,7 +118,7 @@ vi.mock('@/lib/daemon-cli', () => ({
               template: 'k2.blank@1',
               layout: { kind: 'columns', split: [100], minWidths: [0] },
               widgets: [
-                { id: 'garden-empty', kind: 'garden-empty', column: 0, props: {}, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+                { id: 'garden-empty', kind: 'garden-empty', column: 0, props: {}, caps: ['agents:read', 'thread:read', 'thread:post', 'gardens:template'], source: 'builtin' },
               ],
               controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
             }
@@ -140,7 +140,7 @@ vi.mock('@/lib/daemon-cli', () => ({
         page,
         theme: {},
         themes: [
-          { name: 'default', builtin: true, user: false },
+          { name: 'basic', builtin: true, user: false },
           { name: 'paper', builtin: true, user: false },
         ],
         chrome: {},
@@ -1820,7 +1820,7 @@ describe('Zen text follows Zen tokens, never the app Style', () => {
     // The app Style: Square on Paper (light) or Charcoal (dark), the real tokens.
     document.documentElement.setAttribute('data-style', 'square')
     document.documentElement.setAttribute('data-palette', app === 'light' ? 'paper' : 'charcoal')
-    // Zen's default theme is `scheme = "auto"`: this computer's setting.
+    // Zen's `basic` theme is `scheme = "auto"`: this computer's setting.
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       value: (query: string) => ({

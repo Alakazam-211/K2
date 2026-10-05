@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
-import type { ZenThemeEntry } from '@/lib/zen/zen-page'
+import { zenThemeLabel, type ZenThemeEntry } from '@/lib/zen/zen-page'
 import {
   closeZenOverlays,
   useZenOverlayStore,
@@ -121,7 +121,7 @@ export function ZenThemePicker({
                 <span aria-hidden style={{ width: 12, color: 'var(--zen-accent)' }}>
                   {isActive ? '✓' : ''}
                 </span>
-                <span style={{ flex: 1 }}>{t.name}</span>
+                <span style={{ flex: 1 }}>{t.label}</span>
                 {t.builtin && <span style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>built in</span>}
               </button>
             )
@@ -166,7 +166,9 @@ export function ZenThemePicker({
             background: 'linear-gradient(135deg, var(--zen-accent) 50%, var(--zen-bubble-agent) 50%)',
           }}
         />
-        <span data-zen-active-theme="">{active ?? 'Theme'}</span>
+        <span data-zen-active-theme="">
+          {active ? (themes.find((t) => t.name === active)?.label ?? zenThemeLabel(active)) : 'Theme'}
+        </span>
       </button>
     </div>
   )

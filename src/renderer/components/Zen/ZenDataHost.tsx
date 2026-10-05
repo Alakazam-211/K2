@@ -8,18 +8,26 @@
 //
 // prd-zen-gardens-v1 G53: it also runs Home's row-status poll for every
 // Home an Agents widget shows, since `HomeShellEffects` only runs on the
-// Home page and a Garden's widget may show any Home.
+// Home page and a Garden's widget may show any Home. For the same reason it
+// keeps those Homes' agent pictures current (`useHomeAvatarRowSync`: the
+// Home avatar cache Home's rows paint from), so Zen's rows show them too.
 // Rendered by `ZenHost` while the window shows Zen; draws nothing.
 
 import { useEffect } from 'react'
 import { useStore } from 'zustand'
 import { useOverlayThread } from '@/components/SessionView/useOverlayThread'
 import { useHomeStatusPoll } from '@/components/Home/home-room'
-import { useHomesStore, type Home } from '@/stores/homes'
+import { useHomesStore, type Home, type HomeRow } from '@/stores/homes'
+import { useHomeAvatarRowSync } from '@/lib/home-avatars'
 import { clearZenFeed, publishZenFeed, zenThreadFeeds, zenViewHomes, type ZenFeedSpec } from '@/lib/zen/zen-data'
 
 function ZenHomePoll({ home }: { home: Home }): null {
   useHomeStatusPoll(home)
+  return null
+}
+
+function ZenHomeAvatars({ rows }: { rows: HomeRow[] }): null {
+  useHomeAvatarRowSync(rows)
   return null
 }
 
@@ -41,16 +49,26 @@ export function ZenDataHost(): React.JSX.Element {
   const feeds = useStore(zenThreadFeeds, (s) => s.feeds)
   const homeIds = useStore(zenViewHomes, (s) => s.homeIds)
   const homes = useHomesStore((s) => s.homes)
+  const shown = homes.filter((h) => homeIds.includes(h.id))
+  // Every row the shown Homes hold, once each, for their pictures.
+  const avatarRows: HomeRow[] = []
+  const seen = new Set<string>()
+  for (const h of shown) {
+    for (const r of h.rows) {
+      if (seen.has(r.address)) continue
+      seen.add(r.address)
+      avatarRows.push(r)
+    }
+  }
   return (
     <>
+      {avatarRows.length > 0 && <ZenHomeAvatars rows={avatarRows} />}
       {feeds.map((spec) => (
         <ZenThreadFeed key={`${spec.address}#${spec.generation}`} spec={spec} />
       ))}
-      {homes
-        .filter((h) => homeIds.includes(h.id))
-        .map((h) => (
-          <ZenHomePoll key={h.id} home={h} />
-        ))}
+      {shown.map((h) => (
+        <ZenHomePoll key={h.id} home={h} />
+      ))}
     </>
   )
 }

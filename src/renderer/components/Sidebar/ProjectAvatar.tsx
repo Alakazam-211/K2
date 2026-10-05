@@ -6,7 +6,39 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 
 // Cache icon results across component instances
-const iconCache = new Map<string, { found: boolean; dataUrl: string | null }>()
+type IconResult = { found: boolean; dataUrl: string | null }
+const iconCache = new Map<string, IconResult>()
+const iconInflight = new Map<string, Promise<IconResult>>()
+
+/** What this cache already knows about `projectPath`'s icon (undefined:
+ *  not asked yet). Zen's agent rows read the same cache the Agents page
+ *  paints from. */
+export function cachedProjectIcon(projectPath: string): IconResult | undefined {
+  return iconCache.get(projectPath)
+}
+
+/** Ask the connected daemon for `projectPath`'s icon (`projects/get-icon`)
+ *  once, and cache the answer. A failed lookup is cached as no image (the
+ *  letter paints), like the avatar always did. */
+export function loadProjectIcon(projectPath: string, projectId?: string): Promise<IconResult> {
+  const cached = iconCache.get(projectPath)
+  if (cached) return Promise.resolve(cached)
+  const running = iconInflight.get(projectPath)
+  if (running) return running
+  const job = daemonCliGet<IconResult>(primaryScope(), 'projects/get-icon', { path: projectPath, project_id: projectId })
+    .then((result) => {
+      iconCache.set(projectPath, result)
+      return result
+    })
+    .catch(() => {
+      const none = { found: false, dataUrl: null }
+      iconCache.set(projectPath, none)
+      return none
+    })
+    .finally(() => iconInflight.delete(projectPath))
+  iconInflight.set(projectPath, job)
+  return job
+}
 
 interface ProjectAvatarProps {
   projectPath: string
@@ -66,18 +98,12 @@ export default function ProjectAvatar({
     }
 
     let cancelled = false
-    daemonCliGet<{ found: boolean; dataUrl: string | null }>(primaryScope(), 'projects/get-icon', { path: projectPath, project_id: projectId })
-      .then((result) => {
-        iconCache.set(projectPath, result)
-        if (!cancelled && result.found && result.dataUrl) {
-          setIconUrl(result.dataUrl)
-        }
-        if (!cancelled) setLoaded(true)
-      })
-      .catch(() => {
-        iconCache.set(projectPath, { found: false, dataUrl: null })
-        if (!cancelled) setLoaded(true)
-      })
+    void loadProjectIcon(projectPath, projectId).then((result) => {
+      if (!cancelled && result.found && result.dataUrl) {
+        setIconUrl(result.dataUrl)
+      }
+      if (!cancelled) setLoaded(true)
+    })
 
     return () => {
       cancelled = true

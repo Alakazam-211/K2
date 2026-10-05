@@ -13,7 +13,8 @@
 // `server-tag`, `preview` and `status` (which live statuses show).
 //
 // One row per Home row, in Home order (⌘1–9 selects row N of the page's
-// first Agents widget). Each row: avatar,
+// first Agents widget). Each row: avatar (the agent's picture when it has
+// one — `row.avatarUrl` from the bridge — else its initials),
 // name, the server when it isn't this computer, the agent's live status
 // (working, needs you, idle — no status when its server can't say), and the
 // start of its last message. No unread dots (answer 9). A row that can't be
@@ -42,7 +43,7 @@ import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
-import { ZenWidgetStyles, initials, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
+import { ZenAgentAvatar, ZenWidgetStyles, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
 import { useZenAddAgentClick } from '../ZenTemplateControls'
 import { requestZenComposeFocus } from '@/lib/zen/zen-compose-focus'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
@@ -304,18 +305,14 @@ function AgentRow({
         }}
       >
         <span className="relative flex-shrink-0" style={{ width: 40, height: 40 }}>
-          <span
-            className="flex h-full w-full items-center justify-center"
-            style={{
-              borderRadius: 999,
-              background: row.selected ? 'var(--zen-accent)' : 'var(--zen-bubble-agent)',
-              color: row.selected ? 'var(--zen-accent-text)' : 'var(--zen-bubble-agent-text)',
-              fontWeight: 600,
-              fontSize: '0.95em',
-            }}
-          >
-            {initials(row.label)}
-          </span>
+          <ZenAgentAvatar
+            label={row.label}
+            url={row.avatarUrl}
+            size={40}
+            background={row.selected ? 'var(--zen-accent)' : 'var(--zen-bubble-agent)'}
+            color={row.selected ? 'var(--zen-accent-text)' : 'var(--zen-bubble-agent-text)'}
+            fontSize="0.95em"
+          />
           <span className="absolute" style={{ right: -1, bottom: -1, lineHeight: 0 }}>
             <ZenStatusDot row={row} size={12} />
           </span>

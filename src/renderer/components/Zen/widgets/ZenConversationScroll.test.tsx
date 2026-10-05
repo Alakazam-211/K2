@@ -301,6 +301,7 @@ function row(working: boolean): ZenAgentRow {
     people: [],
     selected: true,
     openable: true,
+    avatarUrl: null,
   } as ZenAgentRow
 }
 

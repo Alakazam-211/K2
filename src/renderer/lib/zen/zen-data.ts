@@ -84,6 +84,8 @@ import {
   workspaceHandle,
 } from '@/lib/home-address'
 import { computeRowStatus } from '@/components/Home/home-room'
+import { cachedProjectIcon, loadProjectIcon } from '@/components/Sidebar/ProjectAvatar'
+import { homeRowAvatarFrom, useHomeAvatarStore } from '@/lib/home-avatars'
 import { roomRowActivity } from '@/lib/home-status'
 import { homeRoomVerdict } from '@/lib/home-room-floor'
 import { resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
@@ -165,6 +167,10 @@ export interface ZenAgentRow {
   selected: boolean
   /** Selecting it opens a conversation that can be messaged. */
   openable: boolean
+  /** The agent's picture (a data URL, or the workspace's icon URL), or null:
+   *  paint its initials. The same sources the app's Home and Agents pages
+   *  paint from (see `rowAvatar`). */
+  avatarUrl: string | null
 }
 
 export type ZenConversationPhase = 'opening' | 'ready' | 'unavailable' | 'failed'
@@ -606,6 +612,37 @@ function viewRows(view: ZenView): HomeRow[] {
 
 // ── Rows ───────────────────────────────────────────────────────────────────
 
+/** Paths whose `projects/get-icon` this module already asked for. */
+const iconAsked = new Set<string>()
+
+/** A row's picture, from where the app's own pages paint it:
+ *   - an agent on the window's server (connected): its workspace's
+ *     `iconUrl`, else the Agents page's `ProjectAvatar` lookup
+ *     (`projects/get-icon`, cached per path and shared with that page);
+ *   - any other row: the Home avatar cache (`useHomeRowAvatar`'s rule —
+ *     `~/.k2/cache/agent-avatars/`, or this computer's live read for a
+ *     `local` row on a remote window).
+ *  Null paints the initials, like Home paints its letter. */
+function rowAvatar(row: HomeRow, onConnected: boolean): string | null {
+  const host = useConnectHostStore.getState()
+  if (onConnected && host.connectionStatus === 'connected') {
+    const ws = findWorkspaceForRow(useProjectsStore.getState().projects, row)
+    if (ws) {
+      if (ws.iconUrl) return ws.iconUrl
+      const known = cachedProjectIcon(ws.path)
+      if (known) return known.found && known.dataUrl ? known.dataUrl : null
+      if (!iconAsked.has(ws.path)) {
+        iconAsked.add(ws.path)
+        void loadProjectIcon(ws.path, ws.id).then((r) => {
+          if (r.found && r.dataUrl) emitRows()
+        })
+      }
+      return null
+    }
+  }
+  return homeRowAvatarFrom(row.address, activeHomeHostKey(host.activeHost), useHomeAvatarStore.getState())
+}
+
 function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow {
   const host = useConnectHostStore.getState()
   const projects = useProjectsStore.getState().projects
@@ -699,6 +736,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     people,
     selected: view !== null && selection.get(view.key) === row.address,
     openable: state === 'ok',
+    avatarUrl: rowAvatar(row, onConnected),
   }
 }
 
@@ -756,6 +794,8 @@ function startLive(): void {
   unsubs.push(hostPool.store.subscribe(on))
   unsubs.push(useZenGardenHomesStore.subscribe(on))
   unsubs.push(useZenGardensStore.subscribe(on))
+  // Pictures land in the Home avatar cache after the rows first paint.
+  unsubs.push(useHomeAvatarStore.subscribe(on))
   // Open rooms' own activity slices (Z39): re-subscribe when rooms change.
   const roomSubs = new Map<string, () => void>()
   const syncRooms = (): void => {
@@ -1371,6 +1411,7 @@ export function __resetZenDataForTests(): void {
   rowListeners.clear()
   threadListeners.clear()
   previewInFlight.clear()
+  iconAsked.clear()
   zenThreadFeeds.setState({ feeds: [] })
   zenViewHomes.setState({ homeIds: [] })
 }

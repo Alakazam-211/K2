@@ -439,38 +439,74 @@ export function pruneKeepFrom(state: Pick<HomesState, 'homes' | 'storageOk'>): s
   return [...keep].sort()
 }
 
-/** The picture for a Home row, or null (paint the letter) (P19). */
-export function useHomeRowAvatar(address: string): string | null {
-  const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
-  const cached = useHomeAvatarStore((s) => s.cached[address]?.dataUrl ?? null)
-  const local = useHomeAvatarStore((s) => s.local[address] ?? null)
+/** The picture for a Home row from this computer's cache, or null (paint
+ *  the letter) (P19). Not a hook: Zen's data layer reads it for its rows. */
+export function homeRowAvatarFrom(
+  address: string,
+  connectedKey: string,
+  state: Pick<HomeAvatarState, 'cached' | 'local'>,
+): string | null {
   if (isWebClient()) return null
   const parsed = parseHomeAddress(address)
   if (!parsed) return null
-  if (parsed.host === LOCAL_HOME_HOST) return connectedKey === LOCAL_HOME_HOST ? null : local
+  if (parsed.host === LOCAL_HOME_HOST) return connectedKey === LOCAL_HOME_HOST ? null : (state.local[address] ?? null)
+  const cached = state.cached[address]?.dataUrl ?? null
   return isImageDataUrl(cached) ? cached : null
+}
+
+/** The picture for a Home row, or null (paint the letter) (P19). */
+export function useHomeRowAvatar(address: string): string | null {
+  const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
+  const entry = useHomeAvatarStore((s) => s.cached[address])
+  const local = useHomeAvatarStore((s) => s.local[address])
+  return homeRowAvatarFrom(address, connectedKey, {
+    cached: entry ? { [address]: entry } : {},
+    local: local === undefined ? {} : { [address]: local },
+  })
 }
 
 /** Keeps the selected Home's pictures current and prunes the cache.
  *  Mounted in `HomeShellEffects`, so it runs only while Home is on screen. */
 export function useHomeAvatarSync(sync: HomeAvatarSync = homeAvatarSync): void {
   const home = useHomesStore(selectedHome)
+  useHomeAvatarRowSync(home.rows, sync)
+
+  // P17 / P28: prune 2 s after any row change on any Home, and once now.
+  useEffect(() => {
+    const keep = (): string[] | null => pruneKeepFrom(useHomesStore.getState())
+    sync.schedulePrune(keep)
+    let last = (keep() ?? []).join('\n')
+    return useHomesStore.subscribe((s) => {
+      const next = (pruneKeepFrom(s) ?? []).join('\n')
+      if (next === last) return
+      last = next
+      sync.schedulePrune(keep)
+    })
+  }, [sync])
+}
+
+/** Keeps the pictures of `rows` current: reads the shared cache on mount
+ *  and window focus, fills in stale rows from their servers, and reads
+ *  `local` rows live on a remote window. No pruning (`useHomeAvatarSync`
+ *  owns that). Zen runs it for the Homes its Gardens show, which need not
+ *  be the selected Home. */
+export function useHomeAvatarRowSync(rows: readonly HomeRow[], sync: HomeAvatarSync = homeAvatarSync): void {
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const connected = useConnectHostStore((s) => s.connectionStatus === 'connected')
   const projects = useProjectsStore((s) => s.projects)
-  const hostKeys = [...new Set(home.rows.map((r) => parseHomeAddress(r.address)?.host ?? ''))].filter(Boolean).sort()
+  const hostKeys = [...new Set(rows.map((r) => parseHomeAddress(r.address)?.host ?? ''))].filter(Boolean).sort()
   // Only reach/login TRANSITIONS re-run the sync, never each 30 s check.
   const reachKey = useStore(hostPool.store, (s) =>
     hostKeys.map((k) => `${k}:${s.entries[k]?.reach ?? '-'}:${s.entries[k]?.auth ?? '-'}`).join('|'),
   )
-  const addressesKey = home.rows.map((r) => r.address).join('\n')
-  const localRowsKey = home.rows
+  const addressesKey = rows.map((r) => r.address).join('\n')
+  const localRowsKey = rows
     .map((r) => r.address)
     .filter((a) => parseHomeAddress(a)?.host === LOCAL_HOME_HOST)
     .join('\n')
   const inputRef = useRef<AvatarSyncInput | null>(null)
   inputRef.current = {
-    rows: home.rows,
+    rows,
     connectedKey,
     connectedProjects: connected ? projects : null,
     reachable: (key) => {
@@ -515,17 +551,4 @@ export function useHomeAvatarSync(sync: HomeAvatarSync = homeAvatarSync): void {
     const input = inputRef.current
     if (input && localRowsKey) void sync.readLocalRows(input.rows, input.connectedKey)
   }, [sync, localRowsKey, connectedKey])
-
-  // P17 / P28: prune 2 s after any row change on any Home, and once now.
-  useEffect(() => {
-    const keep = (): string[] | null => pruneKeepFrom(useHomesStore.getState())
-    sync.schedulePrune(keep)
-    let last = (keep() ?? []).join('\n')
-    return useHomesStore.subscribe((s) => {
-      const next = (pruneKeepFrom(s) ?? []).join('\n')
-      if (next === last) return
-      last = next
-      sync.schedulePrune(keep)
-    })
-  }, [sync])
 }

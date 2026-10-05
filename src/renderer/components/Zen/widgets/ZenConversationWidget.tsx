@@ -28,7 +28,7 @@ import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
 import { ZenStatusDot } from './ZenAgentsWidget'
-import { ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
+import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
 
 /** The Thread cards take their look from these (Styles values otherwise). */
 const CARD_TOKENS = {
@@ -219,20 +219,14 @@ export function ZenConversation({
         className="flex flex-shrink-0 items-center gap-3"
         style={{ padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}
       >
-        <span
-          className="flex flex-shrink-0 items-center justify-center"
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 999,
-            background: 'var(--zen-accent)',
-            color: 'var(--zen-accent-text)',
-            fontWeight: 600,
-            fontSize: '0.9em',
-          }}
-        >
-          {initials(row.label)}
-        </span>
+        <ZenAgentAvatar
+          label={row.label}
+          url={row.avatarUrl}
+          size={34}
+          background="var(--zen-accent)"
+          color="var(--zen-accent-text)"
+          fontSize="0.9em"
+        />
         <span className="flex min-w-0 flex-col">
           <span className="truncate" style={{ fontWeight: 600 }} data-zen-conversation-title="">
             {row.label}

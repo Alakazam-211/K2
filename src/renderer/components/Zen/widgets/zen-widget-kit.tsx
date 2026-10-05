@@ -61,6 +61,58 @@ export function initials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
+/** An agent's round avatar: its picture (`row.avatarUrl`, from the bridge)
+ *  cropped to the circle, else its initials on `background`. A picture
+ *  that fails to load paints the initials too. */
+export function ZenAgentAvatar({
+  label,
+  url,
+  size,
+  background,
+  color,
+  fontSize,
+}: {
+  label: string
+  url: string | null
+  size: number
+  background: string
+  color: string
+  fontSize: string
+}): React.JSX.Element {
+  const [failed, setFailed] = useState<string | null>(null)
+  const image = url !== null && url !== failed ? url : null
+  return (
+    <span
+      aria-hidden
+      data-zen-avatar={image ? 'image' : 'initials'}
+      className="flex flex-shrink-0 items-center justify-center"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 999,
+        overflow: 'hidden',
+        background: image ? 'var(--zen-surface-raised)' : background,
+        color,
+        fontWeight: 600,
+        fontSize,
+      }}
+    >
+      {image ? (
+        <img
+          src={image}
+          alt=""
+          draggable={false}
+          data-zen-avatar-img=""
+          onError={() => setFailed(image)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+        />
+      ) : (
+        initials(label)
+      )}
+    </span>
+  )
+}
+
 const anim = (name: string, ms: number, ease = 'cubic-bezier(0.22, 1, 0.36, 1)'): string =>
   `var(--zen-anim-${name}-duration, ${ms}ms) var(--zen-anim-${name}-ease, ${ease})`
 

@@ -69,6 +69,10 @@ const h = vi.hoisted(() => ({
   rooms: [] as Array<{ key: string; activity: { applyHookStatus(id: string, s: string): void } }>,
   seq: 100,
   tickets: [] as Array<Record<string, unknown>>,
+  /** The Home avatar cache (`GET /cli/home/avatars`), by row address. */
+  avatars: {} as Record<string, { dataUrl: string | null; missing: boolean; fetchedAt: number; sha256: string | null }>,
+  /** `projects/get-icon` answers on the window's server, by path. */
+  icons: {} as Record<string, { found: boolean; dataUrl: string | null }>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -206,6 +210,11 @@ vi.mock('@/lib/daemon-cli', () => ({
       }
       return { ...t, workspace: 'cortana', canonicalSessionId: null, comments: [{ author: 'cortana', body: 'Which DNS host should I use?', at: 900 }] }
     }
+    if (route === 'home/avatars' && scope.hostKey === 'local') {
+      const want = String(p.addresses).split(',')
+      return { avatars: Object.fromEntries(want.filter((a) => h.avatars[a]).map((a) => [a, h.avatars[a]])) }
+    }
+    if (route === 'projects/get-icon') return h.icons[String(p.path)] ?? { found: false, dataUrl: null }
     if (route === 'auth/whoami') return { owner: true, username: null }
     if (route === 'users') return { users: [] }
     throw new Error(`unexpected GET ${route} on ${scope.hostKey}`)
@@ -393,6 +402,7 @@ import { ZEN_GLASS_CSS, zenGlassRule } from '@/lib/zen/zen-glass'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { ZEN_WIDGET_CSS } from './zen-widget-kit'
 import { ZEN_ANCHORED_MENU_LAYER } from '@/hooks/useAnchoredMenu'
+import { useHomeAvatarStore } from '@/lib/home-avatars'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -548,6 +558,9 @@ beforeEach(() => {
   h.pages = {}
   h.localProjects = null
   h.tickets = []
+  h.avatars = {}
+  h.icons = {}
+  useHomeAvatarStore.setState({ cached: {}, local: {} })
   useFocusGroupsStore.setState({ focusGroupsEnabled: false, focusGroups: [], activeFocusGroupId: null })
   __resetZenGardensForTests()
   useZenGardenHomesStore.setState({ picks: {} })
@@ -1858,6 +1871,134 @@ describe('Conversation widget', () => {
   })
 })
 
+// Rosson 2026-10-04: My Home and Agents show the agent's picture when it has
+// one, from the same places the app's Home and Agents pages paint it.
+describe('agent pictures in Zen', () => {
+  const PNG_CORTANA = 'data:image/png;base64,Y29ydGFuYQ=='
+  const PNG_SALES = 'data:image/png;base64,c2FsZXM='
+  const PNG_OPS = 'data:image/png;base64,b3Bz'
+  const PNG_ATLAS = 'data:image/png;base64,YXRsYXM='
+  const PNG_BOLT = 'data:image/png;base64,Ym9sdA=='
+
+  function cached(dataUrl: string | null): { dataUrl: string | null; missing: boolean; fetchedAt: number; sha256: string | null } {
+    return { dataUrl, missing: dataUrl === null, fetchedAt: Date.now(), sha256: dataUrl === null ? null : 'abc' }
+  }
+
+  /** The avatar inside `root`: its picture's src, or null when it paints initials. */
+  function avatarOf(root: Element): { src: string | null; text: string } {
+    const av = root.querySelector('[data-zen-avatar]')
+    if (!(av instanceof HTMLElement)) throw new Error('no avatar')
+    const img = av.querySelector('img[data-zen-avatar-img]')
+    if (av.getAttribute('data-zen-avatar') === 'image') {
+      if (!(img instanceof HTMLImageElement)) throw new Error('image avatar without an img')
+      // Round, cropped, filling the circle, on the glass.
+      expect(av.style.borderRadius).toBe('999px')
+      expect(av.style.overflow).toBe('hidden')
+      expect(img.style.objectFit).toBe('cover')
+      expect(img.style.width).toBe('100%')
+      expect(img.style.height).toBe('100%')
+      return { src: img.getAttribute('src'), text: av.textContent ?? '' }
+    }
+    expect(img).toBeNull()
+    return { src: null, text: av.textContent ?? '' }
+  }
+
+  it('My Home: a local row paints its workspace picture, remote rows paint the Home avatar cache, a row with none paints its initials', async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/zen-av/cortana', color: '#c2662d', iconUrl: PNG_CORTANA, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+    h.avatars = { [ROWS.sales.address]: cached(PNG_SALES), [ROWS.julie.address]: cached(null) }
+    await mountZen()
+    await waitFor(() => expect(avatarOf(rowEl(ROWS.sales.address)).src).toBe(PNG_SALES))
+    expect(avatarOf(rowEl(ROWS.cortana.address)).src).toBe(PNG_CORTANA)
+    // The cache says "no image", and a row the cache has never seen: initials.
+    expect(avatarOf(rowEl(ROWS.julie.address))).toEqual({ src: null, text: 'J' })
+    expect(avatarOf(rowEl(ROWS.ops.address))).toEqual({ src: null, text: 'O' })
+    // Read from this computer's cache, the one Home reads.
+    const reads = h.calls.filter((c) => c.route === 'home/avatars')
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.every((c) => c.hostKey === 'local')).toBe(true)
+    expect(String(reads[0].data.addresses).split(',').sort()).toEqual(
+      [ROWS.cortana.address, ROWS.sales.address, ROWS.julie.address, ROWS.ops.address].sort(),
+    )
+
+    // A picture that lands in the cache later paints at once.
+    act(() =>
+      useHomeAvatarStore.setState((st) => ({ cached: { ...st.cached, [ROWS.ops.address]: cached(PNG_OPS) } })),
+    )
+    await waitFor(() => expect(avatarOf(rowEl(ROWS.ops.address)).src).toBe(PNG_OPS))
+  })
+
+  it('a workspace with no listed icon paints the Agents page’s get-icon picture; a picture that fails to load paints initials', async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/zen-av/cortana-geticon', color: '#c2662d', iconUrl: null, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+    h.icons = { '/w/zen-av/cortana-geticon': { found: true, dataUrl: PNG_CORTANA } }
+    await mountZen()
+    await waitFor(() => expect(avatarOf(rowEl(ROWS.cortana.address)).src).toBe(PNG_CORTANA))
+    // One lookup, on the window's server, with the workspace's path and id.
+    expect(h.calls.filter((c) => c.route === 'projects/get-icon').map((c) => [c.hostKey, c.data])).toEqual([
+      ['local', { path: '/w/zen-av/cortana-geticon', project_id: 'p1' }],
+    ])
+    const img = rowEl(ROWS.cortana.address).querySelector('img[data-zen-avatar-img]') as HTMLImageElement
+    act(() => {
+      fireEvent.error(img)
+    })
+    expect(avatarOf(rowEl(ROWS.cortana.address))).toEqual({ src: null, text: 'C' })
+  })
+
+  it('the Agents view: this server’s workspaces paint their pictures (listed or get-icon), else initials', async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/zen-av/v-cortana', color: '#c2662d', iconUrl: null, pinned: 0, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+        { id: 'p2', name: 'atlas', handle: 'atlas', path: '/w/zen-av/v-atlas', color: '#3366aa', iconUrl: PNG_ATLAS, pinned: 1, workspaces: [{ id: 'w2', type: 'main', name: 'main' }] },
+        { id: 'p3', name: 'bolt', handle: 'bolt', path: '/w/zen-av/v-bolt', color: '#33aa66', iconUrl: null, pinned: 0, workspaces: [{ id: 'w3', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+    h.icons = { '/w/zen-av/v-bolt': { found: true, dataUrl: PNG_BOLT } }
+    await mountZen()
+    await openRailView('agents')
+    const box = (): Element => {
+      const el = document.querySelector('[data-zen-widget="agents"][data-zen-agents-source="workspaces"]')
+      if (!el) throw new Error('no Agents view')
+      return el
+    }
+    const row = (address: string): Element => {
+      const el = box().querySelector(`[data-zen-agent-row="${address}"]`)
+      if (!el) throw new Error(`no row ${address}`)
+      return el
+    }
+    await waitFor(() => expect(avatarOf(row('bolt::local')).src).toBe(PNG_BOLT))
+    expect(avatarOf(row('atlas::local')).src).toBe(PNG_ATLAS)
+    expect(avatarOf(row('cortana::local'))).toEqual({ src: null, text: 'C' })
+  })
+
+  it('the conversation header shows the agent’s picture, or its initials', async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/zen-av/h-cortana', color: '#c2662d', iconUrl: null, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+    h.avatars = { [ROWS.sales.address]: cached(PNG_SALES) }
+    await mountZen()
+    await waitFor(() => expect(avatarOf(rowEl(ROWS.sales.address)).src).toBe(PNG_SALES))
+    await select(ROWS.sales.address)
+    const header = (): Element => {
+      const el = document.querySelector('[data-zen-conversation] [data-zen-conversation-title]')?.parentElement?.parentElement
+      if (!el) throw new Error('no conversation header')
+      return el
+    }
+    expect(avatarOf(header()).src).toBe(PNG_SALES)
+    await select(ROWS.cortana.address)
+    await waitFor(() => expect(document.querySelector('[data-zen-conversation-title]')?.textContent).toBe('cortana'))
+    expect(avatarOf(header())).toEqual({ src: null, text: 'C' })
+  })
+})
+
 describe('template controls (G24, G25, G58)', () => {
   it('draws its own Garden switcher, Zen toggle and drag area, and they pass the required-controls check', async () => {
     await mountZen()
@@ -2907,6 +3048,18 @@ describe('S6 source ratchets', () => {
     const data = read('lib/zen/zen-data.ts')
     expect(data).toContain('postThreadCompose(c.scope, c.threadAddr, body)')
     expect(data).toContain('composeAttachPayload(c.scope, {')
+  })
+
+  it('Zen agent pictures reuse the app’s sources: ProjectAvatar’s get-icon cache and the Home avatar cache (no new loading path)', () => {
+    const data = read('lib/zen/zen-data.ts')
+    expect(data).toContain("import { cachedProjectIcon, loadProjectIcon } from '@/components/Sidebar/ProjectAvatar'")
+    expect(data).toContain("import { homeRowAvatarFrom, useHomeAvatarStore } from '@/lib/home-avatars'")
+    expect(data).not.toContain("'projects/get-icon'")
+    expect(data).not.toContain("'home/avatars")
+    const host = read('components/Zen/ZenDataHost.tsx')
+    expect(host).toContain('useHomeAvatarRowSync(rows)')
+    const avatar = read('components/Sidebar/ProjectAvatar.tsx')
+    expect(avatar).toContain('void loadProjectIcon(projectPath, projectId)')
   })
 
   it('widgets never hold a scope or a daemon call: only the bridge', () => {

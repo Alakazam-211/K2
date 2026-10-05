@@ -36,7 +36,7 @@ import type { ZenGardenTemplateResult } from '@/lib/zen/zen-bridge'
 import { takeZenGardenAsk } from '@/lib/zen/zen-garden-ask'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenConversation } from './ZenConversationWidget'
-import { ZenWidgetStyles, initials, useZenRows } from './zen-widget-kit'
+import { ZenAgentAvatar, ZenWidgetStyles, useZenRows } from './zen-widget-kit'
 
 export const ZEN_GARDEN_EMPTY_TITLE = 'This Garden is empty.'
 export const ZEN_GARDEN_EMPTY_ASK = 'Ask your agents to add things to this Garden.'
@@ -111,21 +111,14 @@ function Chooser({
               className="flex w-full items-center gap-3 text-left cursor-pointer disabled:cursor-default"
               style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
             >
-              <span
-                aria-hidden
-                className="flex flex-shrink-0 items-center justify-center"
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: 999,
-                  background: 'var(--zen-bubble-agent)',
-                  color: 'var(--zen-bubble-agent-text)',
-                  fontWeight: 600,
-                  fontSize: '0.8em',
-                }}
-              >
-                {initials(r.label)}
-              </span>
+              <ZenAgentAvatar
+                label={r.label}
+                url={r.avatarUrl}
+                size={26}
+                background="var(--zen-bubble-agent)"
+                color="var(--zen-bubble-agent-text)"
+                fontSize="0.8em"
+              />
               <span className="truncate">{r.label}</span>
             </button>
           ))}

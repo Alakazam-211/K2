@@ -38,6 +38,7 @@
 // Everything comes through the bridge (`agents:read`, `agents:add`).
 
 import { useEffect, useRef, useState } from 'react'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
@@ -91,26 +92,20 @@ function HomePicker({
   onPick(id: string): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const boxRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (boxRef.current && e.target instanceof Node && !boxRef.current.contains(e.target)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  // Portalled into the Zen root and fixed to the button: the column card's
+  // `overflow: hidden` (ZenPage) can't cut it off.
+  const menu = useAnchoredMenu<HTMLButtonElement>({
+    open,
+    onClose: () => setOpen(false),
+    gap: 4,
+    width: 'min',
+    minWidth: 180,
+  })
   return (
-    <div ref={boxRef} className="relative flex min-w-0 items-center gap-1.5" data-zen-home-picker="">
+    <div className="relative flex min-w-0 items-center gap-1.5" data-zen-home-picker="">
       <span style={{ color: 'var(--zen-text-muted)' }}>Home:</span>
       <button
+        ref={menu.anchorRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -134,15 +129,15 @@ function HomePicker({
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && (
+      {open && menu.portal(
         <div
+          ref={menu.menuRef}
           role="menu"
           data-zen-home-picker-menu=""
-          className="absolute left-0 flex flex-col"
+          data-placement={menu.placement}
+          className="no-drag flex flex-col"
           style={{
-            top: 'calc(100% + 4px)',
-            zIndex: 3,
-            minWidth: 180,
+            ...menu.style,
             padding: 4,
             gap: 2,
             background: 'var(--zen-surface-raised)',
@@ -218,6 +213,7 @@ function FocusGroupPicker({ bridge, groups }: { bridge: ZenWidgetBridge; groups:
       <FocusGroupDropdown
         options={groups.groups.map((g) => ({ id: g.id, name: g.name, color: g.color }))}
         value={groups.active}
+        menuAttributes={{ 'data-zen-focus-group-menu': '' }}
         onChange={(id) => {
           if (id === null) return
           try {

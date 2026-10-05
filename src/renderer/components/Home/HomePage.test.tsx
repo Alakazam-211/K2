@@ -630,7 +630,11 @@ describe('Home — the Agents page shell', () => {
       expect(hint.querySelector('.key-symbol')?.textContent).toBe('⌘')
 
       fireEvent.click(pickerButton)
-      const items = within(homeSidebar()).getAllByRole('menuitemradio')
+      // The menu is portalled out of the sidebar (no clipping ancestor).
+      const menu = document.querySelector('[data-home-picker-menu]')
+      if (!(menu instanceof HTMLElement)) throw new Error('no Home picker menu')
+      expect(homeSidebar().contains(menu)).toBe(false)
+      const items = within(menu).getAllByRole('menuitemradio')
       expect(items.map((el) => el.querySelector('[data-shortcut-badge]')?.textContent ?? null)).toEqual([
         '⌥⌘1',
         '⌥⌘2',

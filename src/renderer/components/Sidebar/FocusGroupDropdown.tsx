@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 interface FocusGroupOption {
   id: string | null
@@ -10,16 +11,19 @@ interface FocusGroupDropdownProps {
   options: FocusGroupOption[]
   value: string | null
   onChange: (id: string | null) => void
+  /** Extra attributes on the open menu (it is portalled, so a host styles it
+   *  by these, not by its place under the trigger). */
+  menuAttributes?: Record<`data-${string}`, string>
 }
 
 export default function FocusGroupDropdown({
   options,
   value,
-  onChange
+  onChange,
+  menuAttributes,
 }: FocusGroupDropdownProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [highlightIndex, setHighlightIndex] = useState(0)
 
@@ -31,18 +35,16 @@ export default function FocusGroupDropdown({
 
   const selected = allOptions.find((o) => o.id === value) ?? allOptions[0] ?? { id: null, name: 'Focus Groups' }
 
-  // Close on outside click
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: MouseEvent): void => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-        setSearch('')
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [isOpen])
+  // The menu is portalled and fixed to the trigger, so no clipping
+  // ancestor (a sidebar scroller, a Zen card) cuts it off. It closes on an
+  // outside click or Escape.
+  const menu = useAnchoredMenu<HTMLDivElement>({
+    open: isOpen,
+    onClose: () => {
+      setIsOpen(false)
+      setSearch('')
+    },
+  })
 
   // Focus input when opening
   useEffect(() => {
@@ -82,9 +84,13 @@ export default function FocusGroupDropdown({
   }, [filtered, highlightIndex, handleSelect])
 
   return (
-    <div ref={containerRef} className="relative no-drag">
+    <div ref={menu.anchorRef} className="relative no-drag">
       {/* Trigger button */}
       <button
+        type="button"
+        data-focus-group-trigger=""
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
         className="w-full flex items-center gap-2 px-2 py-1.5 text-left bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
       >
@@ -103,8 +109,15 @@ export default function FocusGroupDropdown({
       </button>
 
       {/* Dropdown panel */}
-      {isOpen && (
-        <div className="absolute top-full left-0 right-0 z-50 mt-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl">
+      {isOpen && menu.portal(
+        <div
+          ref={menu.menuRef}
+          style={menu.style}
+          data-focus-group-menu=""
+          data-placement={menu.placement}
+          {...menuAttributes}
+          className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+        >
           {/* Search input */}
           <div className="p-1.5 border-b border-[var(--color-border)]">
             <input

@@ -6,7 +6,8 @@
 // (a user-named tab per Home would have no width limit). Create, rename,
 // and delete live in the same menu. The last Home cannot be deleted.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { Button, Input } from '@/components/ui'
@@ -25,27 +26,12 @@ export default function HomePicker(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('menu')
   const [draft, setDraft] = useState('')
-  const rootRef = useRef<HTMLDivElement | null>(null)
+  // Portalled and fixed to the picker: the sidebar's scroller
+  // (Layout's `overflow-y-auto`) can't cut it off. Outside click / Escape close.
+  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: () => setOpen(false) })
 
   useEffect(() => {
-    if (!open) {
-      setMode('menu')
-      return
-    }
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && e.target instanceof Node && !rootRef.current.contains(e.target)) {
-        setOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
+    if (!open) setMode('menu')
   }, [open])
 
   const startCreate = (): void => {
@@ -77,7 +63,7 @@ export default function HomePicker(): React.JSX.Element {
     'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent'
 
   return (
-    <div ref={rootRef} className="relative no-drag">
+    <div ref={menu.anchorRef} className="relative no-drag">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -100,10 +86,14 @@ export default function HomePicker(): React.JSX.Element {
         </svg>
       </button>
 
-      {open && (
+      {open && menu.portal(
         <div
+          ref={menu.menuRef}
           role="menu"
-          className="absolute top-full left-0 right-0 z-50 mt-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          data-home-picker-menu=""
+          data-placement={menu.placement}
+          style={menu.style}
+          className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {mode === 'menu' ? (
             <>

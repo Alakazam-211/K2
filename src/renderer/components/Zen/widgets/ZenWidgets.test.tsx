@@ -388,6 +388,8 @@ import { ZEN_PROJECTS_TEXT, zenProjectsAskDraft } from './ZenProjectsViewWidget'
 import { ZEN_EMPTY_FOCUS_GROUP } from './ZenAgentsWidget'
 import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, zenNavPillMotion } from './ZenNavRailWidget'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import { ZEN_WIDGET_CSS } from './zen-widget-kit'
+import { ZEN_ANCHORED_MENU_LAYER } from '@/hooks/useAnchoredMenu'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -632,7 +634,11 @@ async function pickWidgetHome(homeId: string, widget = 'agents'): Promise<void> 
   await act(async () => {
     fireEvent.click(button)
   })
-  const choice = box.querySelector(`[data-zen-home-choice="${homeId}"]`)
+  // The menu is portalled into the Zen root, outside the widget's card.
+  const menu = document.querySelector('[data-zen-home-picker-menu]')
+  if (!(menu instanceof HTMLElement)) throw new Error('the widget’s Home picker did not open')
+  expect(box.contains(menu)).toBe(false)
+  const choice = menu.querySelector(`[data-zen-home-choice="${homeId}"]`)
   if (!(choice instanceof HTMLElement)) throw new Error(`no Home ${homeId} in the widget's picker`)
   await act(async () => {
     fireEvent.click(choice)
@@ -1076,9 +1082,14 @@ describe('the Agents view (Garden 1)', () => {
     expectEveryButtonPointer()
 
     await act(async () => {
-      fireEvent.click(picker.querySelector('button') as HTMLElement)
+      fireEvent.click(picker.querySelector('[data-focus-group-trigger]') as HTMLElement)
     })
-    const play = Array.from(picker.querySelectorAll('button')).find((b) => b.textContent?.includes('Play'))
+    // Portalled into the Zen root (outside the card), with Zen's menu look.
+    const menu = document.querySelector('[data-zen-focus-group-menu]')
+    if (!(menu instanceof HTMLElement)) throw new Error('the focus-group menu did not open')
+    expect(picker.contains(menu)).toBe(false)
+    expect(menu.parentElement).toBe(document.querySelector('[data-zen-root]'))
+    const play = Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Play'))
     if (!play) throw new Error('no Play in the focus-group dropdown')
     expectEveryButtonPointer()
     await act(async () => {
@@ -1089,6 +1100,56 @@ describe('the Agents view (Garden 1)', () => {
     // The list changed; the window's workspace didn't.
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
     expect(picker.textContent).toContain('Play')
+  })
+
+  it('GROUP: label: the dropdown keeps its pill trigger, isn’t clipped by Zen’s CSS or the card, flips up near the bottom, and outside click closes it', async () => {
+    act(() => useFocusGroupsStore.setState({ focusGroupsEnabled: true, focusGroups: GROUPS, activeFocusGroupId: 'g-work' }))
+    await mountZen()
+    await openRailView('agents')
+    await agentsViewRows(3)
+    const picker = document.querySelector('[data-zen-focus-group-picker]') as HTMLElement
+    const trigger = picker.querySelector('[data-focus-group-trigger]') as HTMLElement
+    const dropdownRoot = trigger.parentElement as HTMLElement
+    // The label's wrapper moved the dropdown one level down: Zen's widget CSS
+    // targeted `> div > div` (the old menu) and so put `overflow: hidden` on
+    // the dropdown's own root, which hid the whole menu. It now targets the
+    // trigger and the menu by attribute.
+    // (jsdom doesn't cascade these properties, so match the rules' selectors.)
+    const rules = ZEN_WIDGET_CSS.split('\n').filter((l) => l.includes('focus-group'))
+    const selectorOf = (decl: string): string => {
+      const line = rules.find((l) => l.includes(decl))
+      if (!line) throw new Error(`no focus-group rule with ${decl}`)
+      return line.slice(0, line.indexOf('{')).trim()
+    }
+    const clip = selectorOf('overflow: hidden')
+    const pill = selectorOf('border-radius: 999px')
+    expect(dropdownRoot.matches(clip)).toBe(false)
+    expect(picker.querySelector(clip)).toBeNull()
+    expect(trigger.matches(pill)).toBe(true)
+
+    // Near the bottom of the window: opens upward.
+    dropdownRoot.getBoundingClientRect = () =>
+      ({ top: window.innerHeight - 30, bottom: window.innerHeight - 6, left: 300, right: 470, width: 170, height: 24, x: 300, y: 0, toJSON: () => ({}) }) as DOMRect
+    await act(async () => {
+      fireEvent.click(trigger)
+    })
+    const menu = document.querySelector('[data-zen-focus-group-menu]') as HTMLElement
+    expect(menu).not.toBeNull()
+    expect(menu.closest('[data-zen-column]')).toBeNull()
+    expect(menu.parentElement).toBe(document.querySelector('[data-zen-root]'))
+    expect(menu.matches(clip)).toBe(true) // Zen's rounded menu look, on the menu itself
+    expect(menu.getAttribute('data-placement')).toBe('up')
+    expect(menu.style.bottom).toBe('32px')
+    expect(menu.style.width).toBe('170px')
+    expect(menu.style.zIndex).toBe(String(ZEN_ANCHORED_MENU_LAYER))
+    expectEveryButtonPointer()
+
+    // An outside click (the agents list) closes it without a pick.
+    await act(async () => {
+      fireEvent.mouseDown(document.querySelector('[data-zen-agent-row]') as HTMLElement)
+    })
+    expect(document.querySelector('[data-zen-focus-group-menu]')).toBeNull()
+    expect(useFocusGroupsStore.getState().activeFocusGroupId).toBe('g-work')
   })
 
   it('focus groups on, a group with nothing in it says so', async () => {
@@ -2186,6 +2247,56 @@ describe('the Agents widget’s Home picker (G27, TG4.4)', () => {
       )
     })
     await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')).not.toBeNull())
+  })
+
+  it('its menu is portalled out of the clipping column card, above Zen’s layers; flips up near the bottom; outside click closes', async () => {
+    await mountZen()
+    const box = document.querySelector('[data-zen-widget-id="agents"]') as HTMLElement
+    const card = box.closest('[data-zen-column]') as HTMLElement
+    // The card that clipped it (Rosson 2026-10-04: "the agent section borders cuts it off").
+    expect(card.style.overflow).toBe('hidden')
+    const button = box.querySelector('[data-zen-home-picker-button]') as HTMLElement
+    button.getBoundingClientRect = () =>
+      ({ top: 20, bottom: 40, left: 200, right: 280, width: 80, height: 20, x: 200, y: 20, toJSON: () => ({}) }) as DOMRect
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    let menu = document.querySelector('[data-zen-home-picker-menu]') as HTMLElement
+    expect(menu).not.toBeNull()
+    expect(card.contains(menu)).toBe(false)
+    const root = document.querySelector('[data-zen-root]') as HTMLElement
+    expect(menu.parentElement).toBe(root)
+    expect(menu.style.position).toBe('fixed')
+    expect(menu.style.top).toBe('44px')
+    expect(menu.style.left).toBe('200px')
+    expect(menu.style.minWidth).toBe('180px')
+    expect(menu.style.zIndex).toBe(String(ZEN_ANCHORED_MENU_LAYER))
+    expect(menu.getAttribute('data-placement')).toBe('down')
+    // Zen's tokens: it lives under the root that defines them.
+    expect(menu.style.background).toBe('var(--zen-surface-raised)')
+    expectEveryButtonPointer()
+
+    // An outside click closes it.
+    await act(async () => {
+      fireEvent.mouseDown(root)
+    })
+    expect(document.querySelector('[data-zen-home-picker-menu]')).toBeNull()
+
+    // Near the bottom: it opens upward.
+    button.getBoundingClientRect = () =>
+      ({ top: window.innerHeight - 30, bottom: window.innerHeight - 10, left: 200, right: 280, width: 80, height: 20, x: 200, y: 0, toJSON: () => ({}) }) as DOMRect
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    menu = document.querySelector('[data-zen-home-picker-menu]') as HTMLElement
+    expect(menu.getAttribute('data-placement')).toBe('up')
+    expect(menu.style.bottom).toBe('34px')
+    // And a pick from it still works.
+    await act(async () => {
+      fireEvent.click(menu.querySelector('[data-zen-home-choice="h2"]') as HTMLElement)
+    })
+    expect(document.querySelector('[data-zen-home-picker-menu]')).toBeNull()
+    expect(document.querySelector('[data-zen-home-picker-button]')?.textContent).toContain('Personal')
   })
 
   it('the Garden’s seed Home comes first', async () => {

@@ -119,11 +119,14 @@ pub(crate) fn map_ptr_cp_response(resp: &DnsHttpResponse) -> CliResponse {
             "tunnel token rejected by PTR API — re-pair K2 Connect".into(),
         ),
         404 => {
-            let hint = parse_cp_hint(&resp.body)
-                .unwrap_or_else(|| "no K2X servers row for this box — PTR write refused".into());
+            // k2.dev answers JSON 404 (`route_missing`, or a servers-row
+            // miss); that passes through. A non-JSON 404 (an HTML page)
+            // tells us only that k2.dev had no such page.
             let body = if resp.body.trim_start().starts_with('{') {
                 resp.body.clone()
             } else {
+                let hint = "k2.dev returned 404 (not JSON) — the PTR route may be missing \
+                            on this k2.dev, or there is no K2X servers row for this box";
                 serde_json::json!({
                     "ok": false,
                     "error": { "code": "not_found", "hint": hint },
@@ -370,6 +373,58 @@ impl PtrSetDeps for LivePtrSetDeps {
     }
 }
 
+/// Merge the local alignment snapshot `show` into k2.dev's 200 body `v`.
+///
+/// k2.dev asks the authoritative reverse nameservers after the write and
+/// returns `published`, `authoritativePtr` and the public resolver answers.
+/// When `authoritativePtr` is there it decides `ptr` / `ptrMatchesHelo` /
+/// `aligned`: one recursive lookup from this box can still hold the old
+/// name in cache. That lookup stays as `ptrLocal`, with `resolverNote` when
+/// it differs. An older k2.dev (no `authoritativePtr`) keeps the old
+/// behaviour: the local lookup decides.
+fn merge_set_alignment(v: &mut serde_json::Value, show: &serde_json::Value, hostname: &str) {
+    if v.get("ok").is_none() {
+        v["ok"] = serde_json::json!(true);
+    }
+    v["hostname"] = serde_json::json!(hostname);
+    v["helo"] = serde_json::json!(hostname);
+    v["originIpv4"] = show["originIpv4"].clone();
+    v["aRecords"] = show["aRecords"].clone();
+    v["aMatchesOrigin"] = show["aMatchesOrigin"].clone();
+
+    let authoritative = v
+        .get("authoritativePtr")
+        .and_then(|p| p.as_str())
+        .map(|p| p.trim().trim_end_matches('.').to_string())
+        .filter(|p| !p.is_empty());
+    let Some(auth) = authoritative else {
+        v["ptr"] = show["ptr"].clone();
+        v["ptrMatchesHelo"] = show["ptrMatchesHelo"].clone();
+        v["aligned"] = show["aligned"].clone();
+        return;
+    };
+
+    let ptr_matches_helo = eq_host(&auth, hostname);
+    let a_matches_origin = show["aMatchesOrigin"].as_bool() == Some(true);
+    let local = show["ptr"].as_str().map(|s| s.to_string());
+    v["ptr"] = serde_json::json!(auth);
+    v["ptrSource"] = serde_json::json!("authoritative");
+    v["ptrLocal"] = serde_json::json!(local);
+    v["ptrMatchesHelo"] = serde_json::json!(ptr_matches_helo);
+    v["aligned"] = serde_json::json!(ptr_matches_helo && a_matches_origin);
+    let local_differs = match local.as_deref() {
+        Some(l) => !eq_host(l, &auth),
+        None => true,
+    };
+    if local_differs {
+        v["resolverNote"] = serde_json::json!(format!(
+            "this box's resolver still has {} cached; the published PTR is {auth}. \
+             The cache clears within its TTL.",
+            local.as_deref().unwrap_or("no PTR")
+        ));
+    }
+}
+
 /// POST `/cli/mail/ptr/set` `{hostname}`.
 pub fn handle_ptr_set(body: &[u8]) -> CliResponse {
     let env = RealPreflightEnv;
@@ -466,21 +521,11 @@ pub(crate) fn handle_ptr_set_with(
     match deps.call_cp(&hostname) {
         Ok(resp) => {
             let mut mapped = map_ptr_cp_response(&resp);
-            // On success, enrich with local alignment snapshot.
+            // On success, enrich with the alignment snapshot.
             if resp.status == 200 || resp.status == 201 {
                 let show = ptr_show_json(origin, Some(&hostname), resolver);
                 if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&mapped.body) {
-                    if v.get("ok").is_none() {
-                        v["ok"] = serde_json::json!(true);
-                    }
-                    v["hostname"] = serde_json::json!(hostname);
-                    v["helo"] = serde_json::json!(hostname);
-                    v["originIpv4"] = show["originIpv4"].clone();
-                    v["ptr"] = show["ptr"].clone();
-                    v["aRecords"] = show["aRecords"].clone();
-                    v["ptrMatchesHelo"] = show["ptrMatchesHelo"].clone();
-                    v["aMatchesOrigin"] = show["aMatchesOrigin"].clone();
-                    v["aligned"] = show["aligned"].clone();
+                    merge_set_alignment(&mut v, &show, &hostname);
                     mapped.body = v.to_string();
                 }
             }
@@ -776,6 +821,125 @@ mod tests {
         assert_eq!(helo_n.load(Ordering::SeqCst), 1);
         assert_eq!(cp_n.load(Ordering::SeqCst), 1);
         assert_eq!(last.lock().unwrap().as_deref(), Some("mail.acme.dev"));
+    }
+
+    /// A set whose A matches origin, local resolver answers `local_ptr`,
+    /// and k2.dev answers `cp_body` with 200.
+    fn set_with_cp_body(local_ptr: Option<&str>, cp_body: &str) -> serde_json::Value {
+        let env = FakeEnv {
+            ip: Some("203.0.113.7".into()),
+        };
+        let mut dns = FakeDns::default();
+        let origin: Ipv4Addr = "203.0.113.7".parse().unwrap();
+        dns.a.insert("mail.acme.dev".into(), vec![origin]);
+        if let Some(p) = local_ptr {
+            dns.ptr.insert("203.0.113.7".into(), vec![p.into()]);
+        }
+        let mut deps = deps_ok();
+        deps.cp_resp = Some(DnsHttpResponse {
+            status: 200,
+            body: cp_body.into(),
+        });
+        let r = handle_ptr_set_with(br#"{"hostname":"mail.acme.dev"}"#, &env, &dns, &mut deps);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        serde_json::from_str(&r.body).expect("set body is JSON")
+    }
+
+    const STOCK: &str = "ns1003061.ip-40-160-53.us";
+
+    #[test]
+    fn set_authoritative_match_with_stale_local_is_aligned_with_cache_note() {
+        let v = set_with_cp_body(
+            Some(STOCK),
+            r#"{"ok":true,"ipv4":"203.0.113.7","hostname":"mail.acme.dev","reverse":"mail.acme.dev","changed":true,"published":true,"authoritativePtr":"mail.acme.dev","resolvers":[{"server":"dns100.ovh.us","ptr":"mail.acme.dev"},{"server":"8.8.8.8","ptr":"ns1003061.ip-40-160-53.us"},{"server":"1.1.1.1","ptr":"mail.acme.dev"}],"hint":"Authoritative reverse is mail.acme.dev. 8.8.8.8 still has ns1003061.ip-40-160-53.us cached."}"#,
+        );
+        assert_eq!(v["aligned"], true, "{v}");
+        assert_eq!(v["ptr"], "mail.acme.dev", "{v}");
+        assert_eq!(v["ptrSource"], "authoritative", "{v}");
+        assert_eq!(v["ptrLocal"], STOCK, "{v}");
+        assert_eq!(v["ptrMatchesHelo"], true, "{v}");
+        assert_eq!(v["aMatchesOrigin"], true, "{v}");
+        assert_eq!(v["published"], true, "{v}");
+        let note = v["resolverNote"].as_str().expect("resolverNote present");
+        assert!(note.contains(STOCK), "{note}");
+        assert!(note.contains("TTL"), "{note}");
+        // k2.dev's own fields pass through.
+        assert_eq!(v["resolvers"].as_array().expect("resolvers").len(), 3, "{v}");
+        assert!(v["hint"].as_str().expect("hint").contains("8.8.8.8"), "{v}");
+    }
+
+    #[test]
+    fn set_authoritative_match_with_fresh_local_has_no_cache_note() {
+        let v = set_with_cp_body(
+            Some("mail.acme.dev."),
+            r#"{"ok":true,"published":true,"authoritativePtr":"mail.acme.dev"}"#,
+        );
+        assert_eq!(v["aligned"], true, "{v}");
+        assert_eq!(v["ptrLocal"], "mail.acme.dev.", "{v}");
+        assert!(v.get("resolverNote").is_none(), "{v}");
+    }
+
+    #[test]
+    fn set_authoritative_mismatch_is_not_aligned_even_if_local_matches() {
+        let v = set_with_cp_body(
+            Some("mail.acme.dev"),
+            r#"{"ok":true,"published":false,"authoritativePtr":"ns1003061.ip-40-160-53.us"}"#,
+        );
+        assert_eq!(v["aligned"], false, "{v}");
+        assert_eq!(v["ptrMatchesHelo"], false, "{v}");
+        assert_eq!(v["ptr"], STOCK, "{v}");
+        assert_eq!(v["ptrLocal"], "mail.acme.dev", "{v}");
+    }
+
+    #[test]
+    fn set_without_authoritative_ptr_keeps_local_lookup_behaviour() {
+        // Older k2.dev: plain {"ok":true}. Local stale PTR decides.
+        let old = set_with_cp_body(Some(STOCK), r#"{"ok":true}"#);
+        assert_eq!(old["aligned"], false, "{old}");
+        assert_eq!(old["ptr"], STOCK, "{old}");
+        assert_eq!(old["ptrMatchesHelo"], false, "{old}");
+        assert!(old.get("ptrLocal").is_none(), "{old}");
+        assert!(old.get("ptrSource").is_none(), "{old}");
+        assert!(old.get("resolverNote").is_none(), "{old}");
+
+        // published:null (auth NS unreachable) sends authoritativePtr null.
+        let unknown = set_with_cp_body(
+            Some("mail.acme.dev"),
+            r#"{"ok":true,"published":null,"authoritativePtr":null}"#,
+        );
+        assert_eq!(unknown["aligned"], true, "{unknown}");
+        assert_eq!(unknown["ptr"], "mail.acme.dev", "{unknown}");
+        assert!(unknown.get("ptrSource").is_none(), "{unknown}");
+    }
+
+    #[test]
+    fn map_ptr_cp_html_404_names_what_we_know() {
+        let resp = DnsHttpResponse {
+            status: 404,
+            body: "<!DOCTYPE html><html><body>404: This page could not be found.</body></html>"
+                .into(),
+        };
+        let r = map_ptr_cp_response(&resp);
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "not_found", "{}", r.body);
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("404 (not JSON)"), "{hint}");
+        assert!(hint.contains("PTR route may be missing"), "{hint}");
+        assert!(hint.contains("no K2X servers row"), "{hint}");
+        assert!(!hint.contains("PTR write refused"), "{hint}");
+    }
+
+    #[test]
+    fn map_ptr_cp_json_404_route_missing_passes_through() {
+        let body = r#"{"ok":false,"error":{"code":"route_missing","hint":"POST /api/dns/ptr is not a deployed DNS route."}}"#;
+        let resp = DnsHttpResponse {
+            status: 404,
+            body: body.into(),
+        };
+        let r = map_ptr_cp_response(&resp);
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+        assert_eq!(r.body, body);
     }
 
     #[test]

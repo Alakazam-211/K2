@@ -26223,8 +26223,13 @@ elif verb == "ptr_set":
             d.get("helo") or "?",
             d.get("originIpv4") or "?",
             d.get("aligned")))
-        if d.get("ptr"):
+        if d.get("ptrSource") == "authoritative":
+            print("published ptr: %s  (k2.dev, authoritative nameservers)" % d.get("ptr"))
+            print("local ptr    : %s" % (d.get("ptrLocal") or "(none)"))
+        elif d.get("ptr"):
             print("live ptr: %s" % d.get("ptr"))
+        if d.get("resolverNote"):
+            print("note: %s" % d.get("resolverNote"))
 
 elif verb == "bans_list":
     d = call("GET", "/cli/mail/bans")
@@ -30724,6 +30729,9 @@ Normalize hostname, require public A(hostname) includes origin IPv4,
 set Stalwart HELO + mail_server.hostname, then CP POST /api/dns/ptr
 {hostname, helo}. HELO failure skips CP. Unpaired k2c_ fails loud.
 POST /cli/mail/ptr/set. mail_manage.
+
+aligned uses k2.dev's authoritative PTR when k2.dev returns one; this
+box's own lookup is ptrLocal, and a note says when its cache is stale.
 
 USAGE
   k2 hostmail ptr set <hostname> [--json]

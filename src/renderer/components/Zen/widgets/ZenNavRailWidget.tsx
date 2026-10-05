@@ -13,14 +13,97 @@
 // 44px wide, icons only. Everything goes through the bridge
 // (`app:navigate`: `app.open`, `app.current`, `app.subscribeCurrent`,
 // `app.badges`, `app.subscribe`).
+//
+// Rosson 2026-10-04, "Option A": the current item sits on one liquid glass
+// pill that springs from icon to icon when the view changes. The slide is
+// Motion's shared layout (`layoutId`, scoped per rail so two rails never
+// trade pills); the glass is plain CSS that WebKit draws (no SVG filters in
+// `backdrop-filter`): a low-alpha accent tint over the surface, backdrop
+// blur + saturate, a light rim, a top highlight, a soft shadow and a faint
+// diagonal sheen. Colours are Zen tokens only. Reduced motion: no slide,
+// the pill just appears on the new item. Reduced transparency: a solid
+// tint, no blur, no sheen.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import { LayoutGroup, motion, type Transition } from 'motion/react'
 import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
 import type { ZenAppBadges, ZenAppPage } from '@/lib/zen/zen-app-nav'
+import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
 import type { ZenWidgetProps } from '../zen-registry'
 
 /** The rail's width (CSS px). */
 export const ZEN_NAV_RAIL_WIDTH_PX = 44
+
+/** The pill's spring: quick, settles with a hint of give, no wobble. */
+export const ZEN_NAV_PILL_SPRING: Transition = { type: 'spring', stiffness: 500, damping: 35, mass: 1 }
+
+/** How the pill moves: a shared-layout spring, or (reduced motion) no
+ *  shared layout at all, so it is simply drawn on the new item. */
+export function zenNavPillMotion(
+  reducedMotion: boolean,
+  layoutId: string,
+): { mode: 'spring' | 'instant'; layoutId: string | undefined; transition: Transition } {
+  return reducedMotion
+    ? { mode: 'instant', layoutId: undefined, transition: { duration: 0 } }
+    : { mode: 'spring', layoutId, transition: ZEN_NAV_PILL_SPRING }
+}
+
+// Glass recipe. Light: a white rim + bright top highlight; dark: both
+// dimmer, and a deeper shadow. Every colour comes from a Zen token or plain
+// white/black at low alpha, so each Zen theme tints it.
+const PILL_TINT = 'color-mix(in srgb, var(--zen-accent) 16%, color-mix(in srgb, var(--zen-surface-raised) 52%, transparent))'
+const PILL_SHEEN =
+  'linear-gradient(135deg, rgb(255 255 255 / 0.34) 0%, rgb(255 255 255 / 0.08) 38%, transparent 56%, rgb(255 255 255 / 0.10) 100%)'
+
+/** The rail's styles: the glass pill, the frosted rail and the hover glow. */
+export const ZEN_NAV_RAIL_CSS = `
+[data-zen-root] [data-zen-widget="nav-rail"] {
+  --zen-nav-pill-tint: ${PILL_TINT};
+  --zen-nav-pill-rim: color-mix(in srgb, var(--zen-accent) 22%, rgb(255 255 255 / 0.62));
+  --zen-nav-pill-highlight: rgb(255 255 255 / 0.75);
+  --zen-nav-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px color-mix(in srgb, var(--zen-accent) 18%, transparent);
+  --zen-nav-pill-sheen: ${PILL_SHEEN};
+  background: color-mix(in srgb, var(--zen-surface) 80%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+}
+[data-zen-root][data-zen-scheme="dark"] [data-zen-widget="nav-rail"] {
+  --zen-nav-pill-tint: color-mix(in srgb, var(--zen-accent) 22%, color-mix(in srgb, var(--zen-surface-raised) 48%, transparent));
+  --zen-nav-pill-rim: color-mix(in srgb, var(--zen-accent) 26%, rgb(255 255 255 / 0.16));
+  --zen-nav-pill-highlight: rgb(255 255 255 / 0.22);
+  --zen-nav-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 16px rgb(0 0 0 / 0.30);
+  --zen-nav-pill-sheen: linear-gradient(135deg, rgb(255 255 255 / 0.14) 0%, rgb(255 255 255 / 0.03) 40%, transparent 58%, rgb(255 255 255 / 0.05) 100%);
+}
+[data-zen-root] [data-zen-nav-pill] {
+  background: var(--zen-nav-pill-sheen), var(--zen-nav-pill-tint);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+  border: 1px solid var(--zen-nav-pill-rim);
+}
+[data-zen-root] [data-zen-nav] { transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }
+[data-zen-root] [data-zen-nav]:not([aria-current]):hover {
+  color: var(--zen-text);
+  background: color-mix(in srgb, var(--zen-accent) 9%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--zen-accent) 16%, transparent);
+}
+[data-zen-root] [data-zen-nav]:focus-visible { outline: 2px solid color-mix(in srgb, var(--zen-accent) 60%, transparent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  [data-zen-root] [data-zen-nav] { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-zen-root] [data-zen-widget="nav-rail"] {
+    background: var(--zen-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  [data-zen-root] [data-zen-nav-pill] {
+    background: color-mix(in srgb, var(--zen-accent) 14%, var(--zen-surface-raised));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border-color: color-mix(in srgb, var(--zen-accent) 30%, var(--zen-border));
+  }
+}
+`
 
 const ICON = {
   width: 18,
@@ -112,81 +195,126 @@ function useCurrentView(bridge: ZenWidgetProps['bridge']): ZenAppPage {
   return view
 }
 
+/** `prefers-reduced-motion`, live. */
+function useReducedMotion(): boolean {
+  const [on, setOn] = useState(() => zenMediaMatches(REDUCED_MOTION_QUERY))
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia(REDUCED_MOTION_QUERY)
+    const sync = (): void => setOn(mq.matches)
+    sync()
+    mq.addEventListener?.('change', sync)
+    return () => mq.removeEventListener?.('change', sync)
+  }, [])
+  return on
+}
+
+/** The glass pill behind the current icon. One per rail. */
+function SelectionPill({ scope, reducedMotion }: { scope: string; reducedMotion: boolean }): React.JSX.Element {
+  const m = zenNavPillMotion(reducedMotion, 'zen-nav-pill')
+  return (
+    <motion.div
+      aria-hidden
+      data-zen-nav-pill=""
+      data-zen-nav-pill-motion={m.mode}
+      data-zen-nav-pill-scope={scope}
+      layoutId={m.layoutId}
+      transition={m.transition}
+      initial={false}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 0,
+        borderRadius: 'calc(var(--zen-radius) - 4px)',
+        boxShadow: 'inset 0 1px 0 var(--zen-nav-pill-highlight), inset 0 -1px 0 rgb(255 255 255 / 0.06), var(--zen-nav-pill-shadow)',
+        pointerEvents: 'none',
+      }}
+    />
+  )
+}
+
 export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const badges = useBadges(bridge)
   const view = useCurrentView(bridge)
+  const reducedMotion = useReducedMotion()
   const tickets = badgeText(badges.tickets.badge)
+  // Scope the shared layout to this rail: two rails (or a remount next to
+  // the old one) never animate each other's pill.
+  const scope = `zen-nav-rail-${decl.id}-${useId()}`
   return (
-    <nav
-      aria-label="Pages"
-      data-zen-widget="nav-rail"
-      data-zen-widget-id={decl.id}
-      className="flex flex-shrink-0 flex-col items-center"
-      style={{
-        width: ZEN_NAV_RAIL_WIDTH_PX,
-        padding: '6px 0',
-        gap: 4,
-        background: 'var(--zen-surface)',
-        border: '1px solid var(--zen-border)',
-        borderRadius: 'var(--zen-radius)',
-      }}
-    >
-      {ZEN_NAV_RAIL_ITEMS.map(({ page, name, title, Icon }) => {
-        const current = page === view
-        return (
-          <button
-            key={page}
-            type="button"
-            aria-label={name}
-            aria-current={current ? 'page' : undefined}
-            title={title}
-            data-zen-nav={page}
-            data-zen-soft-button=""
-            onClick={() => {
-              if (current) return
-              try {
-                bridge.call('app.open', page)
-              } catch (err) {
-                console.warn(`[zen] open ${page} failed:`, err)
-              }
-            }}
-            className={`no-drag relative flex items-center justify-center ${current ? 'cursor-default' : 'cursor-pointer'}`}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 'calc(var(--zen-radius) - 4px)',
-              color: current ? 'var(--zen-accent)' : 'var(--zen-text-muted)',
-              background: current ? 'var(--zen-surface-raised)' : 'transparent',
-              boxShadow: current ? 'inset 2px 0 0 var(--zen-accent)' : undefined,
-            }}
-          >
-            <Icon />
-            {page === 'tickets' && tickets !== null && (
-              <span
-                data-zen-nav-badge=""
-                data-stale={badges.tickets.stale ? 'true' : 'false'}
-                title={badges.tickets.title}
-                className="absolute flex items-center justify-center"
-                style={{
-                  top: -2,
-                  right: -2,
-                  minWidth: 14,
-                  height: 14,
-                  padding: '0 3px',
-                  borderRadius: 999,
-                  fontSize: 8,
-                  fontWeight: 700,
-                  background: 'var(--zen-working)',
-                  color: 'var(--zen-accent-text)',
-                  opacity: badges.tickets.stale ? 0.5 : 1,
-                }}
-              >
-                {tickets}
+    <LayoutGroup id={scope}>
+      <nav
+        aria-label="Pages"
+        data-zen-widget="nav-rail"
+        data-zen-widget-id={decl.id}
+        className="flex flex-shrink-0 flex-col items-center"
+        style={{
+          width: ZEN_NAV_RAIL_WIDTH_PX,
+          padding: '6px 0',
+          gap: 4,
+          border: '1px solid var(--zen-border)',
+          borderRadius: 'var(--zen-radius)',
+        }}
+      >
+        <style data-zen-nav-rail-glass="">{ZEN_NAV_RAIL_CSS}</style>
+        {ZEN_NAV_RAIL_ITEMS.map(({ page, name, title, Icon }) => {
+          const current = page === view
+          return (
+            <button
+              key={page}
+              type="button"
+              aria-label={name}
+              aria-current={current ? 'page' : undefined}
+              title={title}
+              data-zen-nav={page}
+              onClick={() => {
+                if (current) return
+                try {
+                  bridge.call('app.open', page)
+                } catch (err) {
+                  console.warn(`[zen] open ${page} failed:`, err)
+                }
+              }}
+              className={`no-drag relative flex items-center justify-center ${current ? 'cursor-default' : 'cursor-pointer'}`}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 'calc(var(--zen-radius) - 4px)',
+                color: current ? 'var(--zen-accent)' : 'var(--zen-text-muted)',
+              }}
+            >
+              {current && <SelectionPill scope={scope} reducedMotion={reducedMotion} />}
+              <span className="relative flex items-center justify-center" style={{ zIndex: 1 }}>
+                <Icon />
               </span>
-            )}
-          </button>
-        )
-      })}
-    </nav>
+              {page === 'tickets' && tickets !== null && (
+                <span
+                  data-zen-nav-badge=""
+                  data-stale={badges.tickets.stale ? 'true' : 'false'}
+                  title={badges.tickets.title}
+                  className="absolute flex items-center justify-center"
+                  style={{
+                    zIndex: 2,
+                    top: -2,
+                    right: -2,
+                    minWidth: 14,
+                    height: 14,
+                    padding: '0 3px',
+                    borderRadius: 999,
+                    fontSize: 8,
+                    fontWeight: 700,
+                    background: 'var(--zen-working)',
+                    color: 'var(--zen-accent-text)',
+                    opacity: badges.tickets.stale ? 0.5 : 1,
+                  }}
+                >
+                  {tickets}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </nav>
+    </LayoutGroup>
   )
 }

@@ -386,6 +386,7 @@ import { zenEmptyThreadText, zenPermissionText } from './ZenConversationWidget'
 import { zenGardenAskDraft } from './ZenGardenEmptyWidget'
 import { ZEN_PROJECTS_TEXT, zenProjectsAskDraft } from './ZenProjectsViewWidget'
 import { ZEN_EMPTY_FOCUS_GROUP } from './ZenAgentsWidget'
+import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, zenNavPillMotion } from './ZenNavRailWidget'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -893,6 +894,106 @@ describe('the nav rail (Garden 1)', () => {
     act(() => void withCap.call('app.open', 'projects'))
     expect(withCap.call('app.current')).toBe('projects')
     expect(useZenWindowStore.getState().on).toBe(true)
+  })
+
+  // Rosson 2026-10-04, Option A: one liquid glass pill under the current
+  // item, springing between icons (Motion shared layout).
+  describe('the glass selection pill', () => {
+    let restoreMatchMedia: PropertyDescriptor | undefined
+
+    beforeEach(() => {
+      restoreMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    })
+
+    afterEach(() => {
+      if (restoreMatchMedia) Object.defineProperty(window, 'matchMedia', restoreMatchMedia)
+      else delete (window as { matchMedia?: unknown }).matchMedia
+    })
+
+    function setReducedMotion(on: boolean): void {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        value: (query: string) => ({
+          matches: query === '(prefers-reduced-motion: reduce)' ? on : false,
+          media: query,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
+      })
+    }
+
+    function pills(): HTMLElement[] {
+      return Array.from(document.querySelectorAll('[data-zen-widget="nav-rail"] [data-zen-nav-pill]')) as HTMLElement[]
+    }
+
+    function onePill(): HTMLElement {
+      const all = pills()
+      expect(all.length).toBe(1)
+      return all[0]
+    }
+
+    it('exactly one pill, inside the current item, and it moves with the view', async () => {
+      setReducedMotion(false)
+      await mountZen()
+      const pill = onePill()
+      expect(pill.closest('[data-zen-nav]')?.getAttribute('data-zen-nav')).toBe('home')
+      expect(pill.closest('[data-zen-nav]')?.getAttribute('aria-current')).toBe('page')
+      expect(pill.getAttribute('aria-hidden')).toBe('true')
+      expect(pill.getAttribute('data-zen-nav-pill-motion')).toBe('spring')
+      for (const view of ['agents', 'tickets', 'projects', 'home'] as const) {
+        await showView(view)
+        const moved = onePill()
+        expect(moved.closest('[data-zen-nav]')?.getAttribute('data-zen-nav'), view).toBe(view)
+        expect(currentNav()).toEqual([view])
+      }
+      // Still Zen, no safe mode, every non-current button a pointer.
+      expect(useZenWindowStore.getState().on).toBe(true)
+      expect(useZenViewStore.getState().safe).toBeNull()
+      expectEveryButtonPointer()
+    })
+
+    it('its layout scope is this rail’s own', async () => {
+      setReducedMotion(false)
+      await mountZen()
+      const scope = onePill().getAttribute('data-zen-nav-pill-scope') ?? ''
+      const railId = document.querySelector('[data-zen-widget="nav-rail"]')?.getAttribute('data-zen-widget-id')
+      expect(railId).toBeTruthy()
+      expect(scope.startsWith(`zen-nav-rail-${railId}-`)).toBe(true)
+      expect(scope.length).toBeGreaterThan(`zen-nav-rail-${railId}-`.length)
+    })
+
+    it('reduced motion: no slide, the pill is drawn on the new item at once', async () => {
+      setReducedMotion(true)
+      await mountZen()
+      expect(onePill().getAttribute('data-zen-nav-pill-motion')).toBe('instant')
+      await showView('tickets')
+      const pill = onePill()
+      expect(pill.getAttribute('data-zen-nav-pill-motion')).toBe('instant')
+      expect(pill.closest('[data-zen-nav]')?.getAttribute('data-zen-nav')).toBe('tickets')
+    })
+
+    it('the motion config: a gentle spring with a shared layout id, or none at all', () => {
+      expect(ZEN_NAV_PILL_SPRING).toEqual({ type: 'spring', stiffness: 500, damping: 35, mass: 1 })
+      expect(zenNavPillMotion(false, 'pill')).toEqual({ mode: 'spring', layoutId: 'pill', transition: ZEN_NAV_PILL_SPRING })
+      expect(zenNavPillMotion(true, 'pill')).toEqual({ mode: 'instant', layoutId: undefined, transition: { duration: 0 } })
+    })
+
+    it('glass in WebKit terms: blur + saturate, Zen tokens only, no SVG filter, solid under reduced transparency', async () => {
+      setReducedMotion(false)
+      await mountZen()
+      const css = document.querySelector('[data-zen-widget="nav-rail"] style[data-zen-nav-rail-glass]')?.textContent ?? ''
+      expect(css).toBe(ZEN_NAV_RAIL_CSS)
+      expect(css).toContain('backdrop-filter: blur(14px) saturate(180%)')
+      expect(css).toContain('-webkit-backdrop-filter: blur(14px) saturate(180%)')
+      expect(css).toContain('var(--zen-accent)')
+      expect(css).toContain('[data-zen-scheme="dark"]')
+      expect(css).not.toMatch(/url\(/)
+      expect(css).not.toMatch(/var\(--color-/)
+      const reduced = css.slice(css.indexOf('@media (prefers-reduced-transparency: reduce)'))
+      expect(reduced).toContain('[data-zen-nav-pill]')
+      expect(reduced).toContain('backdrop-filter: none')
+      expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+    })
   })
 })
 

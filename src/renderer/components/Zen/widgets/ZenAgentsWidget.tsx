@@ -27,6 +27,14 @@
 // cap `agents:add`) above the row. It shows in whole-Home mode when the
 // widget holds the cap; a one-agent widget has nothing to add to.
 //
+// The Agents view (Rosson 2026-10-04, the nav rail's Agents in Garden 1):
+// the same widget with `source: "workspaces"` lists THIS server's
+// workspaces the way the app's Agents page does. In place of the Home
+// picker it shows the app's focus-group dropdown (`FocusGroupDropdown`)
+// when focus groups are on; picking a group lists that group's agents
+// (`focusGroups.set`, never a workspace switch). No Add agent row there:
+// it adds to a Home.
+//
 // Everything comes through the bridge (`agents:read`, `agents:add`).
 
 import { useEffect, useRef, useState } from 'react'
@@ -38,8 +46,13 @@ import { useZenAddAgentClick } from '../ZenTemplateControls'
 import { requestZenComposeFocus } from '@/lib/zen/zen-compose-focus'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
 import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
+import { zenAgentsSource } from '@/lib/zen/zen-rail-views'
+import type { ZenFocusGroups } from '@/lib/zen/zen-data'
+import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
+export const ZEN_EMPTY_SERVER = 'No agents on this server yet.'
+export const ZEN_EMPTY_FOCUS_GROUP = 'No agents in this focus group.'
 export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
 
 function propString(props: Record<string, unknown>, name: string): string | null {
@@ -167,6 +180,49 @@ function HomePicker({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The app's focus groups (`focusGroups.get` + `focusGroups.subscribe`),
+ *  for the Agents view; null in a Home view. */
+function useFocusGroups(bridge: ZenWidgetBridge, on: boolean): ZenFocusGroups | null {
+  const [groups, setGroups] = useState<ZenFocusGroups | null>(() =>
+    on ? (bridge.call('focusGroups.get') as ZenFocusGroups) : null,
+  )
+  useEffect(() => {
+    if (!on) {
+      setGroups(null)
+      return
+    }
+    setGroups(bridge.call('focusGroups.get') as ZenFocusGroups)
+    const off = bridge.call('focusGroups.subscribe', (next: ZenFocusGroups) => setGroups(next))
+    if (typeof off !== 'function') throw new Error('zen: focusGroups.subscribe returned no unsubscribe')
+    return off as () => void
+  }, [bridge, on])
+  return groups
+}
+
+/** The Agents view's focus-group dropdown: the app's own component. */
+function FocusGroupPicker({ bridge, groups }: { bridge: ZenWidgetBridge; groups: ZenFocusGroups }): React.JSX.Element {
+  return (
+    <div
+      data-zen-focus-group-picker=""
+      className="min-w-0"
+      style={{ width: 190, textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}
+    >
+      <FocusGroupDropdown
+        options={groups.groups.map((g) => ({ id: g.id, name: g.name, color: g.color }))}
+        value={groups.active}
+        onChange={(id) => {
+          if (id === null) return
+          try {
+            bridge.call('focusGroups.set', id)
+          } catch (err) {
+            console.warn('[zen] picking a focus group failed:', err)
+          }
+        }}
+      />
     </div>
   )
 }
@@ -361,7 +417,9 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   const rows = useZenRows(bridge)
   const nowSec = useNowSec()
   const [homeId, pickHome] = useWidgetHome(bridge, rows)
-  const picker = homePickerOn(decl.props)
+  const workspaces = zenAgentsSource(decl.props) === 'workspaces'
+  const groups = useFocusGroups(bridge, workspaces)
+  const picker = !workspaces && homePickerOn(decl.props)
   // `mode: "home"` shows the whole Home even when `agent` is set.
   const agent = decl.props.mode === 'home' ? null : propString(decl.props, 'agent')
   // Home names only when they show (the picker, or the single-agent note).
@@ -417,6 +475,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
       data-zen-widget="agents"
       data-zen-widget-id={decl.id}
       data-zen-agents-mode={agent ? 'agent' : 'home'}
+      data-zen-agents-source={workspaces ? 'workspaces' : 'home'}
       data-zen-agents-home={homeId ?? undefined}
     >
       <ZenWidgetStyles />
@@ -433,6 +492,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
       >
         <span>{agent ? 'Agent' : 'Agents'}</span>
         {picker && <HomePicker homes={homes} current={home} onPick={pickHome} />}
+        {groups?.enabled && <FocusGroupPicker bridge={bridge} groups={groups} />}
       </div>
       {rows.length === 0 ? (
         <div
@@ -440,7 +500,13 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
           data-zen-agents-empty=""
           style={{ padding: 24, color: 'var(--zen-text-muted)' }}
         >
-          {agent ? zenAgentNotOnHome(agent, home?.name ?? 'this Home') : ZEN_EMPTY_HOME}
+          {workspaces
+            ? groups?.enabled
+              ? ZEN_EMPTY_FOCUS_GROUP
+              : ZEN_EMPTY_SERVER
+            : agent
+              ? zenAgentNotOnHome(agent, home?.name ?? 'this Home')
+              : ZEN_EMPTY_HOME}
         </div>
       ) : (
         <ul
@@ -454,7 +520,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
           ))}
         </ul>
       )}
-      {!agent && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
+      {!agent && !workspaces && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
     </div>
   )
 }

@@ -13,7 +13,9 @@
 //     Add agent is the Agents widget's own last row, not a template control.
 // Every widget gets only a `ZenWidgetBridge` built with its declared caps.
 // A RAIL kind (`nav-rail`) is drawn as a thin strip at the left edge of its
-// column, outside the column's box, and takes no share of the box.
+// column, outside the column's box, and takes no share of the box. An
+// UNBOXED kind (`tickets-view`) draws its own panels, so its column has no
+// box at all.
 
 import type { ComponentType } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -63,6 +65,9 @@ const widgets = new Map<string, ComponentType<ZenWidgetProps>>()
 
 /** Widget kinds drawn as a strip at the left edge of their column. */
 export const ZEN_RAIL_KINDS: ReadonlySet<string> = new Set(['nav-rail'])
+/** Widget kinds that draw their own panels: their column gets no box
+ *  (K2's Tickets view, liquid glass). */
+export const ZEN_UNBOXED_KINDS: ReadonlySet<string> = new Set(['tickets-view'])
 const templateControls = new Map<string, ComponentType<ZenTemplateControlsProps>>([
   [TEXTING_TEMPLATE_ID, ZenTextingControls],
   [BLANK_TEMPLATE_ID, ZenTextingControls],

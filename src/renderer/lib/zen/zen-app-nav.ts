@@ -1,32 +1,27 @@
 // Rosson 2026-10-04 — the `app:navigate` bridge verbs behind Zen's nav rail
 // (`nav-rail` widget, Garden 1's thin left rail).
 //
-//   bridge.call('app.open', 'agents' | 'projects' | 'tickets')
-//     Switching to an app page exits Zen (Rosson's rule): this window's Zen
-//     goes off through the same path as the toggle and ⌃⌘Z (`exitZen`),
-//     Settings closes, and the page store selects the page, exactly like the
-//     top bar's page tabs. `'home'` is the Garden itself: nothing happens.
-//   bridge.call('app.badges')            → { tickets: ZenAppBadge }
-//   bridge.call('app.subscribe', fn)     → unsubscribe; fn(badges) on change
+//   bridge.call('app.open', 'home' | 'agents' | 'projects' | 'tickets')
+//     Switches the Garden's VIEW in this window; Zen stays on (Rosson,
+//     2026-10-04: Agents, Projects and Tickets open Zen versions of those
+//     pages inside the Garden). `home` is the Garden's own page. It never
+//     touches the app's page store: the page under Zen stays put. The view
+//     is per window and remembered (`k2.zen.window.v1.<label>`).
+//   bridge.call('app.current')               → the view shown now
+//   bridge.call('app.subscribeCurrent', fn)  → unsubscribe; fn(view) on change
+//   bridge.call('app.badges')                → { tickets: ZenAppBadge }
+//   bridge.call('app.subscribe', fn)         → unsubscribe; fn(badges) on change
 //     The top bar's Tickets badge (`ticketsBadgeProps`), from the same
 //     feedback store, so Zen and the top bar always agree.
 
 import { ticketsBadgeProps } from '@/components/TopBar/PageTabs'
 import { useFeedbackStore } from '@/stores/feedback'
-import { usePageViewStore, type AppPage } from '@/stores/page-view'
-import { useSettingsStore } from '@/stores/settings'
 import { registerZenVerb, ZenBridgeError } from './zen-bridge'
-import { exitZen } from './zen-view'
+import { isZenRailView, useZenWindowStore, ZEN_RAIL_VIEWS, type ZenRailView } from './zen-window'
 
-export type ZenAppPage = 'home' | 'agents' | 'projects' | 'tickets'
+export type ZenAppPage = ZenRailView
 
-export const ZEN_APP_PAGES: readonly ZenAppPage[] = ['home', 'agents', 'projects', 'tickets']
-
-const APP_PAGE: Record<Exclude<ZenAppPage, 'home'>, AppPage> = {
-  agents: 'agents',
-  projects: 'projects',
-  tickets: 'feedback',
-}
+export const ZEN_APP_PAGES: readonly ZenAppPage[] = ZEN_RAIL_VIEWS
 
 export interface ZenAppBadge {
   badge: number | '?'
@@ -38,15 +33,25 @@ export interface ZenAppBadges {
   tickets: ZenAppBadge
 }
 
-/** `app.open(page)`: leave Zen in this window and open `page`. */
+/** `app.open(page)`: show `page` in this window's Garden (Zen stays on). */
 export function zenAppOpen(page: unknown): void {
-  if (typeof page !== 'string' || !(ZEN_APP_PAGES as readonly string[]).includes(page)) {
+  if (!isZenRailView(page)) {
     throw new ZenBridgeError('unknown_verb', 'app.open', `page must be one of ${ZEN_APP_PAGES.join(', ')}`)
   }
-  if (page === 'home') return
-  exitZen()
-  if (useSettingsStore.getState().settingsOpen) useSettingsStore.getState().closeSettings()
-  usePageViewStore.getState().setPage(APP_PAGE[page as Exclude<ZenAppPage, 'home'>])
+  useZenWindowStore.getState().setView(page)
+}
+
+/** `app.current()`: the view this window's Garden shows. */
+export function zenAppCurrent(): ZenAppPage {
+  return useZenWindowStore.getState().view
+}
+
+/** `app.subscribeCurrent(fn)`: `fn(view)` whenever it changes. */
+export function zenAppSubscribeCurrent(fn: unknown): () => void {
+  if (typeof fn !== 'function') throw new ZenBridgeError('unknown_verb', 'app.subscribeCurrent', 'needs a function')
+  return useZenWindowStore.subscribe((s, prev) => {
+    if (s.view !== prev.view) (fn as (v: ZenAppPage) => void)(s.view)
+  })
 }
 
 /** `app.badges()`: the top bar's Tickets badge right now. */
@@ -76,6 +81,8 @@ export function zenAppSubscribe(fn: unknown): () => void {
 export function installZenAppNavVerbs(): () => void {
   const offs = [
     registerZenVerb('app.open', (_ctx, page) => zenAppOpen(page)),
+    registerZenVerb('app.current', () => zenAppCurrent()),
+    registerZenVerb('app.subscribeCurrent', (_ctx, fn) => zenAppSubscribeCurrent(fn)),
     registerZenVerb('app.badges', () => zenAppBadges()),
     registerZenVerb('app.subscribe', (_ctx, fn) => zenAppSubscribe(fn)),
   ]

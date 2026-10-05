@@ -7,6 +7,13 @@
 // side of the data verbs: `installZenDataVerbs()` registers them with
 // `registerZenVerb`. A widget never gets a scope, a token or `daemonCli*`.
 //
+// The Agents view (Rosson 2026-10-04, `source: "workspaces"`): an Agents
+// widget that lists THIS server's workspaces (the window's server) the way
+// the app's Agents page does — pinned first, then the active focus group's
+// workspaces plus ungrouped ones when focus groups are on (GH #26), else all
+// of them. Its focus-group dropdown (`focusGroups.*`) reads and sets the
+// app's own active focus group, without switching workspaces.
+//
 // Views (G27): each Agents widget in a Garden shows ONE Home — its own pick
 // (`k2.zen.gardenHomes.v1`), else its `home` prop, else the Garden's
 // `seedHome`, else the window's selected Home at that moment (then kept as
@@ -56,6 +63,7 @@ import { createStore } from 'zustand/vanilla'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
+import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useActiveAgentsStore, mergePaneStatus, type PaneStatus } from '@/stores/active-agents'
 import { usePresenceStore, usersForWorkspace } from '@/stores/presence'
@@ -94,6 +102,7 @@ import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
+import { zenAgentsSource } from './zen-rail-views'
 
 // ── Shapes a widget sees ──────────────────────────────────────────────────
 
@@ -231,6 +240,23 @@ export interface ZenView {
   homeId: string | null
   /** Single-agent mode: a row address, handle or name (the `agent` prop). */
   agent: string | null
+  /** `workspaces`: this server's workspaces (the Agents view), not a Home. */
+  source?: 'home' | 'workspaces'
+}
+
+/** One focus group as the Agents view's dropdown shows it. */
+export interface ZenFocusGroup {
+  id: string
+  name: string
+  color: string | null
+}
+
+/** `focusGroups.get()`: the app's focus groups (Settings turns them on). */
+export interface ZenFocusGroups {
+  enabled: boolean
+  groups: ZenFocusGroup[]
+  /** The active group (null: none picked, or focus groups off). */
+  active: string | null
 }
 
 /** The feeds `ZenDataHost` renders. */
@@ -447,7 +473,50 @@ function homeView(gardenId: string, w: ZenWidgetDecl): ZenView {
 }
 
 function agentsView(gardenId: string, w: ZenWidgetDecl): ZenView {
+  if (zenAgentsSource(w.props) === 'workspaces') {
+    return {
+      key: zenGardenHomeKey(gardenId, w.id),
+      gardenId,
+      widgetId: w.id,
+      homeId: null,
+      agent: zenAgentFilter(w.props),
+      source: 'workspaces',
+    }
+  }
   return homeView(gardenId, w)
+}
+
+/** The app's focus groups, as the Agents view shows them. */
+export function zenFocusGroups(): ZenFocusGroups {
+  const fg = useFocusGroupsStore.getState()
+  return {
+    enabled: fg.focusGroupsEnabled,
+    groups: fg.focusGroups.map((g) => ({ id: g.id, name: g.name, color: g.color })),
+    active: fg.focusGroupsEnabled ? fg.activeFocusGroupId : null,
+  }
+}
+
+/** This server's workspaces as rows, in the Agents page's order: pinned
+ *  first, then the rest — with focus groups on, only the active group's and
+ *  the ungrouped ones (GH #26: ungrouped show in every group). */
+function workspaceRows(): HomeRow[] {
+  const projects = useProjectsStore.getState().projects
+  const fg = useFocusGroupsStore.getState()
+  const hostKey = activeHomeHostKey(useConnectHostStore.getState().activeHost)
+  const group = fg.focusGroupsEnabled ? fg.activeFocusGroupId : null
+  const pinned = projects.filter((p) => p.pinned)
+  const rest = projects.filter((p) => !p.pinned && (group === null || p.focusGroupId === group || p.focusGroupId == null))
+  const out: HomeRow[] = []
+  const seen = new Set<string>()
+  for (const p of [...pinned, ...rest]) {
+    const handle = workspaceHandle(p)
+    if (!handle) continue
+    const address = homeAddress(handle, hostKey)
+    if (seen.has(address)) continue
+    seen.add(address)
+    out.push({ address, workspaceId: p.id, label: p.name })
+  }
+  return out
 }
 
 function looseView(gardenId: string, widgetId: string): ZenView {
@@ -519,8 +588,12 @@ function anyRow(address: string): HomeRow | null {
   return looseRows.get(address) ?? null
 }
 
-/** The view's rows, in Home order. */
+/** The view's rows, in Home order (the Agents view: the Agents page's). */
 function viewRows(view: ZenView): HomeRow[] {
+  if (view.source === 'workspaces') {
+    const rows = workspaceRows()
+    return view.agent ? rows.filter((r) => matchesAgent(r, view.agent as string)) : rows
+  }
   if (view.homeId === null) {
     const address = selection.get(view.key)
     const row = address ? anyRow(address) : null
@@ -677,6 +750,7 @@ function startLive(): void {
   unsubs.push(useHomesStore.subscribe(on))
   unsubs.push(useConnectHostStore.subscribe(on))
   unsubs.push(useProjectsStore.subscribe(on))
+  unsubs.push(useFocusGroupsStore.subscribe(on))
   unsubs.push(useActiveAgentsStore.subscribe(on))
   unsubs.push(usePresenceStore.subscribe(on))
   unsubs.push(hostPool.store.subscribe(on))
@@ -804,7 +878,7 @@ function findRow(view: ZenView, address: string): { row: HomeRow; index: number 
   const rows = viewRows(view)
   const index = rows.findIndex((r) => r.address === address)
   if (index >= 0) return { row: rows[index], index }
-  if (view.homeId === null) {
+  if (view.homeId === null && view.source !== 'workspaces') {
     const loose = anyRow(address)
     if (loose) return { row: loose, index: 0 }
   }
@@ -1175,6 +1249,33 @@ export function installZenDataVerbs(): () => void {
       emitRows()
     }),
     registerZenVerb('agents.local', (ctx) => zenLocalAgents(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId))),
+    // The Agents view's focus-group dropdown: the app's own focus groups.
+    registerZenVerb('focusGroups.get', () => zenFocusGroups()),
+    registerZenVerb('focusGroups.set', (ctx, id) => {
+      const groupId = str(id, 'a focus group id')
+      const fg = useFocusGroupsStore.getState()
+      if (!fg.focusGroupsEnabled) throw new Error('zen: focus groups are off')
+      if (!fg.focusGroups.some((g) => g.id === groupId)) throw new Error(`zen: no focus group ${groupId}`)
+      const view = viewOf(ctx)
+      if (view.source !== 'workspaces') throw new Error(`zen: widget ${ctx.widgetId} shows no workspaces`)
+      // Never switch workspaces: the list changes, nothing else.
+      fg.setActiveFocusGroup(groupId, { autoActivate: false })
+      // A conversation from the old group closes with it.
+      const open = selection.get(view.key)
+      if (open && !viewRows(view).some((r) => r.address === open)) selection.delete(view.key)
+      emitRows()
+    }),
+    registerZenVerb('focusGroups.subscribe', (_ctx, cb) => {
+      const f = fn<ZenFocusGroups>(cb, 'focusGroups.subscribe callback')
+      let last = JSON.stringify(zenFocusGroups())
+      return useFocusGroupsStore.subscribe(() => {
+        const next = zenFocusGroups()
+        const sig = JSON.stringify(next)
+        if (sig === last) return
+        last = sig
+        f(next)
+      })
+    }),
     registerZenVerb('presence.get', (ctx, address) => {
       const a = str(address, 'address')
       return zenAgentRows(zenViewFor(ctx.page(), ctx.gardenId(), ctx.widgetId)).find((r) => r.address === a)?.people ?? []

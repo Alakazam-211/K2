@@ -32,6 +32,7 @@ import {
   type DesktopChrome,
 } from '@/lib/desktop-chrome'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
 import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
 
@@ -271,9 +272,15 @@ function BriefOverlay({
   }, [onClose])
 
   const stoplightInset = briefOverlayStoplightInset(getDesktopChrome())
+  // Opened from Zen's Tickets view, the overlay covers the Zen page while
+  // you read. It is K2's own (Esc or Close), so Zen's required-controls
+  // check must not count it as hiding the page's controls: no safe mode
+  // while a brief is expanded.
+  const zenOverlay = useCallback((el: HTMLDivElement | null) => (el ? registerZenK2Overlay(el) : undefined), [])
 
   return createPortal(
     <div
+      ref={zenOverlay}
       data-testid="brief-overlay"
       role="dialog"
       aria-modal="true"

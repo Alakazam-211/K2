@@ -12,6 +12,10 @@
 //
 // Leaving the Garden and coming back shows the empty page again (the pick
 // is this widget's own state, and its conversation closes on unmount).
+//
+// The same Ask my agent flow (`ZenAskMyAgent`) serves the nav rail's
+// Projects view (Rosson 2026-10-04): "Coming soon — or build a new one
+// yourself!", where "build a new one yourself" opens the chooser.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
@@ -116,10 +120,34 @@ function Chooser({
   )
 }
 
-export function ZenGardenEmptyWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
+/** What the idle panel shows around the Ask my agent trigger. */
+export interface ZenAskIntro {
+  /** `ask` opens the chooser. `phase`: idle, the chooser is open (drawn
+   *  under the intro), or the picked agent's conversation is opening. */
+  (ask: () => void, phase: 'empty' | 'choosing' | 'talking'): React.ReactNode
+}
+
+/**
+ * Ask my agent: an idle panel (`intro`), then a chooser of agents on this
+ * computer, then that agent's conversation in place with `draft` in its
+ * box (never sent). `kind` is the panel's `data-zen-widget`.
+ */
+export function ZenAskMyAgent({
+  bridge,
+  decl,
+  kind,
+  intro,
+  draft,
+}: ZenWidgetProps & {
+  kind: string
+  intro: ZenAskIntro
+  draft(garden: { id: string; name: string }): string
+}): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>({ kind: 'empty' })
   const rows = useZenRows(bridge)
   const drafted = useRef<string | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
   const talking = phase.kind === 'talking' ? phase.address : null
   const row = talking ? (rows.find((r) => r.address === talking) ?? null) : null
 
@@ -144,7 +172,7 @@ export function ZenGardenEmptyWidget({ bridge, decl }: ZenWidgetProps): React.JS
       console.warn('[zen] Ask my agent: no current Garden to name in the draft')
       return
     }
-    bridge.call('compose.draft', row.address, zenGardenAskDraft(garden))
+    bridge.call('compose.draft', row.address, draftRef.current(garden))
   }, [bridge, row])
 
   const ask = (): void => {
@@ -170,7 +198,7 @@ export function ZenGardenEmptyWidget({ bridge, decl }: ZenWidgetProps): React.JS
 
   if (row) {
     return (
-      <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget="garden-empty" data-zen-widget-id={decl.id} data-zen-asking={row.address}>
+      <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget={kind} data-zen-widget-id={decl.id} data-zen-asking={row.address}>
         <ZenWidgetStyles />
         <ZenConversation bridge={bridge} row={row} />
       </div>
@@ -179,38 +207,54 @@ export function ZenGardenEmptyWidget({ bridge, decl }: ZenWidgetProps): React.JS
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col items-center justify-center text-center"
-      data-zen-widget="garden-empty"
+      data-zen-widget={kind}
       data-zen-widget-id={decl.id}
       style={{ padding: 24, color: 'var(--zen-text)' }}
     >
       <ZenWidgetStyles />
-      <div data-zen-garden-empty-title="" style={{ fontSize: '1.25em', fontWeight: 600 }}>
-        {ZEN_GARDEN_EMPTY_TITLE}
-      </div>
-      <div data-zen-garden-empty-ask="" style={{ marginTop: 6, color: 'var(--zen-text-muted)' }}>
-        {ZEN_GARDEN_EMPTY_ASK}
-      </div>
-      {phase.kind === 'choosing' ? (
+      {intro(ask, phase.kind)}
+      {phase.kind === 'choosing' && (
         <Chooser rows={phase.rows} error={phase.error} onPick={pick} onCancel={() => setPhase({ kind: 'empty' })} />
-      ) : (
-        <button
-          className="cursor-pointer disabled:cursor-default"
-          type="button"
-          data-zen-ask-my-agent=""
-          disabled={phase.kind === 'talking'}
-          onClick={ask}
-          style={{
-            marginTop: 16,
-            padding: '8px 18px',
-            borderRadius: 999,
-            background: 'var(--zen-accent)',
-            color: 'var(--zen-accent-text)',
-            fontWeight: 600,
-          }}
-        >
-          Ask my agent
-        </button>
       )}
     </div>
+  )
+}
+
+export function ZenGardenEmptyWidget(props: ZenWidgetProps): React.JSX.Element {
+  return (
+    <ZenAskMyAgent
+      {...props}
+      kind="garden-empty"
+      draft={zenGardenAskDraft}
+      intro={(ask, phase) => (
+        <>
+          <div data-zen-garden-empty-title="" style={{ fontSize: '1.25em', fontWeight: 600 }}>
+            {ZEN_GARDEN_EMPTY_TITLE}
+          </div>
+          <div data-zen-garden-empty-ask="" style={{ marginTop: 6, color: 'var(--zen-text-muted)' }}>
+            {ZEN_GARDEN_EMPTY_ASK}
+          </div>
+          {phase !== 'choosing' && (
+            <button
+              className="cursor-pointer disabled:cursor-default"
+              type="button"
+              data-zen-ask-my-agent=""
+              disabled={phase === 'talking'}
+              onClick={ask}
+              style={{
+                marginTop: 16,
+                padding: '8px 18px',
+                borderRadius: 999,
+                background: 'var(--zen-accent)',
+                color: 'var(--zen-accent-text)',
+                fontWeight: 600,
+              }}
+            >
+              Ask my agent
+            </button>
+          )}
+        </>
+      )}
+    />
   )
 }

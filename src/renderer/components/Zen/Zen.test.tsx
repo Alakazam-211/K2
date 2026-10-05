@@ -316,15 +316,21 @@ describe('Zen is a mode of the window (G1–G5)', () => {
     expect(usePageViewStore.getState().page).toBe('agents')
     expect(useZenWindowStore.getState().on).toBe(true)
     // The window's Garden is the first, written back (G22).
-    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default' })
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default', view: 'home' })
     expect(el('[data-zen-garden-pill]').textContent).toContain('Garden 1')
     expect(zenRoot()?.style.zIndex).toBe('150')
     // T4.2: the list, then the Garden's page, both on the LOCAL daemon.
-    expect(h.calls.map((c) => [c.method, c.hostKey, c.route])).toEqual([
+    const zenCalls = h.calls.filter((c) => c.route.startsWith('zen/'))
+    expect(zenCalls.map((c) => [c.method, c.hostKey, c.route])).toEqual([
       ['GET', 'local', 'zen/gardens'],
       ['GET', 'local', 'zen/get'],
     ])
-    expect(h.calls[1].data).toEqual({ garden: 'g-default' })
+    expect(zenCalls[1].data).toEqual({ garden: 'g-default' })
+    // Rosson 2026-10-04: the top band's usage tool reads the window's
+    // server's usage, like the top bar (here this computer), and nothing else.
+    expect(h.calls.filter((c) => !c.route.startsWith('zen/')).map((c) => [c.method, c.hostKey, c.route])).toEqual([
+      ['GET', 'local', 'usage/subscriptions'],
+    ])
     expect(h.sockets).toEqual(['local'])
     expect(h.zenHandlers.map((z) => z.hostKey)).toEqual(['local'])
   })
@@ -438,7 +444,7 @@ describe('Gardens (G22–G25)', () => {
     await act(async () => void fireEvent.click(options[1]))
     await pageReady('k2.blank@1')
     expect(useZenWindowStore.getState().garden).toBe('g-mornings')
-    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-mornings' })
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-mornings', view: 'home' })
     expect(h.calls.filter((c) => c.route === 'zen/get').map((c) => c.data)).toEqual([
       { garden: 'g-default' },
       { garden: 'g-mornings' },
@@ -512,7 +518,7 @@ describe('Gardens (G22–G25)', () => {
     await zenChanged()
     await pageReady('k2.texting@1')
     expect(useZenWindowStore.getState().garden).toBe('g-default')
-    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default' })
+    expect(storedWindow()).toEqual({ version: 1, on: true, garden: 'g-default', view: 'home' })
   })
 })
 

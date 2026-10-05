@@ -52,6 +52,7 @@ import {
 } from '@/lib/zen/zen-theme-switch'
 import { ZenShortcutSheet, ZenThemePicker } from './ZenThemeTools'
 import { ZenAddAgentPicker } from './ZenAddAgent'
+import { ZenUsageTool } from './ZenUsageTool'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { setZenReservedRects } from '@/lib/zen/zen-monitor'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
@@ -383,11 +384,16 @@ export function ZenRoot(): React.JSX.Element {
   )
   const onCrash = useCallback((message: string) => enterSafeMode({ kind: 'crash', message }), [enterSafeMode])
 
-  // K2's theme control, drawn by the template immediately left of its Zen
-  // toggle (top right). None in safe mode: safe mode never changes the theme.
+  // K2's top-right items, drawn by the template immediately left of its Zen
+  // toggle: the usage tool, then the theme control (Rosson 2026-10-04:
+  // usage, theme, Zen toggle). None in safe mode: safe mode never changes
+  // the theme and reads nothing it doesn't need.
   const topRight =
     page && !inSafeMode ? (
-      <ZenThemePicker themes={page.themes} active={page.activeTheme} onPick={themeTools.pick} error={themeTools.error} />
+      <>
+        <ZenUsageTool />
+        <ZenThemePicker themes={page.themes} active={page.activeTheme} onPick={themeTools.pick} error={themeTools.error} />
+      </>
     ) : null
 
   const banner = safe ? (

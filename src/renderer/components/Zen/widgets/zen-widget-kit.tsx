@@ -82,6 +82,8 @@ export const ZEN_WIDGET_CSS = `
 [data-zen-root] [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); }
 [data-zen-root] [data-zen-compose-input]:focus { outline: none; }
 [data-zen-root] [data-zen-home-menu] [data-zen-home-option]:hover { background: var(--zen-surface); }
+[data-zen-root] [data-zen-focus-group-picker] > div > button { border-radius: 999px; padding: 2px 10px; background: transparent; }
+[data-zen-root] [data-zen-focus-group-picker] > div > div { border-radius: var(--zen-radius); overflow: hidden; background: var(--zen-surface-raised); }
 @keyframes zen-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes zen-message-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes zen-fade-in { from { opacity: 0; } to { opacity: 1; } }

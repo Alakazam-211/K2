@@ -13,6 +13,11 @@
 // S5 / S6 plug in without touching this file: widgets by kind and template
 // controls by template id (`zen-registry.tsx`), data verbs on the bridge
 // (`registerZenVerb`), and the theme on the root (`registerZenThemeEngine`).
+//
+// A Garden with a nav rail draws the view its rail picked in this window
+// (Rosson 2026-10-04: My Home, Agents, Projects, Tickets; `zen-rail-views`).
+// The view changes the widgets only; the template's controls, and so the
+// required-controls check, stay the same.
 
 import { useEffect, useMemo, useRef } from 'react'
 import { useHomesStore } from '@/stores/homes'
@@ -27,6 +32,7 @@ import {
 } from '@/lib/zen/zen-gardens'
 import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
 import { useZenWindowStore } from '@/lib/zen/zen-window'
+import { zenPageForView, zenPageHasRail } from '@/lib/zen/zen-rail-views'
 import { cancelZenComposeFocus } from '@/lib/zen/zen-compose-focus'
 import { createZenBridge, type ZenBridgeHost, type ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import {
@@ -44,7 +50,13 @@ import {
 } from '@/lib/zen/zen-monitor'
 import type { ZenResolvedPage } from '@/lib/zen/zen-page'
 import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
-import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenWidgetFor } from './zen-registry'
+import {
+  ZEN_RAIL_KINDS,
+  ZEN_TEMPLATE_CONTROL_CAPS,
+  ZEN_UNBOXED_KINDS,
+  zenTemplateControlsFor,
+  zenWidgetFor,
+} from './zen-registry'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -64,7 +76,7 @@ function gardenIds(): string[] {
 }
 
 export function ZenPage({
-  page,
+  page: garden,
   safe,
   banner,
   onControlFailure,
@@ -79,6 +91,11 @@ export function ZenPage({
   // Re-render on Garden changes: the template's switcher lists them.
   useZenGardensStore((s) => s.gardens)
   useZenWindowStore((s) => s.garden)
+  // The rail's view in this window: the Garden's page, or a K2 view drawn
+  // inside it (the same controls either way).
+  const picked = useZenWindowStore((s) => s.view)
+  const view = zenPageHasRail(garden) ? picked : 'home'
+  const page = useMemo(() => zenPageForView(garden, view), [garden, view])
   const rootRef = useRef<HTMLDivElement | null>(null)
   const pageRef = useRef(page)
   pageRef.current = page
@@ -153,7 +170,8 @@ export function ZenPage({
     if (safe) return
     return registerZenControlCheck(runCheck)
   }, [safe, runCheck])
-  // First paint and 1.5 s later, again for every new page version.
+  // First paint and 1.5 s later, again for every new page version (the
+  // Garden's: a rail view switch is not a new page).
   useEffect(() => {
     if (safe) return
     let raf: number | null = null
@@ -163,7 +181,7 @@ export function ZenPage({
       if (raf !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
       clearTimeout(second)
     }
-  }, [safe, runCheck, page.version])
+  }, [safe, runCheck, garden.version])
   // After a resize settles: a burst of resize events mid-animation (full
   // screen, a window snap) is many frames, not two separate checks.
   useEffect(() => {
@@ -191,7 +209,7 @@ export function ZenPage({
   const Controls = zenTemplateControlsFor(page.template)
   const { layout } = page
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template}>
+    <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template} data-zen-view={view}>
       {Controls && <Controls bridge={controlsBridge} />}
       {banner}
       <div
@@ -203,6 +221,8 @@ export function ZenPage({
           const inCol = page.widgets.filter((w) => w.column === col)
           const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
           const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+          // K2 views that draw their own panels (Tickets' glass) get no box.
+          const bare = boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind))
           const draw = (w: (typeof inCol)[number]): React.JSX.Element => {
             const Widget = zenWidgetFor(w.kind)
             const bridge = widgetBridges.get(w.id)
@@ -221,13 +241,18 @@ export function ZenPage({
                 <div
                   data-zen-column={col}
                   className="flex min-h-0 min-w-0 flex-col"
-                  style={{
-                    flex: '1 1 0%',
-                    background: 'var(--zen-surface)',
-                    border: '1px solid var(--zen-border)',
-                    borderRadius: 'var(--zen-radius)',
-                    overflow: 'hidden',
-                  }}
+                  data-zen-column-bare={bare ? '' : undefined}
+                  style={
+                    bare
+                      ? { flex: '1 1 0%' }
+                      : {
+                          flex: '1 1 0%',
+                          background: 'var(--zen-surface)',
+                          border: '1px solid var(--zen-border)',
+                          borderRadius: 'var(--zen-radius)',
+                          overflow: 'hidden',
+                        }
+                  }
                 >
                   {boxed.map(draw)}
                 </div>

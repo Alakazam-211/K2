@@ -22,7 +22,8 @@ Gardens." `zen-v1` stays and means the theme routes exist.
 ## The model
 
 - **Zen is a window mode.** On/off lives in the renderer per window
-  (`k2.zen.window.v1.<label>`). The daemon knows nothing about windows.
+  (`k2.zen.window.v1.<label>`, with the Garden and the nav rail's view).
+  The daemon knows nothing about windows.
 - **A Garden** is a personal page on this computer. The list lives in
   `~/.k2/zen/gardens.json` (daemon-written: ids, names, order, templates);
   each Garden's page is `~/.k2/zen/gardens/<id>.toml`.
@@ -192,10 +193,29 @@ filtered from a Home**):
 rail drawn at the **left edge of its column, outside the column's box**; it
 takes no share of the box. Top to bottom: **My Home** (current: the Garden
 itself), **Agents**, **Projects**, **Tickets** (with the top bar's waiting
-badge), each with the top bar's page name as its tooltip. Agents, Projects
-and Tickets leave Zen in this window and open that page (`app.open`), the
-same page store the top bar uses. Only `k2.texting@1` places it; a Garden
-file may place it like any built-in widget.
+badge), each with the top bar's page name as its tooltip. Each switches the
+Garden's **view** in this window, inside Zen (`app.open`; Rosson,
+2026-10-04): Zen stays on and the app page under Zen never changes. The view
+shown is the rail's current item, and it is remembered per window in
+`k2.zen.window.v1.<label>` (`view`: `home`, `agents`, `projects` or
+`tickets`; missing means `home`). The views are drawn by the renderer from
+the Garden's own page (`lib/zen/zen-rail-views.ts`); the template's
+controls never change, so a view switch can't fail the required-controls
+check:
+
+- **My Home**: the Garden's page.
+- **Agents**: the same page, but every `agents` widget lists this server's
+  workspaces the way the app's Agents page does (pinned first; with focus
+  groups on, the active group's and the ungrouped ones), with the app's
+  focus-group dropdown in place of the Home picker when focus groups are
+  on, and no Add agent row.
+- **Projects**: "Coming soon — or build a new one yourself!", where the
+  link is the empty Garden's Ask my agent.
+- **Tickets**: the Tickets page's board (list + item, HTML brief) in a
+  liquid glass look, chat only (no terminal).
+
+Only `k2.texting@1` places it; a Garden file may place it like any built-in
+widget. A Garden without a rail ignores the view.
 
 `garden-empty` has no props. It shows "This Garden is empty." / "Ask your
 agents to add things to this Garden." and **Ask my agent** (G28) until the
@@ -470,13 +490,16 @@ this contract, where it reads more loosely or decides something:
 8. **Bridge verbs** `gardens.list/current/switch` (no cap),
    `gardens.create/rename/delete` (`gardens:manage`, template controls
    only), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
-   (`agents:read`), `compose.draft` (`thread:post`), `app.open(page)` /
-   `app.badges()` / `app.subscribe(fn)` (`app:navigate`: `page` is `home`,
-   `agents`, `projects` or `tickets`; `home` does nothing); `homes.select`
-   is gone.
+   (`agents:read`), `focusGroups.get/set/subscribe` (`agents:read`, the
+   Agents view's dropdown; `set` never switches workspaces),
+   `compose.draft` (`thread:post`), `app.open(page)` / `app.current()` /
+   `app.subscribeCurrent(fn)` / `app.badges()` / `app.subscribe(fn)`
+   (`app:navigate`: `page` is `home`, `agents`, `projects` or `tickets`,
+   the rail's view in this window); `homes.select` is gone.
 9. **Placement** (Rosson, 2026-10-04). One top band for both templates and
    safe mode: the Garden switcher top left, the drag strip, then the
-   top-right cluster — K2's theme control immediately left of the Zen
+   top-right cluster — K2's usage tool (the top bar's subscription usage
+   chip and menu), then its theme control, immediately left of the Zen
    toggle, which sits in the window's top-right corner (where the top bar's
    Zen toggle is outside Zen; clear of Windows' controls via
    `--zen-stoplight-safe-right`). No footer under any column. **Add agent**

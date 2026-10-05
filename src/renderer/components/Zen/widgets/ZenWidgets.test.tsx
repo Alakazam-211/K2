@@ -68,6 +68,7 @@ const h = vi.hoisted(() => ({
   keepAlive: [] as Array<{ hostKey: string; projectId: string }>,
   rooms: [] as Array<{ key: string; activity: { applyHookStatus(id: string, s: string): void } }>,
   seq: 100,
+  tickets: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -178,6 +179,35 @@ vi.mock('@/lib/daemon-cli', () => ({
       const limit = Number(p.limit)
       return { conversation_id: `c-${addr}`, has_more: false, items: limit > 0 ? items.slice(-limit) : items }
     }
+    // The top band's usage tool (the app top bar's UsageButton).
+    if (route === 'usage/subscriptions') {
+      return {
+        harnesses: [
+          {
+            harness: 'claude',
+            plan: 'Max 20x',
+            windows: [{ label: 'Weekly', used: 0.31, resetsAt: '2026-10-10T00:00:00Z' }],
+            checkedAt: new Date().toISOString(),
+            status: '',
+          },
+        ],
+      }
+    }
+    // Zen's Tickets view (the Tickets page's board and stores).
+    if (route === 'feedback/list-all' || route === 'feedback/list') return { ok: true, items: h.tickets }
+    if (route === 'feedback/show') {
+      const t = h.tickets.find((x) => x.id === p.id)
+      if (!t) throw new Error(`no ticket ${String(p.id)}`)
+      if (p.brief) {
+        return {
+          ok: true,
+          brief: { html: '<h2>Which DNS?</h2><p>Pick one.</p>', text: 'Which DNS? Pick one.', bytes: 40, sha256: 'feedc0de', sanitizer: 'k2-brief-v1', createdAt: 900 },
+        }
+      }
+      return { ...t, workspace: 'cortana', canonicalSessionId: null, comments: [{ author: 'cortana', body: 'Which DNS host should I use?', at: 900 }] }
+    }
+    if (route === 'auth/whoami') return { owner: true, username: null }
+    if (route === 'users') return { users: [] }
     throw new Error(`unexpected GET ${route} on ${scope.hostKey}`)
   }),
   daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body?: Record<string, unknown>) => {
@@ -326,6 +356,7 @@ import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useFeedbackStore } from '@/stores/feedback'
+import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -333,7 +364,7 @@ import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { hostPool } from '@/lib/host-pool-instance'
 import { homeRooms } from '@/stores/home-rooms'
 import { noteServerVersion } from '@/kessel/server-scope'
-import { useZenWindowStore } from '@/lib/zen/zen-window'
+import { __reloadZenWindowForTests, useZenWindowStore, zenWindowKey } from '@/lib/zen/zen-window'
 import { __resetZenGardensForTests, useZenGardensStore } from '@/lib/zen/zen-gardens'
 import { useZenGardenHomesStore, ZEN_GARDEN_HOMES_KEY } from '@/lib/zen/zen-garden-homes'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
@@ -353,6 +384,8 @@ import { installZenBuiltins } from './builtins'
 import { __resetZenDraftsForTests } from './ZenCompose'
 import { zenEmptyThreadText, zenPermissionText } from './ZenConversationWidget'
 import { zenGardenAskDraft } from './ZenGardenEmptyWidget'
+import { ZEN_PROJECTS_TEXT, zenProjectsAskDraft } from './ZenProjectsViewWidget'
+import { ZEN_EMPTY_FOCUS_GROUP } from './ZenAgentsWidget'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -508,9 +541,11 @@ beforeEach(() => {
   ]
   h.pages = {}
   h.localProjects = null
+  h.tickets = []
+  useFocusGroupsStore.setState({ focusGroupsEnabled: false, focusGroups: [], activeFocusGroupId: null })
   __resetZenGardensForTests()
   useZenGardenHomesStore.setState({ picks: {} })
-  useZenWindowStore.setState({ on: true, garden: 'g-default' })
+  useZenWindowStore.setState({ on: true, garden: 'g-default', view: 'home' })
   useZenViewStore.setState({ safe: null, epoch: 0 })
   useSettingsStore.setState({ settingsOpen: false })
   usePageViewStore.getState().setPage('home')
@@ -696,12 +731,28 @@ describe('Agents widget', () => {
   })
 })
 
-// Rosson 2026-10-04: Garden 1's thin left rail.
+// Rosson 2026-10-04: Garden 1's thin left rail. Agents, Projects and
+// Tickets switch Garden 1's VIEW in this window, inside Zen.
 describe('the nav rail (Garden 1)', () => {
   function navButton(page: string): HTMLElement {
     const el = document.querySelector(`[data-zen-nav="${page}"]`)
     if (!(el instanceof HTMLElement)) throw new Error(`no ${page} in the rail`)
     return el
+  }
+
+  function currentNav(): string[] {
+    return Array.from(document.querySelectorAll('[data-zen-nav][aria-current="page"]')).map(
+      (b) => b.getAttribute('data-zen-nav') ?? '',
+    )
+  }
+
+  async function showView(view: string): Promise<void> {
+    await act(async () => {
+      fireEvent.click(navButton(view))
+    })
+    await waitFor(() => {
+      if (document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view') !== view) throw new Error(`${view} not shown`)
+    })
   }
 
   it('four icon buttons with tooltips, My Home current, 44px wide, outside the Agents box', async () => {
@@ -719,34 +770,81 @@ describe('the nav rail (Garden 1)', () => {
     ])
     for (const b of Array.from(rail.querySelectorAll('[data-zen-nav]'))) {
       expect(b.getAttribute('title')).toBeTruthy()
+      // No tooltip says the rail leaves Zen any more.
+      expect(b.getAttribute('title')).not.toMatch(/leaves zen/i)
       expect(b.querySelector('svg')).not.toBeNull()
       expect(b.textContent?.trim()).toBe('')
     }
-    expect(navButton('home').getAttribute('aria-current')).toBe('page')
-    expect(navButton('agents').hasAttribute('aria-current')).toBe(false)
+    expect(currentNav()).toEqual(['home'])
     expect(navButton('agents').classList.contains('cursor-pointer')).toBe(true)
     // My Home is where you are: a click changes nothing.
     await act(async () => {
       fireEvent.click(navButton('home'))
     })
     expect(useZenWindowStore.getState().on).toBe(true)
+    expect(useZenWindowStore.getState().view).toBe('home')
     expect(usePageViewStore.getState().page).toBe('home')
   })
 
-  it.each([
-    ['agents', 'agents'],
-    ['projects', 'projects'],
-    ['tickets', 'feedback'],
-  ] as const)('%s leaves Zen in this window and opens that page (the top bar’s page store)', async (nav, page) => {
-    act(() => useSettingsStore.setState({ settingsOpen: false }))
+  it.each(['agents', 'projects', 'tickets'] as const)(
+    '%s switches Garden 1’s view in this window and never leaves Zen or moves the page under it',
+    async (nav) => {
+      await mountZen()
+      await showView(nav)
+      expect(useZenWindowStore.getState().on).toBe(true)
+      expect(useZenWindowStore.getState().view).toBe(nav)
+      expect(useZenViewStore.getState().safe).toBeNull()
+      expect(usePageViewStore.getState().page).toBe('home')
+      expect(document.querySelector('[data-zen-root]')).not.toBeNull()
+      // It is the current item now; My Home isn't.
+      expect(currentNav()).toEqual([nav])
+      expect(navButton('home').classList.contains('cursor-pointer')).toBe(true)
+      // The template's band is untouched: the Garden switcher and the toggle.
+      expect(document.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound')).toBe('garden-switcher')
+      expect(document.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
+      // The rail stays at the left edge.
+      expect(document.querySelector('[data-zen-column-slot="0"]')?.firstElementChild?.getAttribute('data-zen-widget')).toBe('nav-rail')
+      // My Home brings the Garden's own page back.
+      await showView('home')
+      expect(currentNav()).toEqual(['home'])
+      await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
+      expect(document.querySelector('[data-zen-widget="agents"]')?.getAttribute('data-zen-agents-source')).toBe('home')
+    },
+  )
+
+  it('the view is per window and remembered across a reload', async () => {
     await mountZen()
-    await act(async () => {
-      fireEvent.click(navButton(nav))
+    await showView('tickets')
+    expect(JSON.parse(localStorage.getItem(zenWindowKey('main')) ?? 'null')).toEqual({
+      version: 1,
+      on: true,
+      garden: 'g-default',
+      view: 'tickets',
     })
-    expect(useZenWindowStore.getState().on).toBe(false)
-    expect(useZenViewStore.getState().safe).toBeNull()
-    expect(usePageViewStore.getState().page).toBe(page)
-    await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
+    // Another window has its own view.
+    localStorage.setItem(zenWindowKey('window-2'), JSON.stringify({ version: 1, on: true, garden: 'g-default' }))
+    act(() => __reloadZenWindowForTests('window-2'))
+    expect(useZenWindowStore.getState().view).toBe('home')
+    // A relaunch of this window comes back to Tickets.
+    cleanup()
+    act(() => __reloadZenWindowForTests('main'))
+    expect(useZenWindowStore.getState().view).toBe('tickets')
+    render(<ZenHost />)
+    await waitFor(() => expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe('tickets'))
+    expect(currentNav()).toEqual(['tickets'])
+  })
+
+  it('switching rail views never trips the required-controls check into safe mode', async () => {
+    await mountZen()
+    for (const view of ['agents', 'projects', 'tickets', 'home', 'tickets', 'agents'] as const) {
+      await showView(view)
+      // Two failed checks in a row are a failure: run two after each switch.
+      act(() => runZenControlChecksNow())
+      act(() => runZenControlChecksNow())
+      expect(useZenViewStore.getState().safe, view).toBeNull()
+      expect(document.querySelector('[data-zen-safe-banner]'), view).toBeNull()
+    }
+    expect(useZenWindowStore.getState().on).toBe(true)
   })
 
   it('Tickets carries the top bar’s waiting badge, live; none when nothing waits', async () => {
@@ -761,13 +859,16 @@ describe('the nav rail (Garden 1)', () => {
     await waitFor(() => expect(document.querySelector('[data-zen-nav-badge]')).toBeNull())
   })
 
-  it('a blank Garden has no rail', async () => {
-    useZenWindowStore.setState({ garden: 'g-notes' })
+  it('a blank Garden has no rail, and ignores this window’s rail view', async () => {
+    useZenWindowStore.setState({ garden: 'g-notes', view: 'tickets' })
     await mountGarden('k2.blank@1')
     expect(document.querySelector('[data-zen-widget="nav-rail"]')).toBeNull()
+    expect(document.querySelector('[data-zen-widget="garden-empty"]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-widget="tickets-view"]')).toBeNull()
+    expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe('home')
   })
 
-  it('app.open needs app:navigate and a known page', async () => {
+  it('app.open needs app:navigate and a known page; app.current reads the view', async () => {
     await mountZen()
     const hostStub = {
       gardens: () => [],
@@ -785,9 +886,282 @@ describe('the nav rail (Garden 1)', () => {
     }
     const without = createZenBridge(hostStub as never, { id: 'x', caps: [] })
     expect(() => without.call('app.open', 'agents')).toThrow(/cap_not_granted/)
+    expect(() => without.call('app.current')).toThrow(/cap_not_granted/)
     const withCap = createZenBridge(hostStub as never, { id: 'x', caps: ['app:navigate'] })
     expect(() => withCap.call('app.open', 'settings')).toThrow(/page must be one of/)
+    expect(withCap.call('app.current')).toBe('home')
+    act(() => void withCap.call('app.open', 'projects'))
+    expect(withCap.call('app.current')).toBe('projects')
     expect(useZenWindowStore.getState().on).toBe(true)
+  })
+})
+
+/** Every button in Zen shows a pointer on hover (the agent rows keep the
+ *  list's arrow, like a chat list; the current rail item is where you are). */
+function expectEveryButtonPointer(): void {
+  const bare = Array.from(document.querySelectorAll('[data-zen-root] button')).filter(
+    (b) => !b.classList.contains('cursor-pointer') && !b.hasAttribute('data-zen-agent-row') && b.getAttribute('aria-current') !== 'page',
+  )
+  expect(bare.map((b) => b.outerHTML.slice(0, 120))).toEqual([])
+}
+
+async function openRailView(view: 'agents' | 'projects' | 'tickets'): Promise<void> {
+  const el = document.querySelector(`[data-zen-nav="${view}"]`)
+  if (!(el instanceof HTMLElement)) throw new Error(`no ${view} in the rail`)
+  await act(async () => {
+    fireEvent.click(el)
+  })
+  await waitFor(() => {
+    if (document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view') !== view) throw new Error(`${view} not shown`)
+  })
+}
+
+// Rosson 2026-10-04: the rail's Agents view mirrors My Home with this
+// server's workspaces, and the app's focus groups in place of the Home picker.
+describe('the Agents view (Garden 1)', () => {
+  const PROJECTS = [
+    { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/cortana', color: '#c2662d', focusGroupId: 'g-work', pinned: 0, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+    { id: 'p2', name: 'atlas', handle: 'atlas', path: '/w/atlas', color: '#3366aa', focusGroupId: 'g-play', pinned: 1, workspaces: [{ id: 'w2', type: 'main', name: 'main' }] },
+    { id: 'p3', name: 'bolt', handle: 'bolt', path: '/w/bolt', color: '#33aa66', focusGroupId: 'g-play', pinned: 0, workspaces: [{ id: 'w3', type: 'main', name: 'main' }] },
+    { id: 'p4', name: 'drift', handle: 'drift', path: '/w/drift', color: '#aa3366', focusGroupId: null, pinned: 0, workspaces: [{ id: 'w4', type: 'main', name: 'main' }] },
+  ]
+  const GROUPS = [
+    { id: 'g-work', name: 'Work', color: '#ff8800', tabOrder: 0, createdAt: 0 },
+    { id: 'g-play', name: 'Play', color: null, tabOrder: 1, createdAt: 0 },
+  ]
+
+  beforeEach(() => {
+    useProjectsStore.setState({ projects: PROJECTS as never })
+  })
+
+  async function agentsViewRows(expected: number): Promise<string[]> {
+    await waitFor(() => {
+      const box = document.querySelector('[data-zen-widget="agents"][data-zen-agents-source="workspaces"]')
+      if (!box || box.querySelectorAll('[data-zen-agent-row]').length !== expected) throw new Error('rows not drawn')
+    })
+    return rowAddresses()
+  }
+
+  it('focus groups off: every workspace on this server, the Agents page’s order, no dropdown, no Home picker, no Add agent', async () => {
+    await mountZen()
+    await openRailView('agents')
+    // Pinned first, then the rest, as the Agents page lists them.
+    expect(await agentsViewRows(4)).toEqual(['atlas::local', 'cortana::local', 'bolt::local', 'drift::local'])
+    expect(document.querySelector('[data-zen-focus-group-picker]')).toBeNull()
+    expect(document.querySelector('[data-zen-home-picker]')).toBeNull()
+    expect(document.querySelector('[data-zen-add-agent]')).toBeNull()
+    // One server: no server tags.
+    expect(document.querySelector('[data-zen-server-tag]')).toBeNull()
+    // The same texting layout: the Agents list beside the Conversation.
+    expect(document.querySelector('[data-zen-column-slot="1"] [data-zen-widget="conversation"]')).not.toBeNull()
+    expectEveryButtonPointer()
+  })
+
+  it('focus groups on: the app’s focus-group dropdown picks the group whose agents are listed, without switching workspaces', async () => {
+    act(() => useFocusGroupsStore.setState({ focusGroupsEnabled: true, focusGroups: GROUPS, activeFocusGroupId: 'g-work' }))
+    await mountZen()
+    await openRailView('agents')
+    // Pinned, then the group's, then ungrouped ones (GH #26).
+    expect(await agentsViewRows(3)).toEqual(['atlas::local', 'cortana::local', 'drift::local'])
+    const picker = document.querySelector('[data-zen-focus-group-picker]') as HTMLElement
+    expect(picker).not.toBeNull()
+    expect(picker.textContent).toContain('Work')
+    expect(document.querySelector('[data-zen-home-picker]')).toBeNull()
+    expectEveryButtonPointer()
+
+    await act(async () => {
+      fireEvent.click(picker.querySelector('button') as HTMLElement)
+    })
+    const play = Array.from(picker.querySelectorAll('button')).find((b) => b.textContent?.includes('Play'))
+    if (!play) throw new Error('no Play in the focus-group dropdown')
+    expectEveryButtonPointer()
+    await act(async () => {
+      fireEvent.click(play)
+    })
+    expect(await agentsViewRows(3)).toEqual(['atlas::local', 'bolt::local', 'drift::local'])
+    expect(useFocusGroupsStore.getState().activeFocusGroupId).toBe('g-play')
+    // The list changed; the window's workspace didn't.
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
+    expect(picker.textContent).toContain('Play')
+  })
+
+  it('focus groups on, a group with nothing in it says so', async () => {
+    act(() =>
+      useFocusGroupsStore.setState({
+        focusGroupsEnabled: true,
+        focusGroups: [...GROUPS, { id: 'g-empty', name: 'Empty', color: null, tabOrder: 2, createdAt: 0 }],
+        activeFocusGroupId: 'g-empty',
+      }),
+    )
+    useProjectsStore.setState({ projects: PROJECTS.filter((p) => p.focusGroupId === 'g-work') as never })
+    await mountZen()
+    await openRailView('agents')
+    await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(ZEN_EMPTY_FOCUS_GROUP))
+  })
+
+  it('picking an agent opens its conversation in place and focuses its message box, like My Home', async () => {
+    await mountZen()
+    await openRailView('agents')
+    await agentsViewRows(4)
+    await select('cortana::local')
+    await threadReady('cortana::local')
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
+    expect(rowEl('cortana::local').hasAttribute('data-selected')).toBe(true)
+    expect(useConnectHostStore.getState().activeHost).toBe('local')
+    // Its selection is the Agents view's own: My Home's list is untouched.
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-nav="home"]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
+    expect(document.querySelector('[data-zen-agent-row][data-selected]')).toBeNull()
+  })
+})
+
+// Rosson 2026-10-04: the rail's Projects view is coming soon.
+describe('the Projects view (Garden 1)', () => {
+  it('a centred “Coming soon — or build a new one yourself!”, and the link asks one of this computer’s agents', async () => {
+    await mountZen()
+    await openRailView('projects')
+    const soon = document.querySelector('[data-zen-projects-soon]') as HTMLElement
+    expect(soon.textContent).toBe(ZEN_PROJECTS_TEXT)
+    expect(ZEN_PROJECTS_TEXT).toBe('Coming soon — or build a new one yourself!')
+    const view = document.querySelector('[data-zen-widget="projects-view"]') as HTMLElement
+    expect(view.className).toContain('items-center')
+    expect(view.className).toContain('justify-center')
+    expect(document.querySelector('[data-zen-widget="agents"]')).toBeNull()
+    expectEveryButtonPointer()
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-projects-build]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-ask-agent="cortana::local"]')).not.toBeNull())
+    expectEveryButtonPointer()
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-ask-agent="cortana::local"]') as HTMLElement)
+    })
+    await threadReady('cortana::local')
+    const draft = zenProjectsAskDraft({ id: 'g-default', name: 'Garden 1' })
+    await waitFor(() => expect(composeInput().value).toBe(draft))
+    expect(h.calls.some((c) => c.route === 'thread/post')).toBe(false)
+  })
+})
+
+// Rosson 2026-10-04: the rail's Tickets view, the Tickets page in glass,
+// chat only.
+describe('the Tickets view (Garden 1)', () => {
+  const TICKET = {
+    id: 't-1',
+    projectId: 'p1',
+    sessionId: 'sess-9',
+    sessionKind: 'canonical',
+    agentName: 'cortana',
+    kind: 'question',
+    title: 'Which DNS host?',
+    body: null,
+    options: null,
+    priority: 2,
+    status: 'waiting',
+    answer: null,
+    createdAt: 900,
+    updatedAt: 900,
+    answeredAt: null,
+    commentCount: 1,
+    assignees: [],
+    hasBrief: true,
+    briefBytes: 40,
+    projectPath: '/w/cortana',
+    projectName: 'cortana',
+    linked: true,
+  }
+
+  beforeEach(() => {
+    h.tickets = [TICKET]
+  })
+
+  async function openTicket(): Promise<HTMLElement> {
+    await openRailView('tickets')
+    await waitFor(() => expect(document.querySelector('[data-testid="ticket-scope-all"]')).not.toBeNull())
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-testid="ticket-scope-all"]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-testid="ticket-card"]')).not.toBeNull())
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-testid="ticket-card"]') as HTMLElement)
+    })
+    await waitFor(() => expect(document.querySelector('[data-testid="ticket-rail-thread"]')).not.toBeNull())
+    return document.querySelector('[data-testid="ticket-agent-rail"]') as HTMLElement
+  }
+
+  it('the Tickets page’s list + item in liquid glass panels, with no box around them', async () => {
+    await mountZen()
+    await openRailView('tickets')
+    const view = document.querySelector('[data-zen-widget="tickets-view"]') as HTMLElement
+    expect(view).not.toBeNull()
+    expect(view.hasAttribute('data-zen-tickets')).toBe(true)
+    // Its column has no box: the glass panels are the box.
+    expect(view.closest('[data-zen-column]')?.hasAttribute('data-zen-column-bare')).toBe(true)
+    const glass = view.querySelector('style[data-zen-tickets-glass]')?.textContent ?? ''
+    expect(glass).toContain('backdrop-filter')
+    expect(glass).toContain('prefers-reduced-transparency')
+    // Zen tokens only (the board's Styles variables are Zen tokens under the shield).
+    expect(glass).not.toMatch(/var\(--color-/)
+    await waitFor(() => expect(view.querySelector('[data-testid="ticket-list"]')).not.toBeNull())
+    expect(view.querySelector('[data-testid="ticket-board"]')).not.toBeNull()
+  })
+
+  it('an open ticket shows the chat only: no terminal tab or toggle; the HTML brief frame stays', async () => {
+    await mountZen()
+    const rail = await openTicket()
+    expect(rail.querySelector('[role="tablist"]')).toBeNull()
+    expect(document.querySelector('[data-testid="ticket-rail-tab-agent"]')).toBeNull()
+    expect(document.querySelector('[data-testid="ticket-agent-terminal"]')).toBeNull()
+    expect(rail.querySelector('[data-testid="ticket-compose-input"]')).not.toBeNull()
+    expect(rail.textContent).toContain('Which DNS host should I use?')
+    await waitFor(() => expect(document.querySelector('[data-testid="brief-frame"]')).not.toBeNull())
+    // Still Zen, still the same window page.
+    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(usePageViewStore.getState().page).toBe('home')
+    expectEveryButtonPointer()
+  })
+})
+
+// Rosson 2026-10-04: the app top bar's usage tool in Zen's top band.
+describe('the usage tool in the top band', () => {
+  it('sits immediately left of the theme control, in glass, and its menu opens inside Zen over the page', async () => {
+    await mountZen()
+    const topRight = document.querySelector('[data-zen-top-right]') as HTMLElement
+    const order = Array.from(topRight.children).map((c) =>
+      c.hasAttribute('data-zen-usage') ? 'usage' : c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') ? 'toggle' : c.tagName,
+    )
+    expect(order).toEqual(['usage', 'theme', 'toggle'])
+    const usage = topRight.querySelector('[data-zen-usage]') as HTMLElement
+    expect(usage.querySelector('style')?.textContent).toContain('backdrop-filter')
+    await waitFor(() => expect(usage.querySelector('[data-testid="subscription-usage"]')?.textContent).toContain('31%'))
+    // A stacking layer above the page, like the theme picker.
+    expect(usage.style.position).toBe('relative')
+    expect(Number(usage.style.zIndex)).toBeGreaterThan(0)
+
+    await act(async () => {
+      fireEvent.click(usage.querySelector('[data-testid="subscription-usage"]') as HTMLElement)
+    })
+    const menu = document.querySelector('[data-testid="subscription-usage-menu"]') as HTMLElement
+    expect(menu).not.toBeNull()
+    // Inside Zen (no portal), so Zen colours apply.
+    expect(usage.contains(menu)).toBe(true)
+    expect(menu.textContent).toContain('Weekly 31%')
+    expectEveryButtonPointer()
+    // An open menu never counts as hiding the page's controls.
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+  })
+
+  it('stays put in every rail view', async () => {
+    await mountZen()
+    for (const view of ['agents', 'projects', 'tickets'] as const) {
+      await openRailView(view)
+      expect(document.querySelector('[data-zen-top-right] > [data-zen-usage]'), view).not.toBeNull()
+    }
   })
 })
 
@@ -1054,9 +1428,16 @@ describe('template controls (G24, G25, G58)', () => {
             : c.tagName,
     )).toEqual(['switcher', 'drag', 'top-right'])
     const topRight = bar.querySelector('[data-zen-top-right]') as HTMLElement
+    // Rosson 2026-10-04: usage, theme, Zen toggle.
     expect(Array.from(topRight.children).map((c) =>
-      c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') ? 'toggle' : c.tagName,
-    )).toEqual(['theme', 'toggle'])
+      c.hasAttribute('data-zen-usage')
+        ? 'usage'
+        : c.hasAttribute('data-zen-theme-picker')
+          ? 'theme'
+          : c.hasAttribute('data-zen-switch')
+            ? 'toggle'
+            : c.tagName,
+    )).toEqual(['usage', 'theme', 'toggle'])
     expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
     expect(topRight.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
     // No footer under any column any more: both columns run to the bottom.
@@ -2034,10 +2415,25 @@ describe('S6 source ratchets', () => {
       'ZenCompose.tsx',
       'ZenTextingControls.tsx',
       'ZenGardenEmptyWidget.tsx',
+      'ZenNavRailWidget.tsx',
+      'ZenProjectsViewWidget.tsx',
       'zen-widget-kit.tsx',
     ]) {
       const src = read(`components/Zen/widgets/${f}`)
-      expect([f, /daemonCli|scopeForHost|primaryScope|primaryRoom|useOverlayThread|ServerScope/.test(src)]).toEqual([f, false])
+      expect([f, /daemonCli|scopeForHost|primaryScope|primaryRoom|useOverlayThread|ServerScope|useFocusGroupsStore/.test(src)]).toEqual([f, false])
     }
+  })
+
+  it('Zen’s Tickets view is the Tickets page’s own board, the terminal hidden by context (no fork)', () => {
+    const view = read('components/Zen/widgets/ZenTicketsViewWidget.tsx')
+    expect(view).toContain("import { TicketsPageBoard } from '@/components/Feedback/FeedbackPage'")
+    expect(view).toContain('<TicketRailTerminalContext.Provider value={false}>')
+    expect(view).not.toContain('<TicketBoard')
+    const page = read('components/Feedback/FeedbackPage.tsx')
+    expect(page).toContain('<TicketsPageBoardView data={data} />')
+    // The Agents view uses the app's own focus-group dropdown.
+    expect(read('components/Zen/widgets/ZenAgentsWidget.tsx')).toContain(
+      "import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'",
+    )
   })
 })

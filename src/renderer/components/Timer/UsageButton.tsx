@@ -96,7 +96,7 @@ export default function UsageButton(): React.JSX.Element {
         aria-expanded={open}
         aria-haspopup="menu"
         data-testid="subscription-usage"
-        className="flex h-6 items-center gap-[13px] px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+        className="flex h-6 cursor-pointer items-center gap-[13px] px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
         style={noDrag}
         onClick={() => {
           setOpen((was) => {
@@ -195,7 +195,7 @@ export default function UsageButton(): React.JSX.Element {
             <button
               type="button"
               data-testid="subscription-usage-refresh"
-              className="text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
+              className="cursor-pointer text-[11px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:cursor-default disabled:opacity-60"
               disabled={refreshing || !mayRefresh}
               title={
                 mayRefresh

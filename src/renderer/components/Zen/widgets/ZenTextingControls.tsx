@@ -2,7 +2,7 @@
 // built-in templates' own controls, one component set for both
 // (`k2.texting@1`, `k2.blank@1`) and for safe mode, all in one top band:
 // the Garden switcher (top left, it names the Garden you're in), the drag
-// area, and the top-right cluster — K2's theme control, then the Zen toggle
+// area, and the top-right cluster — K2's usage tool and theme control, then the Zen toggle
 // in the top-right corner, where the top bar's Zen toggle is outside Zen
 // (Rosson 2026-10-04). Add agent is no longer a page control: it is the
 // last row of the Agents widget (`ZenAgentsWidget`).
@@ -20,8 +20,9 @@
 //   - the Zen toggle is a switch, on, that turns Zen off in this window;
 //   - the drag area fills the top band between the switcher and the
 //     top-right cluster;
-//   - K2's theme control (`ZenK2TopRightItems`, drawn by the Zen root, none
-//     in safe mode) sits immediately left of the toggle.
+//   - K2's usage tool and theme control (`ZenK2TopRightItems`, drawn by the
+//     Zen root, none in safe mode) sit immediately left of the toggle, in
+//     that order.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'

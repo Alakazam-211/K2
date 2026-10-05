@@ -15,6 +15,9 @@ import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversationWidget } from './ZenConversationWidget'
 import { ZenGardenEmptyWidget } from './ZenGardenEmptyWidget'
 import { ZenNavRailWidget } from './ZenNavRailWidget'
+import { ZenProjectsViewWidget } from './ZenProjectsViewWidget'
+import { ZenTicketsViewWidget } from './ZenTicketsViewWidget'
+import { ZEN_PROJECTS_VIEW_KIND, ZEN_TICKETS_VIEW_KIND } from '@/lib/zen/zen-rail-views'
 import { installZenAppNavVerbs } from '@/lib/zen/zen-app-nav'
 import { ZenTextingControls } from './ZenTextingControls'
 
@@ -27,6 +30,9 @@ export function installZenBuiltins(): () => void {
     registerZenWidget('conversation', ZenConversationWidget),
     registerZenWidget('garden-empty', ZenGardenEmptyWidget),
     registerZenWidget('nav-rail', ZenNavRailWidget),
+    // The rail's K2 views (Garden 1's Projects and Tickets, in Zen).
+    registerZenWidget(ZEN_PROJECTS_VIEW_KIND, ZenProjectsViewWidget),
+    registerZenWidget(ZEN_TICKETS_VIEW_KIND, ZenTicketsViewWidget),
     installZenAppNavVerbs(),
     registerZenTemplateControls(TEXTING_TEMPLATE_ID, ZenTextingControls),
     registerZenTemplateControls(BLANK_TEMPLATE_ID, ZenTextingControls),

@@ -5,10 +5,11 @@
 // are drawn by the TEMPLATE, not by K2's shell: they bind through the
 // bridge exactly as a v2 user page would, so the same check covers them.
 //
-// K2's own top-right items (the theme control) are handed to the template
-// through `ZenK2TopRightContext`, so the template places them immediately
-// left of its Zen toggle (Rosson 2026-10-04). They stay K2's: drawn by the
-// Zen root with its state, registered as K2 overlays, absent in safe mode.
+// K2's own top-right items (the usage tool, then the theme control) are
+// handed to the template through `ZenK2TopRightContext`, so the template
+// places them immediately left of its Zen toggle (Rosson 2026-10-04: usage,
+// theme, Zen toggle). They stay K2's: drawn by the Zen root with its state,
+// registered as K2 overlays, absent in safe mode.
 
 import { createContext, useCallback, useContext, useRef } from 'react'
 import type { ZenBindKind } from '@/lib/zen/zen-controls'
@@ -33,7 +34,7 @@ export function useZenBind(
 /** Height of the template's top band (CSS px). */
 export const TEXTING_BAR_HEIGHT_PX = 44
 
-/** K2's items for the template's top-right cluster (the theme control). */
+/** K2's items for the template's top-right cluster (usage, then theme). */
 export const ZenK2TopRightContext = createContext<React.ReactNode>(null)
 
 /** Where a template draws K2's top-right items: immediately left of its

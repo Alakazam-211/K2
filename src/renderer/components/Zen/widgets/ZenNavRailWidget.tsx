@@ -1,14 +1,18 @@
 // Rosson 2026-10-04 — Garden 1's thin left rail (`nav-rail` widget): four
-// icon buttons, top to bottom, with the top bar's page names as tooltips:
+// icon buttons, top to bottom, with the top bar's page names as tooltips.
+// Each switches the Garden's view in this window, inside Zen (Zen stays
+// on; the page under Zen never changes):
 //
-//   My Home   current: this Garden is the texting view of your Homes;
-//   Agents    leave Zen in this window and open the Agents page;
-//   Projects  … the Projects page;
-//   Tickets   … the Tickets page, with the top bar's waiting badge.
+//   My Home   the Garden's own page: the texting view of your Homes;
+//   Agents    the same texting view of this server's agents (focus groups);
+//   Projects  Zen's Projects view (coming soon);
+//   Tickets   Zen's Tickets view, with the top bar's waiting badge.
 //
-// ZenPage draws a rail kind at the left edge of its column, outside the
-// column's box. About 44px wide, icons only. Everything goes through the
-// bridge (`app:navigate`: `app.open`, `app.badges`, `app.subscribe`).
+// The view shown is the current item (`aria-current`). ZenPage draws a rail
+// kind at the left edge of its column, outside the column's box. About
+// 44px wide, icons only. Everything goes through the bridge
+// (`app:navigate`: `app.open`, `app.current`, `app.subscribeCurrent`,
+// `app.badges`, `app.subscribe`).
 
 import { useEffect, useState } from 'react'
 import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
@@ -79,10 +83,10 @@ interface RailItem {
 }
 
 export const ZEN_NAV_RAIL_ITEMS: readonly RailItem[] = [
-  { page: 'home', name: PAGE_TAB_LABELS.home.name, title: `${PAGE_TAB_LABELS.home.name} — you're here: this Garden is the texting view of your Homes`, Icon: HomeIcon },
-  { page: 'agents', name: PAGE_TAB_LABELS.agents.name, title: `${PAGE_TAB_LABELS.agents.title}. Leaves Zen in this window.`, Icon: AgentIcon },
-  { page: 'projects', name: PAGE_TAB_LABELS.projects.name, title: `${PAGE_TAB_LABELS.projects.title}. Leaves Zen in this window.`, Icon: DashboardIcon },
-  { page: 'tickets', name: PAGE_TAB_LABELS.feedback.name, title: `${PAGE_TAB_LABELS.feedback.title}. Leaves Zen in this window.`, Icon: TicketIcon },
+  { page: 'home', name: PAGE_TAB_LABELS.home.name, title: `${PAGE_TAB_LABELS.home.name} — the texting view of your Homes`, Icon: HomeIcon },
+  { page: 'agents', name: PAGE_TAB_LABELS.agents.name, title: `${PAGE_TAB_LABELS.agents.name} — this server’s agents, in Zen`, Icon: AgentIcon },
+  { page: 'projects', name: PAGE_TAB_LABELS.projects.name, title: `${PAGE_TAB_LABELS.projects.name} — in Zen`, Icon: DashboardIcon },
+  { page: 'tickets', name: PAGE_TAB_LABELS.feedback.name, title: `${PAGE_TAB_LABELS.feedback.title}, in Zen`, Icon: TicketIcon },
 ]
 
 function useBadges(bridge: ZenWidgetProps['bridge']): ZenAppBadges {
@@ -96,8 +100,21 @@ function useBadges(bridge: ZenWidgetProps['bridge']): ZenAppBadges {
   return badges
 }
 
+/** The view this window's Garden shows, live (`app.current`). */
+function useCurrentView(bridge: ZenWidgetProps['bridge']): ZenAppPage {
+  const [view, setView] = useState<ZenAppPage>(() => bridge.call('app.current') as ZenAppPage)
+  useEffect(() => {
+    setView(bridge.call('app.current') as ZenAppPage)
+    const off = bridge.call('app.subscribeCurrent', (next: ZenAppPage) => setView(next))
+    if (typeof off !== 'function') throw new Error('zen: app.subscribeCurrent returned no unsubscribe')
+    return off as () => void
+  }, [bridge])
+  return view
+}
+
 export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const badges = useBadges(bridge)
+  const view = useCurrentView(bridge)
   const tickets = badgeText(badges.tickets.badge)
   return (
     <nav
@@ -115,7 +132,7 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
       }}
     >
       {ZEN_NAV_RAIL_ITEMS.map(({ page, name, title, Icon }) => {
-        const current = page === 'home'
+        const current = page === view
         return (
           <button
             key={page}

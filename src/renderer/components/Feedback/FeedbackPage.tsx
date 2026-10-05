@@ -10,7 +10,8 @@
 //
 // The board itself (narrow list + brief-first detail + chat rail) is the
 // shared TicketBoard; this page adds the workspace/project filter (§6.6)
-// beside the board's search.
+// beside the board's search. `TicketsPageBoard` is that board with its data
+// and filter, without the page's top bar: Zen's Tickets view draws it too.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -41,8 +42,24 @@ export { FeedbackCard, SectionHeader, cardAssigneeNames } from './TicketCard'
 
 const TOPBAR_HEIGHT = 38
 
-export default function FeedbackPage(): React.JSX.Element | null {
-  const isOpen = useFeedbackStore((s) => s.isOpen)
+/** The Tickets page's board data: the list (live on the store's
+ *  `revision`) and the workspace/project filter. Reads while `active`;
+ *  the filter survives `active` going false while the caller stays
+ *  mounted (the page closing and reopening). */
+export interface TicketsPageData {
+  rows: FeedbackListRow[] | null
+  scoped: FeedbackListRow[] | null
+  error: string | null
+  revision: number
+  onMutated(): void
+  projects: ReturnType<typeof useProjectsStore.getState>['projects']
+  workspaceFilter: string
+  setWorkspaceFilter(value: string): void
+  hasUnlinked: boolean
+}
+
+export function useTicketsPageData(active: boolean): TicketsPageData {
+  const isOpen = active
   const revision = useFeedbackStore((s) => s.revision)
   const projects = useProjectsStore((s) => s.projects)
 
@@ -124,6 +141,38 @@ export default function FeedbackPage(): React.JSX.Element | null {
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [loadList])
 
+  return { rows, scoped, error, revision, onMutated, projects, workspaceFilter, setWorkspaceFilter, hasUnlinked }
+}
+
+/** The board (list + filter + detail) over `useTicketsPageData`. */
+export function TicketsPageBoardView({ data }: { data: TicketsPageData }): React.JSX.Element {
+  return (
+    <TicketBoard
+      rows={data.scoped}
+      allRows={data.rows}
+      error={data.error}
+      revision={data.revision}
+      onMutated={data.onMutated}
+      extraFilter={
+        <WorkspaceFilterDropdown
+          projects={data.projects}
+          value={data.workspaceFilter}
+          onChange={data.setWorkspaceFilter}
+          showUnlinked={data.hasUnlinked}
+        />
+      }
+    />
+  )
+}
+
+/** The Tickets page's board without the page's top bar (Zen's Tickets view). */
+export function TicketsPageBoard(): React.JSX.Element {
+  return <TicketsPageBoardView data={useTicketsPageData(true)} />
+}
+
+export default function FeedbackPage(): React.JSX.Element | null {
+  const isOpen = useFeedbackStore((s) => s.isOpen)
+  const data = useTicketsPageData(isOpen)
   if (!isOpen) return null
 
   return (
@@ -152,21 +201,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </DesktopChromeRight>
       </Surface>
 
-      <TicketBoard
-        rows={scoped}
-        allRows={rows}
-        error={error}
-        revision={revision}
-        onMutated={onMutated}
-        extraFilter={
-          <WorkspaceFilterDropdown
-            projects={projects}
-            value={workspaceFilter}
-            onChange={setWorkspaceFilter}
-            showUnlinked={hasUnlinked}
-          />
-        }
-      />
+      <TicketsPageBoardView data={data} />
       <div
         data-toast-host="feedback"
         className="pointer-events-none overflow-hidden"

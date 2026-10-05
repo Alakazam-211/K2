@@ -21,8 +21,12 @@
 //
 // Status, reassign and the rail's open/closed toggle live in the ticket
 // header (FeedbackItemView); the rail has no action bar.
+//
+// Zen's Tickets view (Rosson 2026-10-04) shows the chat only: it provides
+// `TicketRailTerminalContext` = false, so the rail draws no tabs and no
+// Agent terminal, just the Thread.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
@@ -49,6 +53,10 @@ import {
 } from './feedback-api'
 
 export type RailTab = 'thread' | 'agent'
+
+/** May the rail offer the asking session's terminal (the Agent tab)?
+ *  True in the app; Zen's Tickets view sets false (chat only). */
+export const TicketRailTerminalContext = createContext(true)
 
 interface LiveSessionRow {
   sessionId: string
@@ -209,7 +217,9 @@ export function TicketAgentRail({
   sessionKind: FeedbackSessionKind
   canonicalSessionId: string | null | undefined
 }): React.JSX.Element {
-  const [tab, setTab] = useState<RailTab>('thread')
+  const [chosen, setTab] = useState<RailTab>('thread')
+  const terminal = useContext(TicketRailTerminalContext)
+  const tab: RailTab = terminal ? chosen : 'thread'
 
   return (
     <aside
@@ -217,25 +227,27 @@ export function TicketAgentRail({
       className="flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
       style={{ width: 'min(640px, 48vw)' }}
     >
-      <div role="tablist" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
-        {(['thread', 'agent'] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            aria-selected={tab === t}
-            data-testid={`ticket-rail-tab-${t}`}
-            onClick={() => setTab(t)}
-            className={`px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
-              tab === t
-                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-            }`}
-          >
-            {t === 'thread' ? 'Thread' : 'Agent'}
-          </button>
-        ))}
-      </div>
+      {terminal && (
+        <div role="tablist" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
+          {(['thread', 'agent'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={tab === t}
+              data-testid={`ticket-rail-tab-${t}`}
+              onClick={() => setTab(t)}
+              className={`px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
+                tab === t
+                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+              }`}
+            >
+              {t === 'thread' ? 'Thread' : 'Agent'}
+            </button>
+          ))}
+        </div>
+      )}
 
       {tab === 'thread' ? (
         <ThreadTab

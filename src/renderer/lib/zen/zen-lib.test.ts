@@ -44,7 +44,7 @@ describe('k2.zen.window.v1.<label> (G1, G21, TG3.1)', () => {
     expect(main.getState().on).toBe(true)
     expect(other.getState().on).toBe(false)
     expect(other.getState().garden).toBeNull()
-    expect(JSON.parse(kv.map.get(zenWindowKey('main')) ?? 'null')).toEqual({ version: 1, on: true, garden: 'g-1' })
+    expect(JSON.parse(kv.map.get(zenWindowKey('main')) ?? 'null')).toEqual({ version: 1, on: true, garden: 'g-1', view: 'home' })
     expect(kv.map.has(zenWindowKey('window-x'))).toBe(false)
     // Relaunch: the same label comes back as it was.
     const again = createZenWindowStore(kv, 'main')
@@ -72,6 +72,28 @@ describe('k2.zen.window.v1.<label> (G1, G21, TG3.1)', () => {
     const store = createZenWindowStore(kv, 'main')
     expect(store.getState().on).toBe(false)
     expect(kv.map.get(zenWindowKey('main'))).toBe('{"version":9}')
+  })
+
+  it('remembers the nav rail’s view per window (Rosson 2026-10-04); an older or unknown view is My Home', () => {
+    expect(parseZenWindowDoc(JSON.stringify({ version: 1, on: true, garden: 'g-1', view: 'tickets' }))).toEqual({
+      version: 1,
+      on: true,
+      garden: 'g-1',
+      view: 'tickets',
+    })
+    expect(parseZenWindowDoc(JSON.stringify({ version: 1, on: true, garden: 'g-1', view: 'settings' }))).toEqual({
+      version: 1,
+      on: true,
+      garden: 'g-1',
+    })
+    const kv = memKv()
+    const a = createZenWindowStore(kv, 'main')
+    expect(a.getState().view).toBe('home')
+    a.getState().setView('agents')
+    expect(() => a.getState().setView('settings' as never)).toThrow(/unknown rail view/)
+    // A relaunch (new store, same label) comes back to it; another window doesn't.
+    expect(createZenWindowStore(kv, 'main').getState().view).toBe('agents')
+    expect(createZenWindowStore(kv, 'window-b').getState().view).toBe('home')
   })
 
   it('a storage that throws falls back to memory', () => {

@@ -1,8 +1,10 @@
 // prd-zen-gardens-v1 G1, G21 — Zen is a mode of the WINDOW: one remembered
-// on/off per window, plus the Garden that window shows.
+// on/off per window, plus the Garden that window shows, plus the view its
+// nav rail shows (Rosson 2026-10-04: My Home, Agents, Projects or Tickets,
+// all inside Zen).
 //
 // localStorage `k2.zen.window.v1.<window label>` =
-// `{version: 1, on: boolean, garden: string | null}` (the
+// `{version: 1, on: boolean, garden: string | null, view?: ZenRailView}` (the
 // `k2.windowChrome.<label>` pattern, `lib/window-chrome.ts`). Windows are
 // independent: turning Zen on in one never changes another, and there is no
 // `storage` sync between windows, by design. A new window (a new label)
@@ -29,10 +31,23 @@ export function zenWindowKey(label: string): string {
   return `${ZEN_WINDOW_KEY_PREFIX}${label}`
 }
 
+/** What a Garden's nav rail shows in this window (Rosson 2026-10-04). My
+ *  Home is the Garden's own page; the others are Zen versions of the app
+ *  pages, drawn inside the Garden. */
+export type ZenRailView = 'home' | 'agents' | 'projects' | 'tickets'
+
+export const ZEN_RAIL_VIEWS: readonly ZenRailView[] = ['home', 'agents', 'projects', 'tickets']
+
+export function isZenRailView(v: unknown): v is ZenRailView {
+  return typeof v === 'string' && (ZEN_RAIL_VIEWS as readonly string[]).includes(v)
+}
+
 export interface ZenWindowDoc {
   version: 1
   on: boolean
   garden: string | null
+  /** Missing (an older doc) or unknown: My Home. */
+  view?: ZenRailView
 }
 
 export interface KeyValueStorage {
@@ -54,7 +69,7 @@ export function parseZenWindowDoc(raw: string | null): ZenWindowDoc | null {
   const d = v as Record<string, unknown>
   if (d.version !== 1 || typeof d.on !== 'boolean') return null
   const garden = typeof d.garden === 'string' && d.garden.length > 0 ? d.garden : null
-  return { version: 1, on: d.on, garden }
+  return isZenRailView(d.view) ? { version: 1, on: d.on, garden, view: d.view } : { version: 1, on: d.on, garden }
 }
 
 export interface ZenWindowState {
@@ -64,8 +79,11 @@ export interface ZenWindowState {
   on: boolean
   /** The Garden this window shows, as last picked (null: the first one). */
   garden: string | null
+  /** The nav rail's view in this window (My Home by default). */
+  view: ZenRailView
   setOn(on: boolean): void
   setGarden(id: string | null): void
+  setView(view: ZenRailView): void
 }
 
 function safeGet(kv: KeyValueStorage | null, key: string): string | null {
@@ -95,12 +113,17 @@ export function createZenWindowStore(
   return create<ZenWindowState>((set, get) => {
     const save = (): void => {
       const s = get()
-      safeSet(local, zenWindowKey(s.label), JSON.stringify({ version: 1, on: s.on, garden: s.garden } satisfies ZenWindowDoc))
+      safeSet(
+        local,
+        zenWindowKey(s.label),
+        JSON.stringify({ version: 1, on: s.on, garden: s.garden, view: s.view } satisfies ZenWindowDoc),
+      )
     }
     return {
       label,
       on: initial?.on ?? false,
       garden: initial?.garden ?? null,
+      view: initial?.view ?? 'home',
       setOn(on) {
         if (get().on === on) return
         set({ on })
@@ -109,6 +132,12 @@ export function createZenWindowStore(
       setGarden(id) {
         if (get().garden === id) return
         set({ garden: id })
+        save()
+      },
+      setView(view) {
+        if (!isZenRailView(view)) throw new Error(`zen: unknown rail view ${String(view)}`)
+        if (get().view === view) return
+        set({ view })
         save()
       },
     }
@@ -129,5 +158,5 @@ export const useZenWindowStore = createZenWindowStore(localOrNull(), getWindowLa
 /** Tests only: start over as a fresh window `label` would (reads storage). */
 export function __reloadZenWindowForTests(label = useZenWindowStore.getState().label): void {
   const doc = parseZenWindowDoc(safeGet(localOrNull(), zenWindowKey(label)))
-  useZenWindowStore.setState({ label, on: doc?.on ?? false, garden: doc?.garden ?? null })
+  useZenWindowStore.setState({ label, on: doc?.on ?? false, garden: doc?.garden ?? null, view: doc?.view ?? 'home' })
 }

@@ -997,7 +997,7 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
         let shown = b.iter().map(|v| if v.fract() == 0.0 { format!("{}", *v as i64) } else { format!("{v}") }).collect::<Vec<_>>().join(", ");
         assert!(body.contains(&format!("`{name}` [{shown}]")), "skill must show {name}'s points [{shown}]");
     }
-    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 3, "G36: k2-zen skill v3");
+    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 4, "G36: k2-zen skill v4 (Garden 1 + Garden 2)");
 }
 
 fn temp_dot(tag: &str) -> PathBuf {

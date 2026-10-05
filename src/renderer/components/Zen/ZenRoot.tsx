@@ -31,6 +31,8 @@ import {
 import { installZenThemeEngine } from '@/lib/zen/zen-theme-engine'
 import { ZEN_KEYFRAMES_CSS } from '@/lib/zen/zen-motion'
 import { ZEN_SHIELD_CSS, ZEN_STYLE_SHIELD } from '@/lib/zen/zen-style-shield'
+import { ZEN_GLASS_CSS } from '@/lib/zen/zen-glass'
+import { noteZenEntered } from '@/lib/zen/zen-compose-focus'
 import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
   clusterArea,
@@ -289,6 +291,11 @@ export function ZenRoot(): React.JSX.Element {
   const chrome = useZenChromeHold(livePage?.chrome ?? null, inSafeMode)
   const { area, onClusterRect } = useStoplightArea(chrome)
 
+  // Entering Zen: the page's first view may put the caret in its selected
+  // agent's message box (`zen-compose-focus`). Marked during this render,
+  // before any child effect (the page may already be cached and mount now).
+  useState(noteZenEntered)
+
   // G50: keys typed after the toggle land in Zen, never in a terminal
   // hidden underneath.
   useEffect(() => {
@@ -417,6 +424,7 @@ export function ZenRoot(): React.JSX.Element {
     >
       <style data-zen-keyframes="">{ZEN_KEYFRAMES_CSS}</style>
       <style data-zen-shield="">{ZEN_SHIELD_CSS}</style>
+      <style data-zen-glass-styles="">{ZEN_GLASS_CSS}</style>
       {theme.background && (
         <div
           aria-hidden

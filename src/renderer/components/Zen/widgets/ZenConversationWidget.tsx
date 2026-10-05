@@ -378,12 +378,21 @@ export function ZenConversation({
   )
 }
 
+/** Is this conversation pinned to one agent (the `agent` prop)? */
+function zenConversationPinned(props: Record<string, unknown>): boolean {
+  return typeof props.agent === 'string' && props.agent.trim() !== ''
+}
+
+/** The row a Conversation widget shows: pinned, the one agent (its list is
+ *  that agent); else the followed widget's selection. */
+export function zenConversationRow(rows: readonly ZenAgentRow[], props: Record<string, unknown>): ZenAgentRow | null {
+  return zenConversationPinned(props) ? (rows[0] ?? null) : (rows.find((r) => r.selected) ?? null)
+}
+
 export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
-  const pinned = typeof decl.props.agent === 'string' && decl.props.agent.trim() !== ''
-  // Pinned: the one agent (its list is that agent); else the followed
-  // widget's selection.
-  const row = pinned ? (rows[0] ?? null) : (rows.find((r) => r.selected) ?? null)
+  const pinned = zenConversationPinned(decl.props)
+  const row = zenConversationRow(rows, decl.props)
   const options: ZenConversationOptions = {
     compose: decl.props.compose !== false,
     attachments: decl.props.attachments !== false,

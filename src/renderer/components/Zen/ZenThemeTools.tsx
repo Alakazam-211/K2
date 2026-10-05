@@ -2,7 +2,8 @@
 // in-Zen theme picker and the Zen shortcut cheat sheet, both drawn by K2
 // with `--zen-*` tokens only (never Styles tokens).
 //
-// - Theme picker: a small swatch button in the template's top-right
+// - Theme picker: a small swatch button (a shared Zen glass tile, like
+//   the usage chip beside it) in the template's top-right
 //   cluster, immediately left of the Zen toggle (Rosson 2026-10-04; the
 //   template places it through `ZenK2TopRightContext`). It lists
 //   the daemon's themes (built-in ones marked), checks the active one, and
@@ -15,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
+import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { zenThemeLabel, type ZenThemeEntry } from '@/lib/zen/zen-page'
 import {
   closeZenOverlays,
@@ -141,6 +143,8 @@ export function ZenThemePicker({
         aria-expanded={open}
         title={active ? `Theme: ${active}` : 'Themes'}
         data-zen-theme-button=""
+        data-zen-soft-button=""
+        {...ZEN_GLASS_PROPS}
         onClick={() => useZenOverlayStore.setState({ picker: !open, sheet: false })}
         style={{
           display: 'flex',
@@ -148,13 +152,12 @@ export function ZenThemePicker({
           gap: 6,
           height: 26,
           padding: '0 9px',
+          // The shared Zen glass tile (`zen-glass.ts`): background, edge,
+          // blur and shadow come from `data-zen-glass`, like the usage chip.
           borderRadius: 13,
-          border: '1px solid var(--zen-border)',
-          background: 'var(--zen-surface)',
-          color: 'var(--zen-text-muted)',
+          color: open ? 'var(--zen-text)' : 'var(--zen-text-muted)',
           fontSize: 12,
           cursor: 'pointer',
-          opacity: open ? 1 : 0.75,
         }}
       >
         <span

@@ -387,6 +387,9 @@ import { zenGardenAskDraft } from './ZenGardenEmptyWidget'
 import { ZEN_PROJECTS_TEXT, zenProjectsAskDraft } from './ZenProjectsViewWidget'
 import { ZEN_EMPTY_FOCUS_GROUP } from './ZenAgentsWidget'
 import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, zenNavPillMotion } from './ZenNavRailWidget'
+import { ZEN_TICKETS_GLASS_CSS } from './ZenTicketsViewWidget'
+import { ZEN_USAGE_CSS } from '../ZenUsageTool'
+import { ZEN_GLASS_CSS, zenGlassRule } from '@/lib/zen/zen-glass'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { ZEN_WIDGET_CSS } from './zen-widget-kit'
 import { ZEN_ANCHORED_MENU_LAYER } from '@/hooks/useAnchoredMenu'
@@ -1183,6 +1186,27 @@ describe('the Agents view (Garden 1)', () => {
     await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
     expect(document.querySelector('[data-zen-agent-row][data-selected]')).toBeNull()
   })
+
+  it('Agents → Tickets → Agents: the selected agent’s message box has the caret again; none selected, none focused', async () => {
+    await mountZen()
+    await openRailView('agents')
+    await agentsViewRows(4)
+    // Nothing selected in the Agents view yet: coming back focuses nothing.
+    await openRailView('tickets')
+    await openRailView('agents')
+    await agentsViewRows(4)
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+
+    await select('cortana::local')
+    await threadReady('cortana::local')
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
+    await openRailView('tickets')
+    expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
+    await openRailView('agents')
+    await threadReady('cortana::local')
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
+  })
 })
 
 // Rosson 2026-10-04: the rail's Projects view is coming soon.
@@ -1330,6 +1354,223 @@ describe('the usage tool in the top band', () => {
       await openRailView(view)
       expect(document.querySelector('[data-zen-top-right] > [data-zen-usage]'), view).not.toBeNull()
     }
+  })
+})
+
+// Rosson 2026-10-04: "update the other tiles to all have that effect that
+// those two tiles have that make them look like glass" — one shared glass
+// (`lib/zen/zen-glass.ts`) on every Zen tile.
+describe('every Zen tile is the same glass', () => {
+  type Decl = { background: string; backdrop: string; webkit: string }
+
+  /** The style rules `el` matches, from every stylesheet in the document:
+   *  top level, or (`reduced`) inside the reduced-transparency media rule. */
+  function matchedDecls(el: Element, reduced: boolean): Decl[] {
+    const out: Decl[] = []
+    const visit = (rules: CSSRuleList, inReduced: boolean): void => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSMediaRule) {
+          visit(rule.cssRules, inReduced || rule.conditionText.includes('prefers-reduced-transparency: reduce'))
+        } else if (rule instanceof CSSStyleRule && inReduced === reduced && el.matches(rule.selectorText)) {
+          const background = rule.style.getPropertyValue('background')
+          out.push({
+            background,
+            backdrop: rule.style.getPropertyValue('backdrop-filter'),
+            webkit: webkitIn(rule, background),
+          })
+        }
+      }
+    }
+    // Only sheets still in the document (jsdom keeps removed ones listed).
+    for (const sheet of Array.from(document.styleSheets)) if (sheet.ownerNode?.isConnected) visit(sheet.cssRules, false)
+    return out
+  }
+
+  /** jsdom's CSSOM drops vendor-prefixed properties: read the rule's
+   *  `-webkit-backdrop-filter` from its stylesheet's source text (the block
+   *  with the same selector and background). */
+  function webkitIn(rule: CSSStyleRule, background: string): string {
+    if (!background) return ''
+    const flat = (sel: string): string => sel.replace(/\s+/g, ' ').trim()
+    const source = rule.parentStyleSheet?.ownerNode?.textContent ?? ''
+    for (const m of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (flat(m[1]) !== flat(rule.selectorText) || !m[2].includes(`background: ${background};`)) continue
+      return /-webkit-backdrop-filter:\s*([^;]+);/.exec(m[2])?.[1].trim() ?? ''
+    }
+    throw new Error(`no source block for ${rule.selectorText}`)
+  }
+
+  /** `el` is drawn by the shared glass, and is solid under reduced transparency. */
+  function expectGlass(el: Element | null, what: string): void {
+    if (!(el instanceof HTMLElement)) throw new Error(`no ${what}`)
+    const glass = matchedDecls(el, false).filter((d) => d.background === 'var(--zen-glass)')
+    expect(glass, `${what}: glass rule`).toEqual([
+      { background: 'var(--zen-glass)', backdrop: 'var(--zen-glass-blur)', webkit: 'var(--zen-glass-blur)' },
+    ])
+    const solid = matchedDecls(el, true).filter((d) => d.background === 'var(--zen-surface)')
+    expect(solid, `${what}: reduced-transparency rule`).toEqual([
+      { background: 'var(--zen-surface)', backdrop: 'none', webkit: 'none' },
+    ])
+    // Nothing inline overrides it.
+    expect(el.style.background, what).toBe('')
+    expect(el.style.border, what).toBe('')
+  }
+
+  /** `el` carries the shared marker and is drawn by it. */
+  function expectGlassTile(el: Element | null, what: string): void {
+    expect(el?.hasAttribute('data-zen-glass'), `${what}: data-zen-glass`).toBe(true)
+    expectGlass(el, what)
+  }
+
+  it('the shared stylesheet is drawn once, on the Zen root', async () => {
+    await mountZen()
+    const styles = document.querySelectorAll('[data-zen-root] > style[data-zen-glass-styles]')
+    expect(styles.length).toBe(1)
+    expect(styles[0].textContent).toBe(ZEN_GLASS_CSS)
+  })
+
+  it('My Home: the Agents card, the Conversation card, the rail, the Garden switcher and the theme control', async () => {
+    await mountZen()
+    expect(document.querySelectorAll('[data-zen-column]').length).toBe(2)
+    expect(document.querySelector('[data-zen-column="0"] [data-zen-widget="agents"]')).not.toBeNull()
+    expectGlassTile(document.querySelector('[data-zen-column="0"]'), 'Agents card')
+    expect(document.querySelector('[data-zen-column="1"] [data-zen-widget="conversation"]')).not.toBeNull()
+    expectGlassTile(document.querySelector('[data-zen-column="1"]'), 'Conversation card')
+    expectGlassTile(document.querySelector('[data-zen-widget="nav-rail"]'), 'nav rail')
+    expectGlassTile(document.querySelector('[data-zen-garden-pill]'), 'Garden switcher')
+    expectGlassTile(document.querySelector('[data-zen-theme-button]'), 'theme control')
+    // The rail's selection pill keeps its own Motion glass.
+    const pill = document.querySelector('[data-zen-nav-pill]')
+    expect(pill).not.toBeNull()
+    expect(pill?.hasAttribute('data-zen-glass')).toBe(false)
+  })
+
+  it('the usage chip is the same glass, from the same rule', async () => {
+    await mountZen()
+    await waitFor(() => expect(document.querySelector('[data-zen-usage] [data-testid="subscription-usage"]')).not.toBeNull())
+    expect(ZEN_USAGE_CSS).toContain(zenGlassRule(['[data-zen-root] [data-zen-usage] [data-testid="subscription-usage"]']))
+    expectGlass(document.querySelector('[data-zen-usage] [data-testid="subscription-usage"]'), 'usage chip')
+  })
+
+  it('the Projects view card', async () => {
+    await mountZen()
+    await openRailView('projects')
+    const card = document.querySelector('[data-zen-column="0"]')
+    expect(card?.querySelector('[data-zen-projects-soon]')).not.toBeNull()
+    expectGlassTile(card, 'Projects card')
+  })
+
+  it('the Tickets view: no box of its own; its panels are the shared glass', async () => {
+    await mountZen()
+    await openRailView('tickets')
+    const column = document.querySelector('[data-zen-column="0"]')
+    expect(column?.hasAttribute('data-zen-column-bare')).toBe(true)
+    expect(column?.hasAttribute('data-zen-glass')).toBe(false)
+    const panels = ['ticket-list', 'ticket-list-rail', 'ticket-detail', 'ticket-agent-rail'].map(
+      (id) => `[data-zen-root] [data-zen-tickets] [data-testid="${id}"]`,
+    )
+    expect(ZEN_TICKETS_GLASS_CSS).toContain(zenGlassRule(panels))
+    await waitFor(() => expect(document.querySelector('[data-zen-tickets] [data-testid="ticket-list"]')).not.toBeNull())
+    expectGlass(document.querySelector('[data-zen-tickets] [data-testid="ticket-list"]'), 'Tickets list panel')
+    // No private recipe, and no background gradient (Rosson 2026-10-04).
+    for (const css of [ZEN_TICKETS_GLASS_CSS, ZEN_USAGE_CSS]) {
+      expect(css).not.toMatch(/blur\(\d/)
+      expect(css).not.toMatch(/--zen-glass[a-z-]*:/)
+      expect(css).not.toMatch(/gradient\(|url\(/)
+    }
+  })
+
+  it('the empty Garden card', async () => {
+    useZenWindowStore.setState({ garden: 'g-notes' })
+    await mountGarden('k2.blank@1')
+    const card = document.querySelector('[data-zen-column="0"]')
+    expect(card?.querySelector('[data-zen-garden-empty-title]')).not.toBeNull()
+    expectGlassTile(card, 'empty Garden card')
+  })
+})
+
+// Rosson 2026-10-04: "When leaving My Home and coming back, it isn't
+// auto-selecting the text area."
+describe('coming back to a conversation focuses its message box', () => {
+  const isCompose = (): boolean => document.activeElement?.hasAttribute('data-zen-compose-input') === true
+
+  async function backHome(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-zen-nav="home"]') as HTMLElement)
+    })
+    await waitFor(() => {
+      if (document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view') !== 'home') throw new Error('home not shown')
+    })
+  }
+
+  it('My Home → Tickets → My Home: “Message <agent>” has the caret again', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
+
+    await openRailView('tickets')
+    expect(isCompose()).toBe(false)
+    await backHome()
+    await threadReady(ROWS.cortana.address)
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+
+    // A remote update afterwards never takes the caret back.
+    ;(document.activeElement as HTMLElement).blur()
+    act(() => useActiveAgentsStore.setState({ paneStatuses: new Map() }))
+    act(() => useHomesStore.getState().moveRow('h1', 1, 0))
+    expect(isCompose()).toBe(false)
+  })
+
+  it('a remote agent: the caret follows once its conversation is open again', async () => {
+    await mountZen()
+    await select(ROWS.sales.address)
+    await threadReady(ROWS.sales.address)
+    await openRailView('projects')
+    expect(isCompose()).toBe(false)
+    await backHome()
+    await threadReady(ROWS.sales.address)
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message sales'))
+  })
+
+  it('no agent selected: coming back focuses nothing and files nothing', async () => {
+    await mountZen()
+    await openRailView('tickets')
+    await backHome()
+    expect(document.querySelector('[data-zen-agent-row][data-selected]')).toBeNull()
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+    expect(isCompose()).toBe(false)
+  })
+
+  it('never steals focus from a field you are typing in', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    await openRailView('tickets')
+    const other = document.createElement('input')
+    document.body.appendChild(other)
+    other.focus()
+    // The view comes back while the caret is in another field: it stays there.
+    act(() => useZenWindowStore.getState().setView('home'))
+    await threadReady(ROWS.cortana.address)
+    expect(document.activeElement).toBe(other)
+    expect(useZenComposeFocusStore.getState().request).toBeNull()
+    other.remove()
+  })
+
+  it('entering Zen with an agent selected puts the caret in its box', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    ;(document.activeElement as HTMLElement).blur()
+    // Leave Zen, come back.
+    act(() => useZenWindowStore.getState().setOn(false))
+    await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
+    act(() => useZenWindowStore.getState().setOn(true))
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-agent-row]').length).toBe(4))
+    await threadReady(ROWS.cortana.address)
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Message cortana'))
   })
 })
 

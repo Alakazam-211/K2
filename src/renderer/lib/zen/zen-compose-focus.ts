@@ -9,6 +9,13 @@
 // focus. A request is dropped when it is taken, replaced by a newer pick,
 // older than `ZEN_COMPOSE_FOCUS_TTL_MS`, when the page goes away, or when
 // the person is typing in another field by the time the box is ready.
+//
+// Arriving at a conversation files one too (Rosson 2026-10-04: "When
+// leaving My Home and coming back, it isn't auto-selecting the text
+// area"): the rail switching the view to My Home or Agents, and entering
+// Zen, file a request for the agent selected on that view's page (ZenPage,
+// `zenSelectedConversationAddress`). No agent selected: no request. A
+// Garden switch or a safe-mode reload is not an arrival.
 
 import { create } from 'zustand'
 
@@ -52,4 +59,20 @@ export function takeZenComposeFocus(address: string, box: HTMLElement): boolean 
   const active = typeof document === 'undefined' ? null : document.activeElement
   if (active && active !== box && editable(active)) return false
   return true
+}
+
+/** When this window last entered Zen (ms), until the page's first view
+ *  takes it. */
+let enteredAt: number | null = null
+
+/** Zen was just switched on in this window (ZenRoot mounting). */
+export function noteZenEntered(): void {
+  enteredAt = Date.now()
+}
+
+/** Did this window just enter Zen? True once, within the TTL. */
+export function takeZenEntered(): boolean {
+  const at = enteredAt
+  enteredAt = null
+  return at !== null && Date.now() - at <= ZEN_COMPOSE_FOCUS_TTL_MS
 }

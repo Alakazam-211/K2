@@ -32,6 +32,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
 import { TEXTING_BAR_HEIGHT_PX, useZenBind, ZenK2TopRightItems } from '../ZenTemplateControls'
+import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { ZenWidgetStyles } from './zen-widget-kit'
 import { ZenNewGarden } from './ZenNewGarden'
 import { zenToggleIcons, type ZenIconOption } from '@/lib/zen/zen-icon'
@@ -116,14 +117,14 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
         onClick={() => setOpen((v) => !v)}
         data-zen-garden-pill=""
         data-zen-soft-button=""
+        {...ZEN_GLASS_PROPS}
         className="flex items-center gap-2 cursor-pointer"
         style={{
+          // A shared Zen glass tile (`zen-glass.ts`): background, edge, blur.
           height: 30,
           minWidth: 24,
           padding: '0 12px 0 14px',
           color: 'var(--zen-text)',
-          background: 'var(--zen-surface)',
-          border: '1px solid var(--zen-border)',
           borderRadius: 999,
           fontWeight: 600,
         }}

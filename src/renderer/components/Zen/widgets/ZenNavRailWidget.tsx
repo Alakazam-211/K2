@@ -20,7 +20,8 @@
 // trade pills); the glass is plain CSS that WebKit draws (no SVG filters in
 // `backdrop-filter`): a low-alpha accent tint over the surface, backdrop
 // blur + saturate, a light rim, a top highlight, a soft shadow and a faint
-// diagonal sheen. Colours are Zen tokens only. Reduced motion: no slide,
+// diagonal sheen. The rail under it is a shared Zen glass tile, like every
+// other Zen tile. Colours are Zen tokens only. Reduced motion: no slide,
 // the pill just appears on the new item. Reduced transparency: a solid
 // tint, no blur, no sheen.
 
@@ -28,6 +29,7 @@ import { useEffect, useId, useState } from 'react'
 import { LayoutGroup, motion, type Transition } from 'motion/react'
 import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
 import type { ZenAppBadges, ZenAppPage } from '@/lib/zen/zen-app-nav'
+import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
 import type { ZenWidgetProps } from '../zen-registry'
 
@@ -55,7 +57,8 @@ const PILL_TINT = 'color-mix(in srgb, var(--zen-accent) 16%, color-mix(in srgb, 
 const PILL_SHEEN =
   'linear-gradient(135deg, rgb(255 255 255 / 0.34) 0%, rgb(255 255 255 / 0.08) 38%, transparent 56%, rgb(255 255 255 / 0.10) 100%)'
 
-/** The rail's styles: the glass pill, the frosted rail and the hover glow. */
+/** The rail's styles: the glass pill and the hover glow. The rail itself is
+ *  a shared Zen glass tile (`data-zen-glass`, `lib/zen/zen-glass.ts`). */
 export const ZEN_NAV_RAIL_CSS = `
 [data-zen-root] [data-zen-widget="nav-rail"] {
   --zen-nav-pill-tint: ${PILL_TINT};
@@ -63,9 +66,6 @@ export const ZEN_NAV_RAIL_CSS = `
   --zen-nav-pill-highlight: rgb(255 255 255 / 0.75);
   --zen-nav-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px color-mix(in srgb, var(--zen-accent) 18%, transparent);
   --zen-nav-pill-sheen: ${PILL_SHEEN};
-  background: color-mix(in srgb, var(--zen-surface) 80%, transparent);
-  -webkit-backdrop-filter: blur(12px) saturate(160%);
-  backdrop-filter: blur(12px) saturate(160%);
 }
 [data-zen-root][data-zen-scheme="dark"] [data-zen-widget="nav-rail"] {
   --zen-nav-pill-tint: color-mix(in srgb, var(--zen-accent) 22%, color-mix(in srgb, var(--zen-surface-raised) 48%, transparent));
@@ -91,11 +91,6 @@ export const ZEN_NAV_RAIL_CSS = `
   [data-zen-root] [data-zen-nav] { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  [data-zen-root] [data-zen-widget="nav-rail"] {
-    background: var(--zen-surface);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
   [data-zen-root] [data-zen-nav-pill] {
     background: color-mix(in srgb, var(--zen-accent) 14%, var(--zen-surface-raised));
     -webkit-backdrop-filter: none;
@@ -247,12 +242,12 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
         aria-label="Pages"
         data-zen-widget="nav-rail"
         data-zen-widget-id={decl.id}
+        {...ZEN_GLASS_PROPS}
         className="flex flex-shrink-0 flex-col items-center"
         style={{
           width: ZEN_NAV_RAIL_WIDTH_PX,
           padding: '6px 0',
           gap: 4,
-          border: '1px solid var(--zen-border)',
           borderRadius: 'var(--zen-radius)',
         }}
       >

@@ -17,7 +17,12 @@
 // A Garden with a nav rail draws the view its rail picked in this window
 // (Rosson 2026-10-04: My Home, Agents, Projects, Tickets; `zen-rail-views`).
 // The view changes the widgets only; the template's controls, and so the
-// required-controls check, stay the same.
+// required-controls check, stay the same. Arriving at My Home or Agents (a
+// rail switch, or entering Zen) puts the caret in the selected agent's
+// message box (Rosson 2026-10-04; `zen-compose-focus`).
+//
+// Every column box is a shared Zen glass tile (`data-zen-glass`,
+// `lib/zen/zen-glass.ts`; Rosson 2026-10-04).
 
 import { useEffect, useMemo, useRef } from 'react'
 import { useHomesStore } from '@/stores/homes'
@@ -34,8 +39,11 @@ import {
 import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
 import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { zenPageForView, zenPageHasRail } from '@/lib/zen/zen-rail-views'
-import { cancelZenComposeFocus } from '@/lib/zen/zen-compose-focus'
-import { createZenBridge, type ZenBridgeHost, type ZenWidgetBridge } from '@/lib/zen/zen-bridge'
+import { cancelZenComposeFocus, requestZenComposeFocus, takeZenEntered } from '@/lib/zen/zen-compose-focus'
+import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import type { ZenAgentRow } from '@/lib/zen/zen-data'
+import type { ZenRailView } from '@/lib/zen/zen-window'
+import { createZenBridge, ZenBridgeError, type ZenBridgeHost, type ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import {
   checkZenControls,
   createControlRegistry,
@@ -58,6 +66,7 @@ import {
   zenTemplateControlsFor,
   zenWidgetFor,
 } from './zen-registry'
+import { zenConversationRow } from './widgets/ZenConversationWidget'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -75,6 +84,35 @@ function gardenSummaries(): Array<{ id: string; name: string; index: number }> {
 function gardenIds(): string[] {
   return useZenGardensStore.getState().gardens.map((g) => g.id)
 }
+
+/** The agent whose message box an arrival focuses: the row the page's first
+ *  Conversation (with a message box) shows, or null when none is selected. */
+export function zenSelectedConversationAddress(
+  page: ZenResolvedPage,
+  bridges: ReadonlyMap<string, ZenWidgetBridge>,
+): string | null {
+  for (const w of page.widgets) {
+    if (w.kind !== 'conversation' || w.props.compose === false) continue
+    const bridge = bridges.get(w.id)
+    if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
+    // A conversation that can't read agents (not granted, or no data verbs
+    // installed) has no row to focus; the caret never crashes the page.
+    if (!bridge.caps.has('agents:read')) continue
+    let rows: ZenAgentRow[]
+    try {
+      rows = bridge.call('agents.list') as ZenAgentRow[]
+    } catch (err) {
+      if (err instanceof ZenBridgeError && err.code === 'verb_unavailable') continue
+      throw err
+    }
+    const row = zenConversationRow(rows, w.props)
+    if (row) return row.address
+  }
+  return null
+}
+
+/** Views whose page has the conversation an arrival focuses. */
+const ZEN_CONVERSATION_VIEWS: ReadonlySet<ZenRailView> = new Set(['home', 'agents'])
 
 export function ZenPage({
   page: garden,
@@ -150,6 +188,21 @@ export function ZenPage({
     for (const w of page.widgets) m.set(w.id, createZenBridge(host, { id: w.id, caps: w.caps }))
     return m
   }, [host, page.widgets])
+  const bridgesRef = useRef(widgetBridges)
+  bridgesRef.current = widgetBridges
+
+  // Arriving at My Home / Agents (a rail switch, or this window entering
+  // Zen): focus the selected agent's message box once it can be typed in.
+  // A Garden switch, a page reload or a remote update is not an arrival.
+  const arrivedView = useRef<ZenRailView | null>(null)
+  useEffect(() => {
+    const prev = arrivedView.current
+    arrivedView.current = view
+    const arrived = prev === null ? takeZenEntered() : prev !== view
+    if (!arrived || !ZEN_CONVERSATION_VIEWS.has(view)) return
+    const address = zenSelectedConversationAddress(pageRef.current, bridgesRef.current)
+    if (address) requestZenComposeFocus(address)
+  }, [view])
 
   // Z28: the check schedule (not in safe mode: K2's own page needs none).
   const focused = useWindowFocusStore((s) => s.isFocused)
@@ -244,16 +297,11 @@ export function ZenPage({
                   data-zen-column={col}
                   className="flex min-h-0 min-w-0 flex-col"
                   data-zen-column-bare={bare ? '' : undefined}
+                  {...(bare ? {} : ZEN_GLASS_PROPS)}
                   style={
                     bare
                       ? { flex: '1 1 0%' }
-                      : {
-                          flex: '1 1 0%',
-                          background: 'var(--zen-surface)',
-                          border: '1px solid var(--zen-border)',
-                          borderRadius: 'var(--zen-radius)',
-                          overflow: 'hidden',
-                        }
+                      : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
                   }
                 >
                   {boxed.map(draw)}

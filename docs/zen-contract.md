@@ -418,3 +418,40 @@ additions, decided here:
    `"garden"`/`"global"`.
 8. `history` entries for Garden files carry `garden` and `deleted`.
 9. `unknown_garden` also carries `garden` (what was asked for).
+
+## Renderer notes (2026-10-04)
+
+What the renderer (`src/renderer/lib/zen/`, `components/Zen/`) does with
+this contract, where it reads more loosely or decides something:
+
+1. **Feature key.** `scopeForHost('local').serverSupports` reports every
+   feature as supported, so it can't tell an older daemon. The renderer
+   treats `{error: "unknown zen route"}` (404) on `GET /cli/zen/gardens` as
+   "K2 on this computer is older than this app. Update it to use Gardens."
+   Keep that 404 for unknown Zen GET routes.
+2. **Setup.** After `POST /cli/zen/setup` the renderer re-reads
+   `GET /cli/zen/gardens` instead of using `setup`'s `gardens`.
+3. **New Garden.** The switcher sends `{name}` only (the daemon's default
+   template, `blank`) and reads `garden` from the answer; the window switches
+   to it at once and the list is re-read on the `zen_changed` that follows.
+   Names are checked case-insensitively before posting, and a 409
+   `garden_exists` shows "You already have a Garden called “<name>”.".
+4. **`unknown_garden`** on `get` re-reads the list; the window moves to the
+   first Garden. A window's stored Garden that the list lacks is replaced by
+   the first one.
+5. **Layout.** `split` / `minWidths` are read; when `split` is missing the
+   `columns` tables are read instead (`size`, `min-width`).
+6. **Props.** `agents`: `mode`, `home`, `agent`, `home-picker`,
+   `server-tag`, `preview`, `status`. `conversation`: `agents`, `agent` +
+   `home` (pinned, opens itself), `compose`, `attachments`, `load-older`.
+   `order` is not read (rows are always in Home order). Props are read
+   loosely: a missing one gets the default in the table above.
+7. **The Agents widget's Home** is per Garden and widget in localStorage
+   `k2.zen.gardenHomes.v1` (`{version:1, picks:{"<gardenId>/<widgetId>":
+   "<homeId>"}}`): its pick, else `home`, else the Garden's `seedHome`, else
+   the window's selected Home at first show (then kept). It never moves the
+   Home page.
+8. **Bridge verbs** `gardens.list/current/switch` (no cap),
+   `gardens.create/rename/delete` (`gardens:manage`, template controls
+   only), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
+   (`agents:read`), `compose.draft` (`thread:post`); `homes.select` is gone.

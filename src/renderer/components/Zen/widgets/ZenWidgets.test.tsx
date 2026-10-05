@@ -966,6 +966,11 @@ describe('the Agents view (Garden 1)', () => {
     const picker = document.querySelector('[data-zen-focus-group-picker]') as HTMLElement
     expect(picker).not.toBeNull()
     expect(picker.textContent).toContain('Work')
+    // Rosson 2026-10-04: the dropdown reads "GROUP:" in front (uppercase via CSS).
+    const label = picker.querySelector('[data-zen-focus-group-label]') as HTMLElement
+    expect(label.textContent).toBe('Group:')
+    expect(label.className).toContain('uppercase')
+    expect(picker.firstElementChild).toBe(label)
     expect(document.querySelector('[data-zen-home-picker]')).toBeNull()
     expectEveryButtonPointer()
 

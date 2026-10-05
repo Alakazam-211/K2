@@ -208,9 +208,13 @@ function FocusGroupPicker({ bridge, groups }: { bridge: ZenWidgetBridge; groups:
   return (
     <div
       data-zen-focus-group-picker=""
-      className="min-w-0"
-      style={{ width: 190, textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}
+      className="min-w-0 flex items-center gap-1.5"
+      style={{ width: 240 }}
     >
+      <span data-zen-focus-group-label="" className="flex-shrink-0 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+        Group:
+      </span>
+      <div className="min-w-0 flex-1" style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
       <FocusGroupDropdown
         options={groups.groups.map((g) => ({ id: g.id, name: g.name, color: g.color }))}
         value={groups.active}
@@ -223,6 +227,7 @@ function FocusGroupPicker({ bridge, groups }: { bridge: ZenWidgetBridge; groups:
           }
         }}
       />
+      </div>
     </div>
   )
 }

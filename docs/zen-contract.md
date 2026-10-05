@@ -1,89 +1,217 @@
-# Zen v1: what the renderer (S4) reads from the daemon (S1)
+# Zen Gardens: what the renderer reads from the daemon
 
-The S4 renderer was built in parallel with the S1 daemon routes. This page
-records exactly what the renderer sends and parses, so the two can be checked
-against each other. Source of truth: `.k2/prds/prd-zen-mode-v1.md` Z9–Z16 and
-the vs-live amendments Z58–Z62. The renderer side is in
-`src/renderer/lib/zen/zen-api.ts` and `src/renderer/lib/zen/zen-page.ts`.
+This page records exactly what the daemon serves for Zen and what the
+renderer sends, so the two halves can be built in parallel and checked
+against each other. Source of truth: `.k2/prds/prd-zen-gardens-v1.md`
+(G1–G39, Rosson's answers of 2026-10-04) with its vs-live amendments
+G40–G66, over `.k2/prds/prd-zen-mode-v1.md` (Z9–Z16, Z58–Z62). Daemon side:
+`crates/k2-daemon/src/zen_routes.rs` and `crates/k2-core/src/zen/`. Renderer
+side: `src/renderer/lib/zen/`.
 
-Every Zen config request goes to this computer's daemon through
-`scopeForHost('local')` (owner token). None goes through `primaryScope()`.
+Every Zen request goes to **this computer's** daemon through
+`scopeForHost('local')` with its owner token. None goes through
+`primaryScope()`. Any other token (a Connect login of any role, an app pass,
+an agent passport) gets 403 `{error: "zen_local_only"}`. Bodies over 64 KB
+get 413. A GET on a POST route is 405.
+
+Feature key: `/boot-status` `features` carries **`zen-gardens-v1`** (G19).
+The renderer requires it from the local scope; without it, Zen shows safe
+mode with "K2 on this computer is older than this app. Update it to use
+Gardens." `zen-v1` stays and means the theme routes exist.
+
+## The model
+
+- **Zen is a window mode.** On/off lives in the renderer per window
+  (`k2.zen.window.v1.<label>`). The daemon knows nothing about windows.
+- **A Garden** is a personal page on this computer. The list lives in
+  `~/.k2/zen/gardens.json` (daemon-written: ids, names, order, templates);
+  each Garden's page is `~/.k2/zen/gardens/<id>.toml`.
+- **Ids** are `g-` + 8 lowercase hex (`g-3f9a12c0`). They never change:
+  rename and reorder keep them. Any request field or query named `garden`
+  takes an **id or a name** (a name matches case-insensitively and exactly;
+  an id wins).
+- **Index** is **1-based** everywhere (the first Garden is `index: 1`;
+  ⌘⌥1 is Garden 1).
+- **Templates:** `k2.texting@1` (the Default Garden: Agents beside
+  Conversation) and `k2.blank@1` (every new Garden: the empty-Garden widget).
+- **No migration.** Per-Home Zen never shipped (Rosson, 2026-10-04). A folder
+  left from that era (`pages/`, `homes.json`) is ignored, and it counts as not
+  set up until `setup` adds Default.
 
 ## Requests
 
-| Call | When | Body or query |
+| Call | When | Body or query | Answer |
+|---|---|---|---|
+| `GET /cli/zen/gardens` | Zen turns on in a window; every local `zen_changed` | none | `{ok, setUp, gardens: [Garden]}`. **Always 200**: `setUp: false, gardens: []` when Zen isn't set up, so "not set up" differs from "down" |
+| `POST /cli/zen/setup` | Turning Zen on when `gardens` said `setUp: false` (once) | `{}` | `{ok, path, createdFolder, createdDefault, migrated: null, gardens: [Garden], changed}`. Idempotent. The only route that creates `~/.k2/zen` |
+| `GET /cli/zen/get` | Showing a Garden; Try again; every `zen_changed` | `?garden=<id|name>` (omit for the first Garden) | the page answer below |
+| `POST /cli/zen/garden/new` | **+ New Garden** in the switcher | `{name, template?: "blank"\|"texting", seedHome?, at?}` | `{ok, garden: Garden, file, path, changed}` |
+| `POST /cli/zen/garden/rename` | CLI and agents (Q6) | `{garden, name}` | `{ok, garden: Garden, changed}`; the same name again is `changed: false` and emits nothing |
+| `POST /cli/zen/garden/reorder` | CLI and agents | `{garden, to}` (`to` is 1-based) | `{ok, gardens: [Garden], changed}` |
+| `POST /cli/zen/garden/delete` | CLI and agents | `{garden}` | `{ok, deleted: <id>, name, snapshot, gardens: [Garden], changed}` |
+| `POST /cli/zen/theme/set` · `next` · `prev` · `new`, `GET /cli/zen/theme/list` | theme picker and keys | see Themes | |
+| `GET /cli/zen/status` | CLI | none | `{ok, setUp, path, gardens: [Garden], watching, message}` |
+| `GET /cli/zen/validate`, `GET /cli/zen/history`, `POST /cli/zen/reset`, `POST /cli/zen/reload`, `GET /cli/zen/doctor` | CLI | `garden=` / `{garden}`, `file=`, `theme=` | for the CLI |
+
+`Garden` (one entry of every list above):
+
+```jsonc
+{
+  "id": "g-3f9a12c0",
+  "name": "Launch room",            // 1–60 characters, unique without regard to case
+  "index": 2,                       // 1-based position
+  "template": "k2.blank@1",         // what it was made with; its file may name another
+  "hasFile": true,                  // gardens/<id>.toml exists
+  "createdAt": "2026-10-04T18:00:00Z",
+  "theme": "paper",                 // its own theme pick, or null (follows the computer)
+  "seedHome": "<home id>"           // only when garden/new was given one (G27)
+}
+```
+
+### Errors
+
+| Status | `error` | When |
 |---|---|---|
-| `POST /cli/zen/page/ensure` | Before the first `get` for a Home in this app session | `{"homeId": "<uuid>", "name": "<Home name>"}` |
-| `GET /cli/zen/get` | Zen opens for a Home, Try again, and every `zen_changed` | `?home=<uuid>` |
-| `POST /cli/zen/homes/sync` | A Home is created, renamed or deleted, and some Home has Zen on | `{"homes": [{"id": "<uuid>", "name": "<name>"}, …]}`, the full list in Home order |
+| 404 | `zen_not_set_up` | any route but `gardens`, `status`, `doctor` and `setup` before setup. `message`: "Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar." `garden/new` never sets Zen up |
+| 404 | `unknown_garden` | `{garden, gardens: [ids], message}`: no Garden with that id or name |
+| 409 | `garden_exists` | `garden/new` or `garden/rename` onto a name in use (case aside). `message`: "You already have a Garden called “Notes”." |
+| 409 | `last_garden` | `garden/delete` of the only Garden. `message`: "That's your last Garden." |
+| 400 | `bad_request` | a name that is empty or over 60 characters, `at`/`to` outside the list, an unknown `template`, an unknown body field (bodies are strict), or the old `home` key/query |
+| 404 / 409 | `unknown_theme` / `theme_exists` | as before (Themes) |
 
-**Flag 1, `homes/sync` body.** The PRD names the route (Z11) but not its body.
-The renderer sends the full list shown above. The daemon writes `homes.json`
-from it and moves the page files of Homes that are gone into `.history/`.
+**Removed** (G13): `POST /cli/zen/page/ensure` and `POST /cli/zen/homes/sync`.
+They have no policy rows. A POST to either is refused by the top-level
+method guard (405, like any path that isn't a POST route); a GET is 404
+`{error: "unknown zen route"}`. A `home=` query or `home` body field on any
+Zen route is 400, never silently ignored.
 
-**Flag 2, `homes/sync` must not create the folder.** The renderer only calls it
-once `k2.zen.homes.v1` has a Home turned on. Even so, the daemon should treat
-a sync with no `~/.k2/zen/` folder as a no-op. Z8 says only `page/ensure`
-creates the folder.
+**Delete** moves the page file into `.history/gardens/<id>.toml/` (the
+`snapshot` name) with a `deleted.json` record of the list entry, and drops
+the Garden's theme pick. Nothing is removed without a copy in history.
+`GET /cli/zen/history?garden=<deleted id>` still lists it (`deleted: true`).
+A restore verb is later (Q8).
 
 ## `GET /cli/zen/get` answer
-
-What the PRD fixes (Z15):
-
-```
-{ ok, schema, version, page: { template, layout, widgets, controls },
-  theme, chrome, motion, errors, warnings, lastGoodAt }
-```
-
-**Flag 3, inner shapes.** Z10 doesn't spell out the inner shapes. The
-renderer reads them as follows and is lenient about the rest:
 
 ```jsonc
 {
   "ok": true,                      // not read; a page present is what counts
   "schema": 1,                     // any other value: "this K2 reads Zen schema 1" (safe mode)
-  "version": "b3f…",               // string; changes whenever the resolved result changes
+  "version": "b3f…",               // changes whenever anything below changes (Garden name included)
+  "garden": { "id": "g-3f9a12c0", "name": "Launch room", "index": 2 },   // replaces v1's `home`
   "page": {
     "template": "k2.texting@1",
     "layout": {
       "kind": "columns",
-      "split": [34, 66],           // percent per column
-      "minWidths": [240, 360]      // px per column; `min_widths` also accepted
+      "split": [34, 66],           // percent per column; adds up to 100
+      "minWidths": [240, 360],     // px per column
+      "columns": [{ "size": 34, "min-width": 240, "widget": "agents" }, …]   // `widget`: first widget in it
     },
-    "widgets": [
-      { "id": "agents", "kind": "agents", "column": 0, "props": {},
-        "caps": ["agents:read", "agents:add", "presence:read"], "source": "builtin" },
-      { "id": "conversation", "kind": "conversation", "column": 1, "props": {},
-        "caps": ["agents:read", "presence:read", "thread:read", "thread:post"], "source": "builtin" }
-    ],
-    "controls": ["zen-toggle", "home-switcher", "drag-region"]   // strings, or objects with `kind`
-    // The built-in template sends objects: {kind, placement, column?}. Its
-    // zen-toggle and optional add-agent are "bottom-left" under column 0;
-    // home-switcher "top-left"; drag-region "top". Only the required three
-    // are checked; other kinds (add-agent) are ignored by the check.
+    "widgets": [ Widget, … ],
+    "controls": [                  // always the template's; a Garden file can't change them
+      { "kind": "garden-switcher", "placement": "top-left" },
+      { "kind": "drag-region", "placement": "top" },
+      { "kind": "zen-toggle", "placement": "bottom-left", "column": 0 },
+      { "kind": "add-agent", "placement": "bottom-left", "column": 0 }      // texting only
+    ]
   },
-  "theme": { … }, "chrome": { … }, "motion": { … },             // passed whole to the S5 theme engine
-  "errors":   [{ "file": "zen.toml", "line": 12, "col": 3, "message": "unknown color 'acent'" }],
+  "theme": { … }, "themes": [ … ], "chrome": { … }, "motion": { … },     // see Themes
+  "errors":   [{ "file": "gardens/g-3f9a12c0.toml", "line": 7, "col": 1, "message": "…" }],
   "warnings": [ … same shape … ],
-  "lastGoodAt": "2026-10-04T18:00:00Z"
+  "lastGoodAt": "2026-10-04T18:00:00Z",
+  "sources": { "zen.toml": "file", "gardens/g-3f9a12c0.toml": "snapshot:…", "themes/default/theme.toml": "default" }
 }
 ```
 
-Fallbacks:
+**The daemon honours the page's template** (G40). The page is the Garden
+file's `template` (else the template the Garden was made with), then the
+file's `[layout]` and `[[widget]]` in place of the template's (G38). A file
+with errors keeps its last good version: `get` answers **200** with the last
+good `page` plus `errors`. A non-2xx status, or a body with no `page`, puts
+the window into safe mode.
 
-- `widgets`: `type` is accepted for `kind`, and `col` for `column`.
-- A missing `layout` or `widgets` falls back to the built-in `k2.texting@1`.
-- A missing `controls` does **not** fall back. A page that declares none fails
-  the "declared" check, and the window goes into safe mode.
+### Templates
 
-**Errors with a last good version.** When a file has errors, `get` should
-answer **200** with the last good `page` plus `errors`. The `ok` field is not
-read. A non-2xx status, or a body with no `page`, puts the window into safe
-mode:
+| | `k2.texting@1` (Default) | `k2.blank@1` (new Gardens) |
+|---|---|---|
+| layout | 2 columns, `[34, 66]`, min `[240, 360]` | 1 column, `[100]`, min `[320]` |
+| widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`) | `garden-empty` (column 0) |
+| controls | `garden-switcher`, `drag-region`, `zen-toggle`, `add-agent` | `garden-switcher`, `drag-region`, `zen-toggle` |
 
-- No answer at all: "Can't reach K2 on this computer".
-- An answer that isn't a page: "K2 on this computer sent a Zen page this app
-  can't read".
+**Required controls** (G24): `zen-toggle`, `garden-switcher`, `drag-region`.
+Every template declares all three; `home-switcher` and `home-option` are gone
+from Zen. The renderer binds `garden-option` (with its Garden id) the way it
+bound `home-option`. Template controls get the caps `agents:add` and
+`gardens:manage` (G29); widgets never get `gardens:manage`.
+
+### `Widget`
+
+```jsonc
+{
+  "id": "agents",                  // unique on the page
+  "kind": "agents",                // agents | conversation | garden-empty
+  "column": 0,
+  "props": { … },                  // EVERY prop is present: the daemon fills K2's defaults
+  "caps": ["agents:read", "agents:add", "presence:read"],   // K2's, by kind; a file can't name caps
+  "source": "builtin"
+}
+```
+
+Caps by kind: `agents` → `agents:read, agents:add, presence:read`;
+`conversation` → `agents:read, presence:read, thread:read, thread:post`;
+`garden-empty` → `agents:read, thread:read, thread:post`.
+
+Props (Rosson, answer 5: a widget shows **a whole Home** or **one agent
+filtered from a Home**):
+
+| kind | prop | type | default | meaning |
+|---|---|---|---|---|
+| `agents` | `mode` | `"home"` \| `"agent"` | `"agent"` when `agent` is set, else `"home"` (always sent) | whole Home, or one agent |
+| `agents` | `home` | string | unset | the Home to show, by id **or name**; unset = the Garden's `seedHome`, else the window's selected Home (G27) |
+| `agents` | `agent` | string | unset | in `mode: "agent"`, the one agent's name or address in that Home |
+| `agents` | `home-picker` | bool | `false` (texting: `true`) | the widget's own Home picker; never moves the Home page |
+| `agents` | `order` | `"home"` | `"home"` | row order |
+| `agents` | `server-tag` | bool | `true` | tag rows from another server |
+| `agents` | `preview` | bool | `true` | last message under each row |
+| `agents` | `status` | list of `working`, `idle`, `needs-you` | all three | which live statuses show |
+| `conversation` | `agents` | string (a widget id) | the page's first `agents` widget (column order) | follow that widget's picked agent; **always sent** unless `agent` is set |
+| `conversation` | `agent` | string | unset | pin one agent's conversation (name or address), no list needed |
+| `conversation` | `home` | string | unset | with `agent`: the Home to look it up in (id or name) |
+| `conversation` | `compose` | bool | `true` | the compose box |
+| `conversation` | `attachments` | bool | `true` | attachments in the box |
+| `conversation` | `load-older` | bool | `true` | load older on scroll |
+
+`garden-empty` has no props. It shows "This Garden is empty." / "Ask your
+agents to add things to this Garden." and **Ask my agent** (G28) until the
+Garden's file declares `[[widget]]`.
+
+### What a Garden file may declare (G38)
+
+```toml
+schema = 1
+template = "k2.blank@1"            # or "k2.texting@1"
+[layout]
+kind = "columns"
+[[layout.column]]
+size = 40                          # percent; the sizes add up to 100
+min-width = 240                    # px, 0–800 (default 0)
+[[layout.column]]
+size = 60
+[[widget]]
+id = "work"
+kind = "agents"                    # agents | conversation (garden-empty only from the template)
+column = 0
+[widget.props]
+home = "Work"
+agent = "cortana"                  # one agent → mode "agent"
+```
+
+1–3 columns, at most 12 widgets. A `caps` key anywhere is an error;
+`[[control]]` is a warning and ignored; an unknown kind or prop is an error
+at its line; a widget's `column` must exist in the effective layout; a
+`conversation`'s `agents` must name an `agents` widget on the page; a
+`conversation` with neither `agents` nor `agent` needs an `agents` widget to
+follow. Theme tables restyle that Garden only.
 
 ## Themes (Omarchy additions, 2026-10-04)
 
@@ -92,10 +220,10 @@ mode:
 
 ```jsonc
 "theme": {
-  "name": "default",            // the active theme for this Home
+  "name": "default",            // the active theme for this Garden
   "builtin": true,              // shipped inside K2 (read-only)
   "user": false,                // ~/.k2/zen/themes/<name>/theme.toml exists (for a built-in: an override)
-  "scope": "global",            // "home" when the Home has its own pick
+  "scope": "global",            // "garden" when the Garden has its own pick
   "tokens": {
     "scheme": "auto",           // auto | light | dark
     "colors": { "light": { "canvas": "#…", …, "idle": "#…", … }, "dark": { … } },  // `idle`, no `unread` (decision 9)
@@ -137,17 +265,19 @@ mode:
   `image =`. The theme's last good image is then served with
   `lastGood: true`. The renderer should paint `dataUrl` under the Zen root
   with `fit` (`cover|contain|tile|center`) and `opacity`.
-- **Layering.** For one Home the stack is, lowest first:
+- **Layering.** For one Garden the stack is, lowest first:
   1. K2's built-in `default` theme;
   2. K2's built-in copy of the active theme;
   3. `themes/<active>/theme.toml`;
   4. `zen.toml`;
-  5. `pages/<home>.toml`.
+  5. `gardens/<id>.toml`.
 
   The built-ins are `default`, `paper` and `midnight`. They are embedded in
   the daemon and read-only. `~/.k2/zen` holds only the user's changes, and
-  the `zen.toml` stub is empty. The page template is the same: the built-in
-  `k2.texting@1` is the default, and a page file holds only overrides.
+  the `zen.toml` stub is empty. Page templates are the same: the built-in
+  `k2.texting@1` and `k2.blank@1` are the defaults, and a Garden file holds
+  only its changes (theme tables, and optionally its layout of built-in
+  widgets).
 - **Errors.** A theme file with errors keeps its last good version, the
   same way as `zen.toml`. The errors come back in `errors` with
   `file: "themes/<name>/theme.toml"`. If a theme pick points to a deleted
@@ -155,11 +285,11 @@ mode:
 
 | Call | Body | Answer |
 |---|---|---|
-| `GET /cli/zen/theme/list` | `?home=<id|name>` | `{active, scope, global, home, homeTheme, missing, themes}` |
-| `POST /cli/zen/theme/set` | `{name}`, or `{name, home}` for one Home, or `{home, clear: true}` to drop the Home's pick | `{ok, theme, scope, home, changed}` |
-| `POST /cli/zen/theme/next` and `/prev` | `{}` or `{home}` | same as set; cycles `themes` in order and wraps |
+| `GET /cli/zen/theme/list` | `?garden=<id|name>` | `{active, scope, global, garden, gardenTheme, missing, themes}` |
+| `POST /cli/zen/theme/set` | `{name}`, or `{name, garden}` for one Garden, or `{garden, clear: true}` to drop the Garden's pick | `{ok, theme, scope, garden, changed}` |
+| `POST /cli/zen/theme/next` and `/prev` | `{}` or `{garden}` | same as set; cycles `themes` in order and wraps |
 | `POST /cli/zen/theme/new` | `{name, from?}` | `{ok, name, file, path, from, copiedImage, changed}`; 409 `theme_exists` when the theme is already there |
-| `POST /cli/zen/reset` | `{theme}` (as well as `file` and `home`) | removes an override of a built-in theme (`restored: "builtin"`) |
+| `POST /cli/zen/reset` | `{theme}` (as well as `file` and `garden`) | removes an override of a built-in theme (`restored: "builtin"`) |
 
 An unknown name gets 404 `{error: "unknown_theme", theme, themes, message}`
 and changes nothing. Each switch emits one `zen_changed`, so the renderer
@@ -179,7 +309,7 @@ key left out gets K2's default, which is the built-in `themes/default.toml`;
 ```jsonc
 "theme": {
   "name": "default", "builtin": true, "user": false,
-  "scope": "global",                   // "home": a switch carries the Home (Flag 7)
+  "scope": "global",                   // "garden": a switch carries the Garden (Flag 7)
   "tokens": {
     "scheme": "auto",                  // auto | light | dark
     "colors": { "light": { "canvas": "#faf7f2", … }, "dark": { … } },   // 16 tokens each
@@ -237,29 +367,54 @@ root's canvas colour:
 - ⌃⌘. (Ctrl+Alt+.) calls `POST /cli/zen/theme/next {}`.
 - ⌃⌘⇧. (Ctrl+Alt+Shift+.) calls `POST /cli/zen/theme/prev {}`.
 
-When `theme.scope` is `"home"`, each body also carries `home: <Home id>`, so
-the switch changes what this Home shows and its own pick stays its own. The
+When `theme.scope` is `"garden"`, each body also carries `garden: <Garden id>`,
+so the switch changes what this Garden shows and its own pick stays its own. The
 daemon owns the order and the wrap. The renderer then re-reads `get`, and
 `zen_changed` follows the switch as well.
 
 ## Event
 
-`zen_changed` is an app-class kind with no payload. The renderer adds it to
-`src/shared/session-event-kinds.json` and its TypeScript route table.
+`zen_changed` is an app-class kind with **no payload** (`{"kind":"zen_changed"}`):
+the app bus reaches every Connect login on this daemon, and Garden names are
+personal (G15). The renderer re-reads `GET /cli/zen/gardens` and
+`GET /cli/zen/get` on each event (two local requests).
 
-**Flag 4, merge order.** The Rust `session_event_kinds_match_shared_registry`
-test fails until the daemon has `SessionEvent::ZenChanged {}` (Z58). Land S1
-first, or cherry-pick the two together. If S1 also adds the JSON line, keep
-one copy when merging.
+Exactly **one** event per effective change, whoever made it:
+- `garden/new`, `garden/rename` (a real rename), `garden/reorder` (a real
+  move), `garden/delete`;
+- a save of `gardens/<id>.toml`, `zen.toml` or a theme file (the watcher,
+  250 ms debounce; a burst is one event);
+- a theme switch, `reset`, `setup` when it changes anything.
+
+A no-op (the same name, the same position, a save with the same bytes, a
+write to `grants.json`) emits nothing. `gardens.json` is not watched:
+only the `garden/*` routes write it, and they announce their own change. The fingerprint
+covers the list (ids, names, order, templates), every live layer and its
+diagnostics.
 
 The renderer holds its own app socket to the local daemon
-(`subscribeToActiveState(scopeForHost('local'))`) while Zen is on screen. It
-does this whichever server the window is on.
+(`subscribeToActiveState(scopeForHost('local'))`) while Zen is on screen,
+whichever server the window is on.
 
-## Not used by S4
+## Contract changes from the PRD text (flagged for the renderer)
 
-- `GET /cli/zen/validate`, `/cli/zen/history`, and `POST /cli/zen/reload` and
-  `/reset` are for the CLI.
-- `/boot-status` `zen-v1`: the local scope always reports every feature as
-  supported. If the routes are missing (a 404), the window goes into safe mode
-  with "Can't reach K2 on this computer".
+The PRD's route contract is followed; these points were open in it or are
+additions, decided here:
+1. `index` is **1-based** in every answer.
+2. Each `Garden` carries `theme` (its own pick or `null`), for the CLI's
+   `*` and a switcher that wants it.
+3. `setup` also answers `createdDefault`, `path` and `changed`; `migrated`
+   is always `null` (no migration, Rosson).
+4. `garden/new` also answers `file`, `path`, `changed`; `garden/delete` also
+   answers `name`, `gardens`, `changed`; `garden/rename` answers
+   `{ok, garden, changed}`; `garden/reorder` answers `{ok, gardens, changed}`.
+5. The removed POST routes are 405 (method guard), not 404; a GET is 404.
+6. Widget props for answer 5 (not in the PRD's G38 list): `agents.mode`,
+   `agents.agent`, `conversation.agent`, `conversation.home`. The daemon
+   sends **every** prop with K2's defaults filled, `agents.mode` derived,
+   and `conversation.agents` linked to the first Agents widget.
+7. `theme/list` answers `garden`/`gardenTheme` (was `home`/`homeTheme`); a
+   theme switch answers `garden` (was `home`); `theme.scope` is
+   `"garden"`/`"global"`.
+8. `history` entries for Garden files carry `garden` and `deleted`.
+9. `unknown_garden` also carries `garden` (what was asked for).

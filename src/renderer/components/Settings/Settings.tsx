@@ -40,6 +40,9 @@ import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTe
 // (id 'projects', label "Workspaces").
 import ProjectGroupSettings from '../Projects/ProjectSettings'
 import { ContextCatalogSection, CONTEXT_CATALOG_MANIFEST } from './sections/ContextCatalogSection'
+import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSection'
+import { zenAvailable } from '@/lib/zen/zen-platform'
+import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
 import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
@@ -66,7 +69,10 @@ type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
-function settingsNav(): NavBlock[] {
+/** The sidebar. `zenGardens`: show Settings → Gardens, which is
+ *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
+ *  item 17). Placed between Projects and Context Catalog. */
+export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
@@ -74,6 +80,7 @@ function settingsNav(): NavBlock[] {
     { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
+    ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'token-usage', label: 'Token Usage' },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
@@ -144,6 +151,12 @@ export default function Settings(): React.JSX.Element {
   // as k2-connect/connections below.
   const isRemote = useConnectHostStore((s) => s.activeHost) !== 'local'
   const [searchOpen, setSearchOpen] = useState(false)
+  // Settings → Gardens shows where the Zen toggle shows. Read this
+  // computer's Gardens once per open so a daemon without them hides it.
+  const zenGardensShown = useZenGardensSettingsShown()
+  useEffect(() => {
+    if (zenAvailable()) void loadZenSettings()
+  }, [])
 
   // Flat manifest across every section (agentic sections always included).
   const allEntries = useMemo<SettingEntry[]>(
@@ -153,6 +166,7 @@ export default function Settings(): React.JSX.Element {
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
       ...CONTEXT_CATALOG_MANIFEST,
+      ...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),
       ...AGENT_SKILLS_MANIFEST,
       ...HEARTBEATS_MANIFEST,
       ...TERMINAL_MANIFEST,
@@ -189,6 +203,10 @@ export default function Settings(): React.JSX.Element {
     }
     if (isAirgap() && activeSection === 'k2-connect') {
       setSection('connections')
+    }
+    // No Zen in this client (web, Windows until G-Win): no Gardens.
+    if (!zenAvailable() && activeSection === 'zen-gardens') {
+      setSection('general')
     }
   }, [activeSection, setSection])
 
@@ -292,7 +310,7 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {settingsNav().map((block) => {
+          {settingsNav({ zenGardens: zenGardensShown }).map((block) => {
             if (block.kind === 'item') {
               return (
                 <SettingsNavButton
@@ -473,6 +491,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'context-catalog' && (
           <SectionErrorBoundary>
             <ContextCatalogSection />
+          </SectionErrorBoundary>
+        )}
+        {zenAvailable() && activeSection === 'zen-gardens' && (
+          <SectionErrorBoundary>
+            <ZenGardensSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'email-hosting' && (

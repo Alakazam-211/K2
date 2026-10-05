@@ -50,6 +50,8 @@ export type SettingsSection =
   | 'keybindings'
   | 'projects'
   | 'project-groups'
+  /** Settings → Gardens (this computer's Zen Gardens; desktop only, like the Zen toggle). */
+  | 'zen-gardens'
   | 'context-catalog'
   | 'timer'
   /** @deprecated Help guide lives under General → Workspaces. Deep-links redirect. */

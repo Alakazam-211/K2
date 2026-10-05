@@ -226,6 +226,10 @@ pub const WIDGET_KINDS: &[(&str, &str)] = &[
         "conversation",
         "one agent's Thread and a box to message it: the agent picked in an Agents widget, or one agent pinned by name",
     ),
+    (
+        "nav-rail",
+        "a thin icon rail drawn at the left edge of its column (it takes no share of the column's box): My Home (this Garden, shown as current), then Agents, Projects and Tickets, which leave Zen in this window and open that page; Tickets carries the top bar's waiting badge",
+    ),
 ];
 /// Kinds only a template places (never a Garden file).
 pub const TEMPLATE_WIDGET_KINDS: &[(&str, &str)] = &[(
@@ -532,6 +536,7 @@ fn unknown_key(key: &str, where_: &str, allowed: &[&str]) -> String {
         .min_by_key(|(d, _)| *d);
     match best {
         Some((_, a)) => format!("unknown key '{key}' in {where_}; did you mean '{a}'?"),
+        None if allowed.is_empty() => format!("unknown key '{key}' in {where_}; it takes none"),
         None => format!("unknown key '{key}' in {where_}; allowed: {}", allowed.join(", ")),
     }
 }

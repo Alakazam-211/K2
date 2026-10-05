@@ -12,6 +12,8 @@
 //     serves both templates and safe mode (`widgets/ZenTextingControls`).
 //     Add agent is the Agents widget's own last row, not a template control.
 // Every widget gets only a `ZenWidgetBridge` built with its declared caps.
+// A RAIL kind (`nav-rail`) is drawn as a thin strip at the left edge of its
+// column, outside the column's box, and takes no share of the box.
 
 import type { ComponentType } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -38,7 +40,13 @@ export const ZEN_TEMPLATE_CONTROL_CAPS: readonly string[] = ['agents:add', 'gard
 /** Placeholder until S6 registers the real widget. */
 function PlaceholderWidget({ decl }: ZenWidgetProps): React.JSX.Element {
   const title =
-    decl.kind === 'agents' ? 'Agents' : decl.kind === 'conversation' ? 'Conversation' : decl.kind === 'garden-empty' ? 'Garden' : decl.kind
+    decl.kind === 'agents'
+      ? 'Agents'
+      : decl.kind === 'conversation'
+        ? 'Conversation'
+        : decl.kind === 'garden-empty'
+          ? 'Garden'
+          : decl.kind
   return (
     <div
       className="flex h-full w-full items-center justify-center"
@@ -52,6 +60,9 @@ function PlaceholderWidget({ decl }: ZenWidgetProps): React.JSX.Element {
 }
 
 const widgets = new Map<string, ComponentType<ZenWidgetProps>>()
+
+/** Widget kinds drawn as a strip at the left edge of their column. */
+export const ZEN_RAIL_KINDS: ReadonlySet<string> = new Set(['nav-rail'])
 const templateControls = new Map<string, ComponentType<ZenTemplateControlsProps>>([
   [TEXTING_TEMPLATE_ID, ZenTextingControls],
   [BLANK_TEMPLATE_ID, ZenTextingControls],

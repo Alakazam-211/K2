@@ -175,7 +175,15 @@ fn template_page_is_data_with_required_controls_and_known_caps() {
     let cols = page["layout"]["columns"].as_array().expect("columns");
     assert_eq!(cols[0]["widget"], "agents");
     assert_eq!(cols[1]["widget"], "conversation");
-    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation"], "{page}");
+    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation", "nav-rail"], "{page}");
+    // Rosson 2026-10-04: Garden 1's thin left rail, in column 0 beside the
+    // Agents box, with the one cap that leaves Zen for an app page.
+    let nav = &page["widgets"][2];
+    assert_eq!((nav["id"].as_str(), nav["column"].as_u64()), (Some("nav"), Some(0)), "{nav}");
+    assert_eq!(nav["caps"], json!(["app:navigate"]), "{nav}");
+    assert!(zen::BRIDGE_CAPS.contains(&"app:navigate"), "app:navigate is a bridge cap");
+    let blank = zen::template_page(zen::BLANK_TEMPLATE_ID).expect("blank");
+    assert!(!kinds_of(&blank, "widgets").contains(&"nav-rail".to_string()), "blank Gardens get no rail: {blank}");
     let agents = &page["widgets"][0];
     assert_eq!(agents["column"], 0);
     assert_eq!(agents["props"]["home-picker"], true, "G11: the texting Agents widget has a Home picker: {agents}");
@@ -391,7 +399,16 @@ agents = \"agents\"\n";
     assert!(c.is_clean(), "{}", diag_list(&c));
     let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
     assert_eq!(page["layout"]["split"], json!([50, 50]));
-    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation"], "{page}");
+    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation", "nav-rail"], "{page}");
+    // A Garden file may place the rail like any built-in widget.
+    let railed = "schema = 1\n[[widget]]\nid = \"rail\"\nkind = \"nav-rail\"\ncolumn = 0\n[[widget]]\nid = \"a\"\nkind = \"agents\"\ncolumn = 0\n";
+    let c = check_blank(railed);
+    assert!(c.is_clean(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(kinds_of(&page, "widgets"), vec!["nav-rail", "agents"], "{page}");
+    assert_eq!(page["widgets"][0]["caps"], json!(["app:navigate"]), "{page}");
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"rail\"\nkind = \"nav-rail\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n");
+    assert_one_error(&c, 7, "unknown key 'home'", "the rail has no props");
 
     // Errors, each at its line.
     let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\ncolumn = 0\ncaps = [\"thread:post\"]\n");
@@ -609,7 +626,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     write(&f, &garden(&n.id), "schema = 1\ntemplate = \"k2.texting@1\"\n");
     let t = f.resolve(Some(&n.id)).expect("texting");
     assert_eq!(t["page"]["template"], "k2.texting@1", "{t}");
-    assert_eq!(kinds_of(&t["page"], "widgets"), vec!["agents", "conversation"]);
+    assert_eq!(kinds_of(&t["page"], "widgets"), vec!["agents", "conversation", "nav-rail"]);
     // A missing page file resolves to the template the Garden was made with.
     std::fs::remove_file(f.path_of(&garden(&n.id))).expect("rm page");
     let m = f.resolve(Some(&n.id)).expect("missing page");
@@ -997,7 +1014,7 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
         let shown = b.iter().map(|v| if v.fract() == 0.0 { format!("{}", *v as i64) } else { format!("{v}") }).collect::<Vec<_>>().join(", ");
         assert!(body.contains(&format!("`{name}` [{shown}]")), "skill must show {name}'s points [{shown}]");
     }
-    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 4, "G36: k2-zen skill v4 (Garden 1 + Garden 2)");
+    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 5, "G36: k2-zen skill v5 (the nav-rail widget)");
 }
 
 fn temp_dot(tag: &str) -> PathBuf {

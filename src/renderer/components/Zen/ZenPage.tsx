@@ -44,7 +44,7 @@ import {
 } from '@/lib/zen/zen-monitor'
 import type { ZenResolvedPage } from '@/lib/zen/zen-page'
 import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
-import { ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenWidgetFor } from './zen-registry'
+import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, zenTemplateControlsFor, zenWidgetFor } from './zen-registry'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -199,35 +199,42 @@ export function ZenPage({
         data-zen-layout={layout.kind}
         style={{ gap: 'var(--zen-gap)', padding: '0 var(--zen-gap) var(--zen-gap)' }}
       >
-        {layout.split.map((pct, col) => (
-          <div
-            key={col}
-            data-zen-column-slot={col}
-            className="flex min-h-0 min-w-0 flex-col"
-            style={{ flex: `${pct} 1 0%`, minWidth: layout.minWidths[col] ?? 0 }}
-          >
+        {layout.split.map((pct, col) => {
+          const inCol = page.widgets.filter((w) => w.column === col)
+          const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
+          const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+          const draw = (w: (typeof inCol)[number]): React.JSX.Element => {
+            const Widget = zenWidgetFor(w.kind)
+            const bridge = widgetBridges.get(w.id)
+            if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
+            return <Widget key={w.id} decl={w} bridge={bridge} />
+          }
+          return (
             <div
-              data-zen-column={col}
-              className="flex min-h-0 min-w-0 flex-col"
-              style={{
-                flex: '1 1 0%',
-                background: 'var(--zen-surface)',
-                border: '1px solid var(--zen-border)',
-                borderRadius: 'var(--zen-radius)',
-                overflow: 'hidden',
-              }}
+              key={col}
+              data-zen-column-slot={col}
+              className="flex min-h-0 min-w-0 flex-row"
+              style={{ flex: `${pct} 1 0%`, minWidth: layout.minWidths[col] ?? 0, gap: 'var(--zen-gap)' }}
             >
-              {page.widgets
-                .filter((w) => w.column === col)
-                .map((w) => {
-                  const Widget = zenWidgetFor(w.kind)
-                  const bridge = widgetBridges.get(w.id)
-                  if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
-                  return <Widget key={w.id} decl={w} bridge={bridge} />
-                })}
+              {rails.map(draw)}
+              {(boxed.length > 0 || rails.length === 0) && (
+                <div
+                  data-zen-column={col}
+                  className="flex min-h-0 min-w-0 flex-col"
+                  style={{
+                    flex: '1 1 0%',
+                    background: 'var(--zen-surface)',
+                    border: '1px solid var(--zen-border)',
+                    borderRadius: 'var(--zen-radius)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {boxed.map(draw)}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

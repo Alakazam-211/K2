@@ -51,6 +51,15 @@ compose = true
 attachments = true
 load-older = true
 
+# The thin left rail (Rosson 2026-10-04): My Home (current), Agents,
+# Projects, Tickets. Drawn at the left edge of column 0, outside the Agents
+# box; the app pages leave Zen in this window. Blank Gardens don't get it.
+[[widget]]
+id = "nav"
+kind = "nav-rail"
+column = 0
+caps = ["app:navigate"]
+
 # Controls (Z27, G24). The page draws them; K2 binds them and checks the
 # required two (`zen-toggle`, `garden-switcher`). The drag strip is bound for
 # window drag but never checked. One top band: the Garden switcher (top

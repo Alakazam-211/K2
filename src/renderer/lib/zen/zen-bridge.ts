@@ -19,7 +19,10 @@
 //     `agents.local` (the agents on this computer, for Ask my agent), and
 //     the v1 data verbs `agents.list`, `agents.subscribe`, `conversation.*`;
 //   - `thread:post`: `compose.draft(address, text)` sets a conversation's
-//     message box, never sends.
+//     message box, never sends;
+//   - `app:navigate` (the `nav-rail` widget): `app.open(page)` leaves Zen
+//     in this window and opens an app page; `app.badges()` /
+//     `app.subscribe(fn)` read the top bar's Tickets badge.
 // `homes.select` is gone: Zen never changes the window's Home.
 //
 // The data verbs are provided by `zen-data.ts` (and `agents.add` by
@@ -53,6 +56,9 @@ export const ZEN_VERBS = {
   'thread.answer': 'thread:post',
   'thread.void': 'thread:post',
   'compose.draft': 'thread:post',
+  'app.open': 'app:navigate',
+  'app.badges': 'app:navigate',
+  'app.subscribe': 'app:navigate',
   'homes.list': 'agents:read',
   'gardens.list': null,
   'gardens.current': null,

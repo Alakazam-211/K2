@@ -127,6 +127,7 @@ vi.mock('@/lib/daemon-cli', () => ({
               widgets: [
                 { id: 'agents', kind: 'agents', column: 0, props: { 'home-picker': true }, caps: caps.agents, source: 'builtin' },
                 { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: caps.conversation, source: 'builtin' },
+                { id: 'nav', kind: 'nav-rail', column: 0, props: {}, caps: ['app:navigate'], source: 'builtin' },
               ],
               controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
             }
@@ -324,6 +325,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
+import { useFeedbackStore } from '@/stores/feedback'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -694,6 +696,101 @@ describe('Agents widget', () => {
   })
 })
 
+// Rosson 2026-10-04: Garden 1's thin left rail.
+describe('the nav rail (Garden 1)', () => {
+  function navButton(page: string): HTMLElement {
+    const el = document.querySelector(`[data-zen-nav="${page}"]`)
+    if (!(el instanceof HTMLElement)) throw new Error(`no ${page} in the rail`)
+    return el
+  }
+
+  it('four icon buttons with tooltips, My Home current, 44px wide, outside the Agents box', async () => {
+    await mountZen()
+    const rail = document.querySelector('[data-zen-widget="nav-rail"]') as HTMLElement
+    expect(rail).not.toBeNull()
+    expect(rail.style.width).toBe('44px')
+    expect(rail.closest('[data-zen-column]')).toBeNull()
+    expect(rail.parentElement?.getAttribute('data-zen-column-slot')).toBe('0')
+    expect(Array.from(rail.querySelectorAll('[data-zen-nav]')).map((b) => [b.getAttribute('data-zen-nav'), b.getAttribute('aria-label')])).toEqual([
+      ['home', 'My Home'],
+      ['agents', 'Agents'],
+      ['projects', 'Projects'],
+      ['tickets', 'Tickets'],
+    ])
+    for (const b of Array.from(rail.querySelectorAll('[data-zen-nav]'))) {
+      expect(b.getAttribute('title')).toBeTruthy()
+      expect(b.querySelector('svg')).not.toBeNull()
+      expect(b.textContent?.trim()).toBe('')
+    }
+    expect(navButton('home').getAttribute('aria-current')).toBe('page')
+    expect(navButton('agents').hasAttribute('aria-current')).toBe(false)
+    expect(navButton('agents').classList.contains('cursor-pointer')).toBe(true)
+    // My Home is where you are: a click changes nothing.
+    await act(async () => {
+      fireEvent.click(navButton('home'))
+    })
+    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(usePageViewStore.getState().page).toBe('home')
+  })
+
+  it.each([
+    ['agents', 'agents'],
+    ['projects', 'projects'],
+    ['tickets', 'feedback'],
+  ] as const)('%s leaves Zen in this window and opens that page (the top bar’s page store)', async (nav, page) => {
+    act(() => useSettingsStore.setState({ settingsOpen: false }))
+    await mountZen()
+    await act(async () => {
+      fireEvent.click(navButton(nav))
+    })
+    expect(useZenWindowStore.getState().on).toBe(false)
+    expect(useZenViewStore.getState().safe).toBeNull()
+    expect(usePageViewStore.getState().page).toBe(page)
+    await waitFor(() => expect(document.querySelector('[data-zen-root]')).toBeNull())
+  })
+
+  it('Tickets carries the top bar’s waiting badge, live; none when nothing waits', async () => {
+    act(() => useFeedbackStore.setState({ waitingCount: 0, waitingStale: false, waitingUnsupported: false }))
+    await mountZen()
+    expect(document.querySelector('[data-zen-nav-badge]')).toBeNull()
+    act(() => useFeedbackStore.setState({ waitingCount: 3 }))
+    await waitFor(() => expect(document.querySelector('[data-zen-nav="tickets"] [data-zen-nav-badge]')?.textContent).toBe('3'))
+    act(() => useFeedbackStore.setState({ waitingStale: true }))
+    await waitFor(() => expect(document.querySelector('[data-zen-nav-badge]')?.getAttribute('data-stale')).toBe('true'))
+    act(() => useFeedbackStore.setState({ waitingCount: 0, waitingStale: false }))
+    await waitFor(() => expect(document.querySelector('[data-zen-nav-badge]')).toBeNull())
+  })
+
+  it('a blank Garden has no rail', async () => {
+    useZenWindowStore.setState({ garden: 'g-notes' })
+    await mountGarden('k2.blank@1')
+    expect(document.querySelector('[data-zen-widget="nav-rail"]')).toBeNull()
+  })
+
+  it('app.open needs app:navigate and a known page', async () => {
+    await mountZen()
+    const hostStub = {
+      gardens: () => [],
+      currentGardenId: () => '',
+      switchGarden: () => {},
+      createGarden: async () => {
+        throw new Error('unused')
+      },
+      renameGarden: async () => {},
+      deleteGarden: async () => {},
+      homes: () => [],
+      exit: () => {},
+      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
+      page: () => BUILTIN_TEXTING_PAGE,
+    }
+    const without = createZenBridge(hostStub as never, { id: 'x', caps: [] })
+    expect(() => without.call('app.open', 'agents')).toThrow(/cap_not_granted/)
+    const withCap = createZenBridge(hostStub as never, { id: 'x', caps: ['app:navigate'] })
+    expect(() => withCap.call('app.open', 'settings')).toThrow(/page must be one of/)
+    expect(useZenWindowStore.getState().on).toBe(true)
+  })
+})
+
 // Rosson 2026-10-04: picking an agent puts the caret in its message box.
 describe('picking an agent focuses its message box', () => {
   const focusedLabel = (): string | null => document.activeElement?.getAttribute('aria-label') ?? null
@@ -963,8 +1060,11 @@ describe('template controls (G24, G25, G58)', () => {
     expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
     expect(topRight.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
     // No footer under any column any more: both columns run to the bottom.
+    // Column 0 holds the thin nav rail (left edge, outside the box), then
+    // the Agents box.
     expect(document.querySelector('[data-zen-template-footer]')).toBeNull()
-    expect(document.querySelector('[data-zen-column-slot="0"]')?.children.length).toBe(1)
+    const slot0 = Array.from(document.querySelector('[data-zen-column-slot="0"]')?.children ?? [])
+    expect(slot0.map((c) => c.getAttribute('data-zen-widget') ?? c.getAttribute('data-zen-column'))).toEqual(['nav-rail', '0'])
     expect(document.querySelector('[data-zen-column-slot="1"]')?.children.length).toBe(1)
     // Add agent is the Agents widget's last row (bottom left inside it).
     const agents = document.querySelector('[data-zen-widget="agents"]') as HTMLElement
@@ -982,7 +1082,8 @@ describe('template controls (G24, G25, G58)', () => {
       expect(document.querySelector(sel)?.classList.contains('cursor-pointer'), sel).toBe(true)
     }
     const bare = Array.from(document.querySelectorAll('[data-zen-root] button')).filter(
-      (b) => !b.classList.contains('cursor-pointer') && !b.hasAttribute('data-zen-agent-row'),
+      // The rail's My Home is where you are (aria-current): no pointer.
+      (b) => !b.classList.contains('cursor-pointer') && !b.hasAttribute('data-zen-agent-row') && b.getAttribute('aria-current') !== 'page',
     )
     expect(bare.map((b) => b.outerHTML.slice(0, 80))).toEqual([])
 

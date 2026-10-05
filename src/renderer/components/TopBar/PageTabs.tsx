@@ -35,6 +35,14 @@ export function ticketsBadgeProps(s: {
   }
 }
 
+/** The page tabs' names and tooltips (also Zen's nav rail). */
+export const PAGE_TAB_LABELS = {
+  home: { name: 'My Home', title: 'My Home — your own page on this computer: your agents from any server. Other people on the server don\'t see it.' },
+  agents: { name: 'Agents', title: 'Agents — the workspace view' },
+  projects: { name: 'Projects', title: 'Projects — grouped agents, shared dashboards (⌘P)' },
+  feedback: { name: 'Tickets', title: 'Tickets — agents waiting on a human' },
+} as const
+
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
 export function badgeText(badge: number | '?' | undefined): string | null {
   if (badge === '?') return '?'
@@ -157,24 +165,24 @@ export default function PageTabs(): React.JSX.Element {
       <PageTab
         selected={!settingsOpen && page === 'home'}
         onSelect={() => select('home')}
-        title="My Home — your own page on this computer: your agents from any server. Other people on the server don't see it."
+        title={PAGE_TAB_LABELS.home.title}
       >
-        My Home
+        {PAGE_TAB_LABELS.home.name}
       </PageTab>
       <PageTab
         selected={!settingsOpen && page === 'agents'}
         onSelect={() => select('agents')}
-        title="Agents — the workspace view"
+        title={PAGE_TAB_LABELS.agents.title}
       >
-        Agents
+        {PAGE_TAB_LABELS.agents.name}
       </PageTab>
       <PageTab
         selected={!settingsOpen && page === 'projects'}
         onSelect={() => select('projects')}
         badge={projectsUnread}
-        title="Projects — grouped agents, shared dashboards (⌘P)"
+        title={PAGE_TAB_LABELS.projects.title}
       >
-        Projects
+        {PAGE_TAB_LABELS.projects.name}
       </PageTab>
       <PageTab
         selected={!settingsOpen && page === 'feedback'}
@@ -183,9 +191,9 @@ export default function PageTabs(): React.JSX.Element {
         badgeClass="bg-[var(--color-status-working)]"
         badgeStale={ticketsBadge.badgeStale}
         badgeTitle={ticketsBadge.badgeTitle}
-        title="Tickets — agents waiting on a human"
+        title={PAGE_TAB_LABELS.feedback.title}
       >
-        Tickets
+        {PAGE_TAB_LABELS.feedback.name}
       </PageTab>
     </div>
   )

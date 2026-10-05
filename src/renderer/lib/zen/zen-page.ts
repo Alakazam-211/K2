@@ -129,6 +129,8 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       caps: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       source: 'builtin',
     },
+    // The thin left rail (Rosson 2026-10-04): left edge of column 0.
+    { id: 'nav', kind: 'nav-rail', column: 0, props: {}, caps: ['app:navigate'], source: 'builtin' },
   ],
   controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
   theme: null,

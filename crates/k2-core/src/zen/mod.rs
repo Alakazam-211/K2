@@ -157,9 +157,17 @@ pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher"];
 /// `agents:add` lets a widget OPEN K2's Add agent picker for its Home
 /// (`agents.add`); the human picks and K2 writes the row. `gardens:manage`
 /// (create, rename, delete Gardens) is granted by K2 to the template's
-/// controls only, never to a widget.
-pub const BRIDGE_CAPS: &[&str] =
-    &["agents:read", "agents:add", "presence:read", "thread:read", "thread:post", "gardens:manage"];
+/// controls only, never to a widget. `app:navigate` (the `nav-rail`
+/// widget) leaves Zen for an app page and reads the top bar's badges.
+pub const BRIDGE_CAPS: &[&str] = &[
+    "agents:read",
+    "agents:add",
+    "presence:read",
+    "thread:read",
+    "thread:post",
+    "gardens:manage",
+    "app:navigate",
+];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A
 /// Garden file never names caps (G38); these are the only ones.
@@ -167,6 +175,7 @@ pub const BUILTIN_WIDGET_CAPS: &[(&str, &[&str])] = &[
     ("agents", &["agents:read", "agents:add", "presence:read"]),
     ("conversation", &["agents:read", "presence:read", "thread:read", "thread:post"]),
     ("garden-empty", &["agents:read", "thread:read", "thread:post"]),
+    ("nav-rail", &["app:navigate"]),
 ];
 
 /// K2's caps for a built-in widget kind.

@@ -339,7 +339,7 @@ describe('the resolved page (Z10, Z13)', () => {
   it('falls back to the template for a missing layout or widgets, but never for controls', () => {
     const p = parseZenGet({ version: 'v', page: { template: 'k2.texting@1' } })
     expect(p.layout).toEqual(BUILTIN_TEXTING_PAGE.layout)
-    expect(p.widgets.map((w) => w.kind)).toEqual(['agents', 'conversation'])
+    expect(p.widgets.map((w) => w.kind)).toEqual(['agents', 'conversation', 'nav-rail'])
     expect(p.controls).toEqual([])
     expect(p.activeTheme).toBeNull()
     expect(p.themeScope).toBe('global')

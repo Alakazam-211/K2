@@ -140,7 +140,7 @@ the window into safe mode.
 | | `k2.texting@1` (Garden 1) | `k2.blank@1` (Garden 2, new Gardens) |
 |---|---|---|
 | layout | 2 columns, `[34, 66]`, min `[240, 360]` | 1 column, `[100]`, min `[320]` |
-| widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`) | `garden-empty` (column 0) |
+| widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`), `nav-rail` (id `nav`, column 0) | `garden-empty` (column 0) |
 | controls | `garden-switcher`, `drag-region`, `zen-toggle`, `add-agent` | `garden-switcher`, `drag-region`, `zen-toggle` |
 
 **Required controls** (G24; Rosson, 2026-10-04: exactly two):
@@ -155,7 +155,7 @@ bound `home-option`. Template controls get the caps `agents:add` and
 ```jsonc
 {
   "id": "agents",                  // unique on the page
-  "kind": "agents",                // agents | conversation | garden-empty
+  "kind": "agents",                // agents | conversation | nav-rail | garden-empty
   "column": 0,
   "props": { … },                  // EVERY prop is present: the daemon fills K2's defaults
   "caps": ["agents:read", "agents:add", "presence:read"],   // K2's, by kind; a file can't name caps
@@ -165,7 +165,8 @@ bound `home-option`. Template controls get the caps `agents:add` and
 
 Caps by kind: `agents` → `agents:read, agents:add, presence:read`;
 `conversation` → `agents:read, presence:read, thread:read, thread:post`;
-`garden-empty` → `agents:read, thread:read, thread:post`.
+`garden-empty` → `agents:read, thread:read, thread:post`;
+`nav-rail` → `app:navigate`.
 
 Props (Rosson, answer 5: a widget shows **a whole Home** or **one agent
 filtered from a Home**):
@@ -187,6 +188,15 @@ filtered from a Home**):
 | `conversation` | `attachments` | bool | `true` | attachments in the box |
 | `conversation` | `load-older` | bool | `true` | load older on scroll |
 
+`nav-rail` has no props (Rosson, 2026-10-04). It is a thin (44px), icon-only
+rail drawn at the **left edge of its column, outside the column's box**; it
+takes no share of the box. Top to bottom: **My Home** (current: the Garden
+itself), **Agents**, **Projects**, **Tickets** (with the top bar's waiting
+badge), each with the top bar's page name as its tooltip. Agents, Projects
+and Tickets leave Zen in this window and open that page (`app.open`), the
+same page store the top bar uses. Only `k2.texting@1` places it; a Garden
+file may place it like any built-in widget.
+
 `garden-empty` has no props. It shows "This Garden is empty." / "Ask your
 agents to add things to this Garden." and **Ask my agent** (G28) until the
 Garden's file declares `[[widget]]`.
@@ -205,7 +215,7 @@ min-width = 240                    # px, 0–800 (default 0)
 size = 60
 [[widget]]
 id = "work"
-kind = "agents"                    # agents | conversation (garden-empty only from the template)
+kind = "agents"                    # agents | conversation | nav-rail (garden-empty only from the template)
 column = 0
 [widget.props]
 home = "Work"
@@ -460,7 +470,10 @@ this contract, where it reads more loosely or decides something:
 8. **Bridge verbs** `gardens.list/current/switch` (no cap),
    `gardens.create/rename/delete` (`gardens:manage`, template controls
    only), `homes.list`/`agents.home`/`agents.setHome`/`agents.local`
-   (`agents:read`), `compose.draft` (`thread:post`); `homes.select` is gone.
+   (`agents:read`), `compose.draft` (`thread:post`), `app.open(page)` /
+   `app.badges()` / `app.subscribe(fn)` (`app:navigate`: `page` is `home`,
+   `agents`, `projects` or `tickets`; `home` does nothing); `homes.select`
+   is gone.
 9. **Placement** (Rosson, 2026-10-04). One top band for both templates and
    safe mode: the Garden switcher top left, the drag strip, then the
    top-right cluster — K2's theme control immediately left of the Zen
@@ -477,3 +490,15 @@ this contract, where it reads more loosely or decides something:
     fine), and an activation while the options are already bound (the click
     that closes the menu) passes at once. K2 never cancels Enter/Space on the
     trigger. A resize runs the check once, 300 ms after resizing stops.
+11. **Focus after a pick** (Rosson, 2026-10-04). A click on an Agents row,
+    or adding an agent through Add agent (which closes the picker and opens
+    that agent), puts the caret in the conversation's "Message <agent>" box
+    once it can be typed in. Nothing else moves focus (first render, a
+    remote update, ⌘1–9, a Garden switch); a pick waits at most 15 s and
+    never takes focus from another field the person started typing in.
+12. **macOS stoplights in Zen** (Rosson, 2026-10-04) sit 8px further right
+    and 8px further down than the Style's (before the theme's
+    `stoplight-offset`); `--zen-stoplight-safe-*` include it, so the Garden
+    switcher starts at 91px and the top band (at least 52px) stays below
+    them. Leaving Zen restores the Style's position. Linux and Windows are
+    unchanged.

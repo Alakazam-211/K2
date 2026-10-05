@@ -14,6 +14,8 @@ import { registerZenTemplateControls, registerZenWidget } from '../zen-registry'
 import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversationWidget } from './ZenConversationWidget'
 import { ZenGardenEmptyWidget } from './ZenGardenEmptyWidget'
+import { ZenNavRailWidget } from './ZenNavRailWidget'
+import { installZenAppNavVerbs } from '@/lib/zen/zen-app-nav'
 import { ZenTextingControls } from './ZenTextingControls'
 
 /** Install every built-in. Returns the uninstall. */
@@ -24,6 +26,8 @@ export function installZenBuiltins(): () => void {
     registerZenWidget('agents', ZenAgentsWidget),
     registerZenWidget('conversation', ZenConversationWidget),
     registerZenWidget('garden-empty', ZenGardenEmptyWidget),
+    registerZenWidget('nav-rail', ZenNavRailWidget),
+    installZenAppNavVerbs(),
     registerZenTemplateControls(TEXTING_TEMPLATE_ID, ZenTextingControls),
     registerZenTemplateControls(BLANK_TEMPLATE_ID, ZenTextingControls),
   ]

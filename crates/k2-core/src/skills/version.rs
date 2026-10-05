@@ -92,7 +92,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v3 = Zen Gardens: `k2 zen garden`, `--garden`, layout + built-in widgets.
 /// v4 = setup makes Garden 1 + Garden 2; two required controls.
 /// v5 = the `nav-rail` widget (Garden 1's left rail) and the `app:navigate` verbs.
-pub const SKILL_VERSION_ZEN: u32 = 5;
+/// v6 = the rail switches Garden 1's view inside Zen (no longer leaves Zen);
+/// `app.current` / `app.subscribeCurrent`, `focusGroups.*`.
+pub const SKILL_VERSION_ZEN: u32 = 6;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

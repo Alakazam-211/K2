@@ -158,7 +158,8 @@ pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher"];
 /// (`agents.add`); the human picks and K2 writes the row. `gardens:manage`
 /// (create, rename, delete Gardens) is granted by K2 to the template's
 /// controls only, never to a widget. `app:navigate` (the `nav-rail`
-/// widget) leaves Zen for an app page and reads the top bar's badges.
+/// widget) switches the Garden's rail view (inside Zen) and reads the top
+/// bar's badges.
 pub const BRIDGE_CAPS: &[&str] = &[
     "agents:read",
     "agents:add",

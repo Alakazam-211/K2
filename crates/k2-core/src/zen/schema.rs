@@ -228,7 +228,7 @@ pub const WIDGET_KINDS: &[(&str, &str)] = &[
     ),
     (
         "nav-rail",
-        "a thin icon rail drawn at the left edge of its column (it takes no share of the column's box): My Home (this Garden, shown as current), then Agents, Projects and Tickets, which leave Zen in this window and open that page; Tickets carries the top bar's waiting badge",
+        "a thin icon rail drawn at the left edge of its column (it takes no share of the column's box): My Home (this Garden's own page), then Agents, Projects and Tickets, which switch the Garden's view in this window inside Zen (Agents: this server's agents, by focus group; Projects: coming soon; Tickets: the Tickets page, chat only); the view shown is the current item; Tickets carries the top bar's waiting badge",
     ),
 ];
 /// Kinds only a template places (never a Garden file).

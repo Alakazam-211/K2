@@ -53,7 +53,8 @@ load-older = true
 
 # The thin left rail (Rosson 2026-10-04): My Home (current), Agents,
 # Projects, Tickets. Drawn at the left edge of column 0, outside the Agents
-# box; the app pages leave Zen in this window. Blank Gardens don't get it.
+# box; Agents, Projects and Tickets switch this Garden's view, inside Zen.
+# Blank Gardens don't get it.
 [[widget]]
 id = "nav"
 kind = "nav-rail"

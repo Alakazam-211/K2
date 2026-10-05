@@ -177,7 +177,7 @@ fn template_page_is_data_with_required_controls_and_known_caps() {
     assert_eq!(cols[1]["widget"], "conversation");
     assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation", "nav-rail"], "{page}");
     // Rosson 2026-10-04: Garden 1's thin left rail, in column 0 beside the
-    // Agents box, with the one cap that leaves Zen for an app page.
+    // Agents box, with the one cap that switches the Garden's rail view.
     let nav = &page["widgets"][2];
     assert_eq!((nav["id"].as_str(), nav["column"].as_u64()), (Some("nav"), Some(0)), "{nav}");
     assert_eq!(nav["caps"], json!(["app:navigate"]), "{nav}");
@@ -1014,7 +1014,9 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
         let shown = b.iter().map(|v| if v.fract() == 0.0 { format!("{}", *v as i64) } else { format!("{v}") }).collect::<Vec<_>>().join(", ");
         assert!(body.contains(&format!("`{name}` [{shown}]")), "skill must show {name}'s points [{shown}]");
     }
-    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 5, "G36: k2-zen skill v5 (the nav-rail widget)");
+    assert_eq!(k2_core::skills::version::SKILL_VERSION_ZEN, 6, "G36: k2-zen skill v6 (the rail switches views inside Zen)");
+    assert!(!body.contains("leaves Zen in this window"), "v6: the rail no longer leaves Zen");
+    assert!(body.contains("`app.current()`"), "v6: app.current is documented");
 }
 
 fn temp_dot(tag: &str) -> PathBuf {

@@ -317,7 +317,8 @@ the widget is granted. Caps: ",
 - `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
 - `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`, `compose.draft(address, text)`: `thread:post`\n\
 - `gardens.create(name)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the template's controls only)\n\
-- `app.open(page)` (`agents`, `projects` or `tickets`: leaves Zen in this window and opens that page), `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
+- `focusGroups.get()`, `focusGroups.set(id)`, `focusGroups.subscribe(cb)`: `agents:read` (the app's focus groups, for the Agents view)\n\
+- `app.open(page)` (`home`, `agents`, `projects` or `tickets`: switches the Garden's view in this window, inside Zen; Zen stays on), `app.current()`, `app.subscribeCurrent(fn)`, `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
 - `gardens.list()`, `gardens.current()`, `gardens.switch(id)`, `zen.exit()`, `controls.bind(kind, element, gardenId?)`, `theme.get()`: no cap\n\n\
 Built-in widgets get their caps from K2. In Zen v2, a user widget asks for caps in\n\
 its manifest and the human grants them in the K2 app. Agents request caps; they\n\

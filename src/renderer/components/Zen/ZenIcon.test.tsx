@@ -1,22 +1,22 @@
 // @vitest-environment jsdom
 //
-// Rosson 2026-10-04: the Zen toggle's icon candidates (`ZenIcon`) and the
-// TEMPORARY preview switch (`lib/zen/zen-icon.ts`).
+// Rosson 2026-10-04: the Zen icon (`ZenIcon`; the pick, the ensō, is
+// `lib/zen/zen-icon.ts`).
 //
 // Asserted (fail loudly):
-//   - the preview lists ripples, enso, bonsai in that order with their
-//     tooltip names; preview off is the one chosen icon; a bad choice throws;
+//   - the choice is the ensō;
 //   - every variant's on state differs from its off state, and on uses the
 //     accent;
 //   - motion plays when an icon turns on (an on icon mounting, or a toggle)
-//     and an off icon that just mounted stays still;
+//     or `replay` goes up (the top bar's hover), and an off icon that just
+//     mounted stays still;
 //   - `prefers-reduced-motion: reduce` skips all of it: still, no ensō mask,
 //     no starting transform or opacity.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { ZenIcon } from './ZenIcon'
-import { ZEN_ICON_CHOICE, ZEN_ICON_OPTIONS, ZEN_ICON_PREVIEW, zenToggleIcons, type ZenIconVariant } from '@/lib/zen/zen-icon'
+import { ZEN_ICON_CHOICE, type ZenIconVariant } from '@/lib/zen/zen-icon'
 import { REDUCED_MOTION_QUERY } from '@/lib/zen/zen-theme'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -62,25 +62,8 @@ function animatedParts(container: HTMLElement): Array<{ part: string; opacity: s
 }
 
 describe('the icon config (lib/zen/zen-icon.ts)', () => {
-  it('preview: all three, in order, named for the tooltip', () => {
-    expect(zenToggleIcons(true, 'enso').map((o) => [o.variant, o.label])).toEqual([
-      ['ripples', 'Option 1: Stone & ripples'],
-      ['enso', 'Option 2: Ensō'],
-      ['bonsai', 'Option 3: Bonsai'],
-    ])
-  })
-
-  it('preview off: just the chosen one', () => {
-    for (const v of VARIANTS) expect(zenToggleIcons(false, v).map((o) => o.variant)).toEqual([v])
-  })
-
-  it('an unknown choice is loud', () => {
-    expect(() => zenToggleIcons(false, 'koi' as ZenIconVariant)).toThrow('zen icon: unknown choice "koi"')
-  })
-
-  it('the defaults are the module constants', () => {
-    expect(zenToggleIcons()).toEqual(zenToggleIcons(ZEN_ICON_PREVIEW, ZEN_ICON_CHOICE))
-    expect(ZEN_ICON_OPTIONS.map((o) => o.variant)).toEqual(VARIANTS)
+  it('Rosson picked the ensō', () => {
+    expect(ZEN_ICON_CHOICE).toBe('enso')
   })
 })
 
@@ -162,5 +145,18 @@ describe('ZenIcon', () => {
     check()
     r.rerender(<ZenIcon variant={variant} on />)
     check()
+  })
+
+  it.each(VARIANTS)('%s: a replay bump plays it again in the off state; reduced motion does not', (variant) => {
+    const r = render(<ZenIcon variant={variant} on={false} replay={0} />)
+    expect(svg(r.container).getAttribute('data-zen-icon-motion')).toBe('still')
+    r.rerender(<ZenIcon variant={variant} on={false} replay={1} />)
+    expect(svg(r.container).getAttribute('data-zen-icon-motion')).toBe('play')
+    if (variant === 'enso') expect(r.container.querySelector('mask')).not.toBeNull()
+    cleanup()
+    reduced = true
+    const still = render(<ZenIcon variant={variant} on={false} replay={3} />)
+    expect(svg(still.container).getAttribute('data-zen-icon-motion')).toBe('still')
+    expect(still.container.querySelector('mask')).toBeNull()
   })
 })

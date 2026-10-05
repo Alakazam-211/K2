@@ -11,15 +11,15 @@
 // is the Garden page's own Zen toggle, the app menu, or ⌃⌘Z.
 
 //
-// Its icon is `ZenIcon` (off state), chosen in `lib/zen/zen-icon.ts`. While
-// `ZEN_ICON_PREVIEW` is on, this renders all three icon candidates side by
-// side in a dashed group, each a real Zen toggle (TEMPORARY, Rosson
-// 2026-10-04 is picking one).
+// Its icon is the ensō (`ZenIcon`, off state; the choice is
+// `lib/zen/zen-icon.ts`, Rosson 2026-10-04). Pointing at it draws the
+// stroke in once more; reduced motion keeps it still.
 
+import { useState } from 'react'
 import { enterZen } from '@/lib/zen/zen-view'
 import { currentDesktopOs, zenAvailable } from '@/lib/zen/zen-platform'
 import { ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
-import { zenToggleIcons, type ZenIconOption } from '@/lib/zen/zen-icon'
+import { ZEN_ICON_CHOICE } from '@/lib/zen/zen-icon'
 import { ZenIcon } from '@/components/Zen/ZenIcon'
 
 export function zenTopBarToggleTitle(): string {
@@ -27,7 +27,9 @@ export function zenTopBarToggleTitle(): string {
   return `Zen Mode (${chord}). Hold Shift for safe mode.`
 }
 
-function ZenEnterButton({ option, title }: { option: ZenIconOption; title: string }): React.JSX.Element {
+function ZenEnterButton({ title }: { title: string }): React.JSX.Element {
+  // Each hover replays the icon's draw-in.
+  const [hovers, setHovers] = useState(0)
   return (
     <button
       type="button"
@@ -35,35 +37,20 @@ function ZenEnterButton({ option, title }: { option: ZenIconOption; title: strin
       aria-label="Zen Mode"
       title={title}
       data-zen-enter=""
-      data-zen-icon-option={option.variant}
       onClick={(e) => enterZen({ safe: e.shiftKey })}
+      onMouseEnter={() => setHovers((n) => n + 1)}
       className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
       style={{
         // @ts-expect-error -- Electron-specific CSS property
         WebkitAppRegion: 'no-drag',
       }}
     >
-      <ZenIcon variant={option.variant} on={false} size={16} />
+      <ZenIcon variant={ZEN_ICON_CHOICE} on={false} size={16} replay={hovers} />
     </button>
   )
 }
 
 export default function ZenTopBarToggle(): React.JSX.Element | null {
   if (!zenAvailable()) return null
-  const title = zenTopBarToggleTitle()
-  const icons = zenToggleIcons()
-  if (icons.length === 1) return <ZenEnterButton option={icons[0]} title={title} />
-  // TEMPORARY icon comparison (ZEN_ICON_PREVIEW): one dashed group.
-  return (
-    <div
-      role="group"
-      aria-label="Zen icon preview (temporary): pick one"
-      data-zen-icon-preview=""
-      className="no-drag flex items-center gap-0.5 border border-dashed border-[var(--color-accent)]"
-    >
-      {icons.map((o) => (
-        <ZenEnterButton key={o.variant} option={o} title={`${o.label}. ${title}`} />
-      ))}
-    </div>
-  )
+  return <ZenEnterButton title={zenTopBarToggleTitle()} />
 }

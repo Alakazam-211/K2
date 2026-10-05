@@ -1,6 +1,7 @@
-// The Zen toggle's icon candidates (Rosson 2026-10-04): small SVGs on a 24
-// viewBox in `currentColor`, drawn at ~16px. Off is outlined and light; on
-// fills with the accent. Which one the toggle uses is `lib/zen/zen-icon.ts`.
+// The Zen icon (Rosson 2026-10-04): small SVGs on a 24 viewBox in
+// `currentColor`, drawn at ~16px. Off is outlined and light; on fills with
+// the accent. The top bar's Zen toggle draws the one `lib/zen/zen-icon.ts`
+// picks (the ensō); the other two stay so a change of mind is one constant.
 //
 //   ripples  a Zen rock garden: a pebble with two raked-sand ripple arcs.
 //            Off: outlined stone, thin arcs. On: accent stone, solid arcs.
@@ -9,10 +10,10 @@
 //   bonsai   a pot, a curved trunk and three cloud pads. On: accent pads.
 //
 // Motion (Motion's `motion/react`) plays when the icon turns on (including
-// when an on icon mounts, which is how entering Zen looks) or changes after
-// mounting: the ripples ease outward once, the ensō draws in, the bonsai's
-// pads pop with a little sway. An off icon that just mounted stays still.
-// `prefers-reduced-motion: reduce` skips all of it.
+// when an on icon mounts), changes after mounting, or `replay` goes up (the
+// top bar bumps it on hover): the ripples ease outward once, the ensō draws
+// in, the bonsai's pads pop with a little sway. An off icon that just
+// mounted stays still. `prefers-reduced-motion: reduce` skips all of it.
 
 import { useEffect, useId, useState } from 'react'
 import { motion, type Transition } from 'motion/react'
@@ -118,17 +119,25 @@ export interface ZenIconProps {
   size?: number
   /** The on state's fill. Defaults to Zen's accent (outside Zen, pass one). */
   accent?: string
+  /** Bump to play the motion again in the current state (0: never). */
+  replay?: number
 }
 
-export function ZenIcon({ variant, on, size = 16, accent = ZEN_ICON_DEFAULT_ACCENT }: ZenIconProps): React.JSX.Element {
+export function ZenIcon({
+  variant,
+  on,
+  size = 16,
+  accent = ZEN_ICON_DEFAULT_ACCENT,
+  replay = 0,
+}: ZenIconProps): React.JSX.Element {
   const reduced = useReducedMotion()
   // Has `on` changed since mount? (Derived state, React's own pattern.)
   const [seen, setSeen] = useState({ on, toggled: false })
   if (seen.on !== on) setSeen({ on, toggled: true })
-  const animate = !reduced && (on || seen.toggled)
+  const animate = !reduced && (on || seen.toggled || replay > 0)
   const maskId = `zen-enso-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  // A new key per state replays the entry animation on every toggle.
-  const k = on ? 'on' : 'off'
+  // A new key per state (and per replay) plays the animation again.
+  const k = `${on ? 'on' : 'off'}-${replay}`
 
   return (
     <svg

@@ -10,21 +10,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({
-  label: 'main',
-  // The Zen toggle's icon config (TEMPORARY preview): null runs the real
-  // constants of `lib/zen/zen-icon.ts`; set to force preview on or off.
-  icon: null as null | { preview: boolean; choice: 'ripples' | 'enso' | 'bonsai' },
-}))
+const h = vi.hoisted(() => ({ label: 'main' }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
-vi.mock('@/lib/zen/zen-icon', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@/lib/zen/zen-icon')>()
-  return {
-    ...real,
-    zenToggleIcons: () => (h.icon ? real.zenToggleIcons(h.icon.preview, h.icon.choice) : real.zenToggleIcons()),
-  }
-})
 vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
@@ -46,7 +34,6 @@ import { useZenWindowStore } from '@/lib/zen/zen-window'
 import { useZenViewStore } from '@/lib/zen/zen-view'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
-import { zenToggleIcons } from '@/lib/zen/zen-icon'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -61,23 +48,14 @@ function clusterItems(): string[] {
   const cluster = document.querySelector('.no-drag.flex.items-center.gap-1')
   if (!cluster) throw new Error('no top-bar cluster')
   return Array.from(cluster.children).map((c) => {
-    // One toggle, or (the TEMPORARY icon preview) one group of three.
-    if (c.hasAttribute('data-zen-enter') || c.hasAttribute('data-zen-icon-preview')) return 'zen'
+    if (c.hasAttribute('data-zen-enter')) return 'zen'
     if (c.hasAttribute('data-stub')) return c.getAttribute('data-stub') ?? '?'
     if (c.hasAttribute('data-drawer')) return c.getAttribute('data-drawer') ?? '?'
     return 'pipe'
   })
 }
 
-/** While the TEMPORARY icon preview is on, the first toggle's tooltip
- *  names its option first. */
-function titlePrefix(): string {
-  const icons = zenToggleIcons()
-  return icons.length > 1 ? `${icons[0].label}. ` : ''
-}
-
 beforeEach(() => {
-  h.icon = null
   setWindow('MacIntel')
   useZenWindowStore.setState({ on: false, garden: null })
   useZenViewStore.setState({ safe: null, epoch: 0 })
@@ -112,7 +90,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
     ])
     const toggle = document.querySelector('[data-zen-enter]')
     expect(toggle?.getAttribute('aria-pressed')).toBe('false')
-    expect(toggle?.getAttribute('title')).toBe(`${titlePrefix()}Zen Mode (⌃⌘Z). Hold Shift for safe mode.`)
+    expect(toggle?.getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
   })
 
   it('a page without drawer toggles (Settings, Feedback): after the mode toggle, with its own pipe', () => {
@@ -138,7 +116,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
     setWindow('Linux x86_64')
     render(<TopBarUtilities />)
     expect(document.querySelector('[data-zen-enter]')?.getAttribute('title')).toBe(
-      `${titlePrefix()}Zen Mode (Ctrl+Alt+Z). Hold Shift for safe mode.`,
+      'Zen Mode (Ctrl+Alt+Z). Hold Shift for safe mode.',
     )
   })
 
@@ -161,56 +139,65 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
   })
 })
 
-// Rosson 2026-10-04: picking the Zen toggle's icon (`lib/zen/zen-icon.ts`).
-describe('the Zen icon preview in the top bar (TEMPORARY)', () => {
-  it('preview on: three real Zen toggles side by side in one marked group, ripples, enso, bonsai', () => {
-    h.icon = { preview: true, choice: 'ripples' }
-    render(<TopBarUtilities />)
-    expect(clusterItems().slice(-3)).toEqual(['mode', 'pipe', 'zen'])
-    const group = document.querySelector('[data-zen-icon-preview]')
-    if (!(group instanceof HTMLElement)) throw new Error('no icon preview group')
-    expect(group.getAttribute('aria-label')).toBe('Zen icon preview (temporary): pick one')
-    expect(group.classList.contains('border-dashed')).toBe(true)
-    const toggles = Array.from(group.querySelectorAll('[data-zen-enter]'))
-    expect(
-      toggles.map((t) => [t.getAttribute('data-zen-icon-option'), t.querySelector('svg')?.getAttribute('data-zen-icon'), t.getAttribute('title')]),
-    ).toEqual([
-      ['ripples', 'ripples', 'Option 1: Stone & ripples. Zen Mode (⌃⌘Z). Hold Shift for safe mode.'],
-      ['enso', 'enso', 'Option 2: Ensō. Zen Mode (⌃⌘Z). Hold Shift for safe mode.'],
-      ['bonsai', 'bonsai', 'Option 3: Bonsai. Zen Mode (⌃⌘Z). Hold Shift for safe mode.'],
-    ])
-    // Outside Zen every icon is in its off state.
-    expect(toggles.map((t) => t.querySelector('svg')?.getAttribute('data-zen-icon-on'))).toEqual(['false', 'false', 'false'])
-    expect(toggles.every((t) => t.classList.contains('cursor-pointer'))).toBe(true)
+// Rosson 2026-10-04: the top bar's Zen toggle draws the ensō (picked from
+// three candidates; `lib/zen/zen-icon.ts`). Pointing at it draws the
+// stroke in again, unless the OS asks for reduced motion.
+describe('the ensō icon on the top bar’s Zen toggle', () => {
+  let restoreMatchMedia: PropertyDescriptor | undefined
+  let reduced = false
+
+  beforeEach(() => {
+    reduced = false
+    restoreMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: (query: string) => ({
+        matches: query === '(prefers-reduced-motion: reduce)' ? reduced : false,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    })
   })
 
-  it('preview on: each one turns this window’s Zen on (Shift: safe mode)', () => {
-    h.icon = { preview: true, choice: 'ripples' }
-    render(<TopBarUtilities />)
-    for (const variant of ['ripples', 'enso', 'bonsai']) {
-      act(() => useZenWindowStore.getState().setOn(false))
-      act(() => useZenViewStore.setState({ safe: null }))
-      const toggle = document.querySelector(`[data-zen-enter][data-zen-icon-option="${variant}"]`)
-      if (!(toggle instanceof HTMLElement)) throw new Error(`no ${variant} toggle`)
-      act(() => void fireEvent.click(toggle))
-      expect([variant, useZenWindowStore.getState().on, useZenViewStore.getState().safe]).toEqual([variant, true, null])
-      act(() => useZenWindowStore.getState().setOn(false))
-      act(() => void fireEvent.click(toggle, { shiftKey: true }))
-      expect([variant, useZenWindowStore.getState().on, useZenViewStore.getState().safe]).toEqual([variant, true, { kind: 'shift' }])
-    }
-    expect(usePageViewStore.getState().page).toBe('agents')
+  afterEach(() => {
+    if (restoreMatchMedia) Object.defineProperty(window, 'matchMedia', restoreMatchMedia)
+    else delete (window as { matchMedia?: unknown }).matchMedia
   })
 
-  it.each(['ripples', 'enso', 'bonsai'] as const)('preview off: one toggle with the chosen icon (%s)', (choice) => {
-    h.icon = { preview: false, choice }
+  function icon(): SVGSVGElement {
+    const el = document.querySelector('[data-zen-enter] svg[data-zen-icon]')
+    if (!(el instanceof SVGSVGElement)) throw new Error('no Zen icon in the top-bar toggle')
+    return el
+  }
+
+  it('one toggle, the ensō in its off state, with a pointer', () => {
     render(<TopBarUtilities />)
-    expect(document.querySelector('[data-zen-icon-preview]')).toBeNull()
-    expect(clusterItems().slice(-3)).toEqual(['mode', 'pipe', 'zen'])
     const toggles = Array.from(document.querySelectorAll('[data-zen-enter]'))
-    expect(toggles.map((t) => [t.querySelector('svg')?.getAttribute('data-zen-icon'), t.getAttribute('title')])).toEqual([
-      [choice, 'Zen Mode (⌃⌘Z). Hold Shift for safe mode.'],
-    ])
-    act(() => void fireEvent.click(toggles[0]))
-    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(toggles.length).toBe(1)
+    expect(toggles[0].classList.contains('cursor-pointer')).toBe(true)
+    expect([icon().getAttribute('data-zen-icon'), icon().getAttribute('data-zen-icon-on')]).toEqual(['enso', 'false'])
+    expect([icon().getAttribute('width'), icon().getAttribute('viewBox')]).toEqual(['16', '0 0 24 24'])
+    // Still until pointed at.
+    expect(icon().getAttribute('data-zen-icon-motion')).toBe('still')
+    expect(document.querySelector('[data-zen-enter] mask')).toBeNull()
+  })
+
+  it('hover draws the ensō in again', () => {
+    render(<TopBarUtilities />)
+    act(() => void fireEvent.mouseEnter(document.querySelector('[data-zen-enter]') as HTMLElement))
+    expect(icon().getAttribute('data-zen-icon-motion')).toBe('play')
+    const mask = document.querySelector('[data-zen-enter] mask')
+    if (!mask) throw new Error('no ensō draw mask on hover')
+    expect(document.querySelector('[data-zen-enter] [data-zen-icon-part="enso"]')?.getAttribute('mask')).toBe(`url(#${mask.id})`)
+  })
+
+  it('reduced motion: hover leaves it still', () => {
+    reduced = true
+    render(<TopBarUtilities />)
+    act(() => void fireEvent.mouseEnter(document.querySelector('[data-zen-enter]') as HTMLElement))
+    act(() => void fireEvent.mouseEnter(document.querySelector('[data-zen-enter]') as HTMLElement))
+    expect(icon().getAttribute('data-zen-icon-motion')).toBe('still')
+    expect(document.querySelector('[data-zen-enter] mask')).toBeNull()
   })
 })

@@ -390,6 +390,7 @@ import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, zenNavPillMotion } from './ZenNa
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { ZEN_WIDGET_CSS } from './zen-widget-kit'
 import { ZEN_ANCHORED_MENU_LAYER } from '@/hooks/useAnchoredMenu'
+import { zenToggleIcons } from '@/lib/zen/zen-icon'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -1298,7 +1299,7 @@ describe('the usage tool in the top band', () => {
     await mountZen()
     const topRight = document.querySelector('[data-zen-top-right]') as HTMLElement
     const order = Array.from(topRight.children).map((c) =>
-      c.hasAttribute('data-zen-usage') ? 'usage' : c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') ? 'toggle' : c.tagName,
+      c.hasAttribute('data-zen-usage') ? 'usage' : c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') || c.hasAttribute('data-zen-icon-preview') ? 'toggle' : c.tagName,
     )
     expect(order).toEqual(['usage', 'theme', 'toggle'])
     const usage = topRight.querySelector('[data-zen-usage]') as HTMLElement
@@ -1644,11 +1645,12 @@ describe('template controls (G24, G25, G58)', () => {
         ? 'usage'
         : c.hasAttribute('data-zen-theme-picker')
           ? 'theme'
-          : c.hasAttribute('data-zen-switch')
+          : c.hasAttribute('data-zen-switch') || c.hasAttribute('data-zen-icon-preview')
             ? 'toggle'
             : c.tagName,
     )).toEqual(['usage', 'theme', 'toggle'])
-    expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
+    // One toggle, or (the TEMPORARY icon preview) one per icon candidate.
+    expect(document.querySelectorAll('[data-zen-switch]').length).toBe(zenToggleIcons().length)
     expect(topRight.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
     // No footer under any column any more: both columns run to the bottom.
     // Column 0 holds the thin nav rail (left edge, outside the box), then

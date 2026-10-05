@@ -18,7 +18,10 @@
 //     and closes the menu; Esc steps back. Rename and delete are CLI and
 //     agent only in this cut. The menu closes on a pick, Esc or a click
 //     outside;
-//   - the Zen toggle is a switch, on, that turns Zen off in this window;
+//   - the Zen toggle is an icon switch, on, that turns Zen off in this
+//     window (its icon is `ZenIcon`, chosen in `lib/zen/zen-icon.ts`; while
+//     `ZEN_ICON_PREVIEW` is on it is TEMPORARILY three toggles side by
+//     side, one per icon candidate, each bound as `zen-toggle`);
 //   - the drag area fills the top band between the switcher and the
 //     top-right cluster;
 //   - K2's usage tool and theme control (`ZenK2TopRightItems`, drawn by the
@@ -31,6 +34,8 @@ import type { ZenTemplateControlsProps } from '../zen-registry'
 import { TEXTING_BAR_HEIGHT_PX, useZenBind, ZenK2TopRightItems } from '../ZenTemplateControls'
 import { ZenWidgetStyles } from './zen-widget-kit'
 import { ZenNewGarden } from './ZenNewGarden'
+import { zenToggleIcons, type ZenIconOption } from '@/lib/zen/zen-icon'
+import { ZenIcon } from '../ZenIcon'
 
 function GardenChoice({
   bridge,
@@ -166,7 +171,15 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
   )
 }
 
-function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
+function ZenToggleButton({
+  bridge,
+  option,
+  title,
+}: {
+  bridge: ZenWidgetBridge
+  option: ZenIconOption
+  title: string
+}): React.JSX.Element {
   const ref = useZenBind(bridge, 'zen-toggle')
   return (
     <button
@@ -175,24 +188,37 @@ function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
       role="switch"
       aria-checked
       aria-label="Exit Zen Mode"
-      title="Exit Zen Mode"
+      title={title}
       data-zen-switch=""
       data-zen-soft-button=""
-      className="flex items-center gap-2 cursor-pointer"
-      style={{ height: 30, minWidth: 24, flexShrink: 0, padding: '0 6px 0 12px', borderRadius: 999, color: 'var(--zen-text)' }}
+      data-zen-icon-option={option.variant}
+      className="flex items-center justify-center cursor-pointer"
+      style={{ width: 30, height: 30, flexShrink: 0, padding: 0, borderRadius: 999, color: 'var(--zen-text)' }}
     >
-      <span style={{ fontWeight: 600, fontSize: '0.9em' }}>Zen</span>
-      <span
-        aria-hidden
-        className="relative inline-block"
-        style={{ width: 34, height: 20, borderRadius: 999, background: 'var(--zen-accent)' }}
-      >
-        <span
-          className="absolute"
-          style={{ top: 2, right: 2, width: 16, height: 16, borderRadius: 999, background: 'var(--zen-accent-text)' }}
-        />
-      </span>
+      <ZenIcon variant={option.variant} on size={18} accent="var(--zen-accent)" />
     </button>
+  )
+}
+
+/** The Zen toggle: an icon switch, on, that exits Zen. While
+ *  `ZEN_ICON_PREVIEW` is on (TEMPORARY), all three icon candidates side by
+ *  side in a dashed group, each bound as a `zen-toggle` (the required
+ *  controls check passes when any one is visible). */
+function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
+  const icons = zenToggleIcons()
+  if (icons.length === 1) return <ZenToggleButton bridge={bridge} option={icons[0]} title="Exit Zen Mode" />
+  return (
+    <div
+      role="group"
+      aria-label="Zen icon preview (temporary): pick one"
+      data-zen-icon-preview=""
+      className="flex flex-shrink-0 items-center"
+      style={{ gap: 2, padding: 1, border: '1px dashed var(--zen-text-muted)', borderRadius: 999 }}
+    >
+      {icons.map((o) => (
+        <ZenToggleButton key={o.variant} bridge={bridge} option={o} title={`${o.label}. Exit Zen Mode`} />
+      ))}
+    </div>
   )
 }
 

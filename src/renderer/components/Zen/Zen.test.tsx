@@ -44,6 +44,17 @@ const h = vi.hoisted(() => ({
   tauriListens: [] as Array<{ event: string; handler: () => void; options: unknown }>,
 }))
 
+// The Zen toggle's icon config (TEMPORARY preview, `lib/zen/zen-icon.ts`):
+// null runs the real constants; set to force preview on or off.
+const iconCfg = vi.hoisted(() => ({ force: null as null | { preview: boolean; choice: 'ripples' | 'enso' | 'bonsai' } }))
+vi.mock('@/lib/zen/zen-icon', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/zen/zen-icon')>()
+  return {
+    ...real,
+    zenToggleIcons: () => (iconCfg.force ? real.zenToggleIcons(iconCfg.force.preview, iconCfg.force.choice) : real.zenToggleIcons()),
+  }
+})
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string, args?: unknown) => {
     h.invokes.push({ cmd, args })
@@ -119,6 +130,7 @@ import { ZenHost } from './ZenHost'
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import { registerZenTemplateControls, registerZenWidget, type ZenTemplateControlsProps } from './zen-registry'
 import { useZenBind } from './ZenTemplateControls'
+import { zenToggleIcons } from '@/lib/zen/zen-icon'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -228,6 +240,7 @@ const unregister: Array<() => void> = []
 
 beforeEach(() => {
   h.calls.length = 0
+  iconCfg.force = null
   h.zenHandlers.length = 0
   h.sockets.length = 0
   h.closedSockets.length = 0
@@ -310,7 +323,10 @@ describe('Zen is a mode of the window (G1–G5)', () => {
     mount()
     const toggle = el('[data-zen-enter]')
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(toggle.getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
+    // While the TEMPORARY icon preview is on, the tooltip names the option first.
+    const icons = zenToggleIcons()
+    const prefix = icons.length > 1 ? `${icons[0].label}. ` : ''
+    expect(toggle.getAttribute('title')).toBe(`${prefix}Zen Mode (⌃⌘Z). Hold Shift for safe mode.`)
     expect(zenRoot()).toBeNull()
 
     await enterViaTopBar()
@@ -653,12 +669,18 @@ describe('safe mode', () => {
     mount()
     await enterViaTopBar()
     await pageReady()
-    const toggle = el('[data-zen-switch]')
-    styleOverride.set(toggle, { opacity: 0 })
+    // Every Zen toggle (the TEMPORARY icon preview draws one per candidate;
+    // the check passes while any one is visible).
+    const toggles = Array.from(document.querySelectorAll('[data-zen-switch]'))
+    expect(toggles.length).toBe(zenToggleIcons().length)
+    const hide = (on: boolean): void => {
+      for (const t of toggles) on ? styleOverride.set(t, { opacity: 0 }) : styleOverride.delete(t)
+    }
+    hide(true)
     act(() => runZenControlChecksNow())
-    styleOverride.delete(toggle)
+    hide(false)
     act(() => runZenControlChecksNow())
-    styleOverride.set(toggle, { opacity: 0 })
+    hide(true)
     act(() => runZenControlChecksNow())
     expect(document.querySelector('[data-zen-safe-banner]')).toBeNull()
     act(() => runZenControlChecksNow())
@@ -941,5 +963,84 @@ describe('the escape hatch', () => {
     const item = screen.getByRole('menuitem', { name: 'Exit Zen Mode' })
     await act(async () => void fireEvent.click(item))
     expect(zenRoot()).toBeNull()
+  })
+})
+
+// Rosson 2026-10-04: picking the Zen toggle's icon. While the TEMPORARY
+// preview is on, the top bar and Zen's top band each draw three real Zen
+// toggles side by side (ripples, enso, bonsai), and the required-controls
+// check must not put the window in safe mode over it.
+describe('the Zen icon preview (TEMPORARY)', () => {
+  const ORDER = ['ripples', 'enso', 'bonsai']
+
+  it('every top-bar candidate enters Zen and every top-band candidate exits it', async () => {
+    iconCfg.force = { preview: true, choice: 'ripples' }
+    mount()
+    for (const variant of ORDER) {
+      const enter = el(`[data-zen-enter][data-zen-icon-option="${variant}"]`)
+      expect(enter.classList.contains('cursor-pointer')).toBe(true)
+      await act(async () => void fireEvent.click(enter))
+      await pageReady()
+      expect([variant, useZenWindowStore.getState().on]).toEqual([variant, true])
+      const band = el('[data-zen-top-right] [data-zen-icon-preview]')
+      const toggles = Array.from(band.querySelectorAll('[data-zen-switch]'))
+      expect(toggles.map((t) => [t.getAttribute('data-zen-icon-option'), t.getAttribute('data-zen-bound')])).toEqual(
+        ORDER.map((v) => [v, 'zen-toggle']),
+      )
+      expect(toggles.map((t) => t.getAttribute('title'))).toEqual([
+        'Option 1: Stone & ripples. Exit Zen Mode',
+        'Option 2: Ensō. Exit Zen Mode',
+        'Option 3: Bonsai. Exit Zen Mode',
+      ])
+      expect(toggles.every((t) => t.classList.contains('cursor-pointer'))).toBe(true)
+      // The band draws each icon in its on state.
+      expect(toggles.map((t) => t.querySelector('svg')?.getAttribute('data-zen-icon-on'))).toEqual(['true', 'true', 'true'])
+      const exit = el(`[data-zen-switch][data-zen-icon-option="${variant}"]`)
+      await act(async () => void fireEvent.click(exit))
+      expect([variant, useZenWindowStore.getState().on, zenRoot()]).toEqual([variant, false, null])
+    }
+  })
+
+  it('no safe mode while previewing: the scheduled checks pass with three toggles bound', async () => {
+    iconCfg.force = { preview: true, choice: 'ripples' }
+    mount()
+    await enterViaTopBar()
+    await pageReady()
+    expect(document.querySelectorAll('[data-zen-switch][data-zen-bound="zen-toggle"]').length).toBe(3)
+    act(() => useZenViewStore.setState({ safe: null }))
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+    expect(document.querySelector('[data-zen-safe-banner]')).toBeNull()
+    // One candidate hidden (say it's mid-animation): the others still pass.
+    const first = el('[data-zen-switch][data-zen-icon-option="ripples"]')
+    styleOverride.set(first, { opacity: 0 })
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+  })
+
+  it('preview off: one toggle in each place, with the chosen icon', async () => {
+    iconCfg.force = { preview: false, choice: 'bonsai' }
+    mount()
+    expect(document.querySelector('[data-zen-icon-preview]')).toBeNull()
+    const enter = Array.from(document.querySelectorAll('[data-zen-enter]'))
+    expect(enter.map((b) => [b.getAttribute('data-zen-icon-option'), b.getAttribute('title')])).toEqual([
+      ['bonsai', 'Zen Mode (⌃⌘Z). Hold Shift for safe mode.'],
+    ])
+    await enterViaTopBar()
+    await pageReady()
+    expect(document.querySelector('[data-zen-icon-preview]')).toBeNull()
+    const toggles = Array.from(document.querySelectorAll('[data-zen-top-right] > [data-zen-switch]'))
+    expect(toggles.map((t) => [t.getAttribute('data-zen-icon-option'), t.getAttribute('title'), t.getAttribute('data-zen-bound')])).toEqual([
+      ['bonsai', 'Exit Zen Mode', 'zen-toggle'],
+    ])
+    expect(toggles[0].querySelector('svg')?.getAttribute('data-zen-icon')).toBe('bonsai')
+    act(() => runZenControlChecksNow())
+    act(() => runZenControlChecksNow())
+    expect(useZenViewStore.getState().safe).toBeNull()
+    await act(async () => void fireEvent.click(toggles[0]))
+    expect(useZenWindowStore.getState().on).toBe(false)
   })
 })

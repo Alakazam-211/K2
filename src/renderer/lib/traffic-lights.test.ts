@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   STOPLIGHT_SPACER_VAR,
   TRAFFIC_LIGHT_Y_NUDGE_PX,
+  ZEN_STOPLIGHT_INSET_PX,
   createTrafficLightController,
   stoplightSpacerPx,
   trafficLightCommand,
@@ -368,5 +369,17 @@ describe('stoplight spacer under app zoom', () => {
     expect(style).toContain('export function onAppZoomChange(): void')
     expect(style).toContain('trafficLights.onZoomChange()')
     expect(style).toContain('setProperty(STOPLIGHT_SPACER_VAR')
+  })
+})
+
+describe('Zen stoplights (Rosson 2026-10-04: down and right in Zen)', () => {
+  it('Zen adds its own 8px inset right and down on top of the theme offset; the Style never does', () => {
+    expect(ZEN_STOPLIGHT_INSET_PX).toBe(8)
+    const zen = trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25, zen: { square: false, x: 0, y: 0 } })
+    expect(zen).toEqual({ x: 8, y: 8 + TRAFFIC_LIGHT_Y_NUDGE_PX, square: false, zoom: 1.25 })
+    const nudged = trafficLightCommand({ styleId: null, inset: 0, zen: { square: true, x: 6, y: 4 } })
+    expect(nudged).toEqual({ x: 14, y: 15, square: true, zoom: 1 })
+    // Leaving Zen (no `zen`): the Style's own command, no Zen inset.
+    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25 })).toEqual({ x: 0, y: 3, square: true, zoom: 1.25 })
   })
 })

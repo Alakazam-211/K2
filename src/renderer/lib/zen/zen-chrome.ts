@@ -20,7 +20,7 @@
 // (`ZenChromeCluster`) and measures it; its rect is published the same way.
 // The `[chrome]` table changes nothing there.
 
-import { TRAFFIC_LIGHT_Y_NUDGE_PX, trafficLightZoom } from '@/lib/traffic-lights'
+import { TRAFFIC_LIGHT_Y_NUDGE_PX, ZEN_STOPLIGHT_INSET_PX, trafficLightZoom } from '@/lib/traffic-lights'
 import { TRAFFIC_LIGHT_CLUSTER_GAP_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
 import type { ZenChromeSource } from '@/stores/style'
 import type { ZenRect } from './zen-controls'
@@ -68,16 +68,17 @@ export interface ZenStoplightArea {
 /**
  * macOS stoplight area with Zen's `stoplight-offset` (points) at app zoom
  * `zoom`. Native buttons don't scale with CSS zoom; CSS px = points / zoom.
- * At offset [0, 0] and 100% the lights end at 69 px and the page may start
- * at 83 px, the same left edge the top bar's first control has.
+ * Zen moves the lights `ZEN_STOPLIGHT_INSET_PX` down and right first
+ * (Rosson 2026-10-04), so at offset [0, 0] and 100% they end at 77 px, the
+ * page may start at 91 px, and the band below them starts at 39 px.
  */
 export function macStoplightArea(
   offset: readonly [number, number],
   zoom: number | null | undefined,
 ): ZenStoplightArea {
   const z = trafficLightZoom(zoom)
-  const x = Number.isFinite(offset[0]) && offset[0] > 0 ? offset[0] : 0
-  const y = Number.isFinite(offset[1]) && offset[1] > 0 ? offset[1] : 0
+  const x = (Number.isFinite(offset[0]) && offset[0] > 0 ? offset[0] : 0) + ZEN_STOPLIGHT_INSET_PX
+  const y = (Number.isFinite(offset[1]) && offset[1] > 0 ? offset[1] : 0) + ZEN_STOPLIGHT_INSET_PX
   const width = (TRAFFIC_LIGHT_CLUSTER_RIGHT_PX + x) / z
   const safeLeft = width + TRAFFIC_LIGHT_CLUSTER_GAP_PX
   const safeTop = (y + TRAFFIC_LIGHT_Y_NUDGE_PX + MAC_TITLEBAR_BAND_PX) / z

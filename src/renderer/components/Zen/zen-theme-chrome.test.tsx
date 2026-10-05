@@ -312,12 +312,13 @@ describe('native chrome: held while Zen is shown, restored on leave (macOS)', ()
   it('enter takes Zen values; resize and fullscreen keep them; Settings and exit restore the Style', async () => {
     await enterZen()
     await waitFor(() => expect(lastNative('set_window_corner_radius')).toEqual({ radius: 0.5 }))
-    expect(lastNative('set_traffic_light_inset')).toMatchObject({ x: 6, y: 7, square: true })
+    expect(lastNative('set_traffic_light_inset')).toMatchObject({ x: 14, y: 15, square: true })
     expect(root().getAttribute('data-zen-corners')).toBe('square')
     expect(useZenViewStore.getState().safe).toBeNull()
-    // The page keeps clear of the moved lights: 69 + 6 = 75 wide, 4 + 3 + 28 = 35 tall.
-    expect(root().style.getPropertyValue('--zen-stoplight-rect')).toBe('0px 0px 75px 35px')
-    expect(root().style.getPropertyValue('--zen-stoplight-safe-left')).toBe('89px')
+    // Zen's own inset (8, 8) plus the theme's offset (6, 4): the page keeps
+    // clear of the moved lights: 69 + 8 + 6 = 83 wide, 4 + 8 + 3 + 28 = 43 tall.
+    expect(root().style.getPropertyValue('--zen-stoplight-rect')).toBe('0px 0px 83px 43px')
+    expect(root().style.getPropertyValue('--zen-stoplight-safe-left')).toBe('97px')
 
     for (const fire of [
       () => window.dispatchEvent(new Event('resize')),
@@ -329,7 +330,7 @@ describe('native chrome: held while Zen is shown, restored on leave (macOS)', ()
       const insets = h.invokes.filter((i) => i.cmd === 'set_traffic_light_inset')
       const radii = h.invokes.filter((i) => i.cmd === 'set_window_corner_radius')
       expect(insets.length).toBeGreaterThan(0)
-      for (const i of insets) expect(i.args).toMatchObject({ x: 6, y: 7, square: true })
+      for (const i of insets) expect(i.args).toMatchObject({ x: 14, y: 15, square: true })
       for (const r of radii) expect(r.args).toEqual({ radius: 0.5 })
     }
     // Still the page, not safe mode (which would use K2's default chrome).
@@ -365,9 +366,9 @@ describe('native chrome: held while Zen is shown, restored on leave (macOS)', ()
     })
     await waitFor(() => expect(lastNative('set_window_corner_radius')).toEqual({ radius: 0 }))
     // `hidden` isn't a stoplight shape: square (last good) holds.
-    expect(lastNative('set_traffic_light_inset')).toMatchObject({ x: 0, y: 3, square: true })
-    // Never a flip through the Style in between.
-    expect(h.invokes.filter((i) => i.cmd === 'set_traffic_light_inset').some((i) => i.args.x === 8)).toBe(false)
+    expect(lastNative('set_traffic_light_inset')).toMatchObject({ x: 8, y: 11, square: true })
+    // Never a flip through the Style (round lights) in between.
+    expect(h.invokes.filter((i) => i.cmd === 'set_traffic_light_inset').some((i) => i.args.square === false)).toBe(false)
   })
 })
 

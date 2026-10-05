@@ -103,7 +103,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
 
     // Enter Zen.
     style.setChromeSource(ZEN_SQUARE)
-    expect(lastInset()).toEqual({ x: 4, y: 5, square: true, zoom: 1 })
+    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1 })
     expect(lastRadius()).toBe(0.5)
     // The Styles spacer keeps describing the Style.
     expect(spacer()).toBe(glassSpacer)
@@ -119,7 +119,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     await nextFrame()
     expect(insetCalls().length).toBeGreaterThan(0)
     expect(radiusCalls().length).toBeGreaterThan(0)
-    for (const c of insetCalls()) expect(c).toMatchObject({ x: 4, y: 5, square: true })
+    for (const c of insetCalls()) expect(c).toMatchObject({ x: 12, y: 13, square: true })
     for (const r of radiusCalls()) expect(r).toBe(0.5)
 
     // Fullscreen enter/exit (both spellings).
@@ -128,7 +128,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
       document.dispatchEvent(new Event(ev))
       await nextFrame()
       expect(insetCalls().length, ev).toBeGreaterThan(0)
-      for (const c of insetCalls()) expect(c, ev).toMatchObject({ x: 4, y: 5, square: true })
+      for (const c of insetCalls()) expect(c, ev).toMatchObject({ x: 12, y: 13, square: true })
       expect(radiusCalls(), ev).toEqual([0.5])
     }
 
@@ -136,21 +136,21 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     invoke.mockClear()
     ;(window as ZoomWindow).__k2soZoom = 1.25
     style.onAppZoomChange()
-    expect(lastInset()).toEqual({ x: 4, y: 5, square: true, zoom: 1.25 })
+    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1.25 })
     expect(spacer()).toBe(glassSpacer)
 
     // setTitle parks the lights: App re-applies both.
     invoke.mockClear()
     style.reapplyTrafficLights()
     style.reapplyWindowCorners()
-    expect(lastInset()).toMatchObject({ x: 4, y: 5, square: true })
+    expect(lastInset()).toMatchObject({ x: 12, y: 13, square: true })
     expect(lastRadius()).toBe(0.5)
 
     // A Style stamp (Settings hover preview of Square, or another window's
     // storage sync) while in Zen: Zen still wins.
     invoke.mockClear()
     style.stampStyleAttributes({ styleId: 'bezel', paletteId: 'default', schemeMode: 'dark', gapsPreset: '' })
-    for (const c of insetCalls()) expect(c).toMatchObject({ x: 4, y: 5, square: true })
+    for (const c of insetCalls()) expect(c).toMatchObject({ x: 12, y: 13, square: true })
     for (const r of radiusCalls()) expect(r).toBe(0.5)
     stampGlass()
 
@@ -178,7 +178,8 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     invoke.mockClear()
 
     style.setChromeSource({ zen: { corners: 'system', stoplights: 'round', offset: [0, 0] } })
-    expect(lastInset()).toEqual({ x: 0, y: 3, square: false, zoom: 1 })
+    // Zen's own inset: 8 right, 8 down (plus the 3px title-bar nudge).
+    expect(lastInset()).toEqual({ x: 8, y: 11, square: false, zoom: 1 })
     expect(lastRadius()).toBe(0)
     invoke.mockClear()
     window.dispatchEvent(new Event('resize'))

@@ -9,6 +9,14 @@ import { TOP_BAR_PAD_X_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from './desktop-chro
 export const TRAFFIC_LIGHT_Y_NUDGE_PX = 3
 
 /**
+ * Zen's own stoplight inset (Rosson 2026-10-04): a Garden has more room, so
+ * in Zen the lights come down and to the right by this much, before the
+ * theme's `[chrome] stoplight-offset` nudge. Leaving Zen hands the window
+ * back to the Style, which never adds it.
+ */
+export const ZEN_STOPLIGHT_INSET_PX = 8
+
+/**
  * CSS custom property on <html> holding the top-bar stoplight spacer
  * width. Set on macOS at startup and on every app-zoom change; globals.css
  * gives it the 100% value so the first paint is right.
@@ -65,7 +73,8 @@ export function trafficLightOffsets(inset: number): { x: number; y: number } {
 /**
  * Zen's own stoplights (prd-zen-mode-v1 Z23, Z49): shape and offset from
  * the Zen `[chrome]` table, not the Style. `x`/`y` are the 0–24 px nudge
- * right and down; the 3px title-bar nudge is added like a Style inset.
+ * right and down; Zen's own inset (`ZEN_STOPLIGHT_INSET_PX`) and the 3px
+ * title-bar nudge are added on top.
  */
 export type ZenTrafficLights = { square: boolean; x: number; y: number }
 
@@ -88,8 +97,8 @@ export function trafficLightCommand(input: {
     const zx = Number.isFinite(input.zen.x) && input.zen.x > 0 ? input.zen.x : 0
     const zy = Number.isFinite(input.zen.y) && input.zen.y > 0 ? input.zen.y : 0
     return {
-      x: zx,
-      y: zy + TRAFFIC_LIGHT_Y_NUDGE_PX,
+      x: zx + ZEN_STOPLIGHT_INSET_PX,
+      y: zy + ZEN_STOPLIGHT_INSET_PX + TRAFFIC_LIGHT_Y_NUDGE_PX,
       square: input.zen.square,
       zoom: trafficLightZoom(input.zoom),
     }

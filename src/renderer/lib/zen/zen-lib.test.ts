@@ -25,6 +25,7 @@ import { BUILTIN_TEXTING_PAGE, parseZenGet, ZenPageParseError, zenErrorBannerTex
 import { macStoplightArea } from './zen-chrome'
 import { isZenWindow, zenSupportedOn, ZEN_WINDOWS_ENABLED } from './zen-platform'
 import { TRAFFIC_LIGHT_SPACER_BASE_PX } from '@/lib/desktop-chrome'
+import { ZEN_STOPLIGHT_INSET_PX } from '@/lib/traffic-lights'
 
 function memKv(): KeyValueStorage & { map: Map<string, string> } {
   const map = new Map<string, string>()
@@ -406,18 +407,19 @@ describe('the resolved page (Z10, Z13)', () => {
 describe('the stoplight safe area (Z23)', () => {
   it('matches the Styles spacer numbers at 100% and follows the zoom and Zen offset', () => {
     const a = macStoplightArea([0, 0], 1)
-    // 12 (bar pad) + spacer (57 at 100%) + 14 (gap): the same left edge the
-    // top bar's first control has.
-    expect(12 + TRAFFIC_LIGHT_SPACER_BASE_PX + 14).toBe(83)
-    expect(a.vars['--zen-stoplight-safe-left']).toBe('83px')
-    expect(a.rect.width).toBe(69)
-    expect(a.vars['--zen-stoplight-safe-top']).toBe('31px')
+    // The top bar's first control starts at 12 (bar pad) + spacer (57 at
+    // 100%) + 14 (gap) = 83. Zen moves the lights 8 right and 8 down
+    // (Rosson 2026-10-04), so the page starts 8 further right and below.
+    expect(12 + TRAFFIC_LIGHT_SPACER_BASE_PX + 14 + ZEN_STOPLIGHT_INSET_PX).toBe(91)
+    expect(a.vars['--zen-stoplight-safe-left']).toBe('91px')
+    expect(a.rect.width).toBe(77)
+    expect(a.vars['--zen-stoplight-safe-top']).toBe('39px')
     // Zoomed in, the native lights take fewer CSS px.
     expect(macStoplightArea([0, 0], 2).rect.width).toBeLessThan(a.rect.width)
     // Zen's stoplight-offset moves the area right and down.
     const moved = macStoplightArea([10, 6], 1)
-    expect(moved.rect.width).toBe(79)
-    expect(moved.vars['--zen-stoplight-safe-left']).toBe('93px')
-    expect(moved.vars['--zen-stoplight-safe-top']).toBe('37px')
+    expect(moved.rect.width).toBe(87)
+    expect(moved.vars['--zen-stoplight-safe-left']).toBe('101px')
+    expect(moved.vars['--zen-stoplight-safe-top']).toBe('45px')
   })
 })

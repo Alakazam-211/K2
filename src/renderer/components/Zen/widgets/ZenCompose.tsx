@@ -17,7 +17,7 @@
 // takes keyboard focus once it can be typed in (`zen-compose-focus`).
 // Nothing else focuses it: not first render, not a remote update.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
 import {
@@ -38,6 +38,7 @@ export function ZenCompose({
   label,
   disabled,
   attachments: allowAttachments = true,
+  onSend,
 }: {
   bridge: ZenWidgetBridge
   address: string
@@ -45,6 +46,8 @@ export function ZenCompose({
   disabled: boolean
   /** The `attachments` prop: "+" and drops (default on). */
   attachments?: boolean
+  /** A send started (the conversation scrolls to its bottom). */
+  onSend?: () => void
 }): React.JSX.Element {
   const [draft, setDraftState] = useState(() => zenComposeDraft(address))
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -94,12 +97,22 @@ export function ZenCompose({
     el.setSelectionRange(end, end)
   }, [focusRequest, address, disabled])
 
-  // Auto-grow up to ~8 lines.
-  useEffect(() => {
+  // Auto-grow up to ~8 lines, before paint (so the list above re-pins in
+  // the same frame). Measuring needs `height: auto` for a moment; the row
+  // around the box keeps its height meanwhile, or the box would collapse to
+  // one line in that forced layout, the list above would grow, and the
+  // browser would clamp its scrollTop: the newest message and the working
+  // dots would slip under the box on every keystroke (Rosson 2026-10-04).
+  useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
+    const row = el.parentElement
+    const held = row ? row.style.minHeight : ''
+    if (row) row.style.minHeight = `${row.offsetHeight}px`
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+    const next = `${Math.min(el.scrollHeight, 180)}px`
+    el.style.height = next
+    if (row) row.style.minHeight = held
   }, [draft])
 
   const send = useCallback(async () => {
@@ -109,6 +122,7 @@ export function ZenCompose({
     const paths = attachments.flatMap((a) => (a.kind === 'path' ? [a.path] : []))
     const files = attachments.flatMap((a) => (a.kind === 'file' ? [a.file] : []))
     const held = attachments
+    onSend?.()
     setSending(true)
     setError(null)
     setDraft('')
@@ -125,7 +139,7 @@ export function ZenCompose({
     } finally {
       setSending(false)
     }
-  }, [address, attachments, bridge, disabled, draft, sending, setDraft])
+  }, [address, attachments, bridge, disabled, draft, onSend, sending, setDraft])
 
   const pick = useCallback(() => {
     void pickLocalComposeFiles()

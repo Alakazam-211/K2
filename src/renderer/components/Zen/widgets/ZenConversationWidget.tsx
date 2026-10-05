@@ -17,6 +17,7 @@
 // `compose`, `attachments`, `load-older` (the daemon sends every prop).
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -163,9 +164,7 @@ export function ZenConversation({
 }): React.JSX.Element {
   const view = useZenThread(bridge, row.address)
   const nowSec = useNowSec()
-  const listRef = useRef<HTMLDivElement | null>(null)
-  const pinBottom = useRef(true)
-  const heightBeforeOlder = useRef<number | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const items = view?.items ?? []
   const ready = view?.phase === 'ready'
 
@@ -185,37 +184,37 @@ export function ZenConversation({
     },
     [bridge, row.address],
   )
+  // Stick to the list's true bottom (the working dots included) while the
+  // person is there; never snap them once they scrolled up. Resizes — the
+  // message box growing as they type — re-pin through a ResizeObserver
+  // (useStickToBottom), not through renders.
+  const holdRef = useRef<() => void>(() => {})
   const loadOlder = useCallback(() => {
     if (!options.loadOlder || !view || !view.hasMore || view.loadingOlder || items.length === 0) return
-    const el = listRef.current
-    if (el) heightBeforeOlder.current = el.scrollHeight
+    holdRef.current()
     const minSeq = items.reduce((m, it) => Math.min(m, it.seq), Number.POSITIVE_INFINITY)
     void (bridge.call('thread.read', row.address, { beforeSeq: minSeq }) as Promise<unknown>).catch((err: unknown) =>
       console.warn('[zen] load older failed:', err),
     )
   }, [bridge, row.address, view, items, options.loadOlder])
 
-  // Keep the newest message in view unless the user scrolled up; keep the
-  // reading position when older messages arrive on top.
-  useLayoutEffect(() => {
-    const el = listRef.current
-    if (!el) return
-    if (heightBeforeOlder.current !== null) {
-      el.scrollTop += el.scrollHeight - heightBeforeOlder.current
-      heightBeforeOlder.current = null
-      return
-    }
-    if (pinBottom.current) el.scrollTop = el.scrollHeight
-  }, [items.length, row.working, items])
+  const stick = useStickToBottom<HTMLDivElement>({
+    deps: [items, row.working, ready, view?.note, view?.hasMore, view?.error],
+    extraTargets: () => [rootRef.current?.querySelector('[data-zen-compose]')],
+    onNearTop: loadOlder,
+  })
+  holdRef.current = stick.holdForPrepend
 
-  useEffect(() => {
-    pinBottom.current = true
-  }, [row.address])
+  // A new conversation (the empty Garden reuses this one) starts at its end.
+  const { scrollToBottom } = stick
+  useLayoutEffect(() => {
+    scrollToBottom()
+  }, [row.address, scrollToBottom])
 
   const note = view?.note ?? null
   const showEmpty = ready && view.loaded && !view.error && items.length === 0
   return (
-    <div className="flex h-full min-h-0 w-full flex-col" data-zen-conversation={row.address} style={CARD_TOKENS}>
+    <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-conversation={row.address} style={CARD_TOKENS}>
       <div
         className="flex flex-shrink-0 items-center gap-3"
         style={{ padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}
@@ -310,15 +309,12 @@ export function ZenConversation({
       )}
 
       <div
-        ref={listRef}
+        ref={stick.ref}
         data-zen-conversation-body=""
         className="relative flex min-h-0 flex-1 flex-col overflow-y-auto"
-        style={{ padding: '14px var(--zen-gap) 8px', gap: 10 }}
-        onScroll={(e) => {
-          const el = e.currentTarget
-          pinBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
-          if (el.scrollTop <= 16) loadOlder()
-        }}
+        // The browser's own scroll anchoring would fight the pin.
+        style={{ padding: '14px var(--zen-gap) 8px', gap: 10, overflowAnchor: 'none' }}
+        onScroll={stick.onScroll}
       >
         {!ready && (
           <div
@@ -375,6 +371,7 @@ export function ZenConversation({
           label={row.label}
           disabled={!ready || note !== null}
           attachments={options.attachments}
+          onSend={scrollToBottom}
         />
       )}
     </div>

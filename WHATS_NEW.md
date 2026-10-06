@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.44.3 — Put the nav rail in a Garden's top band
+
+- **Top-band placement in Gardens.** A Garden file can now put the nav rail (My Home, Agents, Projects, Tickets) in the top band, right of the Garden switcher, as a row of icons. Add `slot = "top"` to its `[[widget]]`. The glass highlight slides sideways there. The default Garden layout doesn't change; a Garden opts in. Only the nav rail can go up there for now, and the window always keeps room to drag it. `k2 zen validate` explains what's allowed.
+
 ## 0.44.2 — IMAP repair works without the mail helper
 
 - **IMAP check on startup, fixed.** In 0.44.1 the startup check for the IMAP listeners (143 and 993) skipped itself whenever the mail helper wasn't installed yet. Now it reads the listeners first. If both are there, it does nothing. If one is missing, it adds it, then restarts the mail server through the helper or the server's existing permission to restart it. If neither is available, it keeps the new listener and logs the one command to run.

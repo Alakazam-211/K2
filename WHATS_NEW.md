@@ -3,9 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.44.3 — Put the nav rail in a Garden's top band
+## 0.44.3 — Gardens your way
 
-- **Top-band placement in Gardens.** A Garden file can now put the nav rail (My Home, Agents, Projects, Tickets) in the top band, right of the Garden switcher, as a row of icons. Add `slot = "top"` to its `[[widget]]`. The glass highlight slides sideways there. The default Garden layout doesn't change; a Garden opts in. Only the nav rail can go up there for now, and the window always keeps room to drag it. `k2 zen validate` explains what's allowed.
+- **Put the controls anywhere.** A Garden file can now place the Garden switcher, the Zen toggle, usage and the theme picker wherever you like: the top band, a new bottom band, the top or bottom edge of a column, or inside a menu. Leave one out (usage, for example) and it's hidden. A Garden can drop the top band entirely; a thin strip stays so you can still drag the window.
+- **Menus.** A menu button can hold the switcher, the Zen toggle, the theme picker and usage. It works with the keyboard: arrows to move, Enter to pick, Esc to close.
+- **The nav rail in the top band.** `slot = "top"` puts My Home, Agents, Projects and Tickets as a row of icons next to the Garden switcher.
+- **Always a way out.** The Garden switcher and the Zen toggle must each be on screen or one click away in a visible menu, or the Garden won't validate. A closed menu never trips safe mode. On a narrow window, usage and theme hide before anything you need. ⌃⌘Z, View → Exit Zen Mode and Shift-for-safe-mode work in every layout.
+- **`k2 zen guide`.** A user guide in the CLI with 10 topics and copy-paste examples (bottom bar, both buttons in a menu, the rail on top…). It works even when K2 isn't running. `k2 study zen` points to it, and validate errors name the page to read.
+- Older K2 apps ignore the new layout and keep today's top band.
 
 ## 0.44.2 — IMAP repair works without the mail helper
 

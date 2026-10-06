@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.44.2 — IMAP repair works without the mail helper
+
+- **IMAP check on startup, fixed.** In 0.44.1 the startup check for the IMAP listeners (143 and 993) skipped itself whenever the mail helper wasn't installed yet. Now it reads the listeners first. If both are there, it does nothing. If one is missing, it adds it, then restarts the mail server through the helper or the server's existing permission to restart it. If neither is available, it keeps the new listener and logs the one command to run.
+
 ## 0.44.1 — Hosted mail installs again, and air-gap fixes
 
 - **IMAP on older mail servers.** A server that turned on hosted email before 0.40.147 never got IMAP on ports 143 (STARTTLS) and 993 (TLS). On startup, the daemon now adds whichever of those two is missing and restarts the mail server once. If both are already there, it does nothing. Nothing else in the mail setup changes.

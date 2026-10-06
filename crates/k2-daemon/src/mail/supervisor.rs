@@ -557,6 +557,12 @@ pub fn restart_stalwart_and_wait_with(ops: &dyn SystemOps, why: &str) -> Result<
         return Err(msg);
     }
     ops.systemctl(&["restart", STALWART_UNIT]).map(|_| ())?;
+    wait_stalwart_active_with(ops, why)
+}
+
+/// After a `systemctl restart stalwart` (by any door): wait, bounded,
+/// for the unit to be active again. `is-active` is a non-root query.
+pub fn wait_stalwart_active_with(ops: &dyn SystemOps, why: &str) -> Result<(), String> {
     // Listeners come back after the process is up.
     for _ in 0..30 {
         if ops.systemctl_query(&["is-active", STALWART_UNIT]).trim() == "active" {

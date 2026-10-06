@@ -16,10 +16,19 @@
 //! 3. creates ONLY the missing ones (create-only `x:NetworkListener/set`
 //!    — no update, no destroy; never `listeners_apply`, which retargets
 //!    https and destroys pop3s/sieve);
-//! 4. restarts Stalwart once, and only after a create. The restart is
-//!    the mail helper's `systemctl restart stalwart` verb (`sudo -n`), so
-//!    a box without the helper skips the pass with a log line naming the
-//!    install command, before any create.
+//! 4. restarts Stalwart once, and only after a create, through the
+//!    first door that is open ([`restart_once`]): the mail helper's
+//!    `systemctl restart stalwart` verb, else a plain
+//!    `sudo -n /usr/bin/systemctl restart stalwart` when sudoers already
+//!    allows it (older boxes), else nothing — the created listeners stay
+//!    stored and bind on the next Stalwart restart (logged with the root
+//!    command).
+//!
+//! Steps 1–3 are management-API calls to the local Stalwart and need no
+//! root, so the helper is never probed when there is nothing to create.
+//! Stalwart has no API that binds new listeners without a process
+//! restart (`ReloadSettings` does not move sockets — see `jmap.rs`
+//! module doc, verified), so there is no reload door.
 //!
 //! A listener that exists but differs (same name, other bind/TLS mode,
 //! or another listener on the same port) is never overwritten: it is
@@ -257,26 +266,79 @@ impl ListenerStore for StalwartClient {
     }
 }
 
+/// A door that restarted Stalwart after a create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartPath {
+    /// `sudo -n k2-mail-helper systemctl restart stalwart`.
+    MailHelper,
+    /// `sudo -n /usr/bin/systemctl restart stalwart` — boxes whose
+    /// sudoers already lets the daemon user run systemctl (pre-helper
+    /// fleet), or a root daemon.
+    PlainSudo,
+}
+
+/// Absolute systemctl for the plain-sudo door (sudoers matches paths).
+pub const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
+
+/// What happened to the Stalwart restart after a create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartReport {
+    Restarted(RestartPath),
+    /// No door open: the created listeners stay stored and bind on the
+    /// next Stalwart restart. Not a failure, nothing is rolled back.
+    NotRestarted { helper: super::helper::HelperState },
+}
+
+/// The restart doors, probed lazily (only after a create).
+pub trait RestartDoors {
+    /// `sudo -n -l <helper>` probe.
+    fn helper_state(&mut self) -> super::helper::HelperState;
+    /// `sudo -n -l /usr/bin/systemctl restart stalwart` probe (never
+    /// prompts, never runs systemctl).
+    fn plain_sudo_allowed(&mut self) -> bool;
+    /// Restart through `path` and wait for the unit to be active.
+    fn restart(&mut self, path: RestartPath) -> Result<(), String>;
+}
+
+/// Pick the first open door and restart once: helper -> plain sudo ->
+/// none. The plain probe runs only when the helper is unusable.
+pub fn restart_once(doors: &mut dyn RestartDoors) -> Result<RestartReport, String> {
+    let helper = doors.helper_state();
+    let path = if helper == super::helper::HelperState::Installed {
+        RestartPath::MailHelper
+    } else if doors.plain_sudo_allowed() {
+        RestartPath::PlainSudo
+    } else {
+        return Ok(RestartReport::NotRestarted { helper });
+    };
+    doors.restart(path)?;
+    Ok(RestartReport::Restarted(path))
+}
+
 /// Result of one reconcile pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Created these, then restarted Stalwart once.
+    /// Created these, then restarted Stalwart once (or could not — see
+    /// `restart`).
     Added {
         added: Vec<ListenerTemplate>,
         skipped: Vec<String>,
+        restart: RestartReport,
     },
-    /// No write, no restart.
+    /// No write, no restart, no helper probe.
     NothingToDo { skipped: Vec<String> },
 }
 
-/// Read → decide → create the missing ones → restart once (only after a
-/// create). `port_answers(port)` reports a foreign process already
+/// Read -> decide -> create the missing ones -> restart once (only after
+/// a create). `port_answers(port)` reports a foreign process already
 /// accepting on that port (Stalwart has no listener there, so anything
-/// answering is not Stalwart) — such a template is skipped.
+/// answering is not Stalwart) — such a template is skipped. The read and
+/// create are management-API calls; `doors` (root) is touched only after
+/// a create.
 pub fn reconcile_with(
     store: &dyn ListenerStore,
     port_answers: &dyn Fn(u16) -> bool,
-    restart: &mut dyn FnMut() -> Result<(), String>,
+    doors: &mut dyn RestartDoors,
 ) -> Result<Outcome, String> {
     let rows = store.listener_rows()?;
     let mut add = Vec::new();
@@ -304,14 +366,24 @@ pub fn reconcile_with(
     }
     store.create_listeners(&add)?;
     let names: Vec<String> = add.iter().map(|t| t.describe()).collect();
-    restart().map_err(|e| {
+    let restart = restart_once(doors).map_err(|e| {
         format!(
             "added {} but the stalwart restart failed — the sockets bind on the next \
              restart: {e}",
             names.join(", ")
         )
     })?;
-    Ok(Outcome::Added { added: add, skipped })
+    Ok(Outcome::Added { added: add, skipped, restart })
+}
+
+/// One boot pass after the gates (status, admin API up, enable lock):
+/// reconcile, then the log lines.
+pub fn startup_pass(
+    store: &dyn ListenerStore,
+    port_answers: &dyn Fn(u16) -> bool,
+    doors: &mut dyn RestartDoors,
+) -> Vec<String> {
+    log_lines(&reconcile_with(store, port_answers, doors))
 }
 
 const LOG_PREFIX: &str = "[mail/imap-listeners]";
@@ -320,12 +392,22 @@ const LOG_PREFIX: &str = "[mail/imap-listeners]";
 pub fn log_lines(result: &Result<Outcome, String>) -> Vec<String> {
     let mut lines = Vec::new();
     let skipped = match result {
-        Ok(Outcome::Added { added, skipped }) => {
-            let names: Vec<String> = added.iter().map(|t| t.describe()).collect();
-            lines.push(format!(
-                "{LOG_PREFIX} added {}; restarted stalwart",
-                names.join(", ")
-            ));
+        Ok(Outcome::Added { added, skipped, restart }) => {
+            let names = added
+                .iter()
+                .map(|t| t.describe())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(match restart {
+                RestartReport::Restarted(RestartPath::MailHelper) => {
+                    format!("{LOG_PREFIX} added {names}; restarted stalwart")
+                }
+                RestartReport::Restarted(RestartPath::PlainSudo) => format!(
+                    "{LOG_PREFIX} added {names}; restarted stalwart \
+                     (sudo -n {SYSTEMCTL_PATH} restart stalwart)"
+                ),
+                RestartReport::NotRestarted { helper } => not_restarted_line(&names, *helper),
+            });
             skipped
         }
         Ok(Outcome::NothingToDo { skipped }) => {
@@ -367,13 +449,18 @@ pub fn startup_gate(status: Option<&str>, enable_completed: bool) -> Option<Stri
     None
 }
 
-/// The reconcile's only privileged effect is the Stalwart restart, which
-/// rides the mail helper (`sudo -n k2-mail-helper systemctl restart
-/// stalwart`). Without the helper, skip BEFORE creating listeners — a
-/// create without the restart leaves the store ahead of the sockets.
-/// `None` = proceed. Pure.
-pub fn helper_gate(state: super::helper::HelperState) -> Option<String> {
-    super::helper::unavailable_message(state)
+/// The `NOT restarted` line: the listeners are stored, nothing binds
+/// until Stalwart restarts. The installer alone does not restart
+/// Stalwart, so the line names both the restart and the helper fix.
+pub fn not_restarted_line(names: &str, helper: super::helper::HelperState) -> String {
+    format!(
+        "{LOG_PREFIX} added {names}; NOT restarted — the new listeners bind on the next \
+         Stalwart restart. To restart now, run as root: systemctl restart stalwart \
+         (no restart door: mail helper {}, `sudo -n {SYSTEMCTL_PATH} restart stalwart` \
+         not allowed). To let the daemon restart Stalwart itself, run as root: {}",
+        helper.as_str(),
+        super::helper::install_command()
+    )
 }
 
 /// Boot hook (main.rs, next to the mail health loop). Linux only; one
@@ -406,10 +493,6 @@ fn run_startup_reconcile_live() {
 
     let status = supervisor::current_status();
     if let Some(why) = startup_gate(status.as_deref(), supervisor::enable_completed()) {
-        k2_core::log_debug!("{LOG_PREFIX} skipped because {why}");
-        return;
-    }
-    if let Some(why) = helper_gate(supervisor::mail_helper_state()) {
         k2_core::log_debug!("{LOG_PREFIX} skipped because {why}");
         return;
     }
@@ -464,16 +547,62 @@ fn run_startup_reconcile_live() {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)).is_ok()
     };
-    let mut restart = || supervisor::restart_stalwart_and_wait("IMAP listener");
-    let result = reconcile_with(&client, &port_answers, &mut restart);
-    for line in log_lines(&result) {
+    for line in startup_pass(&client, &port_answers, &mut LiveDoors) {
         k2_core::log_debug!("{line}");
+    }
+}
+
+/// Production restart doors (Linux boot thread only; tests use fakes).
+struct LiveDoors;
+
+impl RestartDoors for LiveDoors {
+    fn helper_state(&mut self) -> super::helper::HelperState {
+        super::supervisor::mail_helper_state()
+    }
+
+    fn plain_sudo_allowed(&mut self) -> bool {
+        // `-l <cmd>`: exit 0 iff sudoers lets this user run exactly that
+        // command without a password. `-n` never prompts.
+        std::process::Command::new(super::helper::SUDO_PATH)
+            .args(["-n", "-l", SYSTEMCTL_PATH, "restart", super::supervisor::STALWART_UNIT])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|st| st.success())
+    }
+
+    fn restart(&mut self, path: RestartPath) -> Result<(), String> {
+        use super::supervisor;
+        match path {
+            RestartPath::MailHelper => supervisor::restart_stalwart_and_wait("IMAP listener"),
+            RestartPath::PlainSudo => {
+                let out = std::process::Command::new(super::helper::SUDO_PATH)
+                    .args(["-n", SYSTEMCTL_PATH, "restart", supervisor::STALWART_UNIT])
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .map_err(|e| format!("sudo -n {SYSTEMCTL_PATH} restart stalwart: {e}"))?;
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    let err: String = err.trim().chars().take(400).collect();
+                    return Err(format!(
+                        "sudo -n {SYSTEMCTL_PATH} restart stalwart: exit {:?}: {err}",
+                        out.status.code()
+                    ));
+                }
+                supervisor::wait_stalwart_active_with(
+                    &super::sysops::RealSystemOps,
+                    "IMAP listener",
+                )
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mail::helper::{install_command, HelperState};
     use std::cell::RefCell;
 
     fn row(
@@ -524,13 +653,56 @@ mod tests {
         }
     }
 
+    /// Recording restart doors. Every probe and restart is counted so a
+    /// test can prove the helper was never asked.
+    struct FakeDoors {
+        helper: HelperState,
+        plain_allowed: bool,
+        restart_err: Option<String>,
+        helper_probes: u32,
+        plain_probes: u32,
+        restarts: Vec<RestartPath>,
+    }
+    impl FakeDoors {
+        fn new(helper: HelperState, plain_allowed: bool) -> Self {
+            Self {
+                helper,
+                plain_allowed,
+                restart_err: None,
+                helper_probes: 0,
+                plain_probes: 0,
+                restarts: Vec::new(),
+            }
+        }
+        /// Today's box: helper installed.
+        fn helper() -> Self {
+            Self::new(HelperState::Installed, false)
+        }
+    }
+    impl RestartDoors for FakeDoors {
+        fn helper_state(&mut self) -> HelperState {
+            self.helper_probes += 1;
+            self.helper
+        }
+        fn plain_sudo_allowed(&mut self) -> bool {
+            self.plain_probes += 1;
+            self.plain_allowed
+        }
+        fn restart(&mut self, path: RestartPath) -> Result<(), String> {
+            self.restarts.push(path);
+            match &self.restart_err {
+                Some(e) => Err(e.clone()),
+                None => Ok(()),
+            }
+        }
+    }
+
+    const HELPER_RESTART: RestartReport = RestartReport::Restarted(RestartPath::MailHelper);
+
     fn run(store: &FakeStore) -> (Result<Outcome, String>, u32) {
-        let mut restarts = 0u32;
-        let res = reconcile_with(store, &|_| false, &mut || {
-            restarts += 1;
-            Ok(())
-        });
-        (res, restarts)
+        let mut doors = FakeDoors::helper();
+        let res = reconcile_with(store, &|_| false, &mut doors);
+        (res, doors.restarts.len() as u32)
     }
 
     #[test]
@@ -559,7 +731,11 @@ mod tests {
         let (res, restarts) = run(&store);
         assert_eq!(
             res.expect("ok"),
-            Outcome::Added { added: vec![IMAP_STARTTLS, IMAPS_IMPLICIT], skipped: vec![] }
+            Outcome::Added {
+                added: vec![IMAP_STARTTLS, IMAPS_IMPLICIT],
+                skipped: vec![],
+                restart: HELPER_RESTART,
+            }
         );
         assert_eq!(*store.created.borrow(), vec![vec![IMAP_STARTTLS, IMAPS_IMPLICIT]]);
         assert_eq!(restarts, 1);
@@ -573,7 +749,7 @@ mod tests {
         let (res, restarts) = run(&store);
         assert_eq!(
             res.expect("ok"),
-            Outcome::Added { added: vec![IMAP_STARTTLS], skipped: vec![] }
+            Outcome::Added { added: vec![IMAP_STARTTLS], skipped: vec![], restart: HELPER_RESTART }
         );
         assert_eq!(*store.created.borrow(), vec![vec![IMAP_STARTTLS]]);
         assert_eq!(restarts, 1);
@@ -584,7 +760,7 @@ mod tests {
         let (res, restarts) = run(&store);
         assert_eq!(
             res.expect("ok"),
-            Outcome::Added { added: vec![IMAPS_IMPLICIT], skipped: vec![] }
+            Outcome::Added { added: vec![IMAPS_IMPLICIT], skipped: vec![], restart: HELPER_RESTART }
         );
         assert_eq!(restarts, 1);
     }
@@ -660,7 +836,7 @@ mod tests {
         // ... while the other one is still added.
         let store = FakeStore { rows, ..Default::default() };
         let (res, restarts) = run(&store);
-        let Outcome::Added { added, skipped } = res.expect("ok") else {
+        let Outcome::Added { added, skipped, .. } = res.expect("ok") else {
             panic!("imaps still missing");
         };
         assert_eq!(added, vec![IMAPS_IMPLICIT]);
@@ -676,15 +852,12 @@ mod tests {
     #[test]
     fn foreign_process_on_the_port_skips_the_create() {
         let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
-        let mut restarts = 0;
-        let res = reconcile_with(&store, &|p| p == 993, &mut || {
-            restarts += 1;
-            Ok(())
-        });
-        let Outcome::Added { added, skipped } = res.expect("ok") else { panic!() };
+        let mut doors = FakeDoors::helper();
+        let res = reconcile_with(&store, &|p| p == 993, &mut doors);
+        let Outcome::Added { added, skipped, .. } = res.expect("ok") else { panic!() };
         assert_eq!(added, vec![IMAP_STARTTLS]);
         assert!(skipped[0].starts_with("imaps: port 993 already answers"), "{skipped:?}");
-        assert_eq!(restarts, 1);
+        assert_eq!(doors.restarts, vec![RestartPath::MailHelper]);
     }
 
     #[test]
@@ -706,7 +879,9 @@ mod tests {
     #[test]
     fn restart_failure_reports_what_was_added() {
         let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
-        let res = reconcile_with(&store, &|_| false, &mut || Err("unit failed".into()));
+        let mut doors = FakeDoors::helper();
+        doors.restart_err = Some("unit failed".into());
+        let res = reconcile_with(&store, &|_| false, &mut doors);
         let err = res.expect_err("restart failure surfaces");
         assert!(err.starts_with("added imap ([::]:143 STARTTLS), imaps ([::]:993 implicit TLS)"));
         assert!(err.contains("unit failed"), "{err}");
@@ -727,6 +902,7 @@ mod tests {
         let added = log_lines(&Ok(Outcome::Added {
             added: vec![IMAP_STARTTLS],
             skipped: vec!["imaps: port 993 ...".into()],
+            restart: HELPER_RESTART,
         }));
         assert_eq!(
             added,
@@ -752,23 +928,127 @@ mod tests {
         assert!(startup_gate(Some("running"), false).is_some(), "incomplete enable");
     }
 
+    /// akzm (2026-10-05, daemon 0.44.1): Stalwart already has 143 + 993,
+    /// the helper is not installed. The pass must read, log `nothing to
+    /// do`, and never probe the helper. The old code checked the helper
+    /// first and logged "skipped because mail helper not installed".
     #[test]
-    fn helper_gate_skips_with_the_install_command_when_missing() {
-        use crate::mail::helper::{install_command, HelperState};
-        assert_eq!(helper_gate(HelperState::Installed), None);
-        let why = helper_gate(HelperState::Missing).expect("missing must skip");
-        assert!(why.starts_with("mail helper not installed"), "{why}");
-        assert!(why.ends_with(&install_command()), "{why}");
-        let line = format!("{LOG_PREFIX} skipped because {why}");
-        assert!(
-            line.starts_with("[mail/imap-listeners] skipped because mail helper not installed"),
-            "{line}"
+    fn helper_missing_both_present_is_nothing_to_do_without_helper_probe() {
+        let mut rows = old_enable_rows();
+        rows.push(row("L-imap", "imap", "[::]:143", Some("imap"), Some(false)));
+        rows.push(row("L-imaps", "imaps", "[::]:993", Some("imap"), Some(true)));
+        let store = FakeStore { rows, ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::Missing, false);
+        let lines = startup_pass(&store, &|_| false, &mut doors);
+        assert_eq!(
+            lines,
+            vec![
+                "[mail/imap-listeners] nothing to do — imap :143 STARTTLS and imaps :993 \
+                 implicit TLS are present"
+                    .to_string()
+            ]
         );
-        let why = helper_gate(HelperState::NotAllowed).expect("not allowed must skip");
-        assert!(
-            why.starts_with("mail helper not allowed by sudoers"),
-            "{why}"
+        assert_eq!(doors.helper_probes, 0, "no helper probe");
+        assert_eq!(doors.plain_probes, 0, "no sudo probe");
+        assert!(doors.restarts.is_empty(), "no restart");
+        assert!(store.created.borrow().is_empty(), "no write");
+    }
+
+    #[test]
+    fn helper_missing_one_missing_restarts_through_plain_sudo() {
+        let mut rows = old_enable_rows();
+        rows.push(row("L-imaps", "imaps", "[::]:993", Some("imap"), Some(true)));
+        let store = FakeStore { rows, ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::Missing, true);
+        let res = reconcile_with(&store, &|_| false, &mut doors);
+        assert_eq!(
+            res.clone().expect("ok"),
+            Outcome::Added {
+                added: vec![IMAP_STARTTLS],
+                skipped: vec![],
+                restart: RestartReport::Restarted(RestartPath::PlainSudo),
+            }
         );
+        assert_eq!(*store.created.borrow(), vec![vec![IMAP_STARTTLS]], "create first");
+        assert_eq!(doors.helper_probes, 1);
+        assert_eq!(doors.plain_probes, 1);
+        assert_eq!(doors.restarts, vec![RestartPath::PlainSudo], "exactly one restart");
+        assert_eq!(
+            log_lines(&res),
+            vec![
+                "[mail/imap-listeners] added imap ([::]:143 STARTTLS); restarted stalwart \
+                 (sudo -n /usr/bin/systemctl restart stalwart)"
+                    .to_string()
+            ]
+        );
+
+        // Helper present but refused by sudoers: same plain fallback.
+        let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::NotAllowed, true);
+        let res = reconcile_with(&store, &|_| false, &mut doors).expect("ok");
+        assert!(matches!(
+            res,
+            Outcome::Added { restart: RestartReport::Restarted(RestartPath::PlainSudo), .. }
+        ));
+        assert_eq!(doors.restarts, vec![RestartPath::PlainSudo]);
+    }
+
+    #[test]
+    fn helper_missing_and_no_sudo_keeps_the_create_and_logs_the_hint() {
+        let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::Missing, false);
+        let res = reconcile_with(&store, &|_| false, &mut doors);
+        assert_eq!(
+            res.clone().expect("not a failure"),
+            Outcome::Added {
+                added: vec![IMAP_STARTTLS, IMAPS_IMPLICIT],
+                skipped: vec![],
+                restart: RestartReport::NotRestarted { helper: HelperState::Missing },
+            }
+        );
+        assert_eq!(
+            *store.created.borrow(),
+            vec![vec![IMAP_STARTTLS, IMAPS_IMPLICIT]],
+            "the create stays (no rollback)"
+        );
+        assert!(doors.restarts.is_empty(), "no restart");
+        assert_eq!(doors.plain_probes, 1);
+        let lines = log_lines(&res);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let l = &lines[0];
+        assert!(
+            l.starts_with(
+                "[mail/imap-listeners] added imap ([::]:143 STARTTLS), imaps ([::]:993 \
+                 implicit TLS); NOT restarted — the new listeners bind on the next Stalwart \
+                 restart. To restart now, run as root: systemctl restart stalwart"
+            ),
+            "{l}"
+        );
+        assert!(l.contains("mail helper missing"), "{l}");
+        assert!(l.ends_with(&install_command()), "{l}");
+        assert!(!l.contains("FAILED"), "{l}");
+    }
+
+    #[test]
+    fn helper_installed_restarts_through_the_helper_without_sudo_probe() {
+        let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::Installed, true);
+        let res = reconcile_with(&store, &|_| false, &mut doors).expect("ok");
+        assert!(matches!(res, Outcome::Added { restart: HELPER_RESTART, .. }));
+        assert_eq!(doors.helper_probes, 1);
+        assert_eq!(doors.plain_probes, 0, "helper wins; plain sudo never probed");
+        assert_eq!(doors.restarts, vec![RestartPath::MailHelper]);
+    }
+
+    #[test]
+    fn plain_sudo_restart_failure_reports_what_was_added() {
+        let store = FakeStore { rows: old_enable_rows(), ..Default::default() };
+        let mut doors = FakeDoors::new(HelperState::Missing, true);
+        doors.restart_err = Some("exit Some(1): unit failed".into());
+        let err = reconcile_with(&store, &|_| false, &mut doors).expect_err("surfaces");
+        assert!(err.starts_with("added imap ([::]:143 STARTTLS), imaps"), "{err}");
+        assert!(err.contains("unit failed"), "{err}");
+        assert_eq!(store.created.borrow().len(), 1, "created once, not rolled back");
     }
 
     #[test]
@@ -828,16 +1108,17 @@ mod tests {
             set_reply,
         ]);
         let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
-        let mut restarts = 0u32;
-        let res = reconcile_with(&client, &|_| false, &mut || {
-            restarts += 1;
-            Ok(())
-        });
+        let mut doors = FakeDoors::helper();
+        let res = reconcile_with(&client, &|_| false, &mut doors);
         assert_eq!(
             res.expect("reconcile"),
-            Outcome::Added { added: vec![IMAP_STARTTLS, IMAPS_IMPLICIT], skipped: vec![] }
+            Outcome::Added {
+                added: vec![IMAP_STARTTLS, IMAPS_IMPLICIT],
+                skipped: vec![],
+                restart: HELPER_RESTART,
+            }
         );
-        assert_eq!(restarts, 1, "exactly one restart");
+        assert_eq!(doors.restarts.len(), 1, "exactly one restart");
 
         let sess = rx.recv().expect("session request");
         assert!(sess.starts_with("GET /jmap/session"), "{sess}");
@@ -883,13 +1164,13 @@ mod tests {
         }));
         let (port, rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), v.to_string()]);
         let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
-        let mut restarts = 0u32;
-        let res = reconcile_with(&client, &|_| false, &mut || {
-            restarts += 1;
-            Ok(())
-        });
-        assert_eq!(res.expect("reconcile"), Outcome::NothingToDo { skipped: vec![] });
-        assert_eq!(restarts, 0, "no restart");
+        // akzm: helper not installed. Reading needs no helper.
+        let mut doors = FakeDoors::new(HelperState::Missing, false);
+        let lines = startup_pass(&client, &|_| false, &mut doors);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("nothing to do"), "{lines:?}");
+        assert_eq!(doors.helper_probes, 0, "no helper probe");
+        assert!(doors.restarts.is_empty(), "no restart");
         let _sess = rx.recv().expect("session");
         let get = body_json(&rx.recv().expect("get"));
         assert_eq!(get["methodCalls"][0][0], "x:NetworkListener/get");

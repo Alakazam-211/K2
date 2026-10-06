@@ -29,6 +29,11 @@
 //!   against the mail hostname (never `danger_accept_invalid_certs`);
 //!   non-tls-alpn plans report info — the public cert is Caddy's on the
 //!   mail hostname, not Stalwart tls-alpn.
+//! - `acme-cert-names` — CAL43: when Stalwart's own ACME is on for the
+//!   mail hostname's Domain, its SAN list must be exactly the mail host.
+//!   An empty list (the guided-setup default) makes Stalwart order every
+//!   autoconfig/mta-sts/MX name in one order; one bad name = no cert.
+//!   Soft (warn), never gates direct send.
 //! - `disk` — headroom for mail storage (pre-mortem #12).
 //!
 //! Plus, for a DOMAIN run (`domain = Some`): `mx`/`spf`/`dkim`/`dmarc`
@@ -51,6 +56,7 @@ use std::io::BufRead;
 
 use crate::mail::dns_verify::{self, DnsError, DnsResolver};
 use crate::mail::domains;
+use crate::mail::jmap::CertManagement;
 
 // ── Check vocabulary ────────────────────────────────────────────────────
 
@@ -167,6 +173,9 @@ pub trait DoctorEnv {
     /// (plan A cert check). Never disables verification.
     fn https_cert(&self, hostname: &str) -> Result<(), String>;
     fn disk_free_bytes(&self) -> Option<u64>;
+    /// CAL43: the mail hostname's Stalwart Domain `certificateManagement`
+    /// (`Ok(None)` = no such Domain). Loopback management API only.
+    fn mail_cert_management(&self, hostname: &str) -> Result<Option<CertManagement>, String>;
 }
 
 // ── The check table (pure over the seams) ───────────────────────────────
@@ -419,6 +428,12 @@ pub fn run_checks_with_ptr_resolver(
         },
     });
 
+    // CAL43: Stalwart's ACME name list for the mail hostname.
+    checks.push(acme_cert_names_check(
+        &ctx.hostname,
+        env.mail_cert_management(&ctx.hostname),
+    ));
+
     // Disk headroom (pre-mortem #12).
     checks.push(match env.disk_free_bytes() {
         Some(free) if free >= MIN_DISK_BYTES => DoctorCheck {
@@ -464,6 +479,76 @@ pub fn run_checks_with_ptr_resolver(
         hostname: ctx.hostname.clone(),
         ip,
         domain: domain_name,
+    }
+}
+
+const ACME_NAMES_ID: &str = "acme-cert-names";
+const ACME_NAMES_LABEL: &str = "Stalwart ACME orders the mail host only";
+
+/// CAL43 / C24: grade the Stalwart ACME name list for the mail
+/// hostname's Domain. Pure. Never gates direct send.
+pub fn acme_cert_names_check(
+    hostname: &str,
+    observed: Result<Option<CertManagement>, String>,
+) -> DoctorCheck {
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: ACME_NAMES_ID.into(),
+        label: ACME_NAMES_LABEL.into(),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    let fix = format!(
+        "K2 locks it to {hostname} on enable and on `k2 hostmail cert renew` when \
+         Stalwart issues the mail cert"
+    );
+    match observed {
+        Err(e) => mk(
+            ST_UNKNOWN,
+            format!("could not read the mail domain's certificate settings: {e}"),
+        ),
+        Ok(None) => mk(
+            ST_UNKNOWN,
+            format!("no Stalwart domain carries the mail hostname {hostname}"),
+        ),
+        Ok(Some(CertManagement::Manual)) => mk(
+            ST_INFO,
+            "Stalwart ACME is off for this domain — the mail cert comes from K2's \
+             issuer, Caddy, or a planted certificate"
+                .into(),
+        ),
+        Ok(Some(CertManagement::Other(t))) => mk(
+            ST_WARN,
+            format!("unknown certificate management type '{t}' — K2 cannot check its names"),
+        ),
+        Ok(Some(CertManagement::Automatic {
+            subject_alternative_names,
+            ..
+        })) => {
+            if crate::mail::jmap::sans_locked_to(&subject_alternative_names, hostname) {
+                mk(ST_PASS, format!("Stalwart ACME orders {hostname} only"))
+            } else if subject_alternative_names.is_empty() {
+                mk(
+                    ST_WARN,
+                    format!(
+                        "Stalwart ACME has an empty name list (the setup default). \
+                         Stalwart reads that as mta-sts, ua-auto-config, autoconfig, \
+                         autodiscover, the server name and the MX hosts in ONE order; \
+                         one name that does not point at this box fails the whole \
+                         order and mail gets no cert. {fix}"
+                    ),
+                )
+            } else {
+                mk(
+                    ST_WARN,
+                    format!(
+                        "Stalwart ACME orders {} together; one failing name fails \
+                         the whole order. It should be {hostname} only. {fix}",
+                        subject_alternative_names.join(", ")
+                    ),
+                )
+            }
+        }
     }
 }
 
@@ -991,6 +1076,14 @@ impl DoctorEnv for RealDoctorEnv {
         use crate::mail::preflight::{PreflightEnv, RealPreflightEnv};
         RealPreflightEnv.disk_free_bytes()
     }
+
+    fn mail_cert_management(&self, hostname: &str) -> Result<Option<CertManagement>, String> {
+        let (client, _) = domains::engine_from_db()?;
+        match client.mail_hostname_domain_id(hostname)? {
+            Some(id) => client.domain_get_certificate_management(&id).map(Some),
+            None => Ok(None),
+        }
+    }
 }
 
 // ── Persistence + the production entry points ──────────────────────────
@@ -1357,6 +1450,7 @@ mod tests {
         relay: Result<RelayVerdict, &'static str>,
         cert: Result<(), &'static str>,
         disk: Option<u64>,
+        cert_mgmt: Result<Option<CertManagement>, &'static str>,
     }
 
     impl Default for FakeEnv {
@@ -1371,6 +1465,10 @@ mod tests {
                 relay: Ok(RelayVerdict::Refused(554)),
                 cert: Ok(()),
                 disk: Some(40 * 1024 * 1024 * 1024),
+                cert_mgmt: Ok(Some(CertManagement::Automatic {
+                    acme_provider_id: "acme-p1".into(),
+                    subject_alternative_names: vec!["mail.acme.dev".into()],
+                })),
             }
         }
     }
@@ -1395,6 +1493,13 @@ mod tests {
         }
         fn disk_free_bytes(&self) -> Option<u64> {
             self.disk
+        }
+        fn mail_cert_management(
+            &self,
+            hostname: &str,
+        ) -> Result<Option<CertManagement>, String> {
+            assert_eq!(hostname, "mail.acme.dev");
+            self.cert_mgmt.clone().map_err(str::to_string)
         }
     }
 
@@ -1441,10 +1546,12 @@ mod tests {
             "starttls-25",
             "starttls-587",
             "tls-cert",
+            "acme-cert-names",
             "disk",
         ] {
             assert!(r.checks.iter().any(|c| c.id == id), "missing check {id}");
         }
+        assert_eq!(check(&r, "acme-cert-names").status, ST_PASS);
         assert_eq!(check(&r, "ptr").status, ST_PASS);
         assert_eq!(check(&r, "fcrdns").status, ST_PASS);
         assert_eq!(check(&r, "open-relay").status, ST_PASS);
@@ -1457,6 +1564,79 @@ mod tests {
         assert_eq!(v["hostname"], "mail.acme.dev");
         assert_eq!(v["ip"], "203.0.113.7");
         assert!(v["domain"].is_null());
+    }
+
+    // ── CAL43: Stalwart ACME name list ──
+
+    #[test]
+    fn acme_cert_names_warns_on_empty_or_wide_lists_without_gating() {
+        let auto = |sans: &[&str]| {
+            Ok(Some(CertManagement::Automatic {
+                acme_provider_id: "acme-p1".into(),
+                subject_alternative_names: sans.iter().map(|s| s.to_string()).collect(),
+            }))
+        };
+
+        // Empty = Stalwart's default wide order (the guided-setup state).
+        let env = FakeEnv { cert_mgmt: auto(&[]), ..FakeEnv::default() };
+        let r = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
+        let c = check(&r, "acme-cert-names");
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+        assert!(!c.gates_direct);
+        assert!(c.detail.contains("empty name list"), "{}", c.detail);
+        assert!(c.detail.contains("k2 hostmail cert renew"), "{}", c.detail);
+        assert_eq!(r.grade, ST_PASS, "soft check must not grade: {:?}", r.checks);
+
+        // Several names in one order.
+        let env = FakeEnv {
+            cert_mgmt: auto(&["mail.acme.dev", "autoconfig.acme.dev"]),
+            ..FakeEnv::default()
+        };
+        let r = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
+        let c = check(&r, "acme-cert-names");
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+        assert!(c.detail.contains("autoconfig.acme.dev"), "{}", c.detail);
+        assert!(!c.gates_direct);
+
+        // A single wrong name is not the mail host either.
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            auto(&["autoconfig.acme.dev"]).map_err(str::to_string),
+        );
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+    }
+
+    #[test]
+    fn acme_cert_names_passes_locked_and_skips_manual_or_unreadable() {
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            Ok(Some(CertManagement::Automatic {
+                acme_provider_id: "acme-p1".into(),
+                subject_alternative_names: vec!["MAIL.acme.dev.".into()],
+            })),
+        );
+        assert_eq!(c.status, ST_PASS, "{c:?}");
+        assert_eq!(c.id, "acme-cert-names");
+
+        let c = acme_cert_names_check("mail.acme.dev", Ok(Some(CertManagement::Manual)));
+        assert_eq!(c.status, ST_INFO, "{c:?}");
+
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            Ok(Some(CertManagement::Other("Future".into()))),
+        );
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+
+        let c = acme_cert_names_check("mail.acme.dev", Ok(None));
+        assert_eq!(c.status, ST_UNKNOWN, "{c:?}");
+
+        let env = FakeEnv { cert_mgmt: Err("mail server is stopped"), ..FakeEnv::default() };
+        let r = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
+        let c = check(&r, "acme-cert-names");
+        assert_eq!(c.status, ST_UNKNOWN, "{c:?}");
+        assert!(c.detail.contains("mail server is stopped"), "{}", c.detail);
+        assert!(!c.gates_direct);
+        assert_eq!(r.grade, ST_PASS, "{:?}", r.checks);
     }
 
     // ── Blocked outbound 25 → fail + the provider coaching ──

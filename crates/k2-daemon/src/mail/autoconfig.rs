@@ -159,21 +159,64 @@ fn lookup_dns_zone_id(domain: &str) -> Option<String> {
         })
 }
 
-fn plant_record(zone_id: &str, row: &RecordRow) -> Result<(), String> {
-    // Same wire as POST /cli/dns/records/add (not A8 zones/bind).
-    let body = serde_json::json!({
-        "type": row.rtype,
-        "name": row.name,
-        "content": row.expected,
+/// The k2.dev records-API body for one zone-file row in zone `apex`.
+///
+/// - `name` is zone-RELATIVE (`@` for the apex). Zone-file rows carry the
+///   FQDN, and posting that verbatim planted `_imaps._tcp.<apex>.<apex>`
+///   (IT2). A row outside the zone is refused, never posted.
+/// - MX/SRV: the API keeps the priority in its own `prio` field and
+///   defaults it to 10, then serves `prio content`. Zone-file rdata leads
+///   with the priority (`0 1 993 mail.example.com.`), so it moves to
+///   `prio` — otherwise the served SRV would read `10 0 1 993 …`.
+fn records_api_body(apex: &str, row: &RecordRow) -> Result<serde_json::Value, String> {
+    let name = crate::dns::relative_record_name(&row.name, apex)?;
+    let rtype = row.rtype.trim().to_ascii_uppercase();
+    let mut content = row.expected.trim().to_string();
+    let mut prio: Option<u16> = None;
+    if rtype == "MX" || rtype == "SRV" {
+        let (head, rest) = content
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| format!("{rtype} {}: rdata '{content}' has no priority", row.name))?;
+        let p: u16 = head
+            .parse()
+            .map_err(|_| format!("{rtype} {}: priority '{head}' is not a number", row.name))?;
+        prio = Some(p);
+        content = rest.trim().to_string();
+    }
+    let mut body = serde_json::json!({
+        "type": rtype,
+        "name": name,
+        "content": content,
         "ttl": 3600,
     });
+    if let Some(p) = prio {
+        body["prio"] = serde_json::json!(p);
+    }
+    Ok(body)
+}
+
+/// POST one row through `post(path, body)`. Same wire as
+/// POST /cli/dns/records/add (not A8 zones/bind).
+fn plant_record_via(
+    zone_id: &str,
+    apex: &str,
+    row: &RecordRow,
+    post: &mut dyn FnMut(&str, &str) -> Result<crate::dns::proxy::DnsHttpResponse, String>,
+) -> Result<(), String> {
+    let body = records_api_body(apex, row)?;
     let path = format!("/api/dns/zones/{zone_id}/records");
-    let resp = crate::dns::proxy::proxy_request("POST", &path, None, Some(&body.to_string()))?;
+    let resp = post(&path, &body.to_string())?;
     if resp.status == 200 || resp.status == 201 {
         Ok(())
     } else {
-        Err(format!("HTTP {}: {}", resp.status, resp.body))
+        Err(format!("{} {}: HTTP {}: {}", row.rtype, row.name, resp.status, resp.body))
     }
+}
+
+fn plant_record(zone_id: &str, apex: &str, row: &RecordRow) -> Result<(), String> {
+    plant_record_via(zone_id, apex, row, &mut |path, body| {
+        crate::dns::proxy::proxy_request("POST", path, None, Some(body))
+    })
 }
 
 /// GET `/cli/mail/autoconfig?domain=`
@@ -233,7 +276,7 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
     let mut planted = Vec::new();
     let mut errors = Vec::new();
     for row in &rows {
-        match plant_record(&zone_id, row) {
+        match plant_record(&zone_id, &domain, row) {
             Ok(()) => planted.push(record_json(row)),
             Err(e) => errors.push(e),
         }
@@ -278,6 +321,98 @@ mod tests {
             !names.iter().any(|n| n.contains("mta-sts")),
             "MTA-STS is advanced but not autoconfig apply: {names:?}"
         );
+    }
+
+    /// IT2: every planted row goes out zone-relative (never
+    /// `<x>.<apex>.<apex>`), and MX/SRV priority rides `prio`.
+    #[test]
+    fn plant_record_posts_zone_relative_names() {
+        let rows = autoconfig_rows("acme.dev", ZONE_FIXTURE, Some("mail.acme.dev"));
+        assert!(rows.len() >= 3, "{rows:?}");
+        let mut sent: Vec<(String, serde_json::Value)> = Vec::new();
+        for row in &rows {
+            plant_record_via("zone-1", "acme.dev", row, &mut |path, body| {
+                sent.push((path.to_string(), serde_json::from_str(body).expect("JSON body")));
+                Ok(crate::dns::proxy::DnsHttpResponse { status: 201, body: "{}".into() })
+            })
+            .expect("plant");
+        }
+        assert_eq!(sent.len(), rows.len());
+        for (path, body) in &sent {
+            assert_eq!(path, "/api/dns/zones/zone-1/records");
+            let name = body["name"].as_str().expect("name");
+            assert!(!name.contains("acme.dev"), "name must be zone-relative: {body}");
+            assert!(!name.ends_with('.'), "{body}");
+        }
+        let by_name = |n: &str| {
+            sent.iter()
+                .map(|(_, b)| b)
+                .find(|b| b["name"] == n)
+                .unwrap_or_else(|| panic!("no planted row named {n}: {sent:?}"))
+        };
+        assert_eq!(by_name("autoconfig")["type"], "CNAME");
+        assert_eq!(by_name("autoconfig")["content"], "mail.acme.dev.");
+        assert!(by_name("autoconfig").get("prio").is_none());
+        assert_eq!(by_name("autodiscover")["type"], "CNAME");
+        let srv = by_name("_jmap._tcp");
+        assert_eq!(srv["type"], "SRV");
+        assert_eq!(srv["prio"], 0);
+        assert_eq!(srv["content"], "1 443 mail.acme.dev.");
+    }
+
+    #[test]
+    fn records_api_body_handles_apex_case_and_refuses_foreign_rows() {
+        let row = |name: &str, rtype: &str, expected: &str| RecordRow {
+            id: "adv:0".into(),
+            category: CAT_ADVANCED.into(),
+            rtype: rtype.into(),
+            name: name.into(),
+            purpose: String::new(),
+            expected: expected.into(),
+            expected_display: expected.into(),
+            chunks: Vec::new(),
+            status: String::new(),
+            live: None,
+            checked_at: None,
+        };
+        let b = records_api_body("example.com", &row("Example.COM.", "MX", "10 mail.example.com."))
+            .expect("apex MX");
+        assert_eq!(b["name"], "@");
+        assert_eq!(b["prio"], 10);
+        assert_eq!(b["content"], "mail.example.com.");
+        let b = records_api_body(
+            "example.com",
+            &row("_imaps._tcp.example.com", "srv", "0 1 993 mail.example.com."),
+        )
+        .expect("srv");
+        assert_eq!(b["name"], "_imaps._tcp");
+        assert_eq!(b["type"], "SRV");
+        assert_eq!(b["prio"], 0);
+        assert_eq!(b["content"], "1 993 mail.example.com.");
+
+        // Not under the apex: refused, and never posted.
+        let foreign = row("autoconfig.example.net", "CNAME", "mail.example.com.");
+        let mut posted = 0;
+        let err = plant_record_via("zone-1", "example.com", &foreign, &mut |_, _| {
+            posted += 1;
+            Ok(crate::dns::proxy::DnsHttpResponse { status: 201, body: "{}".into() })
+        })
+        .expect_err("foreign row must be refused");
+        assert!(err.contains("example.net"), "{err}");
+        assert_eq!(posted, 0);
+
+        // SRV rdata without a numeric priority is refused, not guessed.
+        let bad = row("_imaps._tcp.example.com", "SRV", "x 1 993 mail.example.com.");
+        assert!(records_api_body("example.com", &bad).is_err());
+
+        // A non-2xx from the API names the row.
+        let ok_row = row("autoconfig.example.com", "CNAME", "mail.example.com.");
+        let err = plant_record_via("zone-1", "example.com", &ok_row, &mut |_, _| {
+            Ok(crate::dns::proxy::DnsHttpResponse { status: 400, body: "bad name".into() })
+        })
+        .expect_err("400 must fail");
+        assert!(err.contains("HTTP 400"), "{err}");
+        assert!(err.contains("autoconfig.example.com"), "{err}");
     }
 
     #[test]

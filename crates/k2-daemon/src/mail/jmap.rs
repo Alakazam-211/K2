@@ -483,27 +483,99 @@ impl StalwartClient {
         Ok(id)
     }
 
+    /// The Stalwart Domain that carries the mail hostname's ACME config:
+    /// a Domain named exactly `host`, else the default domain Stalwart's
+    /// guided setup created for it ([`super::supervisor::default_domain_for`]).
+    pub fn mail_hostname_domain_id(&self, host: &str) -> Result<Option<String>, String> {
+        match self.domain_query_id(host)? {
+            Some(id) => Ok(Some(id)),
+            None => self.domain_query_id(&super::supervisor::default_domain_for(host)),
+        }
+    }
+
+    /// Read a Domain's `certificateManagement` (CAL43).
+    pub fn domain_get_certificate_management(
+        &self,
+        stalwart_domain_id: &str,
+    ) -> Result<CertManagement, String> {
+        let resp = self.registry_call(
+            "x:Domain/get",
+            serde_json::json!({
+                "ids": [stalwart_domain_id],
+                "properties": ["certificateManagement"],
+            }),
+        )?;
+        parse_domain_get_cert_management(stalwart_domain_id, &resp)
+    }
+
+    /// CAL43 — make C24 real. Stalwart's guided setup leaves the
+    /// Domain's `Automatic` cert config with an EMPTY
+    /// `subjectAlternativeNames`, and Stalwart reads empty as "order
+    /// mta-sts, ua-auto-config, autoconfig, autodiscover, the server
+    /// name and every in-zone MX/service host" in ONE ACME order (v0.16
+    /// `acme/order.rs` `build_domains`). One name that does not point
+    /// at the box fails the whole order, and mail gets no cert (noir).
+    /// Lock the list to exactly `[host]`, keeping `acmeProviderId`.
+    ///
+    /// Idempotent: an already-locked Domain is not written. A `Manual`
+    /// Domain (no Stalwart ACME, e.g. http-01/dns-01 plans) is left
+    /// alone. Updating an Automatic Domain does not queue an order by
+    /// itself (Stalwart only schedules one on Manual → Automatic).
+    pub fn lock_acme_cert_names_to_mail_host(
+        &self,
+        hostname: &str,
+    ) -> Result<CertNamesLock, String> {
+        let host = normalize_cert_host(hostname)?;
+        let domain_id = self.mail_hostname_domain_id(&host)?.ok_or_else(|| {
+            format!("no Stalwart domain for mail hostname '{host}' — cannot lock its cert names")
+        })?;
+        self.lock_cert_names_on(&domain_id, &host)
+    }
+
+    fn lock_cert_names_on(&self, domain_id: &str, host: &str) -> Result<CertNamesLock, String> {
+        let current = self.domain_get_certificate_management(domain_id)?;
+        let (provider, previous) = match current {
+            CertManagement::Manual => return Ok(CertNamesLock::NotAutomatic),
+            CertManagement::Other(t) => {
+                return Err(format!(
+                    "x:Domain/get: domain '{domain_id}' has certificateManagement \
+                     '@type' '{t}' — K2 only knows Manual/Automatic; not touching it"
+                ))
+            }
+            CertManagement::Automatic {
+                acme_provider_id,
+                subject_alternative_names,
+            } => (acme_provider_id, subject_alternative_names),
+        };
+        if sans_locked_to(&previous, host) {
+            return Ok(CertNamesLock::AlreadyLocked);
+        }
+        let resp = self.registry_call(
+            "x:Domain/set",
+            cert_names_lock_update_args(domain_id, &provider, host),
+        )?;
+        parse_set_updated("x:Domain/set", domain_id, &resp)?;
+        Ok(CertNamesLock::Locked { previous })
+    }
+
     /// Retry ACME for the **mail hostname only** (C8/C24 — no extra
     /// SAN names in the request). Stalwart has no dedicated "renew now"
     /// method; the documented on-demand path is `x:Task/set` create of
-    /// an `AcmeRenewal` task bound to the hostname's Domain. Does not
-    /// SIGTERM, wipe, or re-bootstrap.
+    /// an `AcmeRenewal` task bound to the hostname's Domain. The task
+    /// carries no names: the order reads the Domain's
+    /// `subjectAlternativeNames`, so CAL43 locks that list to the mail
+    /// host FIRST. Does not SIGTERM, wipe, or re-bootstrap.
     pub fn renew_acme_for_mail_hostname(&self, hostname: &str) -> Result<String, String> {
         let host = hostname.trim();
         if host.is_empty() {
             return Err("renew_acme_for_mail_hostname: empty hostname".to_string());
         }
-        let domain_id = match self.domain_query_id(host)? {
-            Some(id) => id,
-            None => {
-                let parent = super::supervisor::default_domain_for(host);
-                self.domain_query_id(&parent)?.ok_or_else(|| {
-                    format!(
-                        "no Stalwart domain for mail hostname '{host}' — cannot retry ACME"
-                    )
-                })?
-            }
-        };
+        let domain_id = self.mail_hostname_domain_id(host)?.ok_or_else(|| {
+            format!("no Stalwart domain for mail hostname '{host}' — cannot retry ACME")
+        })?;
+        let lock_host = normalize_cert_host(host)?;
+        self.lock_cert_names_on(&domain_id, &lock_host)
+            .map_err(|e| format!("CAL43 cert-name lock before ACME retry failed: {e}"))?;
         let due = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let args = serde_json::json!({
             "create": {
@@ -2793,6 +2865,134 @@ fn certificate_create_args(chain_pem: &str, key_pem: &str) -> serde_json::Value 
     })
 }
 
+/// A Stalwart Domain's `certificateManagement`, as K2 reads it (CAL43).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertManagement {
+    /// No Stalwart ACME for this Domain.
+    Manual,
+    /// Stalwart ACME. `subject_alternative_names` empty = Stalwart's
+    /// default name set (the C24 hazard).
+    Automatic {
+        acme_provider_id: String,
+        subject_alternative_names: Vec<String>,
+    },
+    /// An `@type` this daemon does not know.
+    Other(String),
+}
+
+/// Outcome of [`StalwartClient::lock_acme_cert_names_to_mail_host`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertNamesLock {
+    /// The Domain is `Manual` — Stalwart orders nothing for it.
+    NotAutomatic,
+    /// Already exactly `[host]`; nothing written.
+    AlreadyLocked,
+    /// Written; `previous` is the list it replaced (empty = default set).
+    Locked { previous: Vec<String> },
+}
+
+fn normalize_cert_host(hostname: &str) -> Result<String, String> {
+    let host = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("cert-name lock: empty mail hostname".to_string());
+    }
+    Ok(host)
+}
+
+/// True when `sans` is exactly one name equal to `host` (case and
+/// trailing dot ignored).
+pub fn sans_locked_to(sans: &[String], host: &str) -> bool {
+    let want = host.trim().trim_end_matches('.');
+    sans.len() == 1 && sans[0].trim().trim_end_matches('.').eq_ignore_ascii_case(want)
+}
+
+/// The CAL43 `x:Domain/set` update: `Automatic` with the SAME
+/// `acmeProviderId` and exactly one SAN. Stalwart's registry `Map`
+/// serializes as a JSON set (`{"name": true}`, `types/map.rs`); a name
+/// with a dot is used verbatim (`acme/order.rs` `build_domains`).
+fn cert_names_lock_update_args(
+    domain_id: &str,
+    acme_provider_id: &str,
+    host: &str,
+) -> serde_json::Value {
+    let mut sans = serde_json::Map::new();
+    sans.insert(host.to_string(), serde_json::Value::Bool(true));
+    serde_json::json!({
+        "update": {
+            domain_id: {
+                "certificateManagement": {
+                    "@type": "Automatic",
+                    "acmeProviderId": acme_provider_id,
+                    "subjectAlternativeNames": sans,
+                }
+            }
+        }
+    })
+}
+
+/// Pure `x:Domain/get` parser for `certificateManagement`. The SAN
+/// list is read from the registry set form (`{"name": true}`); a JSON
+/// array of strings is accepted too. Anything else is a loud Err.
+fn parse_domain_get_cert_management(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<CertManagement, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)))
+        .ok_or_else(|| format!("x:Domain/get: domain '{id}' not in the reply list"))?;
+    let cm = entry
+        .get("certificateManagement")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            format!("x:Domain/get: domain '{id}' has no certificateManagement object")
+        })?;
+    let typ = cm.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+    match typ {
+        "Manual" => Ok(CertManagement::Manual),
+        "Automatic" => {
+            let provider = cm
+                .get("acmeProviderId")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    format!("x:Domain/get: domain '{id}' Automatic cert config has no acmeProviderId")
+                })?;
+            let sans = match cm.get("subjectAlternativeNames") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::Object(m)) => m
+                    .iter()
+                    .filter(|(_, v)| v.as_bool() == Some(true))
+                    .map(|(k, _)| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect(),
+                Some(serde_json::Value::Array(a)) => a
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                Some(other) => {
+                    return Err(format!(
+                        "x:Domain/get: domain '{id}' subjectAlternativeNames has an \
+                         unexpected shape: {other}"
+                    ))
+                }
+            };
+            Ok(CertManagement::Automatic {
+                acme_provider_id: provider.to_string(),
+                subject_alternative_names: sans,
+            })
+        }
+        "" => Err(format!(
+            "x:Domain/get: domain '{id}' certificateManagement has no '@type'"
+        )),
+        other => Ok(CertManagement::Other(other.to_string())),
+    }
+}
+
 /// Point the SystemSettings singleton at a planted Certificate id.
 fn default_certificate_id_args(cert_id: &str) -> serde_json::Value {
     serde_json::json!({
@@ -4403,6 +4603,12 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
         client.listeners_apply(port_plan, &listeners)
     }
 
+    fn lock_acme_cert_names(&mut self, hostname: &str) -> Result<(), String> {
+        self.client()?
+            .lock_acme_cert_names_to_mail_host(hostname)
+            .map(|_| ())
+    }
+
     fn create_service_account(&mut self, default_domain: &str) -> Result<String, String> {
         let client = self.client()?;
         let domain_id = client.domain_query_id(default_domain)?.ok_or_else(|| {
@@ -5135,6 +5341,12 @@ pub(crate) mod tests {
         let (port, rx) = spawn_mock_server(vec![
             NORMAL_SESSION_FIXTURE.to_string(),
             query_reply,
+            cert_mgmt_get_reply("dom-mail", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+                "subjectAlternativeNames": {},
+            })),
+            domain_set_updated_reply("dom-mail"),
             set_reply,
         ]);
         let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
@@ -5146,6 +5358,21 @@ pub(crate) mod tests {
         let q = body_json(&rx.recv().expect("query"));
         assert_eq!(q["methodCalls"][0][0], "x:Domain/query");
         assert_eq!(q["methodCalls"][0][1]["filter"]["name"], "mail.acme.dev");
+        // CAL43: the Domain's SAN list is locked BEFORE the renewal is
+        // queued (the task carries no names; the order reads the Domain).
+        let g = body_json(&rx.recv().expect("domain get"));
+        assert_eq!(g["methodCalls"][0][0], "x:Domain/get");
+        assert_eq!(g["methodCalls"][0][1]["ids"], serde_json::json!(["dom-mail"]));
+        let lock = body_json(&rx.recv().expect("domain set"));
+        assert_eq!(lock["methodCalls"][0][0], "x:Domain/set");
+        assert_eq!(
+            lock["methodCalls"][0][1]["update"]["dom-mail"]["certificateManagement"],
+            serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+                "subjectAlternativeNames": { "mail.acme.dev": true },
+            })
+        );
         let t = body_json(&rx.recv().expect("task"));
         assert_eq!(t["methodCalls"][0][0], "x:Task/set");
         let create = &t["methodCalls"][0][1]["create"]["k2"];
@@ -5188,6 +5415,12 @@ pub(crate) mod tests {
             NORMAL_SESSION_FIXTURE.to_string(),
             miss.clone(),
             hit,
+            // Already locked: idempotent, no x:Domain/set.
+            cert_mgmt_get_reply("dom-parent", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+                "subjectAlternativeNames": { "MAIL.acme.dev.": true },
+            })),
             set_reply,
         ]);
         let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
@@ -5199,7 +5432,10 @@ pub(crate) mod tests {
         assert_eq!(q1["methodCalls"][0][1]["filter"]["name"], "mail.acme.dev");
         let q2 = body_json(&rx.recv().expect("query parent"));
         assert_eq!(q2["methodCalls"][0][1]["filter"]["name"], "acme.dev");
+        let g = body_json(&rx.recv().expect("domain get"));
+        assert_eq!(g["methodCalls"][0][0], "x:Domain/get");
         let t = body_json(&rx.recv().expect("task"));
+        assert_eq!(t["methodCalls"][0][0], "x:Task/set", "no Domain/set when already locked");
         assert_eq!(t["methodCalls"][0][1]["create"]["k2"]["domainId"], "dom-parent");
 
         let (port2, _rx2) = spawn_mock_server(vec![
@@ -5213,6 +5449,256 @@ pub(crate) mod tests {
             .expect_err("no domain must fail loud");
         assert!(err.contains("mail.missing.test"), "{err}");
         assert!(err.contains("cannot retry ACME"), "{err}");
+    }
+
+    // ── CAL43: cert-name lock ───────────────────────────────────────
+
+    fn cert_mgmt_get_reply(id: &str, cm: serde_json::Value) -> String {
+        serde_json::json!({
+            "methodResponses": [["x:Domain/get", {
+                "accountId": "b",
+                "list": [{ "id": id, "certificateManagement": cm }],
+                "notFound": [],
+            }, "0"]],
+        })
+        .to_string()
+    }
+
+    fn domain_set_updated_reply(id: &str) -> String {
+        serde_json::json!({
+            "methodResponses": [["x:Domain/set", {
+                "accountId": "b",
+                "updated": { id: null },
+            }, "0"]],
+        })
+        .to_string()
+    }
+
+    fn domain_query_reply(ids: &[&str]) -> String {
+        serde_json::json!({
+            "methodResponses": [["x:Domain/query", { "accountId": "b", "ids": ids }, "0"]],
+        })
+        .to_string()
+    }
+
+    /// The Domain update carries EXACTLY one SAN (the mail host) and
+    /// keeps the existing acmeProviderId — replacing Stalwart's
+    /// guided-setup default set.
+    #[test]
+    fn cert_name_lock_writes_exactly_the_mail_host_and_keeps_provider() {
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&[]),
+            domain_query_reply(&["dom-apex"]),
+            cert_mgmt_get_reply("dom-apex", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p7",
+                "subjectAlternativeNames": {
+                    "mta-sts.example.com": true,
+                    "autoconfig.example.com": true,
+                },
+            })),
+            domain_set_updated_reply("dom-apex"),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let out = client
+            .lock_acme_cert_names_to_mail_host("Mail.Example.com.")
+            .expect("lock");
+        let CertNamesLock::Locked { mut previous } = out else {
+            panic!("expected Locked, got {out:?}");
+        };
+        previous.sort();
+        assert_eq!(
+            previous,
+            vec!["autoconfig.example.com".to_string(), "mta-sts.example.com".to_string()]
+        );
+        let _sess = rx.recv().expect("session");
+        let q1 = body_json(&rx.recv().expect("query host"));
+        assert_eq!(q1["methodCalls"][0][1]["filter"]["name"], "mail.example.com");
+        let q2 = body_json(&rx.recv().expect("query apex"));
+        assert_eq!(q2["methodCalls"][0][1]["filter"]["name"], "example.com");
+        let g = body_json(&rx.recv().expect("get"));
+        assert_eq!(
+            g["methodCalls"][0][1]["properties"],
+            serde_json::json!(["certificateManagement"])
+        );
+        let set = body_json(&rx.recv().expect("set"));
+        assert_eq!(set["methodCalls"][0][0], "x:Domain/set");
+        let update = set["methodCalls"][0][1]["update"]
+            .as_object()
+            .expect("update map");
+        assert_eq!(update.len(), 1, "{update:?}");
+        let cm = &update["dom-apex"]["certificateManagement"];
+        assert_eq!(cm["@type"], "Automatic");
+        assert_eq!(cm["acmeProviderId"], "acme-p7");
+        let sans = cm["subjectAlternativeNames"].as_object().expect("SAN set object");
+        assert_eq!(sans.len(), 1, "exactly one SAN: {sans:?}");
+        assert_eq!(sans["mail.example.com"], true);
+        // Only certificateManagement is patched — no other Domain field.
+        assert_eq!(update["dom-apex"].as_object().expect("patch").len(), 1);
+    }
+
+    #[test]
+    fn cert_name_lock_is_idempotent_and_leaves_manual_alone() {
+        // Already exactly [host]: no write.
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&["dom-host"]),
+            cert_mgmt_get_reply("dom-host", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+                "subjectAlternativeNames": { "mail.example.com": true },
+            })),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(
+            client
+                .lock_acme_cert_names_to_mail_host("mail.example.com")
+                .expect("lock"),
+            CertNamesLock::AlreadyLocked
+        );
+        let sent: Vec<String> = rx.iter().collect();
+        assert_eq!(sent.len(), 3, "session + query + get only: {sent:#?}");
+        assert!(!sent.iter().any(|r| r.contains("x:Domain/set")), "{sent:#?}");
+
+        // Manual (Stalwart ACME off): no write.
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&["dom-host"]),
+            cert_mgmt_get_reply("dom-host", serde_json::json!({ "@type": "Manual" })),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(
+            client
+                .lock_acme_cert_names_to_mail_host("mail.example.com")
+                .expect("lock"),
+            CertNamesLock::NotAutomatic
+        );
+        let sent: Vec<String> = rx.iter().collect();
+        assert_eq!(sent.len(), 3, "{sent:#?}");
+        assert!(!sent.iter().any(|r| r.contains("x:Domain/set")), "{sent:#?}");
+    }
+
+    #[test]
+    fn cert_name_lock_surfaces_a_rejected_update() {
+        let rejected = serde_json::json!({
+            "methodResponses": [["x:Domain/set", {
+                "notUpdated": { "dom-host": {
+                    "type": "invalidProperties",
+                    "description": "ACME provider not found",
+                } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&["dom-host"]),
+            cert_mgmt_get_reply("dom-host", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+            })),
+            rejected,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client
+            .lock_acme_cert_names_to_mail_host("mail.example.com")
+            .expect_err("must fail loud");
+        assert!(err.contains("ACME provider not found"), "{err}");
+    }
+
+    /// A failed lock stops the renew: no AcmeRenewal is queued against
+    /// Stalwart's wide default name set.
+    #[test]
+    fn renew_does_not_queue_when_the_cert_name_lock_fails() {
+        let rejected = serde_json::json!({
+            "methodResponses": [["x:Domain/set", {
+                "notUpdated": { "dom-host": { "type": "forbidden" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&["dom-host"]),
+            cert_mgmt_get_reply("dom-host", serde_json::json!({
+                "@type": "Automatic",
+                "acmeProviderId": "acme-p1",
+                "subjectAlternativeNames": {},
+            })),
+            rejected,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client
+            .renew_acme_for_mail_hostname("mail.example.com")
+            .expect_err("lock failure must stop the renew");
+        assert!(err.contains("CAL43"), "{err}");
+        assert!(err.contains("forbidden"), "{err}");
+        let sent: Vec<String> = rx.iter().collect();
+        assert!(!sent.iter().any(|r| r.contains("x:Task/set")), "{sent:#?}");
+    }
+
+    #[test]
+    fn cert_management_parser_reads_set_and_array_forms_and_refuses_junk() {
+        let reply = |cm: serde_json::Value| {
+            serde_json::json!({ "list": [{ "id": "d1", "certificateManagement": cm }] })
+        };
+        assert_eq!(
+            parse_domain_get_cert_management("d1", &reply(serde_json::json!({ "@type": "Manual" })))
+                .expect("manual"),
+            CertManagement::Manual
+        );
+        assert_eq!(
+            parse_domain_get_cert_management(
+                "d1",
+                &reply(serde_json::json!({
+                    "@type": "Automatic",
+                    "acmeProviderId": "p",
+                    "subjectAlternativeNames": { "a.example.com": true, "b.example.com": false },
+                }))
+            )
+            .expect("set form"),
+            CertManagement::Automatic {
+                acme_provider_id: "p".into(),
+                subject_alternative_names: vec!["a.example.com".into()],
+            }
+        );
+        assert_eq!(
+            parse_domain_get_cert_management(
+                "d1",
+                &reply(serde_json::json!({
+                    "@type": "Automatic",
+                    "acmeProviderId": "p",
+                    "subjectAlternativeNames": ["a.example.com"],
+                }))
+            )
+            .expect("array form"),
+            CertManagement::Automatic {
+                acme_provider_id: "p".into(),
+                subject_alternative_names: vec!["a.example.com".into()],
+            }
+        );
+        assert_eq!(
+            parse_domain_get_cert_management(
+                "d1",
+                &reply(serde_json::json!({ "@type": "SomethingNew" }))
+            )
+            .expect("unknown type"),
+            CertManagement::Other("SomethingNew".into())
+        );
+        let no_provider = parse_domain_get_cert_management(
+            "d1",
+            &reply(serde_json::json!({ "@type": "Automatic" })),
+        )
+        .expect_err("no provider");
+        assert!(no_provider.contains("acmeProviderId"), "{no_provider}");
+        let missing = parse_domain_get_cert_management("d2", &reply(serde_json::json!({})))
+            .expect_err("not in list");
+        assert!(missing.contains("d2"), "{missing}");
+        assert!(sans_locked_to(&["mail.example.com.".to_string()], "MAIL.example.com"));
+        assert!(!sans_locked_to(&[], "mail.example.com"));
+        assert!(!sans_locked_to(
+            &["mail.example.com".to_string(), "autoconfig.example.com".to_string()],
+            "mail.example.com"
+        ));
     }
 }
 

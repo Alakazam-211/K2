@@ -305,6 +305,12 @@ pub trait BootstrapApi: Send {
     /// the :587 submission listener. Sockets move on the final
     /// restart.
     fn configure_listeners(&mut self, port_plan: &str) -> Result<(), String>;
+    /// CAL43 (tls-alpn plan only): lock the mail hostname's Domain
+    /// `certificateManagement.subjectAlternativeNames` to exactly
+    /// `[hostname]`, keeping its `acmeProviderId`. Guided setup leaves
+    /// that list empty, which Stalwart reads as "every autoconfig/
+    /// mta-sts/MX name in one ACME order" (C24). Idempotent.
+    fn lock_acme_cert_names(&mut self, hostname: &str) -> Result<(), String>;
     /// Create the admin-role `k2-daemon` service account in the
     /// default domain; returns its account id.
     fn create_service_account(&mut self, default_domain: &str) -> Result<String, String>;
@@ -1451,6 +1457,12 @@ pub fn run_enable(
             // L12: bind recovery HTTP to 127.0.0.1:8080 (never *:8080)
             // while we still need 8080, then restart so the loopback
             // bind is live before the port-plan retargets to :8180.
+            // CAL43: first thing in normal mode, so the guided-setup
+            // ACME order (and every renewal after it) asks for the mail
+            // host only. Stalwart ACME runs on the tls-alpn plan only.
+            if super::preflight::request_tls_certificate(port_plan) {
+                api.lock_acme_cert_names(hostname)?;
+            }
             api.bind_setup_http_loopback()?;
             ops.systemctl(&["restart", STALWART_UNIT])?;
             authenticate_saved_admin(ops, api, secrets, &default_domain)?;
@@ -2196,6 +2208,9 @@ mod tests {
         fn configure_listeners(&mut self, plan: &str) -> Result<(), String> {
             self.check(&format!("configure_listeners {plan}"))
         }
+        fn lock_acme_cert_names(&mut self, hostname: &str) -> Result<(), String> {
+            self.check(&format!("lock_acme_cert_names {hostname}"))
+        }
         fn create_service_account(&mut self, default_domain: &str) -> Result<String, String> {
             self.check(&format!("create_service_account {default_domain}"))?;
             Ok("acct-k2".into())
@@ -2346,6 +2361,7 @@ mod tests {
                 "authenticate http://127.0.0.1:8080 admin",
                 "complete_bootstrap mail.acme.dev acme.dev tls=true",
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
+                "lock_acme_cert_names mail.acme.dev",
                 "bind_setup_http_loopback",
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "configure_listeners tls-alpn",
@@ -2494,6 +2510,14 @@ mod tests {
         let err = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
             .expect_err("injected failure");
         assert!(err.starts_with("service-account:"), "{err}");
+        // CAL43: http-01 = Caddy owns the cert, Stalwart ACME is off —
+        // the cert-name lock is a tls-alpn-only call.
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("lock_acme_cert_names")),
+            "{:?}",
+            api.calls
+        );
+        assert!(api.calls.iter().any(|c| c == "configure_listeners http-01"), "{:?}", api.calls);
         assert_eq!(current_status().as_deref(), Some("error"));
         assert!(row_field("last_error")
             .expect("recorded")

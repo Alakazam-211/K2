@@ -33,6 +33,38 @@ pub const ZONE_LIFECYCLE_HINT: &str =
 pub const DNS_ZONE_NOT_ATTACHED_HINT: &str = "this DNS zone is not attached to this server — \
 the owner can attach it in Settings → K2 Server → Domains (or `k2 domain add`)";
 
+/// The owner name the k2.dev records API wants for `name` in zone `apex`.
+///
+/// `POST /api/dns/zones/{id}/records` treats every `name` as RELATIVE to
+/// the zone (`@` = apex; k2-dev-web `validateRecord`). Posting an FQDN
+/// such as `_imaps._tcp.example.com` lands the record at
+/// `_imaps._tcp.example.com.example.com` (IT2). Rules, case-insensitive,
+/// trailing dots ignored:
+/// - `name == apex` → `@`
+/// - `name == <x>.<apex>` → `<x>`
+/// - anything else (not under the apex, or empty) → `Err`; the caller
+///   must not post that row.
+pub fn relative_record_name(name: &str, apex: &str) -> Result<String, String> {
+    let apex_n = apex.trim().trim_end_matches('.').to_ascii_lowercase();
+    if apex_n.is_empty() {
+        return Err("relative record name: empty zone apex".to_string());
+    }
+    let name_n = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    if name_n.is_empty() {
+        return Err(format!("relative record name: empty owner name for zone {apex_n}"));
+    }
+    if name_n == apex_n {
+        return Ok("@".to_string());
+    }
+    match name_n.strip_suffix(&format!(".{apex_n}")) {
+        Some(rel) if !rel.is_empty() && !rel.ends_with('.') => Ok(rel.to_string()),
+        _ => Err(format!(
+            "record name '{}' is not inside zone {apex_n} — refusing to post it",
+            name.trim()
+        )),
+    }
+}
+
 /// Teaching text when NS (or any non-envelope type) is requested.
 pub fn unsupported_type_hint(rtype: &str) -> String {
     format!(
@@ -94,5 +126,39 @@ mod tests {
         assert!(!managed_by_touchable(Some("k2-system")));
         assert!(!managed_by_touchable(Some("k2-mail")));
         assert!(!managed_by_touchable(Some("k2-publish")));
+    }
+
+    /// IT2: the records API is zone-relative.
+    #[test]
+    fn relative_record_name_strips_the_apex() {
+        let ok = |n: &str, a: &str| relative_record_name(n, a).expect(n);
+        assert_eq!(ok("example.com", "example.com"), "@");
+        assert_eq!(ok("example.com.", "example.com"), "@");
+        assert_eq!(ok("_imaps._tcp.example.com", "example.com"), "_imaps._tcp");
+        assert_eq!(ok("_imaps._tcp.example.com.", "example.com."), "_imaps._tcp");
+        assert_eq!(ok("AutoConfig.Example.COM", "example.com"), "autoconfig");
+        assert_eq!(ok("  autodiscover.example.com  ", " EXAMPLE.com "), "autodiscover");
+        assert_eq!(ok("a.b.sub.example.com", "sub.example.com"), "a.b");
+    }
+
+    #[test]
+    fn relative_record_name_refuses_names_outside_the_zone() {
+        for (name, apex) in [
+            ("_imaps._tcp.example.net", "example.com"),
+            // Suffix match must be on a label boundary.
+            ("autoconfig.notexample.com", "example.com"),
+            ("badexample.com", "example.com"),
+            // The parent of the zone is outside it.
+            ("example.com", "sub.example.com"),
+            ("", "example.com"),
+            (".", "example.com"),
+            ("autoconfig", "example.com"),
+        ] {
+            let err = relative_record_name(name, apex)
+                .expect_err(&format!("{name:?} in {apex} must be refused"));
+            assert!(!err.is_empty());
+        }
+        assert!(relative_record_name("example.com", "").is_err());
+        assert!(relative_record_name("x..example.com", "example.com").is_err());
     }
 }

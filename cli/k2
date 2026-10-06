@@ -397,6 +397,19 @@ unset _k2_cli_wants_help
 # `k2 study` prints static in-CLI pages (same skip as --schema). Live
 # unknown verbs never skip PORT/TOKEN. `k2 help` is not daemon-optional.
 [ "${1:-}" = "study" ] && _skip_conn_gate=1
+# `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
+# `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
+# none of them talks to the daemon.
+if [ "${1:-}" = "zen" ]; then
+    case "${2:-}" in
+        ""|guide|help|--help|-h) _skip_conn_gate=1 ;;
+        *)
+            for _a in "${@:2}"; do
+                case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
+            done
+            ;;
+    esac
+fi
 # `k2 tickets template` prints the static brief skeleton (H42).
 case "${1:-}" in
     tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;
@@ -15135,7 +15148,7 @@ cmd_schema() {
     },
     {
       "name": "zen",
-      "usage": "k2 zen <garden|theme|validate|reload|reset|history|doctor|path> ...",
+      "usage": "k2 zen <garden|theme|validate|reload|reset|history|doctor|path|guide> ...",
       "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
       "args": [],
       "flags": [
@@ -15222,6 +15235,17 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "zen guide",
+      "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
+      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, examples, undo, safe-mode), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
+      "args": [{"name": "topic|example", "required": false}, {"name": "name", "required": false}],
+      "flags": [
+        {"name": "--toml", "arg": null, "description": "example <name>: print only the Garden file, ready for > ~/.k2/zen/gardens/<id>.toml."},
+        {"name": "--list", "arg": null, "description": "example: bare example names, one per line."},
+        {"name": "--json", "arg": null, "description": "{id, title, body} (an example adds toml; the index adds topics)."}
+      ]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",
@@ -15277,7 +15301,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen"
 
 _study_usage() {
     cat <<'EOF'
@@ -15294,7 +15318,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
-  skins  feedback-loop  ticket-brief
+  skins  feedback-loop  ticket-brief  zen
 EOF
 }
 
@@ -15319,6 +15343,7 @@ _study_title() {
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
+        zen) echo "Zen Gardens" ;;
         *) echo "" ;;
     esac
 }
@@ -15356,6 +15381,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
+  zen                 Zen Gardens: the one rule; the guide is k2 zen guide
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -15386,6 +15412,7 @@ _study_page() {
             ;;
         feedback-loop) _study_page_feedback_loop ;;
         ticket-brief) _study_page_ticket_brief ;;
+        zen) _study_page_zen ;;
         *) return 1 ;;
     esac
 }
@@ -16714,6 +16741,37 @@ AFTER FILING
   ticket. Comments stay plain text.
   k2 tickets show <id>            body + brief text extract
   k2 tickets show <id> --html     the cleaned HTML only
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_zen() {
+    cat <<'EOF'
+k2 study zen — Zen Gardens in one page
+
+WHAT
+  Zen Mode is a mode of a K2 desktop window. In Zen the window shows a
+  Garden: a personal page that lives on this computer, in
+  ~/.k2/zen/gardens/<id>.toml. Agents build Gardens by editing that file
+  when the human asks ("In my Zen Garden ... (id g-...)").
+
+THE ONE RULE
+  Every page keeps two buttons the human can reach in one click: the Zen
+  toggle (the way out) and the Garden switcher. Where they sit, and
+  whether usage, the theme control or a menu is shown, is the page's
+  choice. k2 zen validate refuses a file that drops one.
+
+THE LOOP
+  k2 zen garden list                 find the Garden's id
+  edit ~/.k2/zen/gardens/<id>.toml
+  k2 zen validate --garden <id>      before you say it's done
+
+THE FULL GUIDE
+  k2 zen guide                       short pages; no daemon needed
+  k2 zen guide gardens               start here
+  k2 zen guide example --list        whole files you can pipe
+  The k2-zen skill has every widget prop and theme token.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -33640,6 +33698,8 @@ USAGE
   k2 zen history [--garden <name|id> | --theme <name> | --file <file>] [--json]
   k2 zen doctor [--json]
   k2 zen path
+  k2 zen guide [<topic>] [--json]
+  k2 zen guide example [<name> [--toml] | --list]
 
 COMMANDS
   garden    The Gardens on this computer. list (* = its own theme); new makes
@@ -33666,8 +33726,13 @@ COMMANDS
             deleted Gardens included.
   doctor    Check the folder, Garden list, templates, watcher and history.
   path      Print the Zen folder.
+  guide     The user guide: short pages (gardens, files, widgets, bands,
+            required, menus, themes, examples, undo, safe-mode) and whole
+            example files to pipe into a Garden. Needs no daemon.
 
 RULES
+  New to Gardens? k2 zen guide. Moving controls? k2 zen guide bands, then
+  k2 zen guide required.
   "In my Zen Garden ... (id g-...)" means: edit ~/.k2/zen/gardens/<id>.toml.
   Run `k2 zen validate --garden <id>` before you say it's done.
   Never write grants.json, gardens.json, active.json or .history/: K2 writes them.
@@ -33675,9 +33740,943 @@ RULES
   Load the k2-zen skill for the page grammar, every widget prop and token.
 
 EXIT
-  0 ok · 1 errors (validate) or a refused request · 3 Zen isn't set up on
-  this computer (turn it on with the Zen toggle in the K2 app's top bar).
+  0 ok · 1 errors (validate) or a refused request · 2 a usage error (an
+  unknown guide topic or example included) · 3 Zen isn't set up on this
+  computer (turn it on with the Zen toggle in the K2 app's top bar).
 EOF
+}
+
+# ── k2 zen guide (prd-zen-freeform-chrome FC33, FC34, FC59–FC66) ─────
+# A user guide in short static pages, daemon-optional like `k2 study`
+# (the connection gate skips `k2 zen guide`). Each page is at most 80
+# lines. `k2 zen guide example <name> --toml` prints a whole Garden file,
+# ready for `> ~/.k2/zen/gardens/<id>.toml`. tests/cli/zen_guide.sh writes
+# every example into a scratch Garden and runs `k2 zen validate`; the
+# zen_core Rust test checks every example with the daemon's own schema and
+# that the pages name every slot, align, edge and control kind.
+
+_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes examples undo safe-mode"
+_ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
+
+_zen_guide_usage() {
+    cat <<'EOF'
+Usage: k2 zen guide [<topic>] [--json]
+       k2 zen guide example [<name> [--toml]] [--json]
+       k2 zen guide example --list
+
+Short pages on building Zen Gardens. Works with no daemon running.
+
+Topics:
+  gardens  files  widgets  bands  required  menus  themes  examples
+  undo  safe-mode
+
+  k2 zen guide                          the index (start here)
+  k2 zen guide <topic>                  one page
+  k2 zen guide <topic> --json           {"id","title","body"}
+  k2 zen guide example                  the example list
+  k2 zen guide example <name>           one example with notes
+  k2 zen guide example <name> --toml    the file only, ready to pipe:
+      k2 zen guide example bottom-bar --toml > ~/.k2/zen/gardens/<id>.toml
+  k2 zen guide example --list           bare example names
+EOF
+}
+
+_zen_guide_title() {
+    case "$1" in
+        index) echo "Building a Zen Garden" ;;
+        gardens) echo "What a Garden is" ;;
+        files) echo "The Zen folder" ;;
+        widgets) echo "Widgets and the two replace rules" ;;
+        bands) echo "Bands, column edges, align and drag" ;;
+        required) echo "The two buttons every page keeps" ;;
+        menus) echo "Menus" ;;
+        themes) echo "Themes" ;;
+        examples) echo "Examples you can pipe" ;;
+        undo) echo "Check, look back, put it back" ;;
+        safe-mode) echo "Safe mode and the ways out" ;;
+        rail-top) echo "The nav rail in the top band" ;;
+        quiet-top) echo "The top band without usage" ;;
+        bottom-bar) echo "Controls in a bottom band" ;;
+        menu-both) echo "Both buttons in one menu" ;;
+        texting-chrome) echo "The template's controls, written out" ;;
+        menu-bottom-right) echo "One menu in the bottom-right corner" ;;
+        column-corner) echo "The toggle at a column's corner" ;;
+        *) echo "" ;;
+    esac
+}
+
+_zen_guide_is_in() {
+    local want="$1" t
+    shift
+    for t in $*; do
+        [ "$t" = "$want" ] && return 0
+    done
+    return 1
+}
+
+_zen_guide_index() {
+    cat <<'EOF'
+k2 zen guide — building a Zen Garden
+
+A Garden is a personal page on this computer, shown when a K2 window is in
+Zen Mode. Its file is ~/.k2/zen/gardens/<id>.toml. Edit the file, run
+k2 zen validate --garden <id>, and every Zen window reloads.
+
+Start here: k2 zen guide gardens
+
+  gardens     What a Garden is, ids, the switcher, Cmd+Option+1-9
+  files       The Zen folder: what you edit, what you never write
+  widgets     Content widgets, Zen controls and the two replace rules
+  bands       Where things go: bands, column edges, align, corners, drag
+  required    The two buttons every page keeps; what validate refuses
+  menus       A menu button that holds controls
+  themes      Colours, font, shape, motion; k2 zen theme
+  examples    Whole Garden files you can pipe into a Garden
+  undo        validate, history, reset, reload, doctor; troubleshooting
+  safe-mode   Every safe-mode line, its fix, and the ways out
+
+  k2 zen guide <topic> [--json]
+  k2 zen guide example <name> [--toml]
+
+This guide works with no daemon running. Every widget prop and theme token
+is in the k2-zen skill.
+EOF
+}
+
+_zen_guide_page_gardens() {
+    cat <<'EOF'
+k2 zen guide gardens — what a Garden is
+
+Zen Mode is a mode of one K2 desktop window. In Zen the window shows a
+Garden: a personal page that lives on this computer. Nobody else on the
+server sees it.
+
+THE FIRST TWO
+  Garden 1   the texting page: a Home's agents beside a conversation.
+  Garden 2   empty: "Ask your agents to add things to this Garden", with
+             Ask my agent and Start with the default.
+  Every new Garden starts empty too (k2 zen garden new <name> --texting
+  starts it as the texting page).
+
+IDS AND NAMES
+  Each Garden has an id like g-3f9a12c0. Ids never change, so renaming or
+  reordering never touches the file. Wherever k2 zen takes <garden>, an id
+  or a name works.
+
+  k2 zen garden list                    index, id, name, template
+  k2 zen garden new <name> [--texting] [--at <n>]
+  k2 zen garden rename <garden> <name>
+  k2 zen garden reorder <garden> <position>       (1-based)
+  k2 zen garden template <garden> texting|blank [--force]
+  k2 zen garden delete <garden>         kept in .history/; the last stays
+
+SWITCHING
+  The Garden switcher shows this Garden's name and opens the Garden list
+  and + New Garden. Cmd+Option+1-9 (Ctrl+Alt+1-9 on Linux) switch Gardens
+  even when no switcher is on screen.
+
+WHEN THE HUMAN ASKS
+  "In my Zen Garden ... (id g-...)" means: edit
+  ~/.k2/zen/gardens/<id>.toml, then run k2 zen validate --garden <id>.
+  Only the human turns Zen on. Until Zen is set up, every k2 zen verb
+  that reads the folder exits 3.
+
+NEXT
+  k2 zen guide files · widgets · bands · examples
+EOF
+}
+
+_zen_guide_page_files() {
+    cat <<'EOF'
+k2 zen guide files — the Zen folder (~/.k2/zen)
+
+It belongs to this computer's K2. k2 zen path prints it.
+
+YOU EDIT
+  gardens/<id>.toml          one Garden's page: its template, layout,
+                             widgets, and theme tables for it alone
+  zen.toml                   theme changes for every Garden
+  themes/<name>/theme.toml   a theme bundle (and its background image)
+
+NEVER WRITE (K2 writes them)
+  gardens.json   the Garden list: use k2 zen garden
+  active.json    the active theme: use k2 zen theme
+  .history/      the last 20 good versions of each file
+  grants.json    widget permissions: only the app writes it, when the
+                 human clicks Allow. Agents request; they never grant.
+
+LAYERS (a later file wins, key by key)
+  1. K2's basic theme
+  2. K2's copy of the active theme
+  3. themes/<active>/theme.toml
+  4. zen.toml
+  5. gardens/<id>.toml
+
+A GARDEN FILE
+  schema = 1                     always the first line
+  template = "k2.texting@1"      or "k2.blank@1"; without it the Garden
+                                 keeps the template it was made with
+  [layout]                       kind = "columns"
+  [[layout.column]]              1 to 3: size (percent, adds up to 100)
+                                 and min-width (px)
+  [[widget]]                     see k2 zen guide widgets and bands
+  [colors.light]  [font]  ...    see k2 zen guide themes
+
+The template gives the page its layout, its content widgets and its Zen
+controls until the file declares its own.
+
+RULES
+  Unknown keys are errors at their line, with a "did you mean".
+  No raw CSS, no selectors, no HTML, no fonts from the network.
+  [layout], [[widget]] and template go only in gardens/<id>.toml.
+  A file with errors is not shown: Zen keeps the last good version.
+EOF
+}
+
+_zen_guide_page_widgets() {
+    cat <<'EOF'
+k2 zen guide widgets — what you place, and the two replace rules
+
+Everything on a Garden page is a [[widget]]. Widgets come in two groups,
+and each group replaces only the template's own group:
+
+  1. Any CONTENT widget (agents, conversation, nav-rail) replaces the
+     template's content widgets. The template's Zen controls stay. A
+     nav-rail with slot = "top" keeps the switcher and the toggle.
+  2. Any ZEN CONTROL (garden-switcher, zen-toggle, usage, theme-picker,
+     menu) replaces ALL of the template's controls. A control you don't
+     place is not shown, so the file must place the two required ones.
+
+WRONG FILE (don't pipe it): only a switcher, under schema = 1
+    [[widget]]
+    kind = "garden-switcher"
+    slot = "bottom"
+k2 zen validate prints (line 3 is that widget's first key):
+  gardens/<id>.toml:3:1: This file places Zen controls, so it replaces the template's. It must also place a zen-toggle (the way out)
+Fix: place a zen-toggle too (k2 zen guide required).
+
+CONTENT WIDGETS (in a column they need id, kind and column = n)
+  agents        a Home's agents with live status and their last message:
+                home = "<Home>" for the whole Home, or agent = "<name>"
+                for one agent (mode follows); home-picker, order,
+                server-tag, preview, status
+  conversation  one agent's Thread and a message box: agents = "<id of
+                an Agents widget>" to follow it, or agent = "<name>"
+                (with home) to pin one; compose, attachments, load-older
+  nav-rail      My Home, Agents, Projects, Tickets: a strip at the left
+                of its column, or a row in a band or at a column edge;
+                orientation = "row" | "column"
+
+ZEN CONTROLS (K2 draws them; outside a column's body the id may be left
+out, and is then the kind)
+  garden-switcher   required: the way to your other Gardens
+  zen-toggle        required: the way out of Zen
+  usage             optional: the subscription usage chip and its menu
+  theme-picker      optional: the theme control
+  menu              optional: a button that holds other Zen controls
+
+LIMITS
+  12 content widgets and 10 Zen controls per page. Each Zen control at
+  most once, except menu. A page never names caps: K2 grants them.
+
+Where each one may go: k2 zen guide bands. Every prop: the k2-zen skill.
+EOF
+}
+
+_zen_guide_page_bands() {
+    cat <<'EOF'
+k2 zen guide bands — where things go
+
+THE PLACES (slot = "column" | "top" | "bottom" | "menu")
+  top band      a full-width row above the columns        slot = "top"
+  bottom band   a full-width row below the columns        slot = "bottom"
+  column edge   a short row at the top or bottom of one column:
+                slot = "column" (the default), column = n,
+                edge = "top" | "bottom" (default "top")
+  menu          inside a menu button: slot = "menu", menu = "<menu id>"
+
+TOP BAND OR TOP OF A COLUMN? Two different places:
+
+  slot = "top"                       slot = "column"
+                                     column = 1
+                                     edge = "top"
+
+  the page's top band: full width,   the top of column 1 only, inside
+  above every column                 that column's box
+
+ALIGN, ORDER AND CORNERS
+  align = "start" | "center" | "end" (default "start"): the left end, the
+  middle or the right end of a band or a column edge. Inside each group,
+  items keep file order. In an "end" group the LAST item in the file sits
+  in the corner. There is no order key.
+  The bottom-right corner: slot = "bottom", align = "end", last in file.
+
+WHAT FITS WHERE
+  bands         every Zen control, and nav-rail (drawn as a row)
+  column edge   every Zen control, and a nav-rail with an edge or
+                orientation = "row"
+  menu          zen-toggle, garden-switcher, theme-picker, usage
+  agents and conversation fill their column: no edge, no align.
+  A band item or a menu item has no column.
+
+BANDS EXIST ONLY WHEN THEY HOLD SOMETHING
+  With no top band, K2 keeps a thin, empty title strip as tall as the
+  window buttons, so the window still drags and the macOS buttons never
+  sit on your page. Nothing can be placed in it. With no bottom band,
+  none is drawn. Columns always start below the top band or title strip.
+
+DRAG
+  Never place drag-region. The empty space in every band IS the drag
+  area. validate refuses kind = "drag-region" with:
+    K2 makes the empty space in every band drag the window; there is nothing to place.
+  Each band keeps at least 120 px of empty space. Column edges don't drag.
+
+LIMITS
+  8 items per band (at most 2 content widgets), 4 per column edge.
+
+Examples: k2 zen guide examples. The required pair: k2 zen guide required.
+EOF
+}
+
+_zen_guide_page_required() {
+    cat <<'EOF'
+k2 zen guide required — the two buttons every page keeps
+
+THE RULE
+  zen-toggle        the way out of Zen
+  garden-switcher   the way to your other Gardens
+  A file that places ANY Zen control replaces all of the template's, so
+  it must place both of these, each exactly once. Everything else
+  (usage, theme-picker, menu) is optional.
+
+REACHABLE MEANS
+  1. Placed once: in a band, at a column edge, or as a top-level item of
+     a menu that sits in a band or at a column edge.
+  2. One click away: its own button is on screen, or the menu button that
+     holds it is. Never two clicks: no menu inside a menu.
+  3. On screen: shown, not faded below 30% opacity, at least 24x24 px,
+     inside the window, clear of the window buttons, not covered.
+  4. Keyboard: Tab reaches the button; a menu opens with Enter or Space.
+  5. Wired: using it does its job within 1 second.
+  The app checks this. Twice unreachable in a row: safe mode
+  (k2 zen guide safe-mode).
+
+FAILING FILE (don't pipe it): only a switcher
+    schema = 1
+    [[widget]]
+    kind = "garden-switcher"
+    slot = "top"
+k2 zen validate prints:
+  gardens/<id>.toml:3:1: This file places Zen controls, so it replaces the template's. It must also place a zen-toggle (the way out)
+and exits 1. Zen keeps showing the last good version. Fix: add
+    [[widget]]
+    kind = "zen-toggle"
+    slot = "top"
+    align = "end"
+
+WHAT VALIDATE REFUSES (an error at its line)
+  - Zen controls without a zen-toggle, or without a garden-switcher.
+  - A Zen control placed twice (only menu may repeat).
+  - kind = "drag-region" (K2 does the drag; k2 zen guide bands).
+  - slot = "menu" without menu = "<id>"; a menu = that names no menu; a
+    menu = on any other slot.
+  - A menu inside a menu; a content widget in a menu; a menu holding
+    nothing, or more than 6 items.
+  - align in a menu or on agents or conversation; edge outside
+    slot = "column", or on agents or conversation.
+  - Over the limits: 12 content widgets, 10 Zen controls, 8 items per
+    band, 4 per column edge, 3 menus.
+  - A kind that doesn't fit its slot; a column the layout doesn't have.
+  - caps anywhere.
+
+Validate doesn't judge pixels. The app keeps the required pair on
+screen: in a crowded band, usage hides first, then the theme control.
+EOF
+}
+
+_zen_guide_page_menus() {
+    cat <<'EOF'
+k2 zen guide menus — a button that holds controls
+
+A menu is a button K2 draws in a band or at a column edge. It holds the
+Zen controls that name it, in file order. A fragment (not a whole file):
+
+    [[widget]]
+    id = "more"
+    kind = "menu"
+    slot = "top"
+    align = "end"
+    [widget.props]
+    icon = "dots"       # "dots" (the default), "bars" or "zen"
+    label = "More"      # up to 24 characters: shown, tooltip, screen reader
+
+    [[widget]]
+    kind = "zen-toggle"
+    slot = "menu"       # always both keys: slot = "menu" AND menu = "<id>"
+    menu = "more"
+
+WHAT IT HOLDS
+  zen-toggle, garden-switcher, theme-picker and usage. Never a menu (no
+  menu inside a menu) and never a content widget. 1 to 6 items each; at
+  most 3 menus on a page. A menu without an id gets the id "menu".
+
+IN THE OPEN MENU
+  garden-switcher   a Gardens section: every Garden with its
+                    Cmd+Option+N, then + New Garden
+  zen-toggle        Exit Zen Mode (Ctrl+Cmd+Z)
+  theme-picker      Theme: <name>, which opens the theme list, with Back
+  usage             Usage, which opens the usage panel, with Back
+  K2 adds separators between sections.
+
+HOW IT OPENS
+  Click, or Enter, Space or Down on the focused button. Never on hover.
+  It opens toward the page: down from the top band or a top edge, up from
+  the bottom band or a bottom edge, and flips when there's no room.
+  It closes on a pick, Esc, Tab, or a click outside.
+
+KEYBOARD
+  Up and Down move and wrap; Home and End jump; Enter and Space pick.
+  In a sub-panel, Left or Esc goes back. Esc at the top closes the menu
+  and puts focus back on its button. Tab closes it and moves on.
+
+A required control in a menu is reachable when the menu button is on
+screen (k2 zen guide required). Whole files: k2 zen guide example
+menu-both, and k2 zen guide example menu-bottom-right.
+EOF
+}
+
+_zen_guide_page_themes() {
+    cat <<'EOF'
+k2 zen guide themes — colours, font, shape, motion
+
+One theme is active for this computer, and each Garden may pick its own.
+K2's themes are built in and read-only: basic, paper, midnight.
+
+  k2 zen theme list [--garden <g>]
+  k2 zen theme next | prev [--garden <g>]
+  k2 zen theme set <name> [--garden <g>]
+  k2 zen theme set --garden <g> --clear      follow the computer again
+  k2 zen theme new <name> [--from <theme>]   a bundle in themes/<name>/
+  k2 zen reset --theme <name>                drop your override
+
+In the app, Ctrl+Cmd+. and Ctrl+Cmd+Shift+. cycle themes (Ctrl+Alt+. on
+Linux), even on a page that places no theme-picker.
+
+THEME TABLES (zen.toml, a theme bundle, or one Garden's file)
+  [theme]                       scheme = "auto" | "light" | "dark"
+  [colors.light] [colors.dark]  canvas, surface, text, accent, ... each a
+                                colour; text and accent need 3:1 contrast
+                                against canvas
+  [font]                        family (system, rounded, serif, mono,
+                                meslo, ...), size, line-height
+  [shape]                       radius, bubble-radius, gap, list-width
+  [terminal.light] [terminal.dark]   the agent terminals' palette
+  [chrome]                      the window itself: corners, stoplights,
+                                stoplight-offset (not the Zen controls)
+  [bezier] [animation]          motion, Hyprland style
+  [background]                  only in themes/<name>/theme.toml: image,
+                                fit, opacity
+
+MAKE A THEME
+  k2 zen theme new sunset
+  edit ~/.k2/zen/themes/sunset/theme.toml
+  k2 zen validate --theme sunset
+  k2 zen theme set sunset              (or --garden <g> for one Garden)
+
+ONE GARDEN ONLY
+  Put theme tables straight into that Garden's file:
+    [colors.light]
+    accent = "#065f46"
+
+Every token and its range: the k2-zen skill.
+EOF
+}
+
+_zen_guide_page_examples() {
+    cat <<'EOF'
+k2 zen guide examples — whole Garden files you can pipe
+
+Each example is a whole Garden file. It names template = "k2.texting@1",
+so it shows Agents beside a Conversation on any Garden.
+
+  rail-top            the nav rail as a row in the top band; the template's
+                      controls stay (it does NOT remove the switcher)
+  quiet-top           the template's top band without usage
+  bottom-bar          switcher bottom left; theme and toggle bottom right;
+                      no usage, no top band
+  menu-both           switcher, theme and toggle in one menu, top right
+  texting-chrome      the template's controls written out: a start point
+  menu-bottom-right   one menu in the bottom-right corner holds them all
+  column-corner       the toggle at the bottom-right of the conversation
+                      column (edge, not a band)
+
+  k2 zen guide example <name>           the file with notes
+  k2 zen guide example <name> --toml    the file only
+  k2 zen guide example --list           bare names
+
+TRY ONE
+  k2 zen garden list                    find the Garden's id
+  k2 zen guide example bottom-bar --toml > ~/.k2/zen/gardens/<id>.toml
+  k2 zen validate --garden <id>
+
+Piping replaces the whole file. To keep your own widgets, copy only the
+Zen-control [[widget]] tables into your file instead. To go back:
+k2 zen guide undo.
+EOF
+}
+
+_zen_guide_page_undo() {
+    cat <<'EOF'
+k2 zen guide undo — check, look back, put it back
+
+CHECK
+  k2 zen validate --garden <id>   file:line:col: message for each error,
+                                  then exit 1. A file with errors is NOT
+                                  shown: Zen keeps the last good version.
+  k2 zen validate                 every file
+  k2 zen reload                   re-read now (K2 also watches the folder)
+  k2 zen doctor                   folder, Garden list, templates, watcher
+
+LOOK BACK
+  k2 zen history --garden <id>    the last 20 good versions, newest
+                                  first (deleted Gardens too)
+
+PUT IT BACK
+  k2 zen reset --garden <id> --to <snapshot>   one version from history
+  k2 zen reset --garden <id>                   the Garden's stub
+  k2 zen reset --theme <name>                  drop a theme override
+  k2 zen reset                                 zen.toml back to empty
+  Every reset keeps the current file as a snapshot first.
+
+START OVER FROM A TEMPLATE
+  k2 zen garden template <garden> texting|blank [--force]
+  A file with its own layout, widgets (Zen controls count) or theme
+  tables needs --force. The old file is kept in .history/.
+
+TROUBLESHOOTING
+  validate is clean, but the open app still shows the old top strip:
+    the app is older than K2 on this computer (the daemon). An older app
+    ignores where a Garden puts its controls and keeps drawing its own
+    top band, with both required controls. Update the app
+    (k2 update --app). Don't edit K2's source to force it.
+  validate is clean, but nothing changed:
+    run k2 zen reload, and check that you edited the Garden on screen
+    (k2 zen garden list).
+  The window went to safe mode: k2 zen guide safe-mode.
+EOF
+}
+
+_zen_guide_page_safe_mode() {
+    cat <<'EOF'
+k2 zen guide safe-mode — what each line means, and the ways out
+
+Safe mode draws the built-in texting page with the template's Garden
+switcher and Zen toggle, and ignores this Garden's file. Your files are
+untouched. The banner says "Zen is in safe mode. Your files are
+untouched.", then one of the lines below, with Try again and Exit Zen.
+
+THE LINES
+  You held Shift while turning Zen on.
+      You asked for it. Turn Zen off and on again without Shift.
+  The Zen toggle isn't on the page.
+      Same for The Garden switcher. Place it: k2 zen guide required.
+  The Zen toggle isn't declared by the page.
+      The page answer doesn't list it. Run k2 zen doctor; if the
+      Garden's file looks right, update K2 on this computer.
+  The Zen toggle isn't visible.
+      Hidden, faded, under 24x24 px, off screen, under the window
+      buttons, or covered. Move it, or put it in a menu.
+  The Garden switcher isn't wired.
+      K2 couldn't confirm it works (its list didn't open within 1
+      second). Try again; if it repeats, file a ticket.
+  The page crashed: <message>
+      Try again. If it repeats, validate the file, then reset it.
+  Can't reach K2 on this computer.
+      The daemon isn't running. Start K2, then Try again.
+  K2 on this computer sent a Zen page this app can't read: <message>
+      The app and K2 disagree. Update both.
+  K2 on this computer is older than this app. Update it to use Gardens.
+      Update K2 on this computer.
+  When the control sits in a menu, the line is about the menu's button.
+
+THE WAYS OUT (they never depend on the page)
+  Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux.
+  View > Exit Zen Mode on macOS; Menu > Exit Zen Mode in K2's window
+  buttons on Linux.
+  Exit Zen in the safe-mode banner.
+  Hold Shift while turning Zen on: safe mode, whatever the file says.
+  Cmd+Option+1-9 (Ctrl+Alt+1-9 on Linux) switch Gardens with no switcher.
+  From a terminal: k2 zen reset --garden <id> restores the Garden's stub.
+
+Safe mode lasts until Try again, a change to the files, or leaving Zen.
+EOF
+}
+
+_zen_guide_page() {
+    case "$1" in
+        index) _zen_guide_index ;;
+        gardens) _zen_guide_page_gardens ;;
+        files) _zen_guide_page_files ;;
+        widgets) _zen_guide_page_widgets ;;
+        bands) _zen_guide_page_bands ;;
+        required) _zen_guide_page_required ;;
+        menus) _zen_guide_page_menus ;;
+        themes) _zen_guide_page_themes ;;
+        examples) _zen_guide_page_examples ;;
+        undo) _zen_guide_page_undo ;;
+        safe-mode) _zen_guide_page_safe_mode ;;
+        *) return 1 ;;
+    esac
+}
+
+# The examples, in Cortana's order (FC65). Each is a whole Garden file.
+_zen_example_toml() {
+    case "$1" in
+        rail-top)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# The nav rail as a row of icons in the top band, right of the Garden
+# switcher. The rail is a CONTENT widget: it replaces the template's
+# content (so agents and conversation are listed too), but NOT its Zen
+# controls. This does NOT remove the switcher: the template's top band
+# (switcher, usage, theme, Zen toggle) stays.
+
+[[widget]]
+kind = "nav-rail"
+slot = "top"
+
+[[widget]]
+id = "agents"
+kind = "agents"
+column = 0
+[widget.props]
+home-picker = true
+
+[[widget]]
+id = "conversation"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "agents"
+EOF
+            ;;
+        quiet-top)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# The template's top band without the usage chip. Placing any Zen control
+# replaces all of the template's, so the switcher, theme and toggle are
+# listed. usage isn't, so it isn't shown.
+
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "top"
+align = "end"        # the last "end" item sits in the top-right corner
+EOF
+            ;;
+        bottom-bar)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# The controls move to a bottom band: the Garden switcher bottom left, the
+# theme and the Zen toggle bottom right. usage isn't placed, so it isn't
+# shown. No top band: K2 keeps a thin empty strip to drag the window.
+
+[[widget]]
+kind = "garden-switcher"
+slot = "bottom"      # align defaults to "start": the left end
+
+[[widget]]
+kind = "theme-picker"
+slot = "bottom"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "bottom"
+align = "end"        # the last "end" item sits in the bottom-right corner
+EOF
+            ;;
+        menu-both)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# One menu button, top right, holds both required controls and the theme.
+# A control in a menu always needs both keys: slot = "menu" and
+# menu = "<the menu's id>".
+
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "end"
+[widget.props]
+icon = "dots"
+label = "More"       # the tooltip and the screen-reader name
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+EOF
+            ;;
+        texting-chrome)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# The template's Zen controls written out in full: the page looks like
+# Garden 1. Start here, then move, drop or add controls. Keep a
+# zen-toggle and a garden-switcher somewhere (k2 zen guide required).
+
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+align = "start"
+
+[[widget]]
+kind = "usage"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "top"
+align = "end"        # last in the "end" group: the top-right corner
+EOF
+            ;;
+        menu-bottom-right)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# A bottom band holding only one menu, in the bottom-right corner, with
+# every control inside it. No top band: K2 keeps a thin empty strip to
+# drag the window.
+
+[[widget]]
+id = "all"
+kind = "menu"
+slot = "bottom"
+align = "end"
+[widget.props]
+icon = "zen"
+label = "Zen"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "all"
+
+[[widget]]
+kind = "usage"
+slot = "menu"
+menu = "all"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "all"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "all"
+EOF
+            ;;
+        column-corner)
+            cat <<'EOF'
+schema = 1
+template = "k2.texting@1"
+
+# The Zen toggle at the bottom-right corner of the conversation (column 1).
+# slot = "column" with edge = "bottom" is the bottom of ONE column, inside
+# its box. It is not the page's bottom band: that would be slot = "bottom".
+# Likewise slot = "top" is the page's top band, not the top of a column.
+
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "column"
+column = 1
+edge = "bottom"
+align = "end"
+EOF
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# One example with its notes (the page `k2 zen guide example <name>`).
+_zen_example_page() {
+    local name="$1"
+    echo "k2 zen guide example $name — $(_zen_guide_title "$name")"
+    echo
+    echo "Write it over a Garden's file, then validate:"
+    echo "  k2 zen guide example $name --toml > ~/.k2/zen/gardens/<id>.toml"
+    echo "  k2 zen validate --garden <id>"
+    echo
+    _zen_example_toml "$name"
+}
+
+# stdin = body; prints {"id","title","body"}, plus "toml" for an example.
+_zen_guide_emit_json() {
+    python3 -c '
+import json, sys
+body = sys.stdin.read()
+if body.endswith("\n"):
+    body = body[:-1]
+out = {"id": sys.argv[1], "title": sys.argv[2], "body": body}
+if len(sys.argv) > 3:
+    out["toml"] = sys.argv[3] + "\n"
+print(json.dumps(out, separators=(",", ":"), ensure_ascii=False))
+' "$@"
+}
+
+cmd_zen_guide() {
+    local as_json=0 toml=0 list=0 p1="" p2="" extra=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1 ;;
+            --toml) toml=1 ;;
+            --list) list=1 ;;
+            -h|--help)
+                _zen_guide_usage
+                exit 0
+                ;;
+            --*)
+                echo "Error: unknown flag '$1' (see k2 zen guide --help)" >&2
+                exit 2
+                ;;
+            *)
+                if [ -z "$p1" ]; then p1="$1"
+                elif [ -z "$p2" ]; then p2="$1"
+                else extra="$1"
+                fi
+                ;;
+        esac
+        shift
+    done
+    if [ -n "$extra" ]; then
+        echo "Error: unexpected extra argument '$extra' (see k2 zen guide --help)" >&2
+        exit 2
+    fi
+    case "$p1" in
+        example|examples)
+            if [ "$list" = 1 ]; then
+                if [ -n "$p2" ] || [ "$toml" = 1 ]; then
+                    echo "Error: --list takes no example name" >&2
+                    exit 2
+                fi
+                if [ "$as_json" = 1 ]; then
+                    local n
+                    for n in $_ZEN_GUIDE_EXAMPLES; do
+                        printf '%s\t%s\n' "$n" "$(_zen_guide_title "$n")"
+                    done | python3 -c '
+import json, sys
+ex = [dict(zip(("id", "title"), l.rstrip("\n").split("\t", 1))) for l in sys.stdin]
+print(json.dumps({"examples": ex}, separators=(",", ":")))
+'
+                else
+                    printf '%s\n' $_ZEN_GUIDE_EXAMPLES
+                fi
+                exit 0
+            fi
+            if [ -z "$p2" ]; then
+                if [ "$toml" = 1 ]; then
+                    echo "Error: --toml needs an example name (k2 zen guide example --list)" >&2
+                    exit 2
+                fi
+                if [ "$as_json" = 1 ]; then
+                    _zen_guide_page examples | _zen_guide_emit_json examples "$(_zen_guide_title examples)"
+                else
+                    _zen_guide_page examples
+                fi
+                exit 0
+            fi
+            if ! _zen_guide_is_in "$p2" $_ZEN_GUIDE_EXAMPLES; then
+                echo "Error: no example '$p2'. Examples: $_ZEN_GUIDE_EXAMPLES" >&2
+                exit 2
+            fi
+            if [ "$as_json" = 1 ]; then
+                _zen_example_page "$p2" | _zen_guide_emit_json "$p2" "$(_zen_guide_title "$p2")" "$(_zen_example_toml "$p2")"
+            elif [ "$toml" = 1 ]; then
+                _zen_example_toml "$p2"
+            else
+                _zen_example_page "$p2"
+            fi
+            exit 0
+            ;;
+    esac
+    if [ "$toml" = 1 ] || [ "$list" = 1 ]; then
+        echo "Error: --toml and --list are for k2 zen guide example" >&2
+        exit 2
+    fi
+    if [ -n "$p2" ]; then
+        echo "Error: unexpected extra argument '$p2' (see k2 zen guide --help)" >&2
+        exit 2
+    fi
+    local topic="${p1:-index}"
+    if [ "$topic" != "index" ] && ! _zen_guide_is_in "$topic" $_ZEN_GUIDE_TOPICS; then
+        echo "Error: no guide topic '$topic'" >&2
+        _zen_guide_usage >&2
+        exit 2
+    fi
+    if [ "$as_json" = 1 ]; then
+        if [ "$topic" = "index" ]; then
+            local t topics=""
+            for t in $_ZEN_GUIDE_TOPICS; do
+                topics="$topics$t=$(_zen_guide_title "$t");"
+            done
+            _zen_guide_index | ZEN_GUIDE_TOPICS="$topics" python3 -c '
+import json, os, sys
+body = sys.stdin.read().rstrip("\n")
+topics = [dict(zip(("id", "title"), p.split("=", 1))) for p in os.environ["ZEN_GUIDE_TOPICS"].split(";") if p]
+print(json.dumps({"id": "index", "title": sys.argv[1], "body": body, "topics": topics}, separators=(",", ":"), ensure_ascii=False))
+' "$(_zen_guide_title index)"
+        else
+            _zen_guide_page "$topic" | _zen_guide_emit_json "$topic" "$(_zen_guide_title "$topic")"
+        fi
+    else
+        _zen_guide_page "$topic"
+    fi
 }
 
 # Shared formatter: verb, as_json, raw daemon body.
@@ -33738,6 +34737,28 @@ if verb in ("validate", "reload"):
         print("reloaded: %s" % ("changed" if d.get("changed") else "no change"))
     if errs:
         print("%d error(s). Zen is showing the last good version." % len(errs), file=sys.stderr)
+        # Point at the guide page for each kind of error (FC35), unless the
+        # message already names one.
+        topics = []
+        for e in errs:
+            m = e.get("message") or ""
+            f = e.get("file") or ""
+            if "k2 zen guide" in m:
+                continue
+            if any(p in m for p in ("slot = \"menu\"", "a menu", "menu \x27", "menu = ", "menus", "menu.label")):
+                t = "menus"
+            elif any(w in m for w in ("slot", "band", "edge", "align", "column")):
+                t = "bands"
+            elif f.startswith("gardens/") and any(w in m for w in ("widget", "kind", "props")):
+                t = "widgets"
+            elif f.startswith("gardens/") and any(w in m for w in ("layout", "template", "schema")):
+                t = "files"
+            else:
+                t = "themes"
+            if t not in topics:
+                topics.append(t)
+        if topics:
+            print("Help: %s" % ", ".join("k2 zen guide %s" % t for t in topics), file=sys.stderr)
         sys.exit(1)
     if verb == "validate":
         files = d.get("files") or []
@@ -34115,6 +35136,9 @@ print(json.dumps(b))
         ""|help|--help|-h)
             cmd_help_zen
             exit 0
+            ;;
+        guide)
+            cmd_zen_guide "$@"
             ;;
         grant|grants|allow)
             echo "Error: there is no 'k2 zen $sub'. Agents never grant permissions." >&2
@@ -34809,7 +35833,8 @@ EOF
     zen)
         # Zen Mode (prd-zen-mode-v1 Z17): this computer's ~/.k2/zen via the
         # local daemon's owner-only /cli/zen/* routes. No grant verb (Z19).
-        if _wants_help "${@:2}"; then
+        # `k2 zen guide` is static and handles its own --help.
+        if [ "${2:-}" != "guide" ] && _wants_help "${@:2}"; then
             cmd_help_zen
             exit 0
         fi

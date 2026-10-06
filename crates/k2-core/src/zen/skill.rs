@@ -93,6 +93,11 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
    or `k2 zen reset --garden <id>` for the Garden's empty stub.\n\
 5. `k2 zen reload` re-reads now; `k2 zen doctor` checks the setup; `k2 zen path`\n\
    prints the folder.\n\n\
+`k2 zen guide` is the user guide, and it needs no daemon: short pages (start with\n\
+`k2 zen guide gardens`; then `files`, `widgets`, `bands`, `required`, `menus`, `themes`,\n\
+`examples`, `undo`, `safe-mode`) and whole Garden files you can pipe into a Garden:\n\
+`k2 zen guide example --list`, then\n\
+`k2 zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`.\n\n\
 `k2 zen` talks only to the K2 on this computer (each person's Gardens live on\n\
 their own computer), so only an agent on this computer can edit them.\n\n\
 ## A Garden page\n\n",

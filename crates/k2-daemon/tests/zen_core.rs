@@ -1755,9 +1755,18 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
     assert_eq!(
         k2_core::skills::version::SKILL_VERSION_ZEN,
-        9,
-        "k2-zen skill v9 (freeform chrome: Zen controls are widgets; v8 was `slot = \"top\"` for the nav rail)"
+        10,
+        "k2-zen skill v10 (the `k2 zen guide` user guide; v9 made Zen controls widgets; v8 was `slot = \"top\"` for the nav rail)"
     );
+    // v10: agents learn the guide and how to pipe an example.
+    for must in [
+        "`k2 zen guide` is the user guide, and it needs no daemon",
+        "`k2 zen guide gardens`",
+        "`k2 zen guide example --list`",
+        "`k2 zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`",
+    ] {
+        assert!(body.contains(must), "skill v10 must mention {must:?}");
+    }
     // v8: the top band slot, with the example people copy (kept in v9).
     for must in [
         "[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n",
@@ -1814,6 +1823,152 @@ fn fc_t5_skill_v9_documents_the_chrome_tables() {
         let c = check_blank(src);
         assert!(c.is_clean() && c.warnings.is_empty(), "skill example {name} must validate clean:\n{}\n{src}", diag_list(&c));
     }
+}
+
+// ── prd-zen-freeform-chrome S4: the CLI guide ─────────────────────────
+
+/// The guide's topics, in the index's order (FC33).
+const GUIDE_TOPICS: [&str; 10] =
+    ["gardens", "files", "widgets", "bands", "required", "menus", "themes", "examples", "undo", "safe-mode"];
+/// FC34's examples in Cortana's order (FC65).
+const GUIDE_EXAMPLES: [&str; 7] =
+    ["rail-top", "quiet-top", "bottom-bar", "menu-both", "texting-chrome", "menu-bottom-right", "column-corner"];
+
+/// Run the static `k2 zen guide <args>` the way an agent with no daemon
+/// would: an empty HOME, no PORT or TOKEN in the environment.
+fn guide(args: &[&str]) -> String {
+    let cli = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+    let home = std::env::temp_dir().join(format!("k2-zen-guide-home-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&home).expect("empty HOME");
+    let out = std::process::Command::new("bash")
+        .arg(&cli)
+        .args(["zen", "guide"])
+        .args(args)
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .output()
+        .expect("run cli/k2 zen guide");
+    std::fs::remove_dir_all(&home).expect("cleanup");
+    assert!(
+        out.status.success(),
+        "k2 zen guide {args:?} exited {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf-8 guide page")
+}
+
+/// FC-T17: every example the guide pipes (`example <name> --toml`) passes
+/// the daemon's own Garden checks, clean with no warnings, on an empty
+/// Garden and on Garden 1, and resolves to a page that keeps both required
+/// controls and leaks no chrome into `widgets`.
+#[test]
+fn fc_t17_every_guide_example_is_a_clean_garden_file() {
+    let list = guide(&["example", "--list"]);
+    let names: Vec<&str> = list.lines().collect();
+    assert_eq!(names, GUIDE_EXAMPLES, "example --list: FC34's names in FC65's order");
+    for name in GUIDE_EXAMPLES {
+        let src = guide(&["example", name, "--toml"]);
+        assert!(src.starts_with("schema = 1\n"), "{name}: a whole file starts with schema = 1:\n{src}");
+        for (tpl, on) in [(zen::BLANK_TEMPLATE_ID, "an empty Garden"), (zen::TEMPLATE_ID, "Garden 1")] {
+            let c = schema::check_garden("gardens/g-1.toml", &src, zen::builtin_layer(), tpl);
+            assert!(c.is_clean() && c.warnings.is_empty(), "{name} on {on} must validate clean:\n{}\n{src}", diag_list(&c));
+            let page = zen::garden_page(&c.layer, tpl);
+            assert_eq!(page["template"], zen::TEMPLATE_ID, "{name}: every example names the texting template: {page}");
+            assert_page_safe(&page, name);
+            let chrome = kinds_of(&page["chrome"], "items");
+            for req in zen::REQUIRED_CONTROLS {
+                assert!(chrome.iter().any(|k| k == req), "{name}: the page must place {req}: {chrome:?}");
+            }
+        }
+        // The page with notes carries the same file and the pipe line.
+        let page = guide(&["example", name]);
+        assert!(page.contains(src.trim_end()), "{name}: the notes page shows the file");
+        assert!(page.contains(&format!("k2 zen guide example {name} --toml > ~/.k2/zen/gardens/<id>.toml")), "{name}: {page}");
+        assert!(page.lines().count() <= 80, "{name}: {} lines", page.lines().count());
+    }
+    assert!(guide(&["example", "rail-top", "--toml"]).contains("This does NOT remove the switcher"), "FC65");
+    assert!(guide(&["example", "column-corner", "--toml"]).contains("that would be slot = \"bottom\""), "FC65 edge-vs-slot note");
+}
+
+/// FC-T18 (drift): the pages name every value of the grammar's tables, the
+/// validate lines they quote are the real messages, and each page is at
+/// most 80 lines.
+#[test]
+fn fc_t18_guide_pages_track_the_grammar() {
+    let index = guide(&[]);
+    assert!(index.contains("Start here: k2 zen guide gardens"), "{index}");
+    assert!(index.lines().count() <= 80, "index: {} lines", index.lines().count());
+    for t in GUIDE_TOPICS {
+        assert!(index.contains(&format!("  {t} ")), "the index lists {t}");
+        let page = guide(&[t]);
+        assert!(page.starts_with(&format!("k2 zen guide {t} —")), "{t}: {page}");
+        let n = page.lines().count();
+        assert!(n <= 80, "guide page {t} is {n} lines (max 80)");
+    }
+    let bands = guide(&["bands"]);
+    for v in schema::WIDGET_SLOTS.iter().chain(schema::ALIGNS).chain(schema::EDGES) {
+        assert!(bands.contains(&format!("\"{v}\"")), "bands must name \"{v}\"");
+    }
+    assert!(bands.contains(schema::DRAG_REGION_ERROR), "bands quotes the real drag-region error (FC62)");
+    assert!(bands.contains("Never place drag-region"), "FC62");
+    assert!(bands.contains("  slot = \"top\"                       slot = \"column\"\n"), "FC59: side by side");
+    assert!(bands.contains("the LAST item in the file sits\n  in the corner"), "FC60");
+    assert!(bands.contains(&format!("{} items per band (at most {} content widgets), {} per column edge", schema::MAX_BAND_ITEMS, schema::MAX_BAND_WIDGETS, schema::MAX_EDGE_ITEMS)));
+    let widgets = guide(&["widgets"]);
+    for (k, _) in schema::WIDGET_KINDS.iter().chain(schema::CHROME_KINDS) {
+        assert!(widgets.contains(&format!("  {k} ")), "widgets must list {k}");
+    }
+    for p in schema::WIDGET_PROPS.iter().filter(|p| p.kind != "menu") {
+        assert!(widgets.contains(p.name), "widgets must name the {} prop {}", p.kind, p.name);
+    }
+    assert!(
+        widgets.contains(&format!("{} content widgets and {} Zen controls", schema::MAX_WIDGETS, schema::MAX_CHROME_WIDGETS)),
+        "widgets states the limits"
+    );
+    let menus = guide(&["menus"]);
+    for k in schema::MENU_ITEM_KINDS {
+        assert!(menus.contains(k), "menus must name {k}");
+    }
+    for i in schema::MENU_ICONS {
+        assert!(menus.contains(&format!("\"{i}\"")), "menus must name icon \"{i}\"");
+    }
+    assert!(menus.contains(&format!("1 to {} items", schema::MAX_MENU_ITEMS)), "menus states the item limit");
+    assert!(menus.contains(&format!("most {} menus", schema::MAX_MENUS)), "menus states the menu limit");
+    assert!(menus.contains(&format!("up to {} characters", schema::MENU_LABEL_MAX)), "menus states the label limit");
+    let required = guide(&["required"]);
+    for k in zen::REQUIRED_CONTROLS {
+        assert!(required.contains(k), "required must name {k}");
+    }
+    // The quoted validate lines are the start of the real message, at the
+    // real position (the failing files' first key is on line 3).
+    let real = schema::required_chrome_error("zen-toggle");
+    for (topic, page) in [("widgets", &widgets), ("required", &required)] {
+        let quoted = page
+            .lines()
+            .find_map(|l| l.strip_prefix("  gardens/<id>.toml:3:1: "))
+            .unwrap_or_else(|| panic!("{topic} quotes a validate line at 3:1"));
+        assert!(real.starts_with(quoted), "{topic} quotes {quoted:?}; the real message is {real:?}");
+        let failing: String = page
+            .lines()
+            .skip_while(|l| !(l.starts_with("WRONG FILE") || l.starts_with("FAILING FILE")))
+            .skip(1)
+            .take_while(|l| l.starts_with("    "))
+            .map(|l| format!("{}\n", &l[4..]))
+            .collect();
+        let src = if failing.starts_with("schema = 1\n") { failing.clone() } else { format!("schema = 1\n{failing}") };
+        let c = check_blank(&src);
+        assert_one_error(&c, 3, quoted, &format!("{topic}'s failing file"));
+    }
+    assert!(required.contains(&format!(
+        "{} content widgets, {} Zen controls, {} items per\n    band, {} per column edge, {} menus",
+        schema::MAX_WIDGETS,
+        schema::MAX_CHROME_WIDGETS,
+        schema::MAX_BAND_ITEMS,
+        schema::MAX_EDGE_ITEMS,
+        schema::MAX_MENUS
+    )));
 }
 
 fn temp_dot(tag: &str) -> PathBuf {

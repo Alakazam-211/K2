@@ -352,6 +352,13 @@ menu   = "more"         # slot = "menu" only: the menu widget's id
   space in every band drag the window; there is nothing to place.").
 - **Caps:** a file never names them. `garden-switcher` gets
   `gardens:manage`; the others get none (FC31).
+- **The user guide** (FC33–FC35): `k2 zen guide [topic] [--json]` teaches
+  this grammar in static pages of at most 80 lines, with no daemon needed;
+  `k2 zen guide example <name> --toml` prints whole Garden files to pipe
+  into `gardens/<id>.toml`. `tests/cli/zen_guide.sh` validates every example
+  against a headless daemon, and `zen_core.rs` (`fc_t17_*`, `fc_t18_*`)
+  checks the examples and the pages against these tables, so a grammar
+  change the guide doesn't follow fails a test.
 
 `ChromeItem` (every key K2 fills):
 

@@ -208,7 +208,10 @@ export function createControlRegistry(
 }
 
 const MIN_BUTTON = { width: 24, height: 24 }
-const MIN_DRAG = { width: 120, height: 12 }
+/** The drag region's minimum width (CSS px): the template keeps it at least
+ *  this wide, and the check's "visible" needs it. */
+export const ZEN_DRAG_MIN_WIDTH_PX = 120
+const MIN_DRAG = { width: ZEN_DRAG_MIN_WIDTH_PX, height: 12 }
 const MIN_OPACITY = 0.3
 
 function intersects(a: ZenRect, b: ZenRect): boolean {

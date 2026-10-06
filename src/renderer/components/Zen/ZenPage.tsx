@@ -21,6 +21,11 @@
 // rail switch, or entering Zen) puts the caret in the selected agent's
 // message box (Rosson 2026-10-04; `zen-compose-focus`).
 //
+// A widget with a band slot (`[[widget]] slot = "top"`, Rosson 2026-10-06)
+// is drawn here too, with its own bridge, and handed to the template's
+// `ZenBandSlot` (`ZenBand.tsx`) instead of a column; the template's
+// controls stay its own, so the required-controls check is unchanged.
+//
 // Every column box is a shared Zen glass tile (`data-zen-glass`,
 // `lib/zen/zen-glass.ts`; Rosson 2026-10-04).
 
@@ -38,7 +43,7 @@ import {
 } from '@/lib/zen/zen-gardens'
 import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
 import { useZenWindowStore } from '@/lib/zen/zen-window'
-import { zenPageForView, zenPageHasRail } from '@/lib/zen/zen-rail-views'
+import { zenPageForView, zenPageHasRail, zenRailOrientation } from '@/lib/zen/zen-rail-views'
 import { cancelZenComposeFocus, requestZenComposeFocus, takeZenEntered } from '@/lib/zen/zen-compose-focus'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
@@ -57,7 +62,7 @@ import {
   zenGeometry,
   zenReservedRects,
 } from '@/lib/zen/zen-monitor'
-import type { ZenResolvedPage } from '@/lib/zen/zen-page'
+import { zenWidgetInBand, zenWidgetSlot, type ZenResolvedPage, type ZenWidgetDecl } from '@/lib/zen/zen-page'
 import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
 import {
   ZEN_RAIL_KINDS,
@@ -67,6 +72,7 @@ import {
   zenWidgetFor,
 } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
+import { ZenBandContext } from './ZenBand'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -263,9 +269,28 @@ export function ZenPage({
 
   const Controls = zenTemplateControlsFor(page.template)
   const { layout } = page
+  const draw = (w: ZenWidgetDecl): React.JSX.Element => {
+    const Widget = zenWidgetFor(w.kind)
+    const bridge = widgetBridges.get(w.id)
+    if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
+    return <Widget key={w.id} decl={w} bridge={bridge} />
+  }
+  // Band widgets (`slot = "top"`, Rosson 2026-10-06): drawn here with their
+  // own bridges, placed by the template's `ZenBandSlot`.
+  const bands = new Map<string, React.ReactNode>()
+  for (const w of page.widgets) {
+    if (!zenWidgetInBand(w)) continue
+    const slot = zenWidgetSlot(w)
+    bands.set(slot, [...((bands.get(slot) as React.ReactNode[] | undefined) ?? []), draw(w)])
+  }
+  const columnWidgets = page.widgets.filter((w) => !zenWidgetInBand(w))
   return (
     <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template} data-zen-view={view}>
-      {Controls && <Controls bridge={controlsBridge} />}
+      {Controls && (
+        <ZenBandContext.Provider value={bands}>
+          <Controls bridge={controlsBridge} />
+        </ZenBandContext.Provider>
+      )}
       {banner}
       <div
         className="flex min-h-0 flex-1"
@@ -273,22 +298,19 @@ export function ZenPage({
         style={{ gap: 'var(--zen-gap)', padding: '0 var(--zen-gap) var(--zen-gap)' }}
       >
         {layout.split.map((pct, col) => {
-          const inCol = page.widgets.filter((w) => w.column === col)
+          const inCol = columnWidgets.filter((w) => w.column === col)
           const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
           const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+          // A rail drawn as a row sits across the top of its column instead
+          // of down its left edge.
+          const rowRail = rails.some((w) => zenRailOrientation(w) === 'row')
           // K2 views that draw their own panels (Tickets' glass) get no box.
           const bare = boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind))
-          const draw = (w: (typeof inCol)[number]): React.JSX.Element => {
-            const Widget = zenWidgetFor(w.kind)
-            const bridge = widgetBridges.get(w.id)
-            if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
-            return <Widget key={w.id} decl={w} bridge={bridge} />
-          }
           return (
             <div
               key={col}
               data-zen-column-slot={col}
-              className="flex min-h-0 min-w-0 flex-row"
+              className={`flex min-h-0 min-w-0 ${rowRail ? 'flex-col' : 'flex-row'}`}
               style={{ flex: `${pct} 1 0%`, minWidth: layout.minWidths[col] ?? 0, gap: 'var(--zen-gap)' }}
             >
               {rails.map(draw)}

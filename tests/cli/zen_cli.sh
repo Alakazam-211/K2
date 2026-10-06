@@ -254,6 +254,23 @@ assert_contains "page error names the Garden file" "$out" "gardens/$NOTES_ID.tom
 printf 'schema = 1\n[[widget]]\nid = "work"\nkind = "agents"\ncolumn = 0\n[widget.props]\nhome = "Work"\nagent = "cortana"\n' >"$ZEN/gardens/$NOTES_ID.toml"
 capture zen validate --garden "$NOTES_ID"
 assert_eq "a one-agent widget validates" "$rc" "0"
+# Rosson 2026-10-06: the nav rail in the top band (slot = "top"); only
+# nav-rail fits there, and a page with the rail up top draws no second rail.
+printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "a top-band nav rail validates" "$rc" "0"
+printf 'schema = 1\n[[widget]]\nid = "a"\nkind = "agents"\nslot = "top"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "agents in the top band exits 1" "$rc" "1"
+assert_contains "the slot error names the allowed kinds" "$out" "gardens/$NOTES_ID.toml:5:8: 'agents' can't go in the top band; slot = \"top\" takes: nav-rail"
+printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\n[[widget]]\nid = "side"\nkind = "nav-rail"\ncolumn = 0\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "a second rail beside a top-band rail exits 1" "$rc" "1"
+assert_contains "the duplicate rail is named" "$out" "gardens/$NOTES_ID.toml:6:1: the nav rail is already in the top band ('nav-rail')"
+printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\nedge = "left"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "an unknown widget key exits 1" "$rc" "1"
+assert_contains "the unknown-key error lists slot" "$out" "unknown key 'edge' in [[widget]]; allowed: id, kind, slot, column, props"
 capture zen validate --garden Nowhere
 assert_eq "unknown Garden exits 1" "$rc" "1"
 capture zen reset --garden Notes

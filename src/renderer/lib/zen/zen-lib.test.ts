@@ -27,8 +27,11 @@ import {
   parseZenGet,
   ZenPageParseError,
   zenErrorBannerText,
+  zenWidgetInBand,
+  zenWidgetSlot,
   type ZenResolvedPage,
 } from './zen-page'
+import { zenPageForView, zenRailOrientation } from './zen-rail-views'
 import { macStoplightArea } from './zen-chrome'
 import { isZenWindow, zenSupportedOn, ZEN_WINDOWS_ENABLED } from './zen-platform'
 import { TRAFFIC_LIGHT_SPACER_BASE_PX } from '@/lib/desktop-chrome'
@@ -466,6 +469,38 @@ describe('the resolved page (Z10, Z13)', () => {
     expect(p.widgets.map((w) => [w.id, w.column, w.props])).toEqual([
       ['work', 0, { home: 'Work', 'home-picker': true }],
       ['talk', 1, { agents: 'work' }],
+    ])
+  })
+
+  it('a band widget keeps its slot (`top`); a column widget has none; a slot this client does not know is a column', () => {
+    const p = parseZenGet({
+      version: 'v',
+      page: {
+        template: 'k2.texting@1',
+        layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+        widgets: [
+          { id: 'agents', kind: 'agents', slot: 'column', column: 0, props: {}, caps: [] },
+          { id: 'nav-rail', kind: 'nav-rail', slot: 'top', props: { orientation: 'row' }, caps: ['app:navigate'] },
+          { id: 'later', kind: 'nav-rail', slot: 'bottom', column: 1, props: {}, caps: [] },
+        ],
+        controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+      },
+    })
+    expect(p.widgets.map((w) => [w.id, w.slot, w.column, zenWidgetSlot(w), zenWidgetInBand(w)])).toEqual([
+      ['agents', undefined, 0, 'column', false],
+      ['nav-rail', 'top', 0, 'top', true],
+      ['later', undefined, 1, 'column', false],
+    ])
+    expect(zenRailOrientation(p.widgets[1])).toBe('row')
+    expect(zenRailOrientation({ slot: 'top', props: {} })).toBe('row')
+    expect(zenRailOrientation({ props: {} })).toBe('column')
+    expect(zenRailOrientation({ props: { orientation: 'row' } })).toBe('row')
+    // The rail views keep a band rail in its band.
+    const tickets = zenPageForView(p, 'tickets')
+    expect(tickets.widgets.map((w) => [w.kind, zenWidgetSlot(w)])).toEqual([
+      ['nav-rail', 'top'],
+      ['nav-rail', 'column'],
+      ['tickets-view', 'column'],
     ])
   })
 

@@ -10,7 +10,13 @@
 //
 // The view shown is the current item (`aria-current`). ZenPage draws a rail
 // kind at the left edge of its column, outside the column's box. About
-// 44px wide, icons only. Everything goes through the bridge
+// 44px wide, icons only.
+//
+// Rosson 2026-10-06: a Garden file may put the rail in the top band
+// (`[[widget]] slot = "top"`), right of the Garden switcher. There it draws
+// as a ROW (`orientation`, default `row` in a band, `column` in a column):
+// the same four icons side by side, sized for the band, with the same pill
+// sliding sideways, the same current view and badges. Everything goes through the bridge
 // (`app:navigate`: `app.open`, `app.current`, `app.subscribeCurrent`,
 // `app.badges`, `app.subscribe`).
 //
@@ -31,10 +37,14 @@ import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
 import type { ZenAppBadges, ZenAppPage } from '@/lib/zen/zen-app-nav'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
+import { zenRailOrientation } from '@/lib/zen/zen-rail-views'
 import type { ZenWidgetProps } from '../zen-registry'
 
 /** The rail's width (CSS px). */
 export const ZEN_NAV_RAIL_WIDTH_PX = 44
+/** A row rail's height (CSS px): fits the top band (52px) beside the
+ *  30px Garden switcher. */
+export const ZEN_NAV_RAIL_ROW_HEIGHT_PX = 36
 
 /** The pill's spring: quick, settles with a hint of give, no wobble. */
 export const ZEN_NAV_PILL_SPRING: Transition = { type: 'spring', stiffness: 500, damping: 35, mass: 1 }
@@ -232,20 +242,24 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
   // Scope the shared layout to this rail: two rails (or a remount next to
   // the old one) never animate each other's pill.
   const scope = `zen-nav-rail-${decl.id}-${useId()}`
+  const orientation = zenRailOrientation(decl)
+  const row = orientation === 'row'
+  const button = row ? 30 : 32
   return (
     <LayoutGroup id={scope}>
       <nav
         aria-label="Pages"
+        aria-orientation={row ? 'horizontal' : 'vertical'}
         data-zen-widget="nav-rail"
         data-zen-widget-id={decl.id}
+        data-zen-nav-orientation={orientation}
         {...ZEN_GLASS_PROPS}
-        className="flex flex-shrink-0 flex-col items-center"
-        style={{
-          width: ZEN_NAV_RAIL_WIDTH_PX,
-          padding: '6px 0',
-          gap: 4,
-          borderRadius: 'var(--zen-radius)',
-        }}
+        className={`flex flex-shrink-0 items-center ${row ? 'flex-row' : 'flex-col'}`}
+        style={
+          row
+            ? { height: ZEN_NAV_RAIL_ROW_HEIGHT_PX, padding: '0 3px', gap: 4, borderRadius: 'var(--zen-radius)' }
+            : { width: ZEN_NAV_RAIL_WIDTH_PX, padding: '6px 0', gap: 4, borderRadius: 'var(--zen-radius)' }
+        }
       >
         <style data-zen-nav-rail-glass="">{ZEN_NAV_RAIL_CSS}</style>
         {ZEN_NAV_RAIL_ITEMS.map(({ page, name, title, Icon }) => {
@@ -268,8 +282,9 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
               }}
               className={`no-drag relative flex items-center justify-center ${current ? 'cursor-default' : 'cursor-pointer'}`}
               style={{
-                width: 32,
-                height: 32,
+                width: button,
+                height: button,
+                flexShrink: 0,
                 borderRadius: 'calc(var(--zen-radius) - 4px)',
                 color: current ? 'var(--zen-accent)' : 'var(--zen-text-muted)',
               }}

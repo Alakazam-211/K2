@@ -225,11 +225,15 @@ pub fn layout_json(kind: &J, columns: &[J]) -> J {
 }
 
 /// A built-in widget as the renderer reads it: K2's caps, `source:
-/// "builtin"`, every prop filled (defaults, `agents.mode`).
+/// "builtin"`, its `slot` (`column` unless the file put it in the top
+/// band), every prop filled (defaults, `agents.mode`, `nav-rail.orientation`).
 pub fn builtin_widget(mut w: J) -> J {
     let kind = w["kind"].as_str().unwrap_or_default().to_string();
+    let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string();
     let mut props = w["props"].as_object().cloned().unwrap_or_default();
     schema::normalize_props(&kind, &mut props);
+    schema::normalize_slot_props(&kind, &slot, &mut props);
+    w["slot"] = json!(slot);
     w["props"] = J::Object(props);
     w["caps"] = json!(widget_caps(&kind).unwrap_or(&[]));
     w["source"] = json!("builtin");

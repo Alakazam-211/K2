@@ -21,8 +21,11 @@
 //   - the Zen toggle is a switch, on, that turns Zen off in this window
 //     (the "Zen" label and the knob; the ensō icon is the top bar's way IN,
 //     `ZenTopBarToggle`, Rosson 2026-10-04);
-//   - the drag area fills the top band between the switcher and the
-//     top-right cluster;
+//   - a Garden's top-band widgets (`[[widget]] slot = "top"`, e.g. the nav
+//     rail as a row) sit immediately right of the switcher (`ZenBandSlot`);
+//     none by default;
+//   - the drag area fills the top band between those and the top-right
+//     cluster, never narrower than `ZEN_DRAG_MIN_WIDTH_PX`;
 //   - K2's usage tool and theme control (`ZenK2TopRightItems`, drawn by the
 //     Zen root, none in safe mode) sit immediately left of the toggle, in
 //     that order.
@@ -32,6 +35,8 @@ import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenTemplateControlsProps } from '../zen-registry'
 import { TEXTING_BAR_HEIGHT_PX, useZenBind, ZenK2TopRightItems } from '../ZenTemplateControls'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { ZEN_DRAG_MIN_WIDTH_PX } from '@/lib/zen/zen-controls'
+import { ZenBandSlot } from '../ZenBand'
 import { ZenWidgetStyles } from './zen-widget-kit'
 import { ZenNewGarden } from './ZenNewGarden'
 
@@ -201,7 +206,9 @@ function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
 
 function DragArea({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const ref = useZenBind(bridge, 'drag-region')
-  return <div ref={ref} data-zen-drag="" className="min-w-0 flex-1 self-stretch" />
+  // Keeps a minimum width so the window can always be dragged, whatever a
+  // Garden puts in the top band (the band slot shrinks first).
+  return <div ref={ref} data-zen-drag="" className="flex-1 self-stretch" style={{ minWidth: ZEN_DRAG_MIN_WIDTH_PX }} />
 }
 
 /** Both templates' top band (and safe mode's): the Garden switcher top
@@ -222,6 +229,7 @@ export function ZenTextingControls({ bridge }: ZenTemplateControlsProps): React.
     >
       <ZenWidgetStyles />
       <ZenGardenSwitcher bridge={bridge} />
+      <ZenBandSlot slot="top" />
       <DragArea bridge={bridge} />
       <div data-zen-top-right="" className="no-drag flex flex-shrink-0 items-center gap-2">
         <ZenK2TopRightItems />

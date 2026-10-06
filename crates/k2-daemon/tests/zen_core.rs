@@ -456,6 +456,95 @@ agents = \"agents\"\n";
     assert_one_error(&c, 2, "one [[widget]] block per widget", "widgets plural");
 }
 
+/// Rosson 2026-10-06: a Garden file places a widget in the top band (right
+/// of the Garden switcher) with `slot = "top"`, the way it places one in a
+/// column. Only `nav-rail` fits; it draws as a row there; a page with the
+/// rail up top draws no second rail; the controls stay the template's.
+#[test]
+fn tg6_2_top_band_slot_for_the_nav_rail() {
+    // The docs' example: no id, no column.
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n");
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    let rail = &page["widgets"][0];
+    assert_eq!(rail["kind"], "nav-rail", "{page}");
+    assert_eq!(rail["id"], "nav-rail", "a top widget's id defaults to its kind: {rail}");
+    assert_eq!(rail["slot"], "top", "{rail}");
+    assert!(rail.get("column").is_none(), "a top widget has no column: {rail}");
+    assert_eq!(rail["props"]["orientation"], "row", "row by default in the top band: {rail}");
+    assert_eq!(rail["caps"], json!(["app:navigate"]), "{rail}");
+    assert_eq!(kinds_of(&page, "controls"), vec!["garden-switcher", "drag-region", "zen-toggle"], "controls stay the template's");
+    for required in zen::REQUIRED_CONTROLS {
+        assert!(kinds_of(&page, "controls").iter().any(|k| k == required), "required control {required} still declared: {page}");
+    }
+    assert!(page["layout"]["columns"][0].get("widget").is_none(), "a top widget names no column: {page}");
+
+    // The texting page with the rail moved up: agents + conversation in the
+    // columns, the rail in the band, explicit id and orientation.
+    let texting = "schema = 1\n\
+template = \"k2.texting@1\"\n\
+[[widget]]\nid = \"agents\"\nkind = \"agents\"\ncolumn = 0\n\
+[[widget]]\nid = \"conversation\"\nkind = \"conversation\"\ncolumn = 1\n\
+[[widget]]\nid = \"nav\"\nkind = \"nav-rail\"\nslot = \"top\"\n[widget.props]\norientation = \"row\"\n";
+    let c = check_page(texting);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
+    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "conversation", "nav-rail"], "{page}");
+    let slots: Vec<&str> = page["widgets"].as_array().unwrap().iter().map(|w| w["slot"].as_str().unwrap()).collect();
+    assert_eq!(slots, vec!["column", "column", "top"], "every widget says its slot: {page}");
+    assert_eq!(page["layout"]["columns"][0]["widget"], "agents", "{page}");
+    assert_eq!(page["widgets"][1]["props"]["agents"], "agents", "the conversation still links: {page}");
+
+    // Default stays: the texting template's rail is in column 0, a column strip.
+    let tpl = zen::texting_page();
+    let nav = tpl["widgets"].as_array().unwrap().iter().find(|w| w["kind"] == "nav-rail").cloned().unwrap();
+    assert_eq!((nav["slot"].clone(), nav["column"].clone(), nav["props"]["orientation"].clone()), (json!("column"), json!(0), json!("column")), "{nav}");
+    // A rail in a column may ask for a row.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"r\"\nkind = \"nav-rail\"\ncolumn = 0\n[widget.props]\norientation = \"row\"\n");
+    assert!(c.is_clean(), "{}", diag_list(&c));
+    assert_eq!(zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID)["widgets"][0]["props"]["orientation"], "row");
+    // `slot = "column"` is the default, said out loud.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\nslot = \"column\"\ncolumn = 0\n");
+    assert!(c.is_clean(), "{}", diag_list(&c));
+
+    // Errors, each at its line.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\nslot = \"top\"\n");
+    assert_one_error(&c, 5, "'agents' can't go in the top band; slot = \"top\" takes: nav-rail", "a kind that doesn't fit the band");
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"t\"\nkind = \"conversation\"\nslot = \"top\"\n[widget.props]\nagent = \"sales\"\n");
+    assert_one_error(&c, 5, "takes: nav-rail", "conversation in the band");
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"bottom\"\n");
+    assert_eq!(c.errors.len(), 2, "bad slot, then no id: {}", diag_list(&c));
+    assert_eq!(c.errors[0].line, 4, "{}", diag_list(&c));
+    assert!(c.errors[0].message.contains("widget slot must be one of: column, top"), "{}", diag_list(&c));
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\ncolumn = 0\n");
+    assert_one_error(&c, 5, "has no column", "a column on a top widget");
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n[widget.props]\norientation = \"column\"\n");
+    assert_one_error(&c, 6, "the top band is one row high", "a column rail in the band");
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n[widget.props]\norientation = \"diagonal\"\n");
+    assert_one_error(&c, 6, "orientation must be one of: row, column", "a bad orientation");
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\nplace = \"left\"\n");
+    assert_one_error(&c, 5, "unknown key 'place'", "unknown key");
+    assert!(c.errors[0].message.contains("slot"), "the unknown-key error lists slot: {}", c.errors[0].message);
+    // The duplicate rule: the rail up top, and another in a column.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"top\"\nkind = \"nav-rail\"\nslot = \"top\"\n[[widget]]\nid = \"side\"\nkind = \"nav-rail\"\ncolumn = 0\n");
+    assert_one_error(&c, 7, "the nav rail is already in the top band ('top'); a page draws one nav rail", "rail in band and column");
+    // Order doesn't matter: the column one is the extra.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"side\"\nkind = \"nav-rail\"\ncolumn = 0\n[[widget]]\nid = \"top\"\nkind = \"nav-rail\"\nslot = \"top\"\n");
+    assert_one_error(&c, 3, "remove 'side'", "column rail declared first");
+    // Two rails up top: one too many, and a default id used twice.
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n");
+    assert!(c.errors.iter().any(|e| e.line == 6 && e.message.contains("default id) is used twice")), "{}", diag_list(&c));
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"nav-rail\"\nslot = \"top\"\n[[widget]]\nid = \"b\"\nkind = \"nav-rail\"\nslot = \"top\"\n[[widget]]\nid = \"c\"\nkind = \"nav-rail\"\nslot = \"top\"\n");
+    assert!(c.errors.iter().any(|e| e.message.contains("the top band holds at most 2 widgets; this page puts 3 there")), "{}", diag_list(&c));
+    assert!(c.errors.iter().any(|e| e.line == 7 && e.message.contains("remove 'b'")), "{}", diag_list(&c));
+    // A column widget still needs a column; the message names the band.
+    let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\n");
+    assert_one_error(&c, 3, "or slot = \"top\" for the top band", "no column, no slot");
+    // `slot` is for Garden files only.
+    let c = check_zen("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n");
+    assert!(c.errors.iter().any(|e| e.message.contains("belongs in a Garden file")), "{}", diag_list(&c));
+}
+
 #[test]
 fn animation_tree_user_global_beats_builtin_leaves_and_styles_inherit() {
     let user = check_zen("schema = 1\n[animation]\nglobal = [1, 8, \"soft\"]\n").layer;
@@ -1028,9 +1117,13 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
     assert_eq!(
         k2_core::skills::version::SKILL_VERSION_ZEN,
-        7,
-        "k2-zen skill v7 (garden template + Start with the default; the default theme is basic; v6 was the rail views)"
+        8,
+        "k2-zen skill v8 (`slot = \"top\"`: the nav rail in the top band; v7 was garden template + basic)"
     );
+    // v8: the top band slot, with the example people copy.
+    for must in ["[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n", "`slot`: `column`, `top`", "Only `nav-rail` fit", "- `orientation` ("] {
+        assert!(body.contains(must), "skill must mention {must:?}");
+    }
 }
 
 fn temp_dot(tag: &str) -> PathBuf {

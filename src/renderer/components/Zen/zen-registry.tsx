@@ -15,7 +15,8 @@
 // A RAIL kind (`nav-rail`) is drawn as a thin strip at the left edge of its
 // column, outside the column's box, and takes no share of the box. An
 // UNBOXED kind (`tickets-view`) draws its own panels, so its column has no
-// box at all.
+// box at all. A widget with a band slot (`slot: "top"`) is drawn by the same
+// registry and placed by the template's `ZenBandSlot` (`ZenBand.tsx`).
 
 import type { ComponentType } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'

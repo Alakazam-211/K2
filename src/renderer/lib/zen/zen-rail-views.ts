@@ -15,7 +15,7 @@
 // the required-controls check. The `projects-view` / `tickets-view` kinds
 // are K2's own: the daemon's schema never lets a Garden file place them.
 
-import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
+import { zenWidgetInBand, type ZenResolvedPage, type ZenWidgetDecl } from './zen-page'
 import type { ZenRailView } from './zen-window'
 
 /** The rail widget kind (a Garden with one gets the rail views). */
@@ -31,6 +31,14 @@ export const ZEN_AGENTS_VIEW_SUFFIX = '@agents'
  *  server's workspaces (the Agents view). */
 export function zenAgentsSource(props: Record<string, unknown>): 'home' | 'workspaces' {
   return props.source === 'workspaces' ? 'workspaces' : 'home'
+}
+
+/** How a rail draws: its `orientation` prop (the daemon always sends it),
+ *  else a row in a band and a column (strip) in a column. */
+export function zenRailOrientation(w: Pick<ZenWidgetDecl, 'slot' | 'props'>): 'row' | 'column' {
+  const o = w.props.orientation
+  if (o === 'row' || o === 'column') return o
+  return zenWidgetInBand(w) ? 'row' : 'column'
 }
 
 /** Does this page have a nav rail (so the rail views apply)? */

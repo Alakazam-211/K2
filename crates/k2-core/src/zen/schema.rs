@@ -228,9 +228,31 @@ pub const WIDGET_KINDS: &[(&str, &str)] = &[
     ),
     (
         "nav-rail",
-        "a thin icon rail drawn at the left edge of its column (it takes no share of the column's box): My Home (this Garden's own page), then Agents, Projects and Tickets, which switch the Garden's view in this window inside Zen (Agents: this server's agents, by focus group; Projects: coming soon; Tickets: the Tickets page, chat only); the view shown is the current item; Tickets carries the top bar's waiting badge",
+        "a thin icon rail: in a column, a strip drawn at the left edge of its column (it takes no share of the column's box); with `slot = \"top\"`, a row of icons in the top band, right of the Garden switcher. Its items: My Home (this Garden's own page), then Agents, Projects and Tickets, which switch the Garden's view in this window inside Zen (Agents: this server's agents, by focus group; Projects: coming soon; Tickets: the Tickets page, chat only); the view shown is the current item; Tickets carries the top bar's waiting badge",
     ),
 ];
+/// `[[widget]] slot`: where a widget sits. `column` (the default) places it
+/// in a layout column (`column = n`); `top` places it in the page's top
+/// band, immediately right of the Garden switcher and before the drag
+/// region (Rosson 2026-10-06). The band's controls stay the template's.
+///
+/// `slot` is a string so later slots (a bottom band, corners, a menu; the
+/// free-form Garden PRD) are new values here, not a new key. The renderer
+/// draws any band slot with one band component.
+pub const WIDGET_SLOTS: &[&str] = &["column", "top"];
+/// The slot a widget gets when its table names none.
+pub const DEFAULT_SLOT: &str = "column";
+/// The top band's slot.
+pub const TOP_SLOT: &str = "top";
+/// THE allowlist of kinds that fit a band (one row, the band's height).
+/// Any other kind with `slot = "top"` is an error naming these. Nothing
+/// else (renderer included) keeps its own list.
+pub const BAND_WIDGET_KINDS: &[&str] = &["nav-rail"];
+/// At most this many widgets in one band.
+pub const MAX_BAND_WIDGETS: usize = 2;
+/// `nav-rail` `orientation`: a row of icons, or a column (strip).
+pub const NAV_RAIL_ORIENTATIONS: &[&str] = &["row", "column"];
+
 /// Kinds only a template places (never a Garden file).
 pub const TEMPLATE_WIDGET_KINDS: &[(&str, &str)] = &[(
     "garden-empty",
@@ -365,6 +387,13 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         default: Some("true"),
         doc: "load older messages on scroll",
     },
+    WidgetProp {
+        kind: "nav-rail",
+        name: "orientation",
+        ty: PropType::OneOf(NAV_RAIL_ORIENTATIONS),
+        default: None,
+        doc: "`row` draws the icons side by side, `column` top to bottom. Default: `row` in the top band (`slot = \"top\"`, the only orientation that fits there), `column` in a column",
+    },
 ];
 
 /// The props of a widget kind.
@@ -398,6 +427,16 @@ pub fn normalize_props(kind: &str, props: &mut Map<String, J>) {
     if kind == "agents" && !props.contains_key("mode") {
         let mode = if props.contains_key("agent") { "agent" } else { "home" };
         props.insert("mode".into(), json!(mode));
+    }
+}
+
+/// Fill props that depend on the widget's slot: a `nav-rail` with no
+/// `orientation` draws as a `row` in the top band and a `column` in a
+/// column. Applied to template and Garden widgets alike.
+pub fn normalize_slot_props(kind: &str, slot: &str, props: &mut Map<String, J>) {
+    if kind == "nav-rail" && !props.contains_key("orientation") {
+        let o = if slot == TOP_SLOT { "row" } else { "column" };
+        props.insert("orientation".into(), json!(o));
     }
 }
 
@@ -1306,9 +1345,14 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
     }
 }
 
-/// `[[widget]]`: K2's built-in widgets placed in columns. Sets
-/// `page.widgets` (props normalized with K2's defaults; caps are never
-/// read from the file).
+/// `[[widget]]`: K2's built-in widgets placed in columns, or (`slot =
+/// "top"`) in the top band. Sets `page.widgets` (props normalized with K2's
+/// defaults; caps are never read from the file).
+///
+/// The top band (Rosson 2026-10-06): only [`BAND_WIDGET_KINDS`], at most
+/// [`MAX_BAND_WIDGETS`]; a top widget has no `column` and its `id` may be
+/// left out (it is then the kind). A page draws one nav rail when the rail
+/// is in the top band: another `nav-rail` on the same page is an error.
 fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let Some(tables) = tables_of(item) else {
         ctx.error(at, "widgets are [[widget]] blocks (one per widget), each with id, kind and column");
@@ -1326,6 +1370,9 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let mut out: Vec<J> = Vec::new();
     let mut ids: Vec<String> = Vec::new();
     let mut ok = true;
+    // `(kind, slot, id, position)` of each widget, for the page-wide top
+    // band rules after the walk.
+    let mut placed: Vec<(String, &'static str, String, (usize, usize))> = Vec::new();
     for (i, t) in tables.iter().enumerate() {
         let tpos = table_pos(ctx, *t, at);
         // Kind first: it decides which props are allowed.
@@ -1364,12 +1411,48 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 }
             }
         };
+        // Then the slot: it decides whether `column` belongs.
+        let slot: Option<&'static str> = match t.get("slot") {
+            None => Some(DEFAULT_SLOT),
+            Some(v) => {
+                let sp = key_pos(ctx, *t, "slot", v, tpos);
+                let vp = item_pos(ctx, v, sp);
+                match v.as_value().and_then(Value::as_str) {
+                    Some(x) if x == TOP_SLOT => {
+                        if let Some(k) = kind.as_deref().filter(|k| !BAND_WIDGET_KINDS.contains(k)) {
+                            ctx.error(
+                                vp,
+                                format!(
+                                    "'{k}' can't go in the top band; slot = \"top\" takes: {}. Place '{k}' in a column (drop slot, set column)",
+                                    BAND_WIDGET_KINDS.join(", ")
+                                ),
+                            );
+                            ok = false;
+                        }
+                        Some(TOP_SLOT)
+                    }
+                    Some(x) if x == DEFAULT_SLOT => Some(DEFAULT_SLOT),
+                    _ => {
+                        ctx.error(
+                            vp,
+                            format!(
+                                "widget slot must be one of: {} (\"column\", the default, places it with column = n; \"top\" puts it in the top band, right of the Garden switcher)",
+                                WIDGET_SLOTS.join(", ")
+                            ),
+                        );
+                        ok = false;
+                        None
+                    }
+                }
+            }
+        };
+        let top = slot == Some(TOP_SLOT);
         let mut w = Map::new();
         let mut props = Map::new();
         for (k, v) in t.iter() {
             let pos = key_pos(ctx, *t, k, v, tpos);
             match k {
-                "kind" => {}
+                "kind" | "slot" => {}
                 "id" => match v.as_value().and_then(Value::as_str) {
                     Some(id) if valid_widget_id(id) => {
                         if ids.iter().any(|x| x == id) {
@@ -1387,6 +1470,13 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         ok = false;
                     }
                 },
+                "column" if top => {
+                    ctx.error(
+                        pos,
+                        "a top-band widget (slot = \"top\") has no column; drop column, or drop slot to place it in a column",
+                    );
+                    ok = false;
+                }
                 "column" => match v.as_value() {
                     Some(Value::Integer(n)) if *n.value() >= 0 && (*n.value() as usize) < MAX_COLUMNS => {
                         let cp = item_pos(ctx, v, pos);
@@ -1429,20 +1519,37 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                     }
                 }
                 other => {
-                    ctx.error(pos, unknown_key(other, "[[widget]]", &["id", "kind", "column", "props"]));
+                    ctx.error(pos, unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "props"]));
                     ok = false;
                 }
             }
         }
         if t.get("id").is_none() {
-            ctx.error(tpos, "each [[widget]] needs an id (letters, digits, - and _)");
-            ok = false;
+            // A top-band widget may leave its id out: it is then its kind.
+            match kind.as_deref().filter(|_| top) {
+                Some(k) if ids.iter().any(|x| x == k) => {
+                    ctx.error(tpos, format!("widget id '{k}' (this top-band widget's default id) is used twice; give it its own id"));
+                    ok = false;
+                }
+                Some(k) => {
+                    ids.push(k.to_string());
+                    w.insert("id".into(), json!(k));
+                }
+                None => {
+                    ctx.error(tpos, "each [[widget]] needs an id (letters, digits, - and _)");
+                    ok = false;
+                }
+            }
         }
-        if t.get("column").is_none() {
-            ctx.error(tpos, "each [[widget]] needs a column (0 is the first)");
+        if t.get("column").is_none() && slot == Some(DEFAULT_SLOT) {
+            ctx.error(tpos, "each [[widget]] needs a column (0 is the first), or slot = \"top\" for the top band");
             ok = false;
         }
         let Some(kind) = kind else { continue };
+        if let Some(sl) = slot {
+            let id = w.get("id").and_then(J::as_str).unwrap_or(kind.as_str()).to_string();
+            placed.push((kind.clone(), sl, id, tpos));
+        }
         // Rosson 2026-10-04 (answer 5): one agent filtered from a Home, or the
         // whole Home.
         let prop_at = |ctx: &Ctx, name: &str| ctx.pos.get(&format!("page.widget.{i}.props.{name}")).copied().unwrap_or(tpos);
@@ -1479,10 +1586,44 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 ok = false;
             }
         }
+        if kind == "nav-rail" && top && props.get("orientation").and_then(J::as_str) == Some("column") {
+            let p = prop_at(ctx, "orientation");
+            ctx.error(
+                p,
+                "the top band is one row high: a nav-rail there draws as a row (orientation = \"row\", or leave it out)",
+            );
+            ok = false;
+        }
+        if top {
+            w.insert("slot".into(), json!(TOP_SLOT));
+        }
         normalize_props(&kind, &mut props);
+        normalize_slot_props(&kind, if top { TOP_SLOT } else { DEFAULT_SLOT }, &mut props);
         w.insert("kind".into(), json!(kind));
         w.insert("props".into(), J::Object(props));
         out.push(J::Object(w));
+    }
+    // The top band: a few widgets at most, and one nav rail per page once
+    // the rail is up there (Rosson 2026-10-06).
+    let tops = placed.iter().filter(|p| p.1 == TOP_SLOT).count();
+    if tops > MAX_BAND_WIDGETS {
+        ctx.error(at, format!("the top band holds at most {MAX_BAND_WIDGETS} widgets; this page puts {tops} there"));
+        ok = false;
+    }
+    if let Some(top_idx) = placed.iter().position(|p| p.0 == "nav-rail" && p.1 == TOP_SLOT) {
+        let top_id = placed[top_idx].2.clone();
+        for (j, (k, _, id, pos)) in placed.iter().enumerate() {
+            if k != "nav-rail" || j == top_idx {
+                continue;
+            }
+            ctx.error(
+                *pos,
+                format!(
+                    "the nav rail is already in the top band ('{top_id}'); a page draws one nav rail, so remove '{id}' or move the rail back to a column"
+                ),
+            );
+            ok = false;
+        }
     }
     if ok {
         ctx.pos.insert("page.widgets".into(), at);
@@ -1523,7 +1664,8 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
     for (i, w) in widgets.iter().enumerate() {
         let id = w["id"].as_str().unwrap_or("?").to_string();
         let col = w["column"].as_u64().unwrap_or(0) as usize;
-        if col >= ncols {
+        let in_column = w["slot"].as_str().unwrap_or(DEFAULT_SLOT) == DEFAULT_SLOT;
+        if in_column && col >= ncols {
             if from_file {
                 let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
                 ctx.error(

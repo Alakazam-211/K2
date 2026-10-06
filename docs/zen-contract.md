@@ -161,7 +161,8 @@ default on its own Garden).
 {
   "id": "agents",                  // unique on the page
   "kind": "agents",                // agents | conversation | nav-rail | garden-empty
-  "column": 0,
+  "slot": "column",                // "column" (default) | "top" (the top band); a string, more values later
+  "column": 0,                     // absent for a band widget (`slot: "top"`)
   "props": { … },                  // EVERY prop is present: the daemon fills K2's defaults
   "caps": ["agents:read", "agents:add", "presence:read"],   // K2's, by kind; a file can't name caps
   "source": "builtin"
@@ -193,9 +194,15 @@ filtered from a Home**):
 | `conversation` | `attachments` | bool | `true` | attachments in the box |
 | `conversation` | `load-older` | bool | `true` | load older on scroll |
 
-`nav-rail` has no props (Rosson, 2026-10-04). It is a thin (44px), icon-only
-rail drawn at the **left edge of its column, outside the column's box**; it
-takes no share of the box. Top to bottom: **My Home** (current: the Garden
+`nav-rail` has one prop, `orientation` (`"row"` | `"column"`, always sent):
+`"row"` when the rail is in the top band (the only orientation allowed
+there), else `"column"` unless the file sets `"row"` (Rosson, 2026-10-06).
+In a column it is a thin (44px), icon-only rail drawn at the **left edge of
+its column, outside the column's box**; it takes no share of the box (a
+`"row"` rail in a column runs across the top of the column instead). With
+`slot = "top"` it is a **row of four icons in the top band, immediately
+right of the Garden switcher**, 36px high with 30px buttons; the glass pill
+slides sideways, and the current view and Tickets badge work the same. Top to bottom: **My Home** (current: the Garden
 itself), **Agents**, **Projects**, **Tickets** (with the top bar's waiting
 badge), each with the top bar's page name as its tooltip. Each switches the
 Garden's **view** in this window, inside Zen (`app.open`; Rosson,
@@ -218,8 +225,9 @@ check:
 - **Tickets**: the Tickets page's board (list + item, HTML brief) in a
   liquid glass look, chat only (no terminal).
 
-Only `k2.texting@1` places it; a Garden file may place it like any built-in
-widget. A Garden without a rail ignores the view.
+Only `k2.texting@1` places it (column 0, `"column"`); a Garden file may
+place it like any built-in widget, in a column or in the top band. A Garden
+without a rail ignores the view.
 
 `garden-empty` has no props. It shows "This Garden is empty." / "Ask your
 agents to add things to this Garden." and **Ask my agent** (G28) until the
@@ -245,6 +253,35 @@ column = 0
 home = "Work"
 agent = "cortana"                  # one agent → mode "agent"
 ```
+
+A widget may sit in the **top band** instead of a column (Rosson,
+2026-10-06):
+
+```toml
+[[widget]]
+kind = "nav-rail"
+slot = "top"                       # "column" (default) | "top"
+```
+
+- `slot` is `"column"` (the default: needs `column = n`) or `"top"`: the
+  top band, immediately right of the Garden switcher, before the drag
+  region. It is a string so later slots (a bottom band, corners, a menu)
+  are new values, not a new key; any other value is an error today.
+- Only the kinds in the schema's one allowlist, `BAND_WIDGET_KINDS`
+  (`nav-rail` today), fit a band; any other kind with `slot = "top"` is an
+  error naming them. At most 2 widgets per band (`MAX_BAND_WIDGETS`).
+- A top widget has no `column` (an error if set), and its `id` may be left
+  out: it is then its kind (`"nav-rail"`).
+- **One rail per page:** with a `nav-rail` in the top band, any other
+  `nav-rail` on the page (column or band) is an error at its line.
+- Like any `[[widget]]`, a top widget is part of the file's widget list,
+  which replaces the template's: on the texting template, declare `agents`
+  and `conversation` too. Without a top widget nothing changes (Garden 1's
+  rail stays in column 0).
+- The band's controls (switcher, drag region, K2's usage + theme items,
+  Zen toggle) are the template's and stay put; the band slot shrinks first
+  and the drag region keeps a 120px minimum, so a band widget can't push a
+  required control off-screen or trip the required-controls check.
 
 1–3 columns, at most 12 widgets. A `caps` key anywhere is an error;
 `[[control]]` is a warning and ignored; an unknown kind or prop is an error
@@ -524,7 +561,11 @@ this contract, where it reads more loosely or decides something:
    chip and menu), then its theme control, immediately left of the Zen
    toggle, which sits in the window's top-right corner (where the top bar's
    Zen toggle is outside Zen; clear of Windows' controls via
-   `--zen-stoplight-safe-right`). No footer under any column. **Add agent**
+   `--zen-stoplight-safe-right`). A Garden's band widgets (`slot: "top"`)
+   sit between the switcher and the drag strip (`ZenBandSlot`,
+   `components/Zen/ZenBand.tsx`: one component for any band slot; nothing
+   is drawn there by default); the drag strip keeps a 120px minimum
+   (`ZEN_DRAG_MIN_WIDTH_PX`). No footer under any column. **Add agent**
    is the Agents widget's last row (its bottom-left corner), shown in
    whole-Home mode when the widget holds `agents:add`; it opens the picker
    for that widget's own Home.

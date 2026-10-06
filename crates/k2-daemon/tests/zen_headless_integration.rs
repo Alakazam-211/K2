@@ -1114,3 +1114,63 @@ async fn garden_template_route_starts_a_garden_with_the_default_headless() {
     .expect("blocking body");
     collector.abort();
 }
+
+/// Rosson 2026-10-06: a Garden file puts the nav rail in the top band
+/// (`slot = "top"`) and the headless daemon's `GET /cli/zen/get` answers
+/// with it: `slot: "top"`, no column, a row, K2's caps, and the template's
+/// controls untouched. A kind that doesn't fit the band is an error at its
+/// line and the last good page stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn top_band_slot_reaches_the_page_answer_headless() {
+    let home = new_home();
+    let d = spawn_daemon(&home.0);
+    let tok = d.owner.clone();
+    let port = d.port;
+    let (v, _one) = setup(port, &tok);
+    let two = v["gardens"][1]["id"].as_str().expect("Garden 2 id").to_string();
+    let home_dir = home.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let page = zen_dir(&home_dir).join(format!("gardens/{two}.toml"));
+        std::fs::write(
+            &page,
+            "schema = 1\n\
+template = \"k2.texting@1\"\n\
+[[widget]]\nid = \"agents\"\nkind = \"agents\"\ncolumn = 0\n\
+[[widget]]\nid = \"conversation\"\nkind = \"conversation\"\ncolumn = 1\n\
+[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n",
+        )
+        .expect("save page");
+        let g = wait_for("get to show the top-band rail", Duration::from_secs(5), || {
+            let (s, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            (s == 200 && g["page"]["widgets"].as_array().is_some_and(|w| w.len() == 3)).then_some(g)
+        });
+        assert_eq!(g["errors"], serde_json::json!([]), "{g}");
+        let rail = g["page"]["widgets"][2].clone();
+        assert_eq!(rail["kind"], "nav-rail", "{g}");
+        assert_eq!(rail["id"], "nav-rail", "{rail}");
+        assert_eq!(rail["slot"], "top", "{rail}");
+        assert!(rail.get("column").is_none(), "{rail}");
+        assert_eq!(rail["props"], serde_json::json!({"orientation": "row"}), "{rail}");
+        assert_eq!(rail["caps"], serde_json::json!(["app:navigate"]), "{rail}");
+        assert_eq!(g["page"]["widgets"][0]["slot"], "column", "{g}");
+        assert_eq!(control_kinds(&g), vec!["garden-switcher", "drag-region", "zen-toggle", "add-agent"], "{g}");
+        let (s, v) = call(port, "GET", &format!("/cli/zen/validate?token={tok}&garden={two}"), None);
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["ok"], true, "{v}");
+
+        // Agents can't go up there: an error at its line, last good kept.
+        let good = g["version"].clone();
+        std::fs::write(&page, "schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\nslot = \"top\"\n").expect("break page");
+        let broken = wait_for("get to report the slot error", Duration::from_secs(5), || {
+            let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            g["errors"].as_array().is_some_and(|e| !e.is_empty()).then_some(g)
+        });
+        assert_eq!(broken["version"], good, "{broken}");
+        assert_eq!(broken["errors"][0]["line"], 5, "{broken}");
+        let msg = broken["errors"][0]["message"].as_str().expect("message");
+        assert!(msg.contains("'agents' can't go in the top band; slot = \"top\" takes: nav-rail"), "{msg}");
+        assert_eq!(broken["page"]["widgets"][2]["slot"], "top", "the last good page still has the rail up top: {broken}");
+    })
+    .await
+    .expect("blocking body");
+}

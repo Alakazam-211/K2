@@ -36,14 +36,37 @@ export interface ZenLayout {
   minWidths: number[]
 }
 
+/** Where a widget sits (Rosson 2026-10-06): a layout column (the default),
+ *  or a band of the page. Only `top` today; the daemon's schema owns the
+ *  values and which kinds fit a band (`BAND_WIDGET_KINDS`). A string, so
+ *  later slots (a bottom band, corners, a menu) are new values. */
+export type ZenWidgetSlot = string
+/** The default slot: a layout column. */
+export const ZEN_COLUMN_SLOT = 'column'
+/** Band slots this renderer draws (with `ZenBandSlot`). */
+export const ZEN_BAND_SLOTS: readonly string[] = ['top']
+
+/** The slot a widget sits in: a band this renderer knows, else a column
+ *  (a slot from a newer daemon falls back to its column). */
+export function zenWidgetSlot(w: Pick<ZenWidgetDecl, 'slot'>): ZenWidgetSlot {
+  return w.slot && ZEN_BAND_SLOTS.includes(w.slot) ? w.slot : ZEN_COLUMN_SLOT
+}
+
+/** Does the widget sit in a band (not a column)? */
+export function zenWidgetInBand(w: Pick<ZenWidgetDecl, 'slot'>): boolean {
+  return zenWidgetSlot(w) !== ZEN_COLUMN_SLOT
+}
+
 /** One widget placed on the page. Built-ins in v1; the same shape carries
  *  v2 user widgets. `caps` are what its source declared (Z33). */
 export interface ZenWidgetDecl {
   id: string
   /** Which widget renders it: `agents`, `conversation` (v1 built-ins). */
   kind: string
-  /** Column index in `layout`. */
+  /** Column index in `layout` (ignored for a band widget). */
   column: number
+  /** A band slot (`top`); absent means a column. */
+  slot?: ZenWidgetSlot
   props: Record<string, unknown>
   caps: string[]
   /** `builtin` in v1 (granted by K2). */
@@ -247,10 +270,12 @@ function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): 
     if (!kind) return
     const id = typeof w.id === 'string' && w.id ? w.id : `${kind}-${idx}`
     const col = num(w.column ?? w.col)
+    const band = typeof w.slot === 'string' && ZEN_BAND_SLOTS.includes(w.slot) ? w.slot : null
     out.push({
       id,
       kind,
-      column: col !== null && col >= 0 && col < columns ? Math.floor(col) : Math.min(idx, columns - 1),
+      ...(band ? { slot: band } : {}),
+      column: band ? 0 : col !== null && col >= 0 && col < columns ? Math.floor(col) : Math.min(idx, columns - 1),
       props: isObj(w.props) ? w.props : {},
       caps: Array.isArray(w.caps) ? w.caps.filter((c): c is string => typeof c === 'string') : [],
       source: typeof w.source === 'string' ? w.source : 'builtin',

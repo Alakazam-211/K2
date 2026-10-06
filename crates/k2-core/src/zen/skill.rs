@@ -9,7 +9,8 @@
 use super::schema::{
     PropType, ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BEZIER_Y_MAX,
     BEZIER_Y_MIN, BLANK_TEMPLATE_ID, BUILTIN_BEZIERS, COLOR_TOKENS, COLUMN_MIN_WIDTH_MAX, CONTROL_WARNING,
-    CORNERS, FONT_FAMILIES, LAYOUT_KINDS, MAX_BACKGROUND_BYTES, MAX_COLUMNS, MAX_WIDGETS, MIN_CONTRAST,
+    CORNERS, DEFAULT_SLOT, FONT_FAMILIES, LAYOUT_KINDS, MAX_BACKGROUND_BYTES, MAX_COLUMNS, MAX_BAND_WIDGETS,
+    MAX_WIDGETS, MIN_CONTRAST, TOP_SLOT, BAND_WIDGET_KINDS, WIDGET_SLOTS,
     NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID, TEMPLATE_WIDGET_KINDS,
     TERMINAL_PARTNER, TERMINAL_TOKENS, WIDGET_KINDS, WIDGET_PROPS,
 };
@@ -134,11 +135,33 @@ until the file declares its own, its layout and widgets.\n\n\
 - `[[widget]]`: `id` (letters, digits, - and _; unique), `kind`, `column` (0 is the\n\
   first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}.\n\
   When the file declares any `[[widget]]`, they replace the template's widgets.\n\
+- `slot`: {} (default `{DEFAULT_SLOT}`). `slot = \"{TOP_SLOT}\"` puts the widget in the page's\n\
+  top band, immediately right of the Garden switcher, instead of a column. Only {} fit\n\
+  there, at most {MAX_BAND_WIDGETS}; a top widget has no `column`, and its `id` may be left out\n\
+  (it is then the kind). The band's controls (Garden switcher, drag area, Zen toggle)\n\
+  stay where they are.\n\
 - A page never names caps: built-in widgets get K2's caps (`caps` is an error).\n\
 - `[[control]]` is warned and ignored: \"{CONTROL_WARNING}\".\n\
 - Unknown kinds, props and keys are errors at their line.\n\n",
         ticks(LAYOUT_KINDS),
         fmt_num(COLUMN_MIN_WIDTH_MAX),
+        ticks(WIDGET_SLOTS),
+        ticks(BAND_WIDGET_KINDS),
+    ));
+    s.push_str(&format!(
+        "### The nav rail in the top band\n\n\
+To show the nav rail as a row of icons in the top band, right of the Garden\n\
+switcher, instead of a strip down a column:\n\n\
+```toml\n\
+[[widget]]\n\
+kind = \"nav-rail\"\n\
+slot = \"{TOP_SLOT}\"\n\
+```\n\n\
+Like any `[[widget]]`, it replaces the template's widgets, so on the texting page\n\
+list the others too (`agents` in column 0, `conversation` in column 1). A page with\n\
+the rail in the top band draws one rail: another `nav-rail` on the page is an error.\n\
+Its `orientation` is `row` there (the only one that fits); in a column it is `column`\n\
+unless you set `orientation = \"row\"`.\n\n"
     ));
     s.push_str("### Built-in widgets\n\n");
     for (kind, what) in WIDGET_KINDS {

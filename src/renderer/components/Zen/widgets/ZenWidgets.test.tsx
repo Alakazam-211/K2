@@ -386,7 +386,7 @@ import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
 import { requestZenComposeFocus, useZenComposeFocusStore, ZEN_COMPOSE_FOCUS_TTL_MS } from '@/lib/zen/zen-compose-focus'
 import { ZenBridgeError, createZenBridge } from '@/lib/zen/zen-bridge'
 import { BUILTIN_TEXTING_PAGE } from '@/lib/zen/zen-page'
-import type { ZenGeometry } from '@/lib/zen/zen-controls'
+import { ZEN_DRAG_MIN_WIDTH_PX, type ZenGeometry } from '@/lib/zen/zen-controls'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { ZenHost } from '../ZenHost'
 import { installZenBuiltins } from './builtins'
@@ -395,7 +395,7 @@ import { zenEmptyThreadText, zenPermissionText } from './ZenConversationWidget'
 import { zenGardenAskDraft } from './ZenGardenEmptyWidget'
 import { ZEN_PROJECTS_TEXT, zenProjectsAskDraft } from './ZenProjectsViewWidget'
 import { ZEN_EMPTY_FOCUS_GROUP } from './ZenAgentsWidget'
-import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, zenNavPillMotion } from './ZenNavRailWidget'
+import { ZEN_NAV_PILL_SPRING, ZEN_NAV_RAIL_CSS, ZEN_NAV_RAIL_ROW_HEIGHT_PX, zenNavPillMotion } from './ZenNavRailWidget'
 import { ZEN_TICKETS_GLASS_CSS } from './ZenTicketsViewWidget'
 import { ZEN_USAGE_CSS } from '../ZenUsageTool'
 import { ZEN_GLASS_CSS, zenGlassRule } from '@/lib/zen/zen-glass'
@@ -2733,6 +2733,193 @@ describe('the Agents widget’s Home picker (G27, TG4.4)', () => {
     expect(homes.find((x) => x.id === 'h1')?.rows.map((r) => r.address)).not.toContain('atlas::local')
     expect(useHomesStore.getState().selectedId).toBe('h1')
     await waitFor(() => expect(widgetRows('agents')).toEqual(['atlas::local']))
+  })
+})
+
+// Rosson 2026-10-06: a Garden file puts the nav rail in the top band
+// (`[[widget]] slot = "top"`), as a row right of the Garden switcher. The
+// band's controls stay the template's.
+describe('a widget in the top band (slot = "top")', () => {
+  const caps = {
+    agents: ['agents:read', 'agents:add', 'presence:read'],
+    conversation: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
+  }
+  beforeEach(() => {
+    h.gardens.push({ id: 'g-top', name: 'Top', template: 'k2.texting@1' })
+    // As the daemon sends it: slot on every widget, orientation filled.
+    h.pages['g-top'] = {
+      template: 'k2.texting@1',
+      layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+      widgets: [
+        { id: 'agents', kind: 'agents', slot: 'column', column: 0, props: { 'home-picker': true }, caps: caps.agents, source: 'builtin' },
+        { id: 'conversation', kind: 'conversation', slot: 'column', column: 1, props: { agents: 'agents' }, caps: caps.conversation, source: 'builtin' },
+        { id: 'nav-rail', kind: 'nav-rail', slot: 'top', props: { orientation: 'row' }, caps: ['app:navigate'], source: 'builtin' },
+      ],
+    }
+    useZenWindowStore.setState({ garden: 'g-top' })
+  })
+
+  function bandOrder(): string[] {
+    const bar = document.querySelector('[data-zen-texting-controls]')
+    if (!bar) throw new Error('no template band')
+    return Array.from(bar.children)
+      .filter((c) => c.tagName !== 'STYLE')
+      .map((c) =>
+        c.querySelector('[data-zen-garden-pill]')
+          ? 'switcher'
+          : c.hasAttribute('data-zen-band')
+            ? `band:${c.getAttribute('data-zen-band')}`
+            : c.hasAttribute('data-zen-drag')
+              ? 'drag'
+              : c.hasAttribute('data-zen-top-right')
+                ? 'top-right'
+                : c.tagName,
+      )
+  }
+
+  function railIn(): string {
+    const rail = document.querySelector('[data-zen-widget="nav-rail"]')
+    if (!rail) throw new Error('no rail')
+    if (rail.closest('[data-zen-band="top"]')) return 'band'
+    const slot = rail.closest('[data-zen-column-slot]')
+    return slot ? `column:${slot.getAttribute('data-zen-column-slot')}` : 'nowhere'
+  }
+
+  function pills(): HTMLElement[] {
+    return Array.from(document.querySelectorAll('[data-zen-widget="nav-rail"] [data-zen-nav-pill]')) as HTMLElement[]
+  }
+
+  async function showView(view: string): Promise<void> {
+    await act(async () => {
+      fireEvent.click(document.querySelector(`[data-zen-nav="${view}"]`) as HTMLElement)
+    })
+    await waitFor(() => {
+      if (document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view') !== view) throw new Error(`${view} not shown`)
+    })
+  }
+
+  it('the rail is a row of four icons in the top band, immediately right of the Garden switcher, and in no column', async () => {
+    await mountZen()
+    expect(bandOrder()).toEqual(['switcher', 'band:top', 'drag', 'top-right'])
+    expect(railIn()).toBe('band')
+    const rail = document.querySelector('[data-zen-widget="nav-rail"]') as HTMLElement
+    expect(rail.getAttribute('data-zen-nav-orientation')).toBe('row')
+    expect(rail.getAttribute('aria-orientation')).toBe('horizontal')
+    expect(rail.classList.contains('flex-row')).toBe(true)
+    expect(rail.style.height).toBe(`${ZEN_NAV_RAIL_ROW_HEIGHT_PX}px`)
+    expect(rail.style.width).toBe('')
+    expect(Array.from(rail.querySelectorAll('[data-zen-nav]')).map((b) => b.getAttribute('data-zen-nav'))).toEqual([
+      'home',
+      'agents',
+      'projects',
+      'tickets',
+    ])
+    for (const b of Array.from(rail.querySelectorAll('[data-zen-nav]')) as HTMLElement[]) {
+      expect(b.style.width).toBe('30px')
+      expect(b.style.height).toBe('30px')
+    }
+    // One rail on the page; column 0 is just the Agents box now.
+    expect(document.querySelectorAll('[data-zen-widget="nav-rail"]').length).toBe(1)
+    const slot0 = Array.from(document.querySelector('[data-zen-column-slot="0"]')?.children ?? [])
+    expect(slot0.map((c) => c.getAttribute('data-zen-column'))).toEqual(['0'])
+    expect(document.querySelector('[data-zen-column-slot] [data-zen-widget="nav-rail"]')).toBeNull()
+    // The badge still rides Tickets.
+    act(() => useFeedbackStore.setState({ waitingCount: 2, waitingStale: false, waitingUnsupported: false }))
+    await waitFor(() => expect(document.querySelector('[data-zen-band="top"] [data-zen-nav="tickets"] [data-zen-nav-badge]')?.textContent).toBe('2'))
+    act(() => useFeedbackStore.setState({ waitingCount: 0 }))
+  })
+
+  it('the glass pill slides sideways with the view, and the rail stays in the band in every view', async () => {
+    await mountZen()
+    expect(pills().length).toBe(1)
+    expect(pills()[0].closest('[data-zen-nav]')?.getAttribute('data-zen-nav')).toBe('home')
+    for (const view of ['agents', 'tickets', 'projects', 'home'] as const) {
+      await showView(view)
+      const all = pills()
+      expect(all.length, view).toBe(1)
+      expect(all[0].closest('[data-zen-nav]')?.getAttribute('data-zen-nav'), view).toBe(view)
+      expect(document.querySelector('[data-zen-nav][aria-current="page"]')?.getAttribute('data-zen-nav'), view).toBe(view)
+      expect(railIn(), view).toBe('band')
+      expect(bandOrder(), view).toEqual(['switcher', 'band:top', 'drag', 'top-right'])
+    }
+    expect(useZenWindowStore.getState().on).toBe(true)
+    expect(usePageViewStore.getState().page).toBe('home')
+  })
+
+  it('the required controls are present and bound, and two checks never drop to safe mode, in any view', async () => {
+    await mountZen()
+    for (const view of ['home', 'agents', 'tickets', 'projects', 'home'] as const) {
+      if (view !== 'home' || document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view') !== 'home') await showView(view)
+      expect(document.querySelectorAll('[data-zen-garden-pill]').length, view).toBe(1)
+      expect(document.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound'), view).toBe('garden-switcher')
+      expect(document.querySelectorAll('[data-zen-switch]').length, view).toBe(1)
+      expect(document.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound'), view).toBe('zen-toggle')
+      expect(document.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound'), view).toBe('drag-region')
+      act(() => runZenControlChecksNow())
+      act(() => runZenControlChecksNow())
+      expect(useZenViewStore.getState().safe, view).toBeNull()
+      expect(document.querySelector('[data-zen-safe-banner]'), view).toBeNull()
+    }
+    // K2's top-right items are still there, left of the toggle.
+    const topRight = document.querySelector('[data-zen-top-right]') as HTMLElement
+    expect(topRight.lastElementChild?.hasAttribute('data-zen-switch')).toBe(true)
+    expect(topRight.querySelector('[data-zen-theme-picker]')).not.toBeNull()
+  })
+
+  it('the drag region keeps its minimum width; the band slot is the part that shrinks', async () => {
+    await mountZen()
+    const drag = document.querySelector('[data-zen-drag]') as HTMLElement
+    expect(ZEN_DRAG_MIN_WIDTH_PX).toBe(120)
+    expect(drag.style.minWidth).toBe(`${ZEN_DRAG_MIN_WIDTH_PX}px`)
+    expect(drag.classList.contains('flex-1')).toBe(true)
+    expect(drag.classList.contains('min-w-0')).toBe(false)
+    const band = document.querySelector('[data-zen-band="top"]') as HTMLElement
+    expect(band.style.flex).toBe('0 1 auto')
+    expect(band.classList.contains('min-w-0')).toBe(true)
+    expect(band.classList.contains('overflow-hidden')).toBe(true)
+    // A click on the band never starts a window drag.
+    expect(band.classList.contains('no-drag')).toBe(true)
+    // The switcher and the top-right cluster never shrink.
+    expect((document.querySelector('[data-zen-garden-pill]')?.parentElement as HTMLElement).style.flexShrink).toBe('0')
+    expect(document.querySelector('[data-zen-top-right]')?.classList.contains('flex-shrink-0')).toBe(true)
+  })
+
+  it('every button keeps a pointer (the current rail item is where you are)', async () => {
+    await mountZen()
+    expectEveryButtonPointer()
+    for (const b of Array.from(document.querySelectorAll('[data-zen-band="top"] [data-zen-nav]:not([aria-current])'))) {
+      expect(b.classList.contains('cursor-pointer')).toBe(true)
+    }
+    await showView('tickets')
+    expectEveryButtonPointer()
+  })
+
+  it('by default the rail stays a column strip at the left edge of column 0 (Garden 1 unchanged)', async () => {
+    useZenWindowStore.setState({ garden: 'g-default' })
+    await mountZen()
+    expect(document.querySelector('[data-zen-band]')).toBeNull()
+    expect(bandOrder()).toEqual(['switcher', 'drag', 'top-right'])
+    expect(railIn()).toBe('column:0')
+    const rail = document.querySelector('[data-zen-widget="nav-rail"]') as HTMLElement
+    expect(rail.getAttribute('data-zen-nav-orientation')).toBe('column')
+    expect(rail.style.width).toBe('44px')
+    const slot0 = document.querySelector('[data-zen-column-slot="0"]') as HTMLElement
+    expect(slot0.classList.contains('flex-row')).toBe(true)
+    expect(slot0.firstElementChild?.getAttribute('data-zen-widget')).toBe('nav-rail')
+  })
+
+  it('a rail asked to be a row inside a column runs across the top of that column', async () => {
+    h.pages['g-top'].widgets = [
+      { id: 'agents', kind: 'agents', slot: 'column', column: 0, props: { 'home-picker': true }, caps: caps.agents, source: 'builtin' },
+      { id: 'conversation', kind: 'conversation', slot: 'column', column: 1, props: { agents: 'agents' }, caps: caps.conversation, source: 'builtin' },
+      { id: 'nav', kind: 'nav-rail', slot: 'column', column: 1, props: { orientation: 'row' }, caps: ['app:navigate'], source: 'builtin' },
+    ]
+    await mountZen()
+    expect(document.querySelector('[data-zen-band]')).toBeNull()
+    expect(railIn()).toBe('column:1')
+    const slot1 = document.querySelector('[data-zen-column-slot="1"]') as HTMLElement
+    expect(slot1.classList.contains('flex-col')).toBe(true)
+    expect(slot1.firstElementChild?.getAttribute('data-zen-nav-orientation')).toBe('row')
   })
 })
 

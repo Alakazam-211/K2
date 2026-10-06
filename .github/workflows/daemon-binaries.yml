@@ -17,6 +17,15 @@
 #   k2-daemon-linux-x86_64{,.sig}
 #   k2-daemon-linux-aarch64{,.sig}
 #
+# Hosted-mail root helper (0.44.1+). SEPARATE assets, same minisign key,
+# plus a .sha256, and NOT in daemon-latest.json — the daemon self-update
+# runs as user k2 and must never try to replace a root-owned file. Ops
+# install it once per box, as root, with install-mail-helper.sh (also a
+# release asset of the same tag):
+#   k2-mail-helper-linux-x86_64{,.sig,.sha256}
+#   k2-mail-helper-linux-aarch64{,.sig,.sha256}
+#   install-mail-helper.sh
+#
 # Do NOT attach an air-gap daemon to the GitHub release. `--features airgap`
 # is a custom/enterprise compile (bakes air-gap ON, omits the GitHub
 # daemon-latest.json ping URL). Distribution is off-band / portal, not
@@ -71,9 +80,11 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             asset: k2-daemon-linux-x86_64
+            helper_asset: k2-mail-helper-linux-x86_64
             cross: false
           - target: aarch64-unknown-linux-gnu
             asset: k2-daemon-linux-aarch64
+            helper_asset: k2-mail-helper-linux-aarch64
             cross: true
 
     steps:
@@ -139,7 +150,7 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Build k2-daemon (release, standalone bin)
+      - name: Build k2-daemon + k2-mail-helper (release, standalone bins)
         env:
           # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
@@ -152,12 +163,15 @@ jobs:
           require_mail_oauth_build_env
           cargo build --release \
             --target ${{ matrix.target }} \
-            --bin k2-daemon
+            --bin k2-daemon \
+            --bin k2-mail-helper
           # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
           TARGET_DIR="${CARGO_TARGET_DIR:-target}"
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
-          file "${{ matrix.asset }}"
+          cp "$TARGET_DIR/${{ matrix.target }}/release/k2-mail-helper" \
+             "${{ matrix.helper_asset }}"
+          file "${{ matrix.asset }}" "${{ matrix.helper_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Sign with the Tauri updater key via the tauri CLI signer (produces a
@@ -167,32 +181,42 @@ jobs:
       - name: Install tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Sign binary (minisign via tauri signer)
+      - name: Sign binaries (minisign via tauri signer)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          cargo tauri signer sign \
-            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-            --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-            "${{ matrix.asset }}"
-          test -f "${{ matrix.asset }}.sig"
-          # tauri signer writes the .sig as BASE64 of the minisig text; the
-          # daemon self-updater (minisign_verify) and plain minisign need
-          # the RAW text — publish that. (Found by the first real Shape B
-          # two-version e2e, 2026-07-06.)
-          if ! head -c 17 "${{ matrix.asset }}.sig" | grep -q "untrusted comment"; then
-            base64 -d < "${{ matrix.asset }}.sig" > "${{ matrix.asset }}.sig.raw"
-            head -c 17 "${{ matrix.asset }}.sig.raw" | grep -q "untrusted comment"
-            mv "${{ matrix.asset }}.sig.raw" "${{ matrix.asset }}.sig"
-          fi
+          set -euo pipefail
+          for f in "${{ matrix.asset }}" "${{ matrix.helper_asset }}"; do
+            cargo tauri signer sign \
+              --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+              --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+              "$f"
+            test -f "$f.sig"
+            # tauri signer writes the .sig as BASE64 of the minisig text; the
+            # daemon self-updater (minisign_verify) and plain minisign need
+            # the RAW text — publish that. (Found by the first real Shape B
+            # two-version e2e, 2026-07-06.)
+            if ! head -c 17 "$f.sig" | grep -q "untrusted comment"; then
+              base64 -d < "$f.sig" > "$f.sig.raw"
+              head -c 17 "$f.sig.raw" | grep -q "untrusted comment"
+              mv "$f.sig.raw" "$f.sig"
+            fi
+          done
 
-      - name: Compute sha256 (for logs / manual manifest merge)
-        run: sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
+      # Daemon: logs / manual manifest merge only. Helper: published —
+      # install-mail-helper.sh checks it after the minisign verify.
+      - name: Compute sha256
+        run: |
+          set -euo pipefail
+          sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
+          sha256sum "${{ matrix.helper_asset }}" | tee "${{ matrix.helper_asset }}.sha256"
 
-      # Attach the binary + .sig to the release for this tag. The daemon
-      # manifest (daemon-latest.json) is produced by release.sh; these assets
-      # use the exact names that manifest references.
+      # Attach the binaries + .sig to the release for this tag. The daemon
+      # manifest (daemon-latest.json) is produced by release.sh; the daemon
+      # assets use the exact names that manifest references. The helper
+      # assets are never listed in that manifest (root-owned file; ops
+      # install it with install-mail-helper.sh).
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -201,7 +225,32 @@ jobs:
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sig" \
+            "${{ matrix.helper_asset }}" \
+            "${{ matrix.helper_asset }}.sig" \
+            "${{ matrix.helper_asset }}.sha256" \
             --clobber
+
+  # The root installer the daemon's "mail helper not installed" hint points
+  # at: <release>/download/<tag>/install-mail-helper.sh. Same tag as the
+  # helper assets it fetches. No build; runs even if a matrix leg fails
+  # (the installer then reports the missing asset by name).
+  upload-mail-helper-installer:
+    name: Attach install-mail-helper.sh
+    runs-on: [self-hosted, linux, k2-linux]
+    steps:
+      - name: Checkout (at the release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Upload installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash -n scripts/install-mail-helper.sh
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload "$TAG" scripts/install-mail-helper.sh --clobber
 
   # release.sh generates daemon-latest.json BEFORE this workflow builds the
   # Linux daemons, so the manifest it uploads only carries macos-aarch64 —

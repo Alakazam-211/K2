@@ -113,6 +113,11 @@ pub trait PreflightEnv {
     fn dns01_token_present(&self) -> bool {
         false
     }
+    /// Can the daemon user `sudo -n` `/usr/local/libexec/k2-mail-helper`?
+    /// Every install step needs it. Tests inject; default installed.
+    fn mail_helper(&self) -> super::helper::HelperState {
+        super::helper::HelperState::Installed
+    }
 }
 
 /// Stalwart asks ACME for a cert itself only on plan A (tls-alpn).
@@ -133,6 +138,7 @@ pub fn https_listener_bind(port_plan: &str) -> &'static str {
 }
 
 const MIN_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB (soft)
+const HELPER_LABEL: &str = "Mail root helper (k2-mail-helper) installed and allowed";
 const MIN_RAM_BYTES: u64 = 1024 * 1024 * 1024; // 1 GB (soft)
 
 /// Run the §5.1 checklist against `env`. Pure decision logic — every
@@ -161,6 +167,7 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
             ("outbound-25", "Outbound port 25 reachable"),
             ("disk", "Disk space"),
             ("ram", "Memory"),
+            ("helper", HELPER_LABEL),
         ] {
             checks.push(PreflightCheck {
                 id,
@@ -389,6 +396,22 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
         }),
     }
 
+    // Root door (hard stop): user k2 installs Stalwart only through
+    // `sudo -n /usr/local/libexec/k2-mail-helper`. GitHub-installed and
+    // pre-§7a boxes lack it; the detail names the one root command.
+    let helper_state = env.mail_helper();
+    checks.push(PreflightCheck {
+        id: "helper",
+        label: HELPER_LABEL,
+        status: if helper_state == super::helper::HelperState::Installed {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+        detail: super::helper::unavailable_message(helper_state)
+            .unwrap_or_else(|| helper_state.as_str().to_string()),
+    });
+
     let ok = !checks.iter().any(|c| c.status == CheckStatus::Fail);
     PreflightReport {
         checks,
@@ -510,6 +533,10 @@ impl PreflightEnv for RealPreflightEnv {
             .unwrap_or(false)
     }
 
+    fn mail_helper(&self) -> super::helper::HelperState {
+        super::supervisor::mail_helper_state()
+    }
+
     fn dns01_token_present(&self) -> bool {
         let db = k2_core::db::try_shared();
         let Some(db) = db else {
@@ -573,6 +600,7 @@ pub(crate) mod tests {
         pub ram: Option<u64>,
         pub router_owns_443: bool,
         pub dns01_token: bool,
+        pub helper: crate::mail::helper::HelperState,
     }
 
     impl Default for FakeEnv {
@@ -587,6 +615,7 @@ pub(crate) mod tests {
                 ram: Some(4 * 1024 * 1024 * 1024),
                 router_owns_443: false,
                 dns01_token: false,
+                helper: crate::mail::helper::HelperState::Installed,
             }
         }
     }
@@ -622,6 +651,39 @@ pub(crate) mod tests {
         fn dns01_token_present(&self) -> bool {
             self.dns01_token
         }
+        fn mail_helper(&self) -> crate::mail::helper::HelperState {
+            self.helper
+        }
+    }
+
+    /// Helper missing / not allowed is a hard stop whose detail is the
+    /// exact root command; installed passes.
+    #[test]
+    fn missing_mail_helper_is_a_hard_stop_naming_the_fix() {
+        use crate::mail::helper::{install_command, HelperState};
+        let r = run_preflight(&FakeEnv::default());
+        assert_eq!(check(&r, "helper").status, CheckStatus::Pass);
+        assert_eq!(check(&r, "helper").detail, "installed");
+
+        for (state, prefix) in [
+            (HelperState::Missing, "mail helper not installed"),
+            (
+                HelperState::NotAllowed,
+                "mail helper not allowed by sudoers",
+            ),
+        ] {
+            let env = FakeEnv {
+                helper: state,
+                ..FakeEnv::default()
+            };
+            let r = run_preflight(&env);
+            assert!(!r.ok, "{state:?} must block enable");
+            let c = check(&r, "helper");
+            assert_eq!(c.status, CheckStatus::Fail);
+            assert!(c.detail.starts_with(prefix), "{}", c.detail);
+            assert!(c.detail.ends_with(&install_command()), "{}", c.detail);
+            assert_eq!(r.to_json()["checks"].as_array().expect("array").len(), 11);
+        }
     }
 
     /// An env that panics on ANY observation — proves the non-Linux
@@ -640,6 +702,9 @@ pub(crate) mod tests {
         }
         fn rdns(&self, _: &str) -> Option<String> {
             panic!("non-Linux preflight must not resolve DNS")
+        }
+        fn mail_helper(&self) -> crate::mail::helper::HelperState {
+            panic!("non-Linux preflight must not probe sudo")
         }
         fn outbound_25(&self) -> Result<(), String> {
             panic!("non-Linux preflight must not dial the network")
@@ -671,6 +736,7 @@ pub(crate) mod tests {
             "outbound-25",
             "disk",
             "ram",
+            "helper",
         ] {
             assert_eq!(check(&r, id).status, CheckStatus::Pass, "{id}");
         }
@@ -679,7 +745,7 @@ pub(crate) mod tests {
         let v = r.to_json();
         assert_eq!(v["ok"], true);
         assert_eq!(v["portPlan"], "tls-alpn");
-        assert_eq!(v["checks"].as_array().expect("array").len(), 10);
+        assert_eq!(v["checks"].as_array().expect("array").len(), 11);
     }
 
     #[test]

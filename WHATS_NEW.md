@@ -7,6 +7,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 - **IMAP on older mail servers.** A server that turned on hosted email before 0.40.147 never got IMAP on ports 143 (STARTTLS) and 993 (TLS). On startup, the daemon now adds whichever of those two is missing and restarts the mail server once. If both are already there, it does nothing. Nothing else in the mail setup changes.
 - **Air-gap stops the usage check.** With air-gap on, K2 no longer checks your Claude, Codex or Grok usage, so nothing goes out to those services in the background. The usage chip reads "Off (air-gap)".
+- **Mail helper ships with the release.** Turning on hosted email needs a small root helper on the server. It now comes with every release, along with a one-line installer that someone with root runs once per server. If the helper is missing, `k2 hostmail enable` stops before downloading anything and prints that exact command instead of "Permission denied". `k2 hostmail status` shows `helper: installed`, `missing`, or `not allowed by sudoers`.
 - **Reverse DNS reads right.** `k2 hostmail ptr set` judges "aligned" by what k2.dev actually published. If this machine's DNS cache still has the old name, you get a note saying it clears on its own, instead of "not aligned".
 
 ## 0.44.0 — Zen Gardens

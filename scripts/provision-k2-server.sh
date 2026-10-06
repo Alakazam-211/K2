@@ -36,11 +36,13 @@
 #   K2_CALLBACK_TOKEN  bearer for the callback (optional)
 #   K2_VERSION         pin a daemon release (default: latest)
 #   K2_RUN_USER        service account (default: k2)
-#   K2_MAIL_HELPER_BIN absolute path to the built k2-mail-helper binary.
+#   K2_MAIL_HELPER_BIN absolute path to a built k2-mail-helper binary.
 #                      Else beside this script (scripts/k2-mail-helper), else
 #                      ../target/release/k2-mail-helper from a
-#                      `cargo build -p k2-daemon --release --bin k2-mail-helper`.
-#                      Missing is a hard failure — the step is not skipped.
+#                      `cargo build -p k2-daemon --release --bin k2-mail-helper`,
+#                      else the signed GitHub release asset for the installed
+#                      daemon version (install-mail-helper.sh; v0.44.1+).
+#                      A failure is a hard failure — the step is not skipped.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -227,9 +229,19 @@ systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
 
 # ── 7a. mail root helper (always, not only --with-db) ───────────────
 # User k2 enable-from-zero calls `sudo -n /usr/local/libexec/k2-mail-helper`.
-# The binary is not inside the GitHub daemon tarball. Do not skip when it
-# is missing, and do not widen /etc/sudoers.d/k2-pg-helper.
+# install-mail-helper.sh installs it root:root 0755 plus
+# /etc/sudoers.d/k2-mail-helper (visudo-checked, 0440). A local binary wins
+# (K2_MAIL_HELPER_BIN, beside this script, ../target/release); otherwise the
+# installer fetches the minisign-signed release asset for the daemon version
+# step 4 just installed (assets ship from v0.44.1). Never skipped, and never
+# widens /etc/sudoers.d/k2-pg-helper.
 log "installing /usr/local/libexec/k2-mail-helper"
+MAIL_HELPER_INSTALLER="$SCRIPT_DIR/install-mail-helper.sh"
+if [ ! -f "$MAIL_HELPER_INSTALLER" ]; then
+	MAIL_HELPER_INSTALLER="/tmp/k2-install-mail-helper.sh"
+	log "fetching install-mail-helper.sh from the repo"
+	curl -fsSL "$RAW_BASE/scripts/install-mail-helper.sh" -o "$MAIL_HELPER_INSTALLER"
+fi
 MAIL_HELPER_SRC=""
 if [ -n "${K2_MAIL_HELPER_BIN:-}" ]; then
 	if [ ! -f "$K2_MAIL_HELPER_BIN" ]; then
@@ -241,18 +253,15 @@ elif [ -f "$SCRIPT_DIR/k2-mail-helper" ]; then
 elif [ -f "$SCRIPT_DIR/../target/release/k2-mail-helper" ]; then
 	MAIL_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-mail-helper"
 fi
-if [ -z "$MAIL_HELPER_SRC" ]; then
-	die "k2-mail-helper binary missing. Looked beside this script ($SCRIPT_DIR/k2-mail-helper) and at $SCRIPT_DIR/../target/release/k2-mail-helper. Build it with: cargo build -p k2-daemon --release --bin k2-mail-helper — or set K2_MAIL_HELPER_BIN. This step is not skipped."
-fi
-install -d -m 0755 /usr/local/libexec
-install -m 0755 -o root -g root "$MAIL_HELPER_SRC" /usr/local/libexec/k2-mail-helper
-cat > /etc/sudoers.d/k2-mail-helper <<'SUDO'
-k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-mail-helper
-Defaults:k2 !requiretty
-SUDO
-chmod 0440 /etc/sudoers.d/k2-mail-helper
-if command -v visudo >/dev/null 2>&1; then
-	visudo -cf /etc/sudoers.d/k2-mail-helper
+if [ -n "$MAIL_HELPER_SRC" ]; then
+	bash "$MAIL_HELPER_INSTALLER" --file "$MAIL_HELPER_SRC"
+else
+	# 0.40.82+ `k2-daemon --version` prints and exits without booting.
+	DAEMON_VERSION="$("$K2_HOME/.local/bin/k2-daemon" --version 2>/dev/null \
+		| sed -n 's/^k2-daemon[[:space:]]\{1,\}\([0-9][^[:space:]]*\).*/\1/p' | head -n1 || true)"
+	[ -n "$DAEMON_VERSION" ] || die "k2-mail-helper: no local binary and could not read the installed daemon version from $K2_HOME/.local/bin/k2-daemon --version. Set K2_MAIL_HELPER_BIN or run install-mail-helper.sh --version <x.y.z>. This step is not skipped."
+	log "no local k2-mail-helper — installing the signed v${DAEMON_VERSION} release asset"
+	bash "$MAIL_HELPER_INSTALLER" --version "$DAEMON_VERSION"
 fi
 
 # ── 7b. optional Postgres sidecar bake (`--with-db` / K2_BAKE_DB=1) ──

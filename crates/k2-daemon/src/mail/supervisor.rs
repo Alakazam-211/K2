@@ -37,6 +37,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::helper::{self, HelperState};
 use super::jmap::StalwartClient;
 use super::secrets::{generate_secret, FileSecretStore, SecretStore};
 use super::sysops::{RealSystemOps, SystemOps};
@@ -544,19 +545,71 @@ pub fn restart_stalwart_and_wait(why: &str) -> Result<(), String> {
     }
     #[cfg(not(test))]
     {
-        RealSystemOps
-            .systemctl(&["restart", STALWART_UNIT])
-            .map(|_| ())?;
-        // Listeners come back after the process is up.
-        for _ in 0..30 {
-            if stalwart_unit_state().trim() == "active" {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                return Ok(());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        Err(format!("stalwart unit did not become active after {why} restart"))
+        restart_stalwart_and_wait_with(&RealSystemOps, why)
     }
+}
+
+/// [`restart_stalwart_and_wait`] over injected ops. The restart rides the
+/// mail helper's `systemctl restart stalwart` verb, so a box without the
+/// helper stops here with the install command (no sudo attempt).
+pub fn restart_stalwart_and_wait_with(ops: &dyn SystemOps, why: &str) -> Result<(), String> {
+    if let Some(msg) = helper::unavailable_message(ops.mail_helper_state()) {
+        return Err(msg);
+    }
+    ops.systemctl(&["restart", STALWART_UNIT]).map(|_| ())?;
+    // Listeners come back after the process is up.
+    for _ in 0..30 {
+        if ops.systemctl_query(&["is-active", STALWART_UNIT]).trim() == "active" {
+            ops.sleep_ms(400);
+            return Ok(());
+        }
+        ops.sleep_ms(200);
+    }
+    Err(format!(
+        "stalwart unit did not become active after {why} restart"
+    ))
+}
+
+/// Fresh probe of the mail root door (enable, restart, boot reconcile).
+pub fn mail_helper_state() -> HelperState {
+    #[cfg(test)]
+    {
+        TEST_HELPER_STATE.with(|c| c.borrow().unwrap_or(HelperState::Installed))
+    }
+    #[cfg(not(test))]
+    {
+        RealSystemOps.mail_helper_state()
+    }
+}
+
+/// [`mail_helper_state`] cached for 30 s — for `GET /cli/mail/status`,
+/// which the Settings page polls (each probe is a `sudo -n -l`).
+pub fn mail_helper_state_cached() -> HelperState {
+    #[cfg(test)]
+    {
+        mail_helper_state()
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        static CACHE: Mutex<Option<(Instant, HelperState)>> = Mutex::new(None);
+        let mut slot = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, state)) = *slot {
+            if at.elapsed() < Duration::from_secs(30) {
+                return state;
+            }
+        }
+        let state = mail_helper_state();
+        *slot = Some((Instant::now(), state));
+        state
+    }
+}
+
+/// Test seam: inject the helper probe (default `Installed`).
+#[cfg(test)]
+pub(crate) fn set_test_helper_state(state: Option<HelperState>) {
+    TEST_HELPER_STATE.with(|c| *c.borrow_mut() = state);
 }
 
 /// True when a previous `hostmail enable` ran to completion (guided
@@ -899,6 +952,7 @@ thread_local! {
     static TEST_STORE_READY: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
     static TEST_TLS_PROBE: std::cell::RefCell<Option<TlsProbe>> = const { std::cell::RefCell::new(None) };
     static TEST_CERTS_DIR: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
+    static TEST_HELPER_STATE: std::cell::RefCell<Option<HelperState>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -1122,6 +1176,13 @@ pub fn run_enable(
                  explicit supervisor operation)"
             ));
         }
+    }
+    // Every install / unit / systemd step is a `sudo -n` of the mail
+    // helper. Without it nothing below can succeed — stop before the
+    // row flips to `installing`, before the 40 MB download, and before
+    // any write, with the one root command that fixes it.
+    if let Some(msg) = helper::unavailable_message(ops.mail_helper_state()) {
+        return Err(format!("preflight: {msg}"));
     }
 
     // Capture BEFORE ensure_installing_row flips the row to `installing`
@@ -2814,6 +2875,91 @@ mod tests {
             "no writes when refusing (PRD §4)"
         );
         clean_row();
+    }
+
+    /// The akzm / mail.quillify.ai failure: no helper on the box. Enable
+    /// stops before the row flips, before the download, before any
+    /// extract or write — with the install command, not EACCES.
+    #[test]
+    fn enable_stops_before_any_effect_when_the_helper_is_missing() {
+        let _g = db_guard();
+        for (state, prefix) in [
+            (HelperState::Missing, "preflight: mail helper not installed"),
+            (
+                HelperState::NotAllowed,
+                "preflight: mail helper not allowed by sudoers",
+            ),
+        ] {
+            clean_row();
+            let ops = FakeSystemOps {
+                download_body: FAKE_BINARY.to_vec(),
+                helper_state: state,
+                ..FakeSystemOps::default()
+            };
+            let mut api = FakeApi::default();
+            let secrets = FakeSecrets::default();
+            let art = fake_artifact();
+            let err = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+                .expect_err("no helper must stop enable");
+            assert!(err.starts_with(prefix), "{err}");
+            assert!(
+                err.ends_with(&format!("run as root: {}", helper::install_command())),
+                "{err}"
+            );
+            assert!(!err.contains("Permission denied"), "{err}");
+            assert!(
+                ops.recorded().is_empty(),
+                "no download / extract / write / systemctl: {:?}",
+                ops.recorded()
+            );
+            assert!(api.calls.is_empty());
+            assert_eq!(
+                current_status(),
+                None,
+                "row must not flip to installing/error"
+            );
+            assert!(!step_is_done("download"));
+        }
+        clean_row();
+    }
+
+    #[test]
+    fn restart_rides_the_helper_and_stops_with_the_fix_when_missing() {
+        let missing = FakeSystemOps {
+            helper_state: HelperState::Missing,
+            ..FakeSystemOps::default()
+        };
+        let err = restart_stalwart_and_wait_with(&missing, "TLS reload")
+            .expect_err("no helper = no restart attempt");
+        assert!(err.starts_with("mail helper not installed"), "{err}");
+        assert!(err.contains(&helper::install_command()), "{err}");
+        assert!(missing.recorded().is_empty(), "{:?}", missing.recorded());
+
+        let mut answers = std::collections::HashMap::new();
+        answers.insert("is-active stalwart".to_string(), "active".to_string());
+        let ok = FakeSystemOps {
+            query_answers: answers,
+            ..FakeSystemOps::default()
+        };
+        restart_stalwart_and_wait_with(&ok, "TLS reload").expect("restart succeeds");
+        assert_eq!(
+            ok.recorded(),
+            vec![
+                "systemctl restart stalwart".to_string(),
+                "systemctl? is-active stalwart".to_string(),
+            ]
+        );
+        // The restart line is a helper verb (systemctl via sudo -n helper).
+        helper::recorded_line_allowlisted("systemctl restart stalwart")
+            .expect("restart is a helper systemctl vector");
+
+        let never = FakeSystemOps::default();
+        let err = restart_stalwart_and_wait_with(&never, "IMAP listener")
+            .expect_err("inactive unit must time out");
+        assert_eq!(
+            err,
+            "stalwart unit did not become active after IMAP listener restart"
+        );
     }
 
     #[test]

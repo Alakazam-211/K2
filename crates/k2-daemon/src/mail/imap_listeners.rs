@@ -16,7 +16,10 @@
 //! 3. creates ONLY the missing ones (create-only `x:NetworkListener/set`
 //!    — no update, no destroy; never `listeners_apply`, which retargets
 //!    https and destroys pop3s/sieve);
-//! 4. restarts Stalwart once, and only after a create.
+//! 4. restarts Stalwart once, and only after a create. The restart is
+//!    the mail helper's `systemctl restart stalwart` verb (`sudo -n`), so
+//!    a box without the helper skips the pass with a log line naming the
+//!    install command, before any create.
 //!
 //! A listener that exists but differs (same name, other bind/TLS mode,
 //! or another listener on the same port) is never overwritten: it is
@@ -364,6 +367,15 @@ pub fn startup_gate(status: Option<&str>, enable_completed: bool) -> Option<Stri
     None
 }
 
+/// The reconcile's only privileged effect is the Stalwart restart, which
+/// rides the mail helper (`sudo -n k2-mail-helper systemctl restart
+/// stalwart`). Without the helper, skip BEFORE creating listeners — a
+/// create without the restart leaves the store ahead of the sockets.
+/// `None` = proceed. Pure.
+pub fn helper_gate(state: super::helper::HelperState) -> Option<String> {
+    super::helper::unavailable_message(state)
+}
+
 /// Boot hook (main.rs, next to the mail health loop). Linux only; one
 /// detached thread; panics contained; never blocks boot.
 pub fn spawn_startup_reconcile() {
@@ -394,6 +406,10 @@ fn run_startup_reconcile_live() {
 
     let status = supervisor::current_status();
     if let Some(why) = startup_gate(status.as_deref(), supervisor::enable_completed()) {
+        k2_core::log_debug!("{LOG_PREFIX} skipped because {why}");
+        return;
+    }
+    if let Some(why) = helper_gate(supervisor::mail_helper_state()) {
         k2_core::log_debug!("{LOG_PREFIX} skipped because {why}");
         return;
     }
@@ -734,6 +750,25 @@ mod tests {
             assert!(startup_gate(Some(s), true).is_some(), "{s}");
         }
         assert!(startup_gate(Some("running"), false).is_some(), "incomplete enable");
+    }
+
+    #[test]
+    fn helper_gate_skips_with_the_install_command_when_missing() {
+        use crate::mail::helper::{install_command, HelperState};
+        assert_eq!(helper_gate(HelperState::Installed), None);
+        let why = helper_gate(HelperState::Missing).expect("missing must skip");
+        assert!(why.starts_with("mail helper not installed"), "{why}");
+        assert!(why.ends_with(&install_command()), "{why}");
+        let line = format!("{LOG_PREFIX} skipped because {why}");
+        assert!(
+            line.starts_with("[mail/imap-listeners] skipped because mail helper not installed"),
+            "{line}"
+        );
+        let why = helper_gate(HelperState::NotAllowed).expect("not allowed must skip");
+        assert!(
+            why.starts_with("mail helper not allowed by sudoers"),
+            "{why}"
+        );
     }
 
     #[test]

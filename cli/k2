@@ -13839,7 +13839,7 @@ cmd_schema() {
     {
       "name": "hostmail enable",
       "usage": "k2 hostmail enable --hostname <name> [--json]",
-      "description": "Provision / start the hosted mail server. POSTs {\"hostname\":...} to /cli/mail/server/enable. Empty body is 400. Not k2 db enable (that POSTs {}). Healthy second enable is a no-op — it does not rotate leftover recovery admin (use k2 hostmail rotate-admin).",
+      "description": "Provision / start the hosted mail server. POSTs {\"hostname\":...} to /cli/mail/server/enable. Empty body is 400. Not k2 db enable (that POSTs {}). Healthy second enable is a no-op — it does not rotate leftover recovery admin (use k2 hostmail rotate-admin). Needs the root helper /usr/local/libexec/k2-mail-helper: without it enable stops with 409 mail_helper_missing whose hint is the one root command (curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>). k2 hostmail status prints helper: installed | missing | not allowed by sudoers.",
       "args": [],
       "flags": [
         {"name": "--hostname", "arg": "name", "description": "Mail hostname (e.g. mail.acme.dev). Required."},
@@ -25391,6 +25391,12 @@ elif verb == "status":
             print("install  : %s" % prog["current"])
         if d.get("lastError"):
             print("last err : %s" % d["lastError"])
+        if d.get("helper"):
+            # Root door for enable / cert restart: installed | missing |
+            # not allowed by sudoers. helperFix is the one root command.
+            print("helper   : %s" % d["helper"])
+            if d.get("helperFix"):
+                print("fix      : %s" % d["helperFix"])
         cert = d.get("cert")
         if isinstance(cert, dict):
             names = cert.get("names") or []
@@ -25959,6 +25965,10 @@ elif verb == "server_enable":
     elif d.get("alreadyEnabled"):
         print(d.get("hint") or "already enabled (no-op)")
     else:
+        # A missing helper never gets here: the daemon answers 409
+        # mail_helper_missing and die() prints the root install command.
+        if d.get("helper"):
+            print("helper   : %s" % d["helper"])
         print(d.get("hint") or "mail server: enable requested.")
 
 elif verb == "import":
@@ -29955,6 +29965,11 @@ Do not `systemctl start` or `stop` the unit by hand — writes stay
 `k2 hostmail disable` stops inbound mail for the WHOLE host (every hosted
 domain) until `k2 hostmail enable` actually restarts the unit.
 
+Linux: `helper:` is the root door enable and cert restarts use —
+installed | missing | not allowed by sudoers. When it is not installed,
+`fix:` prints the one command for root to run on the box:
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>
+
 USAGE
   k2 hostmail status [flags]
   k2 mail status [flags]
@@ -30377,6 +30392,13 @@ SIGTERM, no config wipe, no data-store move, and not rotate-admin
 (use `k2 hostmail rotate-admin` for leftover recovery admin). After
 disable, enable actually restarts the unit. Hostname retarget is
 disable then enable.
+
+Needs the root helper /usr/local/libexec/k2-mail-helper (user k2 runs it
+with `sudo -n`; the agent never gets a root shell). Without it enable
+stops before any download with error mail_helper_missing, whose hint is
+the command root runs once per box:
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>
+Never create /usr/local/bin/stalwart by hand.
 
 USAGE
   k2 hostmail enable --hostname <name> [--json]

@@ -310,21 +310,121 @@ pub fn decide_effect(cmd: HelperCommand, kind: NodeKind) -> Result<FsEffect, Str
     }
 }
 
-/// `NotFound` (sudo or the helper missing) and sudo's password / allow
-/// refusals. Other stderr is not rewritten.
-pub fn map_helper_failure(spawn: Option<&std::io::Error>, stderr: &str) -> Option<String> {
-    if spawn.is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
-        return Some("mail helper not installed".to_string());
+/// Where the root installer and the helper assets live. One release
+/// per tag: `install-mail-helper.sh`, `k2-mail-helper-linux-<arch>`
+/// (+ `.sig` minisign, `.sha256`). Uploaded by `daemon-binaries.yml`.
+pub const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/Alakazam-211/K2/releases/download";
+
+/// Is the root door usable by this daemon user right now?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperState {
+    /// Present and `sudo -n` may run it.
+    Installed,
+    /// `/usr/local/libexec/k2-mail-helper` (or sudo itself) is absent.
+    Missing,
+    /// Present, but sudoers does not let this user run it without a password.
+    NotAllowed,
+}
+
+impl HelperState {
+    /// The preflight / status word: `installed | missing | not allowed by sudoers`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Missing => "missing",
+            Self::NotAllowed => "not allowed by sudoers",
+        }
     }
-    if stderr.contains("a password is required") || stderr.contains("not allowed to execute") {
-        return Some("mail helper not installed".to_string());
+}
+
+/// The one-line root fix for `version`. The installer and the helper
+/// binary are release assets of the same tag, so the helper argv always
+/// matches the daemon that asks for it.
+pub fn install_command_for(version: &str) -> String {
+    format!(
+        "curl -fsSL {RELEASE_DOWNLOAD_BASE}/v{version}/install-mail-helper.sh | sudo bash -s -- --version {version}"
+    )
+}
+
+/// [`install_command_for`] this build's version.
+pub fn install_command() -> String {
+    install_command_for(env!("CARGO_PKG_VERSION"))
+}
+
+/// The error every helper-dependent path returns when the door is shut.
+/// Names the exact fix. Never includes sudo's stderr. `None` when installed.
+pub fn unavailable_message(state: HelperState) -> Option<String> {
+    let what = match state {
+        HelperState::Installed => return None,
+        HelperState::Missing => format!("mail helper not installed ({HELPER_PATH} is missing)"),
+        HelperState::NotAllowed => format!(
+            "mail helper not allowed by sudoers (this daemon user may not `sudo -n {HELPER_PATH}`)"
+        ),
+    };
+    Some(format!("{what} — run as root: {}", install_command()))
+}
+
+/// Classify a failed `sudo -n <helper>`. `NotFound` (sudo missing) and
+/// "command not found" for the helper path are [`HelperState::Missing`].
+/// sudo's password / allow refusals are [`HelperState::NotAllowed`] when
+/// the helper file exists, else Missing (sudo refuses an unlisted command
+/// before it looks for the file). Other stderr is not a door problem.
+pub fn classify_helper_failure(
+    spawn: Option<&std::io::Error>,
+    stderr: &str,
+    helper_present: bool,
+) -> Option<HelperState> {
+    if spawn.is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+        return Some(HelperState::Missing);
     }
     if stderr.contains(HELPER_PATH)
         && (stderr.contains("command not found") || stderr.contains("No such file or directory"))
     {
-        return Some("mail helper not installed".to_string());
+        return Some(HelperState::Missing);
+    }
+    if stderr.contains("a password is required") || stderr.contains("not allowed to execute") {
+        return Some(if helper_present {
+            HelperState::NotAllowed
+        } else {
+            HelperState::Missing
+        });
     }
     None
+}
+
+/// [`classify_helper_failure`] mapped to the teaching error (with the fix).
+pub fn map_helper_failure_with(
+    spawn: Option<&std::io::Error>,
+    stderr: &str,
+    helper_present: bool,
+) -> Option<String> {
+    classify_helper_failure(spawn, stderr, helper_present).and_then(unavailable_message)
+}
+
+/// Production mapper: checks the helper path on disk.
+pub fn map_helper_failure(spawn: Option<&std::io::Error>, stderr: &str) -> Option<String> {
+    map_helper_failure_with(spawn, stderr, Path::new(HELPER_PATH).exists())
+}
+
+/// Probe the door without running a verb: the file, then
+/// `sudo -n -l <helper>` (exit 0 = allowed without a password). Never runs
+/// the helper. Production only; tests use the [`super::sysops`] fake.
+pub fn probe_state() -> HelperState {
+    if !Path::new(HELPER_PATH).exists() {
+        return HelperState::Missing;
+    }
+    match std::process::Command::new(SUDO_PATH)
+        .args(["-n", "-l", HELPER_PATH])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(st) if st.success() => HelperState::Installed,
+        Ok(_) => HelperState::NotAllowed,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HelperState::Missing,
+        Err(_) => HelperState::NotAllowed,
+    }
 }
 
 /// Enable marks a step only after the privileged call returns `Ok`.
@@ -988,30 +1088,62 @@ mod tests {
 
     #[test]
     fn missing_helper_mapper_and_unmarked_step() {
+        let fix = install_command();
         let missing = std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "No such file User=root-CANARY",
         );
-        let msg = map_helper_failure(Some(&missing), "").unwrap();
-        assert_eq!(msg, "mail helper not installed");
+        let msg = map_helper_failure_with(Some(&missing), "", true).unwrap();
+        assert!(msg.starts_with("mail helper not installed"), "{msg}");
+        assert!(msg.contains(&fix), "{msg}");
         assert!(!msg.contains("CANARY"));
 
+        // Password / allow refusal with the file absent = not installed.
         for stderr in [
             "sudo: a password is required",
             "k2 is not allowed to execute /usr/local/libexec/k2-mail-helper as root on this host",
             "sudo: a password is required\nUser=root-CANARY",
         ] {
-            let msg = map_helper_failure(None, stderr).unwrap();
-            assert_eq!(msg, "mail helper not installed");
+            let msg = map_helper_failure_with(None, stderr, false).unwrap();
+            assert!(
+                msg.starts_with("mail helper not installed"),
+                "{stderr} -> {msg}"
+            );
+            assert!(msg.contains(&fix), "{stderr} -> {msg}");
             assert!(!msg.contains("CANARY"), "{stderr} -> {msg}");
+        }
+        // Same refusal with the file present = sudoers does not allow it.
+        for stderr in [
+            "sudo: a password is required",
+            "k2 is not allowed to execute /usr/local/libexec/k2-mail-helper as root on this host",
+        ] {
+            assert_eq!(
+                classify_helper_failure(None, stderr, true),
+                Some(HelperState::NotAllowed),
+                "{stderr}"
+            );
+            let msg = map_helper_failure_with(None, stderr, true).unwrap();
+            assert!(
+                msg.starts_with("mail helper not allowed by sudoers"),
+                "{msg}"
+            );
+            assert!(msg.contains(&fix), "{msg}");
         }
 
         let gone = format!("sudo: {HELPER_PATH}: command not found");
         assert_eq!(
-            map_helper_failure(None, &gone).as_deref(),
-            Some("mail helper not installed")
+            classify_helper_failure(None, &gone, true),
+            Some(HelperState::Missing)
         );
-        assert!(map_helper_failure(None, "ensure-user: useradd failed: exit 1").is_none());
+        assert!(map_helper_failure_with(None, &gone, true)
+            .unwrap()
+            .starts_with("mail helper not installed"));
+        assert!(
+            map_helper_failure_with(None, "ensure-user: useradd failed: exit 1", true).is_none()
+        );
+        assert!(
+            classify_helper_failure(None, "systemctl restart stalwart: failed", false).is_none()
+        );
 
         let mut marked = false;
         let err: Result<(), String> = Err(msg);
@@ -1019,6 +1151,73 @@ mod tests {
         assert!(!marked, "helper error must leave the step unmarked");
         mark_step_on_ok(&Ok(()), &mut marked);
         assert!(marked);
+    }
+
+    /// The installer the hint points at must agree with the daemon: same
+    /// updater pubkey as the self-updater, same helper path, the exact
+    /// two sudoers lines (visudo-checked), and the per-arch asset name
+    /// daemon-binaries.yml uploads.
+    #[test]
+    fn installer_script_matches_daemon_constants() {
+        let script = include_str!("../../../../scripts/install-mail-helper.sh");
+        assert!(
+            script.contains(&format!(
+                "K2_HELPER_PUBKEY=\"{}\"",
+                crate::update_routes::UPDATER_PUBKEY_B64
+            )),
+            "installer pubkey must equal update_routes::UPDATER_PUBKEY_B64"
+        );
+        assert!(script.contains(&format!("HELPER_PATH=\"{HELPER_PATH}\"")));
+        assert!(
+            script.contains(r#"printf '%s ALL=(root) NOPASSWD: %s\nDefaults:%s !requiretty\n'"#)
+        );
+        assert!(script.contains("RUN_USER=\"${K2_RUN_USER:-k2}\""));
+        assert!(script.contains("visudo -cf \"$CANDIDATE\""));
+        assert!(script.contains("ASSET=\"k2-mail-helper-linux-${ARCH}\""));
+        assert!(script.contains(&format!(
+            "RELEASE_BASE=\"${{K2_RELEASE_BASE:-{RELEASE_DOWNLOAD_BASE}}}\""
+        )));
+        let workflow = include_str!("../../../../.github/workflows/daemon-binaries.yml");
+        for asset in [
+            "helper_asset: k2-mail-helper-linux-x86_64",
+            "helper_asset: k2-mail-helper-linux-aarch64",
+            "--bin k2-mail-helper",
+            "gh release upload \"$TAG\" scripts/install-mail-helper.sh --clobber",
+        ] {
+            assert!(
+                workflow.contains(asset),
+                "daemon-binaries.yml lacks {asset}"
+            );
+        }
+    }
+
+    #[test]
+    fn install_hint_names_the_release_installer_for_this_version() {
+        let v = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            install_command(),
+            format!(
+                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-mail-helper.sh | sudo bash -s -- --version {v}"
+            )
+        );
+        assert_eq!(unavailable_message(HelperState::Installed), None);
+        let missing = unavailable_message(HelperState::Missing).unwrap();
+        assert_eq!(
+            missing,
+            format!(
+                "mail helper not installed (/usr/local/libexec/k2-mail-helper is missing) — run as root: {}",
+                install_command()
+            )
+        );
+        let denied = unavailable_message(HelperState::NotAllowed).unwrap();
+        assert!(
+            denied.starts_with("mail helper not allowed by sudoers"),
+            "{denied}"
+        );
+        assert!(denied.ends_with(&install_command()), "{denied}");
+        assert_eq!(HelperState::Installed.as_str(), "installed");
+        assert_eq!(HelperState::Missing.as_str(), "missing");
+        assert_eq!(HelperState::NotAllowed.as_str(), "not allowed by sudoers");
     }
 
     #[test]

@@ -79,6 +79,9 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?")[0] == "/cli/mail/status":
             with open(os.path.join(root, "status.json")) as f:
                 self._send(200, f.read())
+        elif self.path.split("?")[0] == "/cli/mail/server/enable":
+            with open(os.path.join(root, "enable.json")) as f:
+                self._send(409, f.read())
         else:
             self._send(404, '{"error":{"code":"not_found","hint":"stub"}}')
     do_POST = do_GET
@@ -197,6 +200,40 @@ else
 fi
 assert_contains "stateless body is unexpected" "$out" "unexpected daemon response"
 
+FIX="curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v0.44.1/install-mail-helper.sh | sudo bash -s -- --version 0.44.1"
+
+echo "== helper missing → helper + fix lines =="
+cat >"$WORKDIR/status.json" <<JSON
+{"ok":true,"consistent":true,"supported":true,"state":"not-installed","version":null,"pinnedVersion":"0.16.10","hostname":null,"portPlan":null,"enableProgress":null,"lastError":null,"helper":"missing","helperFix":"mail helper not installed (/usr/local/libexec/k2-mail-helper is missing) — run as root: $FIX"}
+JSON
+run_status
+assert_exit "helper missing status exit" 1 "$rc"
+assert_contains "helper line" "$out" "helper   : missing"
+assert_contains "fix line" "$out" "fix      : mail helper not installed"
+assert_contains "fix names the command" "$out" "$FIX"
+
+echo "== helper installed → helper line, no fix =="
+cat >"$WORKDIR/status.json" <<'JSON'
+{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"helper":"installed"}
+JSON
+run_status
+assert_exit "helper installed status exit" 0 "$rc"
+assert_contains "helper installed line" "$out" "helper   : installed"
+assert_absent "no fix line" "$out" "fix      :"
+
+echo "== enable without helper → 409 hint is the root command, exit ≠ 0 =="
+cat >"$WORKDIR/enable.json" <<JSON
+{"ok":false,"error":{"code":"mail_helper_missing","hint":"mail helper not installed (/usr/local/libexec/k2-mail-helper is missing) — run as root: $FIX"},"helper":"missing"}
+JSON
+set +e
+out="$("${K2_STUB[@]}" "$K2_CLI" hostmail enable --hostname mail.lztek.io 2>&1)"
+rc=$?
+set -e
+assert_exit "enable without helper exit" 1 "$rc"
+assert_contains "enable error code" "$out" "mail_helper_missing"
+assert_contains "enable hint command" "$out" "$FIX"
+assert_absent "enable no EACCES" "$out" "Permission denied"
+
 echo "== help + study explain consistent / systemd / disable =="
 # C18: `k2 hostmail status --help` is leaf help. Group help is `k2 hostmail --help`.
 help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$K2_CLI")"
@@ -204,6 +241,10 @@ help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$K2_CLI")"
 assert_contains "status help consistent" "$help_out" "consistent: false"
 assert_contains "status help systemd" "$help_out" "systemctl is-active stalwart"
 assert_contains "status help disable" "$help_out" "until \`k2 hostmail enable\`"
+assert_contains "status help helper" "$help_out" "installed | missing | not allowed by sudoers"
+enable_help="$(sed -n '/^cmd_help_hostmail_enable() {$/,/^}$/p' "$K2_CLI")"
+assert_contains "enable help helper" "$enable_help" "install-mail-helper.sh"
+assert_contains "enable help code" "$enable_help" "mail_helper_missing"
 # Through the stub env: the CLI connection gate needs a port + token even
 # for help, and must never fall back to the real ~/.k2.
 group_help="$("${K2_STUB[@]}" "$K2_CLI" hostmail --help)"

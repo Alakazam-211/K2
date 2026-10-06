@@ -54,6 +54,10 @@ pub trait SystemOps: Send + Sync {
     fn systemctl_query(&self, args: &[&str]) -> String;
     /// Sleep — injected so retry loops are instant in tests.
     fn sleep_ms(&self, ms: u64);
+    /// Can this daemon user `sudo -n` the mail helper? Read-only probe;
+    /// every privileged flow checks it BEFORE its first effect so a box
+    /// without the helper stops with the install command, not EACCES.
+    fn mail_helper_state(&self) -> helper::HelperState;
 }
 
 /// Production implementation.
@@ -208,6 +212,10 @@ impl SystemOps for RealSystemOps {
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
+
+    fn mail_helper_state(&self) -> helper::HelperState {
+        helper::probe_state()
+    }
 }
 
 // ── Test fake ───────────────────────────────────────────────────────────
@@ -233,6 +241,9 @@ pub(crate) mod fake {
         pub query_answers: HashMap<String, String>,
         /// Last bytes written per path (C20 recovery-admin strip).
         pub written: Mutex<HashMap<String, Vec<u8>>>,
+        /// `mail_helper_state` answer (default: installed). Not recorded
+        /// in `ops` — it is a read, and flows assert effect sequences.
+        pub helper_state: helper::HelperState,
     }
 
     impl Default for FakeSystemOps {
@@ -244,6 +255,7 @@ pub(crate) mod fake {
                 existing_paths: Vec::new(),
                 query_answers: HashMap::new(),
                 written: Mutex::new(HashMap::new()),
+                helper_state: helper::HelperState::Installed,
             }
         }
     }
@@ -324,6 +336,9 @@ pub(crate) mod fake {
         }
         fn sleep_ms(&self, _ms: u64) {
             // Instant in tests.
+        }
+        fn mail_helper_state(&self) -> helper::HelperState {
+            self.helper_state
         }
     }
 }

@@ -36,6 +36,35 @@ fn err_json(status: &'static str, code: &str, hint: String) -> CliResponse {
     }
 }
 
+/// The structured stop when the daemon user cannot `sudo -n` the mail
+/// helper: 409 `mail_helper_missing`, hint = the exact root command.
+pub(crate) fn helper_unavailable_response(
+    state: crate::mail::helper::HelperState,
+) -> Option<CliResponse> {
+    let hint = crate::mail::helper::unavailable_message(state)?;
+    Some(CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "mail_helper_missing", "hint": hint },
+            "helper": state.as_str(),
+        })
+        .to_string(),
+    })
+}
+
+/// `helper` / `helperFix` keys for status and enable bodies.
+pub(crate) fn helper_status_fields(
+    state: crate::mail::helper::HelperState,
+    body: &mut serde_json::Value,
+) {
+    body["helper"] = serde_json::json!(state.as_str());
+    if let Some(fix) = crate::mail::helper::unavailable_message(state) {
+        body["helperFix"] = serde_json::json!(fix);
+    }
+}
+
 fn unsupported() -> CliResponse {
     err_json(
         "409 Conflict",
@@ -58,6 +87,8 @@ fn unsupported() -> CliResponse {
 ///   "portPlan": <port_plan|null>,
 ///   "enableProgress": <enable_progress_json|null>,  // S1 machine steps
 ///   "lastError": <last_error|null>,
+///   "helper": "installed" | "missing" | "not allowed by sudoers",  // Linux only
+///   "helperFix": <root install command — only when helper != installed>,
 ///   "health": <live verdict — only present with ?health=1 on Linux> }
 /// ```
 ///
@@ -142,6 +173,11 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     // "not probed", not a failed probe.
     if let Some(health) = health {
         body["health"] = health;
+    }
+    // Linux only: the root door enable / cert restart / boot reconcile
+    // need. Cached 30 s (each probe is a `sudo -n -l`).
+    if mail_supported() {
+        helper_status_fields(supervisor::mail_helper_state_cached(), &mut body);
     }
     CliResponse::ok_json(body.to_string())
 }
@@ -288,6 +324,14 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
     if !mail_supported() {
         return unsupported();
     }
+    // Before the latch, preflight, row, or download: without the root
+    // helper every install step fails (the "Permission denied (os error
+    // 13)" on /usr/local/bin/stalwart was a pre-helper daemon writing it
+    // as k2). Stop with the one root command instead.
+    let helper_state = supervisor::mail_helper_state();
+    if let Some(resp) = helper_unavailable_response(helper_state) {
+        return resp;
+    }
     if !supervisor::try_begin_enable() {
         return err_json(
             "409 Conflict",
@@ -354,6 +398,7 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
             "ok": true,
             "state": "installing",
             "hint": "installing in the background — poll GET /cli/mail/status for enableProgress",
+            "helper": helper_state.as_str(),
             "preflight": preflight_json,
         })
         .to_string(),
@@ -463,6 +508,14 @@ pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
             .is_some()
     };
     if attached {
+        // The custom-domain issuer plants the cert, then restarts
+        // Stalwart through the mail helper. Stop before ordering a cert
+        // the box cannot load.
+        if mail_supported() {
+            if let Some(resp) = helper_unavailable_response(supervisor::mail_helper_state()) {
+                return resp;
+            }
+        }
         let mut params = std::collections::HashMap::new();
         params.insert("hostname".into(), hostname);
         return crate::domains::routes::handle_renew(&params);
@@ -920,7 +973,7 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert_eq!(v["supported"], cfg!(target_os = "linux"));
         let checks = v["report"]["checks"].as_array().expect("checks");
-        assert_eq!(checks.len(), 10);
+        assert_eq!(checks.len(), 11);
         let os = checks.iter().find(|c| c["id"] == "os").expect("os check");
         if cfg!(target_os = "linux") {
             assert_eq!(os["status"], "pass");
@@ -932,6 +985,46 @@ mod tests {
                 .filter(|c| c["id"] != "os")
                 .all(|c| c["status"] == "skipped"));
         }
+    }
+
+    #[test]
+    fn helper_missing_response_names_the_fix_and_status_fields() {
+        use crate::mail::helper::{install_command, HelperState};
+        assert!(helper_unavailable_response(HelperState::Installed).is_none());
+        for (state, word) in [
+            (HelperState::Missing, "missing"),
+            (HelperState::NotAllowed, "not allowed by sudoers"),
+        ] {
+            let resp = helper_unavailable_response(state).expect("stop");
+            assert_eq!(resp.status, "409 Conflict");
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert_eq!(v["ok"], false);
+            assert_eq!(v["error"]["code"], "mail_helper_missing");
+            assert_eq!(v["helper"], word);
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains("run as root: "), "{hint}");
+            assert!(hint.ends_with(&install_command()), "{hint}");
+
+            let mut body = serde_json::json!({ "ok": true });
+            helper_status_fields(state, &mut body);
+            assert_eq!(body["helper"], word);
+            assert_eq!(body["helperFix"].as_str(), Some(hint));
+        }
+        let mut body = serde_json::json!({ "ok": true });
+        helper_status_fields(HelperState::Installed, &mut body);
+        assert_eq!(body["helper"], "installed");
+        assert!(body.get("helperFix").is_none(), "{body}");
+
+        // The probe seam routes use: default installed, injectable.
+        assert_eq!(supervisor::mail_helper_state(), HelperState::Installed);
+        supervisor::set_test_helper_state(Some(HelperState::NotAllowed));
+        assert_eq!(supervisor::mail_helper_state(), HelperState::NotAllowed);
+        assert_eq!(
+            supervisor::mail_helper_state_cached(),
+            HelperState::NotAllowed
+        );
+        supervisor::set_test_helper_state(None);
+        assert_eq!(supervisor::mail_helper_state(), HelperState::Installed);
     }
 
     /// Enable: body validation runs BEFORE the platform gate (real

@@ -204,6 +204,12 @@ pub const FEATURE_ZEN_V1: &str = "zen-v1";
 /// computer is older than this app").
 pub const FEATURE_ZEN_GARDENS: &str = "zen-gardens-v1";
 
+/// Zen freeform chrome (prd-zen-freeform-chrome FC29): `GET /cli/zen/get`
+/// answers `page.chrome`, `page.bands`, `page.edges` and `page.menus`, and a
+/// Garden file may place K2's controls (`slot` `bottom`/`menu`, `align`,
+/// `edge`, `menu`). A client without it draws the template's chrome.
+pub const FEATURE_ZEN_CHROME: &str = "zen-chrome-v1";
+
 /// Zen Z41: `GET /cli/thread/latest?addrs=` answers on this server. A
 /// client without it falls back to `GET /cli/thread?addr=&limit=1`.
 pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
@@ -223,6 +229,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_TICKETS_LIST_ALL);
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_ZEN_GARDENS);
+    out.push(FEATURE_ZEN_CHROME);
     out.push(FEATURE_THREAD_LATEST);
     out.push(FEATURE_HOME_AVATARS);
     out
@@ -238,7 +245,7 @@ mod tests {
         assert!(attach_only_supported());
         assert_eq!(
             features(),
-            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "zen-gardens-v1", "thread-latest", "home-avatars-v1"]
+            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "zen-gardens-v1", "zen-chrome-v1", "thread-latest", "home-avatars-v1"]
         );
     }
 

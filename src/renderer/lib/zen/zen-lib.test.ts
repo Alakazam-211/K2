@@ -504,6 +504,43 @@ describe('the resolved page (Z10, Z13)', () => {
     ])
   })
 
+  it('a zen-chrome-v1 answer (Garden chrome) still parses: chrome stays out of widgets, controls keep both required kinds (FC28, FC32, FC58)', () => {
+    // The daemon's `bottom-bar` answer: chrome lives in page.chrome / bands /
+    // edges / menus, which this renderer does not draw yet (S2).
+    const p = parseZenGet({
+      version: 'v',
+      page: {
+        template: 'k2.texting@1',
+        layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+        widgets: [
+          { id: 'agents', kind: 'agents', slot: 'column', column: 0, props: {}, caps: [] },
+          { id: 'conversation', kind: 'conversation', slot: 'column', column: 1, props: {}, caps: [] },
+          { id: 'nav-rail', kind: 'nav-rail', slot: 'bottom', align: 'end', props: { orientation: 'row' }, caps: ['app:navigate'] },
+        ],
+        controls: [
+          { kind: 'garden-switcher', placement: 'bottom-start' },
+          { kind: 'drag-region', placement: 'bands' },
+          { kind: 'zen-toggle', placement: 'bottom-end' },
+          { kind: 'add-agent', placement: 'widget-bottom-left', widget: 'agents' },
+        ],
+        chrome: {
+          from: 'garden',
+          items: [
+            { id: 'garden-switcher', kind: 'garden-switcher', slot: 'bottom', align: 'start', props: {}, caps: ['gardens:manage'] },
+            { id: 'zen-toggle', kind: 'zen-toggle', slot: 'bottom', align: 'end', props: {}, caps: [] },
+          ],
+        },
+        bands: { top: null, bottom: { start: ['garden-switcher'], center: [], end: ['zen-toggle', 'nav-rail'] } },
+        edges: [],
+        menus: {},
+      },
+    })
+    expect(p.controls).toEqual(['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'])
+    expect(p.widgets.map((w) => w.kind)).toEqual(['agents', 'conversation', 'nav-rail'])
+    // A slot this client doesn't draw yet (`bottom`) falls back to a column (FC58).
+    expect(p.widgets.map((w) => zenWidgetSlot(w))).toEqual(['column', 'column', 'column'])
+  })
+
   it('throws for no page, a non-object, or another schema', () => {
     expect(() => parseZenGet('x')).toThrow(ZenPageParseError)
     expect(() => parseZenGet({ ok: false, error: 'zen_local_only' })).toThrow(/zen_local_only/)

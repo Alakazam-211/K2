@@ -172,10 +172,11 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 ];
 
 /// Required page controls (Z27, G24; Rosson 2026-10-04: exactly two, the
-/// Zen toggle and the Garden switcher). Every template's `controls` names
-/// both; a Garden file can't drop one (its `[[control]]` is ignored). The
-/// templates also declare `drag-region`, which K2 binds for window drag but
-/// never checks.
+/// Zen toggle and the Garden switcher). Every template places both as
+/// chrome widgets and names both in `controls`. A Garden file that places
+/// any chrome must place both (prd-zen-freeform-chrome FC2, FC24), so a
+/// page can never drop one. `[[control]]` in a Garden file is ignored.
+/// `drag-region` is bound for window drag but never checked or placed.
 pub const REQUIRED_CONTROLS: &[&str] = &["zen-toggle", "garden-switcher"];
 
 /// Bridge caps (Z34, G29). `thread:*` reuse the app-gateway names;
@@ -213,6 +214,22 @@ pub fn widget_caps(kind: &str) -> Option<&'static [&'static str]> {
     BUILTIN_WIDGET_CAPS.iter().find(|(k, _)| *k == kind).map(|(_, c)| *c)
 }
 
+/// The caps K2 grants each chrome kind (prd-zen-freeform-chrome FC31).
+/// Chrome is drawn by K2 with the template bridge; a file never names caps.
+/// Only the Garden switcher gets one (`gardens:manage`, for + New Garden).
+pub const CHROME_CAPS: &[(&str, &[&str])] = &[
+    ("garden-switcher", &["gardens:manage"]),
+    ("zen-toggle", &[]),
+    ("usage", &[]),
+    ("theme-picker", &[]),
+    ("menu", &[]),
+];
+
+/// K2's caps for a chrome kind (empty for an unknown one).
+pub fn chrome_caps(kind: &str) -> &'static [&'static str] {
+    CHROME_CAPS.iter().find(|(k, _)| *k == kind).map(|(_, c)| *c).unwrap_or(&[])
+}
+
 /// The renderer's layout shape (docs/zen-contract.md): `split` and
 /// `minWidths` per column; `columns` keeps the per-column detail.
 pub fn layout_json(kind: &J, columns: &[J]) -> J {
@@ -225,19 +242,191 @@ pub fn layout_json(kind: &J, columns: &[J]) -> J {
 }
 
 /// A built-in widget as the renderer reads it: K2's caps, `source:
-/// "builtin"`, its `slot` (`column` unless the file put it in the top
-/// band), every prop filled (defaults, `agents.mode`, `nav-rail.orientation`).
+/// "builtin"`, its `slot` (`column` unless the file put it in a band),
+/// `edge` and `align` only when the file set them (FC28), every prop filled
+/// (defaults, `agents.mode`, `nav-rail.orientation`).
 pub fn builtin_widget(mut w: J) -> J {
     let kind = w["kind"].as_str().unwrap_or_default().to_string();
     let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string();
+    let edge = w["edge"].as_str().map(str::to_string);
     let mut props = w["props"].as_object().cloned().unwrap_or_default();
     schema::normalize_props(&kind, &mut props);
-    schema::normalize_slot_props(&kind, &slot, &mut props);
+    schema::normalize_slot_props(&kind, &slot, edge.as_deref(), &mut props);
     w["slot"] = json!(slot);
     w["props"] = J::Object(props);
     w["caps"] = json!(widget_caps(&kind).unwrap_or(&[]));
     w["source"] = json!("builtin");
     w
+}
+
+/// A chrome item as the renderer reads it (prd-zen-freeform-chrome FC29):
+/// `{id, kind, slot, column?, edge?, align?, menu?, props, caps}`. The id
+/// defaults to the kind; a band item gets `align`; an item in a column
+/// gets `edge` and `align`; a menu item gets `menu`. Every prop is filled
+/// (`menu.icon`); caps are K2's (FC31).
+pub fn chrome_item(w: &J) -> J {
+    let kind = w["kind"].as_str().unwrap_or_default().to_string();
+    let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string();
+    let id = w["id"].as_str().unwrap_or(&kind).to_string();
+    let mut props = w["props"].as_object().cloned().unwrap_or_default();
+    schema::normalize_props(&kind, &mut props);
+    let mut out = serde_json::Map::new();
+    out.insert("id".into(), json!(id));
+    out.insert("kind".into(), json!(kind));
+    out.insert("slot".into(), json!(slot));
+    let align = w["align"].as_str().unwrap_or(schema::DEFAULT_ALIGN);
+    if schema::BAND_SLOTS.contains(&slot.as_str()) {
+        out.insert("align".into(), json!(align));
+    } else if slot == schema::MENU_SLOT {
+        out.insert("menu".into(), w["menu"].clone());
+    } else {
+        out.insert("column".into(), json!(w["column"].as_u64().unwrap_or(0)));
+        out.insert("edge".into(), json!(w["edge"].as_str().unwrap_or(schema::DEFAULT_EDGE)));
+        out.insert("align".into(), json!(align));
+    }
+    out.insert("props".into(), J::Object(props));
+    out.insert("caps".into(), json!(chrome_caps(&kind)));
+    J::Object(out)
+}
+
+/// Where a page item is drawn: a band, a column edge, inside a menu, or the
+/// body of a column (a content widget that fills it, or a column rail).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Spot {
+    Band(String),
+    /// `(column, edge order: 0 top, 1 bottom)`.
+    Edge(u64, u8),
+    Menu(String),
+    Body,
+}
+
+fn spot_of(w: &J) -> Spot {
+    let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT);
+    if schema::BAND_SLOTS.contains(&slot) {
+        return Spot::Band(slot.to_string());
+    }
+    if slot == schema::MENU_SLOT {
+        return Spot::Menu(w["menu"].as_str().unwrap_or_default().to_string());
+    }
+    let kind = w["kind"].as_str().unwrap_or_default();
+    let row = schema::is_chrome_kind(kind)
+        || w["edge"].is_string()
+        || (kind == "nav-rail" && w["props"]["orientation"] == "row");
+    if !row {
+        return Spot::Body;
+    }
+    let edge = w["edge"].as_str().unwrap_or(schema::DEFAULT_EDGE);
+    Spot::Edge(w["column"].as_u64().unwrap_or(0), u8::from(edge == "bottom"))
+}
+
+fn edge_name(order: u8) -> &'static str {
+    if order == 1 { "bottom" } else { "top" }
+}
+
+/// The `placement` string `page.controls` gives a Garden-placed control
+/// (FC29): `top-start`, `column-1-bottom-end`, `menu:more`.
+fn placement_of(w: &J) -> String {
+    let align = w["align"].as_str().unwrap_or(schema::DEFAULT_ALIGN);
+    match spot_of(w) {
+        Spot::Band(b) => format!("{b}-{align}"),
+        Spot::Edge(c, e) => format!("column-{c}-{}-{align}", edge_name(e)),
+        Spot::Menu(m) => format!("menu:{m}"),
+        Spot::Body => w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string(),
+    }
+}
+
+/// `bands`, `edges` and `menus` (FC29): ids in draw order, computed by the
+/// daemon so the renderer only draws. `ordered` is every content widget and
+/// chrome item in page order, each flagged when it is the TEMPLATE's
+/// chrome: template chrome keeps its corners (its `start` items lead their
+/// group, its other items close theirs), so a band widget from the file
+/// sits between the Garden switcher and the toggle, as live.
+fn place_rows(ordered: &[(&J, bool)]) -> (J, J, J) {
+    let rank = |(w, tpl): &(&J, bool)| -> u8 {
+        match (tpl, w["align"].as_str().unwrap_or(schema::DEFAULT_ALIGN)) {
+            (false, _) => 1,
+            (true, "start") => 0,
+            (true, _) => 2,
+        }
+    };
+    let mut items: Vec<(&J, bool)> = ordered.to_vec();
+    items.sort_by_key(rank);
+    let align_idx = |w: &J| match w["align"].as_str().unwrap_or(schema::DEFAULT_ALIGN) {
+        "center" => 1,
+        "end" => 2,
+        _ => 0,
+    };
+    let mut groups: std::collections::BTreeMap<Spot, [Vec<J>; 3]> = std::collections::BTreeMap::new();
+    let mut menus = serde_json::Map::new();
+    for (w, _) in ordered {
+        if w["kind"] == "menu" {
+            menus.insert(w["id"].as_str().unwrap_or("menu").to_string(), json!([]));
+        }
+    }
+    for (w, _) in &items {
+        let id = w["id"].clone();
+        match spot_of(w) {
+            Spot::Body => {}
+            Spot::Menu(m) => {
+                if let Some(list) = menus.entry(m).or_insert_with(|| json!([])).as_array_mut() {
+                    list.push(id);
+                }
+            }
+            spot => groups.entry(spot).or_default()[align_idx(w)].push(id),
+        }
+    }
+    let group_json = |g: &[Vec<J>; 3]| json!({ "start": g[0], "center": g[1], "end": g[2] });
+    let mut bands = serde_json::Map::new();
+    for b in schema::BAND_SLOTS {
+        let v = groups.get(&Spot::Band((*b).to_string())).map(group_json).unwrap_or(J::Null);
+        bands.insert((*b).to_string(), v);
+    }
+    let edges: Vec<J> = groups
+        .iter()
+        .filter_map(|(spot, g)| match spot {
+            Spot::Edge(c, e) => {
+                let mut v = group_json(g);
+                v["column"] = json!(c);
+                v["edge"] = json!(edge_name(*e));
+                Some(v)
+            }
+            _ => None,
+        })
+        .collect();
+    (J::Object(bands), J::Array(edges), J::Object(menus))
+}
+
+/// `page.controls` for a page whose chrome is the Garden file's (FC29):
+/// the switcher and the toggle with their placements, the drag region on
+/// the bands, and Add agent when the page has an Agents widget. Older apps
+/// read only each `kind`, so the required pair stays declared.
+fn garden_controls(chrome: &[J], content: &[J]) -> J {
+    let mut out = Vec::new();
+    let find = |k: &str| chrome.iter().find(|c| c["kind"] == k);
+    if let Some(s) = find("garden-switcher") {
+        out.push(json!({ "kind": "garden-switcher", "placement": placement_of(s) }));
+    }
+    out.push(json!({ "kind": "drag-region", "placement": "bands" }));
+    if let Some(t) = find("zen-toggle") {
+        out.push(json!({ "kind": "zen-toggle", "placement": placement_of(t) }));
+    }
+    if let Some(a) = content.iter().find(|w| w["kind"] == "agents") {
+        out.push(json!({ "kind": "add-agent", "placement": "widget-bottom-left", "widget": a["id"] }));
+    }
+    J::Array(out)
+}
+
+/// Write `chrome`, `bands`, `edges` and `menus` into a page (FC29).
+fn set_chrome(page: &mut J, from: &str, chrome: &[J], ordered: &[(&J, bool)]) {
+    let (bands, edges, menus) = place_rows(ordered);
+    page["chrome"] = json!({ "from": from, "items": chrome });
+    page["bands"] = bands;
+    page["edges"] = edges;
+    page["menus"] = menus;
+}
+
+fn kind_is_chrome(w: &J) -> bool {
+    w["kind"].as_str().is_some_and(schema::is_chrome_kind)
 }
 
 /// Link each Conversation that follows nothing to the page's first Agents
@@ -273,8 +462,11 @@ fn name_columns(columns: &mut [J], widgets: &[J]) {
     }
 }
 
-/// The resolved page of a template: `{template, layout, widgets, controls}`
-/// (Z10, Z15). `None` for an unknown id.
+/// The resolved page of a template: `{template, layout, widgets, controls,
+/// chrome, bands, edges, menus}` (Z10, Z15, FC29, FC30). Its `[[widget]]`
+/// tables split into content (`widgets`) and chrome (`chrome.items`, from
+/// `"template"`); `controls` is the template's `[[control]]` list as is.
+/// `None` for an unknown id.
 pub fn template_page(id: &str) -> Option<J> {
     static PAGES: OnceLock<std::collections::BTreeMap<&'static str, J>> = OnceLock::new();
     PAGES
@@ -287,23 +479,53 @@ pub fn template_page(id: &str) -> Option<J> {
                     let t = serde_json::to_value(v)
                         .unwrap_or_else(|e| panic!("built-in Zen template {tid} to JSON: {e}"));
                     let columns = t["layout"]["column"].as_array().cloned().unwrap_or_default();
+                    let all = t["widget"].as_array().cloned().unwrap_or_default();
                     let mut widgets: Vec<J> =
-                        t["widget"].as_array().cloned().unwrap_or_default().into_iter().map(builtin_widget).collect();
+                        all.iter().filter(|w| !kind_is_chrome(w)).cloned().map(builtin_widget).collect();
                     link_conversations(&mut widgets);
-                    (
-                        *tid,
-                        json!({
-                            "template": tid,
-                            "layout": layout_json(&t["layout"]["kind"], &columns),
-                            "widgets": widgets,
-                            "controls": t["control"].clone(),
-                        }),
-                    )
+                    let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(chrome_item).collect();
+                    let mut page = json!({
+                        "template": tid,
+                        "layout": layout_json(&t["layout"]["kind"], &columns),
+                        "widgets": widgets,
+                        "controls": t["control"].clone(),
+                    });
+                    let ordered: Vec<(&J, bool)> =
+                        widgets.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, true))).collect();
+                    set_chrome(&mut page, "template", &chrome, &ordered);
+                    (*tid, page)
                 })
                 .collect()
         })
         .get(id)
         .cloned()
+}
+
+/// A template's chrome `[[widget]]` tables written out as a Garden file
+/// (`schema = 1` + those tables), so a test and the doctor can check them
+/// with the same rules as a Garden file (FC30). `None` for an unknown id.
+pub fn template_chrome_toml(id: &str) -> Option<String> {
+    let src = TEMPLATES.iter().find(|(t, _)| *t == id)?.1;
+    let v: toml::Value =
+        toml::from_str(src).unwrap_or_else(|e| panic!("built-in Zen template {id} does not parse: {e}"));
+    let chrome: Vec<toml::Value> = v
+        .get("widget")
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| w.get("kind").and_then(toml::Value::as_str).is_some_and(schema::is_chrome_kind))
+        .collect();
+    let mut file = toml::map::Map::new();
+    file.insert("schema".into(), toml::Value::Integer(schema::SCHEMA_VERSION));
+    file.insert("widget".into(), toml::Value::Array(chrome));
+    Some(toml::to_string(&toml::Value::Table(file)).unwrap_or_else(|e| panic!("template {id} chrome to TOML: {e}")))
+}
+
+/// A template's chrome checked as a Garden file on that template (FC30).
+pub fn check_template_chrome(id: &str) -> Option<schema::Checked> {
+    let src = template_chrome_toml(id)?;
+    Some(schema::check_garden(&format!("builtin:{id}#chrome"), &src, builtin_layer(), id))
 }
 
 /// The `k2.texting@1` page (Garden 1's).
@@ -313,7 +535,14 @@ pub fn texting_page() -> J {
 
 /// The page a Garden shows: its template (the file's `template`, else
 /// `default_template`), with the file's `[layout]` and `[[widget]]` in
-/// place of the template's (G38). Controls always come from the template.
+/// place of the template's (G38).
+///
+/// The file's widgets are two groups with their own replace rules
+/// (prd-zen-freeform-chrome FC3): any content widget replaces the
+/// template's content widgets; any chrome widget replaces ALL of the
+/// template's chrome (`chrome.from: "garden"`, `controls` rebuilt from the
+/// file's placements). Chrome never goes into `widgets` (FC28), so an older
+/// app never draws a toggle as a placeholder widget.
 pub fn garden_page(layer: &Layer, default_template: &str) -> J {
     let tid = layer.get("page.template").and_then(J::as_str).unwrap_or(default_template);
     let mut page = template_page(tid).unwrap_or_else(texting_page);
@@ -322,10 +551,36 @@ pub fn garden_page(layer: &Layer, default_template: &str) -> J {
     if layout.is_none() && widgets.is_none() {
         return page;
     }
-    if let Some(w) = widgets {
-        let mut ws: Vec<J> = w.as_array().cloned().unwrap_or_default().into_iter().map(builtin_widget).collect();
+    let file: Vec<J> = widgets.and_then(J::as_array).cloned().unwrap_or_default();
+    // Every file widget in file order, as the renderer reads it.
+    let file_items: Vec<(J, bool)> = file
+        .iter()
+        .map(|w| if kind_is_chrome(w) { (chrome_item(w), true) } else { (builtin_widget(w.clone()), false) })
+        .collect();
+    let has_content = file_items.iter().any(|(_, c)| !c);
+    let has_chrome = file_items.iter().any(|(_, c)| *c);
+    if has_content {
+        let mut ws: Vec<J> = file_items.iter().filter(|(_, c)| !c).map(|(w, _)| w.clone()).collect();
         link_conversations(&mut ws);
         page["widgets"] = J::Array(ws);
+    }
+    let content: Vec<J> = page["widgets"].as_array().cloned().unwrap_or_default();
+    if has_chrome {
+        let chrome: Vec<J> = file_items.iter().filter(|(_, c)| *c).map(|(w, _)| w.clone()).collect();
+        // File order across both groups when the file declares both;
+        // otherwise the template's content, then the file's chrome.
+        let ordered: Vec<(&J, bool)> = if has_content {
+            file_items.iter().map(|(w, _)| (w, false)).collect()
+        } else {
+            content.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, false))).collect()
+        };
+        set_chrome(&mut page, "garden", &chrome, &ordered);
+        page["controls"] = garden_controls(&chrome, &content);
+    } else {
+        let chrome: Vec<J> = page["chrome"]["items"].as_array().cloned().unwrap_or_default();
+        let ordered: Vec<(&J, bool)> =
+            content.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, true))).collect();
+        set_chrome(&mut page, "template", &chrome, &ordered);
     }
     let mut columns: Vec<J> = match layout {
         Some(l) => l["columns"].as_array().cloned().unwrap_or_default(),

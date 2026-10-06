@@ -198,10 +198,11 @@ pub const THEME_TABLES: &[&str] =
 pub const BUNDLE_TABLES: &[&str] = &["background"];
 /// Top-level keys that only a Garden file may carry (G38).
 pub const PAGE_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls", "caps"];
-/// The warning for `[[control]]` in a Garden file: controls always come
-/// from the template, so a page can't drop a required control (G38).
+/// The warning for `[[control]]` in a Garden file (prd-zen-freeform-chrome
+/// FC52): a Garden places its controls with `[[widget]]` (chrome kinds), so
+/// this table does nothing. A warning, not an error, so old files load.
 pub const CONTROL_WARNING: &str =
-    "controls come from the page's template (K2 binds and checks them); this table is ignored";
+    "[[control]] is ignored: place controls with [[widget]] kind = \"zen-toggle\" (see k2 zen guide bands)";
 
 // ── Garden pages: layout and built-in widgets (G38) ─────────────────────
 
@@ -211,8 +212,11 @@ pub const LAYOUT_KINDS: &[&str] = &["columns"];
 pub const MAX_COLUMNS: usize = 3;
 /// `[[layout.column]] min-width`, px, 0..=this.
 pub const COLUMN_MIN_WIDTH_MAX: f64 = 800.0;
-/// At most this many `[[widget]]` on one page.
+/// At most this many content widgets (`WIDGET_KINDS`) on one page. Counted
+/// after each table's kind is known (FC47): chrome has its own limit.
 pub const MAX_WIDGETS: usize = 12;
+/// At most this many chrome widgets (`CHROME_KINDS`) on one page (FC13).
+pub const MAX_CHROME_WIDGETS: usize = 10;
 /// Longest text prop (a Home or agent name).
 pub const MAX_PROP_TEXT: usize = 200;
 
@@ -231,25 +235,103 @@ pub const WIDGET_KINDS: &[(&str, &str)] = &[
         "a thin icon rail: in a column, a strip drawn at the left edge of its column (it takes no share of the column's box); with `slot = \"top\"`, a row of icons in the top band, right of the Garden switcher. Its items: My Home (this Garden's own page), then Agents, Projects and Tickets, which switch the Garden's view in this window inside Zen (Agents: this server's agents, by focus group; Projects: coming soon; Tickets: the Tickets page, chat only); the view shown is the current item; Tickets carries the top bar's waiting badge",
     ),
 ];
-/// `[[widget]] slot`: where a widget sits. `column` (the default) places it
-/// in a layout column (`column = n`); `top` places it in the page's top
-/// band, immediately right of the Garden switcher and before the drag
-/// region (Rosson 2026-10-06). The band's controls stay the template's.
+/// `[[widget]] slot`: where a widget sits (prd-zen-freeform-chrome FC7).
+/// `column` (the default) places it in a layout column (`column = n`; a row
+/// item there sits at the column's top or bottom `edge`); `top` and
+/// `bottom` place it in the page's top or bottom band; `menu` places a Zen
+/// control inside a `menu` widget (`menu = "<id>"`).
 ///
-/// `slot` is a string so later slots (a bottom band, corners, a menu; the
-/// free-form Garden PRD) are new values here, not a new key. The renderer
-/// draws any band slot with one band component.
-pub const WIDGET_SLOTS: &[&str] = &["column", "top"];
+/// `slot` is a string so later slots are new values here, not a new key.
+pub const WIDGET_SLOTS: &[&str] = &["column", "top", "bottom", "menu"];
 /// The slot a widget gets when its table names none.
 pub const DEFAULT_SLOT: &str = "column";
 /// The top band's slot.
 pub const TOP_SLOT: &str = "top";
-/// THE allowlist of kinds that fit a band (one row, the band's height).
-/// Any other kind with `slot = "top"` is an error naming these. Nothing
-/// else (renderer included) keeps its own list.
+/// The bottom band's slot (drawn only when it holds something, FC10).
+pub const BOTTOM_SLOT: &str = "bottom";
+/// The slot of an item inside a `menu` widget.
+pub const MENU_SLOT: &str = "menu";
+/// The band slots: full-width rows above and below the columns.
+pub const BAND_SLOTS: &[&str] = &["top", "bottom"];
+/// `align` (FC8): where an item sits in a band or column edge. In each
+/// group items keep file order; in `end` the LAST item is in the corner.
+pub const ALIGNS: &[&str] = &["start", "center", "end"];
+/// The `align` an item gets when its table names none.
+pub const DEFAULT_ALIGN: &str = "start";
+/// `edge` (FC8): which edge of its column a row item sits at.
+pub const EDGES: &[&str] = &["top", "bottom"];
+/// The `edge` a row item in a column gets when its table names none.
+pub const DEFAULT_EDGE: &str = "top";
+/// THE allowlist of CONTENT kinds that fit a band (one row, the band's
+/// height). Every chrome kind ([`CHROME_KINDS`]) fits a band too. Any other
+/// kind in a band is an error naming both lists. Nothing else (renderer
+/// included) keeps its own list.
 pub const BAND_WIDGET_KINDS: &[&str] = &["nav-rail"];
-/// At most this many widgets in one band.
+/// At most this many CONTENT widgets in one band (FC47).
 pub const MAX_BAND_WIDGETS: usize = 2;
+/// At most this many items (content and chrome) in one band (FC13).
+pub const MAX_BAND_ITEMS: usize = 8;
+/// At most this many items at one column edge (FC13).
+pub const MAX_EDGE_ITEMS: usize = 4;
+/// At most this many `menu` widgets on one page (FC13).
+pub const MAX_MENUS: usize = 3;
+/// A menu holds 1 to this many items (FC13).
+pub const MAX_MENU_ITEMS: usize = 6;
+/// Content kinds that fill their column: they take no `edge` or `align` (FC9).
+pub const FILL_WIDGET_KINDS: &[&str] = &["agents", "conversation"];
+
+/// Chrome kinds (prd-zen-freeform-chrome FC1): K2's own controls, placed
+/// with `[[widget]]` like any widget. Declaring any of them replaces ALL of
+/// the template's chrome (FC3). `zen-toggle` and `garden-switcher` are
+/// required (`REQUIRED_CONTROLS`): a file that places chrome must place both,
+/// once each, directly or as a top-level menu item.
+pub const CHROME_KINDS: &[(&str, &str)] = &[
+    (
+        "garden-switcher",
+        "the Garden switcher (required): the Garden's name; it opens the Garden list and + New Garden. In a menu: a Gardens section listing every Garden, then + New Garden",
+    ),
+    ("zen-toggle", "the Zen toggle (required): the way out of Zen. In a menu: the item Exit Zen Mode"),
+    ("usage", "the subscription usage chip and its menu (optional). In a menu: the item Usage"),
+    (
+        "theme-picker",
+        "the theme control (optional; Ctrl+Cmd+. still cycles themes without it). In a menu: the item Theme",
+    ),
+    (
+        "menu",
+        "a menu button K2 draws (optional) that holds other Zen controls (`slot = \"menu\"`, `menu = \"<this id>\"`); it opens with a click, Enter, Space or Down",
+    ),
+];
+/// The kinds a `menu` may hold (FC9): no menu inside a menu, no content.
+pub const MENU_ITEM_KINDS: &[&str] = &["zen-toggle", "garden-switcher", "theme-picker", "usage"];
+/// `menu` `icon` (FC15).
+pub const MENU_ICONS: &[&str] = &["dots", "bars", "zen"];
+/// Longest `menu` `label`, in characters (FC15).
+pub const MENU_LABEL_MAX: usize = 24;
+/// The kind people try to place for window drag; K2 refuses it (FC5).
+pub const DRAG_REGION_KIND: &str = "drag-region";
+/// The error for `kind = "drag-region"` (FC5).
+pub const DRAG_REGION_ERROR: &str =
+    "K2 makes the empty space in every band drag the window; there is nothing to place.";
+
+/// Is `kind` a chrome kind ([`CHROME_KINDS`])?
+pub fn is_chrome_kind(kind: &str) -> bool {
+    CHROME_KINDS.iter().any(|(k, _)| *k == kind)
+}
+
+/// The names of [`CHROME_KINDS`].
+pub fn chrome_kind_names() -> Vec<&'static str> {
+    CHROME_KINDS.iter().map(|(k, _)| *k).collect()
+}
+
+/// FC24 rule 1: a file that places chrome without a required control
+/// (`zen-toggle` or `garden-switcher`).
+pub fn required_chrome_error(kind: &str) -> String {
+    let (why, align) =
+        if kind == "zen-toggle" { ("the way out", "end") } else { ("the way to your other Gardens", "start") };
+    format!(
+        "This file places Zen controls, so it replaces the template's. It must also place a {kind} ({why}): add [[widget]] kind = \"{kind}\" slot = \"top\" align = \"{align}\", or put it in a menu. See k2 zen guide required."
+    )
+}
 /// `nav-rail` `orientation`: a row of icons, or a column (strip).
 pub const NAV_RAIL_ORIENTATIONS: &[&str] = &["row", "column"];
 
@@ -392,7 +474,21 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "orientation",
         ty: PropType::OneOf(NAV_RAIL_ORIENTATIONS),
         default: None,
-        doc: "`row` draws the icons side by side, `column` top to bottom. Default: `row` in the top band (`slot = \"top\"`, the only orientation that fits there), `column` in a column",
+        doc: "`row` draws the icons side by side, `column` top to bottom. Default: `row` in a band (`slot = \"top\"` or `\"bottom\"`) and at a column `edge`, the only orientation that fits there; `column` in a column",
+    },
+    WidgetProp {
+        kind: "menu",
+        name: "icon",
+        ty: PropType::OneOf(MENU_ICONS),
+        default: Some("\"dots\""),
+        doc: "the button's icon: `dots` (three dots), `bars` (three bars) or `zen` (the enso)",
+    },
+    WidgetProp {
+        kind: "menu",
+        name: "label",
+        ty: PropType::Text,
+        default: None,
+        doc: "up to 24 characters, shown next to the icon and used as the tooltip and the screen-reader name. Without one the name is \"More\"",
     },
 ];
 
@@ -430,12 +526,12 @@ pub fn normalize_props(kind: &str, props: &mut Map<String, J>) {
     }
 }
 
-/// Fill props that depend on the widget's slot: a `nav-rail` with no
-/// `orientation` draws as a `row` in the top band and a `column` in a
-/// column. Applied to template and Garden widgets alike.
-pub fn normalize_slot_props(kind: &str, slot: &str, props: &mut Map<String, J>) {
+/// Fill props that depend on where the widget sits: a `nav-rail` with no
+/// `orientation` draws as a `row` in a band or at a column `edge`, and a
+/// `column` in a column. Applied to template and Garden widgets alike.
+pub fn normalize_slot_props(kind: &str, slot: &str, edge: Option<&str>, props: &mut Map<String, J>) {
     if kind == "nav-rail" && !props.contains_key("orientation") {
-        let o = if slot == TOP_SLOT { "row" } else { "column" };
+        let o = if BAND_SLOTS.contains(&slot) || edge.is_some() { "row" } else { "column" };
         props.insert("orientation".into(), json!(o));
     }
 }
@@ -1345,14 +1441,36 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
     }
 }
 
-/// `[[widget]]`: K2's built-in widgets placed in columns, or (`slot =
-/// "top"`) in the top band. Sets `page.widgets` (props normalized with K2's
-/// defaults; caps are never read from the file).
+/// One `[[widget]]` after the walk, for the page-wide rules.
+struct Placed {
+    kind: String,
+    slot: &'static str,
+    id: String,
+    pos: (usize, usize),
+    /// `(column, edge)` of a row item at a column edge (the edge defaulted).
+    at_edge: Option<(u64, &'static str)>,
+    /// `slot = "menu"`: the menu it names, and where.
+    menu: Option<(String, (usize, usize))>,
+}
+
+/// "nav-rail, garden-switcher, …": every kind that fits a band.
+fn band_kinds() -> String {
+    BAND_WIDGET_KINDS.iter().copied().chain(chrome_kind_names()).collect::<Vec<_>>().join(", ")
+}
+
+/// `[[widget]]`: K2's built-in widgets and Zen controls (prd-zen-gardens-v1
+/// G38; prd-zen-freeform-chrome FC1–FC24). Sets `page.widgets`: every
+/// declared widget, content and chrome, in file order (props normalized
+/// with K2's defaults; caps are never read from the file). `garden_page`
+/// splits the two groups: chrome never reaches the answer's `widgets`.
 ///
-/// The top band (Rosson 2026-10-06): only [`BAND_WIDGET_KINDS`], at most
-/// [`MAX_BAND_WIDGETS`]; a top widget has no `column` and its `id` may be
-/// left out (it is then the kind). A page draws one nav rail when the rail
-/// is in the top band: another `nav-rail` on the same page is an error.
+/// - `slot`: `column` (default; `column = n`, and a row item sits at the
+///   column's `edge`), `top` / `bottom` (the bands), `menu` (`menu = id`).
+/// - Bands take [`BAND_WIDGET_KINDS`] and every chrome kind; a menu takes
+///   [`MENU_ITEM_KINDS`]; a column takes anything, chrome at its edge.
+/// - A widget outside a column's body (a band, an edge, a menu) may leave
+///   `id` out: it is then its kind. One id namespace per page.
+/// - Limits are counted after the kinds are known (FC47).
 fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let Some(tables) = tables_of(item) else {
         ctx.error(at, "widgets are [[widget]] blocks (one per widget), each with id, kind and column");
@@ -1362,23 +1480,24 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
         ctx.error(at, "declare at least one [[widget]], or leave them out to keep the template's");
         return;
     }
-    if tables.len() > MAX_WIDGETS {
-        ctx.error(at, format!("a Garden page holds at most {MAX_WIDGETS} widgets; this one has {}", tables.len()));
-        return;
-    }
-    let kinds: Vec<&str> = WIDGET_KINDS.iter().map(|(k, _)| *k).collect();
+    let content_kinds: Vec<&str> = WIDGET_KINDS.iter().map(|(k, _)| *k).collect();
+    let chrome_kinds = chrome_kind_names();
+    let kind_list = format!(
+        "built-in widgets are: {}; Zen controls are: {}",
+        content_kinds.join(", "),
+        chrome_kinds.join(", ")
+    );
     let mut out: Vec<J> = Vec::new();
     let mut ids: Vec<String> = Vec::new();
     let mut ok = true;
-    // `(kind, slot, id, position)` of each widget, for the page-wide top
-    // band rules after the walk.
-    let mut placed: Vec<(String, &'static str, String, (usize, usize))> = Vec::new();
+    let mut placed: Vec<Placed> = Vec::new();
     for (i, t) in tables.iter().enumerate() {
         let tpos = table_pos(ctx, *t, at);
-        // Kind first: it decides which props are allowed.
-        let kind = match t.get("kind") {
+        ctx.pos.insert(format!("page.widget.{i}"), tpos);
+        // Kind first: it decides which slots, keys and props are allowed.
+        let kind: Option<String> = match t.get("kind") {
             None => {
-                ctx.error(tpos, format!("each [[widget]] needs a kind: {}", kinds.join(", ")));
+                ctx.error(tpos, format!("each [[widget]] needs a kind: {kind_list}"));
                 ok = false;
                 None
             }
@@ -1386,57 +1505,87 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 let kp = key_pos(ctx, *t, "kind", v, tpos);
                 let vp = item_pos(ctx, v, kp);
                 match v.as_value().and_then(Value::as_str) {
-                    Some(k) if kinds.contains(&k) => Some(k.to_string()),
+                    Some(k) if content_kinds.contains(&k) || is_chrome_kind(k) => Some(k.to_string()),
+                    Some(k) if k == DRAG_REGION_KIND => {
+                        ctx.error(vp, format!("'{DRAG_REGION_KIND}' can't be placed: {DRAG_REGION_ERROR}"));
+                        ok = false;
+                        None
+                    }
                     Some(k) if TEMPLATE_WIDGET_KINDS.iter().any(|(n, _)| *n == k) => {
                         ctx.error(
                             vp,
                             format!(
                                 "'{k}' comes from the blank template and shows until the Garden has widgets; place {} instead",
-                                kinds.join(" or ")
+                                content_kinds.join(" or ")
                             ),
                         );
                         ok = false;
                         None
                     }
                     Some(k) => {
-                        ctx.error(vp, format!("unknown widget kind '{k}'; built-in widgets are: {}", kinds.join(", ")));
+                        ctx.error(vp, format!("unknown widget kind '{k}'; {kind_list}"));
                         ok = false;
                         None
                     }
                     None => {
-                        ctx.error(vp, format!("widget kind must be a string: {}", kinds.join(", ")));
+                        ctx.error(vp, format!("widget kind must be a string; {kind_list}"));
                         ok = false;
                         None
                     }
                 }
             }
         };
-        // Then the slot: it decides whether `column` belongs.
+        let chrome = kind.as_deref().is_some_and(is_chrome_kind);
+        // Then the slot: it decides whether `column`, `edge`, `align` and
+        // `menu` belong.
         let slot: Option<&'static str> = match t.get("slot") {
             None => Some(DEFAULT_SLOT),
             Some(v) => {
                 let sp = key_pos(ctx, *t, "slot", v, tpos);
                 let vp = item_pos(ctx, v, sp);
                 match v.as_value().and_then(Value::as_str) {
-                    Some(x) if x == TOP_SLOT => {
-                        if let Some(k) = kind.as_deref().filter(|k| !BAND_WIDGET_KINDS.contains(k)) {
+                    Some(x) if BAND_SLOTS.contains(&x) => {
+                        let band: &'static str = if x == TOP_SLOT { TOP_SLOT } else { BOTTOM_SLOT };
+                        if let Some(k) =
+                            kind.as_deref().filter(|k| !BAND_WIDGET_KINDS.contains(k) && !is_chrome_kind(k))
+                        {
                             ctx.error(
                                 vp,
                                 format!(
-                                    "'{k}' can't go in the top band; slot = \"top\" takes: {}. Place '{k}' in a column (drop slot, set column)",
-                                    BAND_WIDGET_KINDS.join(", ")
+                                    "'{k}' can't go in the {band} band; slot = \"{band}\" takes: {}. Place '{k}' in a column (drop slot, set column)",
+                                    band_kinds()
                                 ),
                             );
                             ok = false;
                         }
-                        Some(TOP_SLOT)
+                        Some(band)
+                    }
+                    Some(x) if x == MENU_SLOT => {
+                        match kind.as_deref() {
+                            Some("menu") => {
+                                ctx.error(
+                                    vp,
+                                    "a menu can't hold another menu: place this menu in a band (slot = \"top\" or \"bottom\") or at a column edge",
+                                );
+                                ok = false;
+                            }
+                            Some(k) if !MENU_ITEM_KINDS.contains(&k) => {
+                                ctx.error(
+                                    vp,
+                                    format!("'{k}' can't go in a menu; a menu holds only: {}", MENU_ITEM_KINDS.join(", ")),
+                                );
+                                ok = false;
+                            }
+                            _ => {}
+                        }
+                        Some(MENU_SLOT)
                     }
                     Some(x) if x == DEFAULT_SLOT => Some(DEFAULT_SLOT),
                     _ => {
                         ctx.error(
                             vp,
                             format!(
-                                "widget slot must be one of: {} (\"column\", the default, places it with column = n; \"top\" puts it in the top band, right of the Garden switcher)",
+                                "widget slot must be one of: {} (\"column\", the default, places it with column = n; \"top\" and \"bottom\" put it in the page's top or bottom band; \"menu\" puts a Zen control in a menu, with menu = \"<menu id>\")",
                                 WIDGET_SLOTS.join(", ")
                             ),
                         );
@@ -1446,9 +1595,15 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 }
             }
         };
-        let top = slot == Some(TOP_SLOT);
+        let in_band = slot.is_some_and(|s| BAND_SLOTS.contains(&s));
+        let in_menu = slot == Some(MENU_SLOT);
+        let in_column = slot == Some(DEFAULT_SLOT);
+        let fills = kind.as_deref().filter(|k| FILL_WIDGET_KINDS.contains(k));
         let mut w = Map::new();
         let mut props = Map::new();
+        let mut edge: Option<&'static str> = None;
+        let mut align: Option<&'static str> = None;
+        let mut menu: Option<(String, (usize, usize))> = None;
         for (k, v) in t.iter() {
             let pos = key_pos(ctx, *t, k, v, tpos);
             match k {
@@ -1470,11 +1625,18 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         ok = false;
                     }
                 },
-                "column" if top => {
+                "column" if in_band => {
+                    let band = slot.unwrap_or(TOP_SLOT);
                     ctx.error(
                         pos,
-                        "a top-band widget (slot = \"top\") has no column; drop column, or drop slot to place it in a column",
+                        format!(
+                            "a {band}-band widget (slot = \"{band}\") has no column; drop column, or drop slot to place it in a column"
+                        ),
                     );
+                    ok = false;
+                }
+                "column" if in_menu => {
+                    ctx.error(pos, "a menu item (slot = \"menu\") has no column: its menu says where it sits; drop column");
                     ok = false;
                 }
                 "column" => match v.as_value() {
@@ -1486,6 +1648,56 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                     _ => {
                         let p = item_pos(ctx, v, pos);
                         ctx.error(p, format!("widget column is a column number, 0 to {}", MAX_COLUMNS - 1));
+                        ok = false;
+                    }
+                },
+                "edge" | "align" if fills.is_some() => {
+                    let f = fills.unwrap_or_default();
+                    ctx.error(pos, format!("'{f}' fills its column and takes no edge or align; drop {k}"));
+                    ok = false;
+                }
+                "edge" if slot.is_some() && !in_column => {
+                    ctx.error(
+                        pos,
+                        "edge picks the top or bottom of a column; it goes only with slot = \"column\" (a band is already an edge of the page; a menu item sits in its menu)",
+                    );
+                    ok = false;
+                }
+                "edge" => match v.as_value().and_then(Value::as_str).and_then(|s| EDGES.iter().find(|e| **e == s)) {
+                    Some(e) => edge = Some(e),
+                    None => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(p, format!("edge must be one of: {}", EDGES.join(", ")));
+                        ok = false;
+                    }
+                },
+                "align" if in_menu => {
+                    ctx.error(
+                        pos,
+                        "align places an item in a band or at a column edge; a menu lists its items in file order, so drop align",
+                    );
+                    ok = false;
+                }
+                "align" => match v.as_value().and_then(Value::as_str).and_then(|s| ALIGNS.iter().find(|a| **a == s)) {
+                    Some(a) => align = Some(a),
+                    None => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(p, format!("align must be one of: {}", ALIGNS.join(", ")));
+                        ok = false;
+                    }
+                },
+                "menu" if slot.is_some() && !in_menu => {
+                    ctx.error(
+                        pos,
+                        "menu = \"<id>\" goes only with slot = \"menu\": it names the menu that holds this item",
+                    );
+                    ok = false;
+                }
+                "menu" => match v.as_value().and_then(Value::as_str) {
+                    Some(m) if valid_widget_id(m) => menu = Some((m.to_string(), item_pos(ctx, v, pos))),
+                    _ => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(p, "menu must be the id of a menu widget (letters, digits, - and _)");
                         ok = false;
                     }
                 },
@@ -1519,16 +1731,26 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                     }
                 }
                 other => {
-                    ctx.error(pos, unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "props"]));
+                    ctx.error(
+                        pos,
+                        unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "edge", "align", "menu", "props"]),
+                    );
                     ok = false;
                 }
             }
         }
-        if t.get("id").is_none() {
-            // A top-band widget may leave its id out: it is then its kind.
-            match kind.as_deref().filter(|_| top) {
+        if in_menu && t.get("menu").is_none() {
+            ctx.error(tpos, "a menu item (slot = \"menu\") needs menu = \"<menu id>\": the menu that holds it");
+            ok = false;
+        }
+        // A widget whose kind already failed gets no second error for its id.
+        if t.get("id").is_none() && kind.is_some() {
+            // Outside a column's body (a band, an edge, a menu) the id may be
+            // left out: it is then the kind (FC14).
+            let optional = slot.is_some_and(|s| s != DEFAULT_SLOT) || chrome || edge.is_some();
+            match kind.as_deref().filter(|_| optional) {
                 Some(k) if ids.iter().any(|x| x == k) => {
-                    ctx.error(tpos, format!("widget id '{k}' (this top-band widget's default id) is used twice; give it its own id"));
+                    ctx.error(tpos, format!("widget id '{k}' (this widget's default id) is used twice; give it its own id"));
                     ok = false;
                 }
                 Some(k) => {
@@ -1541,15 +1763,11 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 }
             }
         }
-        if t.get("column").is_none() && slot == Some(DEFAULT_SLOT) {
+        if t.get("column").is_none() && in_column {
             ctx.error(tpos, "each [[widget]] needs a column (0 is the first), or slot = \"top\" for the top band");
             ok = false;
         }
         let Some(kind) = kind else { continue };
-        if let Some(sl) = slot {
-            let id = w.get("id").and_then(J::as_str).unwrap_or(kind.as_str()).to_string();
-            placed.push((kind.clone(), sl, id, tpos));
-        }
         // Rosson 2026-10-04 (answer 5): one agent filtered from a Home, or the
         // whole Home.
         let prop_at = |ctx: &Ctx, name: &str| ctx.pos.get(&format!("page.widget.{i}.props.{name}")).copied().unwrap_or(tpos);
@@ -1586,40 +1804,162 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 ok = false;
             }
         }
-        if kind == "nav-rail" && top && props.get("orientation").and_then(J::as_str) == Some("column") {
-            let p = prop_at(ctx, "orientation");
+        let orientation = props.get("orientation").and_then(J::as_str);
+        if kind == "nav-rail" && orientation == Some("column") {
+            if let Some(band) = slot.filter(|_| in_band) {
+                let p = prop_at(ctx, "orientation");
+                ctx.error(
+                    p,
+                    format!("the {band} band is one row high: a nav-rail there draws as a row (orientation = \"row\", or leave it out)"),
+                );
+                ok = false;
+            } else if edge.is_some() {
+                let p = prop_at(ctx, "orientation");
+                ctx.error(
+                    p,
+                    "a column edge is one row high: a nav-rail at an edge draws as a row (orientation = \"row\", or leave it out)",
+                );
+                ok = false;
+            }
+        }
+        if kind == "nav-rail" && in_column && edge.is_none() && orientation != Some("row") && align.is_some() {
+            let p = ctx.pos.get(&format!("page.widget.{i}")).copied().unwrap_or(tpos);
             ctx.error(
                 p,
-                "the top band is one row high: a nav-rail there draws as a row (orientation = \"row\", or leave it out)",
+                "align places a row item; this nav-rail is the strip down its column's left side. Set edge = \"top\" or \"bottom\" (or orientation = \"row\") to make it a row, or drop align",
             );
             ok = false;
         }
-        if top {
-            w.insert("slot".into(), json!(TOP_SLOT));
+        if kind == "menu" {
+            if let Some(label) = props.get("label").and_then(J::as_str) {
+                if label.chars().count() > MENU_LABEL_MAX {
+                    let p = prop_at(ctx, "label");
+                    ctx.error(p, format!("menu.label is at most {MENU_LABEL_MAX} characters; this one has {}", label.chars().count()));
+                    ok = false;
+                }
+            }
+        }
+        if let Some(sl) = slot {
+            if sl != DEFAULT_SLOT {
+                w.insert("slot".into(), json!(sl));
+            }
+            if let Some(e) = edge {
+                w.insert("edge".into(), json!(e));
+            }
+            if let Some(a) = align {
+                w.insert("align".into(), json!(a));
+            }
+            if let Some((m, _)) = &menu {
+                w.insert("menu".into(), json!(m));
+            }
+            // A row item at a column edge: chrome, an `edge`, or a row rail.
+            let row_in_column = in_column && (chrome || edge.is_some() || (kind == "nav-rail" && orientation == Some("row")));
+            let at_edge = match (row_in_column, w.get("column").and_then(J::as_u64)) {
+                (true, Some(c)) => Some((c, edge.unwrap_or(DEFAULT_EDGE))),
+                _ => None,
+            };
+            let id = w.get("id").and_then(J::as_str).unwrap_or(kind.as_str()).to_string();
+            placed.push(Placed { kind: kind.clone(), slot: sl, id, pos: tpos, at_edge, menu: menu.clone() });
         }
         normalize_props(&kind, &mut props);
-        normalize_slot_props(&kind, if top { TOP_SLOT } else { DEFAULT_SLOT }, &mut props);
+        normalize_slot_props(&kind, slot.unwrap_or(DEFAULT_SLOT), edge, &mut props);
         w.insert("kind".into(), json!(kind));
         w.insert("props".into(), J::Object(props));
         out.push(J::Object(w));
     }
-    // The top band: a few widgets at most, and one nav rail per page once
-    // the rail is up there (Rosson 2026-10-06).
-    let tops = placed.iter().filter(|p| p.1 == TOP_SLOT).count();
-    if tops > MAX_BAND_WIDGETS {
-        ctx.error(at, format!("the top band holds at most {MAX_BAND_WIDGETS} widgets; this page puts {tops} there"));
+
+    // Limits, counted after the kinds are known (FC47).
+    let content = placed.iter().filter(|p| !is_chrome_kind(&p.kind)).count();
+    if content > MAX_WIDGETS {
+        ctx.error(at, format!("a Garden page holds at most {MAX_WIDGETS} widgets; this one has {content}"));
         ok = false;
     }
-    if let Some(top_idx) = placed.iter().position(|p| p.0 == "nav-rail" && p.1 == TOP_SLOT) {
-        let top_id = placed[top_idx].2.clone();
-        for (j, (k, _, id, pos)) in placed.iter().enumerate() {
-            if k != "nav-rail" || j == top_idx {
+    let chrome_n = placed.len() - content;
+    if chrome_n > MAX_CHROME_WIDGETS {
+        ctx.error(
+            at,
+            format!("a Garden page places at most {MAX_CHROME_WIDGETS} Zen controls (chrome widgets); this one has {chrome_n}"),
+        );
+        ok = false;
+    }
+    // Each Zen control once per page, except `menu` (FC13).
+    for (j, p) in placed.iter().enumerate() {
+        if is_chrome_kind(&p.kind) && p.kind != "menu" && placed[..j].iter().any(|q| q.kind == p.kind) {
+            ctx.error(p.pos, format!("'{}' is placed twice; each Zen control goes on the page once (only menu may repeat)", p.kind));
+            ok = false;
+        }
+    }
+    for band in BAND_SLOTS {
+        let items: Vec<&Placed> = placed.iter().filter(|p| p.slot == *band).collect();
+        let content_in = items.iter().filter(|p| !is_chrome_kind(&p.kind)).count();
+        if content_in > MAX_BAND_WIDGETS {
+            ctx.error(at, format!("the {band} band holds at most {MAX_BAND_WIDGETS} widgets; this page puts {content_in} there"));
+            ok = false;
+        }
+        if items.len() > MAX_BAND_ITEMS {
+            ctx.error(at, format!("the {band} band holds at most {MAX_BAND_ITEMS} items; this page puts {} there", items.len()));
+            ok = false;
+        }
+    }
+    let mut edges: BTreeMap<(u64, &'static str), usize> = BTreeMap::new();
+    for e in placed.iter().filter_map(|p| p.at_edge) {
+        *edges.entry(e).or_default() += 1;
+    }
+    for ((c, e), n) in edges {
+        if n > MAX_EDGE_ITEMS {
+            ctx.error(at, format!("column {c}'s {e} edge holds at most {MAX_EDGE_ITEMS} items; this page puts {n} there"));
+            ok = false;
+        }
+    }
+    // Menus: each named menu exists; each menu holds 1 to 6 items (FC16).
+    let menus: Vec<&Placed> = placed.iter().filter(|p| p.kind == "menu").collect();
+    if menus.len() > MAX_MENUS {
+        ctx.error(at, format!("a page has at most {MAX_MENUS} menus; this one has {}", menus.len()));
+        ok = false;
+    }
+    let menu_ids: Vec<&str> = menus.iter().map(|m| m.id.as_str()).collect();
+    // A menu placed inside a menu is already an error; don't also call it empty.
+    let menus: Vec<&Placed> = menus.into_iter().filter(|m| m.slot != MENU_SLOT).collect();
+    for p in &placed {
+        let Some((m, mpos)) = &p.menu else { continue };
+        if p.slot == MENU_SLOT && !menu_ids.contains(&m.as_str()) {
+            let known = if menu_ids.is_empty() { String::new() } else { format!(" (menus here: {})", menu_ids.join(", ")) };
+            ctx.error(
+                *mpos,
+                format!("menu = \"{m}\" names no menu on this page; add [[widget]] id = \"{m}\" kind = \"menu\"{known}"),
+            );
+            ok = false;
+        }
+    }
+    for m in &menus {
+        let n = placed.iter().filter(|p| p.slot == MENU_SLOT && p.menu.as_ref().is_some_and(|(x, _)| *x == m.id)).count();
+        if n == 0 {
+            ctx.error(
+                m.pos,
+                format!(
+                    "menu '{}' holds nothing: put Zen controls in it with slot = \"menu\" and menu = \"{}\", or remove it",
+                    m.id, m.id
+                ),
+            );
+            ok = false;
+        } else if n > MAX_MENU_ITEMS {
+            ctx.error(m.pos, format!("menu '{}' holds at most {MAX_MENU_ITEMS} items; it has {n}", m.id));
+            ok = false;
+        }
+    }
+    // One nav rail per page once a rail is in a band (Rosson 2026-10-06).
+    if let Some(band_idx) = placed.iter().position(|p| p.kind == "nav-rail" && BAND_SLOTS.contains(&p.slot)) {
+        let band_id = placed[band_idx].id.clone();
+        let band = placed[band_idx].slot;
+        for (j, p) in placed.iter().enumerate() {
+            if p.kind != "nav-rail" || j == band_idx {
                 continue;
             }
             ctx.error(
-                *pos,
+                p.pos,
                 format!(
-                    "the nav rail is already in the top band ('{top_id}'); a page draws one nav rail, so remove '{id}' or move the rail back to a column"
+                    "the nav rail is already in the {band} band ('{band_id}'); a page draws one nav rail, so remove '{}' or move the rail back to a column",
+                    p.id
                 ),
             );
             ok = false;
@@ -1633,8 +1973,12 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
 
 /// G38 rules that need the whole page: every widget's column exists, a
 /// Conversation's `agents` names an Agents widget, and a column's `widget`
-/// names a widget on the page. Widgets or columns the file leaves out come
-/// from its template.
+/// names a widget on the page. Content widgets or columns the file leaves
+/// out come from its template.
+///
+/// prd-zen-freeform-chrome FC24 rule 1 [FC49]: a file that places any
+/// chrome replaces the template's, so it must also place both required
+/// controls; the error sits at the file's first chrome widget.
 fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
     let template = ctx
         .out
@@ -1653,57 +1997,88 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
         Some(l) => l["columns"].as_array().map_or(0, Vec::len),
         None => tpl["layout"]["columns"].as_array().map_or(0, Vec::len),
     };
-    let widgets: Vec<J> = match &file_widgets {
-        Some(w) => w.as_array().cloned().unwrap_or_default(),
-        None => tpl["widgets"].as_array().cloned().unwrap_or_default(),
+    // Every file widget with its table index (for positions).
+    let file: Vec<(usize, J)> = file_widgets.as_ref().and_then(J::as_array).cloned().unwrap_or_default().into_iter().enumerate().collect();
+    let is_chrome = |w: &J| w["kind"].as_str().is_some_and(is_chrome_kind);
+    let file_content: Vec<(Option<usize>, J)> =
+        file.iter().filter(|(_, w)| !is_chrome(w)).map(|(i, w)| (Some(*i), w.clone())).collect();
+    let file_chrome: Vec<(usize, J)> = file.iter().filter(|(_, w)| is_chrome(w)).cloned().collect();
+    let from_file = !file_content.is_empty();
+    let widgets: Vec<(Option<usize>, J)> = if from_file {
+        file_content
+    } else {
+        tpl["widgets"].as_array().cloned().unwrap_or_default().into_iter().map(|w| (None, w)).collect()
     };
-    let from_file = file_widgets.is_some();
     let layout_at = ctx.pos.get("page.layout").copied().unwrap_or(at);
     let agents_ids: Vec<String> =
-        widgets.iter().filter(|x| x["kind"] == "agents").filter_map(|x| x["id"].as_str().map(str::to_string)).collect();
-    for (i, w) in widgets.iter().enumerate() {
+        widgets.iter().filter(|(_, x)| x["kind"] == "agents").filter_map(|(_, x)| x["id"].as_str().map(str::to_string)).collect();
+    let column_error = |ctx: &mut Ctx, i: usize, id: &str, col: usize| {
+        let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
+        ctx.error(
+            p,
+            format!("widget '{id}' is in column {col}, but this page has {ncols} column(s) (0 to {})", ncols.saturating_sub(1)),
+        );
+    };
+    for (idx, w) in &widgets {
         let id = w["id"].as_str().unwrap_or("?").to_string();
         let col = w["column"].as_u64().unwrap_or(0) as usize;
         let in_column = w["slot"].as_str().unwrap_or(DEFAULT_SLOT) == DEFAULT_SLOT;
         if in_column && col >= ncols {
-            if from_file {
-                let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
-                ctx.error(
-                    p,
-                    format!("widget '{id}' is in column {col}, but this page has {ncols} column(s) (0 to {})", ncols.saturating_sub(1)),
-                );
-            } else {
-                ctx.error(
+            match idx {
+                Some(i) => column_error(ctx, *i, &id, col),
+                None => ctx.error(
                     layout_at,
                     format!(
                         "the template's widget '{id}' sits in column {col}, but this layout has {ncols} column(s); add [[widget]] blocks for this layout"
                     ),
-                );
+                ),
             }
         }
-        if w["kind"] == "conversation" && from_file {
-            let pinned = w["props"]["agent"].is_string();
-            match w["props"]["agents"].as_str() {
-                Some(target) if !agents_ids.iter().any(|a| a == target) => {
-                    let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);
-                    let known = if agents_ids.is_empty() { String::new() } else { format!(" ({})", agents_ids.join(", ")) };
-                    ctx.error(p, format!("conversation '{id}' follows '{target}', which is not an Agents widget on this page{known}"));
+        if w["kind"] == "conversation" {
+            if let Some(i) = idx {
+                let pinned = w["props"]["agent"].is_string();
+                match w["props"]["agents"].as_str() {
+                    Some(target) if !agents_ids.iter().any(|a| a == target) => {
+                        let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);
+                        let known = if agents_ids.is_empty() { String::new() } else { format!(" ({})", agents_ids.join(", ")) };
+                        ctx.error(p, format!("conversation '{id}' follows '{target}', which is not an Agents widget on this page{known}"));
+                    }
+                    None if !pinned && agents_ids.is_empty() => {
+                        let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
+                        ctx.error(
+                            p,
+                            format!(
+                                "conversation '{id}' has no agent to show: add an Agents widget, or pin one with agent = \"<name or address>\""
+                            ),
+                        );
+                    }
+                    _ => {}
                 }
-                None if !pinned && agents_ids.is_empty() => {
-                    let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
-                    ctx.error(
-                        p,
-                        format!(
-                            "conversation '{id}' has no agent to show: add an Agents widget, or pin one with agent = \"<name or address>\""
-                        ),
-                    );
-                }
-                _ => {}
+            }
+        }
+    }
+    // Chrome at a column edge needs that column (FC24 rule 10).
+    for (i, w) in &file_chrome {
+        if w["slot"].as_str().unwrap_or(DEFAULT_SLOT) != DEFAULT_SLOT {
+            continue;
+        }
+        let col = w["column"].as_u64().unwrap_or(0) as usize;
+        if col >= ncols {
+            let id = w["id"].as_str().unwrap_or("?").to_string();
+            column_error(ctx, *i, &id, col);
+        }
+    }
+    // FC24 rule 1: chrome from the file must carry both required controls.
+    if let Some((first, _)) = file_chrome.first() {
+        let p = ctx.pos.get(&format!("page.widget.{first}")).copied().unwrap_or(at);
+        for req in super::REQUIRED_CONTROLS {
+            if !file_chrome.iter().any(|(_, w)| w["kind"] == *req) {
+                ctx.error(p, required_chrome_error(req));
             }
         }
     }
     if let Some(l) = &file_layout {
-        let ids: Vec<&str> = widgets.iter().filter_map(|w| w["id"].as_str()).collect();
+        let ids: Vec<&str> = widgets.iter().filter_map(|(_, w)| w["id"].as_str()).collect();
         for (i, c) in l["columns"].as_array().into_iter().flatten().enumerate() {
             if let Some(w) = c["widget"].as_str() {
                 if !ids.contains(&w) {

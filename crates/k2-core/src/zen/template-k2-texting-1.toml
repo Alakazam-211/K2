@@ -3,9 +3,10 @@
 #
 # Data, not special code: `/cli/zen/get?garden=` returns this layout, these
 # widgets and these controls as the resolved page, and the renderer draws
-# from it. A Garden file (`gardens/<id>.toml`) may replace the layout and
-# the built-in widgets with the same shape (G38); the controls always come
-# from the template.
+# from it. A Garden file (`gardens/<id>.toml`) may replace the layout, the
+# built-in widgets and the chrome (K2's controls) with the same shape (G38,
+# prd-zen-freeform-chrome FC3): each group is replaced only when the file
+# declares any of it.
 id = "k2.texting@1"
 schema = 1
 
@@ -61,7 +62,34 @@ kind = "nav-rail"
 column = 0
 caps = ["app:navigate"]
 
-# Controls (Z27, G24). The page draws them; K2 binds them and checks the
+# Chrome (prd-zen-freeform-chrome FC30): K2's controls as data, in the same
+# [[widget]] grammar a Garden file uses (no caps here: K2 grants them). One
+# top band: the Garden switcher at the start; usage, theme and the Zen
+# toggle at the end, so the toggle (the last `end` item) sits in the
+# top-right corner. A Garden file that places any chrome widget replaces
+# all four. Safe mode draws only the switcher and the toggle.
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+align = "start"
+
+[[widget]]
+kind = "usage"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "top"
+align = "end"
+
+# Controls (Z27, G24). Kept for apps that read `page.controls`; they must
+# agree with the chrome above (a core test pins that). The page draws them; K2 binds them and checks the
 # required two (`zen-toggle`, `garden-switcher`). The drag strip is bound for
 # window drag but never checked. One top band: the Garden switcher (top
 # left), the drag strip, then the top-right cluster — K2's theme control

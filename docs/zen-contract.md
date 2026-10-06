@@ -19,6 +19,11 @@ The renderer requires it from the local scope; without it, Zen shows safe
 mode with "K2 on this computer is older than this app. Update it to use
 Gardens." `zen-v1` stays and means the theme routes exist.
 
+**`zen-chrome-v1`** (prd-zen-freeform-chrome FC29) means the page answer
+carries `page.chrome`, `page.bands`, `page.edges` and `page.menus`, and a
+Garden file may place K2's controls (see "Zen controls" below). A renderer
+talking to a daemon without it builds the template's chrome itself (FC32).
+
 ## The model
 
 - **Zen is a window mode.** On/off lives in the renderer per window
@@ -115,13 +120,25 @@ A restore verb is later (Q8).
       "minWidths": [240, 360],     // px per column
       "columns": [{ "size": 34, "min-width": 240, "widget": "agents" }, …]   // `widget`: first widget in it
     },
-    "widgets": [ Widget, … ],
-    "controls": [                  // always the template's; a Garden file can't change them
+    "widgets": [ Widget, … ],      // CONTENT widgets only: never a chrome kind (FC28)
+    "controls": [                  // the template's list as is while the chrome is the template's
       { "kind": "garden-switcher", "placement": "top-left" },
       { "kind": "drag-region", "placement": "top" },
       { "kind": "zen-toggle", "placement": "top-right" },
       { "kind": "add-agent", "placement": "widget-bottom-left", "widget": "agents" }   // texting only
-    ]
+    ],
+    "chrome": {                    // K2's controls (FC29); zen-chrome-v1
+      "from": "template",          // "template" | "garden" (the Garden file placed its own)
+      "items": [ ChromeItem, … ]
+    },
+    "bands": {                     // ids (content and chrome) in draw order; null = no such band
+      "top":    { "start": ["garden-switcher"], "center": [], "end": ["usage", "theme-picker", "zen-toggle"] },
+      "bottom": null
+    },
+    "edges": [                     // column edges that hold something, by column, top before bottom
+      { "column": 1, "edge": "bottom", "start": [], "center": [], "end": ["zen-toggle"] }
+    ],
+    "menus": { "more": ["garden-switcher", "theme-picker", "zen-toggle"] }   // menu id → item ids, file order
   },
   "theme": { … }, "themes": [ … ], "chrome": { … }, "motion": { … },     // see Themes
   "errors":   [{ "file": "gardens/g-3f9a12c0.toml", "line": 7, "col": 1, "message": "…" }],
@@ -145,10 +162,14 @@ the window into safe mode.
 | layout | 2 columns, `[34, 66]`, min `[240, 360]` | 1 column, `[100]`, min `[320]` |
 | widgets | `agents` (column 0, `home-picker: true`), `conversation` (column 1, `agents: "agents"`), `nav-rail` (id `nav`, column 0) | `garden-empty` (column 0; caps `agents:read`, `thread:read`, `thread:post`, `gardens:template`) |
 | controls | `garden-switcher`, `drag-region`, `zen-toggle`, `add-agent` | `garden-switcher`, `drag-region`, `zen-toggle` |
+| chrome (FC30) | top band: `garden-switcher` (start); `usage`, `theme-picker`, `zen-toggle` (end) | the same |
 
 **Required controls** (G24; Rosson, 2026-10-04: exactly two):
-`zen-toggle`, `garden-switcher`. Every template declares both, plus
-`drag-region`, which K2 binds for window drag but never checks.
+`zen-toggle`, `garden-switcher`. Every template places both as chrome and
+declares both in `controls`, plus `drag-region`, which K2 binds for window
+drag but never checks. A Garden file that places any chrome must place
+both (FC24), so no page can drop one. Safe mode always draws the
+template's chrome without usage and theme (FC22).
 `home-switcher` and `home-option` are gone from Zen. The renderer binds `garden-option` (with its Garden id) the way it
 bound `home-option`. Template controls get the caps `agents:add` and
 `gardens:manage` (G29); widgets never get `gardens:manage`. The built-in
@@ -161,8 +182,10 @@ default on its own Garden).
 {
   "id": "agents",                  // unique on the page
   "kind": "agents",                // agents | conversation | nav-rail | garden-empty
-  "slot": "column",                // "column" (default) | "top" (the top band); a string, more values later
-  "column": 0,                     // absent for a band widget (`slot: "top"`)
+  "slot": "column",                // "column" (default) | "top" | "bottom" (the bands); a string, more values later
+  "column": 0,                     // absent for a band widget
+  "edge": "bottom",                // only when the file set it: a row item at that column edge
+  "align": "end",                  // only when the file set it: start | center | end
   "props": { … },                  // EVERY prop is present: the daemon fills K2's defaults
   "caps": ["agents:read", "agents:add", "presence:read"],   // K2's, by kind; a file can't name caps
   "source": "builtin"
@@ -263,28 +286,98 @@ kind = "nav-rail"
 slot = "top"                       # "column" (default) | "top"
 ```
 
-- `slot` is `"column"` (the default: needs `column = n`) or `"top"`: the
-  top band, immediately right of the Garden switcher, before the drag
-  region. It is a string so later slots (a bottom band, corners, a menu)
-  are new values, not a new key; any other value is an error today.
-- Only the kinds in the schema's one allowlist, `BAND_WIDGET_KINDS`
-  (`nav-rail` today), fit a band; any other kind with `slot = "top"` is an
-  error naming them. At most 2 widgets per band (`MAX_BAND_WIDGETS`).
-- A top widget has no `column` (an error if set), and its `id` may be left
-  out: it is then its kind (`"nav-rail"`).
-- **One rail per page:** with a `nav-rail` in the top band, any other
-  `nav-rail` on the page (column or band) is an error at its line.
-- Like any `[[widget]]`, a top widget is part of the file's widget list,
-  which replaces the template's: on the texting template, declare `agents`
-  and `conversation` too. Without a top widget nothing changes (Garden 1's
-  rail stays in column 0).
-- The band's controls (switcher, drag region, K2's usage + theme items,
-  Zen toggle) are the template's and stay put; the band slot shrinks first
-  and the drag region keeps a 120px minimum, so a band widget can't push a
-  required control off-screen or trip the required-controls check.
+- `slot` is `"column"` (the default: needs `column = n`), `"top"` or
+  `"bottom"` (the page's bands), or `"menu"` (a Zen control inside a menu;
+  see below). It is a string so later slots are new values, not a new key;
+  any other value is an error.
+- Content kinds in the schema's one allowlist, `BAND_WIDGET_KINDS`
+  (`nav-rail` today), and every chrome kind fit a band; any other kind in a
+  band is an error naming both lists. At most 2 content widgets per band
+  (`MAX_BAND_WIDGETS`) and 8 items in all (`MAX_BAND_ITEMS`).
+- A band widget has no `column` (an error if set), and its `id` may be
+  left out: it is then its kind (`"nav-rail"`).
+- **One rail per page:** with a `nav-rail` in a band, any other `nav-rail`
+  on the page (column or band) is an error at its line.
+- A band widget is a content widget, so it is part of the file's content
+  list, which replaces the template's: on the texting template, declare
+  `agents` and `conversation` too. It does NOT replace the template's
+  chrome: with the template's chrome, a band widget sits after the Garden
+  switcher in `start` (or before the template's end group in `end`), so the
+  toggle keeps its corner.
 
-1–3 columns, at most 12 widgets. A `caps` key anywhere is an error;
-`[[control]]` is a warning and ignored; an unknown kind or prop is an error
+### Zen controls: chrome widgets (prd-zen-freeform-chrome, zen-chrome-v1)
+
+K2's controls are widgets too. A Garden file places them with `[[widget]]`:
+
+```toml
+[[widget]]
+id     = "x"            # optional outside a column's body (defaults to the kind)
+kind   = "garden-switcher" | "zen-toggle" | "usage" | "theme-picker" | "menu"
+slot   = "column" (default) | "top" | "bottom" | "menu"
+column = 0              # slot = "column" only
+edge   = "top" | "bottom"           # slot = "column" only (default "top")
+align  = "start" | "center" | "end" # bands and edges (default "start")
+menu   = "more"         # slot = "menu" only: the menu widget's id
+[widget.props]          # menu only: icon = "dots" | "bars" | "zen", label = "…" (≤ 24)
+```
+
+- **Two groups, two replace rules (FC3).** Content (`agents`,
+  `conversation`, `nav-rail`) and chrome are separate. Declaring any
+  content widget replaces the template's content; declaring any chrome
+  widget replaces **all** of the template's chrome (`chrome.from:
+  "garden"`), and chrome you don't place is not shown. A file with only
+  one group keeps the template's other group.
+- **Required:** a file that places any chrome must place `zen-toggle` and
+  `garden-switcher`, each exactly once, directly (a band or a column edge)
+  or as a top-level item of a menu. Otherwise validate fails at the first
+  chrome widget's line: "This file places Zen controls, so it replaces the
+  template's. It must also place a zen-toggle (the way out): …".
+- **Where:** a band item sits in `start`, `center` or `end` of its band.
+  A chrome item with `slot = "column"` sits at that column's `edge`
+  (a row; the column must exist). A `nav-rail` with an `edge` (or
+  `orientation = "row"`) is a row at that edge. `agents` and
+  `conversation` fill their column and take no `edge` or `align`.
+- **Order** is file order inside each group; in `end` the **last** item
+  sits in the corner. There is no `order` key.
+- **Menus:** `kind = "menu"` sits in a band or at a column edge and holds
+  the items whose `slot = "menu"` and `menu = "<its id>"`: only
+  `zen-toggle`, `garden-switcher`, `theme-picker`, `usage`. No menu inside a
+  menu, no content in a menu, 1–6 items each, at most 3 menus. `slot =
+  "menu"` without `menu`, or a `menu` naming no menu, is an error; so is
+  `menu` on any other slot.
+- **Limits** (counted after each kind is known): 12 content widgets, 10
+  chrome widgets, 8 items per band (2 content), 4 per column edge. Each
+  chrome kind at most once, except `menu`.
+- **Never placed:** `kind = "drag-region"` is an error ("K2 makes the empty
+  space in every band drag the window; there is nothing to place.").
+- **Caps:** a file never names them. `garden-switcher` gets
+  `gardens:manage`; the others get none (FC31).
+
+`ChromeItem` (every key K2 fills):
+
+```jsonc
+{ "id": "zen-toggle", "kind": "zen-toggle", "slot": "bottom", "align": "end", "props": {}, "caps": [] }
+{ "id": "zen-toggle", "kind": "zen-toggle", "slot": "column", "column": 1, "edge": "bottom", "align": "end", "props": {}, "caps": [] }
+{ "id": "zen-toggle", "kind": "zen-toggle", "slot": "menu", "menu": "more", "props": {}, "caps": [] }
+{ "id": "more", "kind": "menu", "slot": "top", "align": "end", "props": { "icon": "dots", "label": "More" }, "caps": [] }
+```
+
+`bands`, `edges` and `menus` list ids in draw order, computed by the
+daemon, so the renderer only draws. With the template's chrome,
+`controls` is the template's list as is. With the Garden's, `controls`
+lists `garden-switcher` and `zen-toggle` with placements `"<band>-<align>"`
+(`"bottom-start"`), `"column-<n>-<edge>-<align>"` (`"column-1-bottom-end"`)
+or `"menu:<id>"`, then `drag-region` (`"bands"`), and `add-agent` when the
+page has an Agents widget. Older apps read only each control's `kind` and
+ignore `chrome`, `bands`, `edges` and `menus`, so they keep drawing their
+own top band with both required controls (FC32). A file whose `widget`
+key holds only chrome still counts as the file's own changes, so `k2 zen
+garden template` needs `--force` (FC49).
+
+1–3 columns, at most 12 content widgets. A `caps` key anywhere is an error;
+`[[control]]` is a warning and ignored ("[[control]] is ignored: place
+controls with [[widget]] kind = \"zen-toggle\" (see k2 zen guide bands)");
+an unknown kind or prop is an error
 at its line; a widget's `column` must exist in the effective layout; a
 `conversation`'s `agents` must name an `agents` widget on the page; a
 `conversation` with neither `agents` nor `agent` needs an `agents` widget to
@@ -555,13 +648,19 @@ this contract, where it reads more loosely or decides something:
    `app.subscribeCurrent(fn)` / `app.badges()` / `app.subscribe(fn)`
    (`app:navigate`: `page` is `home`, `agents`, `projects` or `tickets`,
    the rail's view in this window); `homes.select` is gone.
-9. **Placement** (Rosson, 2026-10-04). One top band for both templates and
-   safe mode: the Garden switcher top left, the drag strip, then the
-   top-right cluster — K2's usage tool (the top bar's subscription usage
-   chip and menu), then its theme control, immediately left of the Zen
-   toggle, which sits in the window's top-right corner (where the top bar's
-   Zen toggle is outside Zen; clear of Windows' controls via
-   `--zen-stoplight-safe-right`). A Garden's band widgets (`slot: "top"`)
+9. **Placement** (Rosson, 2026-10-04; prd-zen-freeform-chrome). The
+   template's chrome (and safe mode's) is one top band: the Garden switcher
+   top left, the drag strip, then the top-right cluster — K2's usage tool
+   (the top bar's subscription usage chip and menu), then its theme
+   control, immediately left of the Zen toggle, which sits in the window's
+   top-right corner (clear of Windows' controls via
+   `--zen-stoplight-safe-right`). A Garden file may move every one of them
+   (`page.chrome`, `page.bands`, `page.edges`, `page.menus`; see "Zen
+   controls"). **As of the daemon slice (S1) the renderer still draws the
+   template's hard-coded top band**; drawing chrome from `page.bands`,
+   `page.edges` and `page.menus` is the renderer slice (S2/S3). Until
+   then a Garden's chrome moves don't show, but both required controls
+   are always there. A Garden's band widgets (`slot: "top"`)
    sit between the switcher and the drag strip (`ZenBandSlot`,
    `components/Zen/ZenBand.tsx`: one component for any band slot; nothing
    is drawn there by default); the drag strip keeps a 120px minimum

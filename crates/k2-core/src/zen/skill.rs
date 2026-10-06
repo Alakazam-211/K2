@@ -7,14 +7,15 @@
 //! on headless servers never see it.
 
 use super::schema::{
-    PropType, ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BEZIER_Y_MAX,
-    BEZIER_Y_MIN, BLANK_TEMPLATE_ID, BUILTIN_BEZIERS, COLOR_TOKENS, COLUMN_MIN_WIDTH_MAX, CONTROL_WARNING,
-    CORNERS, DEFAULT_SLOT, FONT_FAMILIES, LAYOUT_KINDS, MAX_BACKGROUND_BYTES, MAX_COLUMNS, MAX_BAND_WIDGETS,
-    MAX_WIDGETS, MIN_CONTRAST, TOP_SLOT, BAND_WIDGET_KINDS, WIDGET_SLOTS,
-    NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID, TEMPLATE_WIDGET_KINDS,
-    TERMINAL_PARTNER, TERMINAL_TOKENS, WIDGET_KINDS, WIDGET_PROPS,
+    PropType, ALIGNS, ANIMATION_STYLES, ANIMATION_TREE, BACKGROUND_FITS, BACKGROUND_TYPES, BAND_WIDGET_KINDS,
+    BEZIER_Y_MAX, BEZIER_Y_MIN, BLANK_TEMPLATE_ID, BUILTIN_BEZIERS, CHROME_KINDS, COLOR_TOKENS,
+    COLUMN_MIN_WIDTH_MAX, CONTROL_WARNING, CORNERS, DEFAULT_ALIGN, DEFAULT_EDGE, DEFAULT_SLOT, DRAG_REGION_ERROR,
+    EDGES, FILL_WIDGET_KINDS, FONT_FAMILIES, LAYOUT_KINDS, MAX_BACKGROUND_BYTES, MAX_BAND_ITEMS, MAX_BAND_WIDGETS,
+    MAX_CHROME_WIDGETS, MAX_COLUMNS, MAX_EDGE_ITEMS, MAX_MENUS, MAX_MENU_ITEMS, MAX_WIDGETS, MENU_ITEM_KINDS,
+    MIN_CONTRAST, NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID,
+    TEMPLATE_WIDGET_KINDS, TERMINAL_PARTNER, TERMINAL_TOKENS, TOP_SLOT, WIDGET_KINDS, WIDGET_PROPS, WIDGET_SLOTS,
 };
-use super::{BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
+use super::{chrome_caps, BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
@@ -128,18 +129,21 @@ agents = \"work\"    # shows the agent picked in the \"work\" widget\n\
 accent = \"#065f46\"\n\
 ```\n\n\
 Templates: `{TEMPLATE_ID}` (the texting page: Agents beside Conversation) and\n\
-`{BLANK_TEMPLATE_ID}` (empty). The template gives the page its controls and,\n\
-until the file declares its own, its layout and widgets.\n\n\
+`{BLANK_TEMPLATE_ID}` (empty). The template gives the page its layout, its widgets\n\
+and its controls until the file declares its own.\n\n\
 - `[layout]`: `kind` is {}; 1 to {MAX_COLUMNS} `[[layout.column]]`, each with `size`\n\
   (percent, the sizes add up to 100) and `min-width` (px, 0 to {}).\n\
-- `[[widget]]`: `id` (letters, digits, - and _; unique), `kind`, `column` (0 is the\n\
-  first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}.\n\
-  When the file declares any `[[widget]]`, they replace the template's widgets.\n\
-- `slot`: {} (default `{DEFAULT_SLOT}`). `slot = \"{TOP_SLOT}\"` puts the widget in the page's\n\
-  top band, immediately right of the Garden switcher, instead of a column. Only {} fit\n\
-  there, at most {MAX_BAND_WIDGETS}; a top widget has no `column`, and its `id` may be left out\n\
-  (it is then the kind). The band's controls (Garden switcher, drag area, Zen toggle)\n\
-  stay where they are.\n\
+- `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is\n\
+  the first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}\n\
+  content widgets and {MAX_CHROME_WIDGETS} Zen controls.\n\
+- Two groups, two replace rules: declaring any **content** widget (the built-in widgets\n\
+  below) replaces the template's content widgets; declaring any **Zen control** (see\n\
+  Controls, bands and menus) replaces ALL of the template's controls. A file with only\n\
+  content widgets keeps the template's controls, and the other way round.\n\
+- `slot`: {} (default `{DEFAULT_SLOT}`). `slot = \"{TOP_SLOT}\"` or `\"bottom\"` puts the widget in the\n\
+  page's top or bottom band instead of a column; `slot = \"menu\"` puts a Zen control in a menu.\n\
+  Content kinds that fit a band: {}, at most {MAX_BAND_WIDGETS} per band. A band or menu widget has\n\
+  no `column`, and its `id` may be left out (it is then the kind).\n\
 - A page never names caps: built-in widgets get K2's caps (`caps` is an error).\n\
 - `[[control]]` is warned and ignored: \"{CONTROL_WARNING}\".\n\
 - Unknown kinds, props and keys are errors at their line.\n\n",
@@ -157,12 +161,13 @@ switcher, instead of a strip down a column:\n\n\
 kind = \"nav-rail\"\n\
 slot = \"{TOP_SLOT}\"\n\
 ```\n\n\
-Like any `[[widget]]`, it replaces the template's widgets, so on the texting page\n\
-list the others too (`agents` in column 0, `conversation` in column 1). A page with\n\
-the rail in the top band draws one rail: another `nav-rail` on the page is an error.\n\
-Its `orientation` is `row` there (the only one that fits); in a column it is `column`\n\
-unless you set `orientation = \"row\"`.\n\n"
+The rail is a content widget, so it replaces the template's widgets (on the texting page\n\
+list the others too: `agents` in column 0, `conversation` in column 1) and keeps the\n\
+template's controls. A page with the rail in a band draws one rail: another `nav-rail`\n\
+on the page is an error. Its `orientation` is `row` there (the only one that fits); in a\n\
+column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
     ));
+    s.push_str(&controls_section());
     s.push_str("### Built-in widgets\n\n");
     for (kind, what) in WIDGET_KINDS {
         let caps = BUILTIN_WIDGET_CAPS.iter().find(|(k, _)| k == kind).map(|(_, c)| ticks(c)).unwrap_or_default();
@@ -328,10 +333,12 @@ When the computer asks for reduced motion, every Zen animation is instant.\n\n",
     s.push_str("## Controls\n\nEvery Garden page carries the required controls, which K2 binds and checks itself: ");
     s.push_str(&ticks(REQUIRED_CONTROLS));
     s.push_str(
-        " (the Zen toggle, top right, and the Garden switcher, top left). They come from\n\
-the template, so a Garden file can't drop or move them. If one\n\
-is hidden, covered or unusable, Zen drops to safe mode. The human can always\n\
-leave with Exit Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n\
+        " (the Zen toggle and the Garden switcher). The template puts the switcher top\n\
+left and the toggle top right. A Garden file may move them (Controls, bands and menus),\n\
+but it can never drop one: a file that places any control must place both, and\n\
+validate refuses it otherwise. If one is hidden, covered or unusable, Zen drops to\n\
+safe mode, which draws the template's controls. The human can always leave with Exit\n\
+Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n\
 ## Bridge verbs and caps\n\n\
 Every widget reaches K2 only through the Zen bridge; each verb needs a cap\n\
 the widget is granted. Caps: ",
@@ -344,7 +351,7 @@ the widget is granted. Caps: ",
 - `presence.get(address)`, `presence.subscribe(cb)`: `presence:read`\n\
 - `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
 - `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`, `compose.draft(address, text)`: `thread:post`\n\
-- `gardens.create(name, template?)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the template's controls only)\n\
+- `gardens.create(name, template?)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the Garden switcher only, never a widget)\n\
 - `gardens.useTemplate(template, {force})`: `gardens:template` (the `garden-empty` widget's Start with the default; only the Garden it is on)\n\
 - `focusGroups.get()`, `focusGroups.set(id)`, `focusGroups.subscribe(cb)`: `agents:read` (the app's focus groups, for the Agents view)\n\
 - `app.open(page)` (`home`, `agents`, `projects` or `tickets`: switches the Garden's view in this window, inside Zen; Zen stays on), `app.current()`, `app.subscribeCurrent(fn)`, `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
@@ -352,6 +359,105 @@ the widget is granted. Caps: ",
 Built-in widgets get their caps from K2. In Zen v2, a user widget asks for caps in\n\
 its manifest and the human grants them in the K2 app. Agents request caps; they\n\
 never grant them.\n",
+    );
+    s
+}
+
+/// "Controls, bands and menus" (prd-zen-freeform-chrome FC38): the chrome
+/// grammar, generated from the schema tables, with two examples.
+fn controls_section() -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "### Controls, bands and menus\n\n\
+Before moving controls, read `k2 zen guide bands` and `k2 zen guide required`.\n\n\
+K2's controls are widgets too (**Zen controls**). Place them with `[[widget]]` like any\n\
+widget. The two required ones are {}: a file that places any Zen control replaces ALL of\n\
+the template's and must place both, once each, somewhere the human can reach in one\n\
+click. Everything else is optional; a control you don't place isn't shown.\n\n\
+- **Where:** `slot = \"top\"` or `\"bottom\"` is the page's top or bottom band (full width).\n\
+  `slot = \"column\"` with `column = n` puts a control at that column's edge: `edge` is\n\
+  {} (default `{DEFAULT_EDGE}`). `slot = \"menu\"` with `menu = \"<menu id>\"` puts it inside a `menu`.\n\
+  Note the difference: `slot = \"top\"` is the page's top band; `slot = \"column\"` with\n\
+  `edge = \"top\"` is the top of one column.\n\
+- **`align`:** {} (default `{DEFAULT_ALIGN}`): the left end, the middle or the right end of a band\n\
+  or column edge. Inside each group items keep file order, and in an `end` group the\n\
+  LAST item in the file sits in the corner.\n\
+- **Menus** hold only {}: no menu inside a menu, no content widget.\n\
+  A menu holds 1 to {MAX_MENU_ITEMS} items; at most {MAX_MENUS} menus on a page. `slot = \"menu\"` always needs `menu`.\n\
+- **Limits:** at most {MAX_BAND_ITEMS} items per band, {MAX_EDGE_ITEMS} per column edge. Each Zen\n\
+  control goes on the page once, except `menu`.\n\
+- {} take no `edge` or `align`: they fill their column.\n\
+- Never place `drag-region`: {DRAG_REGION_ERROR} With no top band K2 keeps an empty,\n\
+  draggable strip at the top.\n\n",
+        ticks(REQUIRED_CONTROLS),
+        ticks(EDGES),
+        ticks(ALIGNS),
+        ticks(MENU_ITEM_KINDS),
+        ticks(FILL_WIDGET_KINDS),
+    ));
+    s.push_str("Zen control kinds:\n\n");
+    for (kind, what) in CHROME_KINDS {
+        let caps = chrome_caps(kind);
+        let granted = if caps.is_empty() { "no caps".to_string() } else { ticks(caps) };
+        s.push_str(&format!("**`{kind}`**: {what}. K2 grants it {granted}.\n\n"));
+        for p in WIDGET_PROPS.iter().filter(|p| p.kind == *kind) {
+            let default = p.default.map(|d| format!(" Default `{d}`.")).unwrap_or_default();
+            s.push_str(&format!("- `{}` ({}): {}.{default}\n", p.name, prop_type(p.ty), p.doc));
+        }
+        if WIDGET_PROPS.iter().any(|p| p.kind == *kind) {
+            s.push('\n');
+        }
+    }
+    s.push_str(
+        "`bottom-bar`: the Garden switcher bottom left, the theme and the Zen toggle bottom\n\
+right, usage not shown, no top band. The template's content widgets stay:\n\n\
+```toml\n\
+schema = 1\n\
+\n\
+[[widget]]\n\
+kind = \"garden-switcher\"\n\
+slot = \"bottom\"\n\
+\n\
+[[widget]]\n\
+kind = \"theme-picker\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n\
+\n\
+[[widget]]\n\
+kind = \"zen-toggle\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n\
+```\n\n\
+`menu-both`: both required controls and the theme in one menu, top right:\n\n\
+```toml\n\
+schema = 1\n\
+\n\
+[[widget]]\n\
+id = \"more\"\n\
+kind = \"menu\"\n\
+slot = \"top\"\n\
+align = \"end\"\n\
+[widget.props]\n\
+icon = \"dots\"\n\
+label = \"More\"\n\
+\n\
+[[widget]]\n\
+kind = \"garden-switcher\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n\
+\n\
+[[widget]]\n\
+kind = \"theme-picker\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n\
+\n\
+[[widget]]\n\
+kind = \"zen-toggle\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n\
+```\n\n\
+A file that places only a `garden-switcher` fails validate: it replaced the template's\n\
+controls, so it must also place a `zen-toggle` (the way out).\n\n",
     );
     s
 }

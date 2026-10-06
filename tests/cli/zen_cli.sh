@@ -262,15 +262,52 @@ assert_eq "a top-band nav rail validates" "$rc" "0"
 printf 'schema = 1\n[[widget]]\nid = "a"\nkind = "agents"\nslot = "top"\n' >"$ZEN/gardens/$NOTES_ID.toml"
 capture zen validate --garden Notes
 assert_eq "agents in the top band exits 1" "$rc" "1"
-assert_contains "the slot error names the allowed kinds" "$out" "gardens/$NOTES_ID.toml:5:8: 'agents' can't go in the top band; slot = \"top\" takes: nav-rail"
+assert_contains "the slot error names the allowed kinds" "$out" "gardens/$NOTES_ID.toml:5:8: 'agents' can't go in the top band; slot = \"top\" takes: nav-rail, garden-switcher, zen-toggle, usage, theme-picker, menu"
 printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\n[[widget]]\nid = "side"\nkind = "nav-rail"\ncolumn = 0\n' >"$ZEN/gardens/$NOTES_ID.toml"
 capture zen validate --garden Notes
 assert_eq "a second rail beside a top-band rail exits 1" "$rc" "1"
 assert_contains "the duplicate rail is named" "$out" "gardens/$NOTES_ID.toml:6:1: the nav rail is already in the top band ('nav-rail')"
-printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\nedge = "left"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+# FC41: `edge` is a real key now (FC8), so the unknown-key probe is `place`.
+printf 'schema = 1\n[[widget]]\nkind = "nav-rail"\nslot = "top"\nplace = "left"\n' >"$ZEN/gardens/$NOTES_ID.toml"
 capture zen validate --garden Notes
 assert_eq "an unknown widget key exits 1" "$rc" "1"
-assert_contains "the unknown-key error lists slot" "$out" "unknown key 'edge' in [[widget]]; allowed: id, kind, slot, column, props"
+assert_contains "the unknown-key error lists the keys" "$out" "unknown key 'place' in [[widget]]; allowed: id, kind, slot, column, edge, align, menu, props"
+
+echo "== Zen controls are widgets (prd-zen-freeform-chrome S1) =="
+# Rosson's ask: switcher bottom left, theme + toggle bottom right, no usage.
+printf 'schema = 1\n\n[[widget]]\nkind = "garden-switcher"\nslot = "bottom"\n\n[[widget]]\nkind = "theme-picker"\nslot = "bottom"\nalign = "end"\n\n[[widget]]\nkind = "zen-toggle"\nslot = "bottom"\nalign = "end"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "bottom-bar validates" "$rc" "0"
+capture zen reload
+assert_eq "bottom-bar reload exits 0" "$rc" "0"
+got="$(curl -s "http://127.0.0.1:$PORT/cli/zen/get?token=$TOKEN&garden=$NOTES_ID" | python3 -c '
+import json, sys
+p = json.load(sys.stdin)["page"]
+print(p["chrome"]["from"], p["bands"]["top"], ",".join(p["bands"]["bottom"]["start"]), ",".join(p["bands"]["bottom"]["end"]), ",".join(w["kind"] for w in p["widgets"]))')"
+assert_eq "bottom-bar answer: garden chrome, no top band, bottom band, no chrome in widgets" "$got" "garden None garden-switcher theme-picker,zen-toggle garden-empty"
+# Both required controls in one menu.
+printf 'schema = 1\n[[widget]]\nid = "more"\nkind = "menu"\nslot = "top"\nalign = "end"\n[[widget]]\nkind = "garden-switcher"\nslot = "menu"\nmenu = "more"\n[[widget]]\nkind = "zen-toggle"\nslot = "menu"\nmenu = "more"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "menu-both validates" "$rc" "0"
+# Chrome without the toggle: the FC24 sentence at the first chrome widget.
+printf 'schema = 1\n[[widget]]\nkind = "garden-switcher"\nslot = "bottom"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "chrome without a zen-toggle exits 1" "$rc" "1"
+assert_contains "the required-control error" "$out" "gardens/$NOTES_ID.toml:3:1: This file places Zen controls, so it replaces the template's. It must also place a zen-toggle (the way out)"
+# drag-region is never placed (FC5).
+printf 'schema = 1\n[[widget]]\nkind = "drag-region"\nslot = "top"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "drag-region exits 1" "$rc" "1"
+assert_contains "the drag-region error" "$out" "gardens/$NOTES_ID.toml:3:8: 'drag-region' can't be placed: K2 makes the empty space in every band drag the window; there is nothing to place."
+# A menu item with no menu, and a nested menu.
+printf 'schema = 1\n[[widget]]\nkind = "garden-switcher"\nslot = "top"\n[[widget]]\nkind = "zen-toggle"\nslot = "menu"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "a menu item without menu exits 1" "$rc" "1"
+assert_contains "the missing-menu error" "$out" "gardens/$NOTES_ID.toml:6:1: a menu item (slot = \"menu\") needs menu = \"<menu id>\""
+printf 'schema = 1\n[[widget]]\nid = "outer"\nkind = "menu"\nslot = "top"\n[[widget]]\nid = "inner"\nkind = "menu"\nslot = "menu"\nmenu = "outer"\n' >"$ZEN/gardens/$NOTES_ID.toml"
+capture zen validate --garden Notes
+assert_eq "a nested menu exits 1" "$rc" "1"
+assert_contains "the nested-menu error" "$out" "gardens/$NOTES_ID.toml:9:8: a menu can't hold another menu"
 capture zen validate --garden Nowhere
 assert_eq "unknown Garden exits 1" "$rc" "1"
 capture zen reset --garden Notes

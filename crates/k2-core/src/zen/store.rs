@@ -1781,7 +1781,9 @@ impl ZenFiles {
                     .iter()
                     .filter_map(|c| c["kind"].as_str().map(str::to_string))
                     .collect();
-                !super::REQUIRED_CONTROLS.iter().all(|r| kinds.iter().any(|k| k == r))
+                // FC30: the template's chrome passes the Garden checks too.
+                let chrome_clean = super::check_template_chrome(t).is_some_and(|c| c.is_clean());
+                !chrome_clean || !super::REQUIRED_CONTROLS.iter().all(|r| kinds.iter().any(|k| k == r))
             })
             .map(|t| t.to_string())
             .collect();

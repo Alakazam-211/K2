@@ -1168,8 +1168,150 @@ template = \"k2.texting@1\"\n\
         assert_eq!(broken["version"], good, "{broken}");
         assert_eq!(broken["errors"][0]["line"], 5, "{broken}");
         let msg = broken["errors"][0]["message"].as_str().expect("message");
-        assert!(msg.contains("'agents' can't go in the top band; slot = \"top\" takes: nav-rail"), "{msg}");
+        // FC41: the allowed list grows with the chrome kinds.
+        assert!(
+            msg.contains("'agents' can't go in the top band; slot = \"top\" takes: nav-rail, garden-switcher, zen-toggle, usage, theme-picker, menu"),
+            "{msg}"
+        );
         assert_eq!(broken["page"]["widgets"][2]["slot"], "top", "the last good page still has the rail up top: {broken}");
+    })
+    .await
+    .expect("blocking body");
+}
+
+/// FC-T4 (prd-zen-freeform-chrome FC29, FC24, FC28): Rosson's `bottom-bar`
+/// Garden through the REAL headless daemon. `GET /cli/zen/get` answers
+/// `page.chrome` from the Garden, no top band, the switcher at the start of
+/// the bottom band and theme + toggle at its end, no usage, `controls` with
+/// the new placements, and no chrome in `page.widgets`. `/boot-status`
+/// carries `zen-chrome-v1`. Removing the toggle is an error at the first
+/// chrome widget's line; the version and the last good page stay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fc_t4_garden_chrome_reaches_the_page_answer_headless() {
+    let home = new_home();
+    let d = spawn_daemon(&home.0);
+    let tok = d.owner.clone();
+    let port = d.port;
+    let (s, boot) = call(port, "GET", "/boot-status", None);
+    assert_eq!(s, 200, "{boot}");
+    let features: Vec<&str> = boot["features"].as_array().expect("features").iter().filter_map(J::as_str).collect();
+    assert!(features.contains(&"zen-chrome-v1"), "FC29 feature key: {features:?}");
+    let (v, one) = setup(port, &tok);
+    let two = v["gardens"][1]["id"].as_str().expect("Garden 2 id").to_string();
+    let home_dir = home.0.clone();
+    tokio::task::spawn_blocking(move || {
+        // Before any change: the template's chrome, from the template.
+        let (s, g1) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={one}"), None);
+        assert_eq!(s, 200, "{g1}");
+        assert_eq!(g1["page"]["chrome"]["from"], "template", "{g1}");
+        assert_eq!(
+            g1["page"]["bands"]["top"],
+            serde_json::json!({"start": ["garden-switcher"], "center": [], "end": ["usage", "theme-picker", "zen-toggle"]}),
+            "{g1}"
+        );
+        assert!(g1["page"]["bands"]["bottom"].is_null(), "{g1}");
+        assert_eq!(control_kinds(&g1), vec!["garden-switcher", "drag-region", "zen-toggle", "add-agent"], "unchanged for older apps: {g1}");
+
+        let page = zen_dir(&home_dir).join(format!("gardens/{two}.toml"));
+        let bottom_bar = "schema = 1\n\
+template = \"k2.texting@1\"\n\
+\n\
+[[widget]]\n\
+kind = \"garden-switcher\"\n\
+slot = \"bottom\"\n\
+\n\
+[[widget]]\n\
+kind = \"theme-picker\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n\
+\n\
+[[widget]]\n\
+kind = \"zen-toggle\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n";
+        std::fs::write(&page, bottom_bar).expect("save page");
+        let g = wait_for("get to show the Garden's chrome", Duration::from_secs(5), || {
+            let (s, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            (s == 200 && g["page"]["chrome"]["from"] == "garden").then_some(g)
+        });
+        assert_eq!(g["errors"], serde_json::json!([]), "{g}");
+        let p = &g["page"];
+        assert!(p["bands"]["top"].is_null(), "no top band: {g}");
+        assert_eq!(
+            p["bands"]["bottom"],
+            serde_json::json!({"start": ["garden-switcher"], "center": [], "end": ["theme-picker", "zen-toggle"]}),
+            "{g}"
+        );
+        assert_eq!(p["edges"], serde_json::json!([]), "{g}");
+        assert_eq!(p["menus"], serde_json::json!({}), "{g}");
+        let items = p["chrome"]["items"].as_array().expect("chrome items");
+        assert!(!items.iter().any(|c| c["kind"] == "usage"), "usage is not placed, so not shown: {g}");
+        assert_eq!(
+            items[0],
+            serde_json::json!({"id": "garden-switcher", "kind": "garden-switcher", "slot": "bottom", "align": "start", "props": {}, "caps": ["gardens:manage"]}),
+            "{g}"
+        );
+        // Chrome never reaches widgets: the template's content is unchanged.
+        let widget_kinds: Vec<&str> = p["widgets"].as_array().expect("widgets").iter().filter_map(|w| w["kind"].as_str()).collect();
+        assert_eq!(widget_kinds, vec!["agents", "conversation", "nav-rail"], "{g}");
+        let placements: Vec<(String, String)> = p["controls"]
+            .as_array()
+            .expect("controls")
+            .iter()
+            .map(|c| (c["kind"].as_str().expect("kind").to_string(), c["placement"].as_str().expect("placement").to_string()))
+            .collect();
+        assert_eq!(
+            placements,
+            vec![
+                ("garden-switcher".to_string(), "bottom-start".to_string()),
+                ("drag-region".to_string(), "bands".to_string()),
+                ("zen-toggle".to_string(), "bottom-end".to_string()),
+                ("add-agent".to_string(), "widget-bottom-left".to_string()),
+            ],
+            "{g}"
+        );
+        let (s, v) = call(port, "GET", &format!("/cli/zen/validate?token={tok}&garden={two}"), None);
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["ok"], true, "{v}");
+
+        // Remove the toggle: an error at the first chrome widget (line 5),
+        // the version unchanged, the last good page kept.
+        let good = g["version"].clone();
+        let no_toggle = bottom_bar.split("\n[[widget]]\nkind = \"zen-toggle\"").next().expect("split").to_string();
+        std::fs::write(&page, format!("{no_toggle}\n")).expect("break page");
+        let broken = wait_for("get to report the missing toggle", Duration::from_secs(5), || {
+            let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            g["errors"].as_array().is_some_and(|e| !e.is_empty()).then_some(g)
+        });
+        assert_eq!(broken["version"], good, "{broken}");
+        assert_eq!(broken["errors"].as_array().map(Vec::len), Some(1), "{broken}");
+        assert_eq!(broken["errors"][0]["line"], 5, "{broken}");
+        let msg = broken["errors"][0]["message"].as_str().expect("message");
+        assert!(msg.contains("It must also place a zen-toggle (the way out)"), "{msg}");
+        assert_eq!(broken["page"]["bands"]["bottom"]["end"], serde_json::json!(["theme-picker", "zen-toggle"]), "the last good page stays: {broken}");
+        let (s, v) = call(port, "GET", &format!("/cli/zen/validate?token={tok}&garden={two}"), None);
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["ok"], false, "{v}");
+
+        // menu-both: the menu answer through the daemon.
+        let menu_both = "schema = 1\n\
+template = \"k2.blank@1\"\n\
+[[widget]]\nid = \"more\"\nkind = \"menu\"\nslot = \"top\"\nalign = \"end\"\n\
+[[widget]]\nkind = \"garden-switcher\"\nslot = \"menu\"\nmenu = \"more\"\n\
+[[widget]]\nkind = \"zen-toggle\"\nslot = \"menu\"\nmenu = \"more\"\n";
+        std::fs::write(&page, menu_both).expect("save menu page");
+        let m = wait_for("get to show the menu", Duration::from_secs(5), || {
+            let (s, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={two}"), None);
+            (s == 200 && g["page"]["menus"].get("more").is_some() && g["errors"] == serde_json::json!([])).then_some(g)
+        });
+        assert_eq!(m["page"]["menus"], serde_json::json!({"more": ["garden-switcher", "zen-toggle"]}), "{m}");
+        assert_eq!(m["page"]["bands"]["top"], serde_json::json!({"start": [], "center": [], "end": ["more"]}), "{m}");
+        let kinds: Vec<&str> = m["page"]["controls"].as_array().expect("controls").iter().filter_map(|c| c["placement"].as_str()).collect();
+        assert_eq!(kinds, vec!["menu:more", "bands", "menu:more"], "Garden 2 is blank: no Add agent: {m}");
+        assert!(
+            !m["page"]["widgets"].as_array().expect("widgets").iter().any(|w| w["kind"] == "menu" || w["kind"] == "zen-toggle"),
+            "older apps never see chrome as widgets: {m}"
+        );
     })
     .await
     .expect("blocking body");

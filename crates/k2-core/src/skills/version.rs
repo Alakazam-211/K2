@@ -96,7 +96,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `app.current` / `app.subscribeCurrent`, `focusGroups.*`.
 /// v7 = `k2 zen garden template` + Start with the default (`gardens:template`); the `default` theme is `basic`.
 /// v8 = `[[widget]] slot = "top"`: the nav rail as a row in the top band; `nav-rail` `orientation`.
-pub const SKILL_VERSION_ZEN: u32 = 8;
+/// v9 = freeform chrome (prd-zen-freeform-chrome FC38): Zen controls are
+/// widgets; `slot` `bottom`/`menu`, `align`, `edge`, `menu`; the `menu` kind.
+pub const SKILL_VERSION_ZEN: u32 = 9;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

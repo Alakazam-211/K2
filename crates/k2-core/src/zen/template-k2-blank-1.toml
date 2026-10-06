@@ -5,8 +5,9 @@
 # your agents to add things to this Garden." plus an Ask my agent button
 # and "Start with the default", which turns this Garden into Garden 1's
 # texting page (`gardens.useTemplate`, cap `gardens:template`).
-# When the Garden's file declares `[[widget]]`, those widgets replace it;
-# the controls below stay.
+# When the Garden's file declares content `[[widget]]`s, they replace it;
+# the chrome below stays unless the file places chrome of its own
+# (prd-zen-freeform-chrome FC3).
 id = "k2.blank@1"
 schema = 1
 
@@ -24,7 +25,31 @@ kind = "garden-empty"
 column = 0
 caps = ["agents:read", "thread:read", "thread:post", "gardens:template"]
 
-# Controls (G24). K2 binds them and checks the required two (`zen-toggle`,
+# Chrome (prd-zen-freeform-chrome FC30): the same top band as Garden 1.
+# The Garden switcher at the start; usage, theme and the Zen toggle at the
+# end, the toggle in the top-right corner.
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+align = "start"
+
+[[widget]]
+kind = "usage"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "top"
+align = "end"
+
+# Controls (G24). Kept for apps that read `page.controls`; they must agree
+# with the chrome above. K2 binds them and checks the required two (`zen-toggle`,
 # `garden-switcher`); the drag strip is bound, never checked. Same top band
 # as Garden 1: switcher top left, Zen toggle top right. No Add agent: a
 # blank Garden has no Agents widget to add to.

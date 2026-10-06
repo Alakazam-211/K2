@@ -509,13 +509,20 @@ template = \"k2.texting@1\"\n\
 
     // Errors, each at its line.
     let c = check_blank("schema = 1\n[[widget]]\nid = \"a\"\nkind = \"agents\"\nslot = \"top\"\n");
-    assert_one_error(&c, 5, "'agents' can't go in the top band; slot = \"top\" takes: nav-rail", "a kind that doesn't fit the band");
+    // FC41: the allowed list grows with the chrome kinds; the start stays.
+    assert_one_error(
+        &c,
+        5,
+        "'agents' can't go in the top band; slot = \"top\" takes: nav-rail, garden-switcher, zen-toggle, usage, theme-picker, menu. Place 'agents' in a column",
+        "a kind that doesn't fit the band",
+    );
     let c = check_blank("schema = 1\n[[widget]]\nid = \"t\"\nkind = \"conversation\"\nslot = \"top\"\n[widget.props]\nagent = \"sales\"\n");
     assert_one_error(&c, 5, "takes: nav-rail", "conversation in the band");
-    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"bottom\"\n");
+    // `bottom` is a real slot now (FC7); an unknown one is still an error.
+    let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"side\"\n");
     assert_eq!(c.errors.len(), 2, "bad slot, then no id: {}", diag_list(&c));
     assert_eq!(c.errors[0].line, 4, "{}", diag_list(&c));
-    assert!(c.errors[0].message.contains("widget slot must be one of: column, top"), "{}", diag_list(&c));
+    assert!(c.errors[0].message.contains("widget slot must be one of: column, top, bottom, menu"), "{}", diag_list(&c));
     let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\ncolumn = 0\n");
     assert_one_error(&c, 5, "has no column", "a column on a top widget");
     let c = check_blank("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n[widget.props]\norientation = \"column\"\n");
@@ -543,6 +550,637 @@ template = \"k2.texting@1\"\n\
     // `slot` is for Garden files only.
     let c = check_zen("schema = 1\n[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n");
     assert!(c.errors.iter().any(|e| e.message.contains("belongs in a Garden file")), "{}", diag_list(&c));
+}
+
+// ── prd-zen-freeform-chrome S1: Zen controls are widgets ──────────────
+
+/// A Garden file from lines (line 1 is the first entry), so every
+/// expected line number below can be read off the list.
+fn lines(ls: &[&str]) -> String {
+    let mut s = ls.join("\n");
+    s.push('\n');
+    s
+}
+
+/// Rosson's ask, verbatim from the PRD (§1): switcher bottom left, theme
+/// and toggle bottom right, usage not placed, no top band.
+const BOTTOM_BAR: &str = "schema = 1\n\
+\n\
+[[widget]]\n\
+kind = \"garden-switcher\"\n\
+slot = \"bottom\"\n\
+\n\
+[[widget]]\n\
+kind = \"theme-picker\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n\
+\n\
+[[widget]]\n\
+kind = \"zen-toggle\"\n\
+slot = \"bottom\"\n\
+align = \"end\"\n";
+
+/// Both required controls and the theme in one menu, top right (PRD §1).
+const MENU_BOTH: &str = "schema = 1\n\
+\n\
+[[widget]]\n\
+id = \"more\"\n\
+kind = \"menu\"\n\
+slot = \"top\"\n\
+align = \"end\"\n\
+[widget.props]\n\
+icon = \"dots\"\n\
+label = \"More\"\n\
+\n\
+[[widget]]\n\
+kind = \"garden-switcher\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n\
+\n\
+[[widget]]\n\
+kind = \"theme-picker\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n\
+\n\
+[[widget]]\n\
+kind = \"zen-toggle\"\n\
+slot = \"menu\"\n\
+menu = \"more\"\n";
+
+fn ids(v: &J) -> Vec<String> {
+    v.as_array()
+        .unwrap_or_else(|| panic!("an id list: {v}"))
+        .iter()
+        .map(|x| x.as_str().unwrap_or_else(|| panic!("an id: {x}")).to_string())
+        .collect()
+}
+
+fn group(start: &[&str], center: &[&str], end: &[&str]) -> J {
+    json!({ "start": start, "center": center, "end": end })
+}
+
+fn placements(page: &J) -> Vec<(String, String)> {
+    page["controls"]
+        .as_array()
+        .unwrap_or_else(|| panic!("controls: {page}"))
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().unwrap_or_else(|| panic!("control kind: {c}")).to_string(),
+                c["placement"].as_str().unwrap_or_else(|| panic!("control placement: {c}")).to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The older-app safety property (FC28, FC58) and the answer's internal
+/// consistency: `widgets` never holds a chrome kind; every chrome item is a
+/// chrome kind; every id in `bands`, `edges` and `menus` is a widget or a
+/// chrome item; `controls` always declares both required kinds.
+fn assert_page_safe(page: &J, what: &str) {
+    let widgets = page["widgets"].as_array().unwrap_or_else(|| panic!("{what}: widgets: {page}"));
+    for w in widgets {
+        let k = w["kind"].as_str().unwrap_or_else(|| panic!("{what}: widget kind: {w}"));
+        assert!(!schema::is_chrome_kind(k), "{what}: chrome kind '{k}' leaked into page.widgets: {page}");
+    }
+    let items = page["chrome"]["items"].as_array().unwrap_or_else(|| panic!("{what}: chrome.items: {page}"));
+    for c in items {
+        let k = c["kind"].as_str().unwrap_or_else(|| panic!("{what}: chrome kind: {c}"));
+        assert!(schema::is_chrome_kind(k), "{what}: '{k}' in chrome.items is not a chrome kind: {page}");
+    }
+    let from = page["chrome"]["from"].as_str().unwrap_or_else(|| panic!("{what}: chrome.from: {page}"));
+    assert!(from == "template" || from == "garden", "{what}: chrome.from {from}");
+    let known: Vec<String> =
+        widgets.iter().chain(items.iter()).map(|w| w["id"].as_str().unwrap_or_else(|| panic!("{what}: id: {w}")).to_string()).collect();
+    let mut placed: Vec<String> = Vec::new();
+    for b in ["top", "bottom"] {
+        let band = &page["bands"][b];
+        if band.is_null() {
+            continue;
+        }
+        for a in ["start", "center", "end"] {
+            placed.extend(ids(&band[a]));
+        }
+    }
+    for e in page["edges"].as_array().unwrap_or_else(|| panic!("{what}: edges: {page}")) {
+        for a in ["start", "center", "end"] {
+            placed.extend(ids(&e[a]));
+        }
+    }
+    for (_, list) in page["menus"].as_object().unwrap_or_else(|| panic!("{what}: menus: {page}")) {
+        placed.extend(ids(list));
+    }
+    for id in &placed {
+        assert!(known.contains(id), "{what}: '{id}' is placed but is neither a widget nor a chrome item: {page}");
+    }
+    // Every chrome item is drawn somewhere (a band, an edge or a menu).
+    for c in items {
+        let id = c["id"].as_str().unwrap_or_default().to_string();
+        assert!(placed.contains(&id), "{what}: chrome '{id}' is in no band, edge or menu: {page}");
+    }
+    let kinds = kinds_of(page, "controls");
+    for req in zen::REQUIRED_CONTROLS {
+        assert!(kinds.iter().any(|k| k == req), "{what}: controls must declare {req}: {kinds:?}");
+    }
+}
+
+/// FC-T3 (FC30, FC42): both templates list their chrome as data. It passes
+/// the Garden checks, agrees with `[[control]]`, and resolves to today's
+/// band: the switcher at the start; usage, theme and the toggle at the end.
+#[test]
+fn fc_t3_templates_list_their_chrome_as_data() {
+    for id in schema::TEMPLATE_IDS {
+        let c = zen::check_template_chrome(id).unwrap_or_else(|| panic!("template {id}"));
+        assert!(c.is_clean() && c.warnings.is_empty(), "{id}: template chrome must pass the Garden checks:\n{}", diag_list(&c));
+        let page = zen::template_page(id).unwrap_or_else(|| panic!("template {id}"));
+        assert_eq!(page["chrome"]["from"], "template", "{id}: {page}");
+        let items = page["chrome"]["items"].as_array().expect("chrome items");
+        let kinds: Vec<&str> = items.iter().map(|c| c["kind"].as_str().expect("kind")).collect();
+        assert_eq!(kinds, vec!["garden-switcher", "usage", "theme-picker", "zen-toggle"], "{id}: {page}");
+        assert_eq!(
+            page["chrome"]["items"][0],
+            json!({"id": "garden-switcher", "kind": "garden-switcher", "slot": "top", "align": "start", "props": {}, "caps": ["gardens:manage"]}),
+            "{id}: FC31: only the switcher gets a cap"
+        );
+        for c in &items[1..] {
+            assert_eq!(c["caps"], json!([]), "{id}: {c}");
+            assert_eq!((c["slot"].as_str(), c["align"].as_str()), (Some("top"), Some("end")), "{id}: {c}");
+        }
+        assert_eq!(page["bands"]["top"], group(&["garden-switcher"], &[], &["usage", "theme-picker", "zen-toggle"]), "{id}: {page}");
+        assert!(page["bands"]["bottom"].is_null(), "{id}: no bottom band: {page}");
+        assert_eq!(page["edges"], json!([]), "{id}: {page}");
+        assert_eq!(page["menus"], json!({}), "{id}: {page}");
+        // The [[control]] list agrees: start ↔ top-left, end ↔ top-right.
+        let p = placements(&page);
+        let at = |k: &str| p.iter().find(|(kind, _)| kind == k).map(|(_, pl)| pl.clone());
+        assert_eq!(at("garden-switcher").as_deref(), Some("top-left"), "{id}: {p:?}");
+        assert_eq!(at("zen-toggle").as_deref(), Some("top-right"), "{id}: {p:?}");
+        assert_eq!(at("drag-region").as_deref(), Some("top"), "{id}: {p:?}");
+        assert_page_safe(&page, id);
+    }
+    // Chrome never reaches the template's content widgets.
+    assert_eq!(kinds_of(&zen::texting_page(), "widgets"), vec!["agents", "conversation", "nav-rail"]);
+    assert_eq!(kinds_of(&zen::template_page(zen::BLANK_TEMPLATE_ID).expect("blank"), "widgets"), vec!["garden-empty"]);
+}
+
+/// FC-T2 (FC3): content and chrome are two groups with their own replace
+/// rules.
+#[test]
+fn fc_t2_content_and_chrome_replace_rules() {
+    let tpl = zen::texting_page();
+    // Content only: the template's chrome stays, `controls` byte-identical.
+    let content_only = "schema = 1\n\
+[[widget]]\nid = \"agents\"\nkind = \"agents\"\ncolumn = 0\n\
+[[widget]]\nid = \"conversation\"\nkind = \"conversation\"\ncolumn = 1\n\
+[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n";
+    let c = check_page(content_only);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
+    assert_eq!(page["chrome"]["from"], "template", "{page}");
+    assert_eq!(page["chrome"]["items"], tpl["chrome"]["items"], "the template's chrome: {page}");
+    assert_eq!(page["controls"].to_string(), tpl["controls"].to_string(), "controls byte-identical to today");
+    // The file's band widget sits between the switcher and the end group (live).
+    assert_eq!(page["bands"]["top"], group(&["garden-switcher", "nav-rail"], &[], &["usage", "theme-picker", "zen-toggle"]), "{page}");
+    assert_page_safe(&page, "content only");
+    // Template chrome keeps its corners: a file rail at the end of the top
+    // band sits left of the template's end group, so the toggle stays in
+    // the corner.
+    let c = check_page(&content_only.replace("slot = \"top\"\n", "slot = \"top\"\nalign = \"end\"\n"));
+    assert!(c.is_clean(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
+    assert_eq!(page["bands"]["top"], group(&["garden-switcher"], &[], &["nav-rail", "usage", "theme-picker", "zen-toggle"]), "{page}");
+    assert_eq!(page["widgets"][2]["align"], "end", "a content widget gains align when set (FC28): {page}");
+
+    // Chrome only: the template's content stays; ALL of its chrome is gone.
+    let c = check_page(BOTTOM_BAR);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
+    assert_eq!(page["widgets"], tpl["widgets"], "the template's content widgets, untouched: {page}");
+    assert_eq!(page["layout"], tpl["layout"], "{page}");
+    assert_eq!(page["chrome"]["from"], "garden", "{page}");
+    let kinds: Vec<&str> = page["chrome"]["items"].as_array().expect("items").iter().map(|c| c["kind"].as_str().expect("kind")).collect();
+    assert_eq!(kinds, vec!["garden-switcher", "theme-picker", "zen-toggle"], "usage is not placed, so not shown: {page}");
+    assert!(page["bands"]["top"].is_null(), "no top band: {page}");
+    assert_eq!(page["bands"]["bottom"], group(&["garden-switcher"], &[], &["theme-picker", "zen-toggle"]), "{page}");
+    assert_eq!(
+        placements(&page),
+        vec![
+            ("garden-switcher".to_string(), "bottom-start".to_string()),
+            ("drag-region".to_string(), "bands".to_string()),
+            ("zen-toggle".to_string(), "bottom-end".to_string()),
+            ("add-agent".to_string(), "widget-bottom-left".to_string()),
+        ],
+        "{page}"
+    );
+    assert_eq!(page["controls"][3]["widget"], "agents", "Add agent names the page's Agents widget: {page}");
+    assert_page_safe(&page, "bottom-bar");
+    // On the blank template there is no Agents widget, so no Add agent.
+    let c = check_blank(BOTTOM_BAR);
+    assert!(c.is_clean(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(kinds_of(&page, "controls"), vec!["garden-switcher", "drag-region", "zen-toggle"], "{page}");
+    assert_eq!(kinds_of(&page, "widgets"), vec!["garden-empty"], "{page}");
+
+    // Both: both replaced, and the bands keep FILE order across the groups.
+    let both = lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "id = \"a\"",
+        "kind = \"agents\"",
+        "column = 0",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"bottom\"",
+        "align = \"end\"",
+        "[[widget]]",
+        "kind = \"nav-rail\"",
+        "slot = \"bottom\"",
+        "align = \"end\"",
+        "[[widget]]",
+        "kind = \"garden-switcher\"",
+        "slot = \"bottom\"",
+    ]);
+    let c = check_blank(&both);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(kinds_of(&page, "widgets"), vec!["agents", "nav-rail"], "content replaced, chrome kept out: {page}");
+    assert_eq!(page["widgets"][1]["slot"], "bottom", "{page}");
+    assert_eq!(page["widgets"][1]["props"]["orientation"], "row", "a rail in the bottom band is a row: {page}");
+    assert_eq!(page["chrome"]["from"], "garden", "{page}");
+    assert_eq!(page["bands"]["bottom"], group(&["garden-switcher"], &[], &["zen-toggle", "nav-rail"]), "file order: the LAST end item is in the corner: {page}");
+    assert!(page["bands"]["top"].is_null(), "{page}");
+    assert_eq!(page["controls"][3], json!({"kind": "add-agent", "placement": "widget-bottom-left", "widget": "a"}), "{page}");
+    assert_page_safe(&page, "both");
+}
+
+/// FC-T1 clean shapes: every slot, `align`, `edge` and menu shape; file
+/// order in `bands`; a missing id defaults to the kind.
+#[test]
+fn fc_t1_chrome_grammar_clean_shapes() {
+    // Rosson's two examples.
+    let c = check_blank(MENU_BOTH);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(page["bands"]["top"], group(&[], &[], &["more"]), "only the menu button in the top band: {page}");
+    assert_eq!(page["menus"], json!({"more": ["garden-switcher", "theme-picker", "zen-toggle"]}), "{page}");
+    let menu = page["chrome"]["items"].as_array().expect("items").iter().find(|c| c["kind"] == "menu").cloned().expect("menu");
+    assert_eq!(
+        menu,
+        json!({"id": "more", "kind": "menu", "slot": "top", "align": "end", "props": {"icon": "dots", "label": "More"}, "caps": []}),
+        "{page}"
+    );
+    let toggle = page["chrome"]["items"].as_array().expect("items").iter().find(|c| c["kind"] == "zen-toggle").cloned().expect("toggle");
+    assert_eq!(toggle, json!({"id": "zen-toggle", "kind": "zen-toggle", "slot": "menu", "menu": "more", "props": {}, "caps": []}), "{page}");
+    assert_eq!(
+        placements(&page),
+        vec![
+            ("garden-switcher".to_string(), "menu:more".to_string()),
+            ("drag-region".to_string(), "bands".to_string()),
+            ("zen-toggle".to_string(), "menu:more".to_string()),
+        ],
+        "{page}"
+    );
+    assert_page_safe(&page, "menu-both");
+
+    // A menu with no props gets the dots icon and no label (the name is
+    // "More" in the renderer); a menu in the bottom-right corner.
+    let corner = lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "kind = \"menu\"",
+        "slot = \"bottom\"",
+        "align = \"end\"",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+        "[[widget]]",
+        "kind = \"garden-switcher\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+        "[[widget]]",
+        "kind = \"usage\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+    ]);
+    let c = check_blank(&corner);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(page["bands"]["bottom"], group(&[], &[], &["menu"]), "{page}");
+    assert_eq!(page["menus"], json!({"menu": ["zen-toggle", "garden-switcher", "usage"]}), "menu items in file order: {page}");
+    assert_eq!(page["chrome"]["items"][0]["props"], json!({"icon": "dots"}), "{page}");
+    assert_page_safe(&page, "menu-bottom-right");
+
+    // Column edges: the toggle at the bottom-right of the conversation
+    // column, the switcher at the center of the top band, a row rail at
+    // column 0's bottom edge (no id: it defaults to its kind), the theme
+    // at column 0's top edge (no edge: top by default).
+    let edges = lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "id = \"agents\"",
+        "kind = \"agents\"",
+        "column = 0",
+        "[[widget]]",
+        "id = \"conversation\"",
+        "kind = \"conversation\"",
+        "column = 1",
+        "[[widget]]",
+        "kind = \"nav-rail\"",
+        "column = 0",
+        "edge = \"bottom\"",
+        "[[widget]]",
+        "kind = \"garden-switcher\"",
+        "slot = \"top\"",
+        "align = \"center\"",
+        "[[widget]]",
+        "kind = \"theme-picker\"",
+        "column = 0",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "column = 1",
+        "edge = \"bottom\"",
+        "align = \"end\"",
+    ]);
+    let c = check_page(&edges);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::TEMPLATE_ID);
+    assert_eq!(page["bands"]["top"], group(&[], &["garden-switcher"], &[]), "{page}");
+    assert!(page["bands"]["bottom"].is_null(), "{page}");
+    assert_eq!(
+        page["edges"],
+        json!([
+            {"column": 0, "edge": "top", "start": ["theme-picker"], "center": [], "end": []},
+            {"column": 0, "edge": "bottom", "start": ["nav-rail"], "center": [], "end": []},
+            {"column": 1, "edge": "bottom", "start": [], "center": [], "end": ["zen-toggle"]},
+        ]),
+        "edges sorted by column, top before bottom: {page}"
+    );
+    let rail = &page["widgets"][2];
+    assert_eq!((rail["id"].as_str(), rail["edge"].as_str(), rail["props"]["orientation"].as_str()), (Some("nav-rail"), Some("bottom"), Some("row")), "{rail}");
+    assert!(rail.get("align").is_none(), "a content widget gains align only when set: {rail}");
+    let theme = page["chrome"]["items"].as_array().expect("items").iter().find(|c| c["kind"] == "theme-picker").cloned().expect("theme");
+    assert_eq!(theme, json!({"id": "theme-picker", "kind": "theme-picker", "slot": "column", "column": 0, "edge": "top", "align": "start", "props": {}, "caps": []}), "{page}");
+    let p = placements(&page);
+    assert_eq!(p[0], ("garden-switcher".to_string(), "top-center".to_string()), "{p:?}");
+    assert_eq!(p[2], ("zen-toggle".to_string(), "column-1-bottom-end".to_string()), "{p:?}");
+    assert_page_safe(&page, "column-corner");
+
+    // Explicit ids and `slot = "column"` said out loud; a menu item may
+    // name a menu declared after it.
+    let late_menu = lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "id = \"switch\"",
+        "kind = \"garden-switcher\"",
+        "slot = \"menu\"",
+        "menu = \"m\"",
+        "[[widget]]",
+        "id = \"out\"",
+        "kind = \"zen-toggle\"",
+        "slot = \"column\"",
+        "column = 0",
+        "edge = \"top\"",
+        "align = \"end\"",
+        "[[widget]]",
+        "id = \"m\"",
+        "kind = \"menu\"",
+        "slot = \"top\"",
+        "[widget.props]",
+        "icon = \"zen\"",
+    ]);
+    let c = check_blank(&late_menu);
+    assert!(c.is_clean() && c.warnings.is_empty(), "{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(page["menus"], json!({"m": ["switch"]}), "{page}");
+    assert_eq!(page["bands"]["top"], group(&["m"], &[], &[]), "{page}");
+    assert_eq!(placements(&page)[2], ("zen-toggle".to_string(), "column-0-top-end".to_string()), "{page}");
+    assert_page_safe(&page, "late menu");
+
+    // FC47: limits are counted per group, so 12 content widgets and the two
+    // required controls fit on one page.
+    let mut many = String::from("schema = 1\n");
+    for n in 0..schema::MAX_WIDGETS {
+        many.push_str(&format!("[[widget]]\nid = \"a{n}\"\nkind = \"agents\"\ncolumn = 0\n"));
+    }
+    many.push_str("[[widget]]\nkind = \"garden-switcher\"\nslot = \"top\"\n[[widget]]\nkind = \"zen-toggle\"\nslot = \"top\"\nalign = \"end\"\n");
+    let c = check_blank(&many);
+    assert!(c.is_clean(), "12 content + 2 chrome is within both limits:\n{}", diag_list(&c));
+    let page = zen::garden_page(&c.layer, zen::BLANK_TEMPLATE_ID);
+    assert_eq!(page["widgets"].as_array().map(Vec::len), Some(schema::MAX_WIDGETS), "{page}");
+    assert_page_safe(&page, "12 + 2");
+}
+
+/// FC-T1 rejections (FC24, FC47, FC5): each is an error at its exact line,
+/// with its message.
+#[test]
+fn fc_t1_chrome_grammar_rejections() {
+    // 1. Chrome without the toggle, and without the switcher [FC49]: at the
+    //    first chrome widget's line, even when content comes first.
+    let c = check_blank(&lines(&["schema = 1", "[[widget]]", "kind = \"garden-switcher\"", "slot = \"bottom\""]));
+    assert_one_error(&c, 3, &schema::required_chrome_error("zen-toggle"), "no toggle");
+    assert!(c.errors[0].message.starts_with(
+        "This file places Zen controls, so it replaces the template's. It must also place a zen-toggle (the way out): add [[widget]] kind = \"zen-toggle\" slot = \"top\" align = \"end\", or put it in a menu. See k2 zen guide required."
+    ), "the FC24 sentence: {}", c.errors[0].message);
+    let c = check_page(&lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "id = \"agents\"",
+        "kind = \"agents\"",
+        "column = 0",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"top\"",
+    ]));
+    assert_one_error(&c, 7, "It must also place a garden-switcher", "no switcher");
+    let c = check_blank(&lines(&["schema = 1", "[[widget]]", "id = \"x\"", "kind = \"menu\"", "slot = \"top\"", "[[widget]]", "kind = \"usage\"", "slot = \"menu\"", "menu = \"x\""]));
+    assert_eq!(c.errors.len(), 2, "both required controls missing: {}", diag_list(&c));
+    assert!(c.errors.iter().all(|e| e.line == 3), "{}", diag_list(&c));
+    // 2. A chrome kind placed twice (menu may repeat).
+    let c = check_blank(&lines(&[
+        "schema = 1",
+        "[[widget]]",
+        "kind = \"garden-switcher\"",
+        "slot = \"top\"",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"top\"",
+        "[[widget]]",
+        "id = \"again\"",
+        "kind = \"zen-toggle\"",
+        "slot = \"bottom\"",
+    ]));
+    assert_one_error(&c, 9, "'zen-toggle' is placed twice", "toggle twice");
+    // 3. drag-region (FC5): at the kind value, one error.
+    let c = check_blank(&lines(&["schema = 1", "[[widget]]", "kind = \"drag-region\"", "slot = \"top\""]));
+    assert_one_error(&c, 3, schema::DRAG_REGION_ERROR, "drag-region");
+    // 4. slot = "menu" with no menu; a menu that names no menu; menu on another slot.
+    let base = ["[[widget]]", "kind = \"garden-switcher\"", "slot = \"top\""];
+    let with = |extra: &[&str]| -> String {
+        let mut v: Vec<&str> = vec!["schema = 1"];
+        v.extend_from_slice(&base);
+        v.extend_from_slice(extra);
+        lines(&v)
+    };
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\""]));
+    assert_one_error(&c, 6, "needs menu = \"<menu id>\"", "menu item without menu");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\"", "menu = \"nope\""]));
+    assert_one_error(&c, 8, "menu = \"nope\" names no menu on this page", "dangling menu");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "menu = \"x\""]));
+    assert_one_error(&c, 8, "goes only with slot = \"menu\"", "menu key on a band item");
+    // 5. A menu inside a menu; a content kind in a menu; an empty menu; too many items.
+    let c = check_blank(&with(&[
+        "[[widget]]",
+        "id = \"outer\"",
+        "kind = \"menu\"",
+        "slot = \"top\"",
+        "[[widget]]",
+        "id = \"inner\"",
+        "kind = \"menu\"",
+        "slot = \"menu\"",
+        "menu = \"outer\"",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"menu\"",
+        "menu = \"outer\"",
+    ]));
+    assert_one_error(&c, 12, "a menu can't hold another menu", "nested menu");
+    let c = check_blank(&with(&[
+        "[[widget]]",
+        "kind = \"menu\"",
+        "slot = \"top\"",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+        "[[widget]]",
+        "id = \"a\"",
+        "kind = \"agents\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+    ]));
+    assert_one_error(&c, 15, "'agents' can't go in a menu; a menu holds only: zen-toggle, garden-switcher, theme-picker, usage", "content in a menu");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"menu\"", "slot = \"top\"", "[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\""]));
+    assert_one_error(&c, 6, "menu 'menu' holds nothing", "empty menu");
+    let mut crowded = vec!["schema = 1", "[[widget]]", "kind = \"menu\"", "slot = \"top\""];
+    let item = ["[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\"", "menu = \"menu\""];
+    let ids7: Vec<String> = (0..7).map(|n| format!("id = \"t{n}\"")).collect();
+    for idl in &ids7 {
+        crowded.extend_from_slice(&item[..1]);
+        crowded.push(idl.as_str());
+        crowded.extend_from_slice(&item[1..]);
+    }
+    let c = check_blank(&lines(&crowded));
+    assert!(c.errors.iter().any(|e| e.line == 3 && e.message.contains("menu 'menu' holds at most 6 items; it has 7")), "{}", diag_list(&c));
+    // 6. align and edge where they have no meaning; values off the list.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"menu\"", "slot = \"top\"", "[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\"", "menu = \"menu\"", "align = \"end\""]));
+    assert_one_error(&c, 12, "a menu lists its items in file order", "align in a menu");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"bottom\"", "edge = \"top\""]));
+    assert_one_error(&c, 8, "edge picks the top or bottom of a column", "edge in a band");
+    let c = check_page(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "id = \"a\"", "kind = \"agents\"", "column = 0", "align = \"end\""]));
+    assert_one_error(&c, 12, "'agents' fills its column and takes no edge or align", "align on agents");
+    let c = check_page(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "id = \"t\"", "kind = \"conversation\"", "column = 0", "edge = \"bottom\"", "[widget.props]", "agent = \"x\""]));
+    assert_one_error(&c, 12, "'conversation' fills its column", "edge on conversation");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "align = \"right\""]));
+    assert_one_error(&c, 8, "align must be one of: start, center, end", "bad align");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "column = 0", "edge = \"left\""]));
+    assert_one_error(&c, 8, "edge must be one of: top, bottom", "bad edge");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "id = \"r\"", "kind = \"nav-rail\"", "column = 0", "align = \"end\""]));
+    assert_one_error(&c, 9, "align places a row item", "align on a column rail strip");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "kind = \"nav-rail\"", "column = 0", "edge = \"top\"", "[widget.props]", "orientation = \"column\""]));
+    assert_one_error(&c, 13, "a column edge is one row high", "a column rail at an edge");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"bottom\"", "column = 0"]));
+    assert_one_error(&c, 8, "a bottom-band widget (slot = \"bottom\") has no column", "column on a band item");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"menu\"", "slot = \"top\"", "[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\"", "menu = \"menu\"", "column = 0"]));
+    assert_one_error(&c, 12, "a menu item (slot = \"menu\") has no column", "column on a menu item");
+    let menu_with = |prop: &str| {
+        with(&["[[widget]]", "kind = \"menu\"", "slot = \"top\"", "[widget.props]", prop, "[[widget]]", "kind = \"zen-toggle\"", "slot = \"menu\"", "menu = \"menu\""])
+    };
+    let c = check_blank(&menu_with("label = \"A label far longer than the limit\""));
+    assert_one_error(&c, 9, "menu.label is at most 24 characters", "long label");
+    let c = check_blank(&menu_with("icon = \"star\""));
+    assert_one_error(&c, 9, "menu.icon must be one of: dots, bars, zen", "bad icon");
+    // 7. Limits.
+    let mut bands9 = vec!["schema = 1"];
+    let tid: Vec<String> = (0..9).map(|n| format!("id = \"z{n}\"")).collect();
+    for idl in &tid {
+        bands9.extend_from_slice(&["[[widget]]", idl.as_str(), "kind = \"zen-toggle\"", "slot = \"top\""]);
+    }
+    let c = check_blank(&lines(&bands9));
+    assert!(c.errors.iter().any(|e| e.message.contains("the top band holds at most 8 items; this page puts 9 there")), "{}", diag_list(&c));
+    let mut edge5 = vec!["schema = 1"];
+    for idl in &tid[..5] {
+        edge5.extend_from_slice(&["[[widget]]", idl.as_str(), "kind = \"usage\"", "column = 0", "edge = \"bottom\""]);
+    }
+    let c = check_blank(&lines(&edge5));
+    assert!(c.errors.iter().any(|e| e.message.contains("column 0's bottom edge holds at most 4 items; this page puts 5 there")), "{}", diag_list(&c));
+    let mut menus4 = vec!["schema = 1"];
+    for idl in &tid[..4] {
+        menus4.extend_from_slice(&["[[widget]]", idl.as_str(), "kind = \"menu\"", "slot = \"top\""]);
+    }
+    let c = check_blank(&lines(&menus4));
+    assert!(c.errors.iter().any(|e| e.message.contains("a page has at most 3 menus; this one has 4")), "{}", diag_list(&c));
+    let mut chrome11 = vec!["schema = 1"];
+    let cid: Vec<String> = (0..11).map(|n| format!("id = \"c{n}\"")).collect();
+    for idl in &cid {
+        chrome11.extend_from_slice(&["[[widget]]", idl.as_str(), "kind = \"usage\"", "column = 0"]);
+    }
+    let c = check_blank(&lines(&chrome11));
+    assert!(c.errors.iter().any(|e| e.message.contains("places at most 10 Zen controls (chrome widgets); this one has 11")), "{}", diag_list(&c));
+    let mut content13 = String::from("schema = 1\n");
+    for n in 0..13 {
+        content13.push_str(&format!("[[widget]]\nid = \"a{n}\"\nkind = \"agents\"\ncolumn = 0\n"));
+    }
+    let c = check_blank(&content13);
+    assert_eq!(c.errors.len(), 1, "{}", diag_list(&c));
+    assert!(c.errors[0].message.contains("a Garden page holds at most 12 widgets; this one has 13"), "{}", diag_list(&c));
+    // 8. A kind that doesn't fit its slot names every allowed kind.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "id = \"a\"", "kind = \"agents\"", "slot = \"bottom\""]));
+    assert_one_error(
+        &c,
+        11,
+        "'agents' can't go in the bottom band; slot = \"bottom\" takes: nav-rail, garden-switcher, zen-toggle, usage, theme-picker, menu",
+        "agents in the bottom band",
+    );
+    // 10. A chrome widget in a column the layout doesn't have.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "column = 1", "edge = \"bottom\""]));
+    assert_one_error(&c, 7, "widget 'zen-toggle' is in column 1, but this page has 1 column", "chrome off the layout");
+    // 11. caps on chrome.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "caps = [\"zen:exit\"]"]));
+    assert_one_error(&c, 8, "built-in widgets get K2's caps", "caps on chrome");
+    // Unknown kind lists both groups; the unknown-key list names the new keys.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"clock\"", "slot = \"top\""]));
+    assert_one_error(&c, 6, "unknown widget kind 'clock'; built-in widgets are: agents, conversation, nav-rail; Zen controls are: garden-switcher, zen-toggle, usage, theme-picker, menu", "unknown kind");
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "place = \"left\""]));
+    assert_one_error(&c, 8, "unknown key 'place' in [[widget]]; allowed: id, kind, slot, column, edge, align, menu, props", "unknown key");
+    // Two default ids collide: two menus without ids.
+    let c = check_blank(&with(&[
+        "[[widget]]",
+        "kind = \"menu\"",
+        "slot = \"top\"",
+        "[[widget]]",
+        "kind = \"menu\"",
+        "slot = \"bottom\"",
+        "[[widget]]",
+        "kind = \"zen-toggle\"",
+        "slot = \"menu\"",
+        "menu = \"menu\"",
+    ]));
+    assert_one_error(&c, 9, "widget id 'menu' (this widget's default id) is used twice", "two default menu ids");
+    // A content widget in a column's body still needs its id and column.
+    let c = check_blank(&with(&["[[widget]]", "kind = \"zen-toggle\"", "slot = \"top\"", "[[widget]]", "kind = \"agents\"", "column = 0"]));
+    assert_one_error(&c, 9, "needs an id", "agents without an id");
+    // The rail in the bottom band counts for the one-rail rule.
+    let c = check_blank(&lines(&["schema = 1", "[[widget]]", "id = \"low\"", "kind = \"nav-rail\"", "slot = \"bottom\"", "[[widget]]", "id = \"side\"", "kind = \"nav-rail\"", "column = 0"]));
+    assert_one_error(&c, 7, "the nav rail is already in the bottom band ('low')", "a second rail beside a bottom rail");
+    // [[control]] stays a warning, with the FC52 text.
+    let c = check_blank(&lines(&["schema = 1", "[[control]]", "kind = \"zen-toggle\""]));
+    assert!(c.is_clean(), "{}", diag_list(&c));
+    assert_eq!(c.warnings.len(), 1, "{}", diag_list(&c));
+    assert_eq!(
+        c.warnings[0].message,
+        "[[control]] is ignored: place controls with [[widget]] kind = \"zen-toggle\" (see k2 zen guide bands)"
+    );
 }
 
 #[test]
@@ -1117,12 +1755,64 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
     assert_eq!(
         k2_core::skills::version::SKILL_VERSION_ZEN,
-        8,
-        "k2-zen skill v8 (`slot = \"top\"`: the nav rail in the top band; v7 was garden template + basic)"
+        9,
+        "k2-zen skill v9 (freeform chrome: Zen controls are widgets; v8 was `slot = \"top\"` for the nav rail)"
     );
-    // v8: the top band slot, with the example people copy.
-    for must in ["[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n", "`slot`: `column`, `top`", "Only `nav-rail` fit", "- `orientation` ("] {
+    // v8: the top band slot, with the example people copy (kept in v9).
+    for must in [
+        "[[widget]]\nkind = \"nav-rail\"\nslot = \"top\"\n",
+        "`slot`: `column`, `top`, `bottom`, `menu`",
+        "Content kinds that fit a band: `nav-rail`",
+        "- `orientation` (",
+    ] {
         assert!(body.contains(must), "skill must mention {must:?}");
+    }
+}
+
+/// FC-T5 (prd-zen-freeform-chrome FC38): skill v9 documents every value of
+/// the chrome tables, the two examples, and the guide pointer; the live
+/// "the band's controls stay where they are" text is gone.
+#[test]
+fn fc_t5_skill_v9_documents_the_chrome_tables() {
+    let body = k2_core::zen::skill::generate_k2_zen_skill();
+    let mut want: Vec<String> = Vec::new();
+    want.extend(schema::WIDGET_SLOTS.iter().map(|s| format!("`{s}`")));
+    want.extend(schema::CHROME_KINDS.iter().map(|(k, _)| format!("**`{k}`**")));
+    want.extend(schema::MENU_ITEM_KINDS.iter().map(|k| format!("`{k}`")));
+    want.extend(schema::ALIGNS.iter().map(|a| format!("`{a}`")));
+    want.extend(schema::EDGES.iter().map(|e| format!("`{e}`")));
+    want.extend(schema::MENU_ICONS.iter().map(|i| format!("`{i}`")));
+    want.extend(schema::FILL_WIDGET_KINDS.iter().map(|k| format!("`{k}`")));
+    want.extend(
+        [
+            format!("{} items per band", schema::MAX_BAND_ITEMS),
+            format!("{} per column edge", schema::MAX_EDGE_ITEMS),
+            format!("at most {} menus", schema::MAX_MENUS),
+            format!("A menu holds 1 to {} items", schema::MAX_MENU_ITEMS),
+            format!("{} Zen controls", schema::MAX_CHROME_WIDGETS),
+            schema::DRAG_REGION_ERROR.to_string(),
+            "Before moving controls, read `k2 zen guide bands` and `k2 zen guide required`".to_string(),
+            "`bottom-bar`".to_string(),
+            "`menu-both`".to_string(),
+            "LAST item in the file sits in the corner".to_string(),
+            "K2 grants it `gardens:manage`".to_string(),
+            "- `icon` (".to_string(),
+            "- `label` (".to_string(),
+        ],
+    );
+    let missing: Vec<&String> = want.iter().filter(|w| !body.contains(w.as_str())).collect();
+    assert!(missing.is_empty(), "skill v9 is missing chrome names: {missing:?}");
+    assert!(!body.contains("stay where they are"), "the live v8 sentence about fixed controls must go");
+    assert!(!body.contains("can't drop or move them"), "controls can move now");
+    // The two examples in the skill are clean Garden files.
+    for (name, start) in [("bottom-bar", "`bottom-bar`"), ("menu-both", "`menu-both`")] {
+        let at = body.find(start).unwrap_or_else(|| panic!("{name} example"));
+        let rest = &body[at..];
+        let open = rest.find("```toml\n").unwrap_or_else(|| panic!("{name}: no toml fence")) + "```toml\n".len();
+        let close = rest[open..].find("```").unwrap_or_else(|| panic!("{name}: no closing fence"));
+        let src = &rest[open..open + close];
+        let c = check_blank(src);
+        assert!(c.is_clean() && c.warnings.is_empty(), "skill example {name} must validate clean:\n{}\n{src}", diag_list(&c));
     }
 }
 

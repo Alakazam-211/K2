@@ -29,12 +29,21 @@ import type { ZenControlKind } from './zen-page'
 export type ZenSafeCause =
   | { kind: 'shift' }
   | { kind: 'crash'; message: string }
-  | { kind: 'control'; control: ZenControlKind; problem: ZenControlProblem }
+  | { kind: 'control'; control: ZenControlKind; problem: ZenControlProblem; menu?: ZenControlMenu }
   | { kind: 'unreachable'; message: string }
   | { kind: 'unreadable'; message: string }
   | { kind: 'outdated' }
 
-export type ZenControlProblem = 'undeclared' | 'missing' | 'not-wired' | 'invisible'
+/** prd-zen-freeform-chrome FC25: the four live problems, plus
+ *  `no-keyboard` (the control's button, or its menu's, can't take focus). */
+export type ZenControlProblem = 'undeclared' | 'missing' | 'not-wired' | 'invisible' | 'no-keyboard'
+
+/** The menu that holds a required control (FC25): the cause names it. */
+export interface ZenControlMenu {
+  id: string
+  /** The menu button's name (its `label`, else "More"). */
+  label: string
+}
 
 const CONTROL_NAME: Record<ZenControlKind, string> = {
   'zen-toggle': 'The Zen toggle',
@@ -46,7 +55,12 @@ const PROBLEM_TEXT: Record<ZenControlProblem, string> = {
   missing: 'isn’t on the page',
   'not-wired': 'isn’t wired',
   invisible: 'isn’t visible',
+  'no-keyboard': 'can’t be reached from the keyboard',
 }
+
+/** Every control problem's sentence (the CLI guide's safe-mode page
+ *  quotes these; FC-T18). */
+export const ZEN_CONTROL_PROBLEM_TEXT: Readonly<Record<ZenControlProblem, string>> = PROBLEM_TEXT
 
 /** G19: the daemon on this computer has no Gardens routes. */
 export const ZEN_OUTDATED_TEXT = 'K2 on this computer is older than this app. Update it to use Gardens.'
@@ -59,7 +73,10 @@ export function zenSafeCauseText(cause: ZenSafeCause): string {
     case 'crash':
       return `The page crashed: ${cause.message}`
     case 'control':
-      return `${CONTROL_NAME[cause.control]} ${PROBLEM_TEXT[cause.problem]}.`
+      // FC25: "The Zen toggle’s menu (More) isn’t visible."
+      return cause.menu
+        ? `${CONTROL_NAME[cause.control]}’s menu (${cause.menu.label}) ${PROBLEM_TEXT[cause.problem]}.`
+        : `${CONTROL_NAME[cause.control]} ${PROBLEM_TEXT[cause.problem]}.`
     case 'unreachable':
       return 'Can’t reach K2 on this computer.'
     case 'unreadable':

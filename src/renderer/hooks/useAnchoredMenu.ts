@@ -10,7 +10,9 @@
 //   - elsewhere it portals into `document.body`, one layer above the
 //     trigger's highest z-index ancestor (floor 400, like `SettingDropdown`).
 // It opens below the trigger and flips upward when there isn't room below
-// but there is more above. It follows the trigger on scroll and resize, and
+// but there is more above (`prefer: 'up'` reverses that: Zen's bottom band
+// opens toward the page). It lines up with the trigger's left edge, or its
+// right edge with `align: 'end'`. It follows the trigger on scroll and resize, and
 // closes on a mousedown outside both the trigger and the menu, or on Escape.
 //
 // Usage:
@@ -43,16 +45,32 @@ export function anchoredMenuBox(
   anchor: { top: number; bottom: number; left: number; width: number },
   viewport: { width: number; height: number },
   menuHeight: number,
-  opts: { gap: number; width: 'match' | 'min'; minWidth: number; menuWidth: number },
+  opts: {
+    gap: number
+    width: 'match' | 'min'
+    minWidth: number
+    menuWidth: number
+    /** The side it opens toward when both fit (default `down`). Zen opens
+     *  toward the page: down from the top band, up from the bottom band
+     *  (prd-zen-freeform-chrome FC18). It still flips when there's no room. */
+    prefer?: 'down' | 'up'
+    /** Line up with the trigger's left edge (`start`, default) or its
+     *  right edge (`end`). */
+    align?: 'start' | 'end'
+  },
 ): AnchoredMenuBox {
   const m = ANCHORED_MENU_MARGIN
   const spaceBelow = viewport.height - m - (anchor.bottom + opts.gap)
   const spaceAbove = anchor.top - opts.gap - m
-  const up = menuHeight > spaceBelow && spaceAbove > spaceBelow
+  const up =
+    opts.prefer === 'up'
+      ? !(menuHeight > spaceAbove && spaceBelow > spaceAbove)
+      : menuHeight > spaceBelow && spaceAbove > spaceBelow
   const minWidth = Math.max(opts.minWidth, anchor.width)
   const shownWidth = opts.width === 'match' ? anchor.width : Math.max(minWidth, opts.menuWidth)
   // Keep the menu inside the window horizontally.
-  const left = Math.max(m, Math.min(anchor.left, viewport.width - m - shownWidth))
+  const wanted = opts.align === 'end' ? anchor.left + anchor.width - shownWidth : anchor.left
+  const left = Math.max(m, Math.min(wanted, viewport.width - m - shownWidth))
   return {
     placement: up ? 'up' : 'down',
     ...(up ? { bottom: viewport.height - anchor.top + opts.gap } : { top: anchor.bottom + opts.gap }),
@@ -81,6 +99,8 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
   width = 'match',
   minWidth = 0,
   estimatedHeight = 240,
+  prefer = 'down',
+  align = 'start',
 }: {
   open: boolean
   onClose(): void
@@ -92,6 +112,10 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
   minWidth?: number
   /** Used for the flip until the menu can be measured. */
   estimatedHeight?: number
+  /** The side it opens toward when both fit (it flips when there's no room). */
+  prefer?: 'down' | 'up'
+  /** Line up with the trigger's left (`start`) or right (`end`) edge. */
+  align?: 'start' | 'end'
 }): AnchoredMenu<A> {
   const anchorRef = useRef<A | null>(null)
   const menuEl = useRef<HTMLDivElement | null>(null)
@@ -110,12 +134,14 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
       width,
       minWidth,
       menuWidth: menuRect?.width ?? 0,
+      prefer,
+      align,
     })
     const zIndex = anchor.closest('[data-zen-root]') ? ZEN_ANCHORED_MENU_LAYER : menuLayerForTrigger(anchor)
     const fontSize = getComputedStyle(anchor).fontSize || undefined
     const full = { ...next, zIndex, fontSize }
     setBox((prev) => (prev && JSON.stringify(prev) === JSON.stringify(full) ? prev : full))
-  }, [gap, width, minWidth, estimatedHeight])
+  }, [gap, width, minWidth, estimatedHeight, prefer, align])
 
   useLayoutEffect(() => {
     if (!open) {
@@ -185,5 +211,5 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
     return createPortal(node, zen instanceof HTMLElement ? zen : document.body)
   }
 
-  return { anchorRef, menuRef, style, placement: box?.placement ?? 'down', portal }
+  return { anchorRef, menuRef, style, placement: box?.placement ?? prefer, portal }
 }

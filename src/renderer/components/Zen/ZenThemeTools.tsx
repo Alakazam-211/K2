@@ -3,9 +3,11 @@
 // with `--zen-*` tokens only (never Styles tokens).
 //
 // - Theme picker: a small swatch button (a shared Zen glass tile, like
-//   the usage chip beside it) in the template's top-right
-//   cluster, immediately left of the Zen toggle (Rosson 2026-10-04; the
-//   template places it through `ZenK2TopRightContext`). It lists
+//   the usage chip beside it), the `theme-picker` chrome widget: by
+//   default in the top band's end group, immediately left of the Zen
+//   toggle (Rosson 2026-10-04); a Garden file may move it
+//   (prd-zen-freeform-chrome). Its list opens toward the page through
+//   `useAnchoredMenu` (FC20). It lists
 //   the daemon's themes (built-in ones marked), checks the active one, and
 //   switches on click. ⌃⌘. / ⌃⌘⇧. (Ctrl+Alt+. / Ctrl+Alt+Shift+.) cycle.
 // - Cheat sheet: `?` (not while typing), ⌃⌘/ (Ctrl+Alt+/), the macOS View
@@ -17,6 +19,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import type { ZenChromePlace } from './ZenTemplateControls'
+
+/** The theme control's default place: the top band's end group. */
+const ZEN_TOP_END_PLACE: ZenChromePlace = { row: 'top', opens: 'down', align: 'end' }
 import { zenThemeLabel, type ZenThemeEntry } from '@/lib/zen/zen-page'
 import {
   closeZenOverlays,
@@ -52,38 +59,68 @@ export function ZenThemePicker({
   active,
   onPick,
   error,
+  place = ZEN_TOP_END_PLACE,
 }: {
   themes: readonly ZenThemeEntry[]
   active: string | null
   onPick(name: string): void
   error: string | null
+  /** Where the control sits (prd-zen-freeform-chrome FC18, FC20): the list
+   *  opens toward the page and lines up with the control's side. */
+  place?: ZenChromePlace
 }): React.JSX.Element | null {
   const open = useZenOverlayStore((s) => s.picker)
   const overlayRef = useK2Overlay()
+  const listOverlay = useK2Overlay()
   useEscCloses(open)
+  const close = useCallback(() => useZenOverlayStore.setState({ picker: false }), [])
+  const menu = useAnchoredMenu<HTMLDivElement>({
+    open: open && themes.length > 0,
+    onClose: close,
+    gap: 6,
+    width: 'min',
+    minWidth: 200,
+    prefer: place.opens,
+    align: place.align === 'start' ? 'start' : 'end',
+  })
+  const anchorRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      menu.anchorRef.current = el
+      overlayRef(el)
+    },
+    [menu.anchorRef, overlayRef],
+  )
+  const listRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      menu.menuRef(el)
+      listOverlay(el)
+    },
+    [menu.menuRef, listOverlay],
+  )
   if (themes.length === 0) return null
   return (
     <div
-      ref={overlayRef}
+      ref={anchorRef}
       data-zen-theme-picker=""
       className="no-drag"
       style={{
-        // In the template's top-right cluster, left of the Zen toggle; the
-        // list opens below, right-aligned, over the page.
+        // In its band or column edge; the list opens toward the page,
+        // portalled into the Zen root (`useAnchoredMenu`).
         position: 'relative',
         flexShrink: 0,
         zIndex: 20,
       }}
     >
-      {open && (
+      {open &&
+        menu.portal(
         <div
+          ref={listRef}
           role="listbox"
           aria-label="Zen themes"
+          data-zen-theme-list=""
+          data-zen-menu-placement={menu.placement}
           style={{
-            position: 'absolute',
-            right: 0,
-            top: 'calc(100% + 6px)',
-            minWidth: 200,
+            ...menu.style,
             maxHeight: 320,
             overflowY: 'auto',
             padding: 4,
@@ -133,8 +170,8 @@ export function ZenThemePicker({
               {error}
             </div>
           )}
-        </div>
-      )}
+        </div>,
+        )}
       <button
         className="cursor-pointer"
         type="button"

@@ -99,6 +99,32 @@ describe('anchoredMenuBox', () => {
     })
     expect(box).toEqual({ placement: 'down', top: 34, left: 1000 - ANCHORED_MENU_MARGIN - 180, minWidth: 180 })
   })
+
+  // prd-zen-freeform-chrome FC18 / FC20 / FC-T11: Zen opens toward the page.
+  it('`prefer: up` opens above (a bottom band), and flips down only when above has no room and below has more', () => {
+    const atBottom = { top: 740, bottom: 770, left: 20, width: 120 }
+    expect(anchoredMenuBox(atBottom, vp, 200, { ...opts, width: 'min', prefer: 'up' })).toEqual({
+      placement: 'up',
+      bottom: 62,
+      left: 20,
+      minWidth: 120,
+    })
+    // Even with room below, `up` stays up while above fits.
+    expect(anchoredMenuBox({ top: 400, bottom: 430, left: 20, width: 120 }, vp, 200, { ...opts, prefer: 'up' }).placement).toBe('up')
+    // Near the top with no room above: down.
+    expect(anchoredMenuBox({ top: 40, bottom: 70, left: 20, width: 120 }, vp, 200, { ...opts, prefer: 'up' }).placement).toBe('down')
+  })
+
+  it('`align: end` lines the menu up with the trigger’s right edge', () => {
+    const box = anchoredMenuBox({ top: 10, bottom: 40, left: 800, width: 30 }, vp, 100, {
+      gap: 6,
+      width: 'min',
+      minWidth: 240,
+      menuWidth: 0,
+      align: 'end',
+    })
+    expect(box).toEqual({ placement: 'down', top: 46, left: 830 - 240, minWidth: 240 })
+  })
 })
 
 describe('FocusGroupDropdown in a clipping card', () => {

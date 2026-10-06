@@ -661,6 +661,25 @@ async function pickWidgetHome(homeId: string, widget = 'agents'): Promise<void> 
   })
 }
 
+/** A band's row, left to right: each chrome item by kind, a run of
+ *  content widgets as `band:<slot>`, the empty drag space as `drag`. */
+function bandRow(which: 'top' | 'bottom' = 'top'): string[] {
+  const inner = document.querySelector(`[data-zen-band-row="${which}"] [data-zen-row-inner]`)
+  if (!inner) throw new Error(`no ${which} band`)
+  const out: string[] = []
+  for (const c of Array.from(inner.children)) {
+    if (c.hasAttribute('data-zen-row-spacer')) {
+      out.push('drag')
+      continue
+    }
+    for (const g of Array.from(c.children)) {
+      const kind = g.getAttribute('data-zen-chrome-kind')
+      out.push(kind ?? (g.hasAttribute('data-zen-band') ? `band:${g.getAttribute('data-zen-band')}` : g.tagName))
+    }
+  }
+  return out
+}
+
 describe('Agents widget', () => {
   it('rows follow the Home’s order, and ⌘1–9 selects row N in place', async () => {
     await mountZen()
@@ -904,7 +923,7 @@ describe('the nav rail (Garden 1)', () => {
       deleteGarden: async () => {},
       homes: () => [],
       exit: () => {},
-      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
+      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, menuWiringFailure: () => null, dispose: () => {} },
       page: () => BUILTIN_TEXTING_PAGE,
     }
     const without = createZenBridge(hostStub as never, { id: 'x', caps: [] })
@@ -1336,10 +1355,10 @@ describe('the usage tool in the top band', () => {
   it('sits immediately left of the theme control, in glass, and its menu opens inside Zen over the page', async () => {
     await mountZen()
     const topRight = document.querySelector('[data-zen-top-right]') as HTMLElement
-    const order = Array.from(topRight.children).map((c) =>
-      c.hasAttribute('data-zen-usage') ? 'usage' : c.hasAttribute('data-zen-theme-picker') ? 'theme' : c.hasAttribute('data-zen-switch') ? 'toggle' : c.tagName,
-    )
-    expect(order).toEqual(['usage', 'theme', 'toggle'])
+    const order = Array.from(topRight.children).map((c) => c.getAttribute('data-zen-chrome-kind') ?? c.tagName)
+    expect(order).toEqual(['usage', 'theme-picker', 'zen-toggle'])
+    expect(topRight.querySelector('[data-zen-chrome-kind="usage"] > [data-zen-usage]')).not.toBeNull()
+    expect(topRight.querySelector('[data-zen-chrome-kind="theme-picker"] > [data-zen-theme-picker]')).not.toBeNull()
     const usage = topRight.querySelector('[data-zen-usage]') as HTMLElement
     expect(usage.querySelector('style')?.textContent).toContain('backdrop-filter')
     await waitFor(() => expect(usage.querySelector('[data-testid="subscription-usage"]')?.textContent).toContain('31%'))
@@ -1366,7 +1385,7 @@ describe('the usage tool in the top band', () => {
     await mountZen()
     for (const view of ['agents', 'projects', 'tickets'] as const) {
       await openRailView(view)
-      expect(document.querySelector('[data-zen-top-right] > [data-zen-usage]'), view).not.toBeNull()
+      expect(document.querySelector('[data-zen-top-right] > [data-zen-chrome-kind="usage"] > [data-zen-usage]'), view).not.toBeNull()
     }
   })
 })
@@ -2004,34 +2023,20 @@ describe('agent pictures in Zen', () => {
 describe('template controls (G24, G25, G58)', () => {
   it('draws its own Garden switcher, Zen toggle and drag area, and they pass the required-controls check', async () => {
     await mountZen()
-    const bar = document.querySelector('[data-zen-texting-controls]')
-    if (!bar) throw new Error('the template controls are not registered')
+    const bar = document.querySelector('[data-zen-band-row="top"]')
+    if (!bar) throw new Error('no top band')
+    // The page's chrome is the template's (FC4, FC30), drawn from data.
+    expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-chrome-from')).toBe('template')
     expect(bar.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound')).toBe('garden-switcher')
     expect(bar.querySelector('[data-zen-garden-pill]')?.textContent).toContain('Garden 1')
-    expect(bar.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound')).toBe('drag-region')
+    // FC12: the band itself is the drag area; its empty space keeps 120px.
+    expect(bar.getAttribute('data-zen-bound')).toBe('drag-region')
+    expect((bar.querySelector('[data-zen-drag]') as HTMLElement).style.minWidth).toBe(`${ZEN_DRAG_MIN_WIDTH_PX}px`)
     // Rosson 2026-10-04: the Zen toggle is back in the top-right corner (the
-    // top bar's spot outside Zen), with the theme control immediately left
-    // of it. Band order: switcher, drag area, [theme, toggle].
-    expect(Array.from(bar.children).filter((c) => c.tagName !== 'STYLE').map((c) =>
-      c.hasAttribute('data-zen-garden-pill') || c.querySelector('[data-zen-garden-pill]')
-        ? 'switcher'
-        : c.hasAttribute('data-zen-drag')
-          ? 'drag'
-          : c.hasAttribute('data-zen-top-right')
-            ? 'top-right'
-            : c.tagName,
-    )).toEqual(['switcher', 'drag', 'top-right'])
+    // top bar's spot outside Zen): switcher, drag space, then usage, theme,
+    // Zen toggle.
+    expect(bandRow()).toEqual(['garden-switcher', 'drag', 'usage', 'theme-picker', 'zen-toggle'])
     const topRight = bar.querySelector('[data-zen-top-right]') as HTMLElement
-    // Rosson 2026-10-04: usage, theme, Zen toggle.
-    expect(Array.from(topRight.children).map((c) =>
-      c.hasAttribute('data-zen-usage')
-        ? 'usage'
-        : c.hasAttribute('data-zen-theme-picker')
-          ? 'theme'
-          : c.hasAttribute('data-zen-switch')
-            ? 'toggle'
-            : c.tagName,
-    )).toEqual(['usage', 'theme', 'toggle'])
     expect(document.querySelectorAll('[data-zen-switch]').length).toBe(1)
     expect(topRight.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
     // No footer under any column any more: both columns run to the bottom.
@@ -2540,7 +2545,7 @@ describe('Zen Add agent', () => {
       deleteGarden: async () => {},
       homes: () => [],
       exit: () => {},
-      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, dispose: () => {} },
+      controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, menuWiringFailure: () => null, dispose: () => {} },
       // A v2-style widget on Garden 1's page: it acts for the
       // page's first Agents widget (Home h1).
       page: () => BUILTIN_TEXTING_PAGE,
@@ -2759,23 +2764,9 @@ describe('a widget in the top band (slot = "top")', () => {
     useZenWindowStore.setState({ garden: 'g-top' })
   })
 
-  function bandOrder(): string[] {
-    const bar = document.querySelector('[data-zen-texting-controls]')
-    if (!bar) throw new Error('no template band')
-    return Array.from(bar.children)
-      .filter((c) => c.tagName !== 'STYLE')
-      .map((c) =>
-        c.querySelector('[data-zen-garden-pill]')
-          ? 'switcher'
-          : c.hasAttribute('data-zen-band')
-            ? `band:${c.getAttribute('data-zen-band')}`
-            : c.hasAttribute('data-zen-drag')
-              ? 'drag'
-              : c.hasAttribute('data-zen-top-right')
-                ? 'top-right'
-                : c.tagName,
-      )
-  }
+  const WITH_RAIL = ['garden-switcher', 'band:top', 'drag', 'usage', 'theme-picker', 'zen-toggle']
+  const TEMPLATE_ROW = ['garden-switcher', 'drag', 'usage', 'theme-picker', 'zen-toggle']
+  const bandOrder = (): string[] => bandRow('top')
 
   function railIn(): string {
     const rail = document.querySelector('[data-zen-widget="nav-rail"]')
@@ -2800,7 +2791,7 @@ describe('a widget in the top band (slot = "top")', () => {
 
   it('the rail is a row of four icons in the top band, immediately right of the Garden switcher, and in no column', async () => {
     await mountZen()
-    expect(bandOrder()).toEqual(['switcher', 'band:top', 'drag', 'top-right'])
+    expect(bandOrder()).toEqual(WITH_RAIL)
     expect(railIn()).toBe('band')
     const rail = document.querySelector('[data-zen-widget="nav-rail"]') as HTMLElement
     expect(rail.getAttribute('data-zen-nav-orientation')).toBe('row')
@@ -2840,7 +2831,7 @@ describe('a widget in the top band (slot = "top")', () => {
       expect(all[0].closest('[data-zen-nav]')?.getAttribute('data-zen-nav'), view).toBe(view)
       expect(document.querySelector('[data-zen-nav][aria-current="page"]')?.getAttribute('data-zen-nav'), view).toBe(view)
       expect(railIn(), view).toBe('band')
-      expect(bandOrder(), view).toEqual(['switcher', 'band:top', 'drag', 'top-right'])
+      expect(bandOrder(), view).toEqual(WITH_RAIL)
     }
     expect(useZenWindowStore.getState().on).toBe(true)
     expect(usePageViewStore.getState().page).toBe('home')
@@ -2854,7 +2845,7 @@ describe('a widget in the top band (slot = "top")', () => {
       expect(document.querySelector('[data-zen-garden-pill]')?.getAttribute('data-zen-bound'), view).toBe('garden-switcher')
       expect(document.querySelectorAll('[data-zen-switch]').length, view).toBe(1)
       expect(document.querySelector('[data-zen-switch]')?.getAttribute('data-zen-bound'), view).toBe('zen-toggle')
-      expect(document.querySelector('[data-zen-drag]')?.getAttribute('data-zen-bound'), view).toBe('drag-region')
+      expect(document.querySelector('[data-zen-band-row="top"]')?.getAttribute('data-zen-bound'), view).toBe('drag-region')
       act(() => runZenControlChecksNow())
       act(() => runZenControlChecksNow())
       expect(useZenViewStore.getState().safe, view).toBeNull()
@@ -2862,7 +2853,7 @@ describe('a widget in the top band (slot = "top")', () => {
     }
     // K2's top-right items are still there, left of the toggle.
     const topRight = document.querySelector('[data-zen-top-right]') as HTMLElement
-    expect(topRight.lastElementChild?.hasAttribute('data-zen-switch')).toBe(true)
+    expect(topRight.lastElementChild?.firstElementChild?.hasAttribute('data-zen-switch')).toBe(true)
     expect(topRight.querySelector('[data-zen-theme-picker]')).not.toBeNull()
   })
 
@@ -2898,7 +2889,7 @@ describe('a widget in the top band (slot = "top")', () => {
     useZenWindowStore.setState({ garden: 'g-default' })
     await mountZen()
     expect(document.querySelector('[data-zen-band]')).toBeNull()
-    expect(bandOrder()).toEqual(['switcher', 'drag', 'top-right'])
+    expect(bandOrder()).toEqual(TEMPLATE_ROW)
     expect(railIn()).toBe('column:0')
     const rail = document.querySelector('[data-zen-widget="nav-rail"]') as HTMLElement
     expect(rail.getAttribute('data-zen-nav-orientation')).toBe('column')
@@ -2915,11 +2906,15 @@ describe('a widget in the top band (slot = "top")', () => {
       { id: 'nav', kind: 'nav-rail', slot: 'column', column: 1, props: { orientation: 'row' }, caps: ['app:navigate'], source: 'builtin' },
     ]
     await mountZen()
-    expect(document.querySelector('[data-zen-band]')).toBeNull()
+    expect(document.querySelector('[data-zen-band="top"]')).toBeNull()
     expect(railIn()).toBe('column:1')
     const slot1 = document.querySelector('[data-zen-column-slot="1"]') as HTMLElement
     expect(slot1.classList.contains('flex-col')).toBe(true)
-    expect(slot1.firstElementChild?.getAttribute('data-zen-nav-orientation')).toBe('row')
+    // FC9 / FC44: that is the column's top edge, above its box.
+    const edge = slot1.firstElementChild as HTMLElement
+    expect(edge.getAttribute('data-zen-edge-row')).toBe('1:top')
+    expect(edge.querySelector('[data-zen-nav-orientation="row"]')).not.toBeNull()
+    expect(slot1.children[1]?.querySelector('[data-zen-column="1"] [data-zen-widget="conversation"]')).not.toBeNull()
   })
 })
 
@@ -2945,7 +2940,8 @@ describe('built-in widgets: modes and layout (G38, answer 5)', () => {
     const slot0 = document.querySelector('[data-zen-column-slot="0"]') as HTMLElement
     const slot1 = document.querySelector('[data-zen-column-slot="1"]') as HTMLElement
     expect(slot0.style.flex).toBe('60 1 0%')
-    expect(slot0.style.minWidth).toBe('300px')
+    // FC27: 300px, or its share of the row when the min widths don't fit.
+    expect(slot0.style.minWidth).toBe('min(300px, calc((100% - 1 * var(--zen-gap)) * 1))')
     expect(slot1.style.flex).toBe('40 1 0%')
     expect(Array.from(document.querySelectorAll('[data-zen-column="0"] [data-zen-widget]')).map((w) => w.getAttribute('data-zen-widget'))).toEqual([
       'conversation',
@@ -3256,7 +3252,8 @@ describe('S6 source ratchets', () => {
       'ZenAgentsWidget.tsx',
       'ZenConversationWidget.tsx',
       'ZenCompose.tsx',
-      'ZenTextingControls.tsx',
+      'ZenChromeControls.tsx',
+      'ZenMenu.tsx',
       'ZenGardenEmptyWidget.tsx',
       'ZenNavRailWidget.tsx',
       'ZenProjectsViewWidget.tsx',

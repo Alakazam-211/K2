@@ -1,43 +1,51 @@
-// prd-zen-mode-v1 Z1, Z10, Z27 and prd-zen-gardens-v1 G11, G58 — what
-// draws a resolved Garden page.
+// prd-zen-mode-v1 Z1, Z10, Z27, prd-zen-gardens-v1 G11, G58 and
+// prd-zen-freeform-chrome FC1, FC43 — what draws a resolved Garden page.
 //
-// The page is data (layout + widgets + controls). Two registries turn it
+// The page is data (layout + widgets + placement). Two registries turn it
 // into React:
 //   - widgets by `kind` (`agents`, `conversation`, `garden-empty`). The
 //     built-ins register with `registerZenWidget`; until then a placeholder
 //     fills the column.
-//   - template controls by template id (`k2.texting@1`, `k2.blank@1`). The
-//     template draws its own Zen toggle, Garden switcher and drag strip in
-//     its top band and binds them through the bridge. One component set
-//     serves both templates and safe mode (`widgets/ZenTextingControls`).
-//     Add agent is the Agents widget's own last row, not a template control.
-// Every widget gets only a `ZenWidgetBridge` built with its declared caps.
+//   - chrome by `kind` (FC43): K2's controls, `garden-switcher`,
+//     `zen-toggle`, `usage`, `theme-picker` and `menu`. The page places them
+//     from data (`page.placement`) in a band, at a column edge or in a menu,
+//     and `ZenBands` draws each through this registry. Both templates and
+//     safe mode use the same entries (the per-template controls map is
+//     gone). Add agent is the Agents widget's own last row, not chrome.
+// Every widget gets only a `ZenWidgetBridge` built with its declared caps;
+// chrome gets the template bridge (`ZEN_TEMPLATE_CONTROL_CAPS`, FC31).
 // A RAIL kind (`nav-rail`) is drawn as a thin strip at the left edge of its
-// column, outside the column's box, and takes no share of the box. An
-// UNBOXED kind (`tickets-view`) draws its own panels, so its column has no
-// box at all. A widget with a band slot (`slot: "top"`) is drawn by the same
-// registry and placed by the template's `ZenBandSlot` (`ZenBand.tsx`).
+// column, outside the column's box, and takes no share of the box (or as a
+// row in a band or at a column edge). An UNBOXED kind (`tickets-view`)
+// draws its own panels, so its column has no box at all.
 
-import type { ComponentType } from 'react'
+import { useContext, type ComponentType } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
-import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
-import { BLANK_TEMPLATE_ID, TEXTING_TEMPLATE_ID } from '@/lib/zen/zen-page'
-import { ZenTextingControls } from './widgets/ZenTextingControls'
+import type { ZenChromeItem, ZenWidgetDecl } from '@/lib/zen/zen-page'
+import { ZenGardenSwitcher, ZenToggle } from './widgets/ZenChromeControls'
+import { ZenMenu } from './widgets/ZenMenu'
+import { ZenThemePicker } from './ZenThemeTools'
+import { ZenUsageTool } from './ZenUsageTool'
+import { ZenChromePlaceContext, ZenK2ChromeContext } from './ZenTemplateControls'
 
 export interface ZenWidgetProps {
   decl: ZenWidgetDecl
   bridge: ZenWidgetBridge
 }
 
-export interface ZenTemplateControlsProps {
-  /** The template's bridge: the no-cap verbs (gardens.list / current /
+/** What a chrome item is drawn with. */
+export interface ZenChromeProps {
+  item: ZenChromeItem
+  /** The template bridge: the no-cap verbs (gardens.list / current /
    *  switch, zen.exit, controls.bind, theme.get) plus `agents.add` (cap
    *  `agents:add`) and `gardens.create` (cap `gardens:manage`), granted by
-   *  K2 to the template's own controls. */
+   *  K2 to its own controls. */
   bridge: ZenWidgetBridge
+  /** A `menu`'s items, in file order (empty for every other kind). */
+  menuItems: readonly ZenChromeItem[]
 }
 
-/** Caps K2 grants the template's own controls. */
+/** Caps K2 grants its own controls. */
 export const ZEN_TEMPLATE_CONTROL_CAPS: readonly string[] = ['agents:add', 'gardens:manage']
 
 /** Placeholder until S6 registers the real widget. */
@@ -69,10 +77,6 @@ export const ZEN_RAIL_KINDS: ReadonlySet<string> = new Set(['nav-rail'])
 /** Widget kinds that draw their own panels: their column gets no box
  *  (K2's Tickets view, liquid glass). */
 export const ZEN_UNBOXED_KINDS: ReadonlySet<string> = new Set(['tickets-view'])
-const templateControls = new Map<string, ComponentType<ZenTemplateControlsProps>>([
-  [TEXTING_TEMPLATE_ID, ZenTextingControls],
-  [BLANK_TEMPLATE_ID, ZenTextingControls],
-])
 
 /** S6 plug-in point: the component for widget `kind`. Returns the unregister. */
 export function registerZenWidget(kind: string, component: ComponentType<ZenWidgetProps>): () => void {
@@ -86,25 +90,59 @@ export function zenWidgetFor(kind: string): ComponentType<ZenWidgetProps> {
   return widgets.get(kind) ?? PlaceholderWidget
 }
 
-/** S6 / v2 plug-in point: the controls a template draws (its top band). */
-export function registerZenTemplateControls(
-  templateId: string,
-  component: ComponentType<ZenTemplateControlsProps>,
-): () => void {
-  const prev = templateControls.get(templateId)
-  templateControls.set(templateId, component)
+// ── Chrome by kind (FC43) ────────────────────────────────────────────────
+
+function SwitcherChrome({ bridge }: ZenChromeProps): React.JSX.Element {
+  return <ZenGardenSwitcher bridge={bridge} />
+}
+
+function ToggleChrome({ bridge }: ZenChromeProps): React.JSX.Element {
+  return <ZenToggle bridge={bridge} />
+}
+
+/** K2's usage tool; nothing in safe mode (FC22). */
+function UsageChrome(): React.JSX.Element | null {
+  const k2 = useContext(ZenK2ChromeContext)
+  const place = useContext(ZenChromePlaceContext)
+  return k2.usage ? <ZenUsageTool place={place} /> : null
+}
+
+/** K2's theme control; nothing in safe mode (FC22). */
+function ThemeChrome(): React.JSX.Element | null {
+  const k2 = useContext(ZenK2ChromeContext)
+  const place = useContext(ZenChromePlaceContext)
+  return k2.theme ? <ZenThemePicker {...k2.theme} place={place} /> : null
+}
+
+function MenuChrome({ item, bridge, menuItems }: ZenChromeProps): React.JSX.Element {
+  return <ZenMenu item={item} bridge={bridge} menuItems={menuItems} />
+}
+
+const BUILTIN_CHROME: ReadonlyArray<[string, ComponentType<ZenChromeProps>]> = [
+  ['garden-switcher', SwitcherChrome],
+  ['zen-toggle', ToggleChrome],
+  ['usage', UsageChrome],
+  ['theme-picker', ThemeChrome],
+  ['menu', MenuChrome],
+]
+
+const chrome = new Map<string, ComponentType<ZenChromeProps>>(BUILTIN_CHROME)
+
+/** Plug-in point: the component for chrome `kind` (tests swap one to break
+ *  a required control on purpose). Returns the unregister, which puts the
+ *  previous one back. */
+export function registerZenChrome(kind: string, component: ComponentType<ZenChromeProps>): () => void {
+  const prev = chrome.get(kind)
+  chrome.set(kind, component)
   return () => {
-    if (templateControls.get(templateId) !== component) return
-    if (prev) templateControls.set(templateId, prev)
-    else templateControls.delete(templateId)
+    if (chrome.get(kind) !== component) return
+    if (prev) chrome.set(kind, prev)
+    else chrome.delete(kind)
   }
 }
 
-/** The template's controls; an unknown template draws none (and so fails
- *  the required-controls check into safe mode). */
-export function zenTemplateControlsFor(templateId: string): ComponentType<ZenTemplateControlsProps> | null {
-  return templateControls.get(templateId) ?? null
+/** The component for chrome `kind`; a kind this client doesn't know draws
+ *  nothing (a required one then fails the check into safe mode). */
+export function zenChromeFor(kind: string): ComponentType<ZenChromeProps> | null {
+  return chrome.get(kind) ?? null
 }
-
-/** The built-in template's controls (safe mode always uses these). */
-export const BUILTIN_TEMPLATE_CONTROLS: ComponentType<ZenTemplateControlsProps> = ZenTextingControls

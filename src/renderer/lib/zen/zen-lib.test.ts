@@ -26,7 +26,10 @@ import {
   BUILTIN_TEXTING_PAGE,
   parseZenGet,
   ZenPageParseError,
+  zenControlPlacement,
   zenErrorBannerText,
+  zenMenuLabel,
+  zenMenuRequiredControls,
   zenWidgetInBand,
   zenWidgetSlot,
   type ZenResolvedPage,
@@ -243,7 +246,7 @@ describe('the bridge (Z33/Z34, G29, TG4.3)', () => {
       deleteGarden: async () => undefined,
       homes: () => [{ id: 'a', name: 'A' }],
       exit: () => void (h.exited += 1),
-      controls: { bind: () => () => undefined, bindings: () => [], wiringFailure: () => null, dispose: () => undefined },
+      controls: { bind: () => () => undefined, bindings: () => [], wiringFailure: () => null, menuWiringFailure: () => null, dispose: () => undefined },
       page: () => page,
     }
     return h
@@ -481,7 +484,7 @@ describe('the resolved page (Z10, Z13)', () => {
         widgets: [
           { id: 'agents', kind: 'agents', slot: 'column', column: 0, props: {}, caps: [] },
           { id: 'nav-rail', kind: 'nav-rail', slot: 'top', props: { orientation: 'row' }, caps: ['app:navigate'] },
-          { id: 'later', kind: 'nav-rail', slot: 'bottom', column: 1, props: {}, caps: [] },
+          { id: 'later', kind: 'nav-rail', slot: 'side', column: 1, props: {}, caps: [] },
         ],
         controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
       },
@@ -491,6 +494,8 @@ describe('the resolved page (Z10, Z13)', () => {
       ['nav-rail', 'top', 0, 'top', true],
       ['later', undefined, 1, 'column', false],
     ])
+    // `bottom` is a band this client draws now (prd-zen-freeform-chrome S2).
+    expect(zenWidgetSlot({ slot: 'bottom' })).toBe('bottom')
     expect(zenRailOrientation(p.widgets[1])).toBe('row')
     expect(zenRailOrientation({ slot: 'top', props: {} })).toBe('row')
     expect(zenRailOrientation({ props: {} })).toBe('column')
@@ -504,9 +509,8 @@ describe('the resolved page (Z10, Z13)', () => {
     ])
   })
 
-  it('a zen-chrome-v1 answer (Garden chrome) still parses: chrome stays out of widgets, controls keep both required kinds (FC28, FC32, FC58)', () => {
-    // The daemon's `bottom-bar` answer: chrome lives in page.chrome / bands /
-    // edges / menus, which this renderer does not draw yet (S2).
+  it('FC-T6: a zen-chrome-v1 answer parses chrome, bands, edges and menus; chrome stays out of widgets (FC28, FC29)', () => {
+    // The daemon's `bottom-bar` answer, with a bottom-band rail.
     const p = parseZenGet({
       version: 'v',
       page: {
@@ -537,8 +541,135 @@ describe('the resolved page (Z10, Z13)', () => {
     })
     expect(p.controls).toEqual(['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'])
     expect(p.widgets.map((w) => w.kind)).toEqual(['agents', 'conversation', 'nav-rail'])
-    // A slot this client doesn't draw yet (`bottom`) falls back to a column (FC58).
-    expect(p.widgets.map((w) => zenWidgetSlot(w))).toEqual(['column', 'column', 'column'])
+    // `bottom` is a band this renderer draws; the rail keeps its `align`.
+    expect(p.widgets.map((w) => [zenWidgetSlot(w), w.align])).toEqual([
+      ['column', undefined],
+      ['column', undefined],
+      ['bottom', 'end'],
+    ])
+    expect(p.placement).toEqual({
+      from: 'garden',
+      items: [
+        { id: 'garden-switcher', kind: 'garden-switcher', slot: 'bottom', align: 'start', props: {}, caps: ['gardens:manage'] },
+        { id: 'zen-toggle', kind: 'zen-toggle', slot: 'bottom', align: 'end', props: {}, caps: [] },
+      ],
+      bands: { top: null, bottom: { start: ['garden-switcher'], center: [], end: ['zen-toggle', 'nav-rail'] } },
+      edges: [],
+      menus: {},
+    })
+  })
+
+  it('FC-T6: menus, column edges and ids the page lacks; a chrome kind sent as a widget is never a column box', () => {
+    const p = parseZenGet({
+      version: 'v',
+      page: {
+        template: 'k2.texting@1',
+        layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+        widgets: [
+          { id: 'agents', kind: 'agents', column: 0, props: {}, caps: [] },
+          { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: [] },
+          // A daemon bug: chrome in widgets. Never drawn as a placeholder.
+          { id: 'zen-toggle', kind: 'zen-toggle', column: 1, props: {}, caps: [] },
+        ],
+        controls: ['garden-switcher', 'drag-region', 'zen-toggle'],
+        chrome: {
+          from: 'garden',
+          items: [
+            { id: 'more', kind: 'menu', slot: 'column', column: 1, edge: 'bottom', align: 'end', props: { icon: 'dots', label: 'More' }, caps: [] },
+            { id: 'garden-switcher', kind: 'garden-switcher', slot: 'menu', menu: 'more', props: {}, caps: ['gardens:manage'] },
+            { id: 'zen-toggle', kind: 'zen-toggle', slot: 'menu', menu: 'more', props: {}, caps: [] },
+          ],
+        },
+        bands: { top: null, bottom: null },
+        edges: [{ column: 1, edge: 'bottom', start: [], center: [], end: ['more', 'ghost'] }],
+        menus: { more: ['garden-switcher', 'zen-toggle', 'ghost'] },
+      },
+    })
+    expect(p.widgets.map((w) => w.id)).toEqual(['agents', 'conversation'])
+    expect(p.placement.edges).toEqual([{ column: 1, edge: 'bottom', start: [], center: [], end: ['more'] }])
+    expect(p.placement.menus).toEqual({ more: ['garden-switcher', 'zen-toggle'] })
+    expect(zenControlPlacement(p.placement, 'zen-toggle')?.menu?.id).toBe('more')
+    expect(zenMenuRequiredControls(p.placement, 'more')).toEqual(['garden-switcher', 'zen-toggle'])
+    expect(zenMenuLabel(p.placement.items[0])).toBe('More')
+    expect(zenMenuLabel({ props: {} })).toBe('More')
+    expect(zenMenuLabel({ props: { label: '  Zen  ' } })).toBe('Zen')
+  })
+
+  it('FC-T6 / FC32: an older daemon (no page.chrome) gets the template’s chrome; a top-band rail sits after the switcher', () => {
+    const p = parseZenGet({
+      version: 'v',
+      page: {
+        template: 'k2.texting@1',
+        layout: { kind: 'columns', split: [34, 66], minWidths: [240, 360] },
+        widgets: [
+          { id: 'agents', kind: 'agents', column: 0, props: {}, caps: [] },
+          { id: 'conversation', kind: 'conversation', column: 1, props: {}, caps: [] },
+          { id: 'nav-rail', kind: 'nav-rail', slot: 'top', props: { orientation: 'row' }, caps: ['app:navigate'] },
+        ],
+        controls: ['garden-switcher', 'drag-region', 'zen-toggle', 'add-agent'],
+      },
+    })
+    expect(p.placement.from).toBe('template')
+    expect(p.placement.items.map((i) => [i.kind, i.slot, i.align])).toEqual([
+      ['garden-switcher', 'top', 'start'],
+      ['usage', 'top', 'end'],
+      ['theme-picker', 'top', 'end'],
+      ['zen-toggle', 'top', 'end'],
+    ])
+    expect(p.placement.bands).toEqual({
+      top: { start: ['garden-switcher', 'nav-rail'], center: [], end: ['usage', 'theme-picker', 'zen-toggle'] },
+      bottom: null,
+    })
+    expect(p.placement.edges).toEqual([])
+    // A row rail in a column (no edge) runs across that column's top edge.
+    const row = parseZenGet({
+      page: {
+        template: 'k2.texting@1',
+        layout: { kind: 'columns', split: [50, 50] },
+        widgets: [{ id: 'nav', kind: 'nav-rail', column: 1, props: { orientation: 'row' }, caps: [] }],
+        controls: [],
+      },
+    })
+    expect(row.placement.edges).toEqual([{ column: 1, edge: 'top', start: ['nav'], center: [], end: [] }])
+    // Safe mode's page and both built-ins carry the template's chrome.
+    for (const b of [BUILTIN_TEXTING_PAGE, BUILTIN_BLANK_PAGE]) {
+      expect(b.placement.bands.top).toEqual({ start: ['garden-switcher'], center: [], end: ['usage', 'theme-picker', 'zen-toggle'] })
+      expect(b.placement.bands.bottom).toBeNull()
+    }
+  })
+
+  it('FC48: a one-column view moves column-edge items to column 0, same edge and align, in order', () => {
+    const page: ZenResolvedPage = {
+      ...BUILTIN_TEXTING_PAGE,
+      placement: {
+        from: 'garden',
+        items: [
+          { id: 'garden-switcher', kind: 'garden-switcher', slot: 'column', column: 0, edge: 'bottom', align: 'start', props: {}, caps: [] },
+          { id: 'zen-toggle', kind: 'zen-toggle', slot: 'column', column: 1, edge: 'bottom', align: 'end', props: {}, caps: [] },
+          { id: 'theme-picker', kind: 'theme-picker', slot: 'column', column: 1, edge: 'top', align: 'end', props: {}, caps: [] },
+        ],
+        bands: { top: null, bottom: null },
+        edges: [
+          { column: 0, edge: 'bottom', start: ['garden-switcher'], center: [], end: [] },
+          { column: 1, edge: 'top', start: [], center: [], end: ['theme-picker'] },
+          { column: 1, edge: 'bottom', start: [], center: [], end: ['zen-toggle'] },
+        ],
+        menus: {},
+      },
+    }
+    const tickets = zenPageForView(page, 'tickets')
+    expect(tickets.layout.split).toEqual([100])
+    expect(tickets.placement.edges).toEqual([
+      { column: 0, edge: 'top', start: [], center: [], end: ['theme-picker'] },
+      { column: 0, edge: 'bottom', start: ['garden-switcher'], center: [], end: ['zen-toggle'] },
+    ])
+    expect(tickets.placement.items.map((i) => [i.id, i.column])).toEqual([
+      ['garden-switcher', 0],
+      ['zen-toggle', 0],
+      ['theme-picker', 0],
+    ])
+    // The Agents view keeps the page's placement as is.
+    expect(zenPageForView(page, 'agents').placement).toBe(page.placement)
   })
 
   it('throws for no page, a non-object, or another schema', () => {

@@ -1,30 +1,34 @@
 // prd-zen-mode-v1 Z10, Z27, Z28, Z33 and prd-zen-gardens-v1 G24, G29, G38,
 // G52 — one Garden's resolved page on screen.
 //
-// Draws the template's controls, then the layout host: one column per
-// `layout.split` entry, each holding the widgets placed in it. Every widget
-// gets its own `ZenWidgetBridge` built with the caps its source declared
-// (Z33); the template's controls get the template bridge (no-cap verbs plus
-// `agents.add` and `gardens:manage`). The page owns the control registry
-// (Z27, G24: the Zen toggle and Garden switcher are checked; the drag area
-// is bound only), and, outside safe mode, the check schedule (Z28). While it is on screen, ⌘1–9
-// opens row N of its first Agents widget (G52).
+// Draws the page from data (prd-zen-freeform-chrome S2): the top band (or,
+// with nothing in it, the title strip), the layout host (one column per
+// `layout.split` entry, each with its top and bottom edges and the widgets
+// placed in it), then the bottom band. Where K2's controls sit is
+// `page.placement` (`ZenBands.tsx`). Every widget gets its own
+// `ZenWidgetBridge` built with the caps its source declared (Z33); K2's
+// controls get the template bridge (no-cap verbs plus `agents.add` and
+// `gardens:manage`, FC31). The page owns the control registry (Z27, G24:
+// the Zen toggle and Garden switcher are checked, through their menu's
+// button when they sit in a menu, FC25; the drag areas are bound only),
+// and, outside safe mode, the check schedule (Z28). While it is on screen,
+// ⌘1–9 opens row N of its first Agents widget (G52).
 //
-// S5 / S6 plug in without touching this file: widgets by kind and template
-// controls by template id (`zen-registry.tsx`), data verbs on the bridge
-// (`registerZenVerb`), and the theme on the root (`registerZenThemeEngine`).
+// S5 / S6 plug in without touching this file: widgets and chrome by kind
+// (`zen-registry.tsx`), data verbs on the bridge (`registerZenVerb`), and
+// the theme on the root (`registerZenThemeEngine`).
 //
 // A Garden with a nav rail draws the view its rail picked in this window
 // (Rosson 2026-10-04: My Home, Agents, Projects, Tickets; `zen-rail-views`).
-// The view changes the widgets only; the template's controls, and so the
-// required-controls check, stay the same. Arriving at My Home or Agents (a
-// rail switch, or entering Zen) puts the caret in the selected agent's
-// message box (Rosson 2026-10-04; `zen-compose-focus`).
+// The view changes the widgets only; the page's controls stay where they
+// are (a one-column view moves column-edge items to column 0, FC48), so a
+// view switch never fails the required-controls check. Arriving at My Home
+// or Agents (a rail switch, or entering Zen) puts the caret in the selected
+// agent's message box (Rosson 2026-10-04; `zen-compose-focus`).
 //
-// A widget with a band slot (`[[widget]] slot = "top"`, Rosson 2026-10-06)
-// is drawn here too, with its own bridge, and handed to the template's
-// `ZenBandSlot` (`ZenBand.tsx`) instead of a column; the template's
-// controls stay its own, so the required-controls check is unchanged.
+// When the window is narrower than the columns' min widths, they scale
+// down so every column (and every control at its edge) stays on screen
+// (FC27, `zenColumnMinWidthCss`).
 //
 // Every column box is a shared Zen glass tile (`data-zen-glass`,
 // `lib/zen/zen-glass.ts`; Rosson 2026-10-04).
@@ -43,7 +47,7 @@ import {
 } from '@/lib/zen/zen-gardens'
 import { selectZenRowOnPage, ZEN_TEMPLATE_CONTROLS_ID } from '@/lib/zen/zen-data'
 import { useZenWindowStore } from '@/lib/zen/zen-window'
-import { zenPageForView, zenPageHasRail, zenRailOrientation } from '@/lib/zen/zen-rail-views'
+import { zenPageForView, zenPageHasRail } from '@/lib/zen/zen-rail-views'
 import { cancelZenComposeFocus, requestZenComposeFocus, takeZenEntered } from '@/lib/zen/zen-compose-focus'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
@@ -62,17 +66,18 @@ import {
   zenGeometry,
   zenReservedRects,
 } from '@/lib/zen/zen-monitor'
-import { zenWidgetInBand, zenWidgetSlot, type ZenResolvedPage, type ZenWidgetDecl } from '@/lib/zen/zen-page'
-import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
 import {
-  ZEN_RAIL_KINDS,
-  ZEN_TEMPLATE_CONTROL_CAPS,
-  ZEN_UNBOXED_KINDS,
-  zenTemplateControlsFor,
-  zenWidgetFor,
-} from './zen-registry'
+  zenMenuRequiredControls,
+  zenWidgetInBand,
+  type ZenResolvedPage,
+  type ZenWidgetDecl,
+} from '@/lib/zen/zen-page'
+import { zenColumnMinWidthCss } from '@/lib/zen/zen-overflow'
+import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
+import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidgetFor } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
-import { ZenBandContext } from './ZenBand'
+import { ZenWidgetStyles } from './widgets/zen-widget-kit'
+import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -153,6 +158,8 @@ export function ZenPage({
         exit: () => exitZen(),
         selectGarden: (id) => switchZenGarden(id),
         gardenIds,
+        // FC25: what a menu must bind after its button is activated.
+        menuHolds: (id) => zenMenuRequiredControls(pageRef.current.placement, id),
       }),
     [],
   )
@@ -223,6 +230,8 @@ export function ZenPage({
           reserved: zenReservedRects(),
           gardenIds: gardenIds(),
           root: rootRef.current,
+          // FC25: a control in a closed menu is checked through its button.
+          placement: pageRef.current.placement,
         }),
       ),
     [registry, streak],
@@ -267,52 +276,61 @@ export function ZenPage({
     return () => clearInterval(id)
   }, [safe, focused, runCheck])
 
-  const Controls = zenTemplateControlsFor(page.template)
-  const { layout } = page
+  const { layout, placement } = page
   const draw = (w: ZenWidgetDecl): React.JSX.Element => {
     const Widget = zenWidgetFor(w.kind)
     const bridge = widgetBridges.get(w.id)
     if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
     return <Widget key={w.id} decl={w} bridge={bridge} />
   }
-  // Band widgets (`slot = "top"`, Rosson 2026-10-06): drawn here with their
-  // own bridges, placed by the template's `ZenBandSlot`.
-  const bands = new Map<string, React.ReactNode>()
-  for (const w of page.widgets) {
-    if (!zenWidgetInBand(w)) continue
-    const slot = zenWidgetSlot(w)
-    bands.set(slot, [...((bands.get(slot) as React.ReactNode[] | undefined) ?? []), draw(w)])
+  // Content widgets the rows draw (a band, a column edge): by id, with
+  // their own bridges. Everything else fills its column's body.
+  const rowIds = new Set<string>()
+  for (const g of [placement.bands.top, placement.bands.bottom, ...placement.edges]) {
+    if (g) for (const id of [...g.start, ...g.center, ...g.end]) rowIds.add(id)
   }
-  const columnWidgets = page.widgets.filter((w) => !zenWidgetInBand(w))
+  const byId = new Map(page.widgets.map((w) => [w.id, w]))
+  const items = new Map(placement.items.map((i) => [i.id, i]))
+  const src: ZenRowSource = {
+    widget: (id) => byId.get(id) ?? null,
+    drawWidget: draw,
+    item: (id) => items.get(id) ?? null,
+    menuItems: (id) => (placement.menus[id] ?? []).flatMap((m) => items.get(m) ?? []),
+    bridge: controlsBridge,
+  }
+  const bodyWidgets = page.widgets.filter((w) => !rowIds.has(w.id) && !zenWidgetInBand(w))
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-page={page.template} data-zen-view={view}>
-      {Controls && (
-        <ZenBandContext.Provider value={bands}>
-          <Controls bridge={controlsBridge} />
-        </ZenBandContext.Provider>
-      )}
+    <div
+      ref={rootRef}
+      className="flex h-full min-h-0 w-full flex-col"
+      data-zen-page={page.template}
+      data-zen-view={view}
+      data-zen-chrome-from={placement.from}
+    >
+      <ZenWidgetStyles />
+      <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
+      <ZenTopBand groups={placement.bands.top} src={src} />
       {banner}
       <div
-        className="flex min-h-0 flex-1"
+        className="flex min-h-0 min-w-0 flex-1"
         data-zen-layout={layout.kind}
-        style={{ gap: 'var(--zen-gap)', padding: '0 var(--zen-gap) var(--zen-gap)' }}
+        style={{
+          gap: 'var(--zen-gap)',
+          padding: placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
+        }}
       >
         {layout.split.map((pct, col) => {
-          const inCol = columnWidgets.filter((w) => w.column === col)
+          const inCol = bodyWidgets.filter((w) => w.column === col)
           const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
           const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
-          // A rail drawn as a row sits across the top of its column instead
-          // of down its left edge.
-          const rowRail = rails.some((w) => zenRailOrientation(w) === 'row')
           // K2 views that draw their own panels (Tickets' glass) get no box.
           const bare = boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind))
-          return (
-            <div
-              key={col}
-              data-zen-column-slot={col}
-              className={`flex min-h-0 min-w-0 ${rowRail ? 'flex-col' : 'flex-row'}`}
-              style={{ flex: `${pct} 1 0%`, minWidth: layout.minWidths[col] ?? 0, gap: 'var(--zen-gap)' }}
-            >
+          // FC9: a column's edges (a row rail, a Zen control) run across its
+          // top and bottom, outside its box.
+          const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
+          const bottom = placement.edges.find((e) => e.column === col && e.edge === 'bottom')
+          const body = (
+            <>
               {rails.map(draw)}
               {(boxed.length > 0 || rails.length === 0) && (
                 <div
@@ -329,10 +347,29 @@ export function ZenPage({
                   {boxed.map(draw)}
                 </div>
               )}
+            </>
+          )
+          // FC27: min widths scale down when they don't all fit.
+          const slotStyle = { flex: `${pct} 1 0%`, minWidth: zenColumnMinWidthCss(layout.minWidths, col), gap: 'var(--zen-gap)' }
+          if (!top && !bottom) {
+            return (
+              <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-row" style={slotStyle}>
+                {body}
+              </div>
+            )
+          }
+          return (
+            <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-col" style={slotStyle}>
+              {top && <ZenEdgeRow edge={top} src={src} />}
+              <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
+                {body}
+              </div>
+              {bottom && <ZenEdgeRow edge={bottom} src={src} />}
             </div>
           )
         })}
       </div>
+      {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
     </div>
   )
 }

@@ -663,15 +663,38 @@ this contract, where it reads more loosely or decides something:
    top-right corner (clear of Windows' controls via
    `--zen-stoplight-safe-right`). A Garden file may move every one of them
    (`page.chrome`, `page.bands`, `page.edges`, `page.menus`; see "Zen
-   controls"). **As of the daemon slice (S1) the renderer still draws the
-   template's hard-coded top band**; drawing chrome from `page.bands`,
-   `page.edges` and `page.menus` is the renderer slice (S2/S3). Until
-   then a Garden's chrome moves don't show, but both required controls
-   are always there. A Garden's band widgets (`slot: "top"`)
-   sit between the switcher and the drag strip (`ZenBandSlot`,
-   `components/Zen/ZenBand.tsx`: one component for any band slot; nothing
-   is drawn there by default); the drag strip keeps a 120px minimum
-   (`ZEN_DRAG_MIN_WIDTH_PX`). No footer under any column. **Add agent**
+   controls"). The renderer draws all of it from those fields
+   (`components/Zen/ZenBands.tsx`; chrome by kind in `zen-registry.tsx`);
+   a daemon that sends no `page.chrome` gets the template's chrome built
+   from the renderer's own built-in page (FC32). Safe mode always draws
+   the template's chrome without usage and theme (FC22).
+   - **Bands.** The top band (drawn only when it holds something) keeps
+     the window buttons' insets; with nothing in it the renderer draws
+     the **title strip**, an empty drag strip as tall as the window
+     buttons (`--zen-stoplight-safe-top`). The bottom band is drawn only
+     when it holds something. K2 binds `drag-region` on each band's (and
+     the title strip's) own element; each band keeps at least 120 px of
+     empty space between its `start`, `center` and `end` groups
+     (`ZEN_DRAG_MIN_WIDTH_PX`). A run of content widgets in a row sits in
+     one `ZenBandSlot` (`components/Zen/ZenBand.tsx`), which shrinks and
+     clips first.
+   - **Column edges** are rows above and below a column's box (where a
+     row rail always sat); not drag areas. In a one-column rail view
+     (Projects, Tickets) every column-edge item moves to column 0's same
+     edge and alignment (FC48).
+   - **Menus** (`kind = "menu"`, `components/Zen/widgets/ZenMenu.tsx`): a
+     button (bound `zen-menu` with its id) that opens a K2 menu toward the
+     page; Gardens are listed inline with + New Garden, Exit Zen Mode is a
+     bound `zen-toggle` row, Theme › and Usage › swap to a sub-panel.
+     Keyboard per FC19.
+   - **Dropdowns** (the switcher's, the theme list, menus) open toward the
+     page through `useAnchoredMenu` (down from the top, up from the
+     bottom), portalled into the Zen root as K2 overlays. The usage menu
+     is the app's `UsageButton`, flipped by Zen's CSS only (FC51).
+   - **Narrow windows** (FC27): column min widths scale down to fit; a
+     crowded row hides usage, then the theme control, then truncates the
+     switcher's name; required controls and menu buttons never shrink.
+   No footer under any column. **Add agent**
    is the Agents widget's last row (its bottom-left corner), shown in
    whole-Home mode when the widget holds `agents:add`; it opens the picker
    for that widget's own Home.
@@ -682,6 +705,15 @@ this contract, where it reads more loosely or decides something:
     fine), and an activation while the options are already bound (the click
     that closes the menu) passes at once. K2 never cancels Enter/Space on the
     trigger. A resize runs the check once, 300 ms after resizing stops.
+    It reads where the page put each control first (`page.chrome`, FC25):
+    a control inside menu M is checked through M's button (visible, can
+    take focus, not `[inert]` / `aria-hidden`), never itself, so a closed
+    menu is not a missing control. After M's button is activated, every
+    required control M holds must bind within 1 s (each menu has its own
+    timer); an activation while they are bound passes at once. Problems:
+    `undeclared`, `missing`, `not-wired`, `invisible`, `no-keyboard`; the
+    cause names the menu ("The Zen toggle’s menu (More) isn’t visible.").
+    An open K2 menu is a K2 overlay, never "covering" a control.
 11. **Focus after a pick** (Rosson, 2026-10-04). A click on an Agents row,
     or adding an agent through Add agent (which closes the picker and opens
     that agent), puts the caret in the conversation's "Message <agent>" box

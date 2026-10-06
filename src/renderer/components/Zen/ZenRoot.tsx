@@ -52,9 +52,8 @@ import {
   useZenOverlayStore,
   ZEN_SHORTCUTS_MENU_EVENT,
 } from '@/lib/zen/zen-theme-switch'
-import { ZenShortcutSheet, ZenThemePicker } from './ZenThemeTools'
+import { ZenShortcutSheet } from './ZenThemeTools'
 import { ZenAddAgentPicker } from './ZenAddAgent'
-import { ZenUsageTool } from './ZenUsageTool'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { setZenReservedRects } from '@/lib/zen/zen-monitor'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
@@ -63,7 +62,7 @@ import { ZenErrorBoundary } from './ZenErrorBoundary'
 import { ZenConfigErrorBanner, ZenSafeBanner } from './ZenBanners'
 import { ZenChromeCluster, zenClusterSide } from './ZenChromeCluster'
 import { ZenPage } from './ZenPage'
-import { ZenK2TopRightContext } from './ZenTemplateControls'
+import { ZenK2ChromeContext, type ZenK2Chrome } from './ZenTemplateControls'
 
 // S5: the Zen theme engine (tokens, scheme, type, shape, motion) through the
 // S4 plug-in point. Once per app session.
@@ -386,22 +385,27 @@ export function ZenRoot(): React.JSX.Element {
 
   const onControlFailure = useCallback(
     (f: Extract<ZenControlCheck, { ok: false }>) =>
-      enterSafeMode({ kind: 'control', control: f.control, problem: f.problem }),
+      enterSafeMode({ kind: 'control', control: f.control, problem: f.problem, ...(f.menu ? { menu: f.menu } : {}) }),
     [enterSafeMode],
   )
   const onCrash = useCallback((message: string) => enterSafeMode({ kind: 'crash', message }), [enterSafeMode])
 
-  // K2's top-right items, drawn by the template immediately left of its Zen
-  // toggle: the usage tool, then the theme control (Rosson 2026-10-04:
-  // usage, theme, Zen toggle). None in safe mode: safe mode never changes
-  // the theme and reads nothing it doesn't need.
-  const topRight =
-    page && !inSafeMode ? (
-      <>
-        <ZenUsageTool />
-        <ZenThemePicker themes={page.themes} active={page.activeTheme} onPick={themeTools.pick} error={themeTools.error} />
-      </>
-    ) : null
+  // K2's own extras, one per chrome kind (prd-zen-freeform-chrome FC50):
+  // the usage tool and the theme control, wherever the page places them
+  // (the template: immediately left of the Zen toggle, Rosson 2026-10-04).
+  // None in safe mode: safe mode never changes the theme and reads nothing
+  // it doesn't need (FC22).
+  const themePick = themeTools.pick
+  const themeError = themeTools.error
+  const themes = page?.themes
+  const activeTheme = page?.activeTheme ?? null
+  const k2Chrome = useMemo<ZenK2Chrome>(
+    () =>
+      themes && !inSafeMode
+        ? { usage: true, theme: { themes, active: activeTheme, onPick: themePick, error: themeError } }
+        : { usage: false, theme: null },
+    [themes, activeTheme, themePick, themeError, inSafeMode],
+  )
 
   const banner = safe ? (
     <ZenSafeBanner cause={safe} onTryAgain={clearSafeMode} onExit={exitZen} />
@@ -443,7 +447,7 @@ export function ZenRoot(): React.JSX.Element {
         />
       )}
       <ZenChromeCluster os={os} onRect={onClusterRect} />
-      <ZenK2TopRightContext.Provider value={topRight}>
+      <ZenK2ChromeContext.Provider value={k2Chrome}>
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {page ? (
         <ZenErrorBoundary
@@ -461,7 +465,7 @@ export function ZenRoot(): React.JSX.Element {
         </div>
       )}
       </div>
-      </ZenK2TopRightContext.Provider>
+      </ZenK2ChromeContext.Provider>
       <ZenShortcutSheet os={os} />
       <ZenAddAgentPicker />
     </div>

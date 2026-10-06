@@ -117,7 +117,7 @@ import { ZEN_WIRING_DEADLINE_MS, type ZenGeometry, type ZenRect } from '@/lib/ze
 import { useZenViewStore, zenShownNow } from '@/lib/zen/zen-view'
 import { ZenHost } from './ZenHost'
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
-import { registerZenTemplateControls, registerZenWidget, type ZenTemplateControlsProps } from './zen-registry'
+import { registerZenChrome, registerZenWidget, type ZenChromeProps } from './zen-registry'
 import { useZenBind } from './ZenTemplateControls'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -621,24 +621,9 @@ describe('safe mode', () => {
     err.mockRestore()
   })
 
-  function ControlsWithout({ omit }: { omit: 'garden-switcher' | 'zen-toggle' }): (p: ZenTemplateControlsProps) => React.JSX.Element {
-    return function Controls({ bridge }: ZenTemplateControlsProps): React.JSX.Element {
-      const toggle = useZenBind(bridge, 'zen-toggle')
-      const trigger = useZenBind(bridge, 'garden-switcher')
-      const drag = useZenBind(bridge, 'drag-region')
-      return (
-        <div>
-          {omit !== 'garden-switcher' && <button ref={trigger} data-test-trigger="">Gardens</button>}
-          <div ref={drag} data-zen-drag="" />
-          {omit !== 'zen-toggle' && <button ref={toggle} data-zen-switch="">Zen</button>}
-        </div>
-      )
-    }
-  }
-
   it('a missing Garden switcher: one failed check is not enough, two are safe mode', async () => {
-    // Custom controls draw everything (no footer) but the switcher.
-    unregister.push(registerZenTemplateControls('k2.texting@1', ControlsWithout({ omit: 'garden-switcher' })))
+    // The chrome registry draws everything but the switcher.
+    unregister.push(registerZenChrome('garden-switcher', () => null))
     mount()
     await enterViaTopBar()
     await pageReady()
@@ -698,23 +683,16 @@ describe('safe mode', () => {
   it('a switcher whose options miss one Garden within 1 s is “not wired”', async () => {
     h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
     unregister.push(
-      registerZenTemplateControls(
-        'k2.texting@1',
-        function OneOption({ bridge }: ZenTemplateControlsProps) {
-          const trigger = useZenBind(bridge, 'garden-switcher')
-          const only = useZenBind(bridge, 'garden-option', 'g-default')
-          const drag = useZenBind(bridge, 'drag-region')
-          const toggle = useZenBind(bridge, 'zen-toggle')
-          return (
-            <div>
-              <button ref={trigger} data-test-trigger="">Gardens</button>
-              <button ref={only}>Garden 1</button>
-              <div ref={drag} data-zen-drag="" />
-              <button ref={toggle} data-zen-switch="">Zen</button>
-            </div>
-          )
-        },
-      ),
+      registerZenChrome('garden-switcher', function OneOption({ bridge }: ZenChromeProps) {
+        const trigger = useZenBind(bridge, 'garden-switcher')
+        const only = useZenBind(bridge, 'garden-option', 'g-default')
+        return (
+          <div>
+            <button ref={trigger} data-test-trigger="">Gardens</button>
+            <button ref={only}>Garden 1</button>
+          </div>
+        )
+      }),
     )
     mount()
     await enterViaTopBar()
@@ -736,21 +714,10 @@ describe('safe mode', () => {
   it('always-shown Garden options that miss one Garden are “not wired”', async () => {
     h.gardens = [{ ...DEFAULT }, { ...MORNINGS }]
     unregister.push(
-      registerZenTemplateControls(
-        'k2.texting@1',
-        function AlwaysShown({ bridge }: ZenTemplateControlsProps) {
-          const only = useZenBind(bridge, 'garden-option', 'g-default')
-          const drag = useZenBind(bridge, 'drag-region')
-          const toggle = useZenBind(bridge, 'zen-toggle')
-          return (
-            <div>
-              <button ref={only}>Garden 1</button>
-              <div ref={drag} data-zen-drag="" />
-              <button ref={toggle} data-zen-switch="">Zen</button>
-            </div>
-          )
-        },
-      ),
+      registerZenChrome('garden-switcher', function AlwaysShown({ bridge }: ZenChromeProps) {
+        const only = useZenBind(bridge, 'garden-option', 'g-default')
+        return <button ref={only}>Garden 1</button>
+      }),
     )
     mount()
     await enterViaTopBar()
@@ -763,23 +730,14 @@ describe('safe mode', () => {
 
   it('a toggle drawn without bind (bare element) is "not wired"', async () => {
     unregister.push(
-      registerZenTemplateControls(
-        'k2.texting@1',
-        function Bare({ bridge }: ZenTemplateControlsProps) {
-          const trigger = useZenBind(bridge, 'garden-switcher')
-          const drag = useZenBind(bridge, 'drag-region')
-          return (
-            <div>
-              <button ref={trigger}>Gardens</button>
-              <div ref={drag} data-zen-drag="" />
-              {/* Says it is the toggle, never handed to bind. */}
-              <button data-zen-control="zen-toggle" onClick={() => undefined}>
-                Zen
-              </button>
-            </div>
-          )
-        },
-      ),
+      registerZenChrome('zen-toggle', function Bare() {
+        // Says it is the toggle, never handed to bind.
+        return (
+          <button data-zen-control="zen-toggle" onClick={() => undefined}>
+            Zen
+          </button>
+        )
+      }),
     )
     mount()
     await enterViaTopBar()
@@ -959,7 +917,10 @@ describe('the Zen toggles after the icon pick', () => {
     const toggles = Array.from(document.querySelectorAll('[data-zen-switch]'))
     expect(toggles.length).toBe(1)
     const toggle = toggles[0]
-    expect(toggle.parentElement?.hasAttribute('data-zen-top-right')).toBe(true)
+    // The top band's end group, in its chrome item wrapper (the corner).
+    expect(toggle.parentElement?.getAttribute('data-zen-chrome-item')).toBe('zen-toggle')
+    expect(toggle.parentElement?.parentElement?.hasAttribute('data-zen-top-right')).toBe(true)
+    expect(toggle.parentElement?.parentElement?.lastElementChild).toBe(toggle.parentElement)
     expect(toggle.getAttribute('data-zen-bound')).toBe('zen-toggle')
     expect([toggle.getAttribute('role'), toggle.getAttribute('aria-checked'), toggle.getAttribute('title')]).toEqual([
       'switch',

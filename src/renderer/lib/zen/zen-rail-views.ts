@@ -10,12 +10,21 @@
 //   - Projects: one column, the rail, and K2's Projects view ("Coming soon").
 //   - Tickets: one column, the rail, and K2's Tickets view (liquid glass).
 //
-// The page's controls (the Zen toggle, the Garden switcher) are the
-// template's and never change with the view, so a view switch can't fail
-// the required-controls check. The `projects-view` / `tickets-view` kinds
-// are K2's own: the daemon's schema never lets a Garden file place them.
+// The page's controls (the Zen toggle, the Garden switcher, wherever the
+// page placed them) stay with every view, so a view switch can't fail the
+// required-controls check (prd-zen-freeform-chrome FC26 rule 8, FC48). The
+// `projects-view` / `tickets-view` kinds are K2's own: the daemon's schema
+// never lets a Garden file place them.
 
-import { zenWidgetInBand, type ZenResolvedPage, type ZenWidgetDecl } from './zen-page'
+import {
+  zenWidgetInBand,
+  type ZenChromeItem,
+  type ZenColumnEdge,
+  type ZenEdge,
+  type ZenPlacement,
+  type ZenResolvedPage,
+  type ZenWidgetDecl,
+} from './zen-page'
 import type { ZenRailView } from './zen-window'
 
 /** The rail widget kind (a Garden with one gets the rail views). */
@@ -70,12 +79,39 @@ function agentsViewPage(page: ZenResolvedPage): ZenResolvedPage {
   return { ...page, widgets }
 }
 
+/**
+ * prd-zen-freeform-chrome FC48: a one-column view keeps the page's chrome.
+ * Every column-edge item (a Zen control, a row rail) moves to column 0's
+ * same edge and alignment, in its original order (columns left to right);
+ * bands and menus are unchanged. So a Zen toggle at column 1's bottom edge
+ * is still on screen in Projects and Tickets, and a view switch never fails
+ * the required-controls check.
+ */
+export function zenPlacementInOneColumn(placement: ZenPlacement): ZenPlacement {
+  const merged = new Map<ZenEdge, ZenColumnEdge>()
+  const byColumn = [...placement.edges].sort((a, b) => a.column - b.column)
+  for (const e of byColumn) {
+    const into = merged.get(e.edge) ?? { column: 0, edge: e.edge, start: [], center: [], end: [] }
+    into.start.push(...e.start)
+    into.center.push(...e.center)
+    into.end.push(...e.end)
+    merged.set(e.edge, into)
+  }
+  const edges = (['top', 'bottom'] as const).flatMap((edge) => {
+    const e = merged.get(edge)
+    return e ? [e] : []
+  })
+  const items = placement.items.map((i): ZenChromeItem => (i.column !== undefined ? { ...i, column: 0 } : i))
+  return { ...placement, items, edges }
+}
+
 function singleViewPage(page: ZenResolvedPage, view: ZenWidgetDecl): ZenResolvedPage {
   const rails = page.widgets.filter((w) => w.kind === ZEN_NAV_RAIL_KIND).map((w) => ({ ...w, column: 0 }))
   return {
     ...page,
     layout: { kind: 'columns', split: [100], minWidths: [0] },
     widgets: [...rails, view],
+    placement: zenPlacementInOneColumn(page.placement),
   }
 }
 

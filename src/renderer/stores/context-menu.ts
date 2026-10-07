@@ -4,7 +4,12 @@ import { create } from 'zustand'
 export interface ContextMenuItemDef {
   id: string
   label: string
+  /** `separator`; `heading` (small muted group title) and `note` (muted
+   *  wrapping text) are not selectable. */
   type?: string
+  /** A "▸" row that opens these rows beside it (hover or click). Picking
+   *  one resolves the menu with that row's id. */
+  submenu?: ContextMenuItemDef[]
   enabled?: boolean
   /** When set, render a checkbox in front of the label. */
   checked?: boolean
@@ -16,6 +21,18 @@ export interface ContextMenuItemDef {
   shortcut?: string
   /** Plain trailing words (e.g. "open in sandbox"). Not a key combo. */
   hint?: string
+}
+
+/** A row a click or Enter can pick: not a separator, heading or note, not
+ *  disabled, and not a submenu parent (that opens its rows instead). */
+export function isSelectableItem(item: ContextMenuItemDef): boolean {
+  return (
+    item.type !== 'separator' &&
+    item.type !== 'heading' &&
+    item.type !== 'note' &&
+    item.enabled !== false &&
+    !item.submenu
+  )
 }
 
 /**
@@ -91,8 +108,8 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
 
   selectItem: (id) => {
     const { onSelect, items } = get()
-    const item = items.find((i) => i.id === id)
-    if (item && item.type !== 'separator' && item.enabled !== false) {
+    const item = items.find((i) => i.id === id) ?? items.flatMap((i) => i.submenu ?? []).find((i) => i.id === id)
+    if (item && isSelectableItem(item)) {
       set({
         isOpen: false,
         items: [],

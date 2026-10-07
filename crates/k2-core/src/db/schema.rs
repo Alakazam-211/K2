@@ -1179,6 +1179,12 @@ impl WorkspaceTabSession {
             ) {
                 crate::log_debug!("[core/tab-session] record login for {sid} failed: {e}");
             }
+            // The tab's own Token pick (keyed on `tab-<id>`, made before the
+            // id was known) follows the conversation too, so the chat
+            // reopened under another key starts on that token.
+            if let Err(e) = crate::llm_accounts::pins::mirror_to_conversation(conn, tool, agent_name, sid) {
+                crate::log_debug!("[core/tab-session] token pick for {sid} failed: {e}");
+            }
         }
     }
 

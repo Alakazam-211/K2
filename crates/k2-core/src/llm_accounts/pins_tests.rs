@@ -391,3 +391,170 @@ fn removed_login_resume_is_refused_not_silently_moved() {
     let err = pins::decide_spawn(&conn, Tool::Claude, "tab-1", None, Some("c9"), true).unwrap_err();
     assert_eq!(err.code(), "account_unavailable");
 }
+
+// ── Chat pins on any tab: they follow the conversation ─────────────
+
+fn session_pin_rows(conn: &Connection) -> Vec<(String, String, i64)> {
+    let mut st = conn
+        .prepare("SELECT scope_id, account_id, created_at FROM llm_account_pins WHERE scope_kind = 'session' ORDER BY scope_id")
+        .unwrap();
+    let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    rows.collect::<Result<Vec<_>, _>>().unwrap()
+}
+
+#[test]
+fn a_tab_pick_is_keyed_on_the_tab_and_its_conversation_and_follows_it_to_another_tab() {
+    let h = Home::new("chatpin");
+    let conn = db();
+    let (_d, a, b) = pool(&h, &conn);
+    assert!(pins::conversation_scope_id("../x").is_none(), "an id K2 won't put in a file name");
+    assert!(pins::conversation_scope_id(".hidden").is_none());
+    assert_eq!(pins::conversation_scope_id(" conv-1 ").as_deref(), Some("conversation:conv-1"));
+
+    let p = pins::pin_chat(&conn, "tab-1", Some("conv-1"), Some(Tool::Claude), &a.id, Some("owner-token")).unwrap();
+    let rows = session_pin_rows(&conn);
+    assert_eq!(
+        rows,
+        vec![
+            ("conversation:conv-1".to_string(), a.id.clone(), p.created_at),
+            ("tab-1".to_string(), a.id.clone(), p.created_at),
+        ],
+        "one pick, two rows, same account and pick time"
+    );
+    // The chat reopened in another tab: a fresh key, the same conversation.
+    let l = pins::decide_spawn(&conn, Tool::Claude, "tab-2", Some("proj-1"), Some("conv-1"), false).unwrap();
+    assert_eq!((l.source, l.account_id.as_deref()), (Source::SessionPin, Some(a.id.as_str())));
+    // Another conversation in that tab is not this chat.
+    let other = pins::decide_spawn(&conn, Tool::Claude, "tab-2", Some("proj-1"), Some("conv-2"), false).unwrap();
+    assert_eq!(other.source, Source::Pool);
+
+    // A new pick on the tab moves its conversation mirrors with it.
+    let p2 = pins::pin_chat(&conn, "tab-1", None, Some(Tool::Claude), &b.id, None).unwrap();
+    assert_eq!(
+        session_pin_rows(&conn),
+        vec![
+            ("conversation:conv-1".to_string(), b.id.clone(), p2.created_at),
+            ("tab-1".to_string(), b.id.clone(), p2.created_at),
+        ]
+    );
+    // The newer of the two picks wins; a tie goes to the session key.
+    conn.execute(
+        "UPDATE llm_account_pins SET account_id = ?1, created_at = created_at + 5 WHERE scope_id = 'conversation:conv-1'",
+        rusqlite::params![a.id],
+    )
+    .unwrap();
+    assert_eq!(pins::chat_pin(&conn, Tool::Claude, "tab-1", Some("conv-1")).unwrap().unwrap().account_id, a.id);
+    assert_eq!(pins::chat_pin(&conn, Tool::Claude, "tab-1", None).unwrap().unwrap().account_id, b.id);
+    conn.execute("UPDATE llm_account_pins SET created_at = ?1", rusqlite::params![p2.created_at]).unwrap();
+    assert_eq!(pins::chat_pin(&conn, Tool::Claude, "tab-1", Some("conv-1")).unwrap().unwrap().account_id, b.id);
+
+    // Back to default on the tab: its key and the conversation go.
+    assert!(pins::unpin_chat(&conn, "tab-1", Some("conv-1"), Tool::Claude).unwrap());
+    assert!(session_pin_rows(&conn).is_empty());
+    assert!(!pins::unpin_chat(&conn, "tab-1", Some("conv-1"), Tool::Claude).unwrap());
+    // A pick with no conversation (not known yet) unpins its own mirrors only.
+    let p3 = pins::pin_chat(&conn, "tab-3", None, Some(Tool::Claude), &a.id, None).unwrap();
+    assert!(pins::mirror_to_conversation(&conn, Tool::Claude, "tab-3", "conv-3").unwrap());
+    pins::pin_chat(&conn, "tab-4", Some("conv-4"), Some(Tool::Claude), &b.id, None).unwrap();
+    assert!(pins::unpin_chat(&conn, "tab-3", None, Tool::Claude).unwrap());
+    let left: Vec<String> = session_pin_rows(&conn).into_iter().map(|r| r.0).collect();
+    assert_eq!(left, vec!["conversation:conv-4".to_string(), "tab-4".to_string()], "{p3:?}");
+}
+
+#[test]
+fn a_resume_runs_on_its_chats_pick_and_its_claude_history_is_copied_into_that_home() {
+    let h = Home::new("chatresume");
+    let conn = db();
+    let (_d, a, _b) = pool(&h, &conn);
+    // A pool chat (live home) with a transcript and a subagent folder.
+    let l = pins::decide_spawn(&conn, Tool::Claude, "tab-1", Some("proj-1"), Some("conv-1"), false).unwrap();
+    assert_eq!(l.source, Source::Pool);
+    pins::record_spawn(&conn, &l, "tab-1", Some("conv-1")).unwrap();
+    let proj = h.p(".claude/projects/-ws-sales");
+    fs::create_dir_all(proj.join("conv-1/subagents")).unwrap();
+    fs::write(proj.join("conv-1.jsonl"), "{\"turn\":1}\n").unwrap();
+    fs::write(proj.join("conv-1/subagents/s1.jsonl"), "{}\n").unwrap();
+    fs::write(proj.join("conv-other.jsonl"), "{}\n").unwrap();
+
+    // No chat pick: a workspace pin never moves an existing conversation.
+    pins::pin(&conn, ScopeKind::Workspace, "proj-1", None, &a.id, None).unwrap();
+    let r = pins::decide_spawn(&conn, Tool::Claude, "tab-1", Some("proj-1"), Some("conv-1"), true).unwrap();
+    assert_eq!((r.source, r.account_id.clone(), r.carry.clone()), (Source::Resume, None, None));
+    pins::unpin(&conn, ScopeKind::Workspace, "proj-1", Tool::Claude).unwrap();
+
+    // The chat's pick: the resume runs from a's slot, history carried.
+    pins::pin_chat(&conn, "tab-1", Some("conv-1"), None, &a.id, None).unwrap();
+    let slot = store::slot_dir(Tool::Claude, &a.id);
+    let r = pins::decide_spawn(&conn, Tool::Claude, "tab-9", Some("proj-1"), Some("conv-1"), true).unwrap();
+    assert_eq!(r.source, Source::SessionPin);
+    assert_eq!(r.env, vec![("CLAUDE_CONFIG_DIR".to_string(), slot.to_string_lossy().into_owned())]);
+    let carry = r.carry.clone().expect("history lives in the live home");
+    assert_eq!((carry.from.clone(), carry.to.clone()), (h.p(".claude"), slot.clone()));
+    assert_eq!(pins::carry_conversation(Tool::Claude, &carry.from, &carry.to, "conv-1").unwrap(), 2);
+    assert_eq!(fs::read_to_string(slot.join("projects/-ws-sales/conv-1.jsonl")).unwrap(), "{\"turn\":1}\n");
+    assert!(slot.join("projects/-ws-sales/conv-1/subagents/s1.jsonl").is_file());
+    assert!(!slot.join("projects/-ws-sales/conv-other.jsonl").exists(), "only this conversation");
+    assert!(proj.join("conv-1.jsonl").is_file(), "copied, never moved");
+    assert_eq!(pins::carry_conversation(Tool::Claude, &carry.from, &carry.to, "conv-1").unwrap(), 0, "nothing newer");
+    assert!(pins::carry_conversation(Tool::Claude, &carry.from, &carry.to, "../conv-1").is_err());
+    // Recorded under the new login: the next resume starts there, no carry.
+    pins::record_spawn(&conn, &r, "tab-9", Some("conv-1")).unwrap();
+    let again = pins::decide_spawn(&conn, Tool::Claude, "tab-9", Some("proj-1"), Some("conv-1"), true).unwrap();
+    assert_eq!((again.account_id.as_deref(), again.carry.clone()), (Some(a.id.as_str()), None));
+    // Codex homes share conversations: nothing to carry.
+    assert_eq!(pins::carry_conversation(Tool::Codex, &h.p(".codex"), &slot, "conv-1").unwrap(), 0);
+}
+
+#[test]
+fn a_codex_pick_made_before_the_conversation_id_follows_it_at_adoption() {
+    let h = Home::new("adopt");
+    let conn = db();
+    let _ = pool(&h, &conn);
+    let ck = add_api_key(&conn, Tool::Codex, "ck", API_KEY).unwrap();
+    // Picked on the tab while Codex has not minted its id yet.
+    pins::pin_chat(&conn, "tab-cx", None, Some(Tool::Codex), &ck.id, None).unwrap();
+    let l = pins::decide_spawn(&conn, Tool::Codex, "tab-cx", Some("proj-1"), None, false).unwrap();
+    assert_eq!((l.source, l.account_id.as_deref()), (Source::SessionPin, Some(ck.id.as_str())));
+    pins::record_spawn(&conn, &l, "tab-cx", None).unwrap();
+
+    // The tab row adopts the id Codex wrote (the A18 / sidecar adoption point).
+    conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('proj-1', 'ws', '/ws', 'ws')", [])
+        .unwrap();
+    crate::db::schema::WorkspaceTabSession::upsert(
+        &conn,
+        &crate::db::schema::WorkspaceTabSession {
+            project_id: "proj-1".into(),
+            pane_group_id: "cx".into(),
+            agent_name: "tab-cx".into(),
+            session_id: None,
+            command: Some("codex".into()),
+            args_json: Some("[]".into()),
+            cwd: Some("/ws".into()),
+            last_seen_at: 0,
+            pinned_cols: None,
+            pinned_rows: None,
+            pinned_set_by: None,
+        },
+    )
+    .unwrap();
+    crate::db::schema::WorkspaceTabSession::stamp_session_id(&conn, "proj-1", "cx", "019a-codex-conv").unwrap();
+    let rows = session_pin_rows(&conn);
+    assert!(rows.contains(&("conversation:019a-codex-conv".to_string(), ck.id.clone(), rows[0].2)), "{rows:?}");
+    let rec: Option<String> = conn
+        .query_row(
+            "SELECT account_id FROM llm_session_logins WHERE tool = 'codex' AND conversation_id = '019a-codex-conv'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rec.as_deref(), Some(ck.id.as_str()), "the login record follows too");
+
+    // Reopened in another tab (resume by id): still on the picked token.
+    let r = pins::decide_spawn(&conn, Tool::Codex, "tab-new", Some("proj-1"), Some("019a-codex-conv"), true).unwrap();
+    assert_eq!((r.source, r.account_id.as_deref()), (Source::SessionPin, Some(ck.id.as_str())));
+    let names: Vec<&str> = r.env.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(names, vec!["CODEX_API_KEY", "OPENAI_API_KEY"]);
+    assert!(r.carry.is_none(), "an API token runs in the live home, where the history is");
+    // A pinned chat (its key is the workspace id) is never stamped here.
+    assert!(!rows.iter().any(|r| r.0 == "proj-1"));
+}

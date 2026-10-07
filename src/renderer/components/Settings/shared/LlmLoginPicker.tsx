@@ -7,20 +7,26 @@
 // (Settings → LLMs; "the pool" internally) and follows its rotation. A
 // chat whose workspace has its own token defaults to that instead
 // ("Workspace default — <name>"). Picking a subscription or API token
-// sets this workspace / chat to it: new sessions run on it; a resumed
-// chat keeps the token it started on. The subscription that is the
-// server default can't also be picked here (one sign-in is never live in
-// two places). API tokens are billed per token.
+// for a workspace: its new chats run on it; a resumed chat keeps the
+// token it started on. Picking one for a chat (the pinned chat, or any
+// agent chat tab: its header or right-click → Token): the chat runs on
+// it from its next start and at every revival (reopened, resumed,
+// restored after a restart); the pick is keyed on the chat's session
+// key and its conversation id. The subscription that is the server
+// default can't also be picked here (one sign-in is never live in two
+// places). API tokens are billed per token.
 //
 // The scope is passed in by the caller (workspace settings: the window's
-// primary server; chat header: the room's server).
+// primary server; chat header / tab menu: the room's server).
 
 import React from 'react'
 import { useEffect, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SettingDropdown } from '../controls/SettingControls'
 import {
+  CLAUDE_CHAT_PIN_NOTE,
   CLAUDE_PIN_NOTE,
+  chatPinFor,
   errorText,
   pinBlockReason,
   pinFor,
@@ -31,9 +37,11 @@ import {
   useLlmAccountsStore,
   watchLlmAccounts,
   type LlmAccountsDoc,
+  type LlmPin,
   type LlmTool,
   type PinScope,
 } from '@/stores/llm-accounts'
+import type { ContextMenuItemDef } from '@/stores/context-menu'
 
 export const DEFAULT_VALUE = '__pool__'
 export const SERVER_DEFAULT_LABEL = 'Server default'
@@ -42,7 +50,8 @@ export const TOKEN_LABEL = 'Token'
 export const IN_USE = 'In use'
 export const SUBSCRIPTIONS_HEADING = 'Subscriptions'
 export const API_TOKENS_HEADING = 'API tokens'
-export const SESSION_PIN_NOTE = 'Applies to new chats; a resumed chat keeps the token it started on.'
+export const SESSION_PIN_NOTE =
+  'This chat runs on this token from its next start, and every time it is reopened or restored. Refresh restarts it now.'
 
 /** Chat provider id → token tool (null = no tokens for that harness). */
 export function toolForProvider(provider: string | null | undefined): string | null {
@@ -279,20 +288,110 @@ function TokenList({
   )
 }
 
+/** One chat: its v2 session key (the pinned chat: the workspace id; a tab:
+ *  `tab-<terminalId>`), its conversation id when known, and its
+ *  workspace (for the "Workspace default" entry). */
+export interface ChatTokenTarget {
+  sessionKey: string
+  conversationId?: string | null
+  projectId?: string | null
+}
+
+/** The chat's state for one tool: the value in use (a token id or
+ *  DEFAULT_VALUE), the pick behind it, and the workspace default. */
+export function chatTokenState(
+  doc: LlmAccountsDoc,
+  tool: LlmTool,
+  target: ChatTokenTarget,
+): { value: string; pin: LlmPin | null; workspaceDefaultId: string | null } {
+  const pin = chatPinFor(doc, target.sessionKey, target.conversationId, tool.tool)
+  const wsPin = target.projectId ? pinFor(doc, 'workspace', target.projectId, tool.tool) : null
+  return { value: pin ? pin.accountId : DEFAULT_VALUE, pin, workspaceDefaultId: wsPin ? wsPin.accountId : null }
+}
+
+/** The tool a chat's harness uses when it has saved tokens on that
+ *  server, else null (no Token control: shells, harnesses without
+ *  tokens, a tool with nothing saved). */
+export function chatTokenTool(doc: LlmAccountsDoc | null, provider: string | null | undefined): LlmTool | null {
+  const toolId = toolForProvider(provider)
+  const tool = doc?.tools.find((t) => t.tool === toolId && t.supported)
+  return tool && tool.accounts.length > 0 ? tool : null
+}
+
+/** Pick a token for one chat: the default unpins its key and its
+ *  conversation; anything else pins both. Resolves to the note to show
+ *  (Claude subscription: its history is copied over), or null. */
+export async function chooseChatToken(
+  scope: ServerScope,
+  tool: LlmTool,
+  target: ChatTokenTarget,
+  current: LlmPin | null,
+  value: string,
+): Promise<string | null> {
+  const conv = target.conversationId?.trim() || null
+  if (value === DEFAULT_VALUE) {
+    if (current) await unpinLogin(scope, 'session', target.sessionKey, tool.tool, conv)
+    return null
+  }
+  await pinLogin(scope, 'session', target.sessionKey, tool.tool, value, conv)
+  const acc = tool.accounts.find((a) => a.id === value)
+  return tool.tool === 'claude' && acc?.kind !== 'api_key' ? CLAUDE_CHAT_PIN_NOTE : null
+}
+
+/** Item ids of the tab menu's Token submenu: `token:<value>`. */
+export const TOKEN_MENU_PREFIX = 'token:'
+
+/** The tab right-click "Token ▸" submenu: the same entries as the header
+ *  menu (default, Subscriptions, API tokens), the one in use checked and
+ *  marked "In use", then the note. */
+export function chatTokenMenuItems(
+  tool: LlmTool,
+  value: string,
+  workspaceDefaultId: string | null,
+): ContextMenuItemDef[] {
+  const items: ContextMenuItemDef[] = []
+  let group: string | undefined
+  for (const o of tokenOptions(tool, value, workspaceDefaultId)) {
+    if (o.group !== undefined && o.group !== group) {
+      items.push({ id: `token-group:${o.group}`, label: o.group, type: 'heading' })
+    }
+    group = o.group
+    items.push({
+      id: `${TOKEN_MENU_PREFIX}${o.value}`,
+      label: o.label,
+      checked: o.value === value,
+      badge: o.badge,
+      enabled: o.disabled !== true,
+    })
+  }
+  items.push({ id: 'token-note-sep', label: '', type: 'separator' })
+  items.push({ id: 'token-note', label: SESSION_PIN_NOTE, type: 'note' })
+  return items
+}
+
 function SessionTokenMenu({
   scope,
   doc,
   tool,
-  projectId,
-  workspaceDefaultId,
+  target,
 }: {
   scope: ServerScope
   doc: LlmAccountsDoc
   tool: LlmTool
-  projectId: string
-  workspaceDefaultId: string | null
+  target: ChatTokenTarget
 }): React.JSX.Element {
-  const { value, choose, error, note } = usePick(scope, doc, tool, 'session', projectId)
+  const { value, pin, workspaceDefaultId } = chatTokenState(doc, tool, target)
+  const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const choose = async (v: string): Promise<void> => {
+    setError(null)
+    setNote(null)
+    try {
+      setNote(await chooseChatToken(scope, tool, target, pin, v))
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
   return (
     <div className="space-y-1">
       <p className="text-[10px] text-[var(--color-text-muted)]">Use this token for this chat</p>
@@ -308,26 +407,37 @@ function SessionTokenMenu({
   )
 }
 
-/** Chat header "Token" control for the pinned chat (session key = the
- *  workspace id). Hidden when the tool has no saved tokens. */
+/** Chat header "Token" control. The pinned chat passes only `projectId`
+ *  (its session key is the workspace id); an agent chat tab passes its
+ *  `sessionKey` (`tab-<terminalId>`) and `conversationId`. Hidden when
+ *  the tool has no saved tokens. */
 export function SessionTokenPicker({
   scope,
   projectId,
   provider,
+  sessionKey,
+  conversationId,
+  resolveProjectId,
 }: {
   scope: ServerScope
-  projectId: string
+  projectId?: string | null
   provider: string | null | undefined
+  sessionKey?: string
+  conversationId?: string | null
+  /** A tab's workspace, looked up only once the control shows. */
+  resolveProjectId?: () => string | null
 }): React.JSX.Element | null {
   const doc = useDoc(scope)
   const [open, setOpen] = useState(false)
-  const toolId = toolForProvider(provider)
-  const tool = doc?.tools.find((t) => t.tool === toolId && t.supported)
-  if (!doc || !tool || tool.accounts.length === 0) return null
-  const pin = pinFor(doc, 'session', projectId, tool.tool)
-  const wsPin = pinFor(doc, 'workspace', projectId, tool.tool)
-  const workspaceDefaultId = wsPin ? wsPin.accountId : null
-  const value = pin ? pin.accountId : DEFAULT_VALUE
+  const tool = chatTokenTool(doc, provider)
+  const key = sessionKey || projectId || ''
+  if (!doc || !tool || !key) return null
+  const target: ChatTokenTarget = {
+    sessionKey: key,
+    conversationId,
+    projectId: projectId ?? resolveProjectId?.() ?? null,
+  }
+  const { value, workspaceDefaultId } = chatTokenState(doc, tool, target)
   return (
     <div className="relative self-center flex items-center" data-testid="chat-login-picker">
       <button
@@ -344,13 +454,7 @@ export function SessionTokenPicker({
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">
-          <SessionTokenMenu
-            scope={scope}
-            doc={doc}
-            tool={tool}
-            projectId={projectId}
-            workspaceDefaultId={workspaceDefaultId}
-          />
+          <SessionTokenMenu scope={scope} doc={doc} tool={tool} target={target} />
         </div>
       )}
     </div>

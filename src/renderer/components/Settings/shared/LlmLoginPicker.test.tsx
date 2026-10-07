@@ -27,10 +27,19 @@ import {
   SessionTokenPicker,
   SESSION_PIN_NOTE,
   TOKEN_LABEL,
+  TOKEN_MENU_PREFIX,
   IN_USE,
+  chatTokenMenuItems,
+  chatTokenState,
   toolForProvider,
 } from './LlmLoginPicker'
-import { resetLlmAccountsForTests, CLAUDE_PIN_NOTE } from '@/stores/llm-accounts'
+import {
+  resetLlmAccountsForTests,
+  parseAccountsDoc,
+  chatPinFor,
+  CLAUDE_CHAT_PIN_NOTE,
+  CLAUDE_PIN_NOTE,
+} from '@/stores/llm-accounts'
 import { primaryScope } from '@/kessel/server-scope'
 import { PROJECTS_MANIFEST } from '../sections/ProjectsSection'
 
@@ -51,6 +60,7 @@ const SPARE_NAME = 'Claude · Pro · spare'
 const KEY_NAME = 'API token · metered · billed per token'
 
 let pins: Array<Record<string, unknown>> = []
+let clock = 100
 
 function doc(): Record<string, unknown> {
   const t = (tool: string, display: string, accounts: unknown[], activeId: string | null, subscription = true) => ({
@@ -75,6 +85,7 @@ function doc(): Record<string, unknown> {
 beforeEach(() => {
   resetLlmAccountsForTests()
   pins = []
+  clock = 100
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   h.daemonCliGet.mockImplementation(async (route: string) => {
@@ -82,13 +93,25 @@ beforeEach(() => {
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockImplementation(async (route: string, body: Record<string, unknown>) => {
+    // Same rows the daemon writes: a chat pick with a conversation also
+    // writes `conversation:<id>` (same account, same pick time).
+    const keys = (b: Record<string, unknown>): string[] => [
+      String(b.scopeId),
+      ...(b.conversationId ? [`conversation:${String(b.conversationId)}`] : []),
+    ]
     if (route === 'llm/accounts/pin') {
-      const pin = { scopeKind: body.scope, scopeId: body.scopeId, tool: body.tool, accountId: body.id, label: 'research' }
-      pins = [...pins.filter((p) => !(p.scopeKind === body.scope && p.scopeId === body.scopeId && p.tool === body.tool)), pin]
-      return { pin, note: '' }
+      clock += 1
+      const made = keys(body).map((scopeId) => ({
+        scopeKind: body.scope, scopeId, tool: body.tool, accountId: body.id, label: 'research', createdAt: clock,
+      }))
+      pins = [
+        ...pins.filter((p) => !(p.scopeKind === body.scope && keys(body).includes(String(p.scopeId)) && p.tool === body.tool)),
+        ...made,
+      ]
+      return { pin: made[0], note: '' }
     }
     if (route === 'llm/accounts/unpin') {
-      pins = pins.filter((p) => !(p.scopeKind === body.scope && p.scopeId === body.scopeId && p.tool === body.tool))
+      pins = pins.filter((p) => !(p.scopeKind === body.scope && keys(body).includes(String(p.scopeId)) && p.tool === body.tool))
       return { unpinned: true }
     }
     throw new Error(`unexpected POST ${route}`)
@@ -247,5 +270,98 @@ describe('Chat header Token picker', () => {
     expect(container.querySelector('[data-testid="chat-login-picker"]')).toBeNull()
     expect(toolForProvider('pi')).toBeNull()
     expect(toolForProvider('Claude')).toBe('claude')
+  })
+})
+
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+describe('Token picker on any agent chat tab', () => {
+  it('a tab finds the pick made for its conversation in another tab, and its picks carry the conversation', async () => {
+    // Picked in a tab that was closed: only the conversation row is left.
+    pins = [{ scopeKind: 'session', scopeId: 'conversation:conv-1', tool: 'claude', accountId: 'acc_key', label: 'conv-1', createdAt: 50 }]
+    render(
+      <SessionTokenPicker scope={primaryScope()} provider="claude" sessionKey="tab-t2" conversationId="conv-1" projectId="proj-1" />,
+    )
+    const chip = await screen.findByRole('button', { name: `Claude token for this chat: ${KEY_NAME}` })
+    expect(chip.textContent).toBe(TOKEN_LABEL)
+    fireEvent.click(chip)
+    const list = screen.getByTestId('chat-token-list')
+    expect(within(list).getByRole('button', { name: new RegExp(`^${esc(KEY_NAME)}`) }).textContent).toContain(IN_USE)
+    expect(screen.getByText(SESSION_PIN_NOTE)).toBeTruthy()
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(`^${esc(SPARE_NAME)}`) }))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/pin', {
+        scope: 'session',
+        scopeId: 'tab-t2',
+        tool: 'claude',
+        id: 'acc_spare',
+        conversationId: 'conv-1',
+      }),
+    )
+    expect(await screen.findByText(CLAUDE_CHAT_PIN_NOTE)).toBeTruthy()
+    await screen.findByRole('button', { name: `Claude token for this chat: ${SPARE_NAME}` })
+    fireEvent.click(within(screen.getByTestId('chat-token-list')).getByRole('button', { name: new RegExp(`^${esc(DEFAULT_NAME)}`) }))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/unpin', {
+        scope: 'session',
+        scopeId: 'tab-t2',
+        tool: 'claude',
+        conversationId: 'conv-1',
+      }),
+    )
+    await screen.findByRole('button', { name: `Claude token for this chat: ${DEFAULT_NAME}` })
+    expect(pins).toEqual([])
+  })
+
+  it('a tab whose conversation is not known yet (Codex before adoption) pins its session key only', async () => {
+    render(<SessionTokenPicker scope={primaryScope()} provider="claude" sessionKey="tab-t3" conversationId={null} />)
+    fireEvent.click(await screen.findByRole('button', { name: `Claude token for this chat: ${DEFAULT_NAME}` }))
+    fireEvent.click(within(screen.getByTestId('chat-token-list')).getByRole('button', { name: new RegExp(`^${esc(SPARE_NAME)}`) }))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/pin', {
+        scope: 'session',
+        scopeId: 'tab-t3',
+        tool: 'claude',
+        id: 'acc_spare',
+      }),
+    )
+  })
+
+  it('the newer of the tab pick and the conversation pick is the one in use', () => {
+    pins = [
+      { scopeKind: 'session', scopeId: 'tab-t1', tool: 'claude', accountId: 'acc_key', label: 'tab-t1', createdAt: 5 },
+      { scopeKind: 'session', scopeId: 'conversation:conv-1', tool: 'claude', accountId: 'acc_spare', label: 'conv-1', createdAt: 9 },
+    ]
+    const d = parseAccountsDoc(doc())
+    expect(chatPinFor(d, 'tab-t1', 'conv-1', 'claude')?.accountId).toBe('acc_spare')
+    expect(chatPinFor(d, 'tab-t1', null, 'claude')?.accountId).toBe('acc_key')
+    expect(chatPinFor(d, 'tab-other', 'conv-1', 'claude')?.accountId).toBe('acc_spare')
+    pins[0].createdAt = 9
+    expect(chatPinFor(parseAccountsDoc(doc()), 'tab-t1', 'conv-1', 'claude')?.accountId).toBe('acc_key')
+  })
+
+  it('the right-click Token submenu has the same entries, the one in use checked and marked, then the note', () => {
+    pins = [{ scopeKind: 'session', scopeId: 'tab-t1', tool: 'claude', accountId: 'acc_spare', label: 'tab-t1', createdAt: 5 }]
+    const d = parseAccountsDoc(doc())
+    const tool = d.tools.find((t) => t.tool === 'claude')!
+    const st = chatTokenState(d, tool, { sessionKey: 'tab-t1', conversationId: 'conv-1', projectId: 'proj-1' })
+    expect(st.value).toBe('acc_spare')
+    const items = chatTokenMenuItems(tool, st.value, st.workspaceDefaultId)
+    expect(items.map((i) => [i.type ?? 'item', i.label, i.checked ?? null, i.badge ?? null, i.enabled ?? true])).toEqual([
+      ['item', DEFAULT_NAME, false, null, true],
+      ['heading', 'Subscriptions', null, null, true],
+      ['item', 'Claude · Max · main — This is the server default; pick Server default', false, null, false],
+      ['item', SPARE_NAME, true, IN_USE, true],
+      ['heading', 'API tokens', null, null, true],
+      ['item', KEY_NAME, false, null, true],
+      ['separator', '', null, null, true],
+      ['note', SESSION_PIN_NOTE, null, null, true],
+    ])
+    expect(items.filter((i) => !i.type).map((i) => i.id)).toEqual([
+      `${TOKEN_MENU_PREFIX}__pool__`,
+      `${TOKEN_MENU_PREFIX}acc_live`,
+      `${TOKEN_MENU_PREFIX}acc_spare`,
+      `${TOKEN_MENU_PREFIX}acc_key`,
+    ])
   })
 })

@@ -32,7 +32,19 @@ import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Surface } from '@/components/ui'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
-import { isAgentPtyTerminalItem, persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
+import { conversationIdFromTerminal, isAgentPtyTerminalItem, persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
+import { chatHarnessName } from '@/components/SessionView/chatHarness'
+import {
+  DEFAULT_VALUE as DEFAULT_TOKEN_VALUE,
+  TOKEN_MENU_PREFIX,
+  chatTokenMenuItems,
+  chatTokenState,
+  chatTokenTool,
+  chooseChatToken,
+  type ChatTokenTarget,
+} from '@/components/Settings/shared/LlmLoginPicker'
+import { errorText, useLlmAccountsStore, type LlmAccountsDoc } from '@/stores/llm-accounts'
+import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
@@ -101,6 +113,44 @@ async function openPresetInSandbox(
     const message = err instanceof Error ? err.message : String(err)
     useToastStore.getState().addToast(message, 'error')
   }
+}
+
+/** The agent chat in a tab that can have its own token (its first agent
+ *  PTY pane on a harness with tokens), or null for shells and others. */
+function chatTokenTargetForTab(
+  room: Room,
+  tab: Pick<Tab, 'paneGroups'>,
+): { provider: string; target: ChatTokenTarget } | null {
+  for (const [, pg] of tab.paneGroups) {
+    for (const item of pg.items) {
+      if (!isAgentPtyTerminalItem(item)) continue
+      const td = item.data as TerminalItemData
+      const provider = chatHarnessName({ command: td.command, commandHint: td.commandHint })
+      if (!provider) continue
+      return {
+        provider,
+        target: {
+          sessionKey: agentNameForTerminal(td),
+          conversationId: conversationIdFromTerminal(td),
+          projectId: roomProjectForCwd(room, td.cwd)?.id ?? null,
+        },
+      }
+    }
+  }
+  return null
+}
+
+/** The room server's token list: the cached one (refreshed behind the
+ *  menu), else loaded now. */
+async function llmDocForRoom(room: Room): Promise<LlmAccountsDoc | null> {
+  const store = useLlmAccountsStore.getState()
+  const cached = store.entries[room.scope.id]?.doc
+  if (cached) {
+    void store.load(room.scope)
+    return cached
+  }
+  await store.load(room.scope)
+  return useLlmAccountsStore.getState().entries[room.scope.id]?.doc ?? null
 }
 
 /** Same resolution as ⌘⇧T: this folder's workspace default, then the global default, then the first enabled preset.
@@ -595,6 +645,18 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       copyAddress = await resolveSessionTabCopyableAddress(room.scope, tab, cwd)
     }
 
+    // Token ▸ — this agent chat's own token (same entries as the chat
+    // header picker). Only harnesses with saved tokens; never in a
+    // view-only room.
+    let token: { tool: NonNullable<ReturnType<typeof chatTokenTool>>; target: ChatTokenTarget; doc: LlmAccountsDoc } | null = null
+    const chat = tab && !room.readOnly ? chatTokenTargetForTab(room, tab) : null
+    if (chat) {
+      const doc = await llmDocForRoom(room).catch(() => null)
+      const tool = chatTokenTool(doc, chat.provider)
+      if (doc && tool) token = { tool, target: chat.target, doc }
+    }
+    const tokenState = token ? chatTokenState(token.doc, token.tool, token.target) : null
+
     const menuItems = [
       { id: 'rename', label: 'Rename Tab' },
       // MS57 — opening this computer's terminal app / Finder on a path only
@@ -605,6 +667,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       ] : []),
       ...(copyAddress ? [
         { id: 'copy-address', label: copyAddress.label },
+      ] : []),
+      ...(token && tokenState ? [
+        {
+          id: 'token',
+          label: 'Token',
+          submenu: chatTokenMenuItems(token.tool, tokenState.value, tokenState.workspaceDefaultId),
+        },
       ] : []),
       ...(fileViewerPath ? [
         ...(room.localCommands ? [{ id: 'show-in-finder', label: 'Show in Finder' }] : []),
@@ -629,6 +698,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     ]
 
     const clickedId = await showContextMenu(menuItems)
+    if (clickedId?.startsWith(TOKEN_MENU_PREFIX) && token && tokenState) {
+      const value = clickedId.slice(TOKEN_MENU_PREFIX.length)
+      if (value === tokenState.value) return
+      try {
+        const note = await chooseChatToken(room.scope, token.tool, token.target, tokenState.pin, value)
+        const head = value === DEFAULT_TOKEN_VALUE
+          ? 'This chat goes back to its default token from its next start.'
+          : 'This chat runs on this token from its next start.'
+        useToastStore.getState().addToast(note ? `${head} ${note}` : head, 'success')
+      } catch (err) {
+        useToastStore.getState().addToast(errorText(err), 'error')
+      }
+      return
+    }
     if (clickedId === 'pin-dimensions' && pinSessionId) {
       setPinModalSessionId(pinSessionId)
     } else if (clickedId === 'unpin-dimensions' && pinSessionId) {

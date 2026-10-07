@@ -844,3 +844,161 @@ async fn pinned_codex_session_runs_in_a_shadow_home_sharing_conversations() {
     assert!(!slot.join("auth.json").is_symlink());
     kill_sessions_under(&env.home);
 }
+
+// ── A token picked on any chat tab sticks across revivals ───────────
+
+/// The env files of every `name` shim run whose argv has all `needles`,
+/// once there are exactly `want` of them.
+fn run_envs(env: &TestEnv, name: &str, needles: &[&str], want: usize) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut hits = Vec::new();
+        for e in std::fs::read_dir(&env.log).expect("log").flatten() {
+            let f = e.file_name().to_string_lossy().to_string();
+            if f.starts_with(&format!("{name}-")) && f.ends_with(".argv") {
+                let argv = std::fs::read_to_string(e.path()).unwrap_or_default();
+                if needles.iter().all(|n| argv.lines().any(|l| l == *n)) {
+                    if let Ok(envf) = std::fs::read_to_string(e.path().with_extension("env")) {
+                        hits.push(envf);
+                    }
+                }
+            }
+        }
+        if hits.len() == want {
+            return hits;
+        }
+        assert!(hits.len() < want, "more than {want} {name} runs with {needles:?}");
+        assert!(Instant::now() < deadline, "{} of {want} {name} runs with {needles:?}", hits.len());
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn spawn_a(port: u16, key: &str, cwd: &Path, command: &str, args: &[&str]) {
+    let r = post(
+        port,
+        "/cli/sessions/v2/spawn",
+        OWNER,
+        json!({"agent_name": key, "cwd": cwd.to_string_lossy(), "command": command, "args": args, "cols": 80, "rows": 24}),
+    );
+    assert_eq!(r.status, 200, "v2 spawn {key}: {}", r.body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_picked_on_an_extra_chat_tab_sticks_when_the_chat_is_revived() {
+    let env = setup();
+    let d = futures_block(test_harness::start(OWNER));
+    reset_wallet_tables();
+    let port = d.port;
+    let (pid, ws) = seed_project(&env, "tabws");
+
+    // Live Default + a second signed-in Claude subscription.
+    std::fs::create_dir_all(env.home.join(".claude")).unwrap();
+    std::fs::write(env.home.join(".claude/.credentials.json"), format!(r#"{{"claudeAiOauth":{{"refreshToken":"{MARKER}-live"}}}}"#)).unwrap();
+    k2_daemon::llm_accounts_runtime::boot_import();
+    let second = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let e = k2_core::llm_accounts::wallet::begin_new(&conn, k2_core::llm_accounts::Tool::Claude, "Second", None).unwrap();
+        let slot = env.home.join(format!(".k2/llm-accounts/claude/{}", e.id));
+        std::fs::write(slot.join(".credentials.json"), format!(r#"{{"claudeAiOauth":{{"refreshToken":"{MARKER}-second"}}}}"#)).unwrap();
+        k2_core::llm_accounts::wallet::finalize_login(&conn, &e.id, None).unwrap()
+    };
+    let slot = env.home.join(format!(".k2/llm-accounts/claude/{}", second.id));
+
+    // An extra chat tab (not the pinned chat) starts on the server default.
+    spawn_a(port, "tab-pane1", &ws, "claude", &["--session-id", "conv-tab-1"]);
+    let e0 = run_env(&env, "claude", "conv-tab-1");
+    assert!(e0.contains("CLAUDE_CONFIG_DIR=\n"), "{e0}");
+    let transcript = env.home.join(".claude/projects/-tabws/conv-tab-1.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, "{\"turn\":1}\n").unwrap();
+
+    // Picking a token: people only, POST only.
+    let body = json!({"scope":"session","scopeId":"tab-pane1","conversationId":"conv-tab-1","tool":"claude","id": second.id});
+    let r = post(port, "/cli/llm/accounts/pin", &passport(), body.clone());
+    assert_eq!((r.status, code(&r)), (403, "owner_only".to_string()), "{}", r.body);
+    let r = req(port, "GET", &format!("/cli/llm/accounts/pin?token={OWNER}&scope=session&scopeId=tab-pane1"), None);
+    assert_eq!(r.status, 405);
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, body);
+    assert_eq!(r.status, 200, "pin: {}", r.body);
+    assert!(js(&r)["note"].as_str().unwrap().contains("from its next start"), "{}", r.body);
+    let pins = js(&get(port, "/cli/llm/accounts/pins", OWNER));
+    let mut keys: Vec<String> = pins["pins"].as_array().unwrap().iter().map(|p| p["scopeId"].as_str().unwrap().to_string()).collect();
+    keys.sort();
+    assert_eq!(keys, vec!["conversation:conv-tab-1".to_string(), "tab-pane1".to_string()]);
+    // The subscription now set for a chat can't be the server default.
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": second.id}));
+    assert_eq!((r.status, code(&r)), (409, "login_pinned".to_string()), "{}", r.body);
+
+    // Killed and revived in the same tab (refresh / restart recovery resume):
+    // it runs from the picked subscription's home, history copied there.
+    kill_sessions_under(&env.home);
+    spawn_a(port, "tab-pane1", &ws, "claude", &["--resume", "conv-tab-1"]);
+    let e1 = run_envs(&env, "claude", &["--resume", "conv-tab-1"], 1).remove(0);
+    assert!(e1.contains(&format!("CLAUDE_CONFIG_DIR={}\n", slot.display())), "{e1}");
+    assert_eq!(std::fs::read_to_string(slot.join("projects/-tabws/conv-tab-1.jsonl")).unwrap(), "{\"turn\":1}\n");
+    assert!(transcript.is_file(), "copied, not moved");
+
+    // Closed and reopened from history in a new tab: a new key, same chat.
+    kill_sessions_under(&env.home);
+    spawn_a(port, "tab-pane2", &ws, "claude", &["--resume", "conv-tab-1"]);
+    let all = run_envs(&env, "claude", &["--resume", "conv-tab-1"], 2);
+    for e in &all {
+        assert!(e.contains(&format!("CLAUDE_CONFIG_DIR={}\n", slot.display())), "{e}");
+    }
+    // A pool chat elsewhere in the workspace is untouched.
+    spawn_a(port, "tab-pane3", &ws, "claude", &["--session-id", "conv-tab-3"]);
+    assert!(run_env(&env, "claude", "conv-tab-3").contains("CLAUDE_CONFIG_DIR=\n"));
+
+    // Codex: picked before Codex mints its id; adoption moves it onto the id.
+    let r = post(port, "/cli/llm/accounts/add-key", OWNER, json!({"tool":"codex","label":"CodexKey","key": KEY}));
+    assert_eq!(r.status, 200, "add-key: {}", r.body);
+    let ck = js(&r)["account"]["id"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, json!({"scope":"session","scopeId":"tab-cx","tool":"codex","id": ck}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    spawn_a(port, "tab-cx", &ws, "codex", &["--yolo"]);
+    assert!(run_env(&env, "codex", "--yolo").contains("KEYSET=yes"));
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::upsert(
+            &conn,
+            &k2_core::db::schema::WorkspaceTabSession {
+                project_id: pid.clone(),
+                pane_group_id: "cx".into(),
+                agent_name: "tab-cx".into(),
+                session_id: None,
+                command: Some("codex".into()),
+                args_json: Some("[\"--yolo\"]".into()),
+                cwd: Some(ws.to_string_lossy().into_owned()),
+                last_seen_at: 0,
+                pinned_cols: None,
+                pinned_rows: None,
+                pinned_set_by: None,
+            },
+        )
+        .unwrap();
+        k2_core::db::schema::WorkspaceTabSession::stamp_session_id(&conn, &pid, "cx", "019a-codex-conv").unwrap();
+    }
+    let pins = js(&get(port, "/cli/llm/accounts/pins", OWNER));
+    assert!(
+        pins["pins"].as_array().unwrap().iter().any(|p| p["scopeId"] == "conversation:019a-codex-conv" && p["accountId"] == ck.as_str()),
+        "{pins}"
+    );
+    kill_sessions_under(&env.home);
+    spawn_a(port, "tab-cx-reopened", &ws, "codex", &["resume", "019a-codex-conv"]);
+    let ce = run_envs(&env, "codex", &["resume", "019a-codex-conv"], 1).remove(0);
+    assert!(ce.contains("KEYSET=yes"), "the reopened Codex chat runs on its picked token: {ce}");
+
+    // Back to default for the Claude tab: its key and its conversation go.
+    let r = post(port, "/cli/llm/accounts/unpin", OWNER, json!({"scope":"session","scopeId":"tab-pane2","conversationId":"conv-tab-1","tool":"claude"}));
+    assert_eq!(js(&r)["unpinned"], true, "{}", r.body);
+    let r = post(port, "/cli/llm/accounts/unpin", OWNER, json!({"scope":"session","scopeId":"tab-pane1","tool":"claude"}));
+    assert_eq!(js(&r)["unpinned"], true, "{}", r.body);
+    let pins = js(&get(port, "/cli/llm/accounts/pins", OWNER));
+    assert!(!pins["pins"].as_array().unwrap().iter().any(|p| p["tool"] == "claude"), "{pins}");
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": second.id}));
+    assert_eq!(r.status, 200, "unpinned: may be the server default again: {}", r.body);
+    assert!(!get(port, "/cli/llm/accounts/pins", OWNER).body.contains(MARKER));
+    kill_sessions_under(&env.home);
+}

@@ -338,6 +338,7 @@ function ChatHeader({
         <SessionTokenPicker
           scope={room.scope}
           projectId={projectId}
+          conversationId={currentSessionId}
           provider={currentSession?.provider || pinnedProvider}
         />
       )}

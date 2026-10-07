@@ -144,6 +144,15 @@ fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -
             |r| r.get::<_, String>(0),
         )
         .unwrap_or_else(|_| p.scope_id.clone())
+    } else if let Some(cid) = p.scope_id.strip_prefix(k2_core::llm_accounts::pins::CONVERSATION_PREFIX) {
+        // A chat pick that follows one conversation: its Chats name, else
+        // the start of its id.
+        conn.query_row(
+            "SELECT custom_name FROM chat_session_names WHERE session_id = ?1 AND TRIM(custom_name) != '' LIMIT 1",
+            rusqlite::params![cid],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| cid.chars().take(8).collect())
     } else {
         p.scope_id.clone()
     };
@@ -153,6 +162,7 @@ fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -
         "tool": p.tool,
         "accountId": p.account_id,
         "label": label,
+        "createdAt": p.created_at,
     })
 }
 
@@ -274,7 +284,20 @@ struct Body {
     scope_id: Option<String>,
     workspace: Option<String>,
     session: Option<String>,
+    /// A chat pin's conversation (the provider id), so the pick follows
+    /// the conversation into another tab.
+    conversation_id: Option<String>,
     key: Option<String>,
+}
+
+/// The conversation a chat pin follows: the body's `conversationId`, else
+/// the one the live session on that key names in its argv.
+fn chat_conversation(b: &Body, session_key: &str) -> Option<String> {
+    if let Some(c) = b.conversation_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        return Some(c.to_string());
+    }
+    let live = crate::v2_session_map::lookup_by_agent_name(session_key)?;
+    k2_core::workspace::provider_resume::session_id_from_spawn_argv(live.program.as_deref().unwrap_or(""), &live.args)
 }
 
 /// A workspace by projects.id, path, handle or name.
@@ -602,18 +625,27 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Ok(t) => t,
                 Err(r) => return r,
             };
+            use k2_core::llm_accounts::pins::{self as pins, ScopeKind};
+            let chat = kind == ScopeKind::Session;
+            let conversation = if chat { chat_conversation(&b, &scope_id) } else { None };
             let res = with_conn(|conn| {
-                k2_core::llm_accounts::pins::pin(conn, kind, &scope_id, tool, &id, Some(&key))
-                    .map(|p| pin_json(conn, &p))
+                let p = if chat {
+                    pins::pin_chat(conn, &scope_id, conversation.as_deref(), tool, &id, Some(&key))
+                } else {
+                    pins::pin(conn, kind, &scope_id, tool, &id, Some(&key))
+                }?;
+                let api = wallet_core::get(conn, &p.account_id)?.is_some_and(|e| e.is_api_key());
+                Ok::<_, WalletError>((pin_json(conn, &p), api))
             });
             match res {
-                Ok(p) => {
+                Ok((p, api)) => {
                     audit("llm_accounts.pin", &key, &format!("{}:{}", kind.as_str(), p["tool"].as_str().unwrap_or("")), ingress);
                     crate::session_events::emit_llm_accounts_changed(p["tool"].as_str());
-                    let note = if p["tool"] == "claude" {
-                        "This chat's Claude history will stay with this subscription. New chats use this token; a resumed chat keeps the token it started on."
-                    } else {
-                        "New chats use this token; a resumed chat keeps the token it started on."
+                    let note = match (chat, p["tool"] == "claude" && !api) {
+                        (true, true) => "This chat runs on this token from its next start (Refresh restarts it now). K2 copies its Claude history to this subscription first.",
+                        (true, false) => "This chat runs on this token from its next start (Refresh restarts it now).",
+                        (false, true) => "This chat's Claude history will stay with this subscription. New chats use this token; a resumed chat keeps the token it started on.",
+                        (false, false) => "New chats use this token; a resumed chat keeps the token it started on.",
                     };
                     ok(json!({"pin": p, "note": note}))
                 }
@@ -629,7 +661,15 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Ok(t) => t,
                 Err(r) => return r,
             };
-            match with_conn(|conn| k2_core::llm_accounts::pins::unpin(conn, kind, &scope_id, tool)) {
+            use k2_core::llm_accounts::pins::{self as pins, ScopeKind};
+            let conversation = if kind == ScopeKind::Session { chat_conversation(&b, &scope_id) } else { None };
+            match with_conn(|conn| {
+                if kind == ScopeKind::Session {
+                    pins::unpin_chat(conn, &scope_id, conversation.as_deref(), tool)
+                } else {
+                    pins::unpin(conn, kind, &scope_id, tool)
+                }
+            }) {
                 Ok(removed) => {
                     audit("llm_accounts.unpin", &key, tool.as_str(), ingress);
                     crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));

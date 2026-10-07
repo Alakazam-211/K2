@@ -16,6 +16,8 @@ import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 import { useRoom } from '@/components/Room/RoomContext'
+import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
+import { roomProjectForCwd } from '@/stores/room'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -150,6 +152,17 @@ export function AgentSessionChrome({
           chatEligible={Boolean(chatProvider)}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
+          tokenPicker={
+            chatProvider && !room.readOnly ? (
+              <SessionTokenPicker
+                scope={room.scope}
+                provider={chatProvider}
+                sessionKey={agentName}
+                conversationId={conversationId}
+                resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
+              />
+            ) : null
+          }
         />
         {refreshError ? (
           <p
@@ -183,6 +196,7 @@ export function SidecarSessionHeader({
   chatEligible = false,
   onRefresh,
   refreshing,
+  tokenPicker,
 }: {
   title: string
   viewTab: SessionViewTab
@@ -194,6 +208,8 @@ export function SidecarSessionHeader({
   chatEligible?: boolean
   onRefresh: () => void
   refreshing: boolean
+  /** The chat's Token control, left of refresh (agent chat tabs). */
+  tokenPicker?: ReactNode
 }): JSX.Element {
   return (
     <div
@@ -217,7 +233,8 @@ export function SidecarSessionHeader({
         >
           {title}
         </span>
-        <div className="flex min-w-0 items-center justify-end">
+        <div className="flex min-w-0 items-center justify-end gap-1">
+        {tokenPicker}
         <button
           type="button"
           onClick={onRefresh}

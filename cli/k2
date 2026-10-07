@@ -8932,9 +8932,11 @@ add/login print the sign-in page and any device code; when the tool asks
 for a code, paste it at the prompt (it is read from stdin, never an argument).
 --device signs in from another device (device code where the tool has one).
 Which token a chat uses: its own token > its workspace's token > Server
-default. A resumed chat keeps the token it started on. A subscription set
-for a workspace or chat is never also the server default, and `next`
-skips it.
+default. A chat's own token (--session <key>: the pinned chat's key is its
+workspace id, a tab's is tab-<id>; or conversation:<id>) applies every time
+that chat starts or is revived. Otherwise a resumed chat keeps the token it
+started on. A subscription set for a workspace or chat is never also the
+server default, and `next` skips it.
 API tokens (add-key) are billed per token, go only to sessions that use
 them, and are never shown again. The key is read from stdin, never an argument.
 Agents and K2 terminals are read-only (list, status, usage, pins). Change
@@ -18287,18 +18289,26 @@ FRESH TOKENS
   refresh, no usage call.
 
 A TOKEN FOR ONE WORKSPACE OR CHAT
-  The Token picker (workspace settings → Agent → LLM tokens, or the chat
-  header) says "Use this token for this workspace / this chat". Which
+  The Token picker (workspace settings → Agent → LLM tokens, the chat
+  header of the pinned chat or any agent chat tab, or right-click a chat
+  tab → Token) says "Use this token for this workspace / this chat". Which
   token a chat uses: its own token > its workspace's token > Server
-  default. A resumed chat always keeps the token it started on.
+  default. A chat's own token sticks to that chat: it applies every time
+  the chat starts or is revived (refresh, reopened from history in any
+  tab, restored after a restart). It is kept under the chat's key and its
+  conversation id (conversation:<id>); Codex's id is added once K2 finds
+  it. Without its own token, a resumed chat keeps the token it started on;
+  a workspace token never moves an existing chat.
   A subscription set for a workspace or chat is never also the server
   default and is skipped by "Use next token" (one subscription is never
   live in two places, since sign-ins rotate); set those back to Server
   default first. "Use next token" moves only chats on Server default; a
   chat with its own token at its limit: pick another token for it.
   A chat on its own Claude subscription keeps its Claude history with
-  that subscription. Codex subscriptions share conversations with the
-  normal Codex home.
+  that subscription; moving a chat to another token copies its Claude or
+  Grok history into that token's home before it resumes (never moved or
+  deleted). Codex subscriptions share conversations with the normal Codex
+  home.
   API tokens (k2 llm tokens add-key <tool> <label>, read from stdin) are
   billed per token, go only into sessions that use them, and are never
   shown again. Gemini takes API tokens only.

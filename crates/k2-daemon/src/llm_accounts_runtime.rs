@@ -723,8 +723,9 @@ fn is_resume_argv(tool: Tool, args: &[String]) -> bool {
 }
 
 /// Decide and apply the login for an agent spawn (both spawn doors call
-/// this right before `DaemonPtySession::spawn`): resume → the recorded
-/// login; fresh → session pin > workspace pin > pool. Adds the env (a
+/// this right before `DaemonPtySession::spawn`): resume → its chat's pin
+/// (history copied into that login's home first), else the recorded
+/// login; fresh → chat pin > workspace pin > pool. Adds the env (a
 /// pinned slot's home variable, or an API key) to `env`, prepares a
 /// pinned slot's home, records the decision, and returns a guard that
 /// holds the slot lock until the child is up. `None` for non-agent
@@ -745,6 +746,12 @@ pub fn apply_spawn_login(
     let login = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        // A chat pick made on this key follows the conversation the argv
+        // names (pre-minted or resumed), so the chat reopened under
+        // another key finds it.
+        if let Some(cid) = conversation.as_deref() {
+            k2_core::llm_accounts::pins::mirror_to_conversation(&conn, tool, session_key, cid)?;
+        }
         let login = k2_core::llm_accounts::pins::decide_spawn(
             &conn,
             tool,
@@ -753,7 +760,9 @@ pub fn apply_spawn_login(
             conversation.as_deref(),
             resume,
         )?;
-        if !resume {
+        // A fresh spawn, or a resume moved to its chat's token: record
+        // where the conversation now runs.
+        if !resume || login.source == k2_core::llm_accounts::pins::Source::SessionPin {
             k2_core::llm_accounts::pins::record_spawn(&conn, &login, session_key, conversation.as_deref())?;
         }
         login
@@ -766,6 +775,10 @@ pub fn apply_spawn_login(
         }
         None => None,
     };
+    if let Some(c) = &login.carry {
+        k2_core::llm_accounts::pins::carry_conversation(tool, &c.from, &c.to, &c.conversation_id)
+            .map_err(|e| WalletError::Io(format!("couldn't bring this chat's history to its token: {e}")))?;
+    }
     for (k, v) in &login.env {
         env.insert(k.clone(), v.clone());
     }

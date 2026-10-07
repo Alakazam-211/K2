@@ -23,8 +23,12 @@ export interface LlmPin {
   scopeId: string
   tool: string
   accountId: string
-  /** Workspace name/handle, or the session key. */
+  /** Workspace name/handle, or the session key (a conversation pin: the
+   *  chat's name or the start of its id). */
   label: string
+  /** When the pick was made (unix seconds); the newer of a chat's two
+   *  rows wins. Older daemons don't send it. */
+  createdAt?: number
 }
 
 export type LoginKind = 'subscription' | 'api_key'
@@ -292,32 +296,61 @@ export function addApiKey(
 
 export type PinScope = 'workspace' | 'session'
 
-/** Pin a workspace (scopeId = projects.id) or one session (scopeId = its
- *  session key; the pinned chat's key is the workspace id) to a login. */
+/** Pin a workspace (scopeId = projects.id) or one chat (scopeId = its
+ *  session key: the pinned chat's is the workspace id, a tab's is
+ *  `tab-<terminalId>`) to a login. A chat also passes its conversation
+ *  id when known, so the pick follows that conversation into any tab. */
 export function pinLogin(
   scope: ServerScope,
   pinScope: PinScope,
   scopeId: string,
   tool: string,
   id: string,
+  conversationId?: string | null,
 ): Promise<{ pin: LlmPin; note?: string }> {
-  return mutate(scope, 'pin', { scope: pinScope, scopeId, tool, id })
+  return mutate(scope, 'pin', {
+    scope: pinScope,
+    scopeId,
+    tool,
+    id,
+    ...(conversationId ? { conversationId } : {}),
+  })
 }
 
-/** Back to the pool for that scope + tool. */
+/** Back to the pool for that scope + tool (a chat: its key and its
+ *  conversation). */
 export function unpinLogin(
   scope: ServerScope,
   pinScope: PinScope,
   scopeId: string,
   tool: string,
+  conversationId?: string | null,
 ): Promise<{ unpinned: boolean }> {
-  return mutate(scope, 'unpin', { scope: pinScope, scopeId, tool })
+  return mutate(scope, 'unpin', { scope: pinScope, scopeId, tool, ...(conversationId ? { conversationId } : {}) })
 }
 
 /** The pin for one scope + tool in a loaded doc, if any. */
 export function pinFor(doc: LlmAccountsDoc | null, pinScope: PinScope, scopeId: string, tool: string): LlmPin | null {
   const t = doc?.tools.find((x) => x.tool === tool)
   return t?.pins.find((p) => p.scopeKind === pinScope && p.scopeId === scopeId) ?? null
+}
+
+/** The scope id of a chat pick that follows one conversation. */
+export const CONVERSATION_PREFIX = 'conversation:'
+
+/** A chat's token pick (the daemon's rule): the newer of its session
+ *  key's pin and its conversation's pin; a tie goes to the session key. */
+export function chatPinFor(
+  doc: LlmAccountsDoc | null,
+  sessionKey: string,
+  conversationId: string | null | undefined,
+  tool: string,
+): LlmPin | null {
+  const byKey = sessionKey ? pinFor(doc, 'session', sessionKey, tool) : null
+  const conv = conversationId?.trim()
+  const byConv = conv ? pinFor(doc, 'session', `${CONVERSATION_PREFIX}${conv}`, tool) : null
+  if (byKey && byConv) return (byConv.createdAt ?? 0) > (byKey.createdAt ?? 0) ? byConv : byKey
+  return byKey ?? byConv
 }
 
 /** Is this login pinned anywhere? */
@@ -339,6 +372,9 @@ export const PINNED_SWITCH_REASON =
   "This token is set for a workspace or chat, so it can't also be the server default (a subscription can't be live in two places). Set those back to Server default first."
 
 export const CLAUDE_PIN_NOTE = "This chat's Claude history will stay with this subscription."
+
+/** After picking a Claude subscription for one chat. */
+export const CLAUDE_CHAT_PIN_NOTE = "K2 copies this chat's Claude history to this subscription when it restarts."
 
 export const API_TOKEN_SUFFIX = 'billed per token'
 

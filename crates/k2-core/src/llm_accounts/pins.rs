@@ -1,10 +1,29 @@
 //! Pins, API-key logins, and the per-session login decision.
 //!
 //! **Pins.** A workspace (its canonical agent, sidecars, heartbeats and
-//! tabs) or one session (its v2 session key) can run on a specific login
-//! per tool instead of the pool's active one. Precedence at a fresh
-//! spawn: session pin > workspace pin > the pool. A resume always uses
-//! the login the conversation started under ([`record_spawn`]).
+//! tabs) or one chat can run on a specific login per tool instead of the
+//! pool's active one. Precedence at a fresh spawn: chat pin > workspace
+//! pin > the pool.
+//!
+//! **Chat pins** are session pins. The UI pins a chat by its v2 session
+//! key (the pinned chat: its workspace id; an extra tab: `tab-<id>`) and,
+//! once its conversation id is known, by `conversation:<id>` too (one
+//! pick, two rows with the same account and `created_at`). The
+//! conversation row is what survives a revival under another key: a tab
+//! closed and reopened from history, or restored after a restart. A
+//! self-minting CLI (Codex) learns its id after the start, so the mirror
+//! is written at adoption ([`mirror_to_conversation`], called from
+//! `WorkspaceTabSession::follow_adopted_conversation`, which also moves
+//! the Thread and the login record). When both rows exist the newer pick
+//! wins ([`chat_pin`]).
+//!
+//! **Resume.** A chat pin applies at every revival: a resumed
+//! conversation runs on its chat's pinned login, and its history is
+//! copied into that login's home first when the homes differ
+//! ([`carry_conversation`]; Codex homes share sessions already). With no
+//! chat pin, a resume uses the login the conversation started under
+//! ([`record_spawn`]); a workspace pin or a new server default never
+//! moves an existing conversation.
 //!
 //! **Pinned subscription session** = the tool runs with the login's
 //! wallet slot as its home (`CLAUDE_CONFIG_DIR=<slot>`,
@@ -160,36 +179,172 @@ pub fn unpin(conn: &Connection, scope: ScopeKind, scope_id: &str, tool: Tool) ->
     Ok(n > 0)
 }
 
-/// The pin that applies to a fresh session: session > workspace.
+/// The `scope_id` prefix of a chat pin that follows one conversation.
+pub const CONVERSATION_PREFIX: &str = "conversation:";
+
+/// A provider conversation id K2 will key on and use in a file name
+/// (`<id>.jsonl`, a `<id>/` folder): 1–200 of `[A-Za-z0-9._-]`, not
+/// starting with a dot.
+pub fn valid_conversation_id(c: &str) -> bool {
+    !c.is_empty()
+        && c.len() <= 200
+        && !c.starts_with('.')
+        && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+}
+
+/// `conversation:<id>`, or `None` for an id K2 won't key on.
+pub fn conversation_scope_id(conversation_id: &str) -> Option<String> {
+    let c = conversation_id.trim();
+    valid_conversation_id(c).then(|| format!("{CONVERSATION_PREFIX}{c}"))
+}
+
+fn get_pin(conn: &Connection, kind: ScopeKind, scope_id: &str, tool: Tool) -> Result<Option<Pin>, WalletError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {PIN_COLS} FROM llm_account_pins WHERE scope_kind = ?1 AND scope_id = ?2 AND tool = ?3"),
+            params![kind.as_str(), scope_id, tool.as_str()],
+            map_pin,
+        )
+        .optional()?)
+}
+
+/// Write one session-scope row with a given account and pick time (a
+/// mirror carries its source pick's `created_at`).
+fn put_session_row(
+    conn: &Connection,
+    scope_id: &str,
+    tool: &str,
+    account_id: &str,
+    by: Option<&str>,
+    created_at: i64,
+) -> Result<(), WalletError> {
+    conn.execute(
+        "INSERT INTO llm_account_pins (scope_kind, scope_id, tool, account_id, created_by, created_at) \
+         VALUES ('session', ?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(scope_kind, scope_id, tool) DO UPDATE SET account_id = excluded.account_id, \
+         created_by = excluded.created_by, created_at = excluded.created_at",
+        params![scope_id, tool, account_id, by, created_at],
+    )?;
+    Ok(())
+}
+
+/// The chat pin that applies to a session: the newer of its
+/// conversation's pin and its session key's pin (a tie goes to the
+/// session key, the chat being started).
+pub fn chat_pin(
+    conn: &Connection,
+    tool: Tool,
+    session_key: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<Pin>, WalletError> {
+    let by_key = if session_key.is_empty() { None } else { get_pin(conn, ScopeKind::Session, session_key, tool)? };
+    let by_conv = match conversation_id.and_then(conversation_scope_id) {
+        Some(k) if k != session_key => get_pin(conn, ScopeKind::Session, &k, tool)?,
+        _ => None,
+    };
+    Ok(match (by_key, by_conv) {
+        (Some(k), Some(c)) => Some(if c.created_at > k.created_at { c } else { k }),
+        (k, c) => k.or(c),
+    })
+}
+
+/// The pin that applies to a fresh session: chat > workspace.
 pub fn pin_for(
     conn: &Connection,
     tool: Tool,
     session_key: &str,
+    conversation_id: Option<&str>,
     project_id: Option<&str>,
 ) -> Result<Option<Pin>, WalletError> {
-    let one = |kind: ScopeKind, id: &str| -> Result<Option<Pin>, WalletError> {
-        Ok(conn
-            .query_row(
-                &format!(
-                    "SELECT {PIN_COLS} FROM llm_account_pins WHERE scope_kind = ?1 AND scope_id = ?2 AND tool = ?3"
-                ),
-                params![kind.as_str(), id, tool.as_str()],
-                map_pin,
-            )
-            .optional()?)
-    };
-    if !session_key.is_empty() {
-        if let Some(p) = one(ScopeKind::Session, session_key)? {
-            return Ok(Some(p));
-        }
+    if let Some(p) = chat_pin(conn, tool, session_key, conversation_id)? {
+        return Ok(Some(p));
     }
     if let Some(pid) = project_id.filter(|s| !s.is_empty()) {
-        if let Some(p) = one(ScopeKind::Workspace, pid)? {
+        if let Some(p) = get_pin(conn, ScopeKind::Workspace, pid, tool)? {
             return Ok(Some(p));
         }
     }
     Ok(None)
 }
+
+/// Pin one chat: its session key, plus `conversation:<id>` when the
+/// conversation is known (same account, same `created_at`). Mirrors of
+/// the key's previous pick (same account and pick time) move with it, so
+/// a conversation that ran under this key earlier follows the new pick.
+pub fn pin_chat(
+    conn: &Connection,
+    session_key: &str,
+    conversation_id: Option<&str>,
+    tool: Option<Tool>,
+    account_key: &str,
+    by: Option<&str>,
+) -> Result<Pin, WalletError> {
+    let e = lookup(conn, tool, account_key)?;
+    let t = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
+    let before = get_pin(conn, ScopeKind::Session, session_key.trim(), t)?;
+    let p = pin(conn, ScopeKind::Session, session_key, Some(t), &e.id, by)?;
+    if let Some(old) = before {
+        conn.execute(
+            "UPDATE llm_account_pins SET account_id = ?1, created_by = ?2, created_at = ?3 \
+             WHERE scope_kind = 'session' AND scope_id LIKE 'conversation:%' AND tool = ?4 \
+             AND account_id = ?5 AND created_at = ?6",
+            params![p.account_id, p.created_by, p.created_at, p.tool, old.account_id, old.created_at],
+        )?;
+    }
+    if let Some(k) = conversation_id.and_then(conversation_scope_id) {
+        if k != p.scope_id {
+            put_session_row(conn, &k, &p.tool, &p.account_id, by, p.created_at)?;
+        }
+    }
+    Ok(p)
+}
+
+/// Back to the default for one chat: its session key's pin, the
+/// conversation mirrors of that pick, and `conversation:<id>` when given.
+/// `Ok(false)` when there was nothing to remove.
+pub fn unpin_chat(
+    conn: &Connection,
+    session_key: &str,
+    conversation_id: Option<&str>,
+    tool: Tool,
+) -> Result<bool, WalletError> {
+    let mut removed = false;
+    if let Some(old) = get_pin(conn, ScopeKind::Session, session_key.trim(), tool)? {
+        removed |= conn.execute(
+            "DELETE FROM llm_account_pins WHERE scope_kind = 'session' AND scope_id LIKE 'conversation:%' \
+             AND tool = ?1 AND account_id = ?2 AND created_at = ?3",
+            params![tool.as_str(), old.account_id, old.created_at],
+        )? > 0;
+        removed |= unpin(conn, ScopeKind::Session, session_key, tool)?;
+    }
+    if let Some(k) = conversation_id.and_then(conversation_scope_id) {
+        removed |= unpin(conn, ScopeKind::Session, &k, tool)?;
+    }
+    Ok(removed)
+}
+
+/// Copy the session key's pick onto `conversation:<id>` (the newer pick
+/// wins; an equal one is left alone). `Ok(true)` when a row was written.
+pub fn mirror_to_conversation(
+    conn: &Connection,
+    tool: Tool,
+    session_key: &str,
+    conversation_id: &str,
+) -> Result<bool, WalletError> {
+    let Some(k) = conversation_scope_id(conversation_id) else { return Ok(false) };
+    if session_key.is_empty() || k == session_key {
+        return Ok(false);
+    }
+    let Some(src) = get_pin(conn, ScopeKind::Session, session_key, tool)? else { return Ok(false) };
+    if let Some(cur) = get_pin(conn, ScopeKind::Session, &k, tool)? {
+        if cur.account_id == src.account_id || cur.created_at > src.created_at {
+            return Ok(false);
+        }
+    }
+    put_session_row(conn, &k, &src.tool, &src.account_id, src.created_by.as_deref(), src.created_at)?;
+    Ok(true)
+}
+
 
 // ── API keys ────────────────────────────────────────────────────────
 
@@ -409,6 +564,17 @@ pub struct SpawnLogin {
     pub home: Option<PathBuf>,
     /// Env pairs to set on the child (never logged: may hold an API key).
     pub env: Vec<(String, String)>,
+    /// A resumed conversation moving to its chat's pinned login: copy its
+    /// history from the home it last ran in before the spawn.
+    pub carry: Option<Carry>,
+}
+
+/// Bring one conversation's history from one tool home to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Carry {
+    pub conversation_id: String,
+    pub from: PathBuf,
+    pub to: PathBuf,
 }
 
 impl SpawnLogin {
@@ -422,19 +588,24 @@ impl SpawnLogin {
     }
 }
 
+/// The recorded `(account_id, home)` a conversation (or, for ids the CLI
+/// minted itself, its session key) last started under.
+type Recorded = (Option<String>, Option<String>);
+
 fn recorded(
     conn: &Connection,
     tool: Tool,
     session_key: &str,
     conversation_id: Option<&str>,
-) -> Result<Option<Option<String>>, WalletError> {
+) -> Result<Option<Recorded>, WalletError> {
+    let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<Recorded> { Ok((r.get(0)?, r.get(1)?)) };
     if let Some(cid) = conversation_id.filter(|c| !c.is_empty()) {
-        let r: Option<Option<String>> = conn
+        let r = conn
             .query_row(
-                "SELECT account_id FROM llm_session_logins WHERE tool = ?1 AND conversation_id = ?2 \
-                 ORDER BY recorded_at DESC LIMIT 1",
+                "SELECT account_id, home FROM llm_session_logins WHERE tool = ?1 AND conversation_id = ?2 \
+                 ORDER BY recorded_at DESC, rowid DESC LIMIT 1",
                 params![tool.as_str(), cid],
-                |r| r.get(0),
+                map,
             )
             .optional()?;
         if r.is_some() {
@@ -443,11 +614,21 @@ fn recorded(
     }
     Ok(conn
         .query_row(
-            "SELECT account_id FROM llm_session_logins WHERE session_key = ?1 AND tool = ?2 AND conversation_id = ''",
+            "SELECT account_id, home FROM llm_session_logins WHERE session_key = ?1 AND tool = ?2 AND conversation_id = ''",
             params![session_key, tool.as_str()],
-            |r| r.get(0),
+            map,
         )
         .optional()?)
+}
+
+/// The home a resumed conversation's history is in: its recorded home,
+/// else the tool's live home (pool and API-key sessions run there, and
+/// so did every conversation from before K2 tracked logins).
+fn recorded_home(rec: &Option<Recorded>, tool: Tool) -> PathBuf {
+    match rec {
+        Some((_, Some(h))) if !h.is_empty() => PathBuf::from(h),
+        _ => store::live_home(tool).0,
+    }
 }
 
 fn login_env(tool: Tool, e: &Entry, source: Source) -> Result<SpawnLogin, WalletError> {
@@ -459,6 +640,7 @@ fn login_env(tool: Tool, e: &Entry, source: Source) -> Result<SpawnLogin, Wallet
             source,
             home: None,
             env: api_key_env(tool, &e.id)?,
+            carry: None,
         });
     }
     let slot = store::slot_dir(tool, &e.id);
@@ -469,6 +651,7 @@ fn login_env(tool: Tool, e: &Entry, source: Source) -> Result<SpawnLogin, Wallet
         source,
         home: Some(slot.clone()),
         env: vec![(tool.home_env_var().to_string(), slot.to_string_lossy().into_owned())],
+        carry: None,
     })
 }
 
@@ -484,14 +667,17 @@ fn pool(conn: &Connection, tool: Tool) -> Result<SpawnLogin, WalletError> {
             }
         }
     }
-    Ok(SpawnLogin { tool, account_id: None, kind: None, source: Source::Pool, home: None, env: Vec::new() })
+    Ok(SpawnLogin { tool, account_id: None, kind: None, source: Source::Pool, home: None, env: Vec::new(), carry: None })
 }
 
 /// Decide the login for a spawn. `conversation_id` + `is_resume`: a
-/// resume always uses the login its conversation (or, for ids the CLI
-/// minted itself, its session key) started under, even when pins have
+/// resume runs on its chat's pin (session key or conversation, the newer
+/// pick) when there is one, with [`SpawnLogin::carry`] set when the
+/// conversation's history lives in another home; otherwise on the login
+/// its conversation (or, for ids the CLI minted itself, its session key)
+/// started under, even when workspace pins or the server default have
 /// changed since; a conversation with no record started in the live
-/// home. A fresh spawn takes session pin > workspace pin > pool.
+/// home. A fresh spawn takes chat pin > workspace pin > pool.
 pub fn decide_spawn(
     conn: &Connection,
     tool: Tool,
@@ -501,7 +687,21 @@ pub fn decide_spawn(
     is_resume: bool,
 ) -> Result<SpawnLogin, WalletError> {
     if is_resume {
-        return match recorded(conn, tool, session_key, conversation_id)? {
+        let rec = recorded(conn, tool, session_key, conversation_id)?;
+        if let Some(p) = chat_pin(conn, tool, session_key, conversation_id)? {
+            if let Some(e) = get(conn, &p.account_id)?.filter(|e| e.removed_at.is_none()) {
+                let mut l = login_env(tool, &e, Source::SessionPin)?;
+                if let Some(cid) = conversation_id.map(str::trim).filter(|c| valid_conversation_id(c)) {
+                    let from = recorded_home(&rec, tool);
+                    let to = l.home.clone().unwrap_or_else(|| store::live_home(tool).0);
+                    if from != to {
+                        l.carry = Some(Carry { conversation_id: cid.to_string(), from, to });
+                    }
+                }
+                return Ok(l);
+            }
+        }
+        return match rec.map(|(a, _)| a) {
             Some(Some(id)) => {
                 let e = get(conn, &id)?.ok_or_else(|| WalletError::NotFound(id.clone()))?;
                 if e.removed_at.is_some() {
@@ -520,7 +720,7 @@ pub fn decide_spawn(
             }
         };
     }
-    if let Some(p) = pin_for(conn, tool, session_key, project_id)? {
+    if let Some(p) = pin_for(conn, tool, session_key, conversation_id, project_id)? {
         if let Some(e) = get(conn, &p.account_id)? {
             if e.removed_at.is_none() {
                 let src = if p.scope_kind == "session" { Source::SessionPin } else { Source::WorkspacePin };
@@ -552,6 +752,84 @@ pub fn record_spawn(
         )?;
     }
     Ok(())
+}
+
+/// Where a tool keeps conversations inside its home, one folder per
+/// project: Claude `projects/<slug>/<id>.jsonl` (plus `<id>/`), Grok
+/// `sessions/<cwd>/<id>/`. Codex shadow homes share `sessions/` with the
+/// normal home and Gemini tokens are API keys run in the live home, so
+/// they have nothing to carry.
+fn conversation_root(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Claude => Some("projects"),
+        Tool::Grok => Some("sessions"),
+        Tool::Codex | Tool::Gemini => None,
+    }
+}
+
+fn newer_or_missing(src: &Path, dst: &Path) -> bool {
+    let Ok(dm) = std::fs::metadata(dst) else { return true };
+    match (std::fs::metadata(src).and_then(|m| m.modified()), dm.modified()) {
+        (Ok(s), Ok(d)) => s > d,
+        _ => false,
+    }
+}
+
+/// Copy `src` (a file or a folder, never through a symlink) to `dst`,
+/// file by file, replacing only files that are missing or older there.
+fn copy_entry(src: &Path, dst: &Path) -> Result<usize, String> {
+    let meta = std::fs::symlink_metadata(src).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() {
+        return Ok(0);
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+        let mut n = 0;
+        for ent in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+            n += copy_entry(&ent.path(), &dst.join(ent.file_name()))?;
+        }
+        return Ok(n);
+    }
+    if !newer_or_missing(src, dst) {
+        return Ok(0);
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(src, dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+    Ok(1)
+}
+
+/// Bring one conversation's history from the home it last ran in to the
+/// home its chat's token runs in, so `--resume <id>` finds it there.
+/// Copies (never moves or deletes) the conversation's files under the
+/// same project folder names; a file already in `to` is replaced only by
+/// a newer one. Returns the number of files copied (0 for tools whose
+/// homes share conversations).
+pub fn carry_conversation(tool: Tool, from: &Path, to: &Path, conversation_id: &str) -> Result<usize, String> {
+    let Some(root) = conversation_root(tool) else { return Ok(0) };
+    if !valid_conversation_id(conversation_id) {
+        return Err(format!("not a conversation id: {conversation_id:?}"));
+    }
+    if from == to {
+        return Ok(0);
+    }
+    let Ok(dirs) = std::fs::read_dir(from.join(root)) else { return Ok(0) };
+    let mut n = 0;
+    for d in dirs.flatten() {
+        // `file_type` does not follow links: a linked project folder is skipped.
+        if !d.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        for name in [format!("{conversation_id}.jsonl"), conversation_id.to_string()] {
+            let src = d.path().join(&name);
+            if std::fs::symlink_metadata(&src).is_err() {
+                continue;
+            }
+            n += copy_entry(&src, &to.join(root).join(d.file_name()).join(&name))?;
+        }
+    }
+    Ok(n)
 }
 
 /// Get a pinned subscription slot ready before the spawn: Codex shadow

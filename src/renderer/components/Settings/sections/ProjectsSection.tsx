@@ -59,7 +59,7 @@ import { setSqlDbAgentAccess } from './data-api'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
-import { WorkspaceLlmLogins } from '../shared/LlmLoginPicker'
+import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -86,7 +86,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'Local and federated connections for this workspace', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
-  { id: 'projects.llm-logins', section: 'projects', label: 'LLM logins', description: 'Pin this workspace\'s agents to a specific Claude / Codex / Grok / Gemini login instead of the pool', keywords: ['login', 'logins', 'account', 'pin', 'subscription', 'api key', 'pool', 'wallet'] },
+  { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
@@ -1565,8 +1565,8 @@ function ProjectDetail({
               <WorkspaceCompletionSoundToggle project={project} />
             </SettingsGroup>
 
-            <SettingsGroup title="LLM logins">
-              <WorkspaceLlmLogins scope={primaryScope()} projectId={project.id} />
+            <SettingsGroup title="LLM tokens">
+              <WorkspaceLlmTokens scope={primaryScope()} projectId={project.id} />
             </SettingsGroup>
 
             <SettingsGroup title="Remote Access">

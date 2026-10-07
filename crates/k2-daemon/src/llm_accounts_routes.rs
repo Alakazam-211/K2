@@ -366,7 +366,7 @@ pub fn handle(
         return refuse(
             403,
             "owner_only",
-            "Agents and K2 terminals can only read logins. Change logins on Settings → LLMs, or run k2 from a terminal outside K2.",
+            "Agents and K2 terminals can only read tokens. Change tokens on Settings → LLMs, or run k2 from a terminal outside K2.",
         );
     }
     match path {
@@ -564,7 +564,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Err(WalletError::NotFound(k)) if k == "no_next" => refuse(
                     404,
                     "no_next",
-                    "there is no other signed-in login for that tool; add one on Settings → LLMs",
+                    "there is no other signed-in subscription for that tool; add one on Settings → LLMs",
                 ),
                 Err(e) => wallet_err(e),
             }
@@ -611,9 +611,9 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     audit("llm_accounts.pin", &key, &format!("{}:{}", kind.as_str(), p["tool"].as_str().unwrap_or("")), ingress);
                     crate::session_events::emit_llm_accounts_changed(p["tool"].as_str());
                     let note = if p["tool"] == "claude" {
-                        "This agent's Claude history will live with this login. New sessions use it; a resumed conversation keeps the login it started on."
+                        "This chat's Claude history will stay with this subscription. New chats use this token; a resumed chat keeps the token it started on."
                     } else {
-                        "New sessions use this login; a resumed conversation keeps the login it started on."
+                        "New chats use this token; a resumed chat keeps the token it started on."
                     };
                     ok(json!({"pin": p, "note": note}))
                 }
@@ -661,7 +661,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Err(r) => return r,
             };
             if rt::running_for(&id).is_some() {
-                return refuse(409, "busy", "a sign-in is running for that login; cancel it first");
+                return refuse(409, "busy", "a sign-in is running for that subscription; cancel it first");
             }
             match with_conn(|conn| wallet::remove(conn, &id)) {
                 Ok(out) => {

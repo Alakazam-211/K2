@@ -1,4 +1,5 @@
-// Settings → LLMs: the sign-in sheet for a wallet login.
+// Settings → LLMs: the sign-in sheet for a subscription ("Add
+// subscription" / "Sign in again"; a wallet login internally).
 //
 // The daemon runs the tool's OWN login command in a daemon-owned terminal
 // on the server. This sheet turns that into three buttons a phone can use:
@@ -137,7 +138,7 @@ export function LlmLoginSheet({
   }, [scope, login])
 
   const title =
-    start.kind === 'add' ? `Add a ${start.toolLabel} login` : `Log ${start.label} in again`
+    start.kind === 'add' ? `Add a ${start.toolLabel} subscription` : `Sign ${start.label} in again`
 
   return (
     <div
@@ -196,8 +197,8 @@ export function LlmLoginSheet({
               </p>
             </div>
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              The tool runs its own sign-in on the server. K2 never sees your password; the login is
-              kept in this server’s K2 wallet and is not active until you make it active.
+              The tool runs its own sign-in on the server. K2 never sees your password; the subscription
+              is kept on this server and isn’t the server default until you choose Use this token.
             </p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={onClose} className="px-3 py-1 text-xs text-[var(--color-text-muted)]">
@@ -276,9 +277,9 @@ export function LlmLoginSheet({
 
             {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && (
               <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
-                <div className="text-xs text-[var(--color-text-secondary)]">Make the new login active?</div>
+                <div className="text-xs text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
                 <div className="text-[10px] text-[var(--color-text-muted)]">
-                  Switching affects every unpinned session on this server.
+                  Changing it affects every chat that uses Server default on this server.
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -286,7 +287,7 @@ export function LlmLoginSheet({
                     onClick={() => void makeActive()}
                     className="px-3 py-1 text-xs border border-[var(--color-accent)] text-[var(--color-text-primary)]"
                   >
-                    Make active
+                    Use this token
                   </button>
                   <button
                     type="button"
@@ -299,7 +300,7 @@ export function LlmLoginSheet({
               </div>
             )}
             {madeActive === 'active' && (
-              <div className="text-[11px] text-[var(--color-text-secondary)]">The new login is active.</div>
+              <div className="text-[11px] text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
             )}
             {login.error && <div className="text-[11px] text-red-400">{login.error}</div>}
 

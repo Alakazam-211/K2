@@ -214,25 +214,25 @@ impl std::fmt::Display for WalletError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WalletError::UnknownTool(t) => {
-                write!(f, "unknown tool {t:?} (the wallet supports claude, codex and grok)")
+                write!(f, "unknown tool {t:?} (subscriptions: claude, codex and grok)")
             }
             WalletError::InvalidLabel(why) => write!(f, "invalid label: {why}"),
             WalletError::DuplicateLabel(l) => {
-                write!(f, "a login named {l:?} already exists for that tool")
+                write!(f, "a token named {l:?} already exists for that tool")
             }
-            WalletError::NotFound(id) => write!(f, "no such login: {id}"),
+            WalletError::NotFound(id) => write!(f, "no such token: {id}"),
             WalletError::NotSignedIn(id) => write!(
                 f,
-                "login {id} has no saved sign-in yet; log it in on Settings → LLMs first"
+                "token {id} has no saved sign-in yet; sign it in on Settings → LLMs first"
             ),
             WalletError::ActiveLogin => write!(
                 f,
-                "that login is the active one; switch to another login first"
+                "that token is the server default; make another token the server default first"
             ),
             WalletError::LiveStoreUnavailable(why) => write!(f, "{why}"),
             WalletError::AirGap => write!(f, "{}", crate::airgap::TEACHING),
             WalletError::LockBusy(t) => {
-                write!(f, "another change to the {t} login is in progress; try again")
+                write!(f, "another change to the {t} tokens is in progress; try again")
             }
             WalletError::Conflict(_, hint) => write!(f, "{hint}"),
             WalletError::Io(e) => write!(f, "io: {e}"),
@@ -407,7 +407,7 @@ fn new_id() -> String {
 pub fn create(conn: &Connection, tool: Tool, label: &str, created_by: Option<&str>) -> Result<Entry, WalletError> {
     if !tool.subscription_supported() {
         return Err(WalletError::LiveStoreUnavailable(format!(
-            "{} sign-in logins aren't supported yet; add an API key instead",
+            "{} subscriptions aren't supported yet; add an API token instead",
             tool.display()
         )));
     }
@@ -502,7 +502,7 @@ pub fn update_meta(conn: &Connection, id: &str, m: &MetaUpdate) -> Result<(), Wa
     for t in texts.iter().flatten() {
         if looks_like_secret(t) {
             return Err(WalletError::Io(
-                "refusing to store login metadata that looks like a credential".into(),
+                "refusing to store token metadata that looks like a credential".into(),
             ));
         }
     }

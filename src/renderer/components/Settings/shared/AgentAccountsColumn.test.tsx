@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → LLMs "Logins" column + the sign-in sheet. Daemon calls are
+// Settings → LLMs "Tokens" column + the sign-in sheet. Daemon calls are
 // mocked; routes and bodies are asserted exactly. Fail loud: an
 // unexpected route throws.
 
@@ -23,7 +23,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => h.openUrl(url) }))
 
-import { AgentAccountsColumn, SWITCH_NOTE } from './AgentAccountsColumn'
+import { AgentAccountsColumn, SWITCH_NOTE, ACTIVE_REMOVE_REASON } from './AgentAccountsColumn'
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
@@ -97,7 +97,7 @@ function doc(): Record<string, unknown> {
     ],
     logins: [],
     airgap: false,
-    switchNote: 'Switching a login affects every unpinned session on this server.',
+    switchNote: 'Changing the server default token affects every chat that uses Server default on this server.',
   }
 }
 
@@ -148,48 +148,53 @@ async function renderColumn(): Promise<void> {
   await screen.findByTestId('llm-account-acc_work')
 }
 
-describe('Logins column', () => {
-  it('renders the tools, states, the Active badge, usage and the switch note', async () => {
+describe('Tokens column', () => {
+  it('renders the Tokens heading, plain token names, states, the Server default badge, usage and the switch note', async () => {
     await renderColumn()
+    expect(screen.getByRole('heading', { name: 'Tokens' })).toBeTruthy()
     expect(screen.getByTestId('llm-switch-note').textContent).toBe(SWITCH_NOTE)
     const work = screen.getByTestId('llm-account-acc_work')
-    expect(work.textContent).toContain('Active')
+    expect(screen.getByTestId('llm-name-acc_work').textContent).toBe('Claude · Max · work')
+    expect(screen.getByTestId('llm-name-acc_home').textContent).toBe('Claude · home')
+    expect(work.textContent).toContain('Server default')
     expect(work.textContent).toContain('Signed in')
-    expect(work.textContent).toContain('person@example.test · max')
+    expect(work.textContent).toContain('person@example.test')
     expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
-    expect(screen.getByTestId('llm-account-acc_home').textContent).not.toContain('Active')
-    expect(screen.getByTestId('llm-account-acc_stale').textContent).toContain('Needs login')
+    expect(screen.getByTestId('llm-account-acc_home').textContent).not.toContain('Server default')
+    expect(screen.getByTestId('llm-account-acc_stale').textContent).toContain('Needs sign-in')
     for (const t of ['cursor', 'pi', 'hermes']) {
       expect(screen.getByTestId(`llm-tool-${t}`).textContent).toContain('Not available yet')
     }
     expect(document.body.textContent).not.toContain('Coming soon')
-    expect(screen.getAllByRole('button', { name: '+ Add login' })).toHaveLength(3)
-    expect(screen.getAllByRole('button', { name: '+ Add API key' })).toHaveLength(4)
+    expect(screen.getAllByRole('button', { name: '+ Add subscription' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '+ Add API token' })).toHaveLength(4)
     expect(h.daemonCliGet).toHaveBeenCalledWith('llm/accounts/list')
+    const column = document.querySelector('[data-settings-id="agents.accounts"]')!.textContent ?? ''
+    expect(column).not.toMatch(/\blogins?\b|wallet|\bpool\b|pinned|Make active/i)
   })
 
-  it('Make active posts switch with the id', async () => {
+  it('Use this token posts switch with the id', async () => {
     await renderColumn()
     const row = screen.getByTestId('llm-account-acc_home')
-    fireEvent.click(row.querySelector('button')!)
+    fireEvent.click(within(row).getByRole('button', { name: 'Use this token' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_home' }))
   })
 
-  it('Switch to next login posts next with the tool', async () => {
+  it('Use next token posts next with the tool', async () => {
     await renderColumn()
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to next login' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Use next token' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/next', { tool: 'claude' }))
     expect(document.body.textContent).toContain('K2 never switches on its own')
   })
 
-  it('Remove asks, then posts remove; it is disabled on the active login', async () => {
+  it('Remove asks, then posts remove; it is disabled on the server default', async () => {
     useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
     await renderColumn()
     const activeRemove = Array.from(screen.getByTestId('llm-account-acc_work').querySelectorAll('button')).find(
       (b) => b.textContent === 'Remove',
     )!
     expect((activeRemove as HTMLButtonElement).disabled).toBe(true)
-    expect(activeRemove.getAttribute('title')).toBe('Switch to another login first')
+    expect(activeRemove.getAttribute('title')).toBe(ACTIVE_REMOVE_REASON)
     const idleRemove = Array.from(screen.getByTestId('llm-account-acc_home').querySelectorAll('button')).find(
       (b) => b.textContent === 'Remove',
     )!
@@ -218,36 +223,37 @@ describe('Logins column', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('another change is in progress')
   })
 
-  it('the search manifest has the Logins entries, not the old credentials row', () => {
+  it('the search manifest has the Tokens entries, not the old credentials row', () => {
     const ids = AGENTS_MANIFEST.map((e) => e.id)
     expect(ids).toContain('agents.accounts')
     expect(ids).toContain('agents.add-login')
     expect(ids).not.toContain('agents.credentials')
     const acc = AGENTS_MANIFEST.find((e) => e.id === 'agents.accounts')!
-    expect(acc.keywords).toEqual(expect.arrayContaining(['account', 'login', 'wallet', 'switch']))
+    expect(acc.label).toBe('Tokens')
+    expect(acc.keywords).toEqual(expect.arrayContaining(['token', 'subscription', 'api token', 'login', 'switch']))
   })
 })
 
-describe('Pins and API keys', () => {
-  it('Gemini offers only an API key', async () => {
+describe('Workspace/chat tokens and API tokens', () => {
+  it('Gemini offers only an API token', async () => {
     await renderColumn()
     const gem = screen.getByTestId('llm-tool-gemini')
-    expect(within(gem).queryByRole('button', { name: '+ Add login' })).toBeNull()
-    expect(within(gem).getByRole('button', { name: '+ Add API key' })).toBeTruthy()
-    expect(gem.textContent).toContain('No API key on this server.')
+    expect(within(gem).queryByRole('button', { name: '+ Add subscription' })).toBeNull()
+    expect(within(gem).getByRole('button', { name: '+ Add API token' })).toBeTruthy()
+    expect(gem.textContent).toContain('No API token on this server yet.')
   })
 
-  it('Add API key posts tool, label and key; the key is never rendered after submit', async () => {
+  it('Add API token posts tool, label and key; the key is never rendered after submit', async () => {
     await renderColumn()
     const claude = screen.getByTestId('llm-tool-claude')
-    fireEvent.click(within(claude).getByRole('button', { name: '+ Add API key' }))
+    fireEvent.click(within(claude).getByRole('button', { name: '+ Add API token' }))
     const dialog = screen.getByTestId('llm-apikey-dialog')
     expect(dialog.textContent).toContain('Billed per token by the provider.')
-    const keyInput = screen.getByLabelText('API key') as HTMLInputElement
+    const keyInput = screen.getByLabelText('API token') as HTMLInputElement
     expect(keyInput.type).toBe('password')
-    fireEvent.change(screen.getByLabelText('API key label'), { target: { value: 'metered' } })
+    fireEvent.change(screen.getByLabelText('API token label'), { target: { value: 'metered' } })
     fireEvent.change(keyInput, { target: { value: 'sk-test-SECRET-123456' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add key' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add API token' }))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/add-key', {
         tool: 'claude',
@@ -264,39 +270,39 @@ describe('Pins and API keys', () => {
       throw new Error(JSON.stringify({ error: { code: 'invalid_label', hint: 'invalid label: the API key must be 8–512 characters with no spaces' } }))
     })
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-tool-codex')).getByRole('button', { name: '+ Add API key' }))
-    fireEvent.change(screen.getByLabelText('API key label'), { target: { value: 'k' } })
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'short key' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add key' }))
+    fireEvent.click(within(screen.getByTestId('llm-tool-codex')).getByRole('button', { name: '+ Add API token' }))
+    fireEvent.change(screen.getByLabelText('API token label'), { target: { value: 'k' } })
+    fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'short key' } })
+    fireEvent.click(within(screen.getByTestId('llm-apikey-dialog')).getByRole('button', { name: 'Add API token' }))
     expect((await screen.findByRole('alert')).textContent).toContain('8–512 characters')
-    expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('API token') as HTMLInputElement).value).toBe('')
   })
 
-  it('API-key rows say billed per token', async () => {
+  it('API token rows read "API token · <label> · billed per token"', async () => {
     await renderColumn()
-    expect(screen.getByTestId('llm-billed-acc_key').textContent).toBe('Billed per token')
-    expect(screen.getByTestId('llm-usage-acc_key').textContent).toBe('billed per token')
+    expect(screen.getByTestId('llm-name-acc_key').textContent).toBe('API token · metered · billed per token')
+    expect(screen.queryByTestId('llm-usage-acc_key')).toBeNull()
   })
 
-  it('a pinned login shows where, is in use, and refuses pool actions with the reason', async () => {
+  it('a token set for a workspace shows where, is in use, and refuses server-default actions with the reason', async () => {
     await renderColumn()
-    expect(screen.getByTestId('llm-pinned-acc_pinned').textContent).toBe('Pinned to: research')
-    expect(screen.getByTestId('llm-inuse-acc_pinned').textContent).toBe('In use by a pinned session')
+    expect(screen.getByTestId('llm-pinned-acc_pinned').textContent).toBe('Used by: research')
+    expect(screen.getByTestId('llm-inuse-acc_pinned').textContent).toBe('In use by a chat right now')
     const row = screen.getByTestId('llm-account-acc_pinned')
-    const make = within(row).getByRole('button', { name: 'Make active' }) as HTMLButtonElement
+    const make = within(row).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
     expect(make.disabled).toBe(true)
-    expect(make.title).toContain("can't be the pool's active login")
+    expect(make.title).toContain("can't also be the server default")
     const remove = within(row).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
     expect(remove.disabled).toBe(true)
-    expect(remove.title).toContain('Unpin it first')
+    expect(remove.title).toContain('Set those back to Server default first')
     fireEvent.click(make)
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_pinned' })
   })
 
-  it('the switch note says pinned sessions keep their login', async () => {
+  it('the switch note says workspaces and chats with their own token keep it', async () => {
     await renderColumn()
-    expect(SWITCH_NOTE).toContain('every unpinned session')
-    expect(SWITCH_NOTE).toContain('Pinned workspaces and sessions keep their own login')
+    expect(SWITCH_NOTE).toContain('every chat that uses Server default')
+    expect(SWITCH_NOTE).toContain('Workspaces and chats set to their own token keep it')
   })
 })
 
@@ -305,8 +311,9 @@ describe('Sign-in sheet', () => {
     const writeText = vi.fn(async () => {})
     Object.assign(navigator, { clipboard: { writeText } })
     await renderColumn()
-    fireEvent.click(screen.getAllByRole('button', { name: '+ Add login' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: '+ Add subscription' })[0])
     const sheet = screen.getByTestId('llm-login-sheet')
+    expect(screen.getByRole('dialog', { name: 'Add a Claude subscription' })).toBeTruthy()
     fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'team' } })
     fireEvent.click(screen.getByRole('button', { name: 'Another device' }))
     fireEvent.click(screen.getByTestId('llm-login-start'))
@@ -330,7 +337,7 @@ describe('Sign-in sheet', () => {
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login/cancel', { loginId: 'login_1' }))
   })
 
-  it('polls login/status, shows the live-swap banner, and offers to make the new login active', async () => {
+  it('polls login/status, shows the live-swap banner, and offers to make the new subscription the server default', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let polls = 0
     h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
@@ -348,7 +355,8 @@ describe('Sign-in sheet', () => {
       }
     })
     await renderColumn()
-    fireEvent.click(screen.getByRole('button', { name: 'Log in again' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+    expect(screen.getByRole('dialog', { name: 'Sign old in again' })).toBeTruthy()
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login', { id: 'acc_stale', mode: 'this_computer' }),
@@ -358,9 +366,10 @@ describe('Sign-in sheet', () => {
     })
     expect(polls).toBeGreaterThanOrEqual(1)
     expect(screen.getByTestId('llm-login-banner').textContent).toContain('every session on this server')
-    expect(screen.getByText('Make the new login active?')).toBeTruthy()
-    fireEvent.click(within(screen.getByTestId('llm-login-sheet')).getByRole('button', { name: 'Make active' }))
+    expect(screen.getByText('Make the new subscription the server default?')).toBeTruthy()
+    fireEvent.click(within(screen.getByTestId('llm-login-sheet')).getByRole('button', { name: 'Use this token' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_new' }))
+    expect(await screen.findByText('The new subscription is now the server default.')).toBeTruthy()
     // Done: polling stops.
     const after = polls
     await act(async () => {
@@ -373,8 +382,8 @@ describe('Sign-in sheet', () => {
 describe('store helpers', () => {
   it('parses a malformed list into an empty doc and reads a refusal hint', () => {
     expect(parseAccountsDoc(null)).toEqual({ tools: [], logins: [], airgap: false, switchNote: '' })
-    expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change logins on Settings → LLMs."}}'))).toBe(
-      'Change logins on Settings → LLMs.',
+    expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change tokens on Settings → LLMs."}}'))).toBe(
+      'Change tokens on Settings → LLMs.',
     )
     expect(errorText(new Error('plain'))).toBe('plain')
   })

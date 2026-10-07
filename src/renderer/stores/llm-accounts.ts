@@ -1,7 +1,9 @@
-// LLM login wallet (Settings → LLMs, `k2 llm accounts`), per server.
+// LLM tokens (Settings → LLMs, `k2 llm tokens`), per server. People see
+// "tokens": subscriptions (a CLI sign-in) and API tokens (a key). The
+// internals (routes, types, DB) keep the older "accounts"/"login" names.
 //
-// One login per tool is active on a server; the others wait in the
-// daemon's wallet (`~/.k2/llm-accounts`). The daemon owns every token and
+// One token per tool is the server default ("the pool" internally); the
+// others wait in the daemon's store (`~/.k2/llm-accounts`). The daemon owns every token and
 // returns metadata only. This store renders that truth and sends
 // gestures; it refetches on the app-level `llm_accounts_changed` event and
 // never polls the list. A login sheet polls `login/status` while it is
@@ -117,7 +119,7 @@ export const WALLET_TOOLS = ['claude', 'codex', 'grok', 'gemini'] as const
 
 export const STATE_LABELS: Record<string, string> = {
   signed_in: 'Signed in',
-  needs_login: 'Needs login',
+  needs_login: 'Needs sign-in',
   signing_in: 'Signing in…',
   not_set_up: 'Not set up',
   unknown: 'Unknown',
@@ -323,20 +325,39 @@ export function isPinned(a: LlmAccount): boolean {
   return (a.pinnedTo?.length ?? 0) > 0
 }
 
-/** Can `a` be picked for a pin? A subscription login that is in the live
- *  store (the pool's login) can't: it would be live in two places. */
+/** Can `a` be picked for a pin? A subscription that is in the live
+ *  store (the server default) can't: it would be live in two places. */
 export function pinBlockReason(tool: LlmTool, a: LlmAccount): string | null {
   if (a.kind === 'api_key') return null
   if (a.state !== 'signed_in') return 'Not signed in'
   const live = tool.liveAccountId ?? (tool.accounts.find((x) => x.id === tool.activeId)?.kind === 'api_key' ? null : tool.activeId)
-  if (live === a.id) return "This is the pool's active login; switch the pool to another login first"
+  if (live === a.id) return 'This is the server default; pick Server default'
   return null
 }
 
 export const PINNED_SWITCH_REASON =
-  "Pinned logins can't be the pool's active login (a login can't be live in two places). Unpin it first."
+  "This token is set for a workspace or chat, so it can't also be the server default (a subscription can't be live in two places). Set those back to Server default first."
 
-export const CLAUDE_PIN_NOTE = "This agent's Claude history will live with this login."
+export const CLAUDE_PIN_NOTE = "This chat's Claude history will stay with this subscription."
+
+export const API_TOKEN_SUFFIX = 'billed per token'
+
+function planTitle(plan: string | null | undefined): string {
+  const p = (plan ?? '').trim()
+  return p ? p.charAt(0).toUpperCase() + p.slice(1) : ''
+}
+
+/** What a person reads for a token: "Claude · Max · work" for a
+ *  subscription, "API token · metered · billed per token" for a key. */
+export function tokenName(toolDisplay: string, a: LlmAccount): string {
+  if (a.kind === 'api_key') return `API token · ${a.label} · ${API_TOKEN_SUFFIX}`
+  return [toolDisplay, planTitle(a.plan), a.label].filter(Boolean).join(' · ')
+}
+
+/** The token the server default resolves to right now (null = none). */
+export function serverDefaultAccount(tool: LlmTool): LlmAccount | null {
+  return tool.accounts.find((a) => a.id === tool.activeId) ?? null
+}
 
 /** How often an open login sheet re-reads `login/status`. */
 export const LOGIN_POLL_MS = 1500

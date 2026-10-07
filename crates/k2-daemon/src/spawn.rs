@@ -466,7 +466,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             req.project_id.as_deref(),
             cfg.cwd.as_deref(),
         )
-        .map_err(|e| format!("LLM login: {e}"))?
+        .map_err(|e| format!("LLM token: {e}"))?
     };
     k2_core::cli_folder_trust::maybe_trust_harness_spawn(
         cfg.program.as_deref(),

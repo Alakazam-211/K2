@@ -377,7 +377,7 @@ pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
             write_private(&live_cred_path(tool), bytes).map_err(|e| WalletError::Io(e.to_string()))
         }
         Tool::Gemini => Err(WalletError::LiveStoreUnavailable(
-            "Gemini sign-in logins aren't supported; use an API key".into(),
+            "Gemini subscriptions aren't supported; use an API token".into(),
         )),
         Tool::Grok => {
             let (home, _) = live_home(tool);

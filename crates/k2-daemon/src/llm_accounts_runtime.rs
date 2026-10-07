@@ -29,7 +29,8 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LOGIN_KEEP: Duration = Duration::from_secs(10 * 60);
 pub const LIVE_SWAP_BANNER: &str =
     "Signing in temporarily switches this tool for every session on this server.";
-pub const SWITCH_NOTE: &str = "Switching a login affects every unpinned session on this server.";
+pub const SWITCH_NOTE: &str =
+    "Changing the server default token affects every chat that uses Server default on this server.";
 const KEEP_WARM_EVERY: Duration = Duration::from_secs(30 * 60);
 const KEEP_WARM_FIRST: Duration = Duration::from_secs(120);
 
@@ -300,7 +301,7 @@ pub fn start_login(
     if !tool.subscription_supported() || entry.is_api_key() {
         return Err(WalletError::Conflict(
             "api_key_login",
-            "this login is an API key; there is no sign-in to run".into(),
+            "this token is an API token; there is no sign-in to run".into(),
         ));
     }
     if let Some(id) = running_for(&entry.id) {
@@ -341,7 +342,7 @@ pub fn start_login(
         args,
         env,
         drain_on_exit: true,
-        label: format!("{} login", tool.display()),
+        label: format!("{} sign-in", tool.display()),
         ..Default::default()
     };
     let pty = match DaemonPtySession::spawn(cfg) {
@@ -357,7 +358,7 @@ pub fn start_login(
                 let _ = wallet::discard_unfinished(&conn, &entry.id);
             }
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(WalletError::Io(format!("could not start {} login: {e}", tool.display())));
+            return Err(WalletError::Io(format!("could not start {} sign-in: {e}", tool.display())));
         }
     };
     let events = pty.subscribe_events();
@@ -847,7 +848,7 @@ impl wallet::Refresher for DaemonRefresher {
             Tool::Claude => wallet::claude_refresh_slot(id, &post_json),
             Tool::Codex => crate::subscription_usage::codex_refresh_slot(&store::slot_dir(tool, id)),
             Tool::Grok => grok_warm(&store::slot_dir(tool, id)),
-            Tool::Gemini => Err("Gemini logins are API keys; nothing to refresh".into()),
+            Tool::Gemini => Err("Gemini tokens are API tokens; nothing to refresh".into()),
         }
     }
 }

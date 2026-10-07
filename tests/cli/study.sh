@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-accounts"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -320,23 +320,48 @@ assert_contains "switch named" "$sc_out" "Allow hiring and managing"
 assert_contains "guardrail sentence" "$sc_out" "guardrails, not locks"
 assert_contains "handback" "$sc_out" "k2 msg <primary>"
 
-echo "== k2 study llm-accounts =="
-la_out="$("$K2" study llm-accounts)"
-assert_contains "one active login" "$la_out" "ONE active login per server"
-assert_contains "wallet path" "$la_out" "~/.k2/llm-accounts/<tool>/<id>/"
-assert_contains "every session" "$la_out" "Switching a login affects every unpinned session on this server."
-assert_contains "never the active one" "$la_out" "K2 never refreshes the"
+echo "== k2 study llm-tokens =="
+la_out="$("$K2" study llm-tokens)"
+assert_contains "title" "$la_out" "k2 study llm-tokens — LLM tokens: subscriptions and API tokens"
+assert_contains "one server default" "$la_out" "ONE server default token per server"
+assert_contains "subscription defined" "$la_out" "SUBSCRIPTION"
+assert_contains "api token defined" "$la_out" "TOKEN (a provider key, billed per token)"
+assert_contains "token folder path" "$la_out" "~/.k2/llm-accounts/<tool>/<id>/"
+assert_contains "every chat on Server default" "$la_out" "Changing the server default affects every chat that uses Server"
+assert_contains "never the server default one" "$la_out" "refreshes the server default one."
 assert_contains "air-gap" "$la_out" "Under air-gap"
 assert_contains "read-only terminals" "$la_out" "Agents and K2 terminals are read-only"
-assert_contains "not a security boundary" "$la_out" "not a security boundary"
-assert_contains "bundles never carry it" "$la_out" "never carry the wallet"
-assert_contains "no auto rotation" "$la_out" "never rotates logins"
-assert_contains "pins section" "$la_out" "PINS AND API KEYS"
-assert_contains "pin precedence" "$la_out" "session pin > workspace pin > the pool's active"
-assert_contains "resume keeps its login" "$la_out" "A resumed conversation always keeps the login it started on."
-assert_contains "api keys billed per token" "$la_out" "billed per token"
-la_json="$("$K2" study llm-accounts --json)"
-python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="llm-accounts" and "needs_login" in d["body"], d["id"]' "$la_json"
+assert_contains "not a security boundary" "$la_out" "security boundary."
+assert_contains "bundles never carry it" "$la_out" "never carry the tokens"
+assert_contains "no auto rotation" "$la_out" "never rotates tokens"
+assert_contains "workspace/chat section" "$la_out" "A TOKEN FOR ONE WORKSPACE OR CHAT"
+assert_contains "pick action wording" "$la_out" "Use this token for this workspace / this chat"
+assert_contains "precedence" "$la_out" "its own token > its workspace's token > Server"
+assert_contains "resume keeps its token" "$la_out" "A resumed chat always keeps the token it started on."
+assert_contains "api tokens billed per token" "$la_out" "billed per token"
+assert_contains "cli noun" "$la_out" "k2 llm tokens add <tool> <label> [--device]"
+assert_absent_word() {
+    if printf '%s\n' "$2" | grep -iqw -- "$3"; then
+        echo "  FAIL: $1 (matched $3)" >&2
+        fail=$((fail + 1))
+    else
+        echo "  PASS: $1"
+        pass=$((pass + 1))
+    fi
+}
+assert_absent_word "no wallet word" "$la_out" "wallet"
+assert_absent_word "no pool word" "$la_out" "pool"
+la_json="$("$K2" study llm-tokens --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="llm-tokens" and "needs_login" in d["body"], d["id"]' "$la_json"
+echo "  PASS: llm-tokens --json id+body"
+pass=$((pass + 1))
+
+echo "== k2 study llm-accounts (alias) =="
+alias_out="$("$K2" study llm-accounts)"
+assert_contains "alias names the new page" "$alias_out" "k2 study llm-accounts is now k2 study llm-tokens — this page still works."
+assert_eq "alias prints the same page after its note" "$(printf '%s\n' "$alias_out" | tail -n +3)" "$la_out"
+alias_json="$("$K2" study llm-accounts --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="llm-accounts" and "k2 study llm-tokens" in d["body"], d["id"]' "$alias_json"
 echo "  PASS: llm-accounts --json id+body"
 pass=$((pass + 1))
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# k2 llm accounts — the LLM login wallet CLI.
+# k2 llm tokens — LLM subscriptions and API tokens (`k2 llm accounts` is
+# a working alias; both nouns are covered).
 #
 #   1. No daemon: help text; usage errors exit 2; the tool catalog maps
 #      `llm` to the locked `id` tool `llm-accounts`; schema and daily help
@@ -60,44 +61,65 @@ capture_nod() {
     set -e
 }
 
-capture_nod llm accounts --help
-assert_eq "llm accounts --help exit 0" "$rc" "0"
-assert_contains "help: list" "$out" "k2 llm accounts list [--tool <tool>] [--json]"
-assert_contains "help: add" "$out" "k2 llm accounts add <tool> <label> [--device]"
-assert_contains "help: switch" "$out" "k2 llm accounts switch <tool> <label>"
-assert_contains "help: next" "$out" "k2 llm accounts next <tool>"
-assert_contains "help: every session" "$out" "Switching a login affects every"
+capture_nod llm tokens --help
+assert_eq "llm tokens --help exit 0" "$rc" "0"
+assert_contains "help: list" "$out" "k2 llm tokens list [--tool <tool>] [--json]"
+assert_contains "help: add" "$out" "k2 llm tokens add <tool> <label> [--device]        add a subscription"
+assert_contains "help: add-key" "$out" "k2 llm tokens add-key <tool> <label>               add an API token"
+assert_contains "help: switch" "$out" "k2 llm tokens switch <tool> <label>                use this token as the server default"
+assert_contains "help: next" "$out" "k2 llm tokens next <tool>"
+assert_contains "help: pin wording" "$out" "use this token for a workspace"
+assert_contains "help: alias line" "$out" "\`k2 llm accounts …\` is the same command (alias)."
+assert_contains "help: every session" "$out" "Changing the server"
 assert_contains "help: read-only" "$out" "Agents and K2 terminals are read-only"
-assert_contains "help: study" "$out" "k2 study llm-accounts"
+assert_contains "help: study" "$out" "k2 study llm-tokens"
+assert_absent "help: no wallet word" "$out" "wallet"
+assert_absent "help: no pool word" "$out" "pool"
+tokens_help="$out"
+capture_nod llm accounts --help
+assert_eq "alias: llm accounts --help exit 0" "$rc" "0"
+assert_eq "alias: llm accounts --help is the same help" "$out" "$tokens_help"
+set +e
+out="$(env HOME="$HOME1" "$K2_CLI" llm tokens --help 2>&1)"; rc=$?
+set -e
+assert_eq "help needs no daemon" "$rc" "0"
 set +e
 out="$(env HOME="$HOME1" "$K2_CLI" llm accounts --help 2>&1)"; rc=$?
 set -e
-assert_eq "help needs no daemon" "$rc" "0"
+assert_eq "alias help needs no daemon" "$rc" "0"
 set +e
 out="$(env HOME="$HOME1" "$K2_CLI" llm 2>&1)"; rc=$?
 set -e
 assert_eq "bare k2 llm prints help, no daemon" "$rc" "0"
-assert_contains "bare k2 llm help text" "$out" "LLM login wallet"
+assert_contains "bare k2 llm help text" "$out" "LLM tokens: subscriptions and API tokens"
 capture_nod help llm
-assert_contains "k2 help llm" "$out" "k2 llm accounts list"
+assert_contains "k2 help llm" "$out" "k2 llm tokens list"
 
-capture_nod llm accounts frobnicate
+capture_nod llm tokens frobnicate
 assert_eq "unknown verb exit 2" "$rc" "2"
+assert_contains "unknown verb points at tokens help" "$out" "k2 llm tokens --help"
+capture_nod llm accounts frobnicate
+assert_eq "alias: unknown verb exit 2" "$rc" "2"
 capture_nod llm frobnicate
 assert_eq "unknown llm noun exit 2" "$rc" "2"
-capture_nod llm accounts add claude
+assert_contains "unknown noun points at tokens help" "$out" "k2 llm tokens --help"
+capture_nod llm tokens add claude
 assert_eq "add without a label exit 2" "$rc" "2"
-capture_nod llm accounts add gemini work
-assert_eq "add on a tool without a wallet exit 2" "$rc" "2"
+assert_contains "add usage says tokens" "$out" "usage: k2 llm tokens add <tool> <label> [--device]"
+capture_nod llm tokens add gemini work
+assert_eq "add on a tool without subscriptions exit 2" "$rc" "2"
 assert_contains "says which tools" "$out" "claude, codex, grok"
-capture_nod llm accounts add nosuch work
+assert_contains "says subscriptions" "$out" "gemini has no subscriptions yet"
+capture_nod llm tokens add nosuch work
 assert_eq "unknown tool exit 2" "$rc" "2"
-capture_nod llm accounts switch claude
+capture_nod llm tokens switch claude
 assert_eq "switch without a label exit 2" "$rc" "2"
-capture_nod llm accounts list --bogus
+capture_nod llm tokens list --bogus
 assert_eq "unknown flag exit 2" "$rc" "2"
-capture_nod llm accounts rename claude a
+capture_nod llm tokens rename claude a
 assert_eq "rename without new label exit 2" "$rc" "2"
+capture_nod llm accounts rename claude a
+assert_eq "alias: rename without new label exit 2" "$rc" "2"
 
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: llm tool id" "$(_cli_tool_id_for_verb llm)" "llm-accounts"
@@ -109,11 +131,13 @@ python3 -c '
 import json, sys
 d = json.loads(sys.argv[1])
 names = {c["name"] for c in d["commands"]}
-for n in ("llm accounts list", "llm accounts status", "llm accounts usage", "llm accounts add", "llm accounts switch", "llm accounts next"):
+for n in ("llm tokens list", "llm tokens status", "llm tokens usage", "llm tokens add", "llm tokens switch", "llm tokens next",
+          "llm tokens add-key", "llm tokens pin", "llm tokens unpin", "llm tokens pins"):
     assert n in names, n
-' "$schema" && ok "schema lists llm accounts verbs" || bad "schema llm accounts verbs"
+assert not any(n.startswith("llm accounts") for n in names), sorted(n for n in names if n.startswith("llm"))
+' "$schema" && ok "schema lists llm tokens verbs" || bad "schema llm tokens verbs"
 help_daily="$(sed -n '/^cmd_help_v2_daily() {/,/^}/p' "$K2_CLI")"
-assert_contains "daily help lists llm accounts" "$help_daily" "llm accounts list"
+assert_contains "daily help lists llm tokens" "$help_daily" "llm tokens list"
 
 # ── 2. stub daemon ───────────────────────────────────────────────────
 echo "== stub daemon =="
@@ -152,7 +176,7 @@ LIST = {"tools": [
      "loginMethod": None, "accounts": []},
     {"tool": "cursor", "display": "Cursor Agent", "supported": False, "subscription": False, "apiKeys": False,
      "activeId": None, "loginMethod": None, "accounts": []},
-], "logins": [], "airgap": False, "switchNote": "Switching a login affects every unpinned session on this server."}
+], "logins": [], "airgap": False, "switchNote": "Changing the server default token affects every chat that uses Server default on this server."}
 KEY_ACCT = dict(acct("acc_key", "metered", False), kind="api_key", billedPerToken=True, usage=None)
 PIN_WS = {"scopeKind": "workspace", "scopeId": "proj-1", "tool": "claude", "accountId": "acc_personal", "label": "builder"}
 LIST["tools"][0]["accounts"][1]["pinnedTo"] = [PIN_WS]
@@ -186,7 +210,7 @@ class H(BaseHTTPRequestHandler):
         elif verb in POST_ONLY and method != "POST":
             status, out = 405, {"error": "POST required"}
         elif verb in POST_ONLY and token == scoped:
-            status, out = 403, {"error": {"code": "owner_only", "hint": "Change logins on Settings → LLMs, or run k2 from a terminal outside K2."}}
+            status, out = 403, {"error": {"code": "owner_only", "hint": "Change tokens on Settings → LLMs, or run k2 from a terminal outside K2."}}
         elif verb == "list":
             out = LIST
         elif verb == "status":
@@ -238,11 +262,11 @@ class H(BaseHTTPRequestHandler):
             out = {"pins": [PIN_WS]}
         elif verb == "pin":
             if b.get("id") == "acc_work":
-                status, out = 409, {"error": {"code": "pinned_active", "hint": "work is the pool's active claude login; switch the pool first"}}
+                status, out = 409, {"error": {"code": "pinned_active", "hint": "work is the server default claude token; pick Server default"}}
             else:
                 out = {"pin": {"scopeKind": b.get("scope"), "scopeId": b.get("scopeId"), "tool": b.get("tool"),
                                "accountId": b.get("id"), "label": b.get("scopeId")},
-                       "note": "This agent's Claude history will live with this login."}
+                       "note": "This chat's Claude history will stay with this subscription."}
         elif verb == "unpin":
             out = {"unpinned": b.get("scopeId") != "nothing-here"}
         elif verb == "add-key":
@@ -285,73 +309,90 @@ cell() {
 last() { tail -n 1 "$WORK/reqs.jsonl" | python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
 last_body() { tail -n 1 "$WORK/reqs.jsonl" | python3 -c "import json,sys; print(json.dumps(json.loads(json.load(sys.stdin)['body']), sort_keys=True))"; }
 
-out="$(owner llm accounts list)"
+out="$(owner llm tokens list)"
 assert_contains "list: tool heading" "$out" "Claude:"
 assert_contains "list: active mark" "$out" "* work"
 assert_contains "list: usage summary" "$out" "Session 42% · Weekly 10%"
 assert_contains "list: idle login" "$out" "personal"
-assert_contains "list: empty tool" "$out" "Codex: no logins"
-assert_contains "list: api-key-only tool" "$out" "Gemini: no API keys (add one: k2 llm accounts add-key gemini <label>)"
-assert_contains "list: unsupported tool" "$out" "Cursor Agent: no login wallet yet"
-assert_contains "list: pinned to" "$out" "pinned to: workspace builder (in use)"
-assert_contains "list: api key marker" "$out" "api key · billed per token"
-assert_contains "list: every session note" "$out" "Switching a login affects every unpinned session on this server."
+assert_contains "list: empty tool" "$out" "Codex: no tokens (add a subscription: k2 llm tokens add codex <label>)"
+assert_contains "list: api-key-only tool" "$out" "Gemini: no API tokens (add one: k2 llm tokens add-key gemini <label>)"
+assert_contains "list: unsupported tool" "$out" "Cursor Agent: no tokens yet"
+assert_contains "list: used by" "$out" "used by: workspace builder (in use)"
+assert_contains "list: api token marker" "$out" "API token · billed per token"
+assert_contains "list: star legend" "$out" "* = the server default token."
+assert_contains "list: every session note" "$out" "Changing the server default token affects every chat that uses Server default on this server."
+assert_absent "list: no wallet word" "$out" "wallet"
 assert_eq "list is a GET" "$(last method)" "GET"
 assert_eq "list path" "$(last path)" "/cli/llm/accounts/list"
 assert_eq "owner sends the disk owner token" "$(last token)" "$OWNER"
+tokens_list="$out"
 
-json_out="$(owner llm accounts list --json)"
+# The `accounts` alias runs the same command against the same routes.
+out="$(owner llm accounts list)"
+assert_eq "alias: llm accounts list prints the same" "$out" "$tokens_list"
+assert_eq "alias: list path" "$(last path)" "/cli/llm/accounts/list"
+out="$(owner llm account list)"
+assert_eq "alias: llm account list prints the same" "$out" "$tokens_list"
+out="$(owner llm token list)"
+assert_eq "alias: llm token list prints the same" "$out" "$tokens_list"
+out="$(owner llm accounts switch claude personal)"
+assert_contains "alias: switch works" "$out" "claude: server default is now personal"
+assert_eq "alias: switch is a POST" "$(last method)" "POST"
+assert_eq "alias: switch path" "$(last path)" "/cli/llm/accounts/switch"
+assert_eq "alias: switch body" "$(last_body)" '{"id": "acc_personal"}'
+
+json_out="$(owner llm tokens list --json)"
 python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["tools"][0]["activeId"]=="acc_work", v' "$json_out" \
     && ok "list --json passes the body through" || bad "list --json passthrough"
-out="$(owner llm accounts list --tool codex)"
+out="$(owner llm tokens list --tool codex)"
 assert_absent "list --tool filters" "$out" "Claude:"
 
-out="$(owner llm accounts status claude work)"
-assert_contains "status: label + active" "$out" "claude work (active)"
+out="$(owner llm tokens status claude work)"
+assert_contains "status: label + server default" "$out" "claude work (server default)"
 assert_contains "status: state" "$out" "signed_in"
 assert_eq "status sends id" "$(tail -n 1 "$WORK/reqs.jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin)["query"]["id"])')" "work"
 set +e
-owner llm accounts status claude missing >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens status claude missing >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "status unknown → exit 4" "$rc" "4"
 assert_contains "status 404 hint" "$(cat "$WORK/err")" "not_found"
 
-out="$(owner llm accounts usage)"
+out="$(owner llm tokens usage)"
 assert_contains "usage row" "$out" "Session 42%"
 
-out="$(owner llm accounts switch claude personal)"
-assert_contains "switch says now using" "$out" "claude: now using personal"
-assert_contains "switch says every session" "$out" "every unpinned session on this server"
+out="$(owner llm tokens switch claude personal)"
+assert_contains "switch says server default" "$out" "claude: server default is now personal"
+assert_contains "switch says every chat" "$out" "every chat that uses Server default on this server"
 assert_eq "switch is a POST" "$(last method)" "POST"
 assert_eq "switch path" "$(last path)" "/cli/llm/accounts/switch"
 assert_eq "switch body is the resolved id" "$(last_body)" '{"id": "acc_personal"}'
 
-out="$(owner llm accounts next claude)"
-assert_contains "next switches" "$out" "now using personal"
+out="$(owner llm tokens next claude)"
+assert_contains "next switches" "$out" "server default is now personal"
 assert_eq "next body" "$(last_body)" '{"tool": "claude"}'
 set +e
-owner llm accounts next grok >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens next grok >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "next with nothing to switch to → exit 4" "$rc" "4"
 assert_contains "no_next hint" "$(cat "$WORK/err")" "no_next"
 
-owner llm accounts rename claude personal "home use" >/dev/null
+owner llm tokens rename claude personal "home use" >/dev/null
 assert_eq "rename body" "$(last_body)" '{"id": "acc_personal", "label": "home use"}'
 set +e
-owner llm accounts rename claude personal dup >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens rename claude personal dup >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "rename duplicate → exit 1 (409)" "$rc" "1"
 assert_contains "duplicate hint" "$(cat "$WORK/err")" "duplicate_label"
 
-owner llm accounts remove claude personal >/dev/null
+owner llm tokens remove claude personal >/dev/null
 assert_eq "remove path" "$(last path)" "/cli/llm/accounts/remove"
 assert_eq "remove body" "$(last_body)" '{"id": "acc_personal"}'
 set +e
-owner llm accounts remove claude nobody >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens remove claude nobody >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "remove unknown label → exit 4" "$rc" "4"
 
-owner llm accounts refresh --usage >/dev/null
+owner llm tokens refresh --usage >/dev/null
 assert_eq "refresh body" "$(last_body)" '{"usage": true}'
 
 # Every POST the CLI made carried a JSON body and no route was GET'd that
@@ -369,22 +410,22 @@ for line in open(sys.argv[1]):
 PY
 
 echo "== K2 terminal: passport, read-only =="
-out="$(cell llm accounts list)"
+out="$(cell llm tokens list)"
 assert_contains "passport list works" "$out" "* work"
 assert_eq "passport list sends the scoped token" "$(last token)" "$SCOPED"
 assert_absent "never the owner token" "$(tail -n 1 "$WORK/reqs.jsonl")" "$OWNER"
 set +e
-cell llm accounts switch claude personal >/dev/null 2>"$WORK/err"; rc=$?
+cell llm tokens switch claude personal >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "passport switch → exit 3" "$rc" "3"
-assert_contains "owner_only hint" "$(cat "$WORK/err")" "owner_only: Change logins on Settings → LLMs, or run k2 from a terminal outside K2."
+assert_contains "owner_only hint" "$(cat "$WORK/err")" "owner_only: Change tokens on Settings → LLMs, or run k2 from a terminal outside K2."
 assert_eq "passport mutation sent the scoped token" "$(last token)" "$SCOPED"
 assert_absent "passport mutation never the owner token" "$(tail -n 1 "$WORK/reqs.jsonl")" "$OWNER"
 
 # ── 3. add flow ──────────────────────────────────────────────────────
 echo "== add: sign-in page, device code, pasted code =="
 set +e
-out="$(printf '%s\n' "$PASTED" | owner llm accounts add claude fresh --device 2>"$WORK/err")"; rc=$?
+out="$(printf '%s\n' "$PASTED" | owner llm tokens add claude fresh --device 2>"$WORK/err")"; rc=$?
 set -e
 err_text="$(cat "$WORK/err")"
 assert_eq "add exit 0 on signed_in" "$rc" "0"
@@ -392,8 +433,8 @@ assert_contains "prints the sign-in page" "$out" "Open this page to sign in: htt
 assert_contains "prints the device code" "$out" "Enter this code on that page: WXYZ-1234"
 assert_eq "sign-in page printed once" "$(printf '%s\n' "$out" | grep -c 'Open this page')" "1"
 assert_contains "prompts for the code" "$err_text" "Paste the code:"
-assert_contains "signed in line" "$out" "Signed in: claude fresh."
-assert_contains "make-active offer" "$out" "k2 llm accounts switch claude 'fresh'"
+assert_contains "signed in line" "$out" "Signed in: claude subscription 'fresh'."
+assert_contains "make-default offer" "$out" "It is not the server default. To use it now: k2 llm tokens switch claude 'fresh'"
 assert_absent "pasted code never in stdout" "$out" "$PASTED"
 assert_absent "pasted code never in stderr" "$err_text" "$PASTED"
 python3 - "$WORK/reqs.jsonl" "$PASTED" <<'PY' && ok "add body + login/input carries the pasted code" || bad "add/login input bodies"
@@ -411,7 +452,7 @@ PY
 
 echo "== add: no code on stdin cancels =="
 set +e
-out="$(owner llm accounts add claude fresh </dev/null 2>"$WORK/err")"; rc=$?
+out="$(owner llm tokens add claude fresh </dev/null 2>"$WORK/err")"; rc=$?
 set -e
 assert_eq "empty code → exit 1" "$rc" "1"
 assert_contains "says cancelled" "$(cat "$WORK/err")" "cancelled"
@@ -421,51 +462,51 @@ assert_eq "add without --device asks for this computer" \
 
 # ── 4. pins + API keys ───────────────────────────────────────────────
 echo "== pins =="
-capture_nod llm accounts pin claude personal
+capture_nod llm tokens pin claude personal
 assert_eq "pin without a scope exit 2" "$rc" "2"
-capture_nod llm accounts pin --workspace a --session b claude personal
+capture_nod llm tokens pin --workspace a --session b claude personal
 assert_eq "pin with both scopes exit 2" "$rc" "2"
-capture_nod llm accounts pin --workspace a claude
+capture_nod llm tokens pin --workspace a claude
 assert_eq "pin without a label exit 2" "$rc" "2"
-capture_nod llm accounts unpin --session x
+capture_nod llm tokens unpin --session x
 assert_eq "unpin without a tool exit 2" "$rc" "2"
-capture_nod llm accounts pin --workspace a cursor x
+capture_nod llm tokens pin --workspace a cursor x
 assert_eq "pin on a tool without a wallet exit 2" "$rc" "2"
 
-out="$(owner llm accounts pin --workspace builder claude personal)"
+out="$(owner llm tokens pin --workspace builder claude personal)"
 assert_eq "pin is a POST" "$(last method)" "POST"
 assert_eq "pin path" "$(last path)" "/cli/llm/accounts/pin"
 assert_eq "pin body (workspace)" "$(last_body)" '{"id": "acc_personal", "scope": "workspace", "scopeId": "builder", "tool": "claude"}'
-assert_contains "pin prints the result" "$out" "pinned workspace builder claude to personal"
-assert_contains "pin prints the note" "$out" "Claude history will live with this login"
-owner llm accounts pin --session tab-42 claude personal >/dev/null
+assert_contains "pin prints the result" "$out" "workspace builder now uses claude token personal"
+assert_contains "pin prints the note" "$out" "This chat's Claude history will stay with this subscription."
+owner llm tokens pin --session tab-42 claude personal >/dev/null
 assert_eq "pin body (session)" "$(last_body)" '{"id": "acc_personal", "scope": "session", "scopeId": "tab-42", "tool": "claude"}'
 set +e
-owner llm accounts pin --workspace builder claude work >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens pin --workspace builder claude work >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "pin the pool's live login → exit 1 (409)" "$rc" "1"
-assert_contains "pinned_active hint" "$(cat "$WORK/err")" "pinned_active: work is the pool's active claude login"
+assert_contains "pinned_active hint" "$(cat "$WORK/err")" "pinned_active: work is the server default claude token"
 
-out="$(owner llm accounts unpin --workspace builder claude)"
+out="$(owner llm tokens unpin --workspace builder claude)"
 assert_eq "unpin path" "$(last path)" "/cli/llm/accounts/unpin"
 assert_eq "unpin body" "$(last_body)" '{"scope": "workspace", "scopeId": "builder", "tool": "claude"}'
-assert_contains "unpin says pool" "$out" "uses the pool's active login again"
-out="$(owner llm accounts unpin --session nothing-here claude)"
-assert_contains "unpin with no pin" "$out" "no claude pin on session nothing-here"
+assert_contains "unpin says Server default" "$out" "workspace builder claude: back to Server default"
+out="$(owner llm tokens unpin --session nothing-here claude)"
+assert_contains "unpin with no token of its own" "$out" "chat nothing-here has no claude token of its own (it uses Server default)"
 
-out="$(owner llm accounts pins)"
+out="$(owner llm tokens pins)"
 assert_eq "pins is a GET" "$(last method)" "GET"
 assert_contains "pins row" "$out" "workspace"
 assert_contains "pins row label → login label" "$out" "builder"
 assert_contains "pins row login" "$out" "-> personal"
-json_out="$(owner llm accounts pins --json)"
+json_out="$(owner llm tokens pins --json)"
 python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["pins"][0]["accountId"]=="acc_personal", v' "$json_out" \
     && ok "pins --json passes the body through" || bad "pins --json passthrough"
-out="$(cell llm accounts pins)"
+out="$(cell llm tokens pins)"
 assert_contains "pins works from a K2 terminal" "$out" "-> personal"
 assert_eq "passport pins sends the scoped token" "$(grep '/cli/llm/accounts/pins' "$WORK/reqs.jsonl" | tail -n 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" "$SCOPED"
 set +e
-cell llm accounts pin --workspace builder claude personal >/dev/null 2>"$WORK/err"; rc=$?
+cell llm tokens pin --workspace builder claude personal >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "passport pin → exit 3" "$rc" "3"
 assert_contains "passport pin owner_only" "$(cat "$WORK/err")" "owner_only:"
@@ -483,11 +524,12 @@ done
 : > "$WORK/argv.log"
 nreq_before="$(wc -l < "$WORK/reqs.jsonl")"
 set +e
-out="$(printf '%s\n' "$API_KEY" | env PATH="$WRAP:$PATH" HOME="$HOME2" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" "$K2_CLI" llm accounts add-key gemini metered 2>"$WORK/err")"; rc=$?
+out="$(printf '%s\n' "$API_KEY" | env PATH="$WRAP:$PATH" HOME="$HOME2" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" "$K2_CLI" llm tokens add-key gemini metered 2>"$WORK/err")"; rc=$?
 set -e
 err_text="$(cat "$WORK/err")"
 assert_eq "add-key exit 0" "$rc" "0"
 assert_contains "add-key says billed per token" "$out" "billed per token"
+assert_contains "add-key says API token" "$out" "added gemini API token 'metered'"
 assert_absent "key never in stdout" "$out" "$API_KEY"
 assert_absent "key never in stderr" "$err_text" "$API_KEY"
 [ -s "$WORK/argv.log" ] && ok "argv wrappers saw the children" || bad "argv wrappers saw nothing"
@@ -505,20 +547,20 @@ for line in open(sys.argv[1]):
 PY
 
 set +e
-printf '%s\n' "$API_KEY" | owner llm accounts add-key claude k2 "$API_KEY" >/dev/null 2>"$WORK/err"; rc=$?
+printf '%s\n' "$API_KEY" | owner llm tokens add-key claude k2 "$API_KEY" >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "key as an argument → exit 2" "$rc" "2"
 assert_contains "says stdin" "$(cat "$WORK/err")" "read from stdin, never an argument"
 set +e
-owner llm accounts add-key claude k2 </dev/null >/dev/null 2>"$WORK/err"; rc=$?
+owner llm tokens add-key claude k2 </dev/null >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "no key on stdin → exit 2" "$rc" "2"
 nreq_after="$(grep -c 'add-key' "$WORK/reqs.jsonl")"
 assert_eq "refused add-keys sent nothing" "$nreq_after" "1"
-capture_nod llm accounts add-key cursor x
+capture_nod llm tokens add-key cursor x
 assert_eq "add-key on a tool without keys exit 2" "$rc" "2"
 set +e
-printf '%s\n' "$API_KEY" | cell llm accounts add-key claude k3 >/dev/null 2>"$WORK/err"; rc=$?
+printf '%s\n' "$API_KEY" | cell llm tokens add-key claude k3 >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "passport add-key → exit 3" "$rc" "3"
 assert_contains "passport add-key owner_only" "$(cat "$WORK/err")" "owner_only:"

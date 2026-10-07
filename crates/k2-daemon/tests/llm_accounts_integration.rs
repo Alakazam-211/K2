@@ -317,7 +317,7 @@ async fn wallet_routes_end_to_end() {
     assert_eq!(list["tools"].as_array().unwrap().len(), 7);
     assert_eq!(
         list["switchNote"],
-        "Switching a login affects every unpinned session on this server."
+        "Changing the server default token affects every chat that uses Server default on this server."
     );
     let default = account_by_label(&list, "claude", "Default").clone();
     assert_eq!(default["active"], true);
@@ -691,7 +691,7 @@ async fn pinned_sessions_run_on_their_login_and_resume_keeps_the_recorded_home()
     let v = js(&r);
     assert_eq!(v["pin"]["scopeId"], pid.as_str());
     assert_eq!(v["pin"]["label"], "pinws");
-    assert!(v["note"].as_str().unwrap().contains("Claude history will live with this login"));
+    assert!(v["note"].as_str().unwrap().contains("This chat's Claude history will stay with this subscription."));
     // A pinned login can't become the pool's active login.
     let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": second.id}));
     assert_eq!(r.status, 409);

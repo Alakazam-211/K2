@@ -233,7 +233,7 @@ _cli_tool_id_for_verb() {
         # k2 sidecar v1 (SC35): an `id` tool, so inside a K2 terminal the
         # daemon sees the session's passport, never the owner token.
         sidecar) echo "sidecar" ;;
-        # LLM login wallet (`k2 llm accounts`): an `id` tool, so inside a K2
+        # LLM tokens (`k2 llm tokens`, alias `accounts`): an `id` tool, so inside a K2
         # terminal the daemon sees the session passport (read-only there).
         llm) echo "llm-accounts" ;;
         heartbeat) echo "heartbeat" ;;
@@ -429,11 +429,11 @@ if [ "${1:-}" = "sidecar" ]; then
     esac
 fi
 [ "${1:-}" = "sessions" ] && [ "${2:-}" = "spawn" ] && _skip_conn_gate=1
-# `k2 llm` / `k2 llm accounts` / any `--help` only print help.
+# `k2 llm` / `k2 llm tokens` (alias `accounts`) / any `--help` only print help.
 if [ "${1:-}" = "llm" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        accounts|account)
+        tokens|token|accounts|account)
             case "${3:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
             for _a in "${@:3}"; do
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
@@ -8889,48 +8889,57 @@ cmd_sidecar() {
     esac
 }
 
-# ── k2 llm accounts — the LLM login wallet ──────────────────────────
-# One ACTIVE login per tool per server, kept where the tool always keeps
-# it; other logins wait in ~/.k2/llm-accounts. GET /cli/llm/accounts/
-# list|status|usage|login/status|pins; POST add|add-key|login|login/input|
-# login/cancel|switch|next|rename|remove|refresh|pin|unpin (JSON bodies). `llm` is an `id` tool:
-# inside a K2 terminal the request carries this session's passport, and
-# the daemon keeps passports read-only (list/status/usage). Change logins
-# on Settings → LLMs, or from a terminal outside K2.
+# ── k2 llm tokens — LLM subscriptions and API tokens ─────────────────
+# (`k2 llm accounts` is a working alias.) One token per tool is the
+# SERVER DEFAULT, kept where the tool always keeps it; the other
+# subscriptions and API tokens wait in ~/.k2/llm-accounts. GET
+# /cli/llm/accounts/list|status|usage|login/status|pins; POST
+# add|add-key|login|login/input|login/cancel|switch|next|rename|remove|
+# refresh|pin|unpin (JSON bodies; route names are internal and unchanged).
+# `llm` is an `id` tool: inside a K2 terminal the request carries this
+# session's passport, and the daemon keeps passports read-only
+# (list/status/usage/pins). Change tokens on Settings → LLMs, or from a
+# terminal outside K2.
 
 _llm_accounts_usage() {
     cat <<'EOF'
-k2 llm accounts — the LLM login wallet (Claude, Codex, Grok; API keys also Gemini)
+k2 llm tokens — LLM tokens: subscriptions and API tokens
+(Claude, Codex, Grok subscriptions; API tokens also Gemini)
 
-  k2 llm accounts list [--tool <tool>] [--json]
-  k2 llm accounts status <tool> <label|id> [--json]
-  k2 llm accounts usage [--json]
-  k2 llm accounts add <tool> <label> [--device]        sign a new login in
-  k2 llm accounts login <tool> <label> [--device]      sign an idle login in again
-  k2 llm accounts switch <tool> <label>                make it the active login
-  k2 llm accounts next <tool>                          switch to the next signed-in login
-  k2 llm accounts rename <tool> <label> <new-label>
-  k2 llm accounts remove <tool> <label>                idle logins only (kept in Trash)
-  k2 llm accounts refresh [<tool> <label>] [--usage]   re-read state (and usage)
-  k2 llm accounts add-key <tool> <label>               add an API key (read from stdin)
-  k2 llm accounts pin --workspace <ws> <tool> <label>  pin a workspace to a login
-  k2 llm accounts pin --session <key> <tool> <label>   pin one session to a login
-  k2 llm accounts unpin --workspace <ws>|--session <key> <tool>
-  k2 llm accounts pins [--json]                        every pin
+  k2 llm tokens list [--tool <tool>] [--json]
+  k2 llm tokens status <tool> <label|id> [--json]
+  k2 llm tokens usage [--json]
+  k2 llm tokens add <tool> <label> [--device]        add a subscription (the tool's own sign-in)
+  k2 llm tokens login <tool> <label> [--device]      sign a subscription in again
+  k2 llm tokens switch <tool> <label>                use this token as the server default
+  k2 llm tokens next <tool>                          use the next signed-in subscription
+  k2 llm tokens rename <tool> <label> <new-label>
+  k2 llm tokens remove <tool> <label>                not the server default (kept in Trash)
+  k2 llm tokens refresh [<tool> <label>] [--usage]   re-read state (and usage)
+  k2 llm tokens add-key <tool> <label>               add an API token (read from stdin)
+  k2 llm tokens pin --workspace <ws> <tool> <label>  use this token for a workspace
+  k2 llm tokens pin --session <key> <tool> <label>   use this token for one chat
+  k2 llm tokens unpin --workspace <ws>|--session <key> <tool>
+                                                     back to Server default
+  k2 llm tokens pins [--json]                        workspaces and chats with their own token
 
-Each tool has ONE active login per server. Switching a login affects every
-session on this server; running sessions pick up the new token.
+`k2 llm accounts …` is the same command (alias).
+
+Each tool has ONE server default token per server. Changing the server
+default affects every chat that uses Server default on this server;
+running sessions pick up the new token.
 add/login print the sign-in page and any device code; when the tool asks
 for a code, paste it at the prompt (it is read from stdin, never an argument).
 --device signs in from another device (device code where the tool has one).
-Pins: session pin > workspace pin > the pool's active login. A resumed
-conversation keeps the login it started on. A pinned login is never the
-pool's active login and is skipped by `next`.
-API keys (add-key) are billed per token, go only to sessions that use them,
-and are never shown again. The key is read from stdin, never an argument.
+Which token a chat uses: its own token > its workspace's token > Server
+default. A resumed chat keeps the token it started on. A subscription set
+for a workspace or chat is never also the server default, and `next`
+skips it.
+API tokens (add-key) are billed per token, go only to sessions that use
+them, and are never shown again. The key is read from stdin, never an argument.
 Agents and K2 terminals are read-only (list, status, usage, pins). Change
-logins on Settings → LLMs, or run k2 from a terminal outside K2.
-More: k2 study llm-accounts
+tokens on Settings → LLMs, or run k2 from a terminal outside K2.
+More: k2 study llm-tokens
 EOF
 }
 
@@ -8962,15 +8971,15 @@ _llma_key_tool_ok() {
     case "${1:-}" in
         claude|codex|grok|gemini) return 0 ;;
         cursor|cursor-agent|pi|hermes)
-            echo "usage: ${1} has no login wallet yet (claude, codex, grok, gemini)" >&2
+            echo "usage: ${1} has no LLM tokens yet (claude, codex, grok, gemini)" >&2
             exit 2
             ;;
         "")
-            echo "usage: missing <tool> (claude, codex, grok or gemini) — k2 llm accounts --help" >&2
+            echo "usage: missing <tool> (claude, codex, grok or gemini) — k2 llm tokens --help" >&2
             exit 2
             ;;
         *)
-            echo "usage: unknown tool '$1' (claude, codex, grok or gemini) — k2 llm accounts --help" >&2
+            echo "usage: unknown tool '$1' (claude, codex, grok or gemini) — k2 llm tokens --help" >&2
             exit 2
             ;;
     esac
@@ -8980,15 +8989,15 @@ _llma_tool_ok() {
     case "${1:-}" in
         claude|codex|grok) return 0 ;;
         gemini|cursor|cursor-agent|pi|hermes)
-            echo "usage: ${1} has no login wallet yet (claude, codex, grok)" >&2
+            echo "usage: ${1} has no subscriptions yet (claude, codex, grok)" >&2
             exit 2
             ;;
         "")
-            echo "usage: missing <tool> (claude, codex or grok) — k2 llm accounts --help" >&2
+            echo "usage: missing <tool> (claude, codex or grok) — k2 llm tokens --help" >&2
             exit 2
             ;;
         *)
-            echo "usage: unknown tool '$1' (claude, codex or grok) — k2 llm accounts --help" >&2
+            echo "usage: unknown tool '$1' (claude, codex or grok) — k2 llm tokens --help" >&2
             exit 2
             ;;
     esac
@@ -9024,7 +9033,7 @@ for t in v.get("tools", []):
             print(a["id"]); sys.exit(0)
 ' "$tool" "$key" 2>/dev/null)"
     if [ -z "$id" ]; then
-        echo "not_found: no ${tool} login named '${key}' (k2 llm accounts list --tool ${tool})" >&2
+        echo "not_found: no ${tool} token named '${key}' (k2 llm tokens list --tool ${tool})" >&2
         exit 4
     fi
     printf '%s' "$id"
@@ -9051,34 +9060,35 @@ for t in v.get("tools", []):
         continue
     disp = t.get("display") or name
     if not t.get("supported"):
-        print("%s: no login wallet yet" % disp)
+        print("%s: no tokens yet" % disp)
         continue
     accts = t.get("accounts") or []
     if not accts:
         if t.get("subscription") is False:
-            print("%s: no API keys (add one: k2 llm accounts add-key %s <label>)" % (disp, name))
+            print("%s: no API tokens (add one: k2 llm tokens add-key %s <label>)" % (disp, name))
         else:
-            print("%s: no logins (add one: k2 llm accounts add %s <label>)" % (disp, name))
+            print("%s: no tokens (add a subscription: k2 llm tokens add %s <label>)" % (disp, name))
         continue
     print("%s:" % disp)
     for a in accts:
         mark = "*" if a.get("active") else " "
         if a.get("kind") == "api_key":
             line = "  %s %-20s %-12s %s" % (mark, (a.get("label") or "-")[:20], a.get("state") or "-",
-                                            "api key · billed per token")
+                                            "API token · billed per token")
         else:
             line = "  %s %-20s %-12s %-8s %s" % (mark, (a.get("label") or "-")[:20], a.get("state") or "-",
                                                  (a.get("plan") or "-")[:8], usage_summary(a.get("usage")))
         print(line.rstrip())
         pins = a.get("pinnedTo") or []
         if pins:
-            print("      pinned to: %s%s" % (", ".join("%s %s" % (p.get("scopeKind"), p.get("label") or p.get("scopeId")) for p in pins),
+            print("      used by: %s%s" % (", ".join("%s %s" % ("chat" if p.get("scopeKind") == "session" else p.get("scopeKind"), p.get("label") or p.get("scopeId")) for p in pins),
                                          " (in use)" if a.get("inUse") else ""))
         if a.get("detail"):
             print("      %s" % a["detail"])
 if v.get("airgap"):
     print("Air-gap is on: no sign-in, refresh or usage calls.")
-print(v.get("switchNote") or "Switching a login affects every unpinned session on this server.")
+print("* = the server default token.")
+print(v.get("switchNote") or "Changing the server default token affects every chat that uses Server default on this server.")
 ' "$tool_filter"
 }
 
@@ -9131,10 +9141,10 @@ print("\x1f".join([one(l.get("state")), one(l.get("url")), one(l.get("code")), o
         case "$state" in
             signed_in)
                 trap - INT TERM
-                echo "Signed in: ${tool} ${label}."
+                echo "Signed in: ${tool} subscription '${label}'."
                 if [ "$offer" = "1" ]; then
-                    echo "It is not the active login. To use it now: k2 llm accounts switch ${tool} '${label}'"
-                    echo "Switching a login affects every unpinned session on this server."
+                    echo "It is not the server default. To use it now: k2 llm tokens switch ${tool} '${label}'"
+                    echo "Changing the server default token affects every chat that uses Server default on this server."
                 fi
                 exit 0
                 ;;
@@ -9207,7 +9217,7 @@ cmd_llm_accounts() {
             --tool)
                 [ -n "${2:-}" ] || { echo "usage: --tool needs a value" >&2; exit 2; }
                 tool_filter="$2"; shift 2 ;;
-            --*) echo "usage: unknown flag '$1' (k2 llm accounts --help)" >&2; exit 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 llm tokens --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
         esac
     done
@@ -9215,21 +9225,21 @@ cmd_llm_accounts() {
     [ "$device" = "1" ] && mode="other_device"
     case "$sub" in
         list|ls)
-            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm accounts list [--tool <tool>] [--json]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm tokens list [--tool <tool>] [--json]" >&2; exit 2; }
             [ -z "$tool_filter" ] || _llma_tool_ok "$tool_filter"
             _llma_get list
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             _llma_render_list "$tool_filter"
             ;;
         status)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts status <tool> <label|id> [--json]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens status <tool> <label|id> [--json]" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             _llma_get status "id=$(urlencode "${pos[1]}")&tool=$(urlencode "${pos[0]}")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 a = json.load(sys.stdin).get("account") or {}
-print("%s %s%s" % (a.get("tool"), a.get("label"), " (active)" if a.get("active") else ""))
+print("%s %s%s" % (a.get("tool"), a.get("label"), " (server default)" if a.get("active") else ""))
 for k in ("state", "detail", "plan", "email", "org"):
     if a.get(k):
         print("  %-8s %s" % (k, a[k]))
@@ -9239,14 +9249,14 @@ for w in u.get("windows") or []:
 '
             ;;
         usage)
-            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm accounts usage [--json]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm tokens usage [--json]" >&2; exit 2; }
             _llma_get usage
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 rows = json.load(sys.stdin).get("rows") or []
 if not rows:
-    print("(no logins)")
+    print("(no tokens)")
 for r in rows:
     u = r.get("usage") or {}
     wins = u.get("windows") or []
@@ -9255,14 +9265,14 @@ for r in rows:
 '
             ;;
         add)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts add <tool> <label> [--device]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens add <tool> <label> [--device]" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             _llma_post add "$(_llma_json tool "${pos[0]}" label "${pos[1]}" mode "$mode")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             _llma_follow_login "$_SC_BODY"
             ;;
         login)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts login <tool> <label> [--device]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens login <tool> <label> [--device]" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             local lid
             lid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
@@ -9271,7 +9281,7 @@ for r in rows:
             _llma_follow_login "$_SC_BODY"
             ;;
         switch|use)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts switch <tool> <label>" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens switch <tool> <label>" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             local sid
             sid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
@@ -9280,14 +9290,14 @@ for r in rows:
             _llma_render_switch
             ;;
         next)
-            [ "${#pos[@]}" -eq 1 ] || { echo "usage: k2 llm accounts next <tool>" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 1 ] || { echo "usage: k2 llm tokens next <tool>" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             _llma_post next "$(_llma_json tool "${pos[0]}")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             _llma_render_switch
             ;;
         rename)
-            [ "${#pos[@]}" -eq 3 ] || { echo "usage: k2 llm accounts rename <tool> <label> <new-label>" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 3 ] || { echo "usage: k2 llm tokens rename <tool> <label> <new-label>" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             local rid
             rid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
@@ -9296,13 +9306,13 @@ for r in rows:
             echo "renamed ${pos[0]} '${pos[1]}' to '${pos[2]}'"
             ;;
         remove|rm)
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts remove <tool> <label>" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens remove <tool> <label>" >&2; exit 2; }
             _llma_tool_ok "${pos[0]}"
             local xid
             xid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
             _llma_post remove "$(_llma_json id "$xid")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
-            echo "removed ${pos[0]} '${pos[1]}' (its folder is kept in ~/.k2/llm-accounts/.removed)"
+            echo "removed ${pos[0]} token '${pos[1]}' (its folder is kept in ~/.k2/llm-accounts/.removed)"
             ;;
         refresh)
             local fid="" u=""
@@ -9313,7 +9323,7 @@ for r in rows:
                     _llma_tool_ok "${pos[0]}"
                     fid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
                     ;;
-                *) echo "usage: k2 llm accounts refresh [<tool> <label>] [--usage]" >&2; exit 2 ;;
+                *) echo "usage: k2 llm tokens refresh [<tool> <label>] [--usage]" >&2; exit 2 ;;
             esac
             _llma_post refresh "$(_llma_json id "$fid" usage "$u")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
@@ -9325,7 +9335,7 @@ for a in rows:
 '
             ;;
         pins)
-            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm accounts pins [--json]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm tokens pins [--json]" >&2; exit 2; }
             _llma_get pins
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             local pins_body="$_SC_BODY"
@@ -9339,9 +9349,9 @@ for t in json.loads(list_raw).get("tools", []):
     for a in t.get("accounts") or []:
         labels[a.get("id")] = a.get("label")
 if not pins:
-    print("(no pins — every session uses the active login of the pool)")
+    print("(no workspace or chat has its own token — every chat uses Server default)")
 for p in pins:
-    print("%-7s %-9s %-28s -> %s" % (p.get("tool"), p.get("scopeKind"), (p.get("label") or p.get("scopeId") or "-")[:28],
+    print("%-7s %-9s %-28s -> %s" % (p.get("tool"), "chat" if p.get("scopeKind") == "session" else p.get("scopeKind"), (p.get("label") or p.get("scopeId") or "-")[:28],
                                     labels.get(p.get("accountId")) or p.get("accountId")))
 '
             ;;
@@ -9350,14 +9360,17 @@ for p in pins:
                 echo "usage: pass --workspace or --session, not both" >&2; exit 2
             fi
             local scope="" scope_id=""
+            local scope_word=""
             if [ -n "$pin_ws" ]; then scope="workspace"; scope_id="$pin_ws"
             elif [ -n "$pin_sess" ]; then scope="session"; scope_id="$pin_sess"
             else
-                echo "usage: k2 llm accounts $sub --workspace <ws>|--session <key> <tool>$([ "$sub" = pin ] && echo ' <label>')" >&2
+                echo "usage: k2 llm tokens $sub --workspace <ws>|--session <key> <tool>$([ "$sub" = pin ] && echo ' <label>')" >&2
                 exit 2
             fi
+            scope_word="$scope"
+            [ "$scope" = "session" ] && scope_word="chat"
             if [ "$sub" = "pin" ]; then
-                [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts pin --workspace <ws>|--session <key> <tool> <label>" >&2; exit 2; }
+                [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens pin --workspace <ws>|--session <key> <tool> <label>" >&2; exit 2; }
                 _llma_key_tool_ok "${pos[0]}"
                 local pid
                 pid="$(_llma_resolve "${pos[0]}" "${pos[1]}")" || exit $?
@@ -9367,39 +9380,39 @@ for p in pins:
 import json, sys
 v = json.load(sys.stdin)
 p = v.get("pin") or {}
-print("pinned %s %s %s to %s" % (p.get("scopeKind"), p.get("label") or p.get("scopeId"), p.get("tool"), sys.argv[1]))
+print("%s %s now uses %s token %s" % ("chat" if p.get("scopeKind") == "session" else p.get("scopeKind"), p.get("label") or p.get("scopeId"), p.get("tool"), sys.argv[1]))
 if v.get("note"):
     print(v["note"])
 ' "${pos[1]}"
             else
-                [ "${#pos[@]}" -eq 1 ] || { echo "usage: k2 llm accounts unpin --workspace <ws>|--session <key> <tool>" >&2; exit 2; }
+                [ "${#pos[@]}" -eq 1 ] || { echo "usage: k2 llm tokens unpin --workspace <ws>|--session <key> <tool>" >&2; exit 2; }
                 _llma_key_tool_ok "${pos[0]}"
                 _llma_post unpin "$(_llma_json scope "$scope" scopeId "$scope_id" tool "${pos[0]}")"
                 if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
                 if printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("unpinned") else 1)'; then
-                    echo "unpinned ${scope} ${scope_id} ${pos[0]}: it uses the pool's active login again"
+                    echo "${scope_word} ${scope_id} ${pos[0]}: back to Server default"
                 else
-                    echo "no ${pos[0]} pin on ${scope} ${scope_id}"
+                    echo "${scope_word} ${scope_id} has no ${pos[0]} token of its own (it uses Server default)"
                 fi
             fi
             ;;
         add-key)
             if [ "${#pos[@]}" -gt 2 ]; then
-                echo "usage: the API key is read from stdin, never an argument — k2 llm accounts add-key <tool> <label>" >&2
+                echo "usage: the API token is read from stdin, never an argument — k2 llm tokens add-key <tool> <label>" >&2
                 exit 2
             fi
-            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm accounts add-key <tool> <label>   (the key is read from stdin)" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens add-key <tool> <label>   (the API token is read from stdin)" >&2; exit 2; }
             _llma_key_tool_ok "${pos[0]}"
             local api_key=""
             if [ -t 0 ]; then
-                printf 'Paste the API key: ' >&2
+                printf 'Paste the API token: ' >&2
                 IFS= read -rs api_key || api_key=""
                 echo >&2
             else
                 IFS= read -r api_key || true
             fi
             if [ -z "$api_key" ]; then
-                echo "usage: no API key on stdin" >&2
+                echo "usage: no API token on stdin" >&2
                 exit 2
             fi
             # The key reaches python on stdin and curl on stdin: never on
@@ -9413,11 +9426,11 @@ print(json.dumps({"tool": sys.argv[1], "label": sys.argv[2], "key": sys.stdin.re
             _llma_post add-key "$key_body"
             key_body=""
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
-            echo "added ${pos[0]} API key '${pos[1]}' (billed per token; the key is not shown again)"
-            echo "Use it: k2 llm accounts pin --workspace <ws> ${pos[0]} '${pos[1]}', or switch the pool to it."
+            echo "added ${pos[0]} API token '${pos[1]}' (billed per token; the key is not shown again)"
+            echo "Use it: k2 llm tokens pin --workspace <ws> ${pos[0]} '${pos[1]}', or make it the server default (k2 llm tokens switch)."
             ;;
         *)
-            echo "usage: unknown llm accounts verb '$sub' (list|status|usage|add|add-key|login|switch|next|rename|remove|refresh|pin|unpin|pins — k2 llm accounts --help)" >&2
+            echo "usage: unknown llm tokens verb '$sub' (list|status|usage|add|add-key|login|switch|next|rename|remove|refresh|pin|unpin|pins — k2 llm tokens --help)" >&2
             exit 2
             ;;
     esac
@@ -9430,10 +9443,10 @@ v = json.load(sys.stdin)
 s = v.get("switch") or {}
 a = v.get("account") or {}
 if s.get("alreadyActive"):
-    print("%s: %s is already the active login" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
+    print("%s: %s is already the server default" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
 else:
-    print("%s: now using %s" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
-    print("Switching a login affects every unpinned session on this server.")
+    print("%s: server default is now %s" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
+    print("Changing the server default token affects every chat that uses Server default on this server.")
 '
 }
 
@@ -9441,9 +9454,10 @@ cmd_llm() {
     local sub="${1:-}"
     case "$sub" in
         ""|help|--help|-h) _llm_accounts_usage; return 0 ;;
-        accounts|account) shift; cmd_llm_accounts "$@" ;;
+        # `tokens` is the noun; `accounts` stays a working alias.
+        tokens|token|accounts|account) shift; cmd_llm_accounts "$@" ;;
         *)
-            echo "usage: unknown llm verb '$sub' (k2 llm accounts --help)" >&2
+            echo "usage: unknown llm verb '$sub' (k2 llm tokens --help)" >&2
             exit 2
             ;;
     esac
@@ -14287,9 +14301,9 @@ cmd_schema() {
       "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
     {
-      "name": "llm accounts list",
-      "usage": "k2 llm accounts list [--tool <tool>] [--json]",
-      "description": "This server's LLM logins per tool (claude, codex, grok); * marks the one active login. Read-only from K2 terminals.",
+      "name": "llm tokens list",
+      "usage": "k2 llm tokens list [--tool <tool>] [--json]",
+      "description": "This server's LLM tokens per tool: subscriptions (claude, codex, grok) and API tokens; * marks the server default. Alias: k2 llm accounts. Read-only from K2 terminals.",
       "args": [],
       "flags": [
         {"name": "--tool", "arg": "tool", "description": "Only this tool."},
@@ -14297,71 +14311,71 @@ cmd_schema() {
       ]
     },
     {
-      "name": "llm accounts status",
-      "usage": "k2 llm accounts status <tool> <label|id> [--json]",
-      "description": "One login: state, plan, usage.",
+      "name": "llm tokens status",
+      "usage": "k2 llm tokens status <tool> <label|id> [--json]",
+      "description": "One token: state, plan, usage.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
     },
     {
-      "name": "llm accounts usage",
-      "usage": "k2 llm accounts usage [--json]",
-      "description": "Usage per login (the active login's shared row; idle logins' last probe).",
+      "name": "llm tokens usage",
+      "usage": "k2 llm tokens usage [--json]",
+      "description": "Usage per token (the server default's shared row; other subscriptions' last probe).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
     },
     {
-      "name": "llm accounts add",
-      "usage": "k2 llm accounts add <tool> <label> [--device]",
-      "description": "Sign a new login in with the tool's own sign-in; prints the page and code, reads a pasted code from stdin. Not from K2 terminals.",
+      "name": "llm tokens add",
+      "usage": "k2 llm tokens add <tool> <label> [--device]",
+      "description": "Add a subscription with the tool's own sign-in; prints the page and code, reads a pasted code from stdin. Not from K2 terminals.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": [{"name": "--device", "arg": null, "description": "Sign in from another device (device code where the tool has one)."}]
     },
     {
-      "name": "llm accounts switch",
-      "usage": "k2 llm accounts switch <tool> <label>",
-      "description": "Make a login the active one. Affects every session on this server. Not from K2 terminals.",
+      "name": "llm tokens switch",
+      "usage": "k2 llm tokens switch <tool> <label>",
+      "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Not from K2 terminals.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": []
     },
     {
-      "name": "llm accounts next",
-      "usage": "k2 llm accounts next <tool>",
-      "description": "Switch to the next signed-in login (one click when a session hits its limit). Never automatic.",
+      "name": "llm tokens next",
+      "usage": "k2 llm tokens next <tool>",
+      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic.",
       "args": [{"name": "tool", "required": true}],
       "flags": []
     },
     {
-      "name": "llm accounts add-key",
-      "usage": "k2 llm accounts add-key <tool> <label>",
-      "description": "Add an API-key login (claude, codex, grok, gemini). The key is read from stdin, billed per token, never shown again. Not from K2 terminals.",
+      "name": "llm tokens add-key",
+      "usage": "k2 llm tokens add-key <tool> <label>",
+      "description": "Add an API token (claude, codex, grok, gemini). The key is read from stdin, billed per token, never shown again. Not from K2 terminals.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": []
     },
     {
-      "name": "llm accounts pin",
-      "usage": "k2 llm accounts pin --workspace <ws>|--session <key> <tool> <label>",
-      "description": "Pin a workspace or one session to a login. Session pin > workspace pin > pool. Not from K2 terminals.",
+      "name": "llm tokens pin",
+      "usage": "k2 llm tokens pin --workspace <ws>|--session <key> <tool> <label>",
+      "description": "Use this token for a workspace or one chat. Chat token > workspace token > Server default. Not from K2 terminals.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": [
-        {"name": "--workspace", "arg": "ws", "description": "Pin a workspace (its agent, sidecars, heartbeats, tabs)."},
-        {"name": "--session", "arg": "key", "description": "Pin one session (its session key)."}
+        {"name": "--workspace", "arg": "ws", "description": "Use it for a workspace (its agent, sidecars, heartbeats, tabs)."},
+        {"name": "--session", "arg": "key", "description": "Use it for one chat (its session key)."}
       ]
     },
     {
-      "name": "llm accounts unpin",
-      "usage": "k2 llm accounts unpin --workspace <ws>|--session <key> <tool>",
-      "description": "Remove a pin; the scope uses the pool's active login again.",
+      "name": "llm tokens unpin",
+      "usage": "k2 llm tokens unpin --workspace <ws>|--session <key> <tool>",
+      "description": "Back to Server default for that workspace or chat.",
       "args": [{"name": "tool", "required": true}],
       "flags": [
-        {"name": "--workspace", "arg": "ws", "description": "The workspace pin."},
-        {"name": "--session", "arg": "key", "description": "The session pin."}
+        {"name": "--workspace", "arg": "ws", "description": "The workspace."},
+        {"name": "--session", "arg": "key", "description": "The chat (session key)."}
       ]
     },
     {
-      "name": "llm accounts pins",
-      "usage": "k2 llm accounts pins [--json]",
-      "description": "Every pin (read-only; works from K2 terminals).",
+      "name": "llm tokens pins",
+      "usage": "k2 llm tokens pins [--json]",
+      "description": "Every workspace and chat with its own token (read-only; works from K2 terminals).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
     },
@@ -16616,7 +16630,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-accounts"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts"
 
 _study_usage() {
     cat <<'EOF'
@@ -16633,7 +16647,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
-  skins  feedback-loop  ticket-brief  zen  sidecars  llm-accounts
+  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
+  llm-accounts
 EOF
 }
 
@@ -16660,7 +16675,8 @@ _study_title() {
         ticket-brief) echo "Ticket HTML brief" ;;
         zen) echo "Zen Gardens" ;;
         sidecars) echo "Sidecars" ;;
-        llm-accounts) echo "LLM login wallet" ;;
+        llm-tokens) echo "LLM tokens" ;;
+        llm-accounts) echo "LLM tokens" ;;
         *) echo "" ;;
     esac
 }
@@ -16700,7 +16716,8 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   ticket-brief        The HTML brief every agent ticket carries
   zen                 Zen Gardens: the one rule; the guide is k2 zen guide
   sidecars            Open, list and stop sidecars; the brief; who may
-  llm-accounts        LLM login wallet: one active login per tool; switching
+  llm-tokens          LLM tokens: subscriptions and API tokens; Server default
+  llm-accounts        leftover alias of llm-tokens
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -16733,7 +16750,12 @@ _study_page() {
         ticket-brief) _study_page_ticket_brief ;;
         zen) _study_page_zen ;;
         sidecars) _study_page_sidecars ;;
-        llm-accounts) _study_page_llm_accounts ;;
+        llm-tokens) _study_page_llm_tokens ;;
+        llm-accounts)
+            echo "k2 study llm-accounts is now k2 study llm-tokens — this page still works."
+            echo
+            _study_page_llm_tokens
+            ;;
         *) return 1 ;;
     esac
 }
@@ -18221,77 +18243,91 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
 EOF
 }
 
-_study_page_llm_accounts() {
+_study_page_llm_tokens() {
     cat <<'EOF'
-k2 study llm-accounts — the LLM login wallet
+k2 study llm-tokens — LLM tokens: subscriptions and API tokens
 
 WHAT
-  Each tool (Claude, Codex, Grok) has ONE active login per server. It
-  lives where the tool always keeps it (Claude's keychain item or
-  ~/.claude/.credentials.json, ~/.codex/auth.json, ~/.grok/auth.json).
-  Every session on the server uses it. Your other logins wait in the
-  wallet: ~/.k2/llm-accounts/<tool>/<id>/, folder 0700, file 0600.
-  K2 keeps labels, state and usage in its database, never a token.
+  A token is what a chat spends: a SUBSCRIPTION (a Claude, Codex or Grok
+  account and plan, signed in with the tool's own sign-in) or an API
+  TOKEN (a provider key, billed per token).
+  Each tool has ONE server default token per server. A subscription that
+  is the server default lives where the tool always keeps it (Claude's
+  keychain item or ~/.claude/.credentials.json, ~/.codex/auth.json,
+  ~/.grok/auth.json). Every chat set to Server default uses it. Your
+  other tokens wait on the server: ~/.k2/llm-accounts/<tool>/<id>/,
+  folder 0700, file 0600. K2 keeps labels, state and usage in its
+  database, never a token.
 
-SWITCHING
-  Switching a login affects every unpinned session on this server. Running
-  sessions pick up the new token; conversations stay where they are.
-  K2 first saves the outgoing login back to the wallet (the tool may have
-  refreshed it), then puts the chosen one in place.
-  When a session hits its limit, "Switch to next login" is one click on
-  Settings → LLMs (k2 llm accounts next <tool>). K2 never rotates logins
+SERVER DEFAULT
+  Changing the server default affects every chat that uses Server
+  default on this server. Running sessions pick up the new token;
+  conversations stay where they are. K2 first saves the outgoing
+  subscription back to its folder (the tool may have refreshed it),
+  then puts the chosen one in place.
+  When a session hits its limit, "Use next token" is one click on
+  Settings → LLMs (k2 llm tokens next <tool>). K2 never rotates tokens
   on its own.
 
-ADDING A LOGIN
-  Settings → LLMs → Add login. K2 runs the tool's own sign-in in a
-  terminal it owns: Open sign-in page, Copy code, Paste code. This works
-  from the web app and a phone against a headless box. Over SSH:
-  k2 llm accounts add <tool> <label> [--device]; paste the code at the
+ADDING A SUBSCRIPTION
+  Settings → LLMs → Add subscription. K2 runs the tool's own sign-in in
+  a terminal it owns: Open sign-in page, Copy code, Paste code. This
+  works from the web app and a phone against a headless box. Over SSH:
+  k2 llm tokens add <tool> <label> [--device]; paste the code at the
   prompt (read from stdin, never an argument).
-  The sign-in goes into the new wallet slot, so the active login is not
-  touched. If a tool can't do that, K2 signs in through the live store,
-  saves the new login, and puts the previous one back; a banner says the
-  tool is switched for every session while that runs.
+  The sign-in goes into its own folder, so the server default is not
+  touched. If a tool can't do that, K2 signs in through the tool's live
+  store, saves the new subscription, and puts the previous one back; a
+  banner says the tool is switched for every session while that runs.
 
 FRESH TOKENS
-  The tool refreshes the active login itself. K2 never refreshes the
-  active one. K2 refreshes idle wallet logins (once a day, and right
-  before a switch). Under air-gap: no sign-in, no refresh, no usage call.
+  The tool refreshes the server default subscription itself. K2 never
+  refreshes the server default one. K2 refreshes the other subscriptions
+  (once a day, and right before a switch). Under air-gap: no sign-in, no
+  refresh, no usage call.
 
-PINS AND API KEYS
-  A workspace (its agent, sidecars, heartbeats, tabs) or one session can
-  be pinned to a login: session pin > workspace pin > the pool's active
-  login. A resumed conversation always keeps the login it started on.
-  A pinned login is never the pool's active login and is skipped by
-  "Switch to next login" (one login is never live in two places, since
-  sign-ins rotate); unpin it first. "Switch to next" moves only unpinned
-  sessions; a pinned session at its limit: unpin it, or point the pin at
-  another login.
-  Pinned Claude sessions keep their history with that login. Pinned
-  Codex logins share conversations with the normal Codex home.
-  API keys (k2 llm accounts add-key <tool> <label>, read from stdin) are
+A TOKEN FOR ONE WORKSPACE OR CHAT
+  The Token picker (workspace settings → Agent → LLM tokens, or the chat
+  header) says "Use this token for this workspace / this chat". Which
+  token a chat uses: its own token > its workspace's token > Server
+  default. A resumed chat always keeps the token it started on.
+  A subscription set for a workspace or chat is never also the server
+  default and is skipped by "Use next token" (one subscription is never
+  live in two places, since sign-ins rotate); set those back to Server
+  default first. "Use next token" moves only chats on Server default; a
+  chat with its own token at its limit: pick another token for it.
+  A chat on its own Claude subscription keeps its Claude history with
+  that subscription. Codex subscriptions share conversations with the
+  normal Codex home.
+  API tokens (k2 llm tokens add-key <tool> <label>, read from stdin) are
   billed per token, go only into sessions that use them, and are never
-  shown again. Gemini takes API keys only.
+  shown again. Gemini takes API tokens only.
+  CLI: k2 llm tokens pin --workspace <ws>|--session <key> <tool> <label>;
+  unpin goes back to Server default.
 
 WHO
-  Owner, Admin and Member logins change logins on Settings → LLMs.
+  Owner, Admin and Member users change tokens on Settings → LLMs.
   Agents and K2 terminals are read-only: list, status, usage, pins. Change
-  logins on Settings → LLMs, or run k2 from a terminal outside K2
+  tokens on Settings → LLMs, or run k2 from a terminal outside K2
   (otherwise exit 3, owner_only). No route ever returns a token.
 
 ISOLATION
   All agents run as the same Unix user as the daemon, so any agent with
-  a shell can read the wallet. The wallet decides which subscription the
-  server bills to; it is an organizing feature, not a security boundary.
+  a shell can read the token folders. Tokens decide which subscription
+  or key the server bills to; this is an organizing feature, not a
+  security boundary.
 
 MOVING A BOX
-  Clone and migration bundles never carry the wallet. Sign each login in
-  again on the new box.
+  Clone and migration bundles never carry the tokens. Sign each
+  subscription in again on the new box and add API tokens again.
 
-NEEDS LOGIN
-  needs_login means the tool or K2 could not refresh that login. Click
-  Log in again on Settings → LLMs (or k2 llm accounts login <tool>
-  <label>). For the active login, run the tool's own /login, or switch.
+NEEDS SIGN-IN
+  needs_login means the tool or K2 could not refresh that subscription.
+  Click Sign in again on Settings → LLMs (or k2 llm tokens login <tool>
+  <label>). For the server default, run the tool's own /login, or switch.
+
+`k2 llm accounts` is an alias of `k2 llm tokens`; `k2 study llm-accounts`
+is an alias of this page.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -22798,8 +22834,9 @@ AGENTS
                                         agents (list/show/add/set/remove — `k2 preset --help`)
   sidecar new <name> --harness <preset> Open a named sidecar (<workspace>/<name>) with a brief;
                                         list / stop / access — see `k2 sidecar --help`
-  llm accounts list                     This server's LLM logins (one active per tool);
-                                        read-only from K2 terminals — `k2 llm accounts --help`
+  llm tokens list                       This server's LLM subscriptions and API tokens
+                                        (one server default per tool); read-only from
+                                        K2 terminals — `k2 llm tokens --help`
 
 ASK A HUMAN
   feedback ask "<title>"                File a durable ask for human input (survives
@@ -38544,7 +38581,7 @@ EOF
         shift; cmd_sidecar "$@"
         ;;
     llm)
-        # LLM login wallet (`k2 llm accounts`).
+        # LLM tokens (`k2 llm tokens`; `k2 llm accounts` is an alias).
         shift; cmd_llm "$@"
         ;;
     reserve)

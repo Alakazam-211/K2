@@ -540,8 +540,8 @@ pub fn handle_status() -> CliResponse {
 }
 
 /// Why the active-login refresher is gone, and where refresh lives now.
-pub const RETIRED_HINT: &str = "K2 no longer refreshes the active Claude login: Claude refreshes it itself. \
-K2 keeps your other saved logins fresh (Settings → LLMs → Logins). Remove the old background refresher with uninstall-scheduler.";
+pub const RETIRED_HINT: &str = "K2 no longer refreshes the server default Claude subscription: Claude refreshes it itself. \
+K2 keeps your other saved subscriptions fresh (Settings → LLMs → Tokens). Remove the old background refresher with uninstall-scheduler.";
 
 fn retired() -> CliResponse {
     CliResponse {

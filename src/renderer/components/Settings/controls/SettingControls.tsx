@@ -107,9 +107,19 @@ export function SettingDropdown({
   fullWidth = false,
   disabled = false,
   ariaLabel,
+  triggerLabel,
 }: {
   value: string
-  options: { value: string; label: string; disabled?: boolean; leading?: React.ReactNode }[]
+  /** `group` starts a heading row when it differs from the previous
+   *  option's; `badge` is short trailing text (e.g. "In use"). */
+  options: {
+    value: string
+    label: string
+    disabled?: boolean
+    leading?: React.ReactNode
+    group?: string
+    badge?: string
+  }[]
   onChange: (value: string) => void | Promise<void>
   className?: string
   /**
@@ -141,6 +151,9 @@ export function SettingDropdown({
   disabled?: boolean
   /** Accessible name for the trigger. Omitted callers are unchanged. */
   ariaLabel?: string
+  /** Fixed text on the closed trigger instead of the selected option's
+   *  label (the open menu still marks the selected one). */
+  triggerLabel?: string
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [menuBox, setMenuBox] = useState<{
@@ -227,9 +240,11 @@ export function SettingDropdown({
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'
         } ${fullWidth ? 'w-full justify-between' : ''}`}
       >
-        <span className={`flex min-w-0 items-center gap-2 truncate ${selected ? '' : 'text-[var(--color-text-muted)]'}`}>
-          {selected?.leading}
-          <span className="truncate">{selected?.label ?? placeholder ?? ''}</span>
+        <span
+          className={`flex min-w-0 items-center gap-2 truncate ${selected || triggerLabel !== undefined ? '' : 'text-[var(--color-text-muted)]'}`}
+        >
+          {triggerLabel === undefined && selected?.leading}
+          <span className="truncate">{triggerLabel ?? selected?.label ?? placeholder ?? ''}</span>
         </span>
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
@@ -254,12 +269,22 @@ export function SettingDropdown({
           data-testid="setting-dropdown-menu"
           className="w-max bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto"
         >
-          {options.map((option) => {
+          {options.map((option, i) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true
+            const heading =
+              option.group !== undefined && option.group !== options[i - 1]?.group ? option.group : null
             return (
+              <React.Fragment key={option.value}>
+              {heading !== null && (
+                <div
+                  role="presentation"
+                  className="px-3 pt-2 pb-0.5 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]"
+                >
+                  {heading}
+                </div>
+              )}
               <button
-                key={option.value}
                 type="button"
                 disabled={isDisabled}
                 onClick={() => {
@@ -277,12 +302,18 @@ export function SettingDropdown({
               >
                 {option.leading}
                 <span className="whitespace-nowrap flex-1">{option.label}</span>
+                {option.badge && (
+                  <span className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
+                    {option.badge}
+                  </span>
+                )}
                 {isActive && (
                   <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                 )}
               </button>
+              </React.Fragment>
             )
           })}
         </div>,

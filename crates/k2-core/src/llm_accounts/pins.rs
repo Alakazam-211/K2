@@ -123,7 +123,7 @@ pub fn pin(
             return Err(WalletError::Conflict(
                 "pinned_active",
                 format!(
-                    "{} is the pool's active {} login. A login can't be live in two places (sign-ins rotate), so switch the pool to another login first, or pin a different one.",
+                    "{} is the server default {} token. A subscription can't be live in two places (sign-ins rotate), so pick Server default, or make another token the server default first.",
                     e.label,
                     t.display()
                 ),
@@ -228,7 +228,7 @@ pub fn add_api_key(conn: &Connection, tool: Tool, label: &str, key: &str, by: Op
 pub fn replace_api_key(conn: &Connection, id: &str, key: &str) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     if !e.is_api_key() {
-        return Err(WalletError::Conflict("not_api_key", "that login is a sign-in, not an API key".into()));
+        return Err(WalletError::Conflict("not_api_key", "that token is a subscription, not an API token".into()));
     }
     let t = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     store::write_api_key(t, &e.id, &validate_api_key(key)?)?;
@@ -507,7 +507,7 @@ pub fn decide_spawn(
                 if e.removed_at.is_some() {
                     return Err(WalletError::Conflict(
                         "account_unavailable",
-                        format!("this conversation started on the {} login, which was removed; continue it in a new chat", e.label),
+                        format!("this chat started on the {} token, which was removed; continue it in a new chat", e.label),
                     ));
                 }
                 login_env(tool, &e, Source::Resume)

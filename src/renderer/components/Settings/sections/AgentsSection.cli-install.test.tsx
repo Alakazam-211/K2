@@ -44,14 +44,14 @@ describe('CLI Tools Setup install rows', () => {
     render(<AgentsSection />)
     expand(/Claude Code/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.claude)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the login under Logins/).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under Tokens/).length).toBe(1)
     expect(document.body.textContent).not.toMatch(/Node\.js/)
     expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy()
     expand(/Claude Code/)
 
     expand(/OpenAI Codex/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.codex)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the login under Logins/).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under Tokens/).length).toBe(1)
     expect(document.body.textContent).not.toContain('codex --login')
     expand(/OpenAI Codex/)
 

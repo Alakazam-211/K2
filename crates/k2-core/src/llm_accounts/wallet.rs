@@ -18,16 +18,16 @@ fn pinned_conflict(e: &Entry) -> WalletError {
     WalletError::Conflict(
         "login_pinned",
         format!(
-            "{} is pinned to a workspace or session. A login can't be live in two places (sign-ins rotate), so unpin it first.",
+            "{} is set for a workspace or chat. A subscription can't be live in two places (sign-ins rotate), so set those back to Server default first.",
             e.label
         ),
     )
 }
 
 /// Keep a live login K2 doesn't know (no active entry) instead of
-/// overwriting it: a new idle "Previous login" entry.
+/// overwriting it: a new idle "Previous subscription" entry.
 fn save_unknown_live(conn: &Connection, tool: Tool, bytes: &[u8], by: Option<&str>) -> Result<(), WalletError> {
-    let label = unique_label(conn, tool, "Previous login")?;
+    let label = unique_label(conn, tool, "Previous subscription")?;
     let e = super::create(conn, tool, &label, by)?;
     store::write_slot(tool, &e.id, bytes)?;
     let m = store::parse_meta(tool, bytes);
@@ -115,7 +115,7 @@ pub fn begin_relogin(conn: &Connection, id: &str) -> Result<Entry, WalletError> 
         return Err(WalletError::ActiveLogin);
     }
     if e.is_api_key() {
-        return Err(WalletError::Conflict("api_key_login", "API-key logins have no sign-in; replace the key instead".into()));
+        return Err(WalletError::Conflict("api_key_login", "API tokens have no sign-in; replace the key instead".into()));
     }
     if pins::is_pinned(conn, &e.id)? {
         return Err(pinned_conflict(&e));
@@ -239,7 +239,7 @@ pub fn switch(
     }
     let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
     // 1. Save the outgoing live login (the CLI may have refreshed it).
-    //    A live login K2 doesn't know is kept as "Previous login".
+    //    A live login K2 doesn't know is kept as "Previous subscription".
     let live = store::read_live(tool)?;
     let mut saved = false;
     match (&owner, &live) {

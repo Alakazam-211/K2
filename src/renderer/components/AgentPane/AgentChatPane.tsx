@@ -42,7 +42,7 @@ import {
   type ResolveMemo,
 } from '@/lib/chat-spawn-breaker'
 import type { ServerScope } from '@/kessel/server-scope'
-import { SessionLoginPicker } from '@/components/Settings/shared/LlmLoginPicker'
+import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -199,7 +199,7 @@ interface ChatHeaderProps {
   pinnedProvider: string | null
   /** Opens the shared continue dialog. Does not switch sessions. */
   onContinueNewChat: (source: ContinueNewChatSource) => void
-  /** Workspace id = the pinned chat's session key (LLM login pin). */
+  /** Workspace id = the pinned chat's session key (its Token picker). */
   projectId?: string
 }
 
@@ -335,7 +335,7 @@ function ChatHeader({
       </span>
       <div className="flex min-w-0 items-center justify-end gap-1">
       {projectId && (
-        <SessionLoginPicker
+        <SessionTokenPicker
           scope={room.scope}
           projectId={projectId}
           provider={currentSession?.provider || pinnedProvider}

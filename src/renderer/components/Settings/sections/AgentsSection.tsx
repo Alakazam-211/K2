@@ -75,18 +75,18 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
   {
     id: 'agents.accounts',
     section: 'agents',
-    group: 'Logins',
-    label: 'Logins',
-    description: 'Which login each agent CLI uses on this server; switch, add or remove logins',
-    keywords: ['account', 'login', 'logins', 'subscription', 'sign in', 'switch', 'wallet', 'claude', 'codex', 'grok'],
+    group: 'Tokens',
+    label: 'Tokens',
+    description: 'Which subscription or API token each agent CLI uses on this server; add, switch or remove tokens',
+    keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'account', 'login', 'sign in', 'switch', 'claude', 'codex', 'grok'],
   },
   {
     id: 'agents.add-login',
     section: 'agents',
-    group: 'Logins',
-    label: 'Add login',
-    description: 'Sign another Claude, Codex or Grok account in on this server',
-    keywords: ['add', 'account', 'login', 'sign in', 'subscription', 'claude', 'codex', 'grok'],
+    group: 'Tokens',
+    label: 'Add subscription or API token',
+    description: 'Sign another Claude, Codex or Grok subscription in, or paste an API token, on this server',
+    keywords: ['add', 'token', 'subscription', 'api token', 'api key', 'account', 'login', 'sign in', 'claude', 'codex', 'grok', 'gemini'],
   },
   {
     id: 'agents.cli-claude',
@@ -757,7 +757,7 @@ export function AgentsSection(): React.JSX.Element {
         <CLIInstallGuide />
       </div>
 
-      {/* Right: the login wallet (one active login per tool per server) */}
+      {/* Right: Tokens (one server default token per tool per server) */}
       <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]">
         <AgentAccountsColumn />
       </div>
@@ -779,14 +779,14 @@ const CLI_INSTALL_ENTRIES: {
     command: 'claude',
     installCommand: CLI_INSTALL_COMMANDS.claude,
     docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes: 'Then add the login under Logins →',
+    notes: 'Then add the subscription under Tokens →',
   },
   {
     name: 'OpenAI Codex',
     command: 'codex',
     installCommand: CLI_INSTALL_COMMANDS.codex,
     docs: 'https://github.com/openai/codex',
-    notes: 'Then add the login under Logins →',
+    notes: 'Then add the subscription under Tokens →',
   },
   {
     name: 'Grok',
@@ -794,7 +794,7 @@ const CLI_INSTALL_ENTRIES: {
     installCommand: CLI_INSTALL_COMMANDS.grok,
     docs: 'https://docs.x.ai/build',
     notes:
-      "xAI's terminal coding agent. Then add the login under Logins →. For headless use without a login, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
+      "xAI's terminal coding agent. Then add the subscription under Tokens →. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
   },
   {
     name: 'Gemini CLI',

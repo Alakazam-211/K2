@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
-// LLM login pins: the workspace "LLM logins" group and the chat header
-// login picker. Daemon calls are mocked; routes and bodies are asserted
-// exactly. Fail loud: an unexpected route throws.
+// Token pickers: the workspace "LLM tokens" group and the chat header
+// Token control. The closed control says only "Token"; the open menu shows
+// "Server default — <name>", then Subscriptions, then API tokens, with the
+// one in use marked. Daemon calls are mocked; routes and bodies are
+// asserted exactly. Fail loud: an unexpected route throws.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
@@ -20,7 +22,14 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
-import { WorkspaceLlmLogins, SessionLoginPicker, POOL_LABEL, SESSION_PIN_NOTE, toolForProvider } from './LlmLoginPicker'
+import {
+  WorkspaceLlmTokens,
+  SessionTokenPicker,
+  SESSION_PIN_NOTE,
+  TOKEN_LABEL,
+  IN_USE,
+  toolForProvider,
+} from './LlmLoginPicker'
 import { resetLlmAccountsForTests, CLAUDE_PIN_NOTE } from '@/stores/llm-accounts'
 import { primaryScope } from '@/kessel/server-scope'
 import { PROJECTS_MANIFEST } from '../sections/ProjectsSection'
@@ -33,9 +42,13 @@ function account(over: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
-const LIVE = account({ id: 'acc_live', label: 'main', active: true })
-const SPARE = account({ id: 'acc_spare', label: 'spare' })
+const LIVE = account({ id: 'acc_live', label: 'main', active: true, plan: 'max' })
+const SPARE = account({ id: 'acc_spare', label: 'spare', plan: 'pro' })
 const KEY = account({ id: 'acc_key', label: 'metered', kind: 'api_key', billedPerToken: true })
+
+const DEFAULT_NAME = 'Server default — Claude · Max · main'
+const SPARE_NAME = 'Claude · Pro · spare'
+const KEY_NAME = 'API token · metered · billed per token'
 
 let pins: Array<Record<string, unknown>> = []
 
@@ -84,21 +97,57 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-function pick(trigger: string, option: string): void {
-  fireEvent.click(screen.getByRole('button', { name: trigger }))
-  const menu = screen.getByTestId('setting-dropdown-menu')
-  fireEvent.click(within(menu).getByRole('button', { name: option }))
+/** The workspace Claude trigger: its accessible name carries the token in use. */
+function claudeTrigger(): HTMLElement {
+  return screen.getByRole('button', { name: /^Claude token: / })
 }
 
-describe('Workspace LLM logins', () => {
-  it('one row per supported tool; pinning posts the workspace id; Pool unpins', async () => {
-    render(<WorkspaceLlmLogins scope={primaryScope()} projectId="proj-1" />)
+function openMenu(): HTMLElement {
+  fireEvent.click(claudeTrigger())
+  return screen.getByTestId('setting-dropdown-menu')
+}
+
+function pick(option: string): void {
+  const menu = openMenu()
+  fireEvent.click(within(menu).getByRole('button', { name: new RegExp(`^${option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }))
+}
+
+describe('Workspace LLM tokens', () => {
+  it('one Token picker per supported tool; the closed control says only "Token"', async () => {
+    render(<WorkspaceLlmTokens scope={primaryScope()} projectId="proj-1" />)
     await screen.findByTestId('llm-pin-workspace-claude')
     for (const t of ['claude', 'codex', 'grok', 'gemini']) {
       expect(screen.getByTestId(`llm-pin-workspace-${t}`)).toBeTruthy()
     }
     expect(screen.queryByTestId('llm-pin-workspace-cursor')).toBeNull()
-    pick('Claude login', 'spare')
+    const trigger = claudeTrigger()
+    expect(trigger.textContent).toBe(TOKEN_LABEL)
+    expect(trigger.getAttribute('aria-label')).toBe(`Claude token: ${DEFAULT_NAME}`)
+  })
+
+  it('the open menu: Server default (in use) first, then Subscriptions, then API tokens', async () => {
+    render(<WorkspaceLlmTokens scope={primaryScope()} projectId="proj-1" />)
+    await screen.findByTestId('llm-pin-workspace-claude')
+    const menu = openMenu()
+    const text = menu.textContent ?? ''
+    expect(Array.from(menu.children).map((c) => c.textContent)).toEqual([
+      `${DEFAULT_NAME}${IN_USE}`,
+      'Subscriptions',
+      'Claude · Max · main — This is the server default; pick Server default',
+      SPARE_NAME,
+      'API tokens',
+      KEY_NAME,
+    ])
+    const def = within(menu).getByRole('button', { name: new RegExp(`^${DEFAULT_NAME}`) })
+    expect(def.textContent).toBe(`${DEFAULT_NAME}${IN_USE}`)
+    expect(within(menu).getByRole('button', { name: new RegExp(`^${SPARE_NAME}`) }).textContent).not.toContain(IN_USE)
+    expect(text).not.toMatch(/Pool|login|pin/i)
+  })
+
+  it('picking a subscription posts the workspace id; it becomes the one in use; Server default unpins', async () => {
+    render(<WorkspaceLlmTokens scope={primaryScope()} projectId="proj-1" />)
+    await screen.findByTestId('llm-pin-workspace-claude')
+    pick(SPARE_NAME)
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/pin', {
         scope: 'workspace',
@@ -108,49 +157,59 @@ describe('Workspace LLM logins', () => {
       }),
     )
     expect(await screen.findByText(CLAUDE_PIN_NOTE)).toBeTruthy()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Claude login' }).textContent).toContain('spare'))
-    pick('Claude login', POOL_LABEL)
+    expect(CLAUDE_PIN_NOTE).toBe("This chat's Claude history will stay with this subscription.")
+    await waitFor(() => expect(claudeTrigger().getAttribute('aria-label')).toBe(`Claude token: ${SPARE_NAME}`))
+    expect(claudeTrigger().textContent).toBe(TOKEN_LABEL)
+    const menu = openMenu()
+    expect(within(menu).getByRole('button', { name: new RegExp(`^${SPARE_NAME}`) }).textContent).toContain(IN_USE)
+    expect(within(menu).getByRole('button', { name: new RegExp(`^${DEFAULT_NAME}`) }).textContent).not.toContain(IN_USE)
+    fireEvent.click(within(menu).getByRole('button', { name: new RegExp(`^${DEFAULT_NAME}`) }))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/unpin', { scope: 'workspace', scopeId: 'proj-1', tool: 'claude' }),
     )
   })
 
-  it("the pool's live login is disabled with the reason; API keys say billed per token", async () => {
-    render(<WorkspaceLlmLogins scope={primaryScope()} projectId="proj-1" />)
+  it('the server default subscription is disabled with the reason; API tokens say billed per token', async () => {
+    render(<WorkspaceLlmTokens scope={primaryScope()} projectId="proj-1" />)
     await screen.findByTestId('llm-pin-workspace-claude')
-    fireEvent.click(screen.getByRole('button', { name: 'Claude login' }))
-    const menu = screen.getByTestId('setting-dropdown-menu')
-    const live = within(menu).getByRole('button', { name: /^main — / }) as HTMLButtonElement
+    const menu = openMenu()
+    const live = within(menu).getByRole('button', { name: /^Claude · Max · main — / }) as HTMLButtonElement
     expect(live.disabled).toBe(true)
-    expect(live.textContent).toContain("pool's active login")
-    expect(within(menu).getByRole('button', { name: 'metered · billed per token' })).toBeTruthy()
+    expect(live.textContent).toContain('This is the server default; pick Server default')
+    expect(within(menu).getByRole('button', { name: KEY_NAME })).toBeTruthy()
   })
 
   it('a daemon refusal shows its hint', async () => {
     h.daemonCliPost.mockImplementation(async () => {
-      throw new Error(JSON.stringify({ error: { code: 'pinned_active', hint: "main is the pool's active Claude login." } }))
+      throw new Error(JSON.stringify({ error: { code: 'pinned_active', hint: 'main is the server default Claude token.' } }))
     })
-    render(<WorkspaceLlmLogins scope={primaryScope()} projectId="proj-1" />)
+    render(<WorkspaceLlmTokens scope={primaryScope()} projectId="proj-1" />)
     await screen.findByTestId('llm-pin-workspace-claude')
-    pick('Claude login', 'spare')
-    expect((await screen.findByRole('alert')).textContent).toBe("main is the pool's active Claude login.")
+    pick(SPARE_NAME)
+    expect((await screen.findByRole('alert')).textContent).toBe('main is the server default Claude token.')
   })
 
-  it('the settings search has the LLM logins entry', () => {
+  it('the settings search has the LLM tokens entry', () => {
     const e = PROJECTS_MANIFEST.find((x) => x.id === 'projects.llm-logins')
     expect(e).toBeTruthy()
-    expect(e!.keywords).toEqual(expect.arrayContaining(['login', 'account', 'pin', 'subscription', 'api key']))
+    expect(e!.label).toBe('LLM tokens')
+    expect(e!.keywords).toEqual(expect.arrayContaining(['token', 'subscription', 'api token', 'server default']))
   })
 })
 
-describe('Chat header login picker', () => {
-  it('pins the pinned chat (session key = workspace id) and offers unpin', async () => {
-    render(<SessionLoginPicker scope={primaryScope()} projectId="proj-1" provider="claude" />)
-    const chip = await screen.findByRole('button', { name: 'Claude login for this chat' })
-    expect(chip.textContent).toBe('Login: Pool')
+describe('Chat header Token picker', () => {
+  it('closed it says only "Token"; open it marks the one in use and pins the pinned chat', async () => {
+    render(<SessionTokenPicker scope={primaryScope()} projectId="proj-1" provider="claude" />)
+    const chip = await screen.findByRole('button', { name: `Claude token for this chat: ${DEFAULT_NAME}` })
+    expect(chip.textContent).toBe(TOKEN_LABEL)
     fireEvent.click(chip)
+    expect(screen.getByText('Use this token for this chat')).toBeTruthy()
     expect(screen.getByText(SESSION_PIN_NOTE)).toBeTruthy()
-    pick('Claude login', 'spare')
+    const list = screen.getByTestId('chat-token-list')
+    expect(within(list).getByText('Subscriptions')).toBeTruthy()
+    expect(within(list).getByText('API tokens')).toBeTruthy()
+    expect(within(list).getByRole('button', { name: new RegExp(`^${DEFAULT_NAME}`) }).textContent).toContain(IN_USE)
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(`^${SPARE_NAME}`) }))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/pin', {
         scope: 'session',
@@ -159,18 +218,29 @@ describe('Chat header login picker', () => {
         id: 'acc_spare',
       }),
     )
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Claude login for this chat' }).textContent).toBe('Login: spare'))
-    fireEvent.click(screen.getByRole('button', { name: 'Unpin and use the pool' }))
+    const after = await screen.findByRole('button', { name: `Claude token for this chat: ${SPARE_NAME}` })
+    expect(after.textContent).toBe(TOKEN_LABEL)
+    expect(
+      within(screen.getByTestId('chat-token-list')).getByRole('button', { name: new RegExp(`^${SPARE_NAME}`) }).textContent,
+    ).toContain(IN_USE)
+    fireEvent.click(within(screen.getByTestId('chat-token-list')).getByRole('button', { name: new RegExp(`^${DEFAULT_NAME}`) }))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/unpin', { scope: 'session', scopeId: 'proj-1', tool: 'claude' }),
     )
   })
 
-  it('is hidden for a tool with no logins or a harness without a wallet', async () => {
+  it("a chat whose workspace has its own token defaults to that token", async () => {
+    pins = [{ scopeKind: 'workspace', scopeId: 'proj-1', tool: 'claude', accountId: 'acc_key', label: 'research' }]
+    render(<SessionTokenPicker scope={primaryScope()} projectId="proj-1" provider="claude" />)
+    const chip = await screen.findByRole('button', { name: `Claude token for this chat: Workspace default — ${KEY_NAME}` })
+    expect(chip.textContent).toBe(TOKEN_LABEL)
+  })
+
+  it('is hidden for a tool with no tokens or a harness without tokens', async () => {
     const { container } = render(
       <>
-        <SessionLoginPicker scope={primaryScope()} projectId="proj-1" provider="codex" />
-        <SessionLoginPicker scope={primaryScope()} projectId="proj-1" provider="pi" />
+        <SessionTokenPicker scope={primaryScope()} projectId="proj-1" provider="codex" />
+        <SessionTokenPicker scope={primaryScope()} projectId="proj-1" provider="pi" />
       </>,
     )
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('llm/accounts/list'))

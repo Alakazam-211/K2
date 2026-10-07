@@ -1435,7 +1435,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
                 }
                 return HandlerResult {
                     status: "409 Conflict",
-                    body: serde_json::json!({ "error": format!("LLM login: {e}"), "code": e.code() }).to_string(),
+                    body: serde_json::json!({ "error": format!("LLM token: {e}"), "code": e.code() }).to_string(),
                 };
             }
         }

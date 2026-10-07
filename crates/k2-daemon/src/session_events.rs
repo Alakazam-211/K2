@@ -455,6 +455,15 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "token_usage_changed" }`.
     TokenUsageChanged {},
 
+    /// LLM login wallet (`k2 llm accounts`, Settings → LLMs): a login was
+    /// added, signed in, switched, renamed, removed or refreshed.
+    /// APP-LEVEL refetch signal; `tool` names the tool when known. Never
+    /// carries a token, a sign-in URL or a code.
+    /// Wire: `{ "kind": "llm_accounts_changed", "tool": "claude" }`.
+    LlmAccountsChanged {
+        tool: Option<String>,
+    },
+
     /// prd-daemon-activity-and-thread-working-v1 A11 — the daemon's hook
     /// installer found an agent CLI config it could not update (it did not
     /// parse, so it was left untouched) or hit a write error. APP-LEVEL,
@@ -677,6 +686,7 @@ impl SessionEvent {
             SessionEvent::ProjectsChanged {} => "projects_changed",
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
+            SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
             SessionEvent::ActivityChanged { .. } => "activity_changed",
@@ -781,6 +791,11 @@ pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<Se
 /// ProjectsChanged convention): consumers re-query the ledger.
 pub fn emit_token_usage_changed() {
     let _ = emit(SessionEvent::TokenUsageChanged {});
+}
+
+/// Best-effort: the LLM login wallet changed (refetch signal).
+pub fn emit_llm_accounts_changed(tool: Option<&str>) {
+    let _ = emit(SessionEvent::LlmAccountsChanged { tool: tool.map(str::to_string) });
 }
 
 /// 0.39.39 (#677.1) — best-effort broadcast that a heartbeat session's

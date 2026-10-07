@@ -4753,6 +4753,53 @@ async fn handle_one_request(
         // refusal consumes the request first. Auth lives in the handler:
         // owner token, a Connect login (floors in route_policy), or a
         // passport whose VALIDATED session decides agent vs shell (SC36).
+        // LLM login wallet. POST rows are POST-only (require_post); bodies
+        // go through the capped reader (over the cap → 413, socket closes).
+        // Auth in the handler: owner token / Connect login = full; a
+        // passport (agent OR K2 shell tab) = read-only.
+        p if crate::llm_accounts_routes::is_route(p) => {
+            let post_row = crate::llm_accounts_routes::is_post_route(p);
+            if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::llm_accounts_routes::MAX_BODY,
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::llm_accounts_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::llm_accounts_routes::handle(&p_owned, caller, &body_bytes, &params, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::sidecar_routes::is_route(p) => {
             let post_row = crate::sidecar_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

@@ -552,6 +552,22 @@ pub fn is_agent_verb(path: &str) -> bool {
         // the validated session (canonical harness, sidecar, shell tab,
         // api cell) and applies the agent gate. `/cli/agent-access/set`
         // (the switch itself) is deliberately NOT here.
+        // LLM login wallet: passports may READ (list/status/usage); the
+        // handler refuses every mutation from a passport (agent tabs and
+        // K2 shell tabs alike) with a teaching `owner_only`.
+        "/cli/llm/accounts/list",
+        "/cli/llm/accounts/status",
+        "/cli/llm/accounts/usage",
+        "/cli/llm/accounts/login/status",
+        "/cli/llm/accounts/add",
+        "/cli/llm/accounts/login",
+        "/cli/llm/accounts/login/input",
+        "/cli/llm/accounts/login/cancel",
+        "/cli/llm/accounts/switch",
+        "/cli/llm/accounts/next",
+        "/cli/llm/accounts/rename",
+        "/cli/llm/accounts/remove",
+        "/cli/llm/accounts/refresh",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

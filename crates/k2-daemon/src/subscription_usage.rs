@@ -1031,7 +1031,27 @@ fn map_spawn_err(err: std::io::Error) -> CodexFail {
 }
 
 fn run_codex_process(program: &str) -> Result<CodexParsed, CodexFail> {
-    let mut child = codex_command(program).spawn().map_err(map_spawn_err)?;
+    run_codex_process_in(program, None, codex_exchange)
+}
+
+/// `codex app-server` pointed at a wallet slot (`CODEX_HOME=<slot>`, file
+/// credential store so the OS keyring is never involved). `None` = the
+/// live home (today's probe).
+fn codex_command_in(program: &str, slot: Option<&Path>) -> Command {
+    let mut cmd = codex_command(program);
+    if let Some(slot) = slot {
+        cmd.args(["-c", "cli_auth_credentials_store=\"file\""]);
+        cmd.env("CODEX_HOME", slot);
+    }
+    cmd
+}
+
+fn run_codex_process_in<T>(
+    program: &str,
+    slot: Option<&Path>,
+    exchange: fn(&mut dyn CodexTransport) -> Result<T, CodexFail>,
+) -> Result<T, CodexFail> {
+    let mut child = codex_command_in(program, slot).spawn().map_err(map_spawn_err)?;
     let stdin = child
         .stdin
         .take()
@@ -1056,7 +1076,7 @@ fn run_codex_process(program: &str) -> Result<CodexParsed, CodexFail> {
         }
     });
     let mut transport = ProcessTransport { stdin, rx };
-    let parsed = codex_exchange(&mut transport);
+    let parsed = exchange(&mut transport);
     drop(transport);
     drop(guard);
     parsed
@@ -1397,7 +1417,15 @@ fn map_grok_spawn_err(err: std::io::Error) -> GrokFail {
 }
 
 fn run_grok_process(program: &str) -> Result<GrokParsed, GrokFail> {
-    let mut child = grok_command(program).spawn().map_err(map_grok_spawn_err)?;
+    run_grok_process_in(program, None)
+}
+
+fn run_grok_process_in(program: &str, slot: Option<&Path>) -> Result<GrokParsed, GrokFail> {
+    let mut cmd = grok_command(program);
+    if let Some(slot) = slot {
+        cmd.env("GROK_HOME", slot);
+    }
+    let mut child = cmd.spawn().map_err(map_grok_spawn_err)?;
     let stdin = child
         .stdin
         .take()
@@ -1578,6 +1606,121 @@ fn read_keychain() -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+// ── Wallet slots (Settings → LLMs, `k2 llm accounts usage`) ──────────
+
+/// The token-refresh exchange for an idle Codex slot: the CLI's own
+/// `account/read {refreshToken:true}` (no model tokens spent).
+fn codex_refresh_exchange(io: &mut dyn CodexTransport) -> Result<(), CodexFail> {
+    let timeout = Duration::from_secs(20);
+    io.write_line(&codex_line(
+        1,
+        "initialize",
+        json!({"clientInfo": {"name": "k2", "title": "K2", "version": "0"}}),
+    )?)
+    .map_err(CodexFail::Transport)?;
+    let _init = io.read_matching(1, timeout).map_err(CodexFail::Transport)?;
+    let initialized = serde_json::to_string(&json!({"method": "initialized", "params": {}}))
+        .map_err(|e| CodexFail::Transport(e.to_string()))?;
+    io.write_line(&initialized).map_err(CodexFail::Transport)?;
+    io.write_line(&codex_line(2, "account/read", json!({"refreshToken": true}))?)
+        .map_err(CodexFail::Transport)?;
+    let msg = match io.read_matching(2, timeout) {
+        Ok(m) => m,
+        Err(err) if err.contains("closed") => return Err(CodexFail::NotSignedIn),
+        Err(err) => return Err(CodexFail::Transport(err)),
+    };
+    if let Some(e) = msg.get("error") {
+        let text = e.get("message").and_then(|m| m.as_str()).unwrap_or("account/read error");
+        return Err(CodexFail::Transport(text.chars().take(160).collect()));
+    }
+    match msg.pointer("/result/account") {
+        Some(a) if !a.is_null() => Ok(()),
+        _ => Err(CodexFail::NotSignedIn),
+    }
+}
+
+/// Have Codex refresh an idle wallet slot's token itself (`CODEX_HOME`
+/// = the slot). The caller holds the wallet's Codex lock.
+pub fn codex_refresh_slot(slot: &Path) -> Result<(), String> {
+    if airgap_on() {
+        return Err(k2_core::airgap::TEACHING.to_string());
+    }
+    let program = guarded_program("codex")?;
+    match run_codex_process_in(&program, Some(slot), codex_refresh_exchange) {
+        Ok(()) => Ok(()),
+        Err(CodexFail::NotSignedIn) => Err("401 not signed in (refresh token rejected)".into()),
+        Err(CodexFail::Transport(e)) => Err(e),
+    }
+}
+
+/// Usage for an idle wallet slot. Same row shape as the shared cache
+/// (`harness` = the tool), never written to the shared cache. The caller
+/// holds the wallet's lock for that tool. `claude_token` is the slot's
+/// access token (Claude only), read by the wallet store.
+pub fn probe_wallet_slot(
+    tool: &str,
+    slot: &Path,
+    claude_token: Option<(String, Option<i64>, String)>,
+) -> HarnessUsage {
+    let now = Utc::now();
+    if airgap_on() {
+        return HarnessUsage {
+            harness: tool.to_string(),
+            plan: String::new(),
+            windows: Vec::new(),
+            checked_at: now.to_rfc3339(),
+            status: STATUS_AIRGAP.into(),
+        };
+    }
+    match tool {
+        HARNESS_CLAUDE => {
+            let login = match claude_token {
+                Some((access_token, expires_at, plan)) => ClaudeLogin::Token { access_token, expires_at, plan },
+                None => ClaudeLogin::Missing,
+            };
+            probe_claude(login, |t| LiveIo.claude_get(t), None, SystemTime::now(), now)
+        }
+        HARNESS_CODEX => {
+            let outcome = match guarded_program("codex") {
+                Err(_) => CodexOutcome::Failed,
+                Ok(program) => match run_codex_process_in(&program, Some(slot), codex_exchange) {
+                    Ok(parsed) => CodexOutcome::Ready { plan: parsed.plan, windows: parsed.windows },
+                    Err(CodexFail::NotSignedIn) => CodexOutcome::NotSignedIn,
+                    Err(CodexFail::Transport(_)) => CodexOutcome::Failed,
+                },
+            };
+            probe_codex(outcome, None, now)
+        }
+        HARNESS_GROK => {
+            let outcome = match guarded_program("grok") {
+                Err(_) => GrokOutcome::Failed,
+                Ok(program) => match run_grok_process_in(&program, Some(slot)) {
+                    Ok(parsed) => GrokOutcome::Ready { plan: parsed.plan, windows: parsed.windows },
+                    Err(GrokFail::NotSignedIn) => GrokOutcome::NotSignedIn,
+                    Err(GrokFail::Transport(_)) => GrokOutcome::Failed,
+                },
+            };
+            probe_grok(outcome, None, now)
+        }
+        other => HarnessUsage {
+            harness: other.to_string(),
+            plan: String::new(),
+            windows: Vec::new(),
+            checked_at: now.to_rfc3339(),
+            status: "Not supported".into(),
+        },
+    }
+}
+
+/// The shared cache row for a tool's ACTIVE login (what the top-bar chip
+/// shows), without probing.
+pub fn cached_row(tool: &str) -> Option<HarnessUsage> {
+    match load_cache() {
+        Loaded::Ready(doc) => doc.harnesses.into_iter().find(|h| h.harness == tool),
+        _ => None,
     }
 }
 

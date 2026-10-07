@@ -173,6 +173,8 @@ pub mod sessions_grid_ws;
 pub mod sessions_ws;
 pub mod settings_routes;
 pub mod sidecar_routes;
+pub mod llm_accounts_routes;
+pub mod llm_accounts_runtime;
 pub mod remote_session_routes;
 pub mod remote_session_sessions;
 pub mod signal_format;

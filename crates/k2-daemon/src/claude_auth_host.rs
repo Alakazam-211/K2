@@ -42,6 +42,19 @@
 //! refresh is acceptable failure mode for a 20-minute polling job
 //! but a scheduler that depends on the daemon for every fire is
 //! not. Left as a `TODO Phase 2.1` marker.
+//!
+//! ## Retired for the ACTIVE login (0.45.0, LLM login wallet)
+//!
+//! K2 must never refresh the login that is live in Claude's own store:
+//! the CLI refreshes it, refresh tokens rotate, and a refresh behind the
+//! CLI's back invalidates the CLI's copy. So `refresh-now` and
+//! `install-scheduler` now refuse (`410 retired`) and teach where the
+//! refresh moved: the wallet keep-warm loop refreshes IDLE logins only
+//! (`k2_core::llm_accounts::wallet::claude_refresh_slot`, Claude's own
+//! grant shape: JSON body, client id from the binary, `expiresAt` in
+//! milliseconds — this file read it as seconds, so its refresh never
+//! fired), never under air-gap. `status` and `uninstall-scheduler` stay
+//! so an existing legacy scheduler can be seen and removed.
 
 use std::fs;
 use std::path::PathBuf;
@@ -504,7 +517,7 @@ fn uninstall_crontab() -> Result<(), String> {
 /// ```
 pub fn handle_status() -> CliResponse {
     let scheduler_installed = is_scheduler_installed();
-    let body = match read_credentials() {
+    let mut body = match read_credentials() {
         Some(creds) => {
             let (state, remaining) = compute_auth_state(creds.expires_at);
             serde_json::json!({
@@ -521,7 +534,21 @@ pub fn handle_status() -> CliResponse {
             "schedulerInstalled": scheduler_installed,
         }),
     };
+    body["retired"] = serde_json::json!(true);
+    body["hint"] = serde_json::json!(RETIRED_HINT);
     CliResponse::ok_json(body.to_string())
+}
+
+/// Why the active-login refresher is gone, and where refresh lives now.
+pub const RETIRED_HINT: &str = "K2 no longer refreshes the active Claude login: Claude refreshes it itself. \
+K2 keeps your other saved logins fresh (Settings → LLMs → Logins). Remove the old background refresher with uninstall-scheduler.";
+
+fn retired() -> CliResponse {
+    CliResponse {
+        status: "410 Gone",
+        content_type: "application/json",
+        body: serde_json::json!({"error": {"code": "retired", "hint": RETIRED_HINT}}).to_string(),
+    }
 }
 
 /// Handler for `POST /cli/claude-auth/refresh-now`.
@@ -534,6 +561,16 @@ pub fn handle_status() -> CliResponse {
 /// Body is ignored (kept on POST instead of GET because the side
 /// effect — token write — should not be cacheable).
 pub fn handle_refresh_now() -> CliResponse {
+    // Retired (0.45.0): never refresh the active login behind Claude.
+    retired()
+}
+
+/// The pre-0.45.0 active-login refresh, kept for reference only.
+#[allow(dead_code)]
+fn legacy_refresh_now() -> CliResponse {
+    if k2_core::airgap::enabled() {
+        return CliResponse::bad_request(k2_core::airgap::TEACHING);
+    }
     let creds = match read_credentials() {
         Some(c) => c,
         None => return CliResponse::bad_request("No Claude credentials found"),
@@ -631,6 +668,13 @@ pub fn handle_refresh_now() -> CliResponse {
 /// Idempotent — calling twice in a row reinstalls cleanly because
 /// `install_launchd` best-effort-unloads any prior plist first.
 pub fn handle_install_scheduler() -> CliResponse {
+    // Retired (0.45.0): the scheduler refreshed the active login.
+    retired()
+}
+
+/// The pre-0.45.0 scheduler install, kept for reference only.
+#[allow(dead_code)]
+fn legacy_install_scheduler() -> CliResponse {
     let dir = k2_home_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
         return CliResponse::bad_request(format!("Failed to create ~/.k2: {e}"));

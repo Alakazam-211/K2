@@ -630,6 +630,18 @@ mod unix_impl {
             // k2 sidecar v1: new / list / stop for THIS cell's session
             // (SC36). The handler applies the agent gate from the bound
             // session. Same body caps as TCP (413).
+            // LLM login wallet over the cell socket: read-only for every
+            // passport (the handler refuses mutations with owner_only).
+            p if crate::llm_accounts_routes::is_route(p) => {
+                if crate::llm_accounts_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::llm_accounts_routes::MAX_BODY {
+                    return from_cli(crate::llm_accounts_routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::llm_accounts_routes::handle(p, caller, body, params, "cell"))
+            }
             p if p.starts_with("/cli/sidecar/") && crate::sidecar_routes::is_route(p) => {
                 if crate::sidecar_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());

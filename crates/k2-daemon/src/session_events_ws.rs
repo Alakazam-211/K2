@@ -372,6 +372,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // 0.40.150 — token-usage ledger grew: app-level refetch signal
         // (no workspace scope; the live log is machine-wide).
         SessionEvent::TokenUsageChanged {} => None,
+        SessionEvent::LlmAccountsChanged { .. } => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
         SessionEvent::ZenChanged {} => None,
         // A11 — hook install problems: daemon-global, every client may toast.
@@ -743,6 +744,7 @@ mod tests {
             SessionEvent::ProjectsChanged {},
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
+            SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
             SessionEvent::ZenChanged {},
             SessionEvent::HooksInstallFailed { failures: vec![] },
             SessionEvent::ActivityChanged {

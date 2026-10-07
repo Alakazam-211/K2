@@ -173,6 +173,8 @@ mod sessions_grid_ws;
 mod sessions_ws;
 mod settings_routes;
 mod sidecar_routes;
+mod llm_accounts_routes;
+mod llm_accounts_runtime;
 mod remote_session_routes;
 mod remote_session_sessions;
 mod signal_format;
@@ -1320,6 +1322,10 @@ async fn async_main() {
     // Claude and Codex subscription windows. Headless — no webview — and
     // not hung off the heartbeat monitor.
     let _subscription_usage_handle = subscription_usage::spawn();
+    // LLM login wallet: import each tool's live login as the active
+    // "Default" entry when nothing is active, then keep idle logins warm
+    // (never the active one, never under air-gap).
+    llm_accounts_runtime::spawn();
 
     // Published services: boot reattach/respawn of desired=running
     // rows. Own process group / Job Object — stop_tunnel / Active

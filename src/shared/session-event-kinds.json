@@ -20,6 +20,7 @@
   "projects_changed": "app",
   "chat_history_changed": "app",
   "token_usage_changed": "app",
+  "llm_accounts_changed": "app",
   "presence_changed": "app",
   "open_url": "app",
   "project_groups_changed": "app",

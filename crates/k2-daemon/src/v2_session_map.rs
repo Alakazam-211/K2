@@ -67,6 +67,15 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
 }
 
 fn register_inner(key: String, session: Arc<DaemonPtySession>) {
+    // prd-daemon-activity-and-thread-working-v1 DA2: the activity row
+    // exists before the session is findable, so the first hook from this
+    // pane (accepted only once the map holds it) always has a row.
+    crate::activity_store::register(crate::activity_store::SessionFacts {
+        session_id: session.session_id.to_string(),
+        agent_name: key.clone(),
+        cwd: session.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        program: session.program.clone(),
+    });
     let map_arc = shared();
     let displaced = {
         let mut map = map_arc.lock().unwrap();
@@ -82,6 +91,9 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
             log_debug!(
                 "[v2-map] register displaced existing session under key={key}; killing old child"
             );
+            // DA2: the displaced session's row goes with it (it will never
+            // be unregistered under this key).
+            crate::activity_store::unregister(&old.session_id.to_string());
             old.kill();
         }
     }
@@ -321,8 +333,20 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         );
 
         let terminal_id = session.session_id.to_string();
+        // DA2: the activity row goes with the session (RL5 compat `stop`
+        // for a client that last heard `start`).
+        crate::activity_store::unregister(&terminal_id);
         let db = k2_core::db::shared();
         let conn = db.lock();
+        // DA32 / A14 (d): flip surfaced=0 + status=sleeping for the
+        // workspace row this session backed. Matched BEFORE the
+        // `active_terminal_id` nulls below (the old order nulled it first,
+        // so that arm never matched), and the pinned chat's
+        // `agent-chat:<pid>` row matches too: those rows stayed `running`
+        // after their PTY died. Targeting by terminal id (rather than
+        // (project_id, agent_name)) still covers chat tab, heartbeat
+        // headless wake and worktree chat alike.
+        crate::activity_store::release_lock_on_unregister(&conn, &terminal_id, agent_name);
         // 0.39.39 (#677.1) — a heartbeat session's live state flips to
         // false when its PTY exits. Resolve which heartbeat(s) pointed at
         // this terminal BEFORE we null the column, then broadcast
@@ -355,17 +379,6 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         let _ = k2_core::db::schema::WorkspaceSession::clear_active_terminal_id_by_terminal(
             &conn,
             &terminal_id,
-        );
-        // Flip surfaced=0 + status=sleeping for the workspace whose
-        // active_terminal_id matched. Targeting by terminal_id (rather
-        // than (project_id, agent_name)) means this single UPDATE
-        // covers every code path — chat tab, heartbeat headless wake,
-        // worktree chat — without needing to know which kind of
-        // session this was.
-        let _ = conn.execute(
-            "UPDATE workspace_sessions SET surfaced = 0, status = 'sleeping' \
-             WHERE terminal_id = ?1 OR active_terminal_id = ?1",
-            rusqlite::params![terminal_id],
         );
         drop(conn);
 

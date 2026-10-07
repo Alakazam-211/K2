@@ -55,6 +55,10 @@ impl TempHome {
         std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &home);
+        // K2 test rules: a test that can reach the production daemon (an
+        // inherited session socket/token, or the real home's port/token
+        // files) fails here, loudly, before it does anything.
+        k2_core::test_isolation::assert_isolated_from_prod();
         Self {
             prev,
             home,

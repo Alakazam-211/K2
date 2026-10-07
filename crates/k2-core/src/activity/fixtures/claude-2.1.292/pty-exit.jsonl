@@ -1,0 +1,7 @@
+{"t_ms":0,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"SessionStart","source":"startup","model":"claude-test"}}
+{"t_ms":100,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"Synthetic prompt."}}
+{"t_ms":200,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-1","tool_input":{},"tool_response":{"backgroundTaskId":"bash_1"}}}
+{"t_ms":300,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"Stop","prompt_id":"p1","stop_hook_active":false,"last_assistant_message":"Synthetic reply.","background_tasks":[{"id":"bash_1","type":"shell","status":"running"}],"session_crons":[]}}
+{"t_ms":300,"kind":"expect","payload":{"display":"monitoring","shells":1}}
+{"t_ms":5000,"kind":"exit","payload":"pty"}
+{"t_ms":5000,"kind":"expect","payload":{"display":"idle","reason":"pty_exited","shells":0,"lock":"sleeping"}}

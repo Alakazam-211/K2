@@ -8,13 +8,11 @@
 //! - 50-slot recent-event ring buffer used by `k2so hooks status`.
 //! - `AgentHookEventSink` trait + `set_sink`/`emit` ambient-singleton
 //!   plumbing so both hosts' handlers emit through the same API.
-//! - `handle_hook_complete` — the first migrated route handler. Any
-//!   Tauri-specific HTTP parsing stays in the caller; the handler is
-//!   pure logic (parses a pre-built params map, fires the event, writes
-//!   to `db::shared()`).
+//! - `emit_lifecycle` — the legacy `agent:lifecycle` emit, now fed only
+//!   by the daemon's activity store (prd-daemon-activity-and-thread-
+//!   working-v1 DA13); no raw hook writes a status any more.
 //!
-//! Both hosts call the same `handle_*` functions so the two paths can't
-//! drift. The daemon's `AgentHookEventSink` impl publishes events onto
+//! The daemon's `AgentHookEventSink` impl publishes events onto
 //! its `/events` WebSocket (see `crates/k2so-daemon/src/events.rs`);
 //! src-tauri's routes back onto `AppHandle::emit` directly.
 
@@ -383,7 +381,7 @@ pub fn parse_query_params(url: &str) -> HashMap<String, String> {
 /// Resolve the workspace path that owns `pane_id` for lifecycle broadcast
 /// attribution. Prefer the registered project's path for this terminal;
 /// fall back to the hook's PWD (`cwd` query param). Never invents a path.
-fn resolve_workspace_path_for_pane(
+pub fn resolve_workspace_path_for_pane(
     pane_id: &str,
     hook_cwd: Option<&str>,
 ) -> Option<String> {
@@ -405,106 +403,33 @@ fn resolve_workspace_path_for_pane(
         .filter(|s| !s.is_empty())
 }
 
-/// POST a canonicalized lifecycle event to the hook sink + update the
-/// `agent_sessions` row keyed by `pane_id` (= terminal_id = the
-/// `K2SO_PANE_ID` env var the PTY is spawned with).
+/// Fire the legacy lifecycle outputs for one canonical bucket
+/// (`start` | `stop` | `permission`): the `/events` `agent:lifecycle`
+/// frame, which the daemon's sink also mirrors onto the session-events
+/// bus as `agent_status_changed`.
 ///
-/// Side effects:
-/// - Appends to the recent-events ring buffer.
-/// - Emits `HookEvent::AgentLifecycle` via the registered sink (Tauri
-///   bus or daemon WS broadcast).
-/// - If the mapped canonical is `start`/`stop`/`permission` and the
-///   `agent_sessions` row has a different status, updates the row so
-///   the scheduler's `is_agent_locked` check reflects reality.
-///
-/// Returns the JSON response body (`{"success":true}`) so the HTTP
-/// layer doesn't need to know the wire format. Always 200; no error
-/// paths — unknown event types are recorded in the ring buffer with
-/// `canonical = None` and otherwise ignored.
-pub fn handle_hook_complete(params: &HashMap<String, String>) -> &'static str {
-    let pane_id = params.get("paneId").cloned().unwrap_or_default();
-    let tab_id = params.get("tabId").cloned().unwrap_or_default();
-    let raw_event = params.get("eventType").cloned().unwrap_or_default();
-    // Optional cwd from the hook script (`cwd=$PWD`) — used when the
-    // pane is not yet (or never) in workspace_sessions.
-    let hook_cwd = params
-        .get("cwd")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let canonical_opt = map_event_type(&raw_event);
-    record_recent_event(&raw_event, canonical_opt, &pane_id, &tab_id);
-
-    if let Some(canonical) = canonical_opt {
-        apply_lifecycle(&pane_id, &tab_id, &raw_event, canonical, hook_cwd.as_deref());
-    }
-
-    r#"{"success":true}"#
-}
-
-/// Fire the lifecycle outputs for one canonical bucket: the
-/// `agent:lifecycle` emit (→ bus `agent_status_changed`) and the
-/// `workspace_sessions.status` sync. Shared by the legacy
-/// `/hook/complete` route and the `/hook/event` compat bridge until the
-/// S2 activity store becomes the only writer (DA13, DA30).
-pub fn apply_lifecycle(
-    pane_id: &str,
-    tab_id: &str,
-    raw_event: &str,
-    canonical: &str,
-    hook_cwd: Option<&str>,
-) {
-    // Daemon-authoritative workspace path for remote-safe attribution.
-    // Prefer the registered project path for this terminal; fall back
-    // to the hook's PWD when the session row is missing (tab PTYs).
-    let workspace_path = resolve_workspace_path_for_pane(pane_id, hook_cwd);
-
+/// prd-daemon-activity-and-thread-working-v1 DA13 / RL5: the daemon's
+/// activity store is the only caller. It derives the bucket from its own
+/// row (display), never from a raw hook, and it alone writes
+/// `workspace_sessions.status` (DA32). Raw hooks no longer map straight
+/// onto a status: `handle_hook_complete`'s status write is gone.
+pub fn emit_lifecycle(pane_id: &str, canonical: &str, workspace_path: Option<&str>) {
     let event = AgentLifecycleEvent {
         pane_id: pane_id.to_string(),
-        tab_id: tab_id.to_string(),
+        tab_id: pane_id.to_string(),
         event_type: canonical.to_string(),
-        workspace_path: workspace_path.clone(),
+        workspace_path: workspace_path.map(str::to_string),
     };
-
     crate::log_debug!(
-        "[agent-hooks] {} → {} (pane={}, tab={}, path={:?})",
-        raw_event,
+        "[agent-hooks] lifecycle {} (pane={}, path={:?})",
         canonical,
         pane_id,
-        tab_id,
         workspace_path
     );
     emit(
         HookEvent::AgentLifecycle,
         serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
     );
-
-    // Sync WorkspaceSession.status so the scheduler's is_agent_locked
-    // check reflects reality. Without this, a single wake leaves
-    // status='running' forever and every subsequent heartbeat
-    // silently skips the agent. Pane_id is the K2SO_PANE_ID env
-    // var we set at PTY creation.
-    let new_status: Option<&str> = match canonical {
-        "start" => Some("running"),
-        "stop" => Some("sleeping"),
-        "permission" => Some("permission"),
-        _ => None,
-    };
-    if let Some(new_status) = new_status {
-        let db = crate::db::shared();
-        let conn = db.lock();
-        if let Ok(Some(s)) =
-            crate::db::schema::WorkspaceSession::get_by_terminal_id(&conn, pane_id)
-        {
-            if s.status != new_status {
-                let _ = crate::db::schema::WorkspaceSession::update_status(
-                    &conn,
-                    &s.project_id,
-                    new_status,
-                );
-            }
-        }
-    }
 }
 
 /// The `/cli/hooks/status` injection report for the daemon user's home:
@@ -717,10 +642,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_hook_complete_records_and_emits_on_known_event() {
+    fn emit_lifecycle_sends_one_agent_lifecycle_frame() {
         let _g = TEST_LOCK.lock();
-        recent_events().lock().clear();
-
         let captured: Arc<PLMutex<Vec<(String, serde_json::Value)>>> =
             Arc::new(PLMutex::new(Vec::new()));
         struct Fake(Arc<PLMutex<Vec<(String, serde_json::Value)>>>);
@@ -731,74 +654,16 @@ mod tests {
         }
         set_sink(Box::new(Fake(captured.clone())));
 
-        let params: HashMap<String, String> = [
-            ("paneId", "pane-9"),
-            ("tabId", "tab-9"),
-            ("eventType", "UserPromptSubmit"),
-        ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+        emit_lifecycle("pane-9", "start", Some("/home/u/ws"));
 
-        let body = handle_hook_complete(&params);
-        assert_eq!(body, r#"{"success":true}"#);
-
-        // Emitted exactly once with canonical "start".
         let events = captured.lock();
         assert_eq!(events.len(), 1, "expected one emit, got {events:?}");
         assert_eq!(events[0].0, "agent:lifecycle");
         assert_eq!(events[0].1["eventType"], "start");
         assert_eq!(events[0].1["paneId"], "pane-9");
+        assert_eq!(events[0].1["tabId"], "pane-9");
+        assert_eq!(events[0].1["workspacePath"], "/home/u/ws");
         drop(events);
-
-        // Ring buffer captured the raw name + canonical.
-        let recent = get_recent_events();
-        let last = recent.last().expect("ring buffer has entry");
-        assert_eq!(last.raw_event, "UserPromptSubmit");
-        assert_eq!(last.canonical.as_deref(), Some("start"));
-        assert!(last.matched);
-
-        *sink_slot().lock() = None;
-    }
-
-    #[test]
-    fn handle_hook_complete_ignores_unknown_event_type_but_records() {
-        let _g = TEST_LOCK.lock();
-        recent_events().lock().clear();
-
-        let captured: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
-        struct Fake(Arc<AtomicUsize>);
-        impl AgentHookEventSink for Fake {
-            fn emit(&self, _e: HookEvent, _p: serde_json::Value) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        set_sink(Box::new(Fake(captured.clone())));
-
-        let params: HashMap<String, String> = [
-            ("paneId", "p"),
-            ("tabId", "t"),
-            ("eventType", "MadeUpEvent"),
-        ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
-
-        let body = handle_hook_complete(&params);
-        assert_eq!(body, r#"{"success":true}"#);
-        assert_eq!(
-            captured.load(Ordering::SeqCst),
-            0,
-            "unknown event should not emit"
-        );
-
-        // But ring buffer still holds the raw observation (matched=false).
-        let recent = get_recent_events();
-        let last = recent.last().expect("ring buffer has entry");
-        assert_eq!(last.raw_event, "MadeUpEvent");
-        assert_eq!(last.canonical, None);
-        assert!(!last.matched);
-
         *sink_slot().lock() = None;
     }
 

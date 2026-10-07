@@ -157,6 +157,8 @@ mod session_activity;
 // owner check, and the daemon-owned hook installer.
 mod hook_ingest;
 mod hook_install;
+// S2: the per-session activity store (rows, ends, decay, status lock).
+mod activity_store;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;
@@ -708,6 +710,20 @@ async fn async_main() {
         }
     }
 
+    // prd-daemon-activity-and-thread-working-v1 DA30: no PTY survived the
+    // restart, so a `running` / `permission` session lock left by a missed
+    // Stop (or any `active_terminal_id`) points at a corpse. Release them
+    // before any heartbeat tick or boot-sweep spawn; new rows start
+    // unconfirmed and never write until real evidence arrives.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = activity_store::boot_reset_status(&conn);
+        if n > 0 {
+            log_debug!("[daemon] released {n} stale session lock(s) from prior daemon");
+        }
+    }
+
     // P5.6: legacy heartbeat-projects.txt has been retired in favor
     // of `/cli/heartbeat/active-projects`. If it's still on disk from
     // a pre-P5 install (or if the user only ever runs the daemon
@@ -1231,6 +1247,10 @@ async fn async_main() {
     // gate. The dispatcher stops 503ing real routes, and the renderer's
     // /boot-status poll flips to phase=ready, mounts the app against the
     // correctly-paired daemon, and stops showing "Applying updates…".
+    // S2: the activity store consumes the hook plane and runs its timers
+    // (row deadlines, 10 s liveness sweep) before any route can take a hook.
+    activity_store::spawn();
+
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
 

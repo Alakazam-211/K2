@@ -1,0 +1,8 @@
+{"t_ms":0,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"SessionStart","source":"startup","model":"claude-test"}}
+{"t_ms":100,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"Synthetic prompt."}}
+{"t_ms":200,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-1","tool_input":{"command":"sleep 100"}}}
+{"t_ms":1000,"kind":"keys","payload":"esc"}
+{"t_ms":3500,"kind":"expect","payload":{"display":"working","lead":"working"}}
+{"t_ms":4000,"kind":"keys","payload":"esc"}
+{"t_ms":4500,"kind":"transcript","payload":"interrupt"}
+{"t_ms":4500,"kind":"expect","payload":{"display":"idle","reason":"interrupted","outcome":"cancelled","lock":"sleeping"}}

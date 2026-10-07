@@ -157,6 +157,7 @@ pub mod session_activity;
 // prd-daemon-activity-and-thread-working-v1 S1: `POST /hook/event` ingest +
 // owner check, and the daemon-owned hook installer.
 pub mod hook_ingest;
+pub mod activity_store;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
@@ -302,6 +303,10 @@ pub mod test_harness {
             .set_nonblocking(true)
             .expect("set_nonblocking");
         let listener = TcpListener::from_std(std_listener).expect("tokio adopt listener");
+
+        // The activity store consumes the hook plane in main.rs; run it
+        // here too so `/hook/*` reaches rows and the compat events.
+        crate::activity_store::spawn();
 
         // The dispatcher 503s every real route until boot-status is
         // `ready`; flip it so auth tests see real status codes.

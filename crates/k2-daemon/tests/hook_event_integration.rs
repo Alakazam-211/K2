@@ -132,6 +132,7 @@ fn with_short_home<F: FnOnce(&Path)>(f: F) {
     std::fs::create_dir_all(tmp.join(".k2")).expect("create temp HOME");
     let _restore = Restore { prev: std::env::var_os("HOME"), tmp: tmp.clone() };
     std::env::set_var("HOME", &tmp);
+    k2_core::test_isolation::assert_isolated_from_prod();
     let _ = k2_core::db::init_for_tests();
     v2_session_map::clear_for_tests();
     f(&tmp);

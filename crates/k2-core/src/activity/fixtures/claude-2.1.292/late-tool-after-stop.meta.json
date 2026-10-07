@@ -1,0 +1,42 @@
+{
+  "cli": "claude",
+  "version": "2.1.292",
+  "os": "synthetic",
+  "capturedAt": "synthetic",
+  "synthetic": true,
+  "registeredEvents": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "PermissionDenied",
+    "Notification",
+    "Stop",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
+    "PostCompact",
+    "SessionEnd"
+  ],
+  "childPid": 100,
+  "procs": [
+    [
+      100,
+      10,
+      1
+    ],
+    [
+      200,
+      100,
+      2
+    ],
+    [
+      300,
+      200,
+      3
+    ]
+  ],
+  "notes": "T-S2c: an async PostToolUse for the finished prompt lands after Stop and stays evidence only; one for a new prompt id is a new turn. Synthetic, scrubbed: written from the hook contract (PRD \u00a74) and Orca's documented captures; re-capture on a real 2.1.292 per \u00a711."
+}

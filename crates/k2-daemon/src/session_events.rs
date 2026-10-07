@@ -193,10 +193,12 @@ pub enum SessionEvent {
 
     /// #675.2 — an agent's working/idle status flipped. APP-LEVEL.
     /// Replaces the renderer's terminal/list-running + agent-status poll
-    /// (active-agents.ts) so spinners are push-driven. Emitted from the
-    /// daemon's agent-lifecycle hook chokepoint
-    /// (`handle_hook_complete`), which maps every raw harness hook into
-    /// the canonical `start`/`stop`/`permission` buckets.
+    /// (active-agents.ts) so spinners are push-driven. Since
+    /// prd-daemon-activity-and-thread-working-v1 S2 (RL5) it is a compat
+    /// event derived from the activity store's row display (`working` /
+    /// `monitoring` → `start`, `waiting` → `permission`, `idle` /
+    /// `unverifiable` → `stop`, plus `stop` on row removal), never from a
+    /// raw hook. Deprecated: `activity_changed` (S4) replaces it.
     ///
     /// Wire: `{ "kind": "agent_status_changed", "paneId": string,
     /// "tabId": string, "status": "start"|"stop"|"permission",

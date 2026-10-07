@@ -681,6 +681,8 @@ pub fn handle_write(params: &HashMap<String, String>) -> CliResponse {
         }
     };
 
+    // DA26 / A15: a client's lone Esc / Ctrl-C feeds interrupt inference.
+    crate::activity_store::note_client_input(&session_id.to_string(), message.as_bytes());
     if let Err(e) = session.write(message.as_bytes()) {
         return CliResponse::bad_request(format!("pty write failed: {e}"));
     }

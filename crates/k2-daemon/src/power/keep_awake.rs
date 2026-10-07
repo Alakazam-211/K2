@@ -27,10 +27,13 @@
 //!   itself (loopback), never a Member or a remote client.
 //! - **Battery floor.** On battery below 20 % everything pauses.
 //!
-//! "While agents are working" follows `session_activity_changed`: any
-//! session `working` holds; the hold stays [`WORKING_GRACE`] after the
-//! last one goes idle. A session stuck `working` past [`WORKING_STALE`]
-//! (a lost idle event) stops counting.
+//! "While agents are working" follows the daemon activity store
+//! (prd-daemon-activity-and-thread-working-v1 Q10, A32): a session holds
+//! while it is working, waiting or monitoring background work (never for
+//! cron-only monitoring, so a `/loop` can't keep the Mac up forever); the
+//! hold stays [`WORKING_GRACE`] after the last one lets go. A session with
+//! no evidence for [`WORKING_STALE`] stops counting, measured from its
+//! last evidence, so an `unverifiable` session still holds up to 2 h.
 //!
 //! The status says what is actually held, never just the setting.
 
@@ -65,13 +68,20 @@ impl WorkTracker {
         format!("{workspace_path}|{agent_name}")
     }
 
-    /// Apply one `session_activity_changed`. Returns true when this
-    /// event started a hold that was not already running (so the caller
-    /// re-applies at once instead of waiting for the next tick).
+    /// Apply one activity update. Returns true when this event started a
+    /// hold that was not already running (so the caller re-applies at once
+    /// instead of waiting for the next tick).
     pub fn on_activity(&mut self, key: &str, status: &str, now: Instant) -> bool {
+        self.on_activity_since(key, status == "working", now, now)
+    }
+
+    /// [`Self::on_activity`] with the session's last evidence as the
+    /// staleness clock (A32: [`WORKING_STALE`] counts from evidence, not
+    /// from when the daemon re-announced the row).
+    pub fn on_activity_since(&mut self, key: &str, holds: bool, since: Instant, now: Instant) -> bool {
         let was_busy = self.busy(now);
-        if status == "working" {
-            self.working.insert(key.to_string(), now);
+        if holds {
+            self.working.insert(key.to_string(), since);
             self.went_idle_at = None;
         } else {
             self.remove(key, now);
@@ -305,9 +315,14 @@ impl KeepAwake {
         self.power.os()
     }
 
-    /// One `session_activity_changed`. True = re-apply now.
+    /// One activity update. True = re-apply now.
     pub fn note_activity(&self, key: &str, status: &str, now: Instant) -> bool {
         self.inner.lock().tracker.on_activity(key, status, now)
+    }
+
+    /// One activity-store row change (Q10, A32). True = re-apply now.
+    pub fn note_row(&self, key: &str, holds: bool, since: Instant, now: Instant) -> bool {
+        self.inner.lock().tracker.on_activity_since(key, holds, since, now)
     }
 
     pub fn note_removed(&self, key: &str, now: Instant) {
@@ -559,31 +574,46 @@ pub fn spawn() {
         })
         .await;
         reconcile_async("boot").await;
-        let mut events = crate::session_events::subscribe();
+        let mut rows = crate::activity_store::subscribe();
         let mut tick = tokio::time::interval(RECONCILE_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            use crate::session_events::SessionEvent;
             use tokio::sync::broadcast::error::RecvError;
             tokio::select! {
-                ev = events.recv() => match ev {
-                    Ok(SessionEvent::SessionActivityChanged { workspace_path, agent_name, status, .. }) => {
-                        let key = WorkTracker::key(&workspace_path, &agent_name);
-                        if keep_awake().note_activity(&key, &status, Instant::now()) {
+                ev = rows.recv() => match ev {
+                    Ok(ev) => {
+                        let now = Instant::now();
+                        if ev.row.is_none() {
+                            keep_awake().note_removed(&ev.session_id, now);
+                            continue;
+                        }
+                        let since = evidence_instant(ev.evidence_at, now);
+                        if keep_awake().note_row(&ev.session_id, ev.holds_awake, since, now) {
                             reconcile_async("agent working").await;
                         }
                     }
-                    Ok(SessionEvent::SessionRemoved { workspace_path, agent_name, .. }) => {
-                        keep_awake().note_removed(&WorkTracker::key(&workspace_path, &agent_name), Instant::now());
+                    // A30: an internal subscriber re-reads the store
+                    // instead of the bus it fell behind on.
+                    Err(RecvError::Lagged(_)) => {
+                        let now = Instant::now();
+                        for (sid, holds, at) in crate::activity_store::keep_awake_view() {
+                            keep_awake().note_row(&sid, holds, evidence_instant(at, now), now);
+                        }
                     }
-                    Ok(_) => {}
-                    Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => return,
                 },
                 _ = tick.tick() => reconcile_async("tick").await,
             }
         }
     });
+}
+
+/// The monotonic instant of a row's last evidence (unix ms), for the
+/// [`WORKING_STALE`] clock. No evidence yet counts from now.
+fn evidence_instant(evidence_at_ms: Option<i64>, now: Instant) -> Instant {
+    let Some(at) = evidence_at_ms else { return now };
+    let age = (chrono::Utc::now().timestamp_millis() - at).max(0) as u64;
+    now.checked_sub(Duration::from_millis(age)).unwrap_or(now)
 }
 
 /// Body for `POST /cli/power/keep-awake`.

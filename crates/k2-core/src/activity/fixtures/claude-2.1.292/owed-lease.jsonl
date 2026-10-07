@@ -1,0 +1,8 @@
+{"t_ms":0,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"SessionStart","source":"startup","model":"claude-test"}}
+{"t_ms":100,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"Synthetic prompt."}}
+{"t_ms":300,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"general-purpose"}}
+{"t_ms":500,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"Stop","prompt_id":"p1","stop_hook_active":false,"last_assistant_message":"Synthetic reply.","background_tasks":[{"id":"a-1","type":"subagent","status":"running"}],"session_crons":[]}}
+{"t_ms":9000,"kind":"hook","pid":100,"payload":{"session_id":"conv-0001","transcript_path":"/home/u/.claude/projects/-home-u-ws/conv-0001.jsonl","cwd":"/home/u/ws","permission_mode":"default","hook_event_name":"SubagentStop","agent_id":"a-1","agent_type":"general-purpose"}}
+{"t_ms":68999,"kind":"expect","payload":{"display":"working","reason":"owed_notification","owed":1}}
+{"t_ms":69000,"kind":"tick","payload":null}
+{"t_ms":69000,"kind":"expect","payload":{"display":"idle","reason":"owed_expired","owed":0,"lock":"sleeping"}}

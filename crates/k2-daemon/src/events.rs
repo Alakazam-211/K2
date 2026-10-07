@@ -92,7 +92,7 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
             // `eventType` is the canonical bucket (start/stop/permission)
-            // that `handle_hook_complete` already mapped before emitting.
+            // the activity store derived from its row (RL5 compat).
             if let Some(status) = payload.get("eventType").and_then(|v| v.as_str()) {
                 let _ = crate::session_events::emit(
                     crate::session_events::SessionEvent::AgentStatusChanged {

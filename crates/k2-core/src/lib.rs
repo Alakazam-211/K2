@@ -42,6 +42,9 @@ pub fn log_timestamp() -> String {
 }
 
 pub mod active;
+// prd-daemon-activity-and-thread-working-v1 S2: the per-session activity
+// row and state machine (pure; the daemon's `activity_store` owns rows).
+pub mod activity;
 pub mod agent_hooks;
 // Phase 2.5e: `agents` module retired. All historical homes for
 // agent-scoped code redistributed across `workspace/`, `skills/`,
@@ -448,3 +451,8 @@ mod path_enrichment_tests {
         );
     }
 }
+
+// K2 test rules (2026-10-06): tests panic when they can reach the
+// production daemon (inherited session env, or the real home's port/token).
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_isolation;

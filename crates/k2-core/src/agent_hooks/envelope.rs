@@ -133,6 +133,15 @@ pub struct HookEnvelope {
     pub prompt_thread_addr: Option<String>,
     /// `<task-id>`s from a `<task-notification>` prompt.
     pub task_notification_ids: Vec<String>,
+    /// A background task this lead `PostToolUse` launched, read from
+    /// `tool_response` (`backgroundTaskId` = a `run_in_background` shell,
+    /// `isAsync` + `agentId` = an async subagent, a Monitor `taskId`).
+    /// `kind` is `shell` | `subagent` | `monitor`; `status` is `running`.
+    pub launched_task: Option<TaskEntry>,
+    /// The task a `TaskStop` / `KillShell` call stopped (`tool_input`
+    /// `task_id` / `shell_id` / `bash_id`). Claude sends no notification
+    /// for a stopped task, so the roster forgets it here.
+    pub stopped_task_id: Option<String>,
     /// The hook's working directory (a path, not content).
     pub cwd: Option<String>,
     /// The CLI version the hook reported (`X-K2-Claude-Version`).
@@ -187,6 +196,8 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
         session_crons: None,
         prompt_thread_addr: None,
         task_notification_ids: Vec::new(),
+        launched_task: None,
+        stopped_task_id: None,
         cwd: None,
         cli_version: headers.cli_version.clone(),
         truncated: headers.truncated,
@@ -222,6 +233,10 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
     if let Some(name) = env.tool_name.as_deref() {
         let input = obj.get("tool_input").cloned().unwrap_or(Value::Null);
         env.tool_line = Some(super::tool_line::describe(name, &input));
+        if env.event == "PostToolUse" {
+            env.launched_task = obj.get("tool_response").and_then(|r| launched_task(name, r));
+            env.stopped_task_id = stopped_task_id(name, &input);
+        }
     }
     if let Some(tasks) = obj.get("background_tasks").and_then(Value::as_array) {
         env.background_tasks = Some(
@@ -263,58 +278,69 @@ pub fn thread_addr(text: &str) -> Option<String> {
 }
 
 /// `<task-id>` values from a `<task-notification>` prompt (Claude's
-/// background-task completion message).
+/// background-task completion message). Only a block that carries a
+/// `<status>` before any `<summary>` is a completion; a Monitor's
+/// ongoing `<event>` turn has none and is not counted (S2).
 pub fn task_notification_ids(text: &str) -> Vec<String> {
-    if !text.contains("<task-notification>") {
+    const OPEN: &str = "<task-notification>";
+    if !text.contains(OPEN) {
         return Vec::new();
     }
     let mut ids = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<task-id>") {
-        let after = &rest[start + "<task-id>".len()..];
-        let Some(end) = after.find("</task-id>") else { break };
+    for block in text.split(OPEN).skip(1) {
+        let block = block.split("</task-notification>").next().unwrap_or(block);
+        let status_at = block.find("<status>");
+        let summary_at = block.find("<summary>");
+        let completed = match (status_at, summary_at) {
+            (Some(st), Some(su)) => st < su,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if !completed {
+            continue;
+        }
+        let Some(start) = block.find("<task-id>") else { continue };
+        let after = &block[start + "<task-id>".len()..];
+        let Some(end) = after.find("</task-id>") else { continue };
         let id = after[..end].trim();
         if !id.is_empty() && id.len() <= 128 {
             ids.push(id.to_string());
         }
-        rest = &after[end..];
     }
     ids
 }
 
-impl HookEnvelope {
-    /// The three-bucket lifecycle word (`start` | `stop` | `permission`)
-    /// the pre-store compat path still emits (`agent_status_changed`,
-    /// `agent:lifecycle`, `workspace_sessions.status`). Child events
-    /// (`agent_id`) never move the lead (DA20), and the new events get
-    /// their right bucket: `Notification` is `permission` only for a
-    /// `permission_prompt`, and an `idle_prompt` ends the turn.
-    ///
-    /// The S2 activity store replaces this; it lives here only so the
-    /// legacy outputs keep working between slices.
-    pub fn legacy_bucket(&self) -> Option<&'static str> {
-        if self.agent_id.is_some() {
-            return None;
-        }
-        match self.event.as_str() {
-            "PermissionRequest" => Some("permission"),
-            "PreToolUse" if self.tool_name.as_deref() == Some("AskUserQuestion") => {
-                Some("permission")
-            }
-            "Notification" => match self.notification_type.as_deref() {
-                Some("permission_prompt") => Some("permission"),
-                Some("idle_prompt") => Some("stop"),
-                _ => None,
-            },
-            "PostToolUseFailure" if self.is_interrupt == Some(true) => Some("stop"),
-            "Stop" | "StopFailure" | "SessionEnd" => Some("stop"),
-            "PostCompact" if self.source_field.as_deref() == Some("manual") => Some("stop"),
-            "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
-            | "PermissionDenied" => Some("start"),
-            // Cursor / Gemini names keep today's mapping.
-            other => super::map_event_type(other).filter(|_| self.source != HookSource::Claude),
+fn short_id(v: Option<&Value>) -> Option<String> {
+    let id = v?.as_str()?.trim();
+    (!id.is_empty() && id.len() <= 128).then(|| id.to_string())
+}
+
+/// A background task a lead `PostToolUse` launched, from its
+/// `tool_response` (see [`HookEnvelope::launched_task`]).
+fn launched_task(tool_name: &str, response: &Value) -> Option<TaskEntry> {
+    let entry = |id: String, kind: &str| TaskEntry { id, kind: kind.to_string(), status: "running".to_string() };
+    if let Some(id) = short_id(response.get("backgroundTaskId")) {
+        return Some(entry(id, "shell"));
+    }
+    if response.get("isAsync").and_then(Value::as_bool) == Some(true) {
+        if let Some(id) = short_id(response.get("agentId")) {
+            return Some(entry(id, "subagent"));
         }
     }
+    if tool_name == "Monitor" {
+        if let Some(id) = short_id(response.get("taskId")) {
+            return Some(entry(id, "monitor"));
+        }
+    }
+    None
+}
+
+/// The task a `TaskStop` / `KillShell` / `KillBash` call stopped.
+fn stopped_task_id(tool_name: &str, input: &Value) -> Option<String> {
+    if !matches!(tool_name, "TaskStop" | "KillShell" | "KillBash") {
+        return None;
+    }
+    ["task_id", "shell_id", "bash_id"].iter().find_map(|k| short_id(input.get(*k)))
 }
 
 #[cfg(test)]
@@ -369,10 +395,47 @@ mod tests {
 
         let env = parse_json(json!({
             "hook_event_name": "UserPromptSubmit",
-            "prompt": "<task-notification><task-id>bash_1</task-id><status>completed</status></task-notification>\n<task-notification><task-id>bash_2</task-id></task-notification>",
+            "prompt": "<task-notification><task-id>bash_1</task-id><status>completed</status></task-notification>\n<task-notification><task-id>bash_2</task-id><status>killed</status><summary>s</summary></task-notification>\n<task-notification><task-id>mon_1</task-id><summary>tick</summary><event>line</event><status>x</status></task-notification>\n<task-notification><task-id>mon_2</task-id><event>line</event></task-notification>",
         }));
+        // A Monitor's ongoing event (no status, or status after the
+        // summary) is not a completion.
         assert_eq!(env.task_notification_ids, vec!["bash_1".to_string(), "bash_2".to_string()]);
         assert_eq!(env.prompt_thread_addr, None);
+    }
+
+    #[test]
+    fn post_tool_use_reads_background_launches_and_stops() {
+        let launched = |tool: &str, resp: Value| {
+            parse_json(json!({
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool,
+                "tool_use_id": "tu",
+                "tool_input": {},
+                "tool_response": resp,
+            }))
+            .launched_task
+        };
+        let entry = |id: &str, kind: &str| Some(TaskEntry { id: id.into(), kind: kind.into(), status: "running".into() });
+        assert_eq!(launched("Bash", json!({"backgroundTaskId": "bash_7", "stdout": "x"})), entry("bash_7", "shell"));
+        assert_eq!(launched("Task", json!({"isAsync": true, "agentId": "a-9"})), entry("a-9", "subagent"));
+        assert_eq!(launched("Task", json!({"isAsync": false, "agentId": "a-9"})), None);
+        assert_eq!(launched("Monitor", json!({"taskId": "m-1"})), entry("m-1", "monitor"));
+        assert_eq!(launched("Bash", json!({"stdout": "plain"})), None);
+
+        // A PreToolUse never reports a launch, even with a response key.
+        let pre = parse_json(json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_response": {"backgroundTaskId": "bash_7"},
+        }));
+        assert_eq!(pre.launched_task, None);
+
+        let stop = parse_json(json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "KillShell",
+            "tool_input": {"shell_id": "bash_7"},
+        }));
+        assert_eq!(stop.stopped_task_id.as_deref(), Some("bash_7"));
     }
 
     #[test]
@@ -429,27 +492,6 @@ mod tests {
         h.event_hint = Some("Start".to_string());
         let env = parse(&h, b"{\"conversation_id\":\"c\"}").expect("parses");
         assert_eq!(env.event, "Start");
-        assert_eq!(env.legacy_bucket(), Some("start"));
-    }
-
-    #[test]
-    fn legacy_bucket_matches_the_new_event_set() {
-        let b = |v: Value| parse_json(v).legacy_bucket();
-        assert_eq!(b(json!({"hook_event_name": "UserPromptSubmit"})), Some("start"));
-        assert_eq!(b(json!({"hook_event_name": "Stop"})), Some("stop"));
-        assert_eq!(b(json!({"hook_event_name": "StopFailure"})), Some("stop"));
-        assert_eq!(b(json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash"})), Some("permission"));
-        assert_eq!(b(json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"})), Some("stop"));
-        assert_eq!(b(json!({"hook_event_name": "Notification", "notification_type": "permission_prompt"})), Some("permission"));
-        assert_eq!(b(json!({"hook_event_name": "Notification", "notification_type": "auth_success"})), None);
-        assert_eq!(b(json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"})), Some("permission"));
-        assert_eq!(b(json!({"hook_event_name": "PostToolUseFailure", "is_interrupt": true})), Some("stop"));
-        assert_eq!(b(json!({"hook_event_name": "PostCompact", "trigger": "manual"})), Some("stop"));
-        assert_eq!(b(json!({"hook_event_name": "PostCompact", "trigger": "auto"})), None);
-        assert_eq!(b(json!({"hook_event_name": "SessionStart", "source": "startup"})), None);
-        // A child event never moves the lead (DA20).
-        assert_eq!(b(json!({"hook_event_name": "PostToolUse", "agent_id": "a1"})), None);
-        assert_eq!(b(json!({"hook_event_name": "SubagentStop", "agent_id": "a1"})), None);
     }
 
     #[test]

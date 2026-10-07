@@ -7,14 +7,13 @@
 //! [`HookEnvelope`] (the raw body is dropped right after) and put
 //! through the owner check ([`k2_core::agent_hooks::owner`]). Only an
 //! owner envelope goes on, as an [`IngestEvent`] on [`subscribe`]'s
-//! channel — the seam the S2 activity store consumes. Foreign and
-//! unknown-pane envelopes are counted and change nothing.
+//! channel, which the activity store ([`crate::activity_store`]) consumes.
+//! Foreign and unknown-pane envelopes are counted and change nothing.
 //!
-//! Until S2 lands, an owner envelope also drives the legacy lifecycle
-//! outputs (`agent:lifecycle`, `agent_status_changed`,
-//! `workspace_sessions.status`) through
-//! [`HookEnvelope::legacy_bucket`], so nothing regresses between slices.
-//! S2 deletes that bridge (DA13).
+//! S2 (DA13): no raw hook drives a lifecycle output any more. The store is
+//! the only writer of `workspace_sessions.status` for hook events, and it
+//! derives the legacy `agent:lifecycle` / `agent_status_changed` emits
+//! from its own row.
 //!
 //! Errors never block the agent: everything but an auth failure is 204.
 
@@ -37,10 +36,7 @@ use k2_core::session::SessionId;
 /// envelopes, never blocks the hook route.
 const BUS_CAP: usize = 4096;
 
-/// One thing the S2 store must learn from the hook plane.
-// The S2 activity store is the consumer; until it lands the binary only
-// publishes.
-#[allow(dead_code)]
+/// One thing the activity store must learn from the hook plane.
 #[derive(Debug, Clone)]
 pub enum IngestEvent {
     /// An envelope from the pane's owner: the only kind that may change
@@ -70,8 +66,7 @@ fn bus() -> &'static broadcast::Sender<IngestEvent> {
     BUS.get_or_init(|| broadcast::channel(BUS_CAP).0)
 }
 
-/// Subscribe to the hook plane (the S2 store's input).
-#[allow(dead_code)]
+/// Subscribe to the hook plane (the activity store's input).
 pub fn subscribe() -> broadcast::Receiver<IngestEvent> {
     bus().subscribe()
 }
@@ -169,22 +164,15 @@ pub fn live_pane_facts(pane: &str) -> Option<PaneFacts> {
 
 /// Ingest one `POST /hook/event` (both transports). Never fails the agent.
 pub fn ingest(headers: &HookHeaders, body: &[u8]) -> IngestVerdict {
-    let (verdict, accepted) = ingest_with(
+    ingest_with(
         headers,
         body,
         &LiveProcessTable,
         &live_pane_facts,
         OwnerCheckMode::for_this_platform(),
         now_ms(),
-    );
-    // Pre-store compat bridge (removed by S2): the old lifecycle outputs,
-    // now fed only by owner envelopes.
-    if let Some(env) = accepted {
-        if let Some(bucket) = env.legacy_bucket() {
-            k2_core::agent_hooks::apply_lifecycle(&env.pane, &env.pane, &env.event, bucket, env.cwd.as_deref());
-        }
-    }
-    verdict
+    )
+    .0
 }
 
 /// [`ingest`] with the process table, pane lookup, mode and clock
@@ -246,6 +234,11 @@ pub fn ingest_with(
     entry.counters.bump(verdict);
     entry.last_envelope_ms = Some(now);
     if verdict == IngestVerdict::Accepted {
+        // DA22: the owner's `SessionEnd` releases its claim; a `/clear`
+        // re-claims at once with its `SessionStart` (same process).
+        if env.event == "SessionEnd" && env.agent_id.is_none() {
+            entry.owner.claim = None;
+        }
         entry.last_event = Some(env.event.clone());
         entry.cli_version = env.cli_version.clone().or(entry.cli_version.take());
         entry.source = Some(env.source.as_str());
@@ -286,28 +279,26 @@ fn record(event: &str, pane: &str, tool: Option<&str>, verdict: IngestVerdict) {
 
 /// The legacy `GET /hook/complete` (DA13): only a live pane gets through
 /// (it carries no pid or payload, so "pane is live" is the whole owner
-/// check). Any legacy post from a live pane means an older app rewrote
-/// `notify.sh`, so the installer re-runs now (A10, debounced).
+/// check), and only as evidence for the activity store. Any legacy post
+/// from a live pane means an older app rewrote `notify.sh`, so the
+/// installer re-runs now (A10, debounced).
 pub fn legacy_complete(params: &HashMap<String, String>) -> &'static str {
     let pane = params.get("paneId").cloned().unwrap_or_default();
+    let raw = params.get("eventType").cloned().unwrap_or_default();
     if live_pane_facts(&pane).is_none() {
         state().lock().totals.bump(IngestVerdict::UnknownPane);
-        let raw = params.get("eventType").map(String::as_str).unwrap_or("");
-        record(raw, &pane, None, IngestVerdict::UnknownPane);
+        record(&raw, &pane, None, IngestVerdict::UnknownPane);
         return r#"{"success":true}"#;
     }
     state().lock().legacy += 1;
-    publish(IngestEvent::Legacy {
-        pane,
-        raw_event: params.get("eventType").cloned().unwrap_or_default(),
-        received_at_ms: now_ms(),
-    });
+    record(&raw, &pane, None, IngestVerdict::Accepted);
+    publish(IngestEvent::Legacy { pane, raw_event: raw, received_at_ms: now_ms() });
     crate::hook_install::note_legacy_hook();
-    k2_core::agent_hooks::handle_hook_complete(params)
+    r#"{"success":true}"#
 }
 
 /// Release every claim whose owner process is gone (DA14-6) and drop
-/// entries for panes that are no longer live. The S2 store's 10 s
+/// entries for panes that are no longer live. The activity store's 10 s
 /// liveness sweep calls this; the installer tick calls it too.
 pub fn sweep(procs: &dyn ProcessTable, is_live: &dyn Fn(&str) -> bool) -> Vec<String> {
     let now = now_ms();
@@ -348,8 +339,12 @@ pub fn status_json() -> serde_json::Value {
                     "lastEvent": e.last_event,
                     "cliVersion": e.cli_version,
                     "source": e.source,
-                    // S1 knows only hook evidence; S3 adds transcript/title.
-                    "evidence": if e.counters.accepted > 0 { Some("hook") } else { None },
+                    // The activity store's last evidence source for this
+                    // session (`hook` | `title` | `process`; S3 adds
+                    // `transcript`).
+                    "evidence": crate::activity_store::row_json(pane)
+                        .and_then(|r| r["evidenceSource"].as_str().map(str::to_string))
+                        .or_else(|| (e.counters.accepted > 0).then(|| "hook".to_string())),
                 }),
             )
         })

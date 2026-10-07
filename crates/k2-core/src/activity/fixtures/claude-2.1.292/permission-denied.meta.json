@@ -1,0 +1,42 @@
+{
+  "cli": "claude",
+  "version": "2.1.292",
+  "os": "synthetic",
+  "capturedAt": "synthetic",
+  "synthetic": true,
+  "registeredEvents": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "PermissionDenied",
+    "Notification",
+    "Stop",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
+    "PostCompact",
+    "SessionEnd"
+  ],
+  "childPid": 100,
+  "procs": [
+    [
+      100,
+      10,
+      1
+    ],
+    [
+      200,
+      100,
+      2
+    ],
+    [
+      300,
+      200,
+      3
+    ]
+  ],
+  "notes": "F-C7 permission request then deny: PermissionDenied clears waiting for its tool_use_id. Synthetic, scrubbed: written from the hook contract (PRD \u00a74) and Orca's documented captures; re-capture on a real 2.1.292 per \u00a711."
+}

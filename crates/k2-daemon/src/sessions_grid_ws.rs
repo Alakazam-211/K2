@@ -1743,6 +1743,14 @@ pub async fn serve_session_grid_connection(
                                         my_rows,
                                     );
                                 }
+                                // DA26 / A15: the daemon reads client
+                                // keystrokes (a lone Esc / Ctrl-C) for
+                                // interrupt inference. Injected text never
+                                // passes through here.
+                                crate::activity_store::note_client_input(
+                                    &session.session_id.to_string(),
+                                    text.as_bytes(),
+                                );
                                 session.write(text.into_bytes());
                             }
                             Ok(Inbound::Resize { cols, rows }) => {

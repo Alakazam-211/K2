@@ -329,15 +329,18 @@ export function SessionTokenPicker({
   const workspaceDefaultId = wsPin ? wsPin.accountId : null
   const value = pin ? pin.accountId : DEFAULT_VALUE
   return (
-    <div className="relative self-center" data-testid="chat-login-picker">
+    <div className="relative self-center flex items-center" data-testid="chat-login-picker">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={`${tool.display} token for this chat: ${inUseName(tool, value, workspaceDefaultId)}`}
         aria-expanded={open}
-        className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
       >
-        {TOKEN_LABEL}
+        <span>{TOKEN_LABEL}</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
+          <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
+        </svg>
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">

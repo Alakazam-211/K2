@@ -1130,8 +1130,56 @@ impl WorkspaceTabSession {
                 Some(session_id),
                 pane_group_id,
             );
+            Self::follow_adopted_conversation(
+                conn,
+                pane_group_id,
+                &agent_name,
+                command.as_deref(),
+                session_id,
+            );
         }
         Ok(())
+    }
+
+    /// A harness whose id is found after launch (Codex, Hermes) was keyed
+    /// on its pane until now, and its Thread lives under that pane key
+    /// (`conversation_key_for`). The handle row just moved to the provider
+    /// id, so move the Thread with it, under the same DB lock: the address
+    /// resolves to `session_id` from here on and must still show the
+    /// messages sent before the id was known (Rosson 2026-10-07: Codex's
+    /// reply never reached the Thread, and after a refresh the first
+    /// message was gone). Also record the spawn's login under the id, so a
+    /// resume keeps that account even after a later fresh spawn on the tab.
+    ///
+    /// Best-effort, like the handle rekey: a failure is logged and the tab
+    /// still gets its id (the old behaviour), never a half move.
+    fn follow_adopted_conversation(
+        conn: &Connection,
+        pane_group_id: &str,
+        agent_name: &str,
+        command: Option<&str>,
+        session_id: &str,
+    ) {
+        let pane_key = crate::workspace_session_handles::normalize_pane_key(pane_group_id);
+        let sid = session_id.trim();
+        if sid.is_empty() || pane_key.is_empty() || pane_key == sid {
+            return;
+        }
+        if let Err(e) = crate::overlay::move_conversation(conn, pane_key, sid) {
+            crate::log_debug!("[core/tab-session] move Thread {pane_key} -> {sid} failed: {e}");
+        }
+        if let Some(tool) = command.and_then(crate::llm_accounts::Tool::from_command) {
+            if let Err(e) = conn.execute(
+                "INSERT OR IGNORE INTO llm_session_logins \
+                    (session_key, tool, conversation_id, account_id, home, recorded_at) \
+                 SELECT session_key, tool, ?3, account_id, home, recorded_at \
+                 FROM llm_session_logins \
+                 WHERE session_key = ?1 AND tool = ?2 AND conversation_id = ''",
+                params![agent_name, tool.as_str(), sid],
+            ) {
+                crate::log_debug!("[core/tab-session] record login for {sid} failed: {e}");
+            }
+        }
     }
 
     /// Reverse-index: provider conversation id → tab row (wake that cell).

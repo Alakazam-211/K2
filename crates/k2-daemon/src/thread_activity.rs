@@ -461,6 +461,16 @@ impl Tracker {
         out
     }
 
+    /// The whole Thread moved to a new key (Codex/Hermes adoption: pane
+    /// key → provider id): its turn, whatever its id, goes with it.
+    pub fn conversation_moved(&mut self, from: &str, to: &str, now: i64) -> Vec<Out> {
+        let turn_id = match self.turns.get(from) {
+            Some(t) => t.id.clone(),
+            None => return Vec::new(),
+        };
+        self.moved(from, &turn_id, to, now)
+    }
+
     /// TW4 (a): the agent posted into the conversation's Thread.
     pub fn reply(&mut self, conversation_id: &str, snaps: Snaps, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
@@ -1011,6 +1021,11 @@ pub fn delivered(conversation_id: &str, turn_id: &str, target: Option<&str>, now
         out.extend(t.delivered(conv, turn_id, target, &snap_of, now));
         out
     });
+}
+
+/// The Thread moved to a new conversation key (overlay move listener).
+pub fn conversation_moved(from: &str, to: &str) {
+    run(|t, now| t.conversation_moved(from, to, now));
 }
 
 /// TW4 (a): the agent posted into this conversation's Thread.

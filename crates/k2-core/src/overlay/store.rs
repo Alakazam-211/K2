@@ -528,3 +528,121 @@ fn count_value(
     }
     Ok(n)
 }
+
+/// One collection's pointers after a [`move_conversation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MovedCollection {
+    /// Pointers that were under the old key.
+    pub moved: usize,
+    /// Pointers now under the new key (old + new, deduplicated by doc id).
+    pub total: usize,
+}
+
+/// Move a conversation's `thread` and `chatter` pointers from `from` to
+/// `to` in ONE redb write transaction (Codex/Hermes adoption: pane key →
+/// provider id). Rows already under `to` (a reply that raced in under the
+/// provider id) are merged with the moved ones by doc id, ordered by the
+/// doc's `created_at` (old key first on a tie, then by seq), and
+/// renumbered `1..=n` under `to`. Doc bodies are never copied.
+///
+/// `before_commit(thread, chatter)` runs after the pointers are rewritten
+/// and before the commit: the caller updates the SQLite catalog there. If
+/// it fails, the redb transaction is dropped (aborted) and nothing moves.
+pub fn move_conversation(
+    from: &str,
+    to: &str,
+    before_commit: impl FnOnce(MovedCollection, MovedCollection) -> Result<(), String>,
+) -> Result<(MovedCollection, MovedCollection), String> {
+    let db = db()?;
+    let txn = db
+        .begin_write()
+        .map_err(|e| format!("overlay redb write: {e}"))?;
+    let (thread, chatter) = {
+        let docs = txn
+            .open_table(DOCS)
+            .map_err(|e| format!("overlay open docs: {e}"))?;
+        let thread = move_collection(&txn, &docs, THREAD, "thread", from, to)?;
+        let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to)?;
+        (thread, chatter)
+    };
+    before_commit(thread, chatter)?;
+    txn.commit()
+        .map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok((thread, chatter))
+}
+
+fn conv_pointers(
+    table: &redb::Table<&str, &str>,
+    collection: &str,
+    conversation_id: &str,
+) -> Result<Vec<(i64, String)>, String> {
+    let start = format!("{conversation_id}/");
+    let end = conv_end(conversation_id);
+    let mut out = Vec::new();
+    let range = table
+        .range(start.as_str()..end.as_str())
+        .map_err(|e| format!("overlay {collection} range: {e}"))?;
+    for entry in range {
+        let (k, v) = entry.map_err(|e| format!("overlay {collection} iter: {e}"))?;
+        out.push(parse_conv_pointer(collection, k.value(), v.value())?);
+    }
+    Ok(out)
+}
+
+fn move_collection(
+    txn: &redb::WriteTransaction,
+    docs: &redb::Table<&str, &[u8]>,
+    def: TableDefinition<&str, &str>,
+    collection: &str,
+    from: &str,
+    to: &str,
+) -> Result<MovedCollection, String> {
+    let created_at = |id: &str| -> Result<i64, String> {
+        let guard = docs
+            .get(id)
+            .map_err(|e| format!("overlay get doc: {e}"))?
+            .ok_or_else(|| format!("overlay {collection} points at missing docs/{id}"))?;
+        let doc: OverlayDoc = serde_json::from_slice(guard.value())
+            .map_err(|e| format!("overlay doc parse {id}: {e}"))?;
+        Ok(doc.created_at)
+    };
+    let mut table = txn
+        .open_table(def)
+        .map_err(|e| format!("overlay open {collection}: {e}"))?;
+    let old = conv_pointers(&table, collection, from)?;
+    let new = conv_pointers(&table, collection, to)?;
+    if old.is_empty() {
+        return Ok(MovedCollection { moved: 0, total: new.len() });
+    }
+    // (created_at, source: 0 = the old key first on a tie, seq, id)
+    let mut rows: Vec<(i64, u8, i64, String)> = Vec::with_capacity(old.len() + new.len());
+    for (seq, id) in &old {
+        rows.push((created_at(id)?, 0, *seq, id.clone()));
+    }
+    for (seq, id) in &new {
+        rows.push((created_at(id)?, 1, *seq, id.clone()));
+    }
+    rows.sort();
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|r| seen.insert(r.3.clone()));
+    for (seq, _) in &old {
+        table
+            .remove(conv_key(from, *seq).as_str())
+            .map_err(|e| format!("overlay {collection} remove: {e}"))?;
+    }
+    for (seq, _) in &new {
+        table
+            .remove(conv_key(to, *seq).as_str())
+            .map_err(|e| format!("overlay {collection} remove: {e}"))?;
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let key = conv_key(to, i as i64 + 1);
+        table
+            .insert(key.as_str(), row.3.as_str())
+            .map_err(|e| format!("overlay insert {collection}: {e}"))?;
+    }
+    Ok(MovedCollection {
+        moved: old.len(),
+        total: rows.len(),
+    })
+}

@@ -5,6 +5,7 @@ import {
   applyChatterFrame,
   chatterItemsFromSnapshot,
   mergeOlderOverlayItems,
+  movedConversation,
   OVERLAY_PAGE_SIZE,
   releaseOverlayWebSocket,
   type OverlayThreadItem,
@@ -34,6 +35,9 @@ export function useOverlayChatter(opts: {
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const snapshotSeqRef = useRef(0)
+  /** Bumped when the Thread moved to another conversation key (Codex/Hermes
+   *  adoption): re-read and re-subscribe on the new one. */
+  const [epoch, setEpoch] = useState(0)
   const itemsRef = useRef(items)
   const hasMoreRef = useRef(false)
   const loadingOlderRef = useRef(false)
@@ -87,6 +91,10 @@ export function useOverlayChatter(opts: {
           } catch {
             return
           }
+          if (movedConversation(frame)) {
+            setEpoch((e) => e + 1)
+            return
+          }
           setItems((prev) => applyChatterFrame(prev, frame, snapshotSeqRef.current))
           if (frame.collection === 'chatter' && typeof frame.seq === 'number' && Number.isFinite(frame.seq)) {
             snapshotSeqRef.current = Math.max(snapshotSeqRef.current, frame.seq)
@@ -104,7 +112,7 @@ export function useOverlayChatter(opts: {
       cancelled = true
       if (ws) releaseOverlayWebSocket(ws)
     }
-  }, [scope, addr, conversationId, enabled])
+  }, [scope, addr, conversationId, enabled, epoch])
 
   const loadOlder = useCallback(async () => {
     if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return

@@ -88,6 +88,35 @@ pub fn next_chatterlog_seq(conn: &Connection) -> Result<i64, String> {
     .map_err(|e| format!("overlay last_chatterlog_seq: {e}"))
 }
 
+/// Catalog half of a conversation move: `to` gets `from`'s project and
+/// the merged collections' last seqs (pointers were renumbered
+/// `1..=n`; a higher last seq already on `to` is kept, so a seq is never
+/// handed out twice), and `from`'s row goes. Run inside the caller's
+/// savepoint.
+pub fn apply_move(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    project_id: &str,
+    last_thread_seq: i64,
+    last_chatter_seq: i64,
+) -> Result<(), String> {
+    ensure_conversation(conn, to, project_id)?;
+    conn.execute(
+        "UPDATE overlay_conversations \
+         SET last_thread_seq = MAX(last_thread_seq, ?2), last_chatter_seq = MAX(last_chatter_seq, ?3) \
+         WHERE conversation_id = ?1",
+        params![to, last_thread_seq, last_chatter_seq],
+    )
+    .map_err(|e| format!("overlay catalog move: {e}"))?;
+    conn.execute(
+        "DELETE FROM overlay_conversations WHERE conversation_id = ?1",
+        params![from],
+    )
+    .map_err(|e| format!("overlay catalog move: {e}"))?;
+    Ok(())
+}
+
 pub fn get(
     conn: &Connection,
     conversation_id: &str,

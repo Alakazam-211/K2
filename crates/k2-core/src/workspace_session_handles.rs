@@ -988,7 +988,7 @@ mod tests {
             let c = dbh.lock();
             crate::db::schema::WorkspaceSession::upsert(
                 &c,
-                "ws-row",
+                &format!("ws-row-{project_id}"),
                 &project_id,
                 None,
                 Some(grok),

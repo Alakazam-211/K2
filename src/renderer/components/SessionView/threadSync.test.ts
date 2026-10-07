@@ -92,6 +92,11 @@ class FakeSocket {
   activity(body: Record<string, unknown>): void {
     this.onmessage?.({ data: JSON.stringify({ collection: 'activity', seq: 0, id: body.turnId, activity: body }) })
   }
+  /** The daemon moved this Thread to another key (Codex/Hermes adoption,
+   *  overlay_ws.rs `publish_moved`). */
+  moved(from: string, to: string, seq: number): void {
+    this.onmessage?.({ data: JSON.stringify({ collection: 'moved', seq, id: to, from, to }) })
+  }
   /** The connection drops (daemon restart, network flap, edge idle cut). */
   drop(): void {
     this.readyState = 3
@@ -329,6 +334,81 @@ describe('Thread sync: every view converges on the daemon’s Thread', () => {
       })
     })
     expect(ids(view.result.current.items)).toEqual(['a1'])
+  })
+})
+
+// Rosson 2026-10-07: "if you send a message in the Thread for Codex, the
+// response from Codex doesn't land in the Thread. You have to refresh, and
+// then the first message you sent disappears". Codex mints its own id, so
+// its Thread starts under the pane key; on adoption the daemon moves the
+// Thread (every row, renumbered) to Codex's id and sends `moved` on both
+// keys' sockets. The view follows in place, with no refresh.
+describe('Thread sync: a Thread that moves on adoption (Codex/Hermes)', () => {
+  it('follows the move: keeps the first message, re-subscribes on the new key, shows the reply', async () => {
+    server.conv = 'pane-1'
+    write('u1', 'rosson', 'hello codex', 'compose')
+    const { view, sock } = await mountLive(null)
+    expect(view.result.current.conversationId).toBe('pane-1')
+    expect(ids(view.result.current.items)).toEqual(['u1'])
+
+    // Adoption: the daemon moved u1 under codex-1; the agent's reply raced
+    // in right after (seq 2 there).
+    server.conv = 'codex-1'
+    write('a2', 'sales', 'hi from codex')
+    const catchUpsBefore = server.catchUps.length
+    act(() => sock.moved('pane-1', 'codex-1', 1))
+
+    // Nothing on screen went away while the socket moves.
+    expect(ids(view.result.current.items)).toEqual(['u1'])
+    expect(view.result.current.loaded).toBe(true)
+    expect(view.result.current.conversationId).toBe('codex-1')
+    expect(sock.onmessage).toBeNull()
+    await waitFor(() => expect(live().some((s) => s.url.includes('conversation=codex-1'))).toBe(true))
+    const next = live().find((s) => s.url.includes('conversation=codex-1'))
+    if (!next) throw new Error('no socket on the new key')
+    act(() => next.open())
+
+    // The whole Thread is re-read (renumbered rows) and merged by id.
+    await waitFor(() => expect(ids(view.result.current.items)).toEqual(['u1', 'a2']))
+    expect(server.catchUps.slice(catchUpsBefore)).toEqual([0])
+    expect(view.result.current.items.map((it) => it.seq)).toEqual([1, 2])
+    expect(sock.readyState).toBe(3)
+
+    // Later frames arrive on the new socket; the old one is out of the loop.
+    act(() => sock.frame(write('stale', 'sales', 'never shown')))
+    act(() => next.frame(write('a3', 'sales', 'done')))
+    expect(ids(view.result.current.items)).toEqual(['u1', 'a2', 'a3'])
+    // The in-window compose ingest now matches the new key too.
+    act(() => {
+      ingestOverlayThreadItem({
+        collection: 'thread',
+        seq: 9,
+        id: 'own-9',
+        conversation_id: 'codex-1',
+        doc: { id: 'own-9', kind: 'text', from: 'rosson', body: 'thanks', via: 'compose' },
+      })
+    })
+    expect(ids(view.result.current.items)).toEqual(['u1', 'a2', 'a3', 'own-9'])
+  })
+
+  it('a view already on the new key re-reads the renumbered Thread on the same socket', async () => {
+    server.conv = 'codex-1'
+    write('a1', 'sales', 'early reply')
+    const { view, sock } = await mountLive('codex-1')
+    expect(ids(view.result.current.items)).toEqual(['a1'])
+
+    // The moved first message sorts before the reply; seqs were renumbered.
+    server.rows = [
+      { collection: 'thread', seq: 1, id: 'u0', doc: { id: 'u0', kind: 'text', from: 'rosson', body: 'hello codex', via: 'compose' } },
+      { collection: 'thread', seq: 2, id: 'a1', doc: { id: 'a1', kind: 'text', from: 'sales', body: 'early reply', via: 'thread' } },
+    ]
+    server.seq = 2
+    const sockets = FakeSocket.all.length
+    act(() => sock.moved('pane-1', 'codex-1', 2))
+    await waitFor(() => expect(ids(view.result.current.items)).toEqual(['u0', 'a1']))
+    expect(view.result.current.items.map((it) => it.seq)).toEqual([1, 2])
+    expect(FakeSocket.all.length).toBe(sockets)
+    expect(live()).toContain(sock)
   })
 })
 

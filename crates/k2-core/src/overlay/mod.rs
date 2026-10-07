@@ -20,6 +20,95 @@ pub use store::OverlayPage;
 
 static WRITE: Mutex<()> = Mutex::new(());
 
+/// A conversation's Thread + Chatter moved to a new key (Codex/Hermes
+/// adoption: the pane key → the provider's conversation id).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMove {
+    pub project_id: String,
+    pub from: String,
+    pub to: String,
+    /// Thread rows moved from `from`.
+    pub thread_moved: usize,
+    /// Thread rows now under `to` (moved + any already there).
+    pub thread_total: usize,
+    pub chatter_moved: usize,
+    pub chatter_total: usize,
+}
+
+/// Called after every [`move_conversation`] that moved something. The
+/// daemon registers one that tells live Thread views to follow the new
+/// key and moves the open Thread turn; k2-core alone has no event bus.
+static MOVE_LISTENER: std::sync::OnceLock<fn(&ConversationMove)> = std::sync::OnceLock::new();
+
+/// Register the move listener (first call wins; later calls no-op).
+pub fn set_move_listener(f: fn(&ConversationMove)) {
+    let _ = MOVE_LISTENER.set(f);
+}
+
+/// Move the Thread (and Chatter) of conversation `from` to `to`: the
+/// catalog row and the redb `seq → id` pointers, merged by doc id with
+/// any rows already under `to` and renumbered after them in time order
+/// (see [`store::move_conversation`]). One redb transaction plus one
+/// SQLite savepoint, under the overlay write lock, so a concurrent post
+/// can neither be lost nor land twice. Hold the shared DB lock (`conn`)
+/// across the key change that made `to` the address's conversation, so
+/// no post resolves in between.
+///
+/// `Ok(None)` when there is nothing to move (`from` has no catalog row,
+/// or the keys are equal / empty). Calls the move listener on success.
+pub fn move_conversation(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+) -> Result<Option<ConversationMove>, String> {
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(None);
+    }
+    let moved = {
+        let _guard = WRITE.lock();
+        let Some((project_id, _, _)) = catalog::get(conn, from)? else {
+            return Ok(None);
+        };
+        conn.execute_batch("SAVEPOINT overlay_move")
+            .map_err(|e| format!("overlay move savepoint: {e}"))?;
+        let res = store::move_conversation(from, to, |thread, chatter| {
+            catalog::apply_move(
+                conn,
+                from,
+                to,
+                &project_id,
+                thread.total as i64,
+                chatter.total as i64,
+            )
+        });
+        match res {
+            Ok((thread, chatter)) => {
+                conn.execute_batch("RELEASE overlay_move")
+                    .map_err(|e| format!("overlay move release: {e}"))?;
+                ConversationMove {
+                    project_id,
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    thread_moved: thread.moved,
+                    thread_total: thread.total,
+                    chatter_moved: chatter.moved,
+                    chatter_total: chatter.total,
+                }
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK TO overlay_move; RELEASE overlay_move");
+                return Err(e);
+            }
+        }
+    };
+    if let Some(f) = MOVE_LISTENER.get() {
+        f(&moved);
+    }
+    Ok(Some(moved))
+}
+
 /// Post overlay text onto the Thread collection only (not Chatter).
 pub fn post_thread(
     conn: &Connection,
@@ -564,7 +653,7 @@ mod tests {
         let c = dbh.lock();
         crate::db::schema::WorkspaceSession::upsert(
             &c,
-            "ws-row",
+            &format!("ws-row-{project_id}"),
             &project_id,
             None,
             Some(session_id),
@@ -893,6 +982,187 @@ mod tests {
 
         let all = read_chatter(&conv, 0).expect("unbounded helper");
         assert_eq!(all.len(), 60);
+    }
+
+    fn bodies(items: &[OverlayItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|i| i.doc.body.clone().expect("text body"))
+            .collect()
+    }
+
+    /// S6 (prd-thread-survives-tab-rename-v1 Side finding A): the pane
+    /// key's Thread moves to the provider id. A reply that raced in under
+    /// the provider id is merged by time, nothing is lost or duplicated,
+    /// and seqs are renumbered 1..n with the next post after them.
+    #[test]
+    fn move_conversation_merges_raced_reply_in_time_order_without_duplicates() {
+        let project_id = seed_project("ovl-move");
+        let pane = format!("pane-{}", uuid::Uuid::new_v4());
+        let provider = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+
+        let (first, _) = post_thread(&c, &pane, &project_id, "rosson", "ovl-move/1", "first", "compose")
+            .expect("first");
+        let (second, _) = post_thread(&c, &pane, &project_id, "rosson", "ovl-move/1", "second", "compose")
+            .expect("second");
+        record_chatter(&c, &pane, &project_id, None, "sales", "ovl-move/1", "ping", "msg", "accepted")
+            .expect("chatter");
+        // The agent's reply raced in under the provider id (same second as
+        // the pane rows: a tie keeps the pane rows first).
+        post_thread(&c, &provider, &project_id, "ovl-move/1", "ovl-move/1", "reply", "thread")
+            .expect("raced reply");
+        // An older doc under the provider id sorts by time, not by key.
+        let early_id = uuid::Uuid::new_v4().to_string();
+        let mut early = OverlayDoc::text(
+            early_id.clone(),
+            "ovl-move/1".into(),
+            "ovl-move/1".into(),
+            "early".into(),
+            "thread",
+        );
+        early.created_at = first.doc.created_at - 100;
+        let early_seq = catalog::next_thread_seq(&c, &provider, &project_id).expect("seq");
+        store::commit_write(&early, Some((provider.as_str(), early_seq)), &[], None).expect("early");
+        // The same doc linked under both keys must come out once.
+        let dup_seq = catalog::next_thread_seq(&c, &provider, &project_id).expect("seq");
+        store::link_thread(&provider, dup_seq, &second.id).expect("dup link");
+
+        let mv = move_conversation(&c, &pane, &provider)
+            .expect("move")
+            .expect("something moved");
+        assert_eq!(mv.from, pane);
+        assert_eq!(mv.to, provider);
+        assert_eq!(mv.project_id, project_id);
+        assert_eq!(mv.thread_moved, 2, "{mv:?}");
+        assert_eq!(mv.thread_total, 4, "first, second, reply, early (dup dropped): {mv:?}");
+        assert_eq!(mv.chatter_moved, 1, "{mv:?}");
+        assert_eq!(mv.chatter_total, 1, "{mv:?}");
+
+        let items = read_thread(&provider, 0).expect("read provider");
+        assert_eq!(bodies(&items), ["early", "first", "second", "reply"], "{items:?}");
+        let seqs: Vec<i64> = items.iter().map(|i| i.seq).collect();
+        assert_eq!(seqs, [1, 2, 3, 4], "renumbered after the move: {items:?}");
+        assert_eq!(items[1].id, first.id, "doc ids are kept");
+        assert_eq!(items[2].id, second.id);
+        let (thread_n, _, _) = store::debug_pointer_count(&second.id).expect("count");
+        assert_eq!(thread_n, 1, "one pointer per doc after the merge");
+        assert!(read_thread(&pane, 0).expect("read pane").is_empty(), "nothing left on the pane key");
+        let chatter = read_chatter(&provider, 0).expect("chatter");
+        assert_eq!(chatter.len(), 1, "{chatter:?}");
+        assert_eq!(chatter[0].doc.body.as_deref(), Some("ping"));
+        assert!(read_chatter(&pane, 0).expect("pane chatter").is_empty());
+
+        assert!(catalog::get(&c, &pane).expect("get").is_none(), "pane catalog row must go");
+        let (proj, last_thread, last_chatter) =
+            catalog::get(&c, &provider).expect("get").expect("provider row");
+        assert_eq!(proj, project_id);
+        assert_eq!(last_thread, 4, "last seq = the merged count (above the old 3)");
+        assert_eq!(last_chatter, 1);
+
+        let (next, _) = post_thread(&c, &provider, &project_id, "rosson", "ovl-move/1", "next", "compose")
+            .expect("next");
+        assert_eq!(next.seq, 5, "the next post lands after the moved rows");
+        assert_eq!(
+            bodies(&read_thread(&provider, 0).expect("read")),
+            ["early", "first", "second", "reply", "next"]
+        );
+
+        // Idempotent: a second move (the stamp runs again) is a no-op.
+        assert!(move_conversation(&c, &pane, &provider).expect("again").is_none());
+        assert_eq!(read_thread(&provider, 0).expect("read").len(), 5);
+    }
+
+    /// The real adoption door: `stamp_session_id` on a Codex tab keyed on
+    /// its pane moves the Thread with the handle, so `ws/1` still shows
+    /// the first message. A Claude-style tab (id known at launch) is
+    /// untouched.
+    #[test]
+    fn stamp_session_id_moves_pane_keyed_thread_with_the_handle() {
+        let project_id = seed_project("ovl-stamp");
+        let dbh = conn();
+        let c = dbh.lock();
+        let pane = format!("pane{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+        let agent = format!("tab-{pane}");
+        c.execute(
+            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, command, last_seen_at) \
+             VALUES (?1, ?2, ?3, 'codex', unixepoch())",
+            params![project_id, pane, agent],
+        )
+        .expect("codex tab");
+        let handle = crate::workspace_session_handles::ensure_sidecar_handle(
+            &c, &project_id, &agent, Some("codex"), None, &pane,
+        )
+        .expect("handle")
+        .expect("a codex tab is a sidecar");
+        assert_eq!(
+            crate::workspace_session_handles::resolve_handle(&c, &project_id, &handle).expect("resolve"),
+            pane,
+            "before discovery the Thread key is the pane"
+        );
+        post_thread(&c, &pane, &project_id, "rosson", "ovl-stamp/1", "hello codex", "compose")
+            .expect("first message");
+        c.execute(
+            "INSERT INTO llm_session_logins (session_key, tool, conversation_id, account_id, home, recorded_at) \
+             VALUES (?1, 'codex', '', 'acct-1', '/slot', 1)",
+            params![agent],
+        )
+        .expect("fresh spawn login");
+
+        let codex_id = uuid::Uuid::new_v4().to_string();
+        crate::db::schema::WorkspaceTabSession::stamp_session_id(&c, &project_id, &pane, &codex_id)
+            .expect("stamp");
+        assert_eq!(
+            crate::workspace_session_handles::resolve_handle(&c, &project_id, &handle).expect("resolve"),
+            codex_id,
+            "the handle follows the provider id"
+        );
+        post_thread(&c, &codex_id, &project_id, "ovl-stamp/1", "ovl-stamp/1", "hi from codex", "thread")
+            .expect("reply");
+        assert_eq!(
+            bodies(&read_thread(&codex_id, 0).expect("read")),
+            ["hello codex", "hi from codex"],
+            "the address shows the first message and the reply"
+        );
+        assert!(read_thread(&pane, 0).expect("pane").is_empty());
+        let login: Option<String> = c
+            .query_row(
+                "SELECT account_id FROM llm_session_logins WHERE session_key = ?1 AND tool = 'codex' AND conversation_id = ?2",
+                params![agent, codex_id],
+                |r| r.get(0),
+            )
+            .expect("login recorded under the adopted id");
+        assert_eq!(login.as_deref(), Some("acct-1"));
+
+        // Re-stamping the same id is a no-op (no duplicates).
+        crate::db::schema::WorkspaceTabSession::stamp_session_id(&c, &project_id, &pane, &codex_id)
+            .expect("stamp again");
+        assert_eq!(read_thread(&codex_id, 0).expect("read").len(), 2);
+
+        // Claude/Grok: keyed on the provider id from launch. Stamping does
+        // not touch its Thread (nothing under its pane key).
+        let cpane = format!("pane{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+        let cagent = format!("tab-{cpane}");
+        let claude_id = uuid::Uuid::new_v4().to_string();
+        c.execute(
+            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+             VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+            params![project_id, cpane, cagent, claude_id],
+        )
+        .expect("claude tab");
+        crate::workspace_session_handles::ensure_sidecar_handle(
+            &c, &project_id, &cagent, Some("claude"), Some(&claude_id), &cpane,
+        )
+        .expect("claude handle");
+        post_thread(&c, &claude_id, &project_id, "rosson", "ovl-stamp/2", "to claude", "compose")
+            .expect("claude post");
+        crate::db::schema::WorkspaceTabSession::stamp_session_id(&c, &project_id, &cpane, &claude_id)
+            .expect("claude stamp");
+        let claude_items = read_thread(&claude_id, 0).expect("claude read");
+        assert_eq!(bodies(&claude_items), ["to claude"]);
+        assert_eq!(claude_items[0].seq, 1);
+        assert!(catalog::get(&c, &cpane).expect("get").is_none());
     }
 
     #[test]

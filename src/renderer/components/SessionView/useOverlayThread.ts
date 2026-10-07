@@ -21,6 +21,12 @@
 //      re-sync too (a socket can sit half-open after sleep).
 //   5. If the address now resolves to another conversation (the pinned
 //      Chat changed), the hook starts over on the new one.
+//   5a. A `moved` frame (Codex/Hermes adoption: the Thread moved from the
+//      pane key to the provider's id, daemon side, with every row) is
+//      followed in place: the socket re-subscribes on the new key and
+//      re-reads the whole Thread, merged by id. Nothing on screen goes
+//      away and nothing waits for a refresh (Rosson 2026-10-07: Codex's
+//      reply never showed, and a refresh lost the first message).
 //   6. The working strip (prd-daemon-activity-and-thread-working-v1 S7,
 //      TW11): `activity` frames on the same socket feed `turn`, never
 //      `items`. They are ephemeral (`since_seq` never replays them), so
@@ -38,6 +44,7 @@ import {
   applyActivityFrame,
   applyOverlayFrame,
   mergeOlderOverlayItems,
+  movedConversation,
   mergeThreadItems,
   OVERLAY_PAGE_SIZE,
   releaseOverlayWebSocket,
@@ -182,6 +189,33 @@ export function useOverlayThread(opts: {
       }
     }
 
+    /** 5a: the Thread now lives under `to`. Re-read it whole (the moved
+     *  rows were renumbered), and if this socket is on the old key, move
+     *  the socket. Items stay on screen: the re-read merges by id. */
+    function followMove(sock: WebSocket, to: string): void {
+      if (cancelled) return
+      if (to === conv) {
+        void catchUp(0)
+        void catchUpTurn()
+        return
+      }
+      conv = to
+      setResolvedConv(to)
+      if (ws === sock) {
+        ws = null
+        sock.onclose = null
+        sock.onerror = null
+        sock.onmessage = null
+        releaseOverlayWebSocket(sock)
+      }
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
+      backoffMs = reconnectBaseMs
+      void connect(() => 0)
+    }
+
     function scheduleReconnect(): void {
       if (cancelled || retryTimer !== null) return
       const delay = jittered(backoffMs)
@@ -214,6 +248,11 @@ export function useOverlayThread(opts: {
           try {
             frame = JSON.parse(rawFrame) as OverlayWsFrame
           } catch {
+            return
+          }
+          const movedTo = movedConversation(frame)
+          if (movedTo) {
+            followMove(sock, movedTo)
             return
           }
           if (frame.collection === 'activity') {

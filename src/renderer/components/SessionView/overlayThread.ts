@@ -52,6 +52,22 @@ export interface OverlayWsFrame {
   doc?: OverlayDoc | null
   /** `collection: "activity"` only: the Thread turn (§7.6). Never an item. */
   activity?: unknown
+  /** `collection: "moved"` only: the Thread's old and new conversation keys. */
+  from?: string
+  to?: string
+}
+
+/**
+ * The conversation a `moved` frame says this Thread now lives under, or
+ * null for any other frame. A harness that mints its own id (Codex,
+ * Hermes) keeps its Thread under the pane key until K2 finds the id; then
+ * the daemon moves the Thread to that id and tells every socket on either
+ * key (overlay_ws.rs `publish_moved`). Never an item.
+ */
+export function movedConversation(frame: OverlayWsFrame): string | null {
+  if (frame.collection !== 'moved') return null
+  const to = typeof frame.to === 'string' && frame.to.trim() ? frame.to : frame.id
+  return typeof to === 'string' && to.trim() ? to.trim() : null
 }
 
 export function isChatterDoc(doc: OverlayDoc | null | undefined): boolean {

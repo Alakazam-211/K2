@@ -102,7 +102,67 @@ pub fn subscribe_activity() -> broadcast::Receiver<OverlayFrame> {
     activity_bus().subscribe()
 }
 
+/// Wire collection of the "this Thread moved" frame.
+pub const MOVED_COLLECTION: &str = "moved";
+
+/// A Thread moved to a new conversation key (Codex/Hermes adoption). One
+/// `moved` frame goes to the subscribers of BOTH keys: a view on the old
+/// key re-subscribes on `to` and re-reads; a view already on `to` re-reads
+/// (its rows were renumbered). `seq` = Thread rows now under `to`. Wire:
+/// `{collection:"moved", seq, id:<to>, from, to}`. Not stored; app guests
+/// never see it (they only get `thread`, and only on a pinned Chat).
+pub fn publish_moved(mv: &k2_core::overlay::ConversationMove) {
+    for conv in [&mv.from, &mv.to] {
+        publish(OverlayFrame {
+            collection: MOVED_COLLECTION.to_string(),
+            seq: mv.thread_total as i64,
+            id: mv.to.clone(),
+            doc: None,
+            activity: Some(serde_json::json!({ "from": mv.from, "to": mv.to })),
+            conversation_id: Some(conv.clone()),
+        });
+    }
+}
+
+fn on_conversation_moved(mv: &k2_core::overlay::ConversationMove) {
+    log_debug!(
+        "[daemon/overlay_ws] Thread moved {} -> {} ({} thread rows, {} chatter rows)",
+        mv.from,
+        mv.to,
+        mv.thread_moved,
+        mv.chatter_moved
+    );
+    publish_moved(mv);
+    // The open Thread turn follows its conversation. Off this thread: the
+    // caller holds the shared DB lock, and the tracker must never be taken
+    // under it.
+    let (from, to) = (mv.from.clone(), mv.to.clone());
+    let spawned = std::thread::Builder::new()
+        .name("thread-activity-move".into())
+        .spawn(move || crate::thread_activity::conversation_moved(&from, &to));
+    if let Err(e) = spawned {
+        log_debug!("[daemon/overlay_ws] could not move the Thread turn: {e}");
+    }
+}
+
+/// Register the k2-core overlay move listener (idempotent). Called at boot
+/// and by the test harness.
+pub fn install_move_listener() {
+    k2_core::overlay::set_move_listener(on_conversation_moved);
+}
+
 fn wire_json(frame: &OverlayFrame) -> String {
+    if frame.collection == MOVED_COLLECTION {
+        let payload = frame.activity.as_ref();
+        return serde_json::json!({
+            "collection": frame.collection,
+            "seq": frame.seq,
+            "id": frame.id,
+            "from": payload.and_then(|p| p.get("from")).cloned().unwrap_or(serde_json::Value::Null),
+            "to": frame.id,
+        })
+        .to_string();
+    }
     match &frame.activity {
         // §7.6: an activity frame has no `doc`.
         Some(activity) => serde_json::json!({

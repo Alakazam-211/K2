@@ -318,6 +318,7 @@ pub mod test_harness {
         crate::activity_store::spawn();
         crate::activity_events::spawn();
         crate::thread_activity::spawn();
+        crate::overlay_ws::install_move_listener();
 
         // The dispatcher 503s every real route until boot-status is
         // `ready`; flip it so auth tests see real status codes.

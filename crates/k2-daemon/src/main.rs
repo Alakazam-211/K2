@@ -1264,6 +1264,9 @@ async fn async_main() {
     activity_events::spawn();
     // S6: Thread turns follow the store and the transcripts.
     thread_activity::spawn();
+    // A Thread that moves on Codex/Hermes adoption (pane key -> provider
+    // id) tells its live views to follow, and its open turn moves too.
+    overlay_ws::install_move_listener();
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");

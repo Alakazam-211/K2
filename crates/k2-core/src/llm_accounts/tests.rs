@@ -286,7 +286,7 @@ fn keep_warm_refreshes_due_idle_slots_only() {
     store::write_slot(Tool::Claude, &c.id, &claude_cred("c", far_future_ms())).unwrap();
     update_meta(&conn, &c.id, &MetaUpdate { refreshed_at: Some(now()), ..Default::default() }).unwrap();
     let r = FakeRefresher { calls: AtomicUsize::new(0), fail_with: None };
-    let res = wallet::keep_warm(&conn, &r, now()).unwrap();
+    let res = wallet::keep_warm(&conn, &r, now(), &|_| false).unwrap();
     assert_eq!(res.len(), 1, "{res:?}");
     assert_eq!(res[0].id, b.id);
     assert!(res[0].refreshed);
@@ -297,13 +297,13 @@ fn keep_warm_refreshes_due_idle_slots_only() {
     // A permanent failure marks the idle login needs_login.
     store::write_slot(Tool::Claude, &b.id, &claude_cred("b", now() * 1000 + 60_000)).unwrap();
     let bad = FakeRefresher { calls: AtomicUsize::new(0), fail_with: Some("400 invalid_grant".into()) };
-    let res = wallet::keep_warm(&conn, &bad, now()).unwrap();
+    let res = wallet::keep_warm(&conn, &bad, now(), &|_| false).unwrap();
     assert_eq!(res.len(), 1);
     assert!(!res[0].refreshed);
     assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
     // Air-gap: nothing at all.
     std::env::set_var("K2_AIRGAP", "1");
-    let res = wallet::keep_warm(&conn, &bad, now() + 10 * 24 * 3600).unwrap();
+    let res = wallet::keep_warm(&conn, &bad, now() + 10 * 24 * 3600, &|_| false).unwrap();
     std::env::remove_var("K2_AIRGAP");
     assert!(res.is_empty());
     assert!(!dump_db(&conn).contains(MARKER));

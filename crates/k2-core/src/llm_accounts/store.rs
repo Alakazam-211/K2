@@ -72,6 +72,7 @@ pub fn live_home(tool: Tool) -> (PathBuf, bool) {
         Tool::Claude => user_home().join(".claude"),
         Tool::Codex => user_home().join(".codex"),
         Tool::Grok => user_home().join(".grok"),
+        Tool::Gemini => user_home().join(".gemini"),
     };
     (dir, false)
 }
@@ -294,17 +295,39 @@ fn read_nonempty(path: &Path) -> Result<Option<Vec<u8>>, WalletError> {
 
 // ── Slots ───────────────────────────────────────────────────────────
 
+/// Does the slot hold a usable login (a sign-in, or an API key)?
 pub fn slot_has_cred(tool: Tool, id: &str) -> bool {
-    matches!(read_nonempty(&slot_cred_path(tool, id)), Ok(Some(_)))
+    matches!(read_slot(tool, id), Ok(Some(_))) || has_api_key(tool, id)
 }
 
+/// A slot's credential. Claude on macOS: Claude's storage is
+/// "keychain-with-plaintext-fallback" (binary 2.1.292): with
+/// `CLAUDE_CONFIG_DIR=<slot>` it reads the hashed keychain item first and
+/// the slot's `.credentials.json` only when that item is absent; when it
+/// refreshes it writes the item and deletes the file. So for a slot a
+/// pinned session has used, the hashed item is the truth.
 pub(crate) fn read_slot(tool: Tool, id: &str) -> Result<Option<Vec<u8>>, WalletError> {
+    if tool == Tool::Claude && keychain_enabled() {
+        let svc = claude_keychain_service(Some(&slot_dir(tool, id)));
+        if let Ok(Some(b)) = keychain::read(&svc, &claude_keychain_account()) {
+            return Ok(Some(b));
+        }
+    }
     read_nonempty(&slot_cred_path(tool, id))
 }
 
 pub(crate) fn write_slot(tool: Tool, id: &str, bytes: &[u8]) -> Result<(), WalletError> {
     let dir = slot_dir(tool, id);
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
+    if tool == Tool::Claude && keychain_enabled() {
+        // Keep a hashed item Claude made for this slot in step; the file
+        // is K2's copy and what Claude falls back to.
+        let svc = claude_keychain_service(Some(&dir));
+        let acct = claude_keychain_account();
+        if let Ok(Some(_)) = keychain::read(&svc, &acct) {
+            keychain::write(&svc, &acct, bytes).map_err(WalletError::Io)?;
+        }
+    }
     write_private(&slot_cred_path(tool, id), bytes).map_err(|e| WalletError::Io(e.to_string()))
 }
 
@@ -312,6 +335,9 @@ pub(crate) fn write_slot(tool: Tool, id: &str, bytes: &[u8]) -> Result<(), Walle
 
 /// Read the tool's live login. `Ok(None)` = signed out.
 pub(crate) fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
+    if !tool.subscription_supported() {
+        return Ok(None);
+    }
     if tool == Tool::Claude && keychain_enabled() {
         let svc = claude_live_keychain_service();
         match keychain::read(&svc, &claude_keychain_account()) {
@@ -350,6 +376,9 @@ pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
         Tool::Codex => {
             write_private(&live_cred_path(tool), bytes).map_err(|e| WalletError::Io(e.to_string()))
         }
+        Tool::Gemini => Err(WalletError::LiveStoreUnavailable(
+            "Gemini sign-in logins aren't supported; use an API key".into(),
+        )),
         Tool::Grok => {
             let (home, _) = live_home(tool);
             let _grok_lock = FileLock::acquire(&home.join("auth.json.lock"), Duration::from_secs(10))
@@ -401,13 +430,14 @@ impl FileLock {
     }
 }
 
-static TOOL_MUTEX: [Mutex<()>; 3] = [Mutex::new(()), Mutex::new(()), Mutex::new(())];
+static TOOL_MUTEX: [Mutex<()>; 4] = [Mutex::new(()), Mutex::new(()), Mutex::new(()), Mutex::new(())];
 
 fn mutex_for(tool: Tool) -> &'static Mutex<()> {
     match tool {
         Tool::Claude => &TOOL_MUTEX[0],
         Tool::Codex => &TOOL_MUTEX[1],
         Tool::Grok => &TOOL_MUTEX[2],
+        Tool::Gemini => &TOOL_MUTEX[3],
     }
 }
 
@@ -440,6 +470,69 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
     let file = FileLock::acquire(&dir.join(".lock"), left)
         .map_err(|_| WalletError::LockBusy(tool.display().into()))?;
     Ok(ToolLock { tool, _guard: guard, _file: file })
+}
+
+/// The per-slot lock: one login's credential is never swapped, refreshed
+/// and handed to a spawning session at the same time. An in-process
+/// mutex per slot plus a flock on `<slot>/.lock`.
+pub struct SlotLock {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    _file: FileLock,
+}
+
+fn slot_mutex(tool: Tool, id: &str) -> &'static Mutex<()> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static MAP: OnceLock<Mutex<HashMap<String, &'static Mutex<()>>>> = OnceLock::new();
+    let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = map.lock().unwrap_or_else(|p| p.into_inner());
+    g.entry(format!("{}/{}", tool.as_str(), id))
+        .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))))
+}
+
+pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, WalletError> {
+    let deadline = Instant::now() + timeout;
+    let m = slot_mutex(tool, id);
+    let guard = loop {
+        match m.try_lock() {
+            Ok(g) => break g,
+            Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(WalletError::LockBusy(tool.display().into()));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    };
+    let dir = slot_dir(tool, id);
+    ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
+    let left = deadline.saturating_duration_since(Instant::now());
+    let file = FileLock::acquire(&dir.join(".lock"), left)
+        .map_err(|_| WalletError::LockBusy(tool.display().into()))?;
+    Ok(SlotLock { _guard: guard, _file: file })
+}
+
+// ── API keys ────────────────────────────────────────────────────────
+
+/// `<slot>/api-key`, 0600. Never returned by any route.
+pub fn api_key_path(tool: Tool, id: &str) -> PathBuf {
+    slot_dir(tool, id).join("api-key")
+}
+
+pub(crate) fn write_api_key(tool: Tool, id: &str, key: &str) -> Result<(), WalletError> {
+    ensure_private_dir(&slot_dir(tool, id)).map_err(|e| WalletError::Io(e.to_string()))?;
+    write_private(&api_key_path(tool, id), key.as_bytes()).map_err(|e| WalletError::Io(e.to_string()))
+}
+
+pub(crate) fn read_api_key(tool: Tool, id: &str) -> Option<String> {
+    let b = std::fs::read(api_key_path(tool, id)).ok()?;
+    let k = String::from_utf8(b).ok()?.trim().to_string();
+    (!k.is_empty()).then_some(k)
+}
+
+pub fn has_api_key(tool: Tool, id: &str) -> bool {
+    read_api_key(tool, id).is_some()
 }
 
 // ── Metadata parsing (never returns a token) ───────────────────────
@@ -504,6 +597,7 @@ pub fn parse_meta(tool: Tool, bytes: &[u8]) -> CredMeta {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| d.timestamp());
         }
+        Tool::Gemini => {}
         Tool::Grok => {
             // Grok's auth.json shape is not documented; presence only,
             // plus any obvious refresh field.

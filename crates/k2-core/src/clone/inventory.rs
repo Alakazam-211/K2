@@ -30,6 +30,16 @@ const SKIP_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
+/// Is a workspace-relative path inside an LLM login wallet
+/// (`.k2/llm-accounts/…` or the legacy `.k2so/llm-accounts/…`)?
+pub(crate) fn is_llm_wallet_path(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split(['/', '\\']).collect();
+    parts.windows(2).any(|w| {
+        (w[0] == ".k2" || w[0] == ".k2so")
+            && w[1] == crate::llm_accounts::store::WALLET_DIR_NAME
+    })
+}
+
 /// Bulk file globs / names dropped everywhere.
 fn is_bulk_file(name: &str) -> bool {
     name == ".DS_Store"
@@ -284,6 +294,13 @@ fn process_workspace_file(
     // Dedupe across passes: a file the main walk already took (or already
     // scrubbed) must not be re-processed by the force-include/secret walks.
     if !seen.insert(rel.clone()) {
+        return;
+    }
+    // The LLM login wallet (`<home>/.k2/llm-accounts/`) never travels, not
+    // even with `carry_secrets`: it only enters a tree when a workspace IS
+    // the home folder. Listed as scrubbed so the report says so.
+    if is_llm_wallet_path(&rel) {
+        scrubbed.push(rel);
         return;
     }
 

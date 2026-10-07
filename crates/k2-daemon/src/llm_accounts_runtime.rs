@@ -29,7 +29,7 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LOGIN_KEEP: Duration = Duration::from_secs(10 * 60);
 pub const LIVE_SWAP_BANNER: &str =
     "Signing in temporarily switches this tool for every session on this server.";
-pub const SWITCH_NOTE: &str = "Switching a login affects every session on this server.";
+pub const SWITCH_NOTE: &str = "Switching a login affects every unpinned session on this server.";
 const KEEP_WARM_EVERY: Duration = Duration::from_secs(30 * 60);
 const KEEP_WARM_FIRST: Duration = Duration::from_secs(120);
 
@@ -229,6 +229,8 @@ pub fn login_command(
         env.push((tool.home_env_var().to_string(), slot.to_string_lossy().into_owned()));
     }
     let args: Vec<String> = match tool {
+        // Never reached: start_login refuses tools without sign-in logins.
+        Tool::Gemini => Vec::new(),
         Tool::Claude => vec!["auth".into(), "login".into(), "--claudeai".into()],
         Tool::Codex => {
             let mut a = vec![
@@ -295,6 +297,12 @@ pub fn start_login(
         return Err(WalletError::AirGap);
     }
     let tool = entry.tool().ok_or_else(|| WalletError::UnknownTool(entry.tool.clone()))?;
+    if !tool.subscription_supported() || entry.is_api_key() {
+        return Err(WalletError::Conflict(
+            "api_key_login",
+            "this login is an API key; there is no sign-in to run".into(),
+        ));
+    }
     if let Some(id) = running_for(&entry.id) {
         return view(&id, started_by).ok_or(WalletError::NotFound(id));
     }
@@ -652,6 +660,126 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
     }
 }
 
+// ── Spawn doors: pins, API keys, recorded homes ─────────────────────
+
+/// Sessions running on a pinned subscription slot: account id → child
+/// pids. A slot with a live pid is CLI-owned; keep-warm skips it.
+fn in_use_map() -> &'static Mutex<HashMap<String, Vec<i32>>> {
+    static M: OnceLock<Mutex<HashMap<String, Vec<i32>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pid_alive(pid: i32) -> bool {
+    #[cfg(unix)]
+    {
+        pid > 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Is a pinned slot in use by a running session?
+pub fn slot_in_use(account_id: &str) -> bool {
+    let mut m = in_use_map().lock().unwrap_or_else(|p| p.into_inner());
+    match m.get_mut(account_id) {
+        Some(pids) => {
+            pids.retain(|p| pid_alive(*p));
+            !pids.is_empty()
+        }
+        None => false,
+    }
+}
+
+/// Which logins have running pinned sessions (for the LLMs page).
+pub fn in_use_ids() -> Vec<String> {
+    let keys: Vec<String> = in_use_map().lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
+    keys.into_iter().filter(|k| slot_in_use(k)).collect()
+}
+
+/// Holds the slot lock across a pinned spawn; [`SpawnGuard::spawned`]
+/// marks the slot in use by the child.
+pub struct SpawnGuard {
+    pub login: k2_core::llm_accounts::pins::SpawnLogin,
+    _slot: Option<store::SlotLock>,
+}
+
+impl SpawnGuard {
+    pub fn spawned(self, pid: Option<i32>) {
+        if let (Some((_, id)), Some(pid)) = (self.login.pinned_slot(), pid) {
+            in_use_map()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .entry(id.to_string())
+                .or_default()
+                .push(pid);
+        }
+    }
+}
+
+fn is_resume_argv(tool: Tool, args: &[String]) -> bool {
+    match tool {
+        Tool::Codex => args.iter().any(|a| a == "resume"),
+        Tool::Claude => args.iter().any(|a| a == "--resume" || a == "-r" || a == "--continue" || a == "-c"),
+        _ => args.iter().any(|a| a == "--resume" || a == "-r" || a == "--continue"),
+    }
+}
+
+/// Decide and apply the login for an agent spawn (both spawn doors call
+/// this right before `DaemonPtySession::spawn`): resume → the recorded
+/// login; fresh → session pin > workspace pin > pool. Adds the env (a
+/// pinned slot's home variable, or an API key) to `env`, prepares a
+/// pinned slot's home, records the decision, and returns a guard that
+/// holds the slot lock until the child is up. `None` for non-agent
+/// programs and for plain pool spawns with nothing to inject.
+pub fn apply_spawn_login(
+    program: Option<&str>,
+    args: &[String],
+    env: &mut HashMap<String, String>,
+    session_key: &str,
+    project_id: Option<&str>,
+    cwd: Option<&Path>,
+) -> Result<Option<SpawnGuard>, WalletError> {
+    let Some(tool) = program.and_then(Tool::from_command) else {
+        return Ok(None);
+    };
+    let conversation = k2_core::workspace::provider_resume::session_id_from_spawn_argv(program.unwrap_or(""), args);
+    let resume = is_resume_argv(tool, args);
+    let login = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let login = k2_core::llm_accounts::pins::decide_spawn(
+            &conn,
+            tool,
+            session_key,
+            project_id,
+            conversation.as_deref(),
+            resume,
+        )?;
+        if !resume {
+            k2_core::llm_accounts::pins::record_spawn(&conn, &login, session_key, conversation.as_deref())?;
+        }
+        login
+    };
+    let slot_lock = match login.pinned_slot() {
+        Some((t, id)) => {
+            let l = store::lock_slot(t, id, Duration::from_secs(30))?;
+            k2_core::llm_accounts::pins::prepare_slot_home(t, id, cwd)?;
+            Some(l)
+        }
+        None => None,
+    };
+    for (k, v) in &login.env {
+        env.insert(k.clone(), v.clone());
+    }
+    if login.account_id.is_none() && login.env.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(SpawnGuard { login, _slot: slot_lock }))
+}
+
 // ── Refresh of idle slots ───────────────────────────────────────────
 
 /// HTTP for the Claude refresh grant. Errors carry the status and the
@@ -725,6 +853,7 @@ impl wallet::Refresher for DaemonRefresher {
             Tool::Claude => wallet::claude_refresh_slot(id, &post_json),
             Tool::Codex => crate::subscription_usage::codex_refresh_slot(&store::slot_dir(tool, id)),
             Tool::Grok => grok_warm(&store::slot_dir(tool, id)),
+            Tool::Gemini => Err("Gemini logins are API keys; nothing to refresh".into()),
         }
     }
 }
@@ -801,7 +930,7 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
     let res = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        wallet::keep_warm(&conn, &DaemonRefresher, chrono::Utc::now().timestamp())
+        wallet::keep_warm(&conn, &DaemonRefresher, chrono::Utc::now().timestamp(), &|id| slot_in_use(id))
     };
     let res = match res {
         Ok(r) => r,

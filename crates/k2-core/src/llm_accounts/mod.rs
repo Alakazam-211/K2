@@ -24,31 +24,37 @@
 //! Nothing in this module returns a token to a caller outside it: the
 //! public shapes ([`Entry`], [`store::CredMeta`]) carry metadata only.
 
+pub mod pins;
 pub mod store;
 pub mod wallet;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-/// Tools the wallet supports in v1 (live store and login command
-/// verified). Gemini, Cursor Agent, Pi and Hermes are listed on the
-/// LLMs page as "not yet".
+/// Tools the wallet supports. Claude, Codex and Grok: subscription logins
+/// (live store and login command verified) and API keys. Gemini: API keys
+/// only. Cursor Agent, Pi and Hermes are listed on the LLMs page as "not
+/// yet".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tool {
     Claude,
     Codex,
     Grok,
+    Gemini,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 3] = [Tool::Claude, Tool::Codex, Tool::Grok];
+    pub const ALL: [Tool; 4] = [Tool::Claude, Tool::Codex, Tool::Grok, Tool::Gemini];
+    /// Tools with a subscription login K2 can swap and sign in.
+    pub const SUBSCRIPTION: [Tool; 3] = [Tool::Claude, Tool::Codex, Tool::Grok];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Tool::Claude => "claude",
             Tool::Codex => "codex",
             Tool::Grok => "grok",
+            Tool::Gemini => "gemini",
         }
     }
 
@@ -57,8 +63,15 @@ impl Tool {
             "claude" => Some(Tool::Claude),
             "codex" => Some(Tool::Codex),
             "grok" => Some(Tool::Grok),
+            "gemini" => Some(Tool::Gemini),
             _ => None,
         }
+    }
+
+    /// The tool a spawn command runs (first token's basename).
+    pub fn from_command(command: &str) -> Option<Tool> {
+        let first = command.split_whitespace().next()?;
+        Tool::parse(first.rsplit('/').next().unwrap_or(first))
     }
 
     pub fn display(self) -> &'static str {
@@ -66,7 +79,13 @@ impl Tool {
             Tool::Claude => "Claude",
             Tool::Codex => "Codex",
             Tool::Grok => "Grok",
+            Tool::Gemini => "Gemini",
         }
+    }
+
+    /// Does K2 support subscription (CLI sign-in) logins for this tool?
+    pub fn subscription_supported(self) -> bool {
+        Tool::SUBSCRIPTION.contains(&self)
     }
 
     /// The CLI binary.
@@ -74,13 +93,15 @@ impl Tool {
         self.as_str()
     }
 
-    /// The env var that points the CLI at a wallet slot for its own
-    /// login / refresh / usage commands. Never set on agent sessions.
+    /// The env var that points the CLI at a home: a wallet slot for the
+    /// tool's own login / refresh / usage commands, and for sessions
+    /// pinned to a subscription login.
     pub fn home_env_var(self) -> &'static str {
         match self {
             Tool::Claude => "CLAUDE_CONFIG_DIR",
             Tool::Codex => "CODEX_HOME",
             Tool::Grok => "GROK_HOME",
+            Tool::Gemini => "GEMINI_CLI_HOME",
         }
     }
 
@@ -90,13 +111,33 @@ impl Tool {
             Tool::Claude => ".credentials.json",
             Tool::Codex => "auth.json",
             Tool::Grok => "auth.json",
+            Tool::Gemini => "oauth_creds.json",
+        }
+    }
+
+    /// Env vars an API-key login sets on a session (verified against the
+    /// installed binaries: Codex reads CODEX_API_KEY, then OPENAI_API_KEY).
+    pub fn api_key_env(self) -> &'static [&'static str] {
+        match self {
+            Tool::Claude => &["ANTHROPIC_API_KEY"],
+            Tool::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+            Tool::Grok => &["XAI_API_KEY"],
+            Tool::Gemini => &["GEMINI_API_KEY"],
         }
     }
 }
 
+/// Login kinds.
+pub mod kind {
+    /// A CLI sign-in: swapped into the live store, or a pinned home.
+    pub const SUBSCRIPTION: &str = "subscription";
+    /// A pasted API key: injected into sessions via env, never swapped,
+    /// billed per token.
+    pub const API_KEY: &str = "api_key";
+}
+
 /// Tools shown on the LLMs page without wallet support yet.
 pub const NOT_YET: &[(&str, &str)] = &[
-    ("gemini", "Gemini"),
     ("cursor", "Cursor Agent"),
     ("pi", "Pi"),
     ("hermes", "Hermes"),
@@ -142,6 +183,9 @@ impl Entry {
     pub fn tool(&self) -> Option<Tool> {
         Tool::parse(&self.tool)
     }
+    pub fn is_api_key(&self) -> bool {
+        self.kind == kind::API_KEY
+    }
 }
 
 #[derive(Debug)]
@@ -159,6 +203,9 @@ pub enum WalletError {
     LiveStoreUnavailable(String),
     AirGap,
     LockBusy(String),
+    /// A rule refusal with its own code (409): `login_pinned`,
+    /// `pinned_active`, `api_key_login`, …
+    Conflict(&'static str, String),
     Io(String),
     Db(rusqlite::Error),
 }
@@ -187,6 +234,7 @@ impl std::fmt::Display for WalletError {
             WalletError::LockBusy(t) => {
                 write!(f, "another change to the {t} login is in progress; try again")
             }
+            WalletError::Conflict(_, hint) => write!(f, "{hint}"),
             WalletError::Io(e) => write!(f, "io: {e}"),
             WalletError::Db(e) => write!(f, "db: {e}"),
         }
@@ -211,6 +259,7 @@ impl WalletError {
             WalletError::LiveStoreUnavailable(_) => "live_store_unavailable",
             WalletError::AirGap => "airgap",
             WalletError::LockBusy(_) => "busy",
+            WalletError::Conflict(code, _) => code,
             WalletError::Io(_) => "io",
             WalletError::Db(_) => "db",
         }
@@ -220,7 +269,8 @@ impl WalletError {
             WalletError::DuplicateLabel(_)
             | WalletError::ActiveLogin
             | WalletError::NotSignedIn(_)
-            | WalletError::LockBusy(_) => "409 Conflict",
+            | WalletError::LockBusy(_)
+            | WalletError::Conflict(..) => "409 Conflict",
             WalletError::NotFound(_) => "404 Not Found",
             WalletError::AirGap => "403 Forbidden",
             WalletError::LiveStoreUnavailable(_) => "422 Unprocessable Entity",
@@ -353,8 +403,24 @@ fn new_id() -> String {
     format!("acc_{}", &u[..16])
 }
 
-/// Insert a new entry row (no slot file yet: state `not_set_up`).
+/// Insert a new subscription entry row (no slot file yet: `not_set_up`).
 pub fn create(conn: &Connection, tool: Tool, label: &str, created_by: Option<&str>) -> Result<Entry, WalletError> {
+    if !tool.subscription_supported() {
+        return Err(WalletError::LiveStoreUnavailable(format!(
+            "{} sign-in logins aren't supported yet; add an API key instead",
+            tool.display()
+        )));
+    }
+    create_kind(conn, tool, label, kind::SUBSCRIPTION, created_by)
+}
+
+pub(crate) fn create_kind(
+    conn: &Connection,
+    tool: Tool,
+    label: &str,
+    kind_: &str,
+    created_by: Option<&str>,
+) -> Result<Entry, WalletError> {
     let label = validate_label(label)?;
     if label_taken(conn, tool, &label, None)? {
         return Err(WalletError::DuplicateLabel(label));
@@ -363,10 +429,10 @@ pub fn create(conn: &Connection, tool: Tool, label: &str, created_by: Option<&st
     // New logins join the end of the tool's pool.
     conn.execute(
         "INSERT INTO llm_accounts (id, tool, label, kind, position, created_by, created_at, state) \
-         VALUES (?1, ?2, ?3, 'subscription', \
+         VALUES (?1, ?2, ?3, ?6, \
                  (SELECT COALESCE(MAX(position), -1) + 1 FROM llm_accounts WHERE tool = ?2), \
                  ?4, ?5, 'not_set_up')",
-        params![id, tool.as_str(), label, created_by, now()],
+        params![id, tool.as_str(), label, created_by, now(), kind_],
     )?;
     get(conn, &id)?.ok_or(WalletError::NotFound(id))
 }
@@ -510,15 +576,49 @@ pub fn active_id(conn: &Connection, tool: Tool) -> Result<Option<String>, Wallet
 }
 
 pub(crate) fn set_active(conn: &Connection, tool: Tool, id: &str, by: Option<&str>) -> Result<(), WalletError> {
+    set_active_with_live(conn, tool, id, None, by)
+}
+
+/// `live_account_id`: the subscription login left in the live store
+/// while `id` (an API key) is the pool's active login.
+pub(crate) fn set_active_with_live(
+    conn: &Connection,
+    tool: Tool,
+    id: &str,
+    live_account_id: Option<&str>,
+    by: Option<&str>,
+) -> Result<(), WalletError> {
     let t = now();
     conn.execute(
-        "INSERT INTO llm_active (tool, account_id, switched_at, switched_by) VALUES (?1, ?2, ?3, ?4) \
+        "INSERT INTO llm_active (tool, account_id, switched_at, switched_by, live_account_id) VALUES (?1, ?2, ?3, ?4, ?5) \
          ON CONFLICT(tool) DO UPDATE SET account_id = excluded.account_id, \
-         switched_at = excluded.switched_at, switched_by = excluded.switched_by",
-        params![tool.as_str(), id, t, by],
+         switched_at = excluded.switched_at, switched_by = excluded.switched_by, \
+         live_account_id = excluded.live_account_id",
+        params![tool.as_str(), id, t, by, live_account_id],
     )?;
     conn.execute("UPDATE llm_accounts SET last_used_at = ?2 WHERE id = ?1", params![id, t])?;
     Ok(())
+}
+
+/// The subscription login whose credential is in the tool's live store
+/// right now (the CLI owns its refresh): the pool's active login, or,
+/// while an API key is active, the login left behind in the live store.
+pub fn live_owner(conn: &Connection, tool: Tool) -> Result<Option<String>, WalletError> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT account_id, live_account_id FROM llm_active WHERE tool = ?1",
+            params![tool.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((active, live)) = row else { return Ok(None) };
+    if let Some(l) = live {
+        return Ok(Some(l));
+    }
+    match get(conn, &active)? {
+        Some(e) if !e.is_api_key() && e.removed_at.is_none() => Ok(Some(e.id)),
+        _ => Ok(None),
+    }
 }
 
 /// Soft-delete the row (the slot folder is moved by [`wallet::remove`]).
@@ -544,7 +644,14 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
         .unwrap_or(entries.len() - 1);
     for step in 1..entries.len() {
         let e = &entries[(start + step) % entries.len()];
-        if Some(e.id.as_str()) != active.as_deref() && store::slot_has_cred(tool, &e.id) {
+        // The pool cycle skips API keys (billed per token: only an
+        // explicit pick) and any login pinned somewhere (never live in
+        // two places).
+        if Some(e.id.as_str()) != active.as_deref()
+            && !e.is_api_key()
+            && store::slot_has_cred(tool, &e.id)
+            && !pins::is_pinned(conn, &e.id)?
+        {
             return Ok(Some(e.clone()));
         }
     }
@@ -553,3 +660,5 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod pins_tests;

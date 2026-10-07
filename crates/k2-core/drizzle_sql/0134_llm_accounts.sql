@@ -52,5 +52,42 @@ CREATE TABLE IF NOT EXISTS llm_active (
     tool        TEXT PRIMARY KEY,
     account_id  TEXT NOT NULL,
     switched_at INTEGER NOT NULL,
-    switched_by TEXT
+    switched_by TEXT,
+    -- When the pool's active login is an API key (env-injected), the
+    -- subscription login still sitting in the tool's live store; NULL
+    -- when account_id itself is in the live store.
+    live_account_id TEXT
 );
+--> statement-breakpoint
+-- Pins: a workspace (its canonical agent, sidecars, heartbeats, tabs)
+-- or one session (v2 session key) runs on a specific login instead of
+-- the pool's active one. Session pin > workspace pin > pool. A
+-- subscription login that is pinned anywhere is never the pool's active
+-- login (and the reverse): one login is never live in two places, since
+-- refresh tokens rotate.
+CREATE TABLE IF NOT EXISTS llm_account_pins (
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('workspace','session')),
+    scope_id   TEXT NOT NULL,
+    tool       TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (scope_kind, scope_id, tool)
+);
+--> statement-breakpoint
+-- The login a session/conversation started under, so a resume uses the
+-- same home even after pins change. conversation_id '' = the latest
+-- fresh spawn on that session key (ids a CLI mints itself are adopted
+-- later). account_id NULL = the tool's live home (the pool).
+CREATE TABLE IF NOT EXISTS llm_session_logins (
+    session_key     TEXT NOT NULL,
+    tool            TEXT NOT NULL,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    account_id      TEXT,
+    home            TEXT,
+    recorded_at     INTEGER NOT NULL,
+    PRIMARY KEY (session_key, tool, conversation_id)
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS llm_session_logins_conv
+    ON llm_session_logins (tool, conversation_id);

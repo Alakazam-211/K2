@@ -36,12 +36,16 @@ pub const NEXT: &str = "/cli/llm/accounts/next";
 pub const RENAME: &str = "/cli/llm/accounts/rename";
 pub const REMOVE: &str = "/cli/llm/accounts/remove";
 pub const REFRESH: &str = "/cli/llm/accounts/refresh";
+pub const PINS: &str = "/cli/llm/accounts/pins";
+pub const PIN: &str = "/cli/llm/accounts/pin";
+pub const UNPIN: &str = "/cli/llm/accounts/unpin";
+pub const ADD_KEY: &str = "/cli/llm/accounts/add-key";
 
 /// Read routes (passports allowed).
-pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS];
+pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
-    ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH,
+    ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -132,11 +136,43 @@ fn usage_for(e: &Entry, active: bool) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -> Value {
+    let label = if p.scope_kind == "workspace" {
+        conn.query_row(
+            "SELECT COALESCE(NULLIF(handle, ''), name) FROM projects WHERE id = ?1",
+            rusqlite::params![p.scope_id],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| p.scope_id.clone())
+    } else {
+        p.scope_id.clone()
+    };
+    json!({
+        "scopeKind": p.scope_kind,
+        "scopeId": p.scope_id,
+        "tool": p.tool,
+        "accountId": p.account_id,
+        "label": label,
+    })
+}
+
+fn pinned_to(e: &Entry) -> Value {
+    with_conn(|conn| {
+        let pins = k2_core::llm_accounts::pins::pins_for(conn, &e.id).unwrap_or_default();
+        Value::Array(pins.iter().map(|p| pin_json(conn, p)).collect())
+    })
+}
+
 fn account_json(e: &Entry, active: bool, human: bool) -> Value {
+    let api = e.is_api_key();
     json!({
         "id": e.id,
         "tool": e.tool,
         "label": e.label,
+        "kind": e.kind,
+        "billedPerToken": api,
+        "pinnedTo": pinned_to(e),
+        "inUse": !api && rt::slot_in_use(&e.id),
         "active": active,
         "state": e.state,
         "detail": e.detail,
@@ -161,28 +197,44 @@ fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
 
 fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
     let mut tools = Vec::new();
-    with_conn(|conn| -> Result<(), WalletError> {
-        for tool in Tool::ALL {
-            let active = wallet_core::active_id(conn, tool)?;
-            let accounts: Vec<Value> = wallet_core::list_for(conn, tool)?
-                .iter()
-                .map(|e| account_json(e, active.as_deref() == Some(e.id.as_str()), human))
-                .collect();
-            tools.push(json!({
-                "tool": tool.as_str(),
-                "display": tool.display(),
-                "supported": true,
-                "activeId": active,
-                "loginMethod": wallet::login_method(tool),
-                "accounts": accounts,
-            }));
-        }
-        Ok(())
+    let all_pins = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
+        Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
     })?;
+    let accounts_by_tool = with_conn(|conn| -> Result<Vec<(Tool, Option<String>, Option<String>, Vec<Entry>)>, WalletError> {
+        let mut v = Vec::new();
+        for tool in Tool::ALL {
+            v.push((
+                tool,
+                wallet_core::active_id(conn, tool)?,
+                wallet_core::live_owner(conn, tool)?,
+                wallet_core::list_for(conn, tool)?,
+            ));
+        }
+        Ok(v)
+    })?;
+    for (tool, active, live, entries) in accounts_by_tool {
+        let accounts: Vec<Value> = entries
+            .iter()
+            .map(|e| account_json(e, active.as_deref() == Some(e.id.as_str()), human))
+            .collect();
+        let pins: Vec<Value> = all_pins.iter().filter(|p| p["tool"] == tool.as_str()).cloned().collect();
+        tools.push(json!({
+            "tool": tool.as_str(),
+            "display": tool.display(),
+            "supported": true,
+            "subscription": tool.subscription_supported(),
+            "apiKeys": true,
+            "activeId": active,
+            "liveAccountId": live,
+            "loginMethod": if tool.subscription_supported() { json!(wallet::login_method(tool)) } else { Value::Null },
+            "accounts": accounts,
+            "pins": pins,
+        }));
+    }
     for (id, display) in wallet_core::NOT_YET {
         tools.push(json!({
-            "tool": id, "display": display, "supported": false,
-            "activeId": Value::Null, "loginMethod": Value::Null, "accounts": [],
+            "tool": id, "display": display, "supported": false, "subscription": false, "apiKeys": false,
+            "activeId": Value::Null, "liveAccountId": Value::Null, "loginMethod": Value::Null, "accounts": [], "pins": [],
         }));
     }
     let logins: Vec<Value> = match who_key {
@@ -218,6 +270,49 @@ struct Body {
     login_id: Option<String>,
     text: Option<String>,
     usage: Option<bool>,
+    scope: Option<String>,
+    scope_id: Option<String>,
+    workspace: Option<String>,
+    session: Option<String>,
+    key: Option<String>,
+}
+
+/// A workspace by projects.id, path, handle or name.
+fn resolve_workspace(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT id FROM projects WHERE id = ?1 OR path = ?1 OR handle = ?1 OR name = ?1 \
+         ORDER BY CASE WHEN id = ?1 THEN 0 WHEN path = ?1 THEN 1 WHEN handle = ?1 THEN 2 ELSE 3 END LIMIT 1",
+        rusqlite::params![key.trim().trim_end_matches('/')],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// The pin scope from a body: `{scope:"workspace", scopeId|workspace}` or
+/// `{scope:"session", scopeId|session}` (a session's v2 key; the
+/// canonical chat's key is its workspace id).
+fn scope_of(b: &Body) -> Result<(k2_core::llm_accounts::pins::ScopeKind, String), CliResponse> {
+    use k2_core::llm_accounts::pins::ScopeKind;
+    let kind = match (b.scope.as_deref(), &b.workspace, &b.session) {
+        (Some(s), _, _) => ScopeKind::parse(s)
+            .ok_or_else(|| refuse(400, "bad_request", "scope is workspace or session"))?,
+        (None, Some(_), _) => ScopeKind::Workspace,
+        (None, None, Some(_)) => ScopeKind::Session,
+        _ => return Err(refuse(400, "bad_request", "scope (workspace or session) is required")),
+    };
+    let raw = b
+        .scope_id
+        .clone()
+        .or_else(|| if kind == ScopeKind::Workspace { b.workspace.clone() } else { b.session.clone() })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| refuse(400, "bad_request", "scopeId is required"))?;
+    if kind == ScopeKind::Workspace {
+        let id = with_conn(|conn| resolve_workspace(conn, &raw))
+            .ok_or_else(|| refuse(404, "not_found", format!("no workspace {raw}")))?;
+        return Ok((kind, id));
+    }
+    Ok((kind, raw))
 }
 
 fn parse_body(body: &[u8]) -> Result<Body, CliResponse> {
@@ -316,6 +411,15 @@ pub fn handle(
             });
             match res {
                 Ok(rows) => ok(json!({"rows": rows})),
+                Err(e) => wallet_err(e),
+            }
+        }
+        PINS => {
+            let res = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
+                Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
+            });
+            match res {
+                Ok(p) => ok(json!({"pins": p})),
                 Err(e) => wallet_err(e),
             }
         }
@@ -462,6 +566,75 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     "no_next",
                     "there is no other signed-in login for that tool; add one on Settings → LLMs",
                 ),
+                Err(e) => wallet_err(e),
+            }
+        }
+        ADD_KEY => {
+            let tool = match tool_of(&b.tool) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            let label = match need(&b.label, "label") {
+                Ok(l) => l.to_string(),
+                Err(r) => return r,
+            };
+            // The key is never logged, echoed or returned.
+            let key_text = b.key.clone().unwrap_or_default();
+            match with_conn(|conn| k2_core::llm_accounts::pins::add_api_key(conn, tool, &label, &key_text, Some(&key))) {
+                Ok(e) => {
+                    audit("llm_accounts.add_key", &key, tool.as_str(), ingress);
+                    crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+                    ok(json!({"account": entry_json(&e.id, true).unwrap_or(Value::Null)}))
+                }
+                Err(e) => wallet_err(e),
+            }
+        }
+        PIN => {
+            let (kind, scope_id) = match scope_of(&b) {
+                Ok(s) => s,
+                Err(r) => return r,
+            };
+            let id = match need(&b.id, "id") {
+                Ok(i) => i.to_string(),
+                Err(r) => return r,
+            };
+            let tool = match opt_tool(&b.tool) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            let res = with_conn(|conn| {
+                k2_core::llm_accounts::pins::pin(conn, kind, &scope_id, tool, &id, Some(&key))
+                    .map(|p| pin_json(conn, &p))
+            });
+            match res {
+                Ok(p) => {
+                    audit("llm_accounts.pin", &key, &format!("{}:{}", kind.as_str(), p["tool"].as_str().unwrap_or("")), ingress);
+                    crate::session_events::emit_llm_accounts_changed(p["tool"].as_str());
+                    let note = if p["tool"] == "claude" {
+                        "This agent's Claude history will live with this login. New sessions use it; a resumed conversation keeps the login it started on."
+                    } else {
+                        "New sessions use this login; a resumed conversation keeps the login it started on."
+                    };
+                    ok(json!({"pin": p, "note": note}))
+                }
+                Err(e) => wallet_err(e),
+            }
+        }
+        UNPIN => {
+            let (kind, scope_id) = match scope_of(&b) {
+                Ok(s) => s,
+                Err(r) => return r,
+            };
+            let tool = match tool_of(&b.tool) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            match with_conn(|conn| k2_core::llm_accounts::pins::unpin(conn, kind, &scope_id, tool)) {
+                Ok(removed) => {
+                    audit("llm_accounts.unpin", &key, tool.as_str(), ingress);
+                    crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+                    ok(json!({"unpinned": removed}))
+                }
                 Err(e) => wallet_err(e),
             }
         }

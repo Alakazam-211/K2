@@ -7,8 +7,32 @@ use std::time::Duration;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use super::pins;
 use super::store::{self, CredMeta};
-use super::{active_id, get, list_for, lookup, now, set_active, state, update_meta, Entry, MetaUpdate, Tool, WalletError};
+use super::{
+    active_id, get, list_for, live_owner, lookup, now, set_active, set_active_with_live, state,
+    update_meta, Entry, MetaUpdate, Tool, WalletError,
+};
+
+fn pinned_conflict(e: &Entry) -> WalletError {
+    WalletError::Conflict(
+        "login_pinned",
+        format!(
+            "{} is pinned to a workspace or session. A login can't be live in two places (sign-ins rotate), so unpin it first.",
+            e.label
+        ),
+    )
+}
+
+/// Keep a live login K2 doesn't know (no active entry) instead of
+/// overwriting it: a new idle "Previous login" entry.
+fn save_unknown_live(conn: &Connection, tool: Tool, bytes: &[u8], by: Option<&str>) -> Result<(), WalletError> {
+    let label = unique_label(conn, tool, "Previous login")?;
+    let e = super::create(conn, tool, &label, by)?;
+    store::write_slot(tool, &e.id, bytes)?;
+    let m = store::parse_meta(tool, bytes);
+    update_meta(conn, &e.id, &meta_update_from(&m, state::SIGNED_IN))
+}
 
 const LOCK_WAIT: Duration = Duration::from_secs(20);
 
@@ -85,10 +109,16 @@ pub fn begin_new(conn: &Connection, tool: Tool, label: &str, by: Option<&str>) -
 pub fn begin_relogin(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-    if active_id(conn, tool)?.as_deref() == Some(e.id.as_str()) {
+    if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) {
         // Logging the active login in again belongs to the CLI itself
         // (`/login`); K2 signs in into a wallet slot only.
         return Err(WalletError::ActiveLogin);
+    }
+    if e.is_api_key() {
+        return Err(WalletError::Conflict("api_key_login", "API-key logins have no sign-in; replace the key instead".into()));
+    }
+    if pins::is_pinned(conn, &e.id)? {
+        return Err(pinned_conflict(&e));
     }
     store::ensure_private_dir(&store::slot_dir(tool, &e.id)).map_err(|err| WalletError::Io(err.to_string()))?;
     update_meta(conn, &e.id, &MetaUpdate { state: Some(state::SIGNING_IN.into()), detail: Some(None), ..Default::default() })?;
@@ -177,19 +207,51 @@ pub fn switch(
     if !store::slot_has_cred(tool, &target.id) {
         return Err(WalletError::NotSignedIn(target.id));
     }
-    // 1. Save the outgoing live login. With no active entry, keep the
-    //    live login in the wallet instead of overwriting it.
+    if !target.is_api_key() && pins::is_pinned(conn, &target.id)? {
+        return Err(pinned_conflict(&target));
+    }
+    // The subscription login whose credential is in the live store now.
+    let owner = live_owner(conn, tool)?;
+    if target.is_api_key() {
+        // An API key is env-injected into new sessions; the live store is
+        // left as it is and remembered as the subscription in it.
+        set_active_with_live(conn, tool, &target.id, owner.as_deref(), by)?;
+        return Ok(SwitchOutcome {
+            tool: tool.as_str().into(),
+            from: current,
+            to: target.id,
+            saved_outgoing: false,
+            refreshed: false,
+            already_active: false,
+        });
+    }
+    if owner.as_deref() == Some(target.id.as_str()) {
+        // Back from an API key to the login already in the live store.
+        set_active(conn, tool, &target.id, by)?;
+        return Ok(SwitchOutcome {
+            tool: tool.as_str().into(),
+            from: current,
+            to: target.id,
+            saved_outgoing: false,
+            refreshed: false,
+            already_active: false,
+        });
+    }
+    let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
+    // 1. Save the outgoing live login (the CLI may have refreshed it).
+    //    A live login K2 doesn't know is kept as "Previous login".
     let live = store::read_live(tool)?;
     let mut saved = false;
-    match (&current, &live) {
-        (Some(cur), Some(bytes)) => {
-            store::write_slot(tool, cur, bytes)?;
+    match (&owner, &live) {
+        (Some(o), Some(bytes)) => {
+            let _owner_slot = store::lock_slot(tool, o, LOCK_WAIT)?;
+            store::write_slot(tool, o, bytes)?;
             let m = store::parse_meta(tool, bytes);
-            update_meta(conn, cur, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
+            update_meta(conn, o, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
             saved = true;
         }
-        (None, Some(_)) => {
-            import_live_locked(conn, tool, by, "Previous login")?;
+        (None, Some(bytes)) => {
+            save_unknown_live(conn, tool, bytes, by)?;
             saved = true;
         }
         _ => {}
@@ -385,8 +447,13 @@ pub fn remove(conn: &Connection, id: &str) -> Result<RemoveOutcome, WalletError>
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
-    if active_id(conn, tool)?.as_deref() == Some(e.id.as_str()) {
+    if active_id(conn, tool)?.as_deref() == Some(e.id.as_str())
+        || live_owner(conn, tool)?.as_deref() == Some(e.id.as_str())
+    {
         return Err(WalletError::ActiveLogin);
+    }
+    if pins::is_pinned(conn, &e.id)? {
+        return Err(pinned_conflict(&e));
     }
     let dir = store::slot_dir(tool, &e.id);
     let mut moved_to = None;
@@ -406,7 +473,12 @@ pub fn remove(conn: &Connection, id: &str) -> Result<RemoveOutcome, WalletError>
 pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-    let is_active = active_id(conn, tool)?.as_deref() == Some(e.id.as_str());
+    if e.is_api_key() {
+        let st = if store::has_api_key(tool, &e.id) { state::SIGNED_IN } else { state::NOT_SET_UP };
+        update_meta(conn, &e.id, &MetaUpdate { state: Some(st.into()), ..Default::default() })?;
+        return get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id));
+    }
+    let is_active = live_owner(conn, tool)?.as_deref() == Some(e.id.as_str());
     let m = if is_active { store::live_meta(tool)? } else { store::slot_meta(tool, &e.id) };
     let st = if e.state == state::SIGNING_IN {
         state::SIGNING_IN
@@ -467,15 +539,27 @@ pub fn refresh_error_is_permanent(e: &str) -> bool {
 
 /// Refresh every idle slot that is due. Never the active login, never
 /// under air-gap. Each refresh holds the tool lock.
-pub fn keep_warm(conn: &Connection, refresher: &dyn Refresher, now_secs: i64) -> Result<Vec<WarmResult>, WalletError> {
+/// Refresh ownership: the CLI refreshes the login in the live store and
+/// any pinned slot a running session uses (`in_use`); K2 refreshes every
+/// other subscription slot. API keys never refresh.
+pub fn keep_warm(
+    conn: &Connection,
+    refresher: &dyn Refresher,
+    now_secs: i64,
+    in_use: &dyn Fn(&str) -> bool,
+) -> Result<Vec<WarmResult>, WalletError> {
     if crate::airgap::enabled() {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for tool in Tool::ALL {
-        let active = active_id(conn, tool)?;
+    for tool in Tool::SUBSCRIPTION {
+        let owner = live_owner(conn, tool)?;
         for e in list_for(conn, tool)? {
-            if active.as_deref() == Some(e.id.as_str()) || e.state == state::SIGNING_IN {
+            if owner.as_deref() == Some(e.id.as_str())
+                || e.state == state::SIGNING_IN
+                || e.is_api_key()
+                || in_use(&e.id)
+            {
                 continue;
             }
             let meta = store::slot_meta(tool, &e.id);
@@ -486,8 +570,15 @@ pub fn keep_warm(conn: &Connection, refresher: &dyn Refresher, now_secs: i64) ->
                 Ok(l) => l,
                 Err(_) => continue,
             };
-            // Re-check under the lock: a switch may have made it active.
-            if active_id(conn, tool)?.as_deref() == Some(e.id.as_str()) {
+            // The slot lock also blocks a pinned session from starting on
+            // this login mid-refresh.
+            let _slot = match store::lock_slot(tool, &e.id, Duration::from_secs(5)) {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            // Re-check under the locks: a switch may have made it live, or
+            // a pinned session may have started on it.
+            if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) || in_use(&e.id) {
                 continue;
             }
             match refresher.refresh(tool, &e.id) {

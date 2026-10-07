@@ -71,10 +71,11 @@ fn shim_script(log: &Path) -> String {
         r#"#!/bin/sh
 n=$(/usr/bin/basename "$0")
 f="{log}/$n-$$"
-printf 'HOOK=%s\nCELL=%s\nCLAUDE_CONFIG_DIR=%s\nCODEX_HOME=%s\nGROK_HOME=%s\nHOME=%s\n' "$K2_HOOK_TOKEN" "$K2_CELL" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$GROK_HOME" "$HOME" > "$f.env"
+printf 'HOOK=%s\nCELL=%s\nCLAUDE_CONFIG_DIR=%s\nCODEX_HOME=%s\nGROK_HOME=%s\nHOME=%s\nKEYSET=%s\n' "$K2_HOOK_TOKEN" "$K2_CELL" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$GROK_HOME" "$HOME" "${{ANTHROPIC_API_KEY:+yes}}${{CODEX_API_KEY:+yes}}" > "$f.env"
 printf '%s\n' "$@" > "$f.argv"
 case "$n" in
   claude)
+    if [ "$1" != "auth" ]; then exec /bin/cat; fi
     printf 'Opening browser to sign in...\n'
     "$BROWSER" "https://claude.example.test/oauth/authorize?state=s1"
     printf "If the browser didn't open, visit: https://claude.example.test/oauth/authorize?state=s1\n"
@@ -87,6 +88,7 @@ case "$n" in
     printf 'Login successful.\n'
     exit 0 ;;
   codex)
+    if [ "$1" != "login" ]; then exec /bin/cat; fi
     printf 'Open https://auth.example.test/codex/device and enter this one-time code: ABCD-12345\n'
     /bin/sleep 2
     printf '{{"tokens":{{"refresh_token":"{marker}-codex-rt"}}}}' > "$CODEX_HOME/auth.json"
@@ -267,7 +269,10 @@ fn db_dump() -> String {
 fn reset_wallet_tables() {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    conn.execute_batch("DELETE FROM llm_accounts; DELETE FROM llm_active;").expect("reset");
+    conn.execute_batch(
+        "DELETE FROM llm_accounts; DELETE FROM llm_active; DELETE FROM llm_account_pins; DELETE FROM llm_session_logins;",
+    )
+    .expect("reset");
 }
 
 #[cfg(unix)]
@@ -310,12 +315,18 @@ async fn wallet_routes_end_to_end() {
     assert!(!r.body.contains(MARKER), "no token in list");
     let list = js(&r);
     assert_eq!(list["tools"].as_array().unwrap().len(), 7);
-    assert_eq!(list["switchNote"], "Switching a login affects every session on this server.");
+    assert_eq!(
+        list["switchNote"],
+        "Switching a login affects every unpinned session on this server."
+    );
     let default = account_by_label(&list, "claude", "Default").clone();
     assert_eq!(default["active"], true);
     assert_eq!(default["email"], "first@example.test");
     assert_eq!(default["plan"], "max");
-    assert_eq!(tool_doc(&list, "gemini")["supported"], false);
+    assert_eq!(default["kind"], "subscription");
+    assert_eq!(tool_doc(&list, "gemini")["supported"], true);
+    assert_eq!(tool_doc(&list, "gemini")["subscription"], false, "Gemini: API keys only");
+    assert_eq!(tool_doc(&list, "cursor")["supported"], false);
     assert_eq!(tool_doc(&list, "claude")["loginMethod"], "temp_home");
     let mut saw_event = false;
     while let Ok(ev) = events.try_recv() {
@@ -569,4 +580,267 @@ async fn airgap_refuses_sign_in_but_allows_local_changes() {
     assert_eq!(r.status, 410, "{}", r.body);
     std::env::remove_var("K2_AIRGAP");
     assert!(!env.home.join(".k2/llm-accounts/.login").read_dir().map(|mut d| d.next().is_some()).unwrap_or(false));
+}
+
+// ── Pins at the spawn doors ─────────────────────────────────────────
+
+const KEY: &str = "sk-test-K2TEST_SECRET_MARKER-apikey-0001";
+
+fn seed_project(env: &TestEnv, handle: &str) -> (String, PathBuf) {
+    let path = env.home.join(format!("ws-{handle}"));
+    std::fs::create_dir_all(&path).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+        rusqlite::params![id, handle, path.to_string_lossy()],
+    )
+    .expect("seed project");
+    (id, path)
+}
+
+/// The env file of the one shim run whose argv contains `needle`.
+fn run_env(env: &TestEnv, name: &str, needle: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut hits = Vec::new();
+        for e in std::fs::read_dir(&env.log).expect("log").flatten() {
+            let f = e.file_name().to_string_lossy().to_string();
+            if f.starts_with(&format!("{name}-")) && f.ends_with(".argv") {
+                let argv = std::fs::read_to_string(e.path()).unwrap_or_default();
+                if argv.lines().any(|l| l == needle) {
+                    let envp = e.path().with_extension("env");
+                    hits.push(std::fs::read_to_string(envp).expect("env file"));
+                }
+            }
+        }
+        if hits.len() == 1 {
+            return hits.remove(0);
+        }
+        assert!(hits.len() < 2, "more than one {name} run with {needle}");
+        assert!(Instant::now() < deadline, "no {name} run with {needle}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn spawn_b(project_id: &str, cwd: &Path, key: &str, command: &str, args: &[&str]) {
+    k2_daemon::spawn::spawn_agent_session_v2_blocking(k2_daemon::spawn::SpawnWorkspaceSessionRequest {
+        agent_name: key.to_string(),
+        project_id: Some(project_id.to_string()),
+        cwd: cwd.to_string_lossy().into_owned(),
+        command: Some(command.to_string()),
+        args: Some(args.iter().map(|s| s.to_string()).collect()),
+        cols: 80,
+        rows: 24,
+        canonical_key: Some(key.to_string()),
+        env: std::collections::HashMap::new(),
+        launch_prompt: None,
+        label: None,
+    })
+    .expect("spawn");
+}
+
+fn kill_sessions_under(home: &Path) {
+    for (key, s) in k2_daemon::v2_session_map::snapshot() {
+        if s.cwd.as_ref().is_some_and(|p| p.starts_with(home)) {
+            k2_daemon::v2_session_map::unregister(&key);
+            s.kill();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pinned_sessions_run_on_their_login_and_resume_keeps_the_recorded_home() {
+    let env = setup();
+    let d = futures_block(test_harness::start(OWNER));
+    reset_wallet_tables();
+    let port = d.port;
+    let (pid, ws) = seed_project(&env, "pinws");
+
+    // Live Default + a second signed-in Claude login.
+    std::fs::create_dir_all(env.home.join(".claude")).unwrap();
+    std::fs::write(env.home.join(".claude/.credentials.json"), format!(r#"{{"claudeAiOauth":{{"refreshToken":"{MARKER}-live"}}}}"#)).unwrap();
+    std::fs::write(env.home.join(".claude/settings.json"), "{}").unwrap();
+    k2_daemon::llm_accounts_runtime::boot_import();
+    let second = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let e = k2_core::llm_accounts::wallet::begin_new(&conn, k2_core::llm_accounts::Tool::Claude, "Second", None).unwrap();
+        let slot = env.home.join(format!(".k2/llm-accounts/claude/{}", e.id));
+        std::fs::write(slot.join(".credentials.json"), format!(r#"{{"claudeAiOauth":{{"refreshToken":"{MARKER}-second"}}}}"#)).unwrap();
+        k2_core::llm_accounts::wallet::finalize_login(&conn, &e.id, None).unwrap()
+    };
+    let slot = env.home.join(format!(".k2/llm-accounts/claude/{}", second.id));
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let default_id = account_by_label(&list, "claude", "Default")["id"].as_str().unwrap().to_string();
+
+    // The pool's live login can't be pinned; a passport can't pin.
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, json!({"scope":"workspace","workspace":"pinws","id": default_id}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(code(&r), "pinned_active");
+    let r = post(port, "/cli/llm/accounts/pin", &passport(), json!({"scope":"workspace","workspace":"pinws","id": second.id}));
+    assert_eq!(r.status, 403);
+    assert_eq!(code(&r), "owner_only");
+    let r = req(port, "GET", &format!("/cli/llm/accounts/pin?token={OWNER}"), None);
+    assert_eq!(r.status, 405);
+
+    // Pin the workspace (by handle) to Second.
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, json!({"scope":"workspace","workspace":"pinws","id": second.id}));
+    assert_eq!(r.status, 200, "pin: {}", r.body);
+    let v = js(&r);
+    assert_eq!(v["pin"]["scopeId"], pid.as_str());
+    assert_eq!(v["pin"]["label"], "pinws");
+    assert!(v["note"].as_str().unwrap().contains("Claude history will live with this login"));
+    // A pinned login can't become the pool's active login.
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": second.id}));
+    assert_eq!(r.status, 409);
+    assert_eq!(code(&r), "login_pinned");
+
+    // Door B (daemon-internal spawn): the canonical chat runs from Second's slot.
+    spawn_b(&pid, &ws, &pid, "claude", &["--session-id", "conv-pinned-1"]);
+    let e1 = run_env(&env, "claude", "conv-pinned-1");
+    assert!(e1.contains(&format!("CLAUDE_CONFIG_DIR={}\n", slot.display())), "{e1}");
+    assert!(e1.contains(&format!("HOME={}\n", env.home.display())), "HOME never changes: {e1}");
+    assert!(slot.join("settings.json").is_symlink(), "shared settings linked into the slot");
+    let cfg: Value = serde_json::from_slice(&std::fs::read(slot.join(".claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["projects"][ws.to_string_lossy().as_ref()]["hasTrustDialogAccepted"], true);
+    // In use while that session runs.
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let row = account_by_label(&list, "claude", "Second");
+    assert_eq!(row["inUse"], true, "{row}");
+    assert_eq!(row["pinnedTo"][0]["label"], "pinws");
+
+    // Another workspace is on the pool: no env.
+    let (pid2, ws2) = seed_project(&env, "poolws");
+    spawn_b(&pid2, &ws2, &pid2, "claude", &["--session-id", "conv-pool-1"]);
+    let e2 = run_env(&env, "claude", "conv-pool-1");
+    assert!(e2.contains("CLAUDE_CONFIG_DIR=\n"), "pool sessions launch exactly as before: {e2}");
+
+    // Re-pin the workspace to an API key.
+    let r = post(port, "/cli/llm/accounts/add-key", OWNER, json!({"tool":"claude","label":"Metered","key": KEY}));
+    assert_eq!(r.status, 200, "add-key: {}", r.body);
+    let key_id = js(&r)["account"]["id"].as_str().unwrap().to_string();
+    assert_eq!(js(&r)["account"]["billedPerToken"], true);
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, json!({"scope":"workspace","scopeId": pid, "id": key_id}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    spawn_b(&pid, &ws, &format!("{pid}:hb:daily"), "claude", &["--session-id", "conv-key-1"]);
+    let e3 = run_env(&env, "claude", "conv-key-1");
+    assert!(e3.contains("KEYSET=yes"), "API key injected: {e3}");
+    assert!(e3.contains("CLAUDE_CONFIG_DIR=\n"), "an API key needs no home: {e3}");
+
+    // Resume the first conversation: its recorded home, not the new pin.
+    kill_sessions_under(&env.home);
+    spawn_b(&pid, &ws, &pid, "claude", &["--resume", "conv-pinned-1"]);
+    let e4 = {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut found = None;
+            for e in std::fs::read_dir(&env.log).unwrap().flatten() {
+                let f = e.file_name().to_string_lossy().to_string();
+                if f.starts_with("claude-") && f.ends_with(".argv") {
+                    let a = std::fs::read_to_string(e.path()).unwrap_or_default();
+                    if a.lines().any(|l| l == "--resume") && a.lines().any(|l| l == "conv-pinned-1") {
+                        found = std::fs::read_to_string(e.path().with_extension("env")).ok();
+                    }
+                }
+            }
+            if let Some(f) = found {
+                break f;
+            }
+            assert!(Instant::now() < deadline, "no resume run");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    assert!(e4.contains(&format!("CLAUDE_CONFIG_DIR={}\n", slot.display())), "resume keeps its home: {e4}");
+    assert!(!e4.contains("KEYSET=yes"));
+
+    // Door A (/cli/sessions/v2/spawn) with a session pin on a tab key.
+    let r = post(port, "/cli/llm/accounts/pin", OWNER, json!({"scope":"session","session":"tab-door-a","tool":"claude","id": key_id}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(
+        port,
+        "/cli/sessions/v2/spawn",
+        OWNER,
+        json!({"agent_name":"tab-door-a","cwd": ws.to_string_lossy(),"command":"claude","args":["--session-id","conv-door-a"],"cols":80,"rows":24}),
+    );
+    assert_eq!(r.status, 200, "v2 spawn: {}", r.body);
+    let e5 = run_env(&env, "claude", "conv-door-a");
+    assert!(e5.contains("KEYSET=yes"), "{e5}");
+
+    // Unpin; pins listing; nothing secret anywhere.
+    let r = post(port, "/cli/llm/accounts/unpin", OWNER, json!({"scope":"session","session":"tab-door-a","tool":"claude"}));
+    assert_eq!(js(&r)["unpinned"], true);
+    for (path, tok) in [
+        ("/cli/llm/accounts/list", OWNER.to_string()),
+        ("/cli/llm/accounts/pins", OWNER.to_string()),
+        ("/cli/llm/accounts/usage", OWNER.to_string()),
+        ("/cli/llm/accounts/pins", passport()),
+    ] {
+        let r = get(port, path, &tok);
+        assert_eq!(r.status, 200, "{path}: {}", r.body);
+        assert!(!r.body.contains(MARKER), "{path} leaks a secret");
+    }
+    let r = get(port, &format!("/cli/llm/accounts/status?id={key_id}"), OWNER);
+    assert!(!r.body.contains(MARKER));
+    let dump = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut out = String::new();
+        for t in ["llm_accounts", "llm_active", "llm_account_pins", "llm_session_logins"] {
+            let mut st = conn.prepare(&format!("SELECT * FROM {t}")).unwrap();
+            let n = st.column_count();
+            let mut rows = st.query([]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                for i in 0..n {
+                    let v: rusqlite::types::Value = row.get(i).unwrap();
+                    out.push_str(&format!("{v:?}|"));
+                }
+            }
+        }
+        out
+    };
+    assert!(!dump.contains(MARKER), "no secret in the DB");
+    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    assert!(!audit.contains(MARKER), "no secret in the audit log");
+    assert!(audit.contains("llm_accounts.pin"));
+    kill_sessions_under(&env.home);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pinned_codex_session_runs_in_a_shadow_home_sharing_conversations() {
+    let env = setup();
+    let _d = futures_block(test_harness::start(OWNER));
+    reset_wallet_tables();
+    let (pid, ws) = seed_project(&env, "codexws");
+    std::fs::create_dir_all(env.home.join(".codex")).unwrap();
+    std::fs::write(env.home.join(".codex/config.toml"), "model = \"m\"\n").unwrap();
+    std::fs::write(env.home.join(".codex/history.jsonl"), "").unwrap();
+    let e = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let e = k2_core::llm_accounts::wallet::begin_new(&conn, k2_core::llm_accounts::Tool::Codex, "Team", None).unwrap();
+        let slot = env.home.join(format!(".k2/llm-accounts/codex/{}", e.id));
+        std::fs::write(slot.join("auth.json"), format!(r#"{{"tokens":{{"refresh_token":"{MARKER}"}}}}"#)).unwrap();
+        let e = k2_core::llm_accounts::wallet::finalize_login(&conn, &e.id, None).unwrap();
+        // Finalize made it active (nothing was live); give the pool another
+        // login so this one can be pinned.
+        let other = k2_core::llm_accounts::wallet::begin_new(&conn, k2_core::llm_accounts::Tool::Codex, "Other", None).unwrap();
+        let oslot = env.home.join(format!(".k2/llm-accounts/codex/{}", other.id));
+        std::fs::write(oslot.join("auth.json"), r#"{"tokens":{"refresh_token":"x"}}"#).unwrap();
+        k2_core::llm_accounts::wallet::finalize_login(&conn, &other.id, None).unwrap();
+        k2_core::llm_accounts::wallet::switch(&conn, k2_core::llm_accounts::Tool::Codex, &other.id, None, None).unwrap();
+        k2_core::llm_accounts::pins::pin(&conn, k2_core::llm_accounts::pins::ScopeKind::Workspace, &pid, None, &e.id, None).unwrap();
+        e
+    };
+    let slot = env.home.join(format!(".k2/llm-accounts/codex/{}", e.id));
+    spawn_b(&pid, &ws, &pid, "codex", &["--yolo"]);
+    let env_text = run_env(&env, "codex", "--yolo");
+    assert!(env_text.contains(&format!("CODEX_HOME={}\n", slot.display())), "{env_text}");
+    let sessions = std::fs::read_link(slot.join("sessions")).expect("sessions is a link");
+    assert_eq!(sessions, env.home.join(".codex/sessions"), "conversations land in the normal Codex home");
+    assert!(env.home.join(".codex/sessions").is_dir());
+    assert!(std::fs::read_to_string(slot.join("config.toml")).unwrap().contains("cli_auth_credentials_store = \"file\""));
+    assert!(!slot.join("auth.json").is_symlink());
+    kill_sessions_under(&env.home);
 }

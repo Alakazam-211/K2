@@ -1415,6 +1415,31 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         per_session_uid = Some(cell_uid);
     }
 
+    // LLM login wallet: a pinned session runs on its login (slot home or
+    // API key), a resume on the login its conversation started under.
+    let llm_login = {
+        let args_for_login = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
+        match crate::llm_accounts_runtime::apply_spawn_login(
+            cfg.program.as_deref(),
+            &args_for_login,
+            &mut cfg.env,
+            &req.agent_name,
+            project_id.as_deref(),
+            cfg.cwd.as_deref(),
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                if let Some(uid) = per_session_uid {
+                    let _ = crate::cell_egress::remove_egress_policy(uid);
+                    crate::cell_uid_pool::free(uid);
+                }
+                return HandlerResult {
+                    status: "409 Conflict",
+                    body: serde_json::json!({ "error": format!("LLM login: {e}"), "code": e.code() }).to_string(),
+                };
+            }
+        }
+    };
     k2_core::cli_folder_trust::maybe_trust_harness_spawn(
         cfg.program.as_deref(),
         cfg.cwd.as_deref(),
@@ -1444,6 +1469,9 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             };
         }
     };
+    if let Some(g) = llm_login {
+        g.spawned(session.child_pid());
+    }
     // Seed last-claimer dims at create so a grid attach before the first
     // SetActive/Resize still pre-snaps to the body fit (fresh PTY is already
     // at req.cols×rows — this only records the claimer size, no reflow).

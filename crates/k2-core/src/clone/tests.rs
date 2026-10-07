@@ -1897,3 +1897,31 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
     }
     out
 }
+
+/// The LLM login wallet never travels in a clone bundle, even with
+/// `carry_secrets` and even when the workspace is the home folder.
+#[test]
+fn llm_wallet_never_travels_even_when_carrying_secrets() {
+    let fx = build_fixture();
+    write(
+        &fx.project.join(".k2/llm-accounts/claude/acc_x/.credentials.json"),
+        "{\"claudeAiOauth\":{\"refreshToken\":\"K2TEST_SECRET_MARKER\"}}",
+    );
+    write(&fx.project.join(".k2/llm-accounts/codex/acc_y/api-key"), "K2TEST_SECRET_MARKER");
+    write(&fx.project.join("notes/llm-accounts/readme.md"), "a project folder with that name travels");
+    for carry in [false, true] {
+        let mut o = opts(&fx.home);
+        o.carry_secrets = carry;
+        let inv = inventory(&fx.project.to_string_lossy(), o).unwrap();
+        let ws = rel_paths(&inv, DestinationClass::Workspace);
+        assert!(
+            !ws.iter().any(|p| p.contains("llm-accounts/claude") || p.contains("llm-accounts/codex")),
+            "wallet must never be bundled (carry={carry}): {ws:?}"
+        );
+        assert!(
+            inv.scrubbed_secrets.iter().any(|p| p.starts_with(".k2/llm-accounts/")),
+            "the report lists the wallet as left behind (carry={carry})"
+        );
+        assert!(ws.contains("notes/llm-accounts/readme.md"), "only the wallet under .k2 is excluded");
+    }
+}

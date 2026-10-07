@@ -453,13 +453,30 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         overlay: None,
     };
     let session_id = cfg.session_id;
+    let mut cfg = cfg;
 
+    // LLM login wallet: pins / recorded login for this session key.
+    let llm_login = {
+        let args_for_login = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
+        crate::llm_accounts_runtime::apply_spawn_login(
+            cfg.program.as_deref(),
+            &args_for_login,
+            &mut cfg.env,
+            &canonical_key,
+            req.project_id.as_deref(),
+            cfg.cwd.as_deref(),
+        )
+        .map_err(|e| format!("LLM login: {e}"))?
+    };
     k2_core::cli_folder_trust::maybe_trust_harness_spawn(
         cfg.program.as_deref(),
         cfg.cwd.as_deref(),
         cfg.env.get("HOME").map(String::as_str),
     );
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
+    if let Some(g) = llm_login {
+        g.spawned(session.child_pid());
+    }
     // Seed last-claimer dims at create (attach-size PR2) so a grid
     // pre-snap has the body fit before the first SetActive.
     {

@@ -159,6 +159,9 @@ pub mod wiki;
 // Phase 2.5c: historical migration helpers (one-shot, sentinel-gated).
 pub mod migrations;
 pub mod llm;
+/// LLM login wallet: one active login per tool, idle logins in
+/// `~/.k2/llm-accounts` (`k2 llm accounts`, Settings → LLMs).
+pub mod llm_accounts;
 // K2 Mail (prd-email-server-v1 pre-mortem #14) — the ONE mail-domain
 // normalization helper (lowercase punycode A-label) used at every
 // boundary. Store only what it returns; display-decode at the edge.

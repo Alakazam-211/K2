@@ -1078,6 +1078,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0133_mail_credential_marks",
             include_str!("../../drizzle_sql/0133_mail_credential_marks.sql"),
         ),
+        // 0134 — LLM login wallet: llm_accounts (metadata only, never a
+        // token) + llm_active (one active login per tool per server).
+        (
+            "0134_llm_accounts",
+            include_str!("../../drizzle_sql/0134_llm_accounts.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1738,7 +1744,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0133_mail_credential_marks",
+            last_name, "0134_llm_accounts",
             "unexpected last migration name: {last_name}"
         );
     }

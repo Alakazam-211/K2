@@ -110,11 +110,6 @@ pub fn mail_caller() -> MailCaller {
     }
 }
 
-/// True when the current request carries a scoped agent passport.
-pub fn caller_is_agent() -> bool {
-    crate::caller_workspace::request_principal().is_some()
-}
-
 /// Whether the mailbox row is a person's mailbox (`person_mailbox = 1`).
 pub fn is_person_mailbox(address_id: &str) -> bool {
     let db = k2_core::db::shared();

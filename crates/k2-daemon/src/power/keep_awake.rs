@@ -64,6 +64,7 @@ pub struct WorkTracker {
 }
 
 impl WorkTracker {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn key(workspace_path: &str, agent_name: &str) -> String {
         format!("{workspace_path}|{agent_name}")
     }
@@ -71,6 +72,7 @@ impl WorkTracker {
     /// Apply one activity update. Returns true when this event started a
     /// hold that was not already running (so the caller re-applies at once
     /// instead of waiting for the next tick).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn on_activity(&mut self, key: &str, status: &str, now: Instant) -> bool {
         self.on_activity_since(key, status == "working", now, now)
     }
@@ -316,6 +318,7 @@ impl KeepAwake {
     }
 
     /// One activity update. True = re-apply now.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn note_activity(&self, key: &str, status: &str, now: Instant) -> bool {
         self.inner.lock().tracker.on_activity(key, status, now)
     }

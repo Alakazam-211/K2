@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.0 — See your agents work
+
+- **Thread shows the agent working.** While an agent works, Thread shows a live strip under your message: the time since you asked, the current step ("Running a command", "Thinking… 8s"), any subagents, and a Stop button. It stays up after the reply while subagents or background tasks are still running, and says plainly when the agent is stuck on a permission prompt or a question.
+- **Activity you can trust.** The server, not each window, now decides whether an agent is working. Every window, the web app, My Home and Zen show the same state, and it no longer gets stuck on "working". Older servers keep showing their dots in the new app.
+- **LLM tokens.** Settings → LLMs → Tokens holds several subscriptions and API tokens for Claude, Codex and Grok (API tokens for Gemini too). Each tool has one server default. Use next token switches when one runs out, and running chats pick up the change. Any chat tab or workspace can use its own token: open the Token menu in the chat header, or right-click the tab. K2 keeps your saved logins fresh. Logins stay on this server and never travel in a clone. From the CLI: `k2 llm tokens`.
+- **Hosted mail: calendars groundwork and steadier certificates.** Servers get ready for calendars and contacts. There's an Apple setup profile (`k2 hostmail profile`) and an explicit Stalwart upgrade to 0.16.20. Certificates K2 issues now renew themselves before they expire.
+- **Mail you stay in control of.** `k2 mail send --bcc`, and an owner "always BCC" setting per workspace that the agent can't remove. Agents send only through K2, so your rules always apply. An agent allowed to manage mail can now do what you can for other mailboxes, except loosen the rules on its own mail.
+- **`k2 sidecar`.** Agents can start, list and stop side chats for Claude, Codex, Grok, Gemini, Cursor, Pi and Hermes. Each can be resumed later. Turn it on per workspace with `k2 sidecar access on`.
+- **Rename agents** from the sidebar: right-click → Rename agent. The handle stays the same, so messages keep working.
+
+**Fixes**
+- Codex: each chat runs its own background server, so Thread replies and `k2` commands act as that chat. Messages you send before Codex's first reply no longer disappear. If Codex was already open, restart it once after updating.
+- A Thread message to a chat opened from history now goes to that workspace's agent, never another workspace's.
+- Terminals no longer hang or print `(eval)` errors when the login shell prints extra output at startup.
+- Published apps on `localhost` load even when the server lists IPv6 first. An app that isn't running shows "Service not reachable" (502) instead of a 404.
+- My Home remembers the view (terminal, chat, split) for agents on other servers.
+- The LLM launch bar starts hidden; turn it on in Settings → LLMs.
+- The Zen permission banner just states that the agent is stuck, with no button. Zen widgets get the full set of agent states (working, monitoring, needs you, no update, idle).
+
+**Server owners:** to use the calendar features, re-run the mail helper installer once with `--version 0.45.0` (`sudo bash install-mail-helper.sh --version 0.45.0`). New servers we set up get it automatically.
+
 ## 0.44.4 — Security update
 
 - **Important security fixes.** K2 now checks where every browser request comes from before it acts on it, for the web client, apps and live connections. Please update the app and your servers.

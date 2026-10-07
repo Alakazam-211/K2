@@ -1581,6 +1581,48 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // POST /cli/workspace/swap-canonical — replace the pinned chat
+        // with a never-chatted session of another harness and send the
+        // transcript handoff into it. Owner/member token only. Skin
+        // guests cannot kill the canonical PTY. Body:
+        // {project, provider, mode?, notes?}.
+        "/cli/workspace/swap-canonical" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"swap-canonical is not allowed for skin guests"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::pinned_chat::handle_swap_canonical(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // POST /cli/companion/set-password — Phase 2 Unit 1.
         // Body: `{"password": "..."}`. Hashes argon2id, stores in
         // macOS Keychain (preferred) or settings.json (fallback),

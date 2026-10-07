@@ -4270,6 +4270,153 @@ except Exception:
     cli_request "/cli/workspace/resume-chat-args" "project=$(urlencode "$resolved_path")"
 }
 
+# Replace the workspace's pinned chat with a new session of another
+# harness. The daemon copies a transcript seed (and optional notes)
+# into that new chat. It does not resume the saved session, and it
+# does not move heartbeats onto the new session.
+#
+#   k2 workspace swap-canonical <workspace> --agent claude
+#   k2 workspace swap-canonical <workspace> --agent claude --full --notes-file handoff.md
+cmd_workspace_swap_canonical() {
+    local target="" agent="" mode="recent" notes_file=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --agent|--provider)
+                agent="${2:-}"
+                if [[ -z "$agent" ]]; then
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --mode)
+                mode="${2:-}"
+                if [[ -z "$mode" ]]; then
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --recent) mode="recent"; shift ;;
+            --full) mode="full"; shift ;;
+            --notes-file)
+                notes_file="${2:-}"
+                if [[ -z "$notes_file" ]]; then
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
+            -*)
+                echo "Unknown flag: $1" >&2
+                echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                exit 2
+                ;;
+            *)
+                if [[ -z "$target" ]]; then
+                    target="$1"
+                else
+                    echo "Unexpected argument: $1" >&2
+                    exit 2
+                fi
+                shift
+                ;;
+        esac
+    done
+    if [[ -z "$target" || -z "$agent" ]]; then
+        echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+        exit 2
+    fi
+    case "$mode" in
+        recent|full) ;;
+        *) echo "mode must be recent or full" >&2; exit 2 ;;
+    esac
+    local notes=""
+    if [[ -n "$notes_file" ]]; then
+        if [[ ! -f "$notes_file" ]]; then
+            echo "Error: file not found: $notes_file" >&2
+            exit 1
+        fi
+        notes=$(cat "$notes_file")
+    fi
+    local resolved_path
+    resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null || true)
+    if [ -z "$resolved_path" ]; then
+        resolved_path="$target"
+    fi
+    local body
+    body=$(SWAP_PROJECT="$resolved_path" SWAP_PROVIDER="$agent" SWAP_MODE="$mode" SWAP_NOTES="$notes" python3 -c '
+import json, os
+print(json.dumps({
+    "project": os.environ.get("SWAP_PROJECT", ""),
+    "provider": os.environ.get("SWAP_PROVIDER", ""),
+    "mode": os.environ.get("SWAP_MODE", "recent"),
+    "notes": os.environ.get("SWAP_NOTES", ""),
+}))
+')
+    local out rc=0
+    out=$(curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=${TOKEN}" \
+        --connect-timeout 5 --max-time 120 \
+        -H "Content-Type: application/json" \
+        --data-raw "$body" 2>/dev/null) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        echo "Error: could not reach the daemon" >&2
+        exit 1
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") and not d.get("swapped"):
+    err = d["error"]
+    if isinstance(err, dict):
+        err = err.get("hint") or err.get("code") or err
+    print("Error: %s" % err, file=sys.stderr)
+    path = d.get("handoffPath") or ""
+    if path:
+        print("Handoff file: %s" % path, file=sys.stderr)
+    sys.exit(1)
+if not d.get("swapped"):
+    print("Error: canonical chat was not swapped", file=sys.stderr)
+    sys.exit(1)
+print("Swapped the canonical chat to %s." % (d.get("provider") or ""))
+prev = d.get("fromProvider") or ""
+if prev:
+    print("Previous harness: %s" % prev)
+sid = d.get("sessionId") or ""
+if sid:
+    print("Terminal session: %s" % sid)
+conv = d.get("claudeSessionId") or ""
+if conv:
+    print("New conversation: %s" % conv)
+path = d.get("handoffPath") or ""
+if path:
+    print("Handoff file: %s" % path)
+seed_error = d.get("seedError") or ""
+if seed_error:
+    print("Transcript seed: %s" % seed_error)
+if d.get("messageDelivered"):
+    print("The handoff was sent into the new chat.")
+else:
+    reason = d.get("messageReason") or "not delivered"
+    hint = d.get("messageHint") or ""
+    print("The new chat is up. The handoff was not sent (%s)." % reason)
+    if hint:
+        print(hint)
+    print("The handoff file is on disk. Paste it into the new chat if it did not arrive.")
+print("Heartbeats that resume their own session were not moved.")
+'
+}
+
 # 0.37.4 Phase B: set a v2 session's authoritative label.
 # Daemon-side; broadcasts LabelChanged to every WS subscriber so
 # every Tauri window + the mobile companion converge.
@@ -17464,6 +17611,17 @@ API / HOST-SESSIONS
   force-model-on-resume get <ws>    Show if resume also splices the default model
   force-model-on-resume set <ws> on|off  Pass default model on dead resume (new PTY)
 
+CANONICAL CHAT
+  swap-canonical <ws> --agent <harness>
+                                    Replace the pinned chat with a new session
+                                    of that harness and send it a transcript seed.
+                                    Does not resume the old chat. Does not move
+                                    heartbeats.
+      --recent                      Last turn only (default)
+      --full                        Longer transcript tail
+      --notes-file <path>           Extra notes appended to the seed
+      harness: claude, grok, cursor, gemini, pi, codex, hermes
+
 `<path>` defaults to K2_PROJECT_PATH or PWD.
 
 EXAMPLES
@@ -17482,6 +17640,7 @@ EXAMPLES
   k2 workspace resources add docs/brief.md
   k2 workspace resources list
   k2 workspace resources remove docs/brief.md
+  k2 workspace swap-canonical my-agent --agent claude --notes-file handoff.md
 EOF
 }
 
@@ -35585,6 +35744,7 @@ EOF
             set-agent-name)    shift 2; cmd_workspace_set_agent_display_name "$@" ;;
             set-handle)        shift 2; cmd_workspace_set_handle "$@" ;;
             resume-chat-args)  shift 2; cmd_workspace_resume_chat_args "$@" ;;
+            swap-canonical)    shift 2; cmd_workspace_swap_canonical "$@" ;;
             # B3a (sandbox) — set/clear the per-workspace Anthropic API key.
             api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
             # Phase 0b — owner API guest policy (host-session inject every turn).
@@ -35595,7 +35755,7 @@ EOF
             host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
             default-model)     shift 2; cmd_workspace_default_model "$@" ;;
             force-model-on-resume) shift 2; cmd_workspace_force_model_on_resume "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|...> [args]" >&2; exit 1 ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|triage|set-agent-name|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

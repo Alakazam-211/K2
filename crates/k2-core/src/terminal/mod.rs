@@ -35,6 +35,10 @@ pub mod ensure_cli;
 // resolution + temp-HOME belt so `cargo test` can never exec the real
 // `claude` (which opened a browser OAuth login under a temp HOME).
 pub mod agent_spawn_guard;
+// Codex 0.155+ shares one detached app-server per CODEX_HOME; tool
+// commands under it inherit the FIRST session's K2 passport. Add
+// `--no-daemon` to Codex TUI launches when the binary supports it.
+pub mod codex_no_daemon;
 // Windows CreateProcess PATHEXT / .cmd wrap (npm `claude.cmd`).
 pub mod win_cmd;
 // UTF-8 locale defaulting for spawned children (launchd/systemd give

@@ -356,6 +356,35 @@ impl TerminalManager {
         // Set shell and optional command
         if let Some(ref user_command) = command {
             let mut shell_cmd = shell_escape_arg(user_command);
+            // Same shared-app-server guard as the v2 path (daemon_pty.rs):
+            // a Codex TUI gets `--no-daemon` when the binary supports it.
+            let mut args = args;
+            if crate::terminal::codex_no_daemon::is_codex_program(user_command) {
+                let search_path = crate::terminal::login_path::augmented_path(
+                    &crate::terminal::login_path::process_path(),
+                );
+                // Test guard: never probe a real agent binary under a temp HOME.
+                let guard = crate::terminal::agent_spawn_guard::GuardEnv::from_process();
+                if let Ok(prog) = crate::terminal::agent_spawn_guard::resolve_program(
+                    user_command,
+                    &search_path,
+                    &guard,
+                ) {
+                    let mut a = args.clone().unwrap_or_default();
+                    let outcome = crate::terminal::codex_no_daemon::apply(
+                        &prog,
+                        &mut a,
+                        &search_path,
+                        crate::terminal::codex_no_daemon::Policy::from_process(),
+                    );
+                    log_debug!(
+                        "[terminal/alacritty] codex shared app-server: {:?} id={}",
+                        outcome,
+                        id
+                    );
+                    args = Some(a);
+                }
+            }
             if let Some(ref user_args) = args {
                 for arg in user_args {
                     shell_cmd.push(' ');

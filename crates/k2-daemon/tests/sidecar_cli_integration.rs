@@ -93,12 +93,16 @@ fn setup() -> TestEnv {
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     std::fs::create_dir_all(&shim_log).expect("shim log dir");
     // One shim body for every harness: `create-chat` prints a fresh id (the
-    // cursor-agent subcommand); anything else records argv (NUL-separated)
-    // and the identity env, then becomes `cat` so the PTY stays open.
+    // cursor-agent subcommand); `--help` answers like Codex 0.155+ (the
+    // daemon probes Codex for `--no-daemon`; a real `--help` launches
+    // nothing, so it is not recorded); anything else records argv
+    // (NUL-separated) and the identity env, then becomes `cat` so the PTY
+    // stays open.
     let script = format!(
         "#!/bin/sh\n\
          n=$(/usr/bin/basename \"$0\")\n\
          if [ \"$1\" = \"create-chat\" ]; then /usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z'; exit 0; fi\n\
+         if [ \"$1\" = \"--help\" ]; then printf '      --no-daemon\\n          Run without the shared background server\\n'; exit 0; fi\n\
          f=\"{log}/$n-$(/bin/date +%s)-$$\"\n\
          printf 'K2_CELL=%s\\nK2_SIDECAR_NAME=%s\\n' \"$K2_CELL\" \"$K2_SIDECAR_NAME\" > \"$f.env\"\n\
          printf '%s\\0' \"$@\" > \"$f.tmp\"\n\
@@ -1278,6 +1282,10 @@ async fn resume_after_restart_codex() {
         "{:?}",
         first.argv
     );
+    // Codex 0.155+: each sidecar runs its own app-server, so its tool
+    // commands carry THIS sidecar's passport (not a shared server's).
+    assert_eq!(first.argv.first().map(String::as_str), Some("--no-daemon"), "{:?}", first.argv);
+    assert_eq!(resumed.argv.first().map(String::as_str), Some("--no-daemon"), "{:?}", resumed.argv);
     assert!(
         first.argv.last().expect("argv").contains("Your brief is"),
         "{:?}",

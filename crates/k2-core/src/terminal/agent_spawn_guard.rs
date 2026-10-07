@@ -176,7 +176,7 @@ fn resolve_in_shim_dirs(program: &str, dirs: &[PathBuf]) -> Result<String, Strin
 /// Where `program` would exec from: itself when it carries a directory
 /// component, else the first `search_path` dir holding a regular file of
 /// that name (Windows also tries the common PATHEXT suffixes).
-fn locate_on_path(program: &str, search_path: &str) -> Option<PathBuf> {
+pub fn locate_on_path(program: &str, search_path: &str) -> Option<PathBuf> {
     let raw = Path::new(program);
     if raw.is_absolute() || raw.components().count() > 1 {
         return Some(raw.to_path_buf());

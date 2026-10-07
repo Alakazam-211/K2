@@ -331,6 +331,103 @@ _cli_apply_auth_for_verb() {
 
 # END_CLI_TOOL_POLICY
 
+# BEGIN_CLI_STALE_PASSPORT
+# Codex 0.155+ runs every interactive session's tool commands under ONE
+# shared, detached app-server per CODEX_HOME (`codex app-server --listen
+# unix://`, parent pid 1). That server keeps the env of whichever K2 session
+# started it, so the passport a Codex tool sees ($K2_HOOK_SOCK +
+# $K2_HOOK_TOKEN) can be another tab's or a dead one. K2 now launches Codex
+# with --no-daemon; these checks catch tabs started before that, and say so
+# instead of a bare 401. They never fall back to the owner token.
+
+# stdin: `ps -axo pid=,ppid=,command=` rows. Succeeds when the ancestry of
+# pid $1 includes a shared Codex app-server (unix listener, managed daemon,
+# or detached to pid 1). A private in-process / stdio server never matches.
+_cli_ancestry_has_shared_codex_server() {
+    awk -v start="${1:-}" '
+        {
+            pid = $1; ppid = $2
+            $1 = ""; $2 = ""
+            sub(/^ +/, "")
+            parent[pid] = ppid
+            cmd[pid] = $0
+        }
+        END {
+            p = start; n = 0; found = 0
+            while (p != "" && (p + 0) > 1 && n < 64) {
+                c = cmd[p]
+                if (c ~ /codex/ && c ~ /app-server/ &&
+                    (c ~ /--listen[ =]unix/ || c ~ /--managed-daemon/ ||
+                     c ~ /app-server daemon/ || parent[p] == 1)) {
+                    found = 1
+                    break
+                }
+                p = parent[p]; n++
+            }
+            exit(found ? 0 : 1)
+        }'
+}
+
+# True when this process runs under a shared Codex app-server. Only looks
+# when a CODEX_* var is exported (Codex sets CODEX_THREAD_ID on tool runs).
+_cli_under_shared_codex_server() {
+    [ -n "$(compgen -e CODEX_ 2>/dev/null)" ] || return 1
+    command -v ps >/dev/null 2>&1 || return 1
+    ps -axo pid=,ppid=,command= 2>/dev/null | _cli_ancestry_has_shared_codex_server "$$"
+}
+
+# One loopback probe with the SCOPED token: true only when the daemon
+# answers with its auth refusal (the token names no live session).
+_cli_scoped_token_rejected() {
+    [ -n "${SCOPED_TOKEN:-}" ] && [ -n "${BASE_URL:-}" ] || return 1
+    local out
+    out="$(curl -s --connect-timeout 3 --max-time 5 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        "${BASE_URL}/cli/whoami" 2>/dev/null)" || return 1
+    [[ "$out" == *"Invalid or missing auth token"* ]]
+}
+
+_cli_passport_stale_die() {
+    local why="$1" sock="$2"
+    case "$why" in
+        codex_shared)
+            echo "Error: this tool runs under a shared Codex app-server started by another session," >&2
+            echo "so the K2 session credentials it sees are not this tab's (or no longer exist)." >&2
+            echo "Restart Codex in this tab; K2 now starts Codex without the shared server (--no-daemon)." >&2
+            echo "If it keeps happening, stop the shared server once: codex app-server daemon stop" >&2
+            ;;
+        *)
+            echo "Error: this shell's K2 session credentials are stale: the session socket is gone" >&2
+            echo "(${sock}) and the daemon rejects the session token." >&2
+            echo "If this is a Codex tab, the tool runs under a shared Codex app-server started by" >&2
+            echo "another session; restart Codex in this tab. Otherwise restart this tab." >&2
+            ;;
+    esac
+    exit 3
+}
+
+# Before an ID/locked verb in a scoped cell: refuse a passport that is not
+# this session's (shared Codex app-server) or that is dead (socket gone AND
+# the daemon rejects the token). A missing socket alone is not enough — a
+# failed socket bind still serves the scoped token over TCP.
+_cli_check_session_passport() {
+    local verb="${1:-}"
+    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    [ -n "$hook_sock" ] || return 0
+    local tool_id mode
+    tool_id="$(_cli_tool_id_for_verb "$verb")"
+    mode="$(_cli_tool_default_mode "$tool_id")"
+    [ "$mode" = "id" ] || return 0
+    if _cli_under_shared_codex_server; then
+        _cli_passport_stale_die codex_shared "$hook_sock"
+    fi
+    if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then
+        _cli_passport_stale_die stale "$hook_sock"
+    fi
+    return 0
+}
+# END_CLI_STALE_PASSPORT
+
 # DAEMON_INSTALL_EARLY_BYPASS — `k2 daemon install` provisions the
 # standalone daemon on a FRESH headless box where no daemon is running
 # yet, so it cannot satisfy the PORT/TOKEN connection gate below (and
@@ -37980,6 +38077,9 @@ print(json.dumps(b))
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
 # invert to DISK_OWNER_TOKEN (COMPAT-58). See _cli_apply_auth_for_verb.
+# A passport from a shared Codex app-server or a dead session is refused
+# with a clear error first (never an owner fallback).
+_cli_check_session_passport "${1:-help}"
 _cli_apply_auth_for_verb "${1:-help}"
 
 case "${1:-help}" in

@@ -696,6 +696,33 @@ impl DaemonPtySession {
             }
             None => None,
         };
+        // Codex 0.155+ attaches every TUI to ONE shared, detached
+        // app-server per CODEX_HOME, and tool commands run under it with
+        // the env of whichever session started it — another tab's (or a
+        // dead) K2 passport. `--no-daemon` keeps the app-server in this
+        // PTY so tool commands inherit THIS session's env. Exec argv only
+        // (durable `store_args` above stay clean); skipped for microVM
+        // cells, whose program runs in their own guest.
+        let mut spawn_args = spawn_args;
+        if let Some(prog) = guarded_program.as_deref() {
+            if !matches!(cfg.sandbox, crate::terminal::SandboxSpec::Microvm) {
+                let outcome = crate::terminal::codex_no_daemon::apply(
+                    prog,
+                    &mut spawn_args,
+                    path_for_resolve,
+                    crate::terminal::codex_no_daemon::Policy::from_process(),
+                );
+                match outcome {
+                    crate::terminal::codex_no_daemon::Outcome::NotCodex
+                    | crate::terminal::codex_no_daemon::Outcome::NotTui => {}
+                    other => log_debug!(
+                        "[daemon_pty] codex shared app-server: {:?} session={}",
+                        other,
+                        cfg.session_id
+                    ),
+                }
+            }
+        }
         let shell = guarded_program.as_deref().map(|prog| {
             let (program, args) =
                 crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve);

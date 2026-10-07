@@ -212,6 +212,8 @@ pub mod skin_gateway;
 
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod codex_no_daemon_tests;
 
 use std::sync::Arc;
 use std::time::Instant;

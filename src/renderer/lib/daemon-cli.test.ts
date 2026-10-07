@@ -69,7 +69,15 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }))
 
-import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError, HostSwitchedError } from './daemon-cli'
+import {
+  daemonCliGet,
+  daemonCliGetText,
+  daemonCliPost,
+  daemonCliPostQuery,
+  isPreFourFourFourMethod405,
+  RecoveringError,
+  HostSwitchedError,
+} from './daemon-cli'
 import * as connectionGateProbe from './connection-gate-probe'
 import {
   useConnectHostStore,
@@ -206,6 +214,59 @@ describe('daemonCliPost — body in body, token in query', () => {
     expect(opts.method).toBe('POST')
     expect(opts.headers).toMatchObject({ 'Content-Type': 'application/json' })
     expect(JSON.parse(opts.body as string)).toEqual({ workspace: 'k2', body: 'hi' })
+  })
+})
+
+describe('daemonCliPostQuery — 0.44.4 state changes go out as POST', () => {
+  beforeEach(() => {
+    mem.clear()
+    __resetConnectHostStoreForTests()
+    getDaemonWsMock.mockReset()
+    invalidateDaemonWsMock.mockReset()
+  })
+
+  it('POSTs with the params in the query string and no body', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => fakeRes({ body: '{"success":true}' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await daemonCliPostQuery(primaryScope(), 'heartbeat/enable', { project: '/w', name: 'hb', enabled: true })
+    expect(out).toEqual({ success: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('http://127.0.0.1:47800/cli/heartbeat/enable?project=%2Fw&name=hb&enabled=true&token=local-tok')
+    expect(opts.method).toBe('POST')
+    expect(opts.body).toBeUndefined()
+  })
+
+  it('a pre-0.44.4 server’s top-level 405 is replayed once as GET', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? fakeRes({ status: 405, body: '{"error":"method not allowed for this route"}' })
+        : fakeRes({ body: '{"success":true}' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await daemonCliPostQuery(primaryScope(), 'dns-manage', { project: '/w', enable: 1 })
+    expect(out).toEqual({ success: true })
+    expect(fetchMock.mock.calls.map((c) => (c[1] as RequestInit).method)).toEqual(['POST', 'GET'])
+    expect(fetchMock.mock.calls[1][0]).toBe(fetchMock.mock.calls[0][0])
+  })
+
+  it('any other 405 (a 0.44.4 server) is NOT replayed as GET', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    const fetchMock = vi.fn(async () => fakeRes({ status: 405, body: '{"error":"POST required"}' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliPostQuery(primaryScope(), 'terminal/write', { id: 'x', message: 'y' })).rejects.toThrow('POST required')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('isPreFourFourFourMethod405 matches only the old top-level guard', () => {
+    expect(isPreFourFourFourMethod405(405, '{"error":"method not allowed for this route"}')).toBe(true)
+    expect(isPreFourFourFourMethod405(405, '{"error":"POST required"}')).toBe(false)
+    expect(isPreFourFourFourMethod405(403, '{"error":"method not allowed for this route"}')).toBe(false)
   })
 })
 

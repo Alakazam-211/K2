@@ -467,12 +467,23 @@ fn strip_token_params(query: &str) -> String {
     out
 }
 
-/// CSRF gate for cookie-only credentials on mutating `/cli/*` methods.
+/// True for every method that may change state: anything except
+/// GET / HEAD / OPTIONS (0.44.4 — was a fixed POST/PUT/PATCH/DELETE list).
+pub(crate) fn method_may_mutate(method: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
+}
+
+/// CSRF gate for cookie-only credentials on every state-changing method.
 ///
 /// Returns `Some(403 response)` when the request must be rejected, else
-/// `None` (proceed). Exempt: non-mutating methods (GET/HEAD/OPTIONS),
-/// non-`/cli/*` paths, public `/cli/auth/login` (password-authed), and any
-/// request that also presents Bearer or `?token=` (CLI/desktop path).
+/// `None` (proceed). Exempt: GET/HEAD/OPTIONS, the public password-authed
+/// login/reset routes and skin logout, and any request that also presents
+/// Bearer or `?token=` (CLI/desktop/agent path).
+///
+/// 0.44.4: applies on EVERY path (was `/cli/*` only) and to every method
+/// other than GET/HEAD/OPTIONS. The header alone is not enough behind the
+/// hosted edge Worker (it stamps `X-K2-Client: web` on every proxied
+/// request), so [`cookie_origin_gate`] runs next to it.
 pub(crate) fn cookie_csrf_gate(
     method: &str,
     path: &str,
@@ -482,14 +493,7 @@ pub(crate) fn cookie_csrf_gate(
     if !cookie_only {
         return None;
     }
-    let mutating = matches!(
-        method,
-        "POST" | "PUT" | "PATCH" | "DELETE"
-    );
-    if !mutating {
-        return None;
-    }
-    if !path.starts_with("/cli/") {
+    if !method_may_mutate(method) {
         return None;
     }
     // Public login is password-authed, not session-authed. Skin SPA POSTs
@@ -502,7 +506,8 @@ pub(crate) fn cookie_csrf_gate(
     {
         return None;
     }
-    if has_web_client_header(headers_blob) {
+    // Head only: a text/plain body line `X-K2-Client: web` must not count.
+    if has_web_client_header(request_head(headers_blob)) {
         return None;
     }
     Some(crate::cli_response::CliResponse {
@@ -510,6 +515,194 @@ pub(crate) fn cookie_csrf_gate(
         content_type: "application/json",
         body: r#"{"error":"csrf_required","message":"cookie auth requires X-K2-Client: web (or X-K2-CSRF: web) on mutating requests"}"#.to_string(),
     })
+}
+
+// ── Cookie Origin gate (security patch 0.44.4) ─────────────────────────
+//
+// `k2.dev` is not on the Public Suffix List, so every `*.k2.dev` host is
+// the same *site*: SameSite (Lax or Strict) still sends the Connect
+// `k2_session` / app `k2_skin_session` cookie on requests a page on any
+// other customer's `*.k2.dev` host makes. Browsers apply no CORS to the
+// WebSocket handshake, and the hosted edge Worker adds `X-K2-Client: web`
+// to every request it proxies, so neither SameSite nor the CSRF header
+// stops a sibling-subdomain page. `Origin` / `Sec-Fetch-Site` do: the
+// browser sets them and a page cannot forge them.
+//
+// The gate runs on EVERY cookie-only request — every method, GET and
+// WebSocket upgrades included — once, at the dispatcher chokepoint, before
+// any route or handler runs.
+//
+// Allowed origins for a cookie-only request (exact scheme + host + port):
+//
+// 1. Same origin: `http(s)://<Host>` — the host the daemon is served on
+//    (the SPA behind local Caddy, the app front door `skin.*` / nested
+//    label / Direct `front_door.url`, custom domains, loopback, LAN
+//    air-gap). Default ports fold (`https://x` == Host `x:443`). Host is
+//    set by the browser to the target, so a foreign page cannot make it
+//    match. `X-Forwarded-Host` (first value) counts the same way: a proxy
+//    (Caddy, the edge Worker) sets it, and a browser cannot attach it to
+//    a credentialed cross-origin request (the preflight fails) or to a WS
+//    handshake.
+// 2. Hosted web client: `https://<label>.app.k2.dev` when Host is
+//    `<label>.k2.dev` (one DNS label). The edge Worker proxies
+//    `<label>.app.k2.dev` → `<label>.k2.dev` and forwards Origin as-is.
+// 3. The desktop app's Tauri webview: `tauri://localhost` (macOS/Linux),
+//    `http://tauri.localhost` / `https://tauri.localhost` (Windows). The
+//    desktop authenticates with `?token=`, so it never reaches this gate
+//    today; listed so a future cookie path keeps working.
+//
+// Decisions: `Origin: null`, several `Origin` headers, and any Origin with
+// a path/query are refused. No Origin + `Sec-Fetch-Site` present → only
+// `same-origin` / `none` pass (a same-origin GET `fetch` sends no Origin
+// but does send `Sec-Fetch-Site: same-origin`). Neither header → allowed:
+// not a browser, so it cannot be riding a victim's cookie (curl /
+// server-side backends). Bearer / `?token=` callers (CLI, agents, app
+// passes, API keys, Companion) never reach this gate — `cookie_only` is
+// false for them. `X-K2-Client: web` is only a client hint now: the edge
+// Worker injects it on every forwarded request, so it proves nothing.
+
+/// The request line + headers of a peeked request buffer, without any
+/// body bytes that arrived in the same read (cut at the first blank line).
+pub(crate) fn request_head(blob: &str) -> &str {
+    let crlf = blob.find("\r\n\r\n");
+    let lf = blob.find("\n\n");
+    match (crlf, lf) {
+        (Some(a), Some(b)) => &blob[..a.min(b)],
+        (Some(a), None) | (None, Some(a)) => &blob[..a],
+        (None, None) => blob,
+    }
+}
+
+/// Tauri desktop webview origins (see the block comment above).
+pub(crate) const TAURI_ORIGINS: &[&str] =
+    &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
+/// Split `scheme://authority` into (scheme, authority) — lowercase. `None`
+/// for anything with a path, query, fragment, userinfo or an empty part.
+fn parse_origin(origin: &str) -> Option<(String, String)> {
+    let o = origin.trim().to_ascii_lowercase();
+    let (scheme, rest) = o.split_once("://")?;
+    if scheme.is_empty()
+        || rest.is_empty()
+        || rest.contains(['/', '?', '#', '@', ' '])
+    {
+        return None;
+    }
+    Some((scheme.to_string(), rest.to_string()))
+}
+
+/// Drop the default port for the scheme (`:443` for https/wss, `:80` for
+/// http/ws) so `https://x` and Host `x:443` compare equal.
+fn fold_default_port(scheme: &str, authority: &str) -> String {
+    let default = match scheme {
+        "https" | "wss" => ":443",
+        "http" | "ws" => ":80",
+        _ => "",
+    };
+    if !default.is_empty() {
+        if let Some(stripped) = authority.strip_suffix(default) {
+            return stripped.to_string();
+        }
+    }
+    authority.to_string()
+}
+
+/// Whether `origin` is one of the daemon's own origins for this request
+/// (same origin as Host, the hosted web client for this Host, or Tauri).
+pub(crate) fn origin_allowed(origin: &str, headers_blob: &str) -> bool {
+    let o = origin.trim().to_ascii_lowercase();
+    if TAURI_ORIGINS.contains(&o.as_str()) {
+        return true;
+    }
+    let Some((scheme, authority)) = parse_origin(&o) else {
+        return false;
+    };
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    // A request that reached us over TLS (proxy says https) only accepts
+    // an https Origin; so does any `*.k2.dev` host (HSTS-preloaded `.dev`).
+    let https_only = request_is_secure(headers_blob);
+    let origin_authority = fold_default_port(&scheme, &authority);
+    // The daemon's own host names for this request: Host, plus the first
+    // `X-Forwarded-Host` value a proxy set (see the block comment above).
+    let mut hosts: Vec<String> = Vec::with_capacity(2);
+    if let Some(h) = extract_host(headers_blob) {
+        hosts.push(h.trim().to_ascii_lowercase());
+    }
+    if let Some(h) = extract_header(headers_blob, "x-forwarded-host") {
+        let first = h.split(',').next().unwrap_or("").trim().to_ascii_lowercase();
+        hosts.push(first);
+    }
+    for host in &hosts {
+        if host.is_empty() || host.contains(['/', '?', '#', '@', ' ']) {
+            continue;
+        }
+        let bare = host_no_port(host).to_string();
+        let k2_dev_host = bare.ends_with(".k2.dev");
+        // 1. Same origin (default ports folded with the Origin's scheme).
+        if origin_authority == fold_default_port(&scheme, host)
+            && (scheme == "https" || (!https_only && !k2_dev_host))
+        {
+            return true;
+        }
+        // 2. Hosted web client: Host `<label>.k2.dev` ↔ `https://<label>.app.k2.dev`.
+        if scheme == "https" {
+            if let Some(label) = bare.strip_suffix(".k2.dev") {
+                if !label.is_empty() && !label.contains('.') {
+                    if let Some(loc) = super::dispatcher::app_web_root_location(label) {
+                        let want = loc.trim_end_matches('/').trim_start_matches("https://");
+                        if origin_authority == want {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Origin gate for cookie-only credentials (0.44.4). Runs on EVERY
+/// cookie-only request — every method, GET and WebSocket upgrades
+/// included — on any path. Returns `Some(403)` to refuse, `None` to
+/// proceed. See the block comment above for the allowlist and the
+/// missing-header decisions.
+pub(crate) fn cookie_origin_gate(
+    cookie_only: bool,
+    headers_blob: &str,
+) -> Option<crate::cli_response::CliResponse> {
+    if !cookie_only {
+        return None;
+    }
+    // Head only: the peeked buffer may hold body bytes, and a body line
+    // must never pass for a header.
+    let headers_blob = request_head(headers_blob);
+    let refused = || crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: r#"{"error":"origin_refused","message":"cookie-authenticated requests must come from this server's own web origin (cross-origin request refused)"}"#.to_string(),
+    };
+    // Several Origin headers is not a browser shape — refuse.
+    let origins: Vec<&str> = headers_blob
+        .lines()
+        .filter_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case("origin").then_some(v.trim())
+        })
+        .collect();
+    match origins.as_slice() {
+        [] => {}
+        [one] => {
+            return if origin_allowed(one, headers_blob) { None } else { Some(refused()) };
+        }
+        _ => return Some(refused()),
+    }
+    match extract_header(headers_blob, "sec-fetch-site") {
+        None => None,
+        Some(s) if s.eq_ignore_ascii_case("same-origin") || s.eq_ignore_ascii_case("none") => None,
+        Some(_) => Some(refused()),
+    }
 }
 
 /// True iff the request's `?token=` is the OWNER token (the local daemon
@@ -881,6 +1074,36 @@ pub(crate) fn merge_json_object_params(
             params.insert(k.clone(), s);
         }
     }
+}
+
+/// Consume the request and return its params: the query string, plus —
+/// for a POST — a form or JSON-object body (0.44.4: routes that used to be
+/// GET-shaped verbs now take POST; clients may keep the params in the query
+/// string or move them into the body). The query wins on a clash, and a
+/// body `token` is never honored (credentials come from the query /
+/// Bearer / cookie fold only).
+pub(crate) async fn read_request_params(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    is_post: bool,
+    path: &str,
+    query: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut params = std::collections::HashMap::new();
+    if is_post {
+        let body = read_post_body(stream, buf).await;
+        let trimmed = String::from_utf8_lossy(&body);
+        if trimmed.trim_start().starts_with('{') {
+            merge_json_object_params(&mut params, &body);
+        } else {
+            params.extend(parse_form_body(&body));
+        }
+        params.remove("token");
+    } else {
+        let _ = stream.read(buf).await;
+    }
+    params.extend(parse_params(path, query));
+    params
 }
 
 /// Reassemble a full `path?query` URL and hand off to k2_core's
@@ -1844,6 +2067,99 @@ mod tests {
         );
     }
 
+    // ── 0.44.4 cookie Origin gate ────────────────────────────────────
+
+    fn origin_gate(cookie_only: bool, head: &str) -> &'static str {
+        match cookie_origin_gate(cookie_only, head) {
+            None => "pass",
+            Some(r) => {
+                assert_eq!(r.status, "403 Forbidden");
+                let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+                assert_eq!(v["error"], "origin_refused", "{}", r.body);
+                "403"
+            }
+        }
+    }
+
+    #[test]
+    fn cookie_origin_gate_refuses_foreign_origins_on_every_method_and_ws() {
+        let foreign = "Origin: https://evil.k2.dev\r\n";
+        for (method, path, extra) in [
+            ("GET", "/cli/terminal/write?id=x&message=y", ""),
+            ("GET", "/cli/sessions/events?path=", "Upgrade: websocket\r\nConnection: Upgrade\r\n"),
+            ("POST", "/cli/thread/post", "X-K2-Client: web\r\n"),
+            ("GET", "/events", "Upgrade: websocket\r\n"),
+        ] {
+            let head = format!(
+                "{method} {path} HTTP/1.1\r\nHost: rosson.k2.dev\r\nX-Forwarded-Proto: https\r\n{foreign}{extra}"
+            );
+            assert_eq!(origin_gate(true, &head), "403", "{method} {path}");
+            // Bearer / ?token= callers never reach the gate.
+            assert_eq!(origin_gate(false, &head), "pass", "{method} {path} token caller");
+        }
+        // Sec-Fetch-Site without Origin: only same-origin / none pass.
+        for (sfs, want) in [
+            ("same-origin", "pass"),
+            ("none", "pass"),
+            ("same-site", "403"),
+            ("cross-site", "403"),
+        ] {
+            let head = format!("GET /cli/projects/list HTTP/1.1\r\nHost: x.k2.dev\r\nSec-Fetch-Site: {sfs}\r\n");
+            assert_eq!(origin_gate(true, &head), want, "{sfs}");
+        }
+        // Neither header: not a browser → pass (documented decision).
+        assert_eq!(origin_gate(true, "GET /cli/projects/list HTTP/1.1\r\nHost: x.k2.dev\r\n"), "pass");
+    }
+
+    #[test]
+    fn cookie_origin_gate_allows_the_daemons_own_origins() {
+        let cases: &[(&str, &str, &str)] = &[
+            // (Host + extra headers, Origin, want)
+            // Hosted web client through the edge Worker.
+            ("Host: rosson.k2.dev\r\nX-Forwarded-Proto: https\r\n", "https://rosson.app.k2.dev", "pass"),
+            ("Host: rosson.k2.dev:443\r\n", "https://rosson.app.k2.dev", "pass"),
+            // Another customer's app host is refused.
+            ("Host: rosson.k2.dev\r\n", "https://mallory.app.k2.dev", "403"),
+            ("Host: rosson.k2.dev\r\n", "https://evil.rosson.k2.dev", "403"),
+            // Same origin (front door, custom domain, Worker X-Forwarded-Host).
+            ("Host: skin.rosson.k2.dev\r\n", "https://skin.rosson.k2.dev", "pass"),
+            ("Host: app.customer.com\r\n", "https://app.customer.com", "pass"),
+            ("Host: app.customer.com:443\r\n", "https://app.customer.com", "pass"),
+            ("Host: rosson.k2.dev\r\nX-Forwarded-Host: rosson.app.k2.dev\r\n", "https://rosson.app.k2.dev", "pass"),
+            // Loopback / LAN dev over plain http.
+            ("Host: 127.0.0.1:38471\r\n", "http://127.0.0.1:38471", "pass"),
+            ("Host: 127.0.0.1:38471\r\n", "http://127.0.0.1:5173", "403"),
+            ("Host: 192.168.1.20:38471\r\n", "http://192.168.1.20:38471", "pass"),
+            // http Origin on an https request, or on a k2.dev host.
+            ("Host: app.customer.com\r\nX-Forwarded-Proto: https\r\n", "http://app.customer.com", "403"),
+            ("Host: rosson.k2.dev\r\n", "http://rosson.k2.dev", "403"),
+            // Trailing-dot Host does not match the dotless Origin.
+            ("Host: rosson.k2.dev.\r\n", "https://rosson.k2.dev", "403"),
+            // Tauri desktop webview.
+            ("Host: 127.0.0.1:45123\r\n", "tauri://localhost", "pass"),
+            ("Host: 127.0.0.1:45123\r\n", "http://tauri.localhost", "pass"),
+            ("Host: rosson.k2.dev\r\n", "https://tauri.localhost", "pass"),
+            // Malformed / opaque.
+            ("Host: rosson.k2.dev\r\n", "null", "403"),
+            ("Host: rosson.k2.dev\r\n", "https://rosson.k2.dev/path", "403"),
+            ("Host: rosson.k2.dev\r\n", "", "403"),
+        ];
+        for (host_lines, origin, want) in cases {
+            let head = format!("POST /cli/thread/post HTTP/1.1\r\n{host_lines}Origin: {origin}\r\n");
+            assert_eq!(origin_gate(true, &head), *want, "Origin {origin:?} with {host_lines:?}");
+        }
+        // Several Origin headers → refused even if one matches.
+        let two = "POST /x HTTP/1.1\r\nHost: a.k2.dev\r\nOrigin: https://a.k2.dev\r\nOrigin: https://evil.k2.dev\r\n";
+        assert_eq!(origin_gate(true, two), "403");
+        // An Origin smuggled in the body never counts: the head has a
+        // foreign Origin, the body a matching one → still refused.
+        let smuggle = "POST /x HTTP/1.1\r\nHost: a.k2.dev\r\nOrigin: https://evil.k2.dev\r\n\r\nOrigin: https://a.k2.dev\r\n";
+        assert_eq!(origin_gate(true, smuggle), "403");
+        // And a body Origin does not turn a header-less request into a refusal.
+        let body_only = "POST /x HTTP/1.1\r\nHost: a.k2.dev\r\n\r\nOrigin: https://evil.k2.dev\r\n";
+        assert_eq!(origin_gate(true, body_only), "pass");
+    }
+
     #[test]
     fn request_is_secure_reads_x_forwarded_proto() {
         assert!(request_is_secure(
@@ -1887,7 +2203,8 @@ mod tests {
         )
         .is_none());
 
-        // GET (WS upgrade path) never CSRF-gated.
+        // GET (WS upgrade path) is not header-gated; the Origin gate
+        // (`cookie_origin_gate`) covers it instead.
         assert!(cookie_csrf_gate(
             "GET",
             "/cli/sessions/events",
@@ -1895,6 +2212,22 @@ mod tests {
             "GET /cli/sessions/events HTTP/1.1\r\n",
         )
         .is_none());
+
+        // 0.44.4: every non-GET/HEAD/OPTIONS method and every path.
+        for m in ["PUT", "PATCH", "DELETE", "PROPFIND"] {
+            let r = cookie_csrf_gate(m, "/cli/auth/logout", true, "X /cli/auth/logout HTTP/1.1\r\n");
+            assert_eq!(r.expect("non-GET method is gated").status, "403 Forbidden", "{m}");
+        }
+        let v1 = cookie_csrf_gate("POST", "/v1/sandboxes", true, "POST /v1/sandboxes HTTP/1.1\r\n");
+        assert_eq!(v1.expect("non-/cli path is gated too").status, "403 Forbidden");
+        // A body line that looks like the header does not count.
+        let smuggled = cookie_csrf_gate(
+            "POST",
+            "/cli/thread/post",
+            true,
+            "POST /cli/thread/post HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\n\r\nX-K2-Client: web\r\n",
+        );
+        assert_eq!(smuggled.expect("body header smuggle refused").status, "403 Forbidden");
 
         // Query-token auth (cookie_only=false) never CSRF-gated.
         assert!(cookie_csrf_gate(

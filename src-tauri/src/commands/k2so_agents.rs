@@ -322,7 +322,7 @@ pub fn k2so_heartbeat_set_session(
     if let Some(prov) = provider.as_deref() {
         params.push(("provider", prov));
     }
-    client.cli_get("/cli/heartbeat/set-session", &params)
+    client.cli_post_query("/cli/heartbeat/set-session", &params)
 }
 
 #[tauri::command]
@@ -1007,7 +1007,7 @@ pub fn workspace_session_set_session_id(
     session_id: String,
 ) -> Result<String, String> {
     let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_get(
+    client.cli_post_query(
         "/cli/workspace/set-chat-session",
         &[("project", &project_path), ("session_id", &session_id)],
     )

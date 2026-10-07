@@ -642,7 +642,7 @@ pub fn handle_sessions_resize(params: &HashMap<String, String>) -> CliResponse {
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
-/// Handler for `GET /cli/terminal/write?id=<session>&message=<text>[&no_submit=true]`.
+/// Handler for `POST /cli/terminal/write?id=<session>&message=<text>[&no_submit=true]`.
 ///
 /// Looks up the session in the daemon's `session_map` by session
 /// id, writes `message` bytes to the PTY, and (unless `no_submit`)
@@ -698,7 +698,7 @@ pub fn handle_write(params: &HashMap<String, String>) -> CliResponse {
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
-/// Handler for `GET /cli/terminal/spawn`.
+/// Handler for `POST /cli/terminal/spawn` (POST-only since 0.44.4).
 ///
 /// Spawns a new session on behalf of an agent via the shared
 /// `spawn::spawn_agent_session` helper, then emits a
@@ -726,7 +726,7 @@ pub fn handle_terminal_spawn(
     )
 }
 
-/// Handler for `GET /cli/terminal/spawn-background`.
+/// Handler for `POST /cli/terminal/spawn-background` (POST-only since 0.44.4).
 ///
 /// Like `/cli/terminal/spawn` but emits the `CliTerminalSpawnBackground`
 /// event instead — telling UIs "this is a background / companion

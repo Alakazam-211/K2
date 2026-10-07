@@ -32,6 +32,17 @@ http_get() {
     curl -sG "http://127.0.0.1:${PORT}${endpoint}" -d "$params" --connect-timeout 3 --max-time 10 2>/dev/null
 }
 
+# 0.44.4: routes that change state take POST (GET → 405). Same params.
+http_post_q() {
+    local PORT TOKEN endpoint params
+    PORT=$(cat "$HOME/.k2so/heartbeat.port" 2>/dev/null)
+    TOKEN=$(cat "$HOME/.k2so/heartbeat.token" 2>/dev/null)
+    endpoint="$1"; shift
+    params="token=${TOKEN}&project=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TEST_WORKSPACE'))")"
+    for p in "$@"; do params="${params}&${p}"; done
+    curl -s -X POST "http://127.0.0.1:${PORT}${endpoint}?${params}" --data-raw "" --connect-timeout 3 --max-time 10 2>/dev/null
+}
+
 # Check K2SO is running
 PORT=$(cat "$HOME/.k2so/heartbeat.port" 2>/dev/null || echo "")
 if [ -z "$PORT" ]; then echo -e "${RED}K2SO is not running.${NC}"; exit 1; fi
@@ -170,7 +181,7 @@ run agent create event-test --role "Event queue test" > /dev/null
 run work create --title "Event trigger item" --body "test event flow" --agent event-test --priority high --source issue > /dev/null
 
 # Drain events
-EVENTS=$(http_get "/cli/events" "agent=event-test")
+EVENTS=$(http_post_q "/cli/events" "agent=event-test")
 if echo "$EVENTS" | grep -q "work-item\|Event trigger"; then
     pass "events: work creation pushed event to queue"
 else
@@ -178,7 +189,7 @@ else
 fi
 
 # Drain again — should be empty
-EVENTS2=$(http_get "/cli/events" "agent=event-test")
+EVENTS2=$(http_post_q "/cli/events" "agent=event-test")
 if [ "$EVENTS2" = "[]" ]; then
     pass "events: queue drained (empty on second read)"
 else
@@ -190,7 +201,7 @@ run work create --title "Event A" --body "a" --agent event-test > /dev/null
 run work create --title "Event B" --body "b" --agent event-test > /dev/null
 run work create --title "Event C" --body "c" --agent event-test > /dev/null
 
-EVENTS3=$(http_get "/cli/events" "agent=event-test")
+EVENTS3=$(http_post_q "/cli/events" "agent=event-test")
 # Count events (count "type" occurrences)
 EVENT_COUNT=$(echo "$EVENTS3" | grep -o '"type"' | wc -l | xargs)
 if [ "${EVENT_COUNT:-0}" -ge 3 ]; then

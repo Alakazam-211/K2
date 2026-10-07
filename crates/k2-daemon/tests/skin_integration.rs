@@ -955,11 +955,13 @@ async fn skin_host_belt_403s_grid_login_v1_not_thread() {
         );
         assert_eq!(v1.status, 403, "skin Host + /v1; {}", v1.body);
 
+        // 0.44.4: terminal/write is POST-only; the skin Host belt still
+        // refuses the POST.
         let term = http_host(
             port,
-            "GET",
+            "POST",
             &format!("/cli/terminal/write?token={OWNER_TOKEN}&id=nope"),
-            None,
+            Some(""),
             skin_host,
         );
         assert_eq!(term.status, 403, "skin Host + terminal; {}", term.body);

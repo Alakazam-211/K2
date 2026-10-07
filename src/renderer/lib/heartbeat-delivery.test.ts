@@ -9,11 +9,11 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }))
-const daemonCliGet = vi.fn()
+const daemonCliPostQuery = vi.fn()
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
-    daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+    daemonCliPostQuery: primaryOnly((...args: unknown[]) => daemonCliPostQuery(...args)),
   }
 })
 
@@ -173,14 +173,14 @@ describe('applyDeliveryTarget — optimistic row mirror', () => {
 describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
   beforeEach(() => {
     invoke.mockReset()
-    daemonCliGet.mockReset()
+    daemonCliPostQuery.mockReset()
   })
 
   it('targets the ACTIVE host route, never the local Tauri bridge', async () => {
-    daemonCliGet.mockResolvedValue({ success: true })
+    daemonCliPostQuery.mockResolvedValue({ success: true })
     await setHeartbeatSession('/home/k2/ai/rpmavs-sb-migration', 'daily', { mode: 'pinned' })
     expect(invoke).not.toHaveBeenCalled()
-    expect(daemonCliGet).toHaveBeenCalledWith('heartbeat/set-session', {
+    expect(daemonCliPostQuery).toHaveBeenCalledWith('heartbeat/set-session', {
       project: '/home/k2/ai/rpmavs-sb-migration',
       name: 'daily',
       mode: 'pinned',
@@ -190,9 +190,9 @@ describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
   })
 
   it('rides session_id+provider for session mode', async () => {
-    daemonCliGet.mockResolvedValue({ success: true })
+    daemonCliPostQuery.mockResolvedValue({ success: true })
     await setHeartbeatSession('/w', 'daily', { mode: 'session', sessionId: 's1', provider: 'pi' })
-    expect(daemonCliGet).toHaveBeenLastCalledWith('heartbeat/set-session', {
+    expect(daemonCliPostQuery).toHaveBeenLastCalledWith('heartbeat/set-session', {
       project: '/w',
       name: 'daily',
       mode: 'session',
@@ -202,7 +202,7 @@ describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
   })
 
   it('raises a 2xx {"error":…} body so callers can revert', async () => {
-    daemonCliGet.mockResolvedValue({ error: 'heartbeat not found' })
+    daemonCliPostQuery.mockResolvedValue({ error: 'heartbeat not found' })
     await expect(setHeartbeatSession('/w', 'daily', { mode: 'auto' })).rejects.toThrow(
       'heartbeat not found',
     )
@@ -212,13 +212,13 @@ describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
 describe('setHeartbeatSession — explicit local scope (WakeScheduler contract)', () => {
   beforeEach(() => {
     invoke.mockReset()
-    daemonCliGet.mockReset()
+    daemonCliPostQuery.mockReset()
   })
 
   it('sends mode-only for pinned/auto and rides sessionId+provider for session', async () => {
     invoke.mockResolvedValue('{"success":true}')
     await setHeartbeatSession('/w', 'daily', { mode: 'pinned' }, { scope: 'local' })
-    expect(daemonCliGet).not.toHaveBeenCalled()
+    expect(daemonCliPostQuery).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('k2so_heartbeat_set_session', {
       projectPath: '/w',
       name: 'daily',

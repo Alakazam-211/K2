@@ -497,6 +497,59 @@ pub(crate) fn workspace_not_found_response(q: &str) -> CliResponse {
     }
 }
 
+/// Per-workspace AGENT PERMISSION switches on `/cli/workspace/set`
+/// (security patch 0.44.4; prd-agent-noun-tiers-v1 vs-live A3 / Q4
+/// default Admin). Each one widens what this workspace's agents (or other
+/// users, through them) may do, so writing any of them needs an Admin or
+/// Owner login or the owner token — never a Member login. Gated on key
+/// PRESENCE, not value: a Member switching an owner's grant OFF is the
+/// same unauthorized write.
+pub const AGENT_SWITCH_FIELDS: &[&str] = &[
+    "dns_manage_enabled",
+    "agents_can_create_connections",
+    "mail_agent_send",
+    "db_agent_access",
+    "allow_remote_instruct",
+    "api_skip_permissions",
+    "wiki_public_chat",
+];
+
+/// The [`AGENT_SWITCH_FIELDS`] a `/cli/workspace/set` body names, in
+/// body order. An unparseable body returns an empty list — the handler's
+/// own parser rejects it with 400 right after.
+pub fn agent_switch_fields_in(body: &[u8]) -> Vec<String> {
+    let Ok(b) = serde_json::from_slice::<WorkspaceSetBody>(body) else {
+        return Vec::new();
+    };
+    b.fields
+        .keys()
+        .filter(|k| AGENT_SWITCH_FIELDS.contains(&k.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// 403 for a login below Admin writing an agent switch.
+pub fn agent_switch_role_required(
+    field: &str,
+    role: k2_core::connect_users::Role,
+) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "role_required",
+            "required": "admin",
+            "role": role.as_wire(),
+            "field": field,
+            "message": format!(
+                "Changing the agent switch '{field}' needs an admin login on this server. You are signed in as {}.",
+                role.as_wire()
+            ),
+        })
+        .to_string(),
+    }
+}
+
 /// Handler for `POST /cli/workspace/set`.
 ///
 /// Contract (mirrors the `k2 agent set` mockup):

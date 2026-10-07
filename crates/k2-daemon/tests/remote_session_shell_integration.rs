@@ -237,7 +237,7 @@ async fn shell_spawn_write_read_gate_revoke_disable() {
         urlenc(&session_id),
         msg
     );
-    let wr = http(d.port, "GET", &write_path, None);
+    let wr = http(d.port, "POST", &write_path, Some(""));
     assert_ne!(
         wr.status, 403,
         "matching grant must not auth-deny write; body={}",
@@ -280,7 +280,7 @@ async fn shell_spawn_write_read_gate_revoke_disable() {
         urlenc(&token2),
         urlenc(&session_id)
     );
-    let ww = http(d.port, "GET", &write_wrong, None);
+    let ww = http(d.port, "POST", &write_wrong, Some(""));
     assert_eq!(ww.status, 403, "wrong grant must 403; body={}", ww.body);
     let ww_v = json(&ww.body);
     assert_eq!(
@@ -295,7 +295,7 @@ async fn shell_spawn_write_read_gate_revoke_disable() {
         urlenc(OWNER_TOKEN),
         urlenc(&session_id)
     );
-    let wo = http(d.port, "GET", &write_owner, None);
+    let wo = http(d.port, "POST", &write_owner, Some(""));
     assert_eq!(
         wo.status, 200,
         "owner must write remote shell; body={}",
@@ -322,7 +322,7 @@ async fn shell_spawn_write_read_gate_revoke_disable() {
         urlenc(&token),
         urlenc(&session_id)
     );
-    let wrv = http(d.port, "GET", &write_rev, None);
+    let wrv = http(d.port, "POST", &write_rev, Some(""));
     assert!(
         wrv.status == 403 || wrv.status == 400,
         "post-revoke write must fail; status={} body={}",
@@ -395,7 +395,7 @@ async fn shell_spawn_write_read_gate_revoke_disable() {
         urlenc(&token3),
         urlenc(&sid3)
     );
-    let wd = http(d.port, "GET", &write_dis, None);
+    let wd = http(d.port, "POST", &write_dis, Some(""));
     assert_eq!(wd.status, 403, "post-disable write; body={}", wd.body);
     assert_eq!(
         json(&wd.body)["error"]["code"],
@@ -420,7 +420,7 @@ async fn owner_non_remote_terminal_path_still_works() {
         urlenc(OWNER_TOKEN),
         urlenc(&fake_id)
     );
-    let r = http(d.port, "GET", &path, None);
+    let r = http(d.port, "POST", &path, Some(""));
     // Not a remote session → gate passthrough → session not found 400.
     assert_eq!(
         r.status, 400,

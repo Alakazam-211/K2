@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { isAirgap } from '@/lib/airgap'
 import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
@@ -171,7 +171,7 @@ export default function WhatsNewModal({
     if (dismissing) return
     setDismissing(true)
     try {
-      await daemonCliGet(primaryScope(), 'whats_new/mark_seen')
+      await daemonCliPostQuery(primaryScope(), 'whats_new/mark_seen')
     } catch (err) {
       // eslint-disable-next-line no-console
       console.debug('[whats-new] mark_seen failed:', err)

@@ -246,7 +246,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
-        // #67 — per-workspace remote-instruct opt-in. GET with `?enable=`
+        // #67 — per-workspace remote-instruct opt-in. POST (Admin, 0.44.4) with `enable=`
         // mirrors the `/cli/worktree` pattern (path-scoped write via
         // `update_project_setting`). Default OFF / fail-closed; the daemon
         // still ENFORCES the gate server-side in `authorize_send_message`
@@ -272,7 +272,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
-        // DNS K1 — per-workspace DNS-manage opt-in. GET with `?enable=`
+        // DNS K1 — per-workspace DNS-manage opt-in. POST (Admin, 0.44.4) with `enable=`
         // mirrors `/cli/remote-instruct` (path-scoped write via
         // `update_project_setting`). Default OFF / fail-closed; effective
         // gate is `dns_manage_allowed_for_path` (app master OR workspace).
@@ -305,7 +305,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
         // C1 (0.40.45) — per-workspace agents-may-create-connections opt-in.
-        // GET with `?enable=` mirrors `/cli/dns-manage`. Default OFF /
+        // POST (Admin, 0.44.4) with `enable=` mirrors `/cli/dns-manage`. Default OFF /
         // fail-closed; effective gate is
         // `agents_can_create_connections_for_path` (app master OR workspace).
         // Owner / Owner-role always bypass the mutate gate regardless.

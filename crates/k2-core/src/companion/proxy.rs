@@ -68,6 +68,32 @@ fn map_route(method: &str, path: &str) -> Option<&'static str> {
     }
 }
 
+/// Internal `/cli/*` routes the proxy reaches that change state. The daemon
+/// answers GET with 405 on them (security patch 0.44.4), so they are
+/// forwarded as POST with the same query-string params and an empty body.
+pub fn internal_route_is_write(route: &str) -> bool {
+    matches!(
+        route,
+        "/cli/review/approve"
+            | "/cli/review/reject"
+            | "/cli/review/feedback"
+            | "/cli/terminal/write"
+            | "/cli/terminal/spawn"
+            | "/cli/terminal/spawn-background"
+            | "/cli/agents/launch"
+    )
+}
+
+/// Send one proxied request to the daemon: POST for a write route
+/// ([`internal_route_is_write`]), GET for a read. Params ride the URL.
+fn send_internal(route: &str, url: &str) -> reqwest::Result<reqwest::blocking::Response> {
+    if internal_route_is_write(route) {
+        reqwest::blocking::Client::new().post(url).body("").send()
+    } else {
+        reqwest::blocking::get(url)
+    }
+}
+
 /// Parse HTTP headers from raw request bytes.
 pub fn parse_headers(request: &str) -> HashMap<String, String> {
     let mut headers = HashMap::new();
@@ -187,7 +213,7 @@ pub fn dispatch_ws_method(
         state.hook_port, internal_route, query.join("&")
     );
 
-    let resp = reqwest::blocking::get(&url)
+    let resp = send_internal(internal_route, &url)
         .map_err(|e| format!("Internal request failed: {}", e))?;
 
     let status = resp.status();
@@ -476,7 +502,7 @@ pub fn proxy_to_internal(
     );
 
     // Forward to internal server
-    let resp = reqwest::blocking::get(&url)
+    let resp = send_internal(internal_route, &url)
         .map_err(|e| format!("Internal proxy failed: {}", e))?;
 
     let status = resp.status();

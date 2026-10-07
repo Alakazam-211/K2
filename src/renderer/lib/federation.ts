@@ -18,7 +18,7 @@
 // THAT daemon's pinned federation peers and fetch a paired peer's agent roster
 // (the local daemon dials the peer's signed roster GET).
 
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliGet, isPreFourFourFourMethod405 } from '@/lib/daemon-cli'
 import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -331,6 +331,36 @@ async function cliGet<T>(
     }
     search.set('token', creds.token)
     const res = await fetch(`${creds.base}/cli/${route}?${search.toString()}`, { method: 'GET' })
+    return parse<T>(res)
+  }, { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
+}
+
+/** POST `<base>/cli/<route>?<params>` (empty body) against an explicit
+ *  daemon — 0.44.4: `connections` add/remove change state and the daemon
+ *  refuses them as GET. A pre-0.44.4 peer only routes that path as GET and
+ *  answers the POST with its top-level 405 before any handler runs, so the
+ *  same request is replayed as GET there (side-effect safe). */
+async function cliPostQuery<T>(
+  creds: DaemonCreds,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): Promise<T> {
+  return withRemoteRetry(async () => {
+    const search = new URLSearchParams()
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) search.set(k, String(v))
+      }
+    }
+    search.set('token', creds.token)
+    const url = `${creds.base}/cli/${route}?${search.toString()}`
+    const res = await fetch(url, { method: 'POST' })
+    if (res.status === 405) {
+      const text = await res.clone().text()
+      if (isPreFourFourFourMethod405(res.status, text)) {
+        return parse<T>(await fetch(url, { method: 'GET' }))
+      }
+    }
     return parse<T>(res)
   }, { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
 }
@@ -717,12 +747,12 @@ async function tryAddReverseConnection(
     const reverseTarget = formatAgentHost(sourceAgent, reverseHost)
     const reverseLegacy = `${sourceAgent}@${reverseHost}`
     try {
-      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
+      await cliPostQuery(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
     } catch (e) {
       // Older peer daemons only recognized agent@host as remote.
       const msg = e instanceof Error ? e.message : String(e)
       if (msg.includes('not found') || msg.includes('Workspace')) {
-        await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseLegacy })
+        await cliPostQuery(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseLegacy })
       } else {
         throw e
       }
@@ -767,7 +797,7 @@ export async function addRemoteConnection(
   // recognized `agent@host` as remote (pre-PR2).
   const localC = await activeCreds()
   try {
-    await cliGet(localC, 'connections', {
+    await cliPostQuery(localC, 'connections', {
       project: sourceWorkspacePath,
       action: 'add',
       target: canonical,
@@ -775,7 +805,7 @@ export async function addRemoteConnection(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes('not found') || msg.includes('Workspace')) {
-      await cliGet(localC, 'connections', {
+      await cliPostQuery(localC, 'connections', {
         project: sourceWorkspacePath,
         action: 'add',
         target: legacy,
@@ -810,7 +840,7 @@ export async function removeRemoteConnection(
         : null
   const localC = await activeCreds()
   const tryRemove = async (t: string) =>
-    cliGet(localC, 'connections', {
+    cliPostQuery(localC, 'connections', {
       project: sourceWorkspacePath,
       action: 'remove',
       target: t,
@@ -842,9 +872,9 @@ export async function removeRemoteConnection(
     )
     const reverseLegacy = `${workspaceBasename(sourceWorkspacePath)}@${reverseHost}`
     try {
-      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
+      await cliPostQuery(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
     } catch {
-      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseLegacy }).catch(() => {})
+      await cliPostQuery(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseLegacy }).catch(() => {})
     }
   } catch { /* best-effort reverse cleanup */ }
 }

@@ -50,6 +50,9 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // public tunnel (edge|any|off). Owner/admin only: a Member must not
     // reopen the public login surface.
     "connectLoginIngress",
+    // 0.44.4 (noun-tiers A3): the global agent mail-send default is an
+    // agent permission switch like DNS/connections above — Admin floor.
+    "mailAgentSend",
 ];
 
 /// Handler for `GET /cli/settings/get`.

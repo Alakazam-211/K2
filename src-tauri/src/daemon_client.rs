@@ -75,6 +75,17 @@ impl DaemonClient {
     /// percent-encoded into the query string alongside the auth
     /// token. Any non-2xx status is surfaced as Err with the body.
     pub fn cli_get(&self, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
+        self.cli_query(false, path, params)
+    }
+
+    /// POST twin of [`Self::cli_get`] for routes that change state: the
+    /// daemon answers GET with 405 on them (security patch 0.44.4). Same
+    /// query-string params, empty body.
+    pub fn cli_post_query(&self, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
+        self.cli_query(true, path, params)
+    }
+
+    fn cli_query(&self, post: bool, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
         let mut url = format!("{}{}?token={}", self.base, path, self.token);
         for (k, v) in params {
             url.push('&');
@@ -82,9 +93,12 @@ impl DaemonClient {
             url.push('=');
             url.push_str(&pct_encode(v));
         }
-        let response = self
-            .http
-            .get(&url)
+        let request = if post {
+            self.http.post(&url).body("")
+        } else {
+            self.http.get(&url)
+        };
+        let response = request
             .send()
             .map_err(|e| format!("daemon {path}: {e}"))?;
         let status = response.status();

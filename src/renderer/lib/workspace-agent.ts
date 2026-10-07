@@ -18,7 +18,7 @@
 // GET that mutates, matching the old `cli_get` proxy). The display-name body
 // field is snake_case `display_name`; resume-chat-args is camelCase.
 
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { assertScopeMayWrite, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 
 /** Resolve the workspace's primary-agent display name. Total — the daemon
@@ -41,7 +41,7 @@ export async function setAgentDisplayName(
   projectPath: string,
   name: string,
 ): Promise<void> {
-  await daemonCliGet(scope, 'workspace/set-agent-display-name', {
+  await daemonCliPostQuery(scope, 'workspace/set-agent-display-name', {
     project: projectPath,
     name,
   })
@@ -89,7 +89,7 @@ export async function setChatSession(
   // A GET that writes: held to the room's write rules (never from a
   // view-only room; on the allowlist for a usable one).
   assertScopeMayWrite(scope, 'workspace/set-chat-session')
-  await daemonCliGet(scope, 'workspace/set-chat-session', {
+  await daemonCliPostQuery(scope, 'workspace/set-chat-session', {
     project: projectPath,
     session_id: sessionId,
     ...(provider ? { provider } : {}),
@@ -104,7 +104,7 @@ export function claimAgentLock(
   params: { project: string; agent: string; terminal_id: string; owner: string },
 ): Promise<unknown> {
   if (!scopeMayWrite(scope, 'agents/lock')) return Promise.resolve(null)
-  return daemonCliGet(scope, 'agents/lock', params)
+  return daemonCliPostQuery(scope, 'agents/lock', params)
 }
 
 export interface ResumeChatArgs {

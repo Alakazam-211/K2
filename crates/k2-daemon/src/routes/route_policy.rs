@@ -110,37 +110,37 @@ use Floor::{Admin, Member, NoLogin, Owner, Public};
 /// a binary search; a unit test pins the order and uniqueness).
 pub const ROUTES: &[Route] = &[
     get("/cli/activity/events", Member),
-    get("/cli/agent/complete", Member),
+    post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
     get("/cli/agent/list", Member),
-    get("/cli/agent/reply", Member),
+    post("/cli/agent/reply", Member),
     post("/cli/agent/retire", Member),
-    get("/cli/agent/update", Member),
-    get("/cli/agentic", Member),
-    get("/cli/agents-create-connections", Member),
+    post("/cli/agent/update", Member),
+    both("/cli/agentic", Member),
+    post("/cli/agents-create-connections", Admin),
     post("/cli/agents-manage-skin", Owner),
     post("/cli/agents/archive-orphans", Member),
-    get("/cli/agents/create", Member),
-    get("/cli/agents/delegate", Member),
-    get("/cli/agents/delete", Member),
-    both("/cli/agents/disable-workspace-claude-md", Member),
+    post("/cli/agents/create", Member),
+    post("/cli/agents/delegate", Member),
+    post("/cli/agents/delete", Member),
+    post("/cli/agents/disable-workspace-claude-md", Member),
     post("/cli/agents/ensure-cli", Member),
-    get("/cli/agents/generate-claude-md", Member),
+    post("/cli/agents/generate-claude-md", Member),
     get("/cli/agents/heartbeat", Member),
     get("/cli/agents/heartbeat/action", Member),
     get("/cli/agents/heartbeat/noop", Member),
-    get("/cli/agents/launch", Member),
+    post("/cli/agents/launch", Member),
     get("/cli/agents/list", Member),
-    get("/cli/agents/lock", Member),
+    post("/cli/agents/lock", Member),
     get("/cli/agents/profile", Member),
-    get("/cli/agents/reap", Member),
-    both("/cli/agents/regenerate-workspace-skill", Member),
-    both("/cli/agents/run-workspace-ingest", Member),
+    post("/cli/agents/reap", Member),
+    post("/cli/agents/regenerate-workspace-skill", Member),
+    post("/cli/agents/run-workspace-ingest", Member),
     get("/cli/agents/running", Member),
-    both("/cli/agents/save-agent-md", Member),
-    both("/cli/agents/save-session-id", Member),
+    post("/cli/agents/save-agent-md", Member),
+    post("/cli/agents/save-session-id", Member),
     get("/cli/agents/triage", Member),
-    get("/cli/agents/unlock", Member),
+    post("/cli/agents/unlock", Member),
     get("/cli/agents/work", Member),
     get("/cli/agents/work/create", Member),
     get("/cli/agents/work/move", Member),
@@ -153,15 +153,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/auth/login", Public),
     post("/cli/auth/logout", Member),
     get("/cli/auth/whoami", Member),
-    both("/cli/awareness/publish", Member),
+    post("/cli/awareness/publish", Member),
     get("/cli/awareness/subscribe", Member),
     post("/cli/browser/open-url", Member),
-    both("/cli/canonical/detect-state", Member),
+    post("/cli/canonical/detect-state", Member),
     get("/cli/certs", Member),
     both("/cli/certs/config", Admin),
-    both("/cli/certs/issue", Member),
-    both("/cli/certs/renew", Member),
-    both("/cli/certs/upload", Admin),
+    post("/cli/certs/issue", Member),
+    post("/cli/certs/renew", Member),
+    post("/cli/certs/upload", Admin),
     post("/cli/chat/archive", Member),
     post("/cli/chat/continue-seed", Member),
     get("/cli/chat/custom-names", Member),
@@ -179,32 +179,32 @@ pub const ROUTES: &[Route] = &[
     get("/cli/chat/transcript", Member),
     get("/cli/chatter", Member),
     get("/cli/chatterlog", Member),
-    get("/cli/checkin", Member),
+    post("/cli/checkin", Member),
     post("/cli/claude-auth/install-scheduler", Member),
     post("/cli/claude-auth/refresh-now", Member),
     get("/cli/claude-auth/status", Member),
     post("/cli/claude-auth/uninstall-scheduler", Member),
-    both("/cli/clone/bundle", Member),
-    both("/cli/clone/pack", Member),
+    post("/cli/clone/bundle", Member),
+    post("/cli/clone/pack", Member),
     post("/cli/clone/pack-cleanup", Member),
     get("/cli/clone/pack-status", Member),
-    both("/cli/clone/unpack", Member),
-    get("/cli/commit", Member),
-    get("/cli/commit-merge", Member),
+    post("/cli/clone/unpack", Member),
+    post("/cli/commit", Member),
+    post("/cli/commit-merge", Member),
     post("/cli/companion/disconnect-session", Member),
     get("/cli/companion/presets", Member),
     get("/cli/companion/projects", Member),
     get("/cli/companion/projects-summary", Member),
     get("/cli/companion/sessions", Member),
     post("/cli/companion/set-password", Member),
-    get("/cli/companion/start", Member),
+    post("/cli/companion/start", Member),
     get("/cli/companion/status", Member),
-    get("/cli/companion/stop", Member),
-    get("/cli/connections", Member),
+    post("/cli/companion/stop", Member),
+    both("/cli/connections", Member),
     post("/cli/context/add", Member),
     get("/cli/context/catalog", Member),
-    both("/cli/context/catalog/create", Admin),
-    both("/cli/context/catalog/delete", Admin),
+    post("/cli/context/catalog/create", Admin),
+    post("/cli/context/catalog/delete", Admin),
     get("/cli/context/layers", Member),
     post("/cli/context/move", Member),
     post("/cli/context/regen", Member),
@@ -231,14 +231,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/db/restore", Member),
     post("/cli/db/revoke", Member),
     both("/cli/db/rows", Member),
-    both("/cli/db/rows/delete", Member),
-    both("/cli/db/rows/update", Member),
+    post("/cli/db/rows/delete", Member),
+    post("/cli/db/rows/update", Member),
     post("/cli/db/server/disable", Admin),
     post("/cli/db/server/enable", Admin),
     post("/cli/db/server/uninstall", Admin),
     get("/cli/db/status", Member),
     get("/cli/db/tables", Member),
-    get("/cli/dns-manage", Member),
+    post("/cli/dns-manage", Admin),
     both("/cli/dns/access", Member),
     both("/cli/dns/records", Member),
     post("/cli/dns/records/add", Member),
@@ -249,11 +249,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/dns/zones/delete", Member),
     split("/cli/domains", Member, Admin),
     both("/cli/domains/names", Member),
-    both("/cli/domains/names/remove", Member),
+    post("/cli/domains/names/remove", Member),
     post("/cli/domains/refresh", Admin),
-    both("/cli/domains/remove", Admin),
-    get("/cli/done", Member),
-    get("/cli/events", Member),
+    post("/cli/domains/remove", Admin),
+    post("/cli/done", Member),
+    post("/cli/events", Member),
     post("/cli/federation/inbound", Public),
     get("/cli/federation/outbox", Admin),
     post("/cli/federation/pair/confirm", Admin),
@@ -267,7 +267,7 @@ pub const ROUTES: &[Route] = &[
     both("/cli/feedback/answer", Member),
     post("/cli/feedback/assign", Member),
     both("/cli/feedback/comment", Member),
-    both("/cli/feedback/create", Member),
+    post("/cli/feedback/create", Member),
     get("/cli/feedback/list", Member),
     get("/cli/feedback/list-all", Member),
     both("/cli/feedback/resolve", Member),
@@ -283,8 +283,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/compress", Member),
     post("/cli/fs/compress-cancel", Member),
     get("/cli/fs/compress-status", Member),
-    both("/cli/fs/copy", Member),
-    both("/cli/fs/create", Member),
+    post("/cli/fs/copy", Member),
+    post("/cli/fs/create", Member),
     post("/cli/fs/delete", Member),
     post("/cli/fs/duplicate", Member),
     get("/cli/fs/events", Member),
@@ -292,14 +292,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/extract-cancel", Member),
     get("/cli/fs/extract-status", Member),
     get("/cli/fs/info", Member),
-    both("/cli/fs/move", Member),
+    post("/cli/fs/move", Member),
     post("/cli/fs/open-external", Member),
     post("/cli/fs/open-finder", Member),
     get("/cli/fs/read-binary", Member),
     get("/cli/fs/read-dir", Member),
     get("/cli/fs/read-file", Member),
     get("/cli/fs/read-range", Member),
-    both("/cli/fs/rename", Member),
+    post("/cli/fs/rename", Member),
     post("/cli/fs/search-tree", Member),
     post("/cli/fs/upload-binary", Member),
     post("/cli/fs/upload-chunk", Member),
@@ -330,31 +330,31 @@ pub const ROUTES: &[Route] = &[
     get("/cli/glossary/get", Member),
     get("/cli/glossary/list", Member),
     get("/cli/heartbeat-log", Member),
-    get("/cli/heartbeat/active-projects", Member),
+    post("/cli/heartbeat/active-projects", Member),
     get("/cli/heartbeat/active-session", Member),
-    both("/cli/heartbeat/add", Member),
+    post("/cli/heartbeat/add", Member),
     post("/cli/heartbeat/apply-wake-scheduler", Member),
-    both("/cli/heartbeat/archive", Member),
-    both("/cli/heartbeat/edit", Member),
-    both("/cli/heartbeat/enable", Member),
-    both("/cli/heartbeat/fire", Member),
+    post("/cli/heartbeat/archive", Member),
+    post("/cli/heartbeat/edit", Member),
+    post("/cli/heartbeat/enable", Member),
+    post("/cli/heartbeat/fire", Member),
     get("/cli/heartbeat/fires-list", Member),
     get("/cli/heartbeat/fires-list-all", Member),
     post("/cli/heartbeat/install-launchd", Member),
-    get("/cli/heartbeat/launch", Member),
+    post("/cli/heartbeat/launch", Member),
     get("/cli/heartbeat/list", Member),
     get("/cli/heartbeat/list-all", Member),
     get("/cli/heartbeat/list-archived", Member),
-    get("/cli/heartbeat/remove", Owner),
-    both("/cli/heartbeat/rename", Member),
-    get("/cli/heartbeat/schedule", Member),
+    post("/cli/heartbeat/remove", Owner),
+    post("/cli/heartbeat/rename", Member),
+    both("/cli/heartbeat/schedule", Member),
     get("/cli/heartbeat/scheduler-status", Member),
-    get("/cli/heartbeat/set-session", Member),
-    both("/cli/heartbeat/set-show-sessions", Member),
-    get("/cli/heartbeat/set-use-workspace-session", Member),
+    post("/cli/heartbeat/set-session", Member),
+    post("/cli/heartbeat/set-show-sessions", Member),
+    post("/cli/heartbeat/set-use-workspace-session", Member),
     get("/cli/heartbeat/show", Member),
     get("/cli/heartbeat/status", Member),
-    get("/cli/heartbeat/unarchive", Member),
+    post("/cli/heartbeat/unarchive", Member),
     post("/cli/heartbeat/uninstall-launchd", Member),
     post("/cli/heartbeat/wake", Member),
     // Home avatar cache (prd-home-picker-and-remote-avatars-v1 P18): this
@@ -406,7 +406,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/approvals/deny", Admin),
     get("/cli/mail/approvals/list", Admin),
     post("/cli/mail/archive", Member),
-    get("/cli/mail/attachments", Member),
+    both("/cli/mail/attachments", Member),
     both("/cli/mail/autoconfig", Admin),
     both("/cli/mail/bans", Admin),
     post("/cli/mail/bans/clear", Admin),
@@ -480,15 +480,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/spam/train", Admin),
     get("/cli/mail/status", Member),
     get("/cli/mail/wait", Member),
-    get("/cli/mode", Member),
-    get("/cli/onboarding/adopt", Member),
-    both("/cli/onboarding/agents-md-generate-enabled", Member),
-    both("/cli/onboarding/harness-fanout-enabled", Member),
+    both("/cli/mode", Member),
+    post("/cli/onboarding/adopt", Member),
+    post("/cli/onboarding/agents-md-generate-enabled", Member),
+    post("/cli/onboarding/harness-fanout-enabled", Member),
     get("/cli/onboarding/scan", Member),
-    both("/cli/onboarding/set-agents-md-generate-enabled", Member),
-    both("/cli/onboarding/set-harness-fanout-enabled", Member),
-    get("/cli/onboarding/skip", Member),
-    get("/cli/onboarding/start-fresh", Member),
+    post("/cli/onboarding/set-agents-md-generate-enabled", Member),
+    post("/cli/onboarding/set-harness-fanout-enabled", Member),
+    post("/cli/onboarding/skip", Member),
+    post("/cli/onboarding/start-fresh", Member),
     get("/cli/ops/activity", Member),
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
@@ -571,12 +571,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/publish/subdomain/unclaim", Member),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
-    both("/cli/relations/create", Member),
-    both("/cli/relations/delete", Member),
+    post("/cli/relations/create", Member),
+    post("/cli/relations/delete", Member),
     get("/cli/relations/list", Member),
     get("/cli/relations/list-incoming", Member),
-    get("/cli/release", Member),
-    get("/cli/remote-instruct", Member),
+    post("/cli/release", Member),
+    post("/cli/remote-instruct", Admin),
     post("/cli/remote-session/disable", Admin),
     post("/cli/remote-session/enable", Admin),
     post("/cli/remote-session/grant", Admin),
@@ -584,39 +584,39 @@ pub const ROUTES: &[Route] = &[
     post("/cli/remote-session/revoke", Admin),
     post("/cli/remote-session/shell/spawn", Member),
     get("/cli/remote-session/status", Admin),
-    get("/cli/reserve", Member),
+    post("/cli/reserve", Member),
     both("/cli/respond", NoLogin),
     post("/cli/review-checklist/init", Member),
     get("/cli/review-checklist/read", Member),
     post("/cli/review-checklist/toggle", Member),
     post("/cli/review-checklist/write", Member),
-    get("/cli/review/approve", Member),
-    get("/cli/review/feedback", Member),
-    get("/cli/review/reject", Member),
+    post("/cli/review/approve", Member),
+    post("/cli/review/feedback", Member),
+    post("/cli/review/reject", Member),
     get("/cli/reviews", Member),
     get("/cli/sandbox/list", Member),
     post("/cli/sandbox/open", NoLogin),
     post("/cli/sandbox/reopen", Member),
-    get("/cli/scheduler-tick", Member),
+    post("/cli/scheduler-tick", Member),
     post("/cli/sections/assign", Member),
     post("/cli/sections/create", Member),
     post("/cli/sections/delete", Member),
     get("/cli/sections/list", Member),
     post("/cli/sections/reorder", Member),
     post("/cli/sections/update", Member),
-    both("/cli/session/complete", NoLogin),
-    both("/cli/session/set-surfaced", Member),
+    post("/cli/session/complete", NoLogin),
+    post("/cli/session/set-surfaced", Member),
     get("/cli/sessions/bytes", Member),
     get("/cli/sessions/events", Member),
     get("/cli/sessions/grid", Member),
-    get("/cli/sessions/label", Member),
+    post("/cli/sessions/label", Member),
     get("/cli/sessions/list-for-workspace", Member),
     get("/cli/sessions/lookup-by-agent", Member),
-    get("/cli/sessions/resize", Member),
+    post("/cli/sessions/resize", Member),
     get("/cli/sessions/subscribe", Member),
-    both("/cli/sessions/v2/close", Member),
-    both("/cli/sessions/v2/refresh", Member),
-    both("/cli/sessions/v2/spawn", Member),
+    post("/cli/sessions/v2/close", Member),
+    post("/cli/sessions/v2/refresh", Member),
+    post("/cli/sessions/v2/spawn", Member),
     get("/cli/settings", Member),
     get("/cli/settings/get", Member),
     post("/cli/settings/reset", Member),
@@ -626,7 +626,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skill-layers/get-content", Member),
     get("/cli/skill-layers/list", Member),
     post("/cli/skills/create", Member),
-    get("/cli/skills/regenerate", Member),
+    post("/cli/skills/regenerate", Member),
     post("/cli/skills/remove", Member),
     post("/cli/skills/write-opt-in", Member),
     both("/cli/skin-tokens", Owner),
@@ -664,7 +664,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/users/remove", Owner),
     post("/cli/skin/users/rooms", Owner),
     post("/cli/skin/users/unlock", Owner),
-    get("/cli/status", Member),
+    post("/cli/status", Member),
     post("/cli/store/create", Member),
     post("/cli/store/drop", Member),
     get("/cli/store/get", Member),
@@ -690,12 +690,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/terminal/scroll", Member),
     post("/cli/terminal/send-message", Member),
     post("/cli/terminal/set-focus", Member),
-    get("/cli/terminal/spawn", Member),
-    get("/cli/terminal/spawn-background", Member),
-    get("/cli/terminal/write", Member),
+    post("/cli/terminal/spawn", Member),
+    post("/cli/terminal/spawn-background", Member),
+    post("/cli/terminal/write", Member),
     post("/cli/themes/create-template", Member),
     post("/cli/themes/delete", Member),
-    get("/cli/themes/ensure-dir", Member),
+    post("/cli/themes/ensure-dir", Member),
     get("/cli/themes/get-dir", Member),
     get("/cli/themes/list", Member),
     get("/cli/thread", Member),
@@ -710,7 +710,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/timer/delete", Member),
     get("/cli/timer/entries-export", Member),
     get("/cli/timer/entries-list", Member),
-    get("/cli/trust-folders", Member),
+    post("/cli/trust-folders", Member),
     split("/cli/tunnel/config", Member, Owner),
     post("/cli/tunnel/disable", NoLogin),
     post("/cli/tunnel/enable", NoLogin),
@@ -736,8 +736,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/users/set-role", Owner),
     post("/cli/users/unlock", Owner),
     get("/cli/whats_new", Member),
-    get("/cli/whats_new/mark_seen", Member),
-    get("/cli/whats_new/reset", Member),
+    post("/cli/whats_new/mark_seen", Member),
+    post("/cli/whats_new/reset", Member),
     get("/cli/whoami", Member),
     post("/cli/wiki/chat", Member),
     post("/cli/wiki/chat/off", Member),
@@ -760,22 +760,22 @@ pub const ROUTES: &[Route] = &[
     post("/cli/workspace-layouts/save", Member),
     get("/cli/workspace/agent-display-name", Member),
     post("/cli/workspace/api-key", NoLogin),
-    get("/cli/workspace/cleanup", Member),
-    get("/cli/workspace/create", Member),
-    get("/cli/workspace/ensure-canonical-session", Member),
+    post("/cli/workspace/cleanup", Member),
+    post("/cli/workspace/create", Member),
+    post("/cli/workspace/ensure-canonical-session", Member),
     post("/cli/workspace/ensure-pinned-chat", Member),
     get("/cli/workspace/handle", Member),
-    both("/cli/workspace/msg", Member),
-    get("/cli/workspace/open", Member),
-    get("/cli/workspace/remove", Member),
+    post("/cli/workspace/msg", Member),
+    post("/cli/workspace/open", Member),
+    post("/cli/workspace/remove", Member),
     get("/cli/workspace/resolve", Member),
     get("/cli/workspace/resources", Member),
-    both("/cli/workspace/resources/add", Member),
-    both("/cli/workspace/resources/remove", Member),
+    post("/cli/workspace/resources/add", Member),
+    post("/cli/workspace/resources/remove", Member),
     get("/cli/workspace/resume-chat-args", Member),
     post("/cli/workspace/set", Member),
-    get("/cli/workspace/set-agent-display-name", Member),
-    get("/cli/workspace/set-chat-session", Member),
+    post("/cli/workspace/set-agent-display-name", Member),
+    post("/cli/workspace/set-chat-session", Member),
     post("/cli/workspace/set-handle", Member),
     post("/cli/workspace/set-tab-title", Member),
     get("/cli/workspace/tab-titles", Member),
@@ -783,7 +783,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/workspaces/delete", Member),
     get("/cli/workspaces/list", Member),
     post("/cli/workspaces/set-nav-visible", Member),
-    get("/cli/worktree", Member),
+    post("/cli/worktree", Member),
     // Zen Mode (prd-zen-mode-v1 Z15, vs-live Z59/Z62; prd-zen-gardens-v1
     // G13/G45): Member floor so a Member's own desktop works; every handler
     // then requires the LOCAL owner token and answers 403 `zen_local_only`
@@ -831,6 +831,175 @@ pub fn post_allowed(path: &str) -> bool {
         || V1_POST_EXACT.contains(&path)
         || path == "/v1/w"
         || path.starts_with("/v1/w/")
+}
+
+// ── No state change over GET (security patch 0.44.4) ───────────────────
+//
+// A `post(...)` row is POST-only: the dispatcher answers every GET to it
+// with 405 BEFORE auth and before any handler ([`get_refused`]), for every
+// caller (owner token, login, passport, cookie). A `both(...)` /
+// `split(...)` row serves GET as a real read; the few whose GET form can
+// still write — a mode param flips them from read to write — are listed in
+// [`GET_WRITE_PARAMS`], and that GET form is refused the same way. Clients
+// send those writes as POST (params may stay in the query string).
+
+/// Routes that changed state on GET before 0.44.4 and are POST-only now.
+/// Pinned by tests (each must be a `post(...)` row and must 405 on GET);
+/// the per-cell socket admits these as POST for agent verbs.
+pub const FORMERLY_GET_WRITES: &[&str] = &[
+    "/cli/agent/complete",
+    "/cli/agent/reply",
+    "/cli/agent/update",
+    "/cli/agents-create-connections",
+    "/cli/agents/create",
+    "/cli/agents/delegate",
+    "/cli/agents/delete",
+    "/cli/agents/generate-claude-md",
+    "/cli/agents/launch",
+    "/cli/agents/lock",
+    "/cli/agents/reap",
+    "/cli/agents/unlock",
+    "/cli/awareness/publish",
+    "/cli/checkin",
+    "/cli/commit",
+    "/cli/commit-merge",
+    "/cli/companion/start",
+    "/cli/companion/stop",
+    "/cli/dns-manage",
+    "/cli/done",
+    "/cli/events",
+    "/cli/heartbeat/active-projects",
+    "/cli/heartbeat/add",
+    "/cli/heartbeat/archive",
+    "/cli/heartbeat/edit",
+    "/cli/heartbeat/enable",
+    "/cli/heartbeat/fire",
+    "/cli/heartbeat/launch",
+    "/cli/heartbeat/remove",
+    "/cli/heartbeat/rename",
+    "/cli/heartbeat/set-session",
+    "/cli/heartbeat/set-use-workspace-session",
+    "/cli/heartbeat/unarchive",
+    "/cli/onboarding/adopt",
+    "/cli/onboarding/skip",
+    "/cli/onboarding/start-fresh",
+    "/cli/release",
+    "/cli/remote-instruct",
+    "/cli/reserve",
+    "/cli/review/approve",
+    "/cli/review/feedback",
+    "/cli/review/reject",
+    "/cli/scheduler-tick",
+    "/cli/sessions/label",
+    "/cli/sessions/resize",
+    "/cli/sessions/v2/close",
+    "/cli/sessions/v2/refresh",
+    "/cli/sessions/v2/spawn",
+    "/cli/skills/regenerate",
+    "/cli/status",
+    "/cli/terminal/spawn",
+    "/cli/terminal/spawn-background",
+    "/cli/terminal/write",
+    "/cli/themes/ensure-dir",
+    "/cli/trust-folders",
+    "/cli/whats_new/mark_seen",
+    "/cli/whats_new/reset",
+    "/cli/workspace/cleanup",
+    "/cli/workspace/create",
+    "/cli/workspace/ensure-canonical-session",
+    "/cli/workspace/msg",
+    "/cli/workspace/open",
+    "/cli/workspace/remove",
+    "/cli/workspace/set-agent-display-name",
+    "/cli/workspace/set-chat-session",
+    "/cli/worktree",
+];
+
+/// `(path, param, read values)`: on these readable routes a GET that
+/// carries `param` with any value NOT in `read values` is a write and is
+/// refused (405); send it as POST. A GET without `param` stays a read.
+pub const GET_WRITE_PARAMS: &[(&str, &str, &[&str])] = &[
+    // `?action=add|remove` connects / disconnects; list is the read.
+    ("/cli/connections", "action", &["", "list"]),
+    // `?set=<mode>` writes agent_mode (and may spawn the canonical session).
+    ("/cli/mode", "set", &[]),
+    // any `?enable=` writes the agentic-systems setting.
+    ("/cli/agentic", "enable", &[]),
+    // `?mode=` writes the workspace heartbeat mode.
+    ("/cli/heartbeat/schedule", "mode", &[]),
+    // `?out=<path>` writes an attachment into the workspace.
+    ("/cli/mail/attachments", "out", &[]),
+];
+
+/// GET routes reviewed in 0.44.4 whose read has an incidental, idempotent
+/// side effect (a cache refresh, housekeeping, IMAP \Seen on read). They
+/// stay GET; the cookie Origin gate is what keeps a foreign page off them.
+/// The verb-name ratchet test reads this list too.
+// Read by the ratchet tests (the list is the reviewed record).
+#[cfg_attr(not(test), allow(dead_code))]
+pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
+    ("/cli/agents/running", "drops dead PTYs from the in-memory session map"),
+    ("/cli/auth/whoami", "validating a session may reap an expired one"),
+    ("/cli/context/layers", "refreshes generated roster packs on disk when they changed"),
+    ("/cli/db/dsn", "lazily mints the agent role's vaulted password / bind membership"),
+    ("/cli/federation/peer-roster", "lazy-heals stale connection rows from the peer roster"),
+    ("/cli/federation/pubkey", "creates the host keypair once if missing"),
+    ("/cli/heartbeat/active-session", "clears a dead active terminal id / records a live one"),
+    ("/cli/host-sessions/list", "drops dead host-session PTYs from the session map"),
+    ("/cli/mail/approvals/list", "auto-denies sends pending longer than 7 days"),
+    ("/cli/mail/outbox", "auto-denies sends pending longer than 7 days"),
+    ("/cli/mail/read", "reading a message marks it \\Seen (IMAP semantics)"),
+    ("/cli/mail/status", "health=1 refreshes the stored health snapshot"),
+    ("/cli/mail/wait", "a matched message is marked \\Seen"),
+    ("/cli/power/status", "re-applies the saved keep-awake setting"),
+    ("/cli/projects/get-icon", "caches a detected icon url"),
+    ("/cli/skill-layers/get-content", "creates the layers folder if missing"),
+    ("/cli/skill-layers/list", "creates the layers folder if missing"),
+    ("/cli/terminal/classify", "may start the local classifier worker"),
+    ("/cli/wiki/index", "regenerates the derived host wiki index"),
+    ("/cli/wiki/note", "regenerates the derived host wiki index"),
+    ("/cli/workspace/resume-chat-args", "assigns a resume session id when none is saved"),
+    ("/cli/zen/get", "snapshots Zen history when the files changed"),
+];
+
+/// Central "no state change over GET" check (0.44.4). True when a GET to
+/// `path?query` must be refused with 405: the row is POST-only, or the
+/// query carries a [`GET_WRITE_PARAMS`] write param. Runs for every
+/// caller, before auth.
+pub fn get_refused(path: &str, query: &str) -> bool {
+    if lookup(path).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
+        return true;
+    }
+    if !GET_WRITE_PARAMS.iter().any(|(p, _, _)| *p == path) {
+        return false;
+    }
+    get_refused_params(path, &super::http::parse_params(path, query))
+}
+
+/// [`get_refused`] over an already-parsed params map (the per-cell socket
+/// parses once up front).
+pub fn get_refused_params(
+    path: &str,
+    params: &std::collections::HashMap<String, String>,
+) -> bool {
+    if lookup(path).is_some_and(|r| r.get.is_none() && r.post.is_some()) {
+        return true;
+    }
+    let Some((_, param, reads)) = GET_WRITE_PARAMS.iter().find(|(p, _, _)| *p == path) else {
+        return false;
+    };
+    match params.get(*param) {
+        None => false,
+        Some(v) => !reads.contains(&v.as_str()),
+    }
+}
+
+/// A route that used to be a GET-shaped verb and is now (also) a POST:
+/// the [`FORMERLY_GET_WRITES`] list plus the [`GET_WRITE_PARAMS`] routes.
+/// The per-cell socket serves these as POST through the same params
+/// handler it used for the GET form.
+pub fn is_post_shaped_get_verb(path: &str) -> bool {
+    FORMERLY_GET_WRITES.contains(&path) || GET_WRITE_PARAMS.iter().any(|(p, _, _)| *p == path)
 }
 
 /// Refusal for a login below the route's floor.
@@ -1149,13 +1318,309 @@ mod tests {
         // Rosson R1 (prd-app-heartbeats-surface-v1): archive stays open to any
         // login; hard delete is the Owner role only.
         let remove = lookup("/cli/heartbeat/remove").expect("heartbeat remove is classified");
-        let floor = remove.get.expect("heartbeat remove is a GET route");
+        // 0.44.4: POST-only (was a GET-shaped verb).
+        assert!(remove.get.is_none(), "heartbeat remove is POST-only");
+        let floor = remove.post.expect("heartbeat remove is a POST route");
         assert_eq!(floor.as_wire(), "owner");
         assert!(!floor.admits(Role::Member));
         assert!(!floor.admits(Role::Admin));
         assert!(floor.admits(Role::Owner));
         let archive = lookup("/cli/heartbeat/archive").expect("heartbeat archive is classified");
         assert_eq!(archive.post.expect("archive accepts POST").as_wire(), "member");
+    }
+
+    // ── 0.44.4: no state change over GET ─────────────────────────────
+
+    #[test]
+    fn formerly_get_writes_are_post_only_and_refused_on_get() {
+        assert!(FORMERLY_GET_WRITES.len() >= 60, "list shrank: {}", FORMERLY_GET_WRITES.len());
+        for p in FORMERLY_GET_WRITES {
+            let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
+            assert!(row.get.is_none(), "{p} still serves GET");
+            assert!(row.post.is_some(), "{p} has no POST floor");
+            assert!(get_refused(p, ""), "{p}: GET must be refused");
+            assert!(get_refused(p, "token=x&id=1"), "{p}: GET with params must be refused");
+            assert!(is_post_shaped_get_verb(p), "{p}");
+        }
+        // The terminal + spawn verbs named by the security review.
+        for p in [
+            "/cli/terminal/write",
+            "/cli/terminal/spawn",
+            "/cli/terminal/spawn-background",
+            "/cli/sessions/resize",
+            "/cli/scheduler-tick",
+        ] {
+            assert!(FORMERLY_GET_WRITES.contains(&p), "{p} missing from the list");
+        }
+    }
+
+    #[test]
+    fn agent_switch_writers_need_admin() {
+        for p in ["/cli/dns-manage", "/cli/agents-create-connections", "/cli/remote-instruct"] {
+            let row = lookup(p).expect("classified");
+            assert!(row.get.is_none(), "{p} is POST-only");
+            let floor = row.post.expect("POST floor");
+            assert_eq!(floor.as_wire(), "admin", "{p}");
+            assert!(!floor.admits(Role::Member), "{p}");
+            assert!(floor.admits(Role::Admin), "{p}");
+        }
+    }
+
+    #[test]
+    fn get_write_params_refuse_only_the_write_form() {
+        for (p, _, _) in GET_WRITE_PARAMS {
+            let row = lookup(p).unwrap_or_else(|| panic!("{p} not classified"));
+            assert!(row.get.is_some() && row.post.is_some(), "{p} must serve GET reads and POST writes");
+            assert!(!get_refused(p, "project=%2Ftmp%2Fw"), "{p}: plain GET stays a read");
+        }
+        assert!(get_refused("/cli/connections", "action=add&target=x"));
+        assert!(get_refused("/cli/connections", "action=remove&target=x"));
+        assert!(get_refused("/cli/connections", "action=bogus"));
+        assert!(!get_refused("/cli/connections", "action=list"));
+        assert!(!get_refused("/cli/connections", "action="));
+        assert!(get_refused("/cli/mode", "set=manager"));
+        assert!(get_refused("/cli/agentic", "enable=1"));
+        assert!(get_refused("/cli/heartbeat/schedule", "mode=off"));
+        assert!(get_refused("/cli/mail/attachments", "id=1&get=1&out=%2Ftmp%2Fa"));
+        assert!(!get_refused("/cli/mail/attachments", "id=1"));
+        // Plain reads are never refused.
+        for p in ["/cli/projects/list", "/cli/terminal/read", "/cli/sessions/events", "/cli/thread"] {
+            assert!(!get_refused(p, "token=x"), "{p}");
+        }
+    }
+
+    /// Words that name a state change. A GET-serving row whose path holds
+    /// one must be a reviewed read ([`GET_READS_WITH_HOUSEKEEPING`],
+    /// [`GET_VERB_NAMED_READS`]) or a [`GET_WRITE_PARAMS`] route.
+    const MUTATING_WORDS: &[&str] = &[
+        "add", "adopt", "apply", "approve", "archive", "bind", "cancel", "claim", "cleanup",
+        "close", "commit", "complete", "confirm", "copy", "create", "delegate", "delete",
+        "deny", "disable", "done", "edit", "enable", "ensure", "fire", "fresh", "generate",
+        "import", "install", "invite", "issue", "kill", "launch", "lock", "mark", "mint",
+        "move", "open", "pair", "publish", "put", "reap", "refresh", "regenerate", "reject",
+        "release", "remove", "rename", "renew", "reply", "reserve", "reset", "resize",
+        "revoke", "rotate", "run", "save", "send", "set", "skip", "spawn", "start", "stop",
+        "tick", "trust", "unarchive", "unclaim", "uninstall", "unlock", "update", "upload",
+        "write",
+    ];
+
+    /// GET-serving rows whose path holds a [`MUTATING_WORDS`] word but
+    /// whose GET is a read (verified handler by handler for 0.44.4).
+    const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
+        ("/cli/agents/work/create", "410 Gone, no state"),
+        ("/cli/agents/work/move", "410 Gone, no state"),
+        ("/cli/work/inbox/create", "410 Gone, no state"),
+        ("/cli/daemon/update/status", "reads the updater state"),
+        ("/cli/project-config/has-run-command", "reads project config"),
+        ("/cli/project-config/run-command", "returns the configured command string; never runs it"),
+        ("/cli/publish/leftovers", "lists published-service leftovers"),
+        ("/cli/publish/list", "lists published services"),
+        ("/cli/publish/logs", "reads service logs"),
+    ];
+
+    fn path_words(path: &str) -> Vec<String> {
+        path.trim_start_matches("/cli/")
+            .split(['/', '-', '_'])
+            .filter(|w| !w.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect()
+    }
+
+    #[test]
+    fn get_rows_named_like_writes_are_reviewed_reads() {
+        let reviewed: BTreeSet<&str> = GET_READS_WITH_HOUSEKEEPING
+            .iter()
+            .map(|(p, _)| *p)
+            .chain(GET_VERB_NAMED_READS.iter().map(|(p, _)| *p))
+            .chain(GET_WRITE_PARAMS.iter().map(|(p, _, _)| *p))
+            .collect();
+        let mut offenders = Vec::new();
+        for r in ROUTES {
+            if r.get.is_none() {
+                continue;
+            }
+            let words = path_words(r.path);
+            if words.iter().any(|w| MUTATING_WORDS.contains(&w.as_str())) && !reviewed.contains(r.path) {
+                offenders.push(r.path);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "GET-serving route(s) named like a state change — make the row `post(...)` \
+             (and update every client), or, if the GET is a verified read, add it to \
+             GET_VERB_NAMED_READS / GET_READS_WITH_HOUSEKEEPING with the reason:\n  {}",
+            offenders.join("\n  ")
+        );
+        // Every reviewed entry is a real GET row (no stale names).
+        for p in &reviewed {
+            assert!(lookup(p).is_some_and(|r| r.get.is_some()), "stale reviewed entry {p}");
+        }
+    }
+
+    // ── clients never GET a POST-only route ──────────────────────────
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repo root")
+            .to_path_buf()
+    }
+
+    /// `"/cli/…"` literals that follow one of `markers` on the same line.
+    fn literals_after(src: &str, markers: &[&str]) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (n, line) in src.lines().enumerate() {
+            for m in markers {
+                let mut from = 0;
+                while let Some(off) = line[from..].find(m) {
+                    let start = from + off + m.len();
+                    let rest = &line[start..];
+                    let lit: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || "/_.-".contains(*c))
+                        .collect();
+                    if lit.starts_with("/cli/") {
+                        out.push((n + 1, lit));
+                    }
+                    from = start;
+                }
+            }
+        }
+        out
+    }
+
+    fn get_to_post_only(origin: &str, hits: &[(usize, String)], bad: &mut Vec<String>) {
+        for (line, lit) in hits {
+            if let Some(r) = lookup(lit) {
+                if r.get.is_none() && r.post.is_some() {
+                    bad.push(format!("{origin}:{line} GETs POST-only {lit}"));
+                }
+            }
+        }
+    }
+
+    fn assert_no_bad(bad: Vec<String>) {
+        assert!(bad.is_empty(), "client GET to a POST-only route (would 405):\n  {}", bad.join("\n  "));
+    }
+
+    #[test]
+    fn the_cli_never_gets_a_post_only_route() {
+        let cli = repo_root().join("cli").join("k2");
+        let src = std::fs::read_to_string(&cli).unwrap_or_else(|e| panic!("read {}: {e}", cli.display()));
+        let hits = literals_after(
+            &src,
+            &[
+                "cli_request \"",
+                "cli_request_uds \"",
+                "cli_send cli_request \"",
+                "http_get(\"",
+                "call(\"GET\", \"",
+                "request(\"GET\", \"",
+            ],
+        );
+        let n = hits.len();
+        let mut bad = Vec::new();
+        get_to_post_only("cli/k2", &hits, &mut bad);
+        assert_no_bad(bad);
+        assert!(n > 200, "CLI GET extractor found only {n} call sites — broken?");
+    }
+
+    #[test]
+    fn the_renderer_and_tauri_shell_never_get_a_post_only_route() {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
+                let p = e.expect("entry").path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx" || x == "rs")
+                    && !p.to_string_lossy().contains(".test.")
+                    && !p.to_string_lossy().contains(".mstest.")
+                {
+                    out.push(p);
+                }
+            }
+        }
+        let root = repo_root();
+        let mut files = Vec::new();
+        walk(&root.join("src").join("renderer"), &mut files);
+        walk(&root.join("src-tauri").join("src"), &mut files);
+        assert!(files.len() > 200, "walk found too few files");
+        let mut total = 0;
+        let mut bad = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("read {}: {e}", f.display()));
+            // `daemonCliGet<T>(\n  scope,\n  'route'` → `/cli/route` (the
+            // call may span lines and carry a type argument). Rust:
+            // `cli_get(\n  "/cli/route"`.
+            let mut hits = Vec::new();
+            for name in ["daemonCliGet", "daemonCliGetText", "hostGet", "cliGet", "cli_get"] {
+                let mut from = 0;
+                while let Some(off) = src[from..].find(name) {
+                    let at = from + off;
+                    let after_name = at + name.len();
+                    from = after_name;
+                    // Whole identifier only (`daemonCliGet` ≠ `daemonCliGetText`).
+                    let prev_ok = at == 0
+                        || !src.as_bytes()[at - 1].is_ascii_alphanumeric() && src.as_bytes()[at - 1] != b'_';
+                    let next = src.as_bytes().get(after_name).copied();
+                    if !prev_ok || !matches!(next, Some(b'(') | Some(b'<')) {
+                        continue;
+                    }
+                    let mut window_end = (after_name + 300).min(src.len());
+                    while !src.is_char_boundary(window_end) {
+                        window_end -= 1;
+                    }
+                    let window = &src[after_name..window_end];
+                    let Some(paren) = window.find('(') else { continue };
+                    let rest = &window[paren + 1..];
+                    let Some(q) = rest.find(['\'', '"']) else { continue };
+                    let quote = rest.as_bytes()[q] as char;
+                    let lit_and_on = &rest[q + 1..];
+                    let Some(end) = lit_and_on.find(quote) else { continue };
+                    let route = lit_and_on[..end].trim_start_matches('/');
+                    let route = route.strip_prefix("cli/").unwrap_or(route);
+                    if !route.is_empty()
+                        && route.chars().all(|c| c.is_ascii_alphanumeric() || "/_-.".contains(c))
+                    {
+                        let line = src[..at].matches('\n').count() + 1;
+                        hits.push((line, format!("/cli/{route}")));
+                    }
+                }
+            }
+            let shown = f.strip_prefix(&root).unwrap_or(&f).display().to_string();
+            total += hits.len();
+            get_to_post_only(&shown, &hits, &mut bad);
+        }
+        assert_no_bad(bad);
+        assert!(total > 100, "renderer GET extractor found only {total} call sites — broken?");
+    }
+
+    #[test]
+    fn companion_proxy_posts_exactly_the_post_only_routes() {
+        // Every WS method the mobile Companion can call (proxy.rs
+        // `map_ws_method`); the HTTP map reaches the same internal routes.
+        let methods = [
+            "projects.list", "projects.summary", "sessions.list", "agents.list",
+            "agents.running", "agents.work", "agents.wake", "reviews.list",
+            "review.approve", "review.reject", "review.feedback", "terminal.read",
+            "terminal.write", "terminal.spawn", "terminal.spawn_background",
+            "presets.list", "status",
+        ];
+        let mut writes = 0;
+        for m in methods {
+            let (route, _) = k2_core::companion::proxy::map_ws_method(m)
+                .unwrap_or_else(|| panic!("companion method {m} unmapped"));
+            let row = lookup(route).unwrap_or_else(|| panic!("{route} not classified"));
+            let post_only = row.get.is_none() && row.post.is_some();
+            assert_eq!(
+                k2_core::companion::proxy::internal_route_is_write(route),
+                post_only,
+                "companion {m} → {route}: the proxy must POST exactly the POST-only routes"
+            );
+            writes += usize::from(post_only);
+        }
+        assert_eq!(writes, 7, "terminal write/spawn×2, agents.wake, review ×3");
     }
 
     #[test]

@@ -493,6 +493,45 @@ cli_request() {
         -d "$params"
 }
 
+# 0.44.4 — POST twin of cli_request for routes that change state (the
+# daemon answers GET with 405 on them). Same contract: pre-urlencoded
+# `key=value` args ride the query string, the body is empty, and transport
+# errors classify exactly like cli_request (_cli_curl).
+#
+# A pre-0.44.4 daemon (e.g. a remote host via `--host`) only routes these
+# paths as GET and answers the POST with its top-level
+# `method not allowed for this route` 405 before any handler runs, so the
+# same request is replayed once as GET there (side-effect safe).
+cli_request_post() {
+    local endpoint="$1"
+    shift
+    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    for param in "$@"; do
+        params="${params}&${param}"
+    done
+    local out rc=0
+    out="$(_cli_curl -sS -v -X POST "${BASE_URL}${endpoint}?${params}" \
+        --connect-timeout 5 --max-time 30 \
+        --data-raw "")" || rc=$?
+    if [ "$rc" -eq 0 ] && [[ "$out" == *'method not allowed for this route'* ]]; then
+        cli_request "$endpoint" "$@"
+        return $?
+    fi
+    printf '%s' "$out"
+    return "$rc"
+}
+
+# UDS twin of cli_request_post (cli_send picks `<fn>_uds`).
+cli_request_post_uds() {
+    local endpoint="$1"; shift
+    local params=""
+    for param in "$@"; do params="${params}${params:+&}${param}"; done
+    _cli_curl -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+        --connect-timeout 5 --max-time 30 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        --data-raw ""
+}
+
 # POST a JSON body. Used by /cli/awareness/publish (Phase 3).
 # Token rides in the query string (the daemon parses it there
 # before looking at the body). Caller supplies the full endpoint
@@ -1441,7 +1480,7 @@ cmd_agent_update() {
         echo "  field: frontmatter key (role, type) or section name (Work Sources, Capabilities)" >&2
         exit 1
     fi
-    cli_request "/cli/agent/update" \
+    cli_request_post "/cli/agent/update" \
         "agent=$(urlencode "$name")" \
         "field=$(urlencode "$field")" \
         "value=$(urlencode "$value")" \
@@ -1492,7 +1531,7 @@ cmd_terminal_spawn() {
     [ -n "$wait" ] && params="${params}&wait=1"
     [ -n "$sandbox" ] && params="${params}&sandbox=${sandbox}"
     local resp
-    resp=$(cli_request "/cli/terminal/spawn" "$params") || true
+    resp=$(cli_request_post "/cli/terminal/spawn" "$params") || true
     if [ -z "$resp" ]; then
         echo "Error: terminal spawn returned no body" >&2
         exit 1
@@ -1521,7 +1560,7 @@ cmd_commit() {
     local params=""
     [ -n "$message" ] && params="message=$(urlencode "$message")"
     echo "Requesting AI Commit..."
-    cli_request "/cli/commit" "$params"
+    cli_request_post "/cli/commit" "$params"
 }
 
 cmd_commit_merge() {
@@ -1535,7 +1574,7 @@ cmd_commit_merge() {
     local params=""
     [ -n "$message" ] && params="message=$(urlencode "$message")"
     echo "Requesting AI Commit & Merge..."
-    cli_request "/cli/commit-merge" "$params"
+    cli_request_post "/cli/commit-merge" "$params"
 }
 
 # 0.39.0f Phase 2.1b: cmd_agents_delete / cmd_agents_lock /
@@ -1727,7 +1766,7 @@ cmd_heartbeat_add() {
         params="${params}&instructions=$(urlencode "$instructions")"
     fi
     local resp
-    resp=$(cli_send cli_request "/cli/heartbeat/add" "$params")
+    resp=$(cli_send cli_request_post "/cli/heartbeat/add" "$params")
     local wakeup_abs written
     if printf '%s' "$resp" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if isinstance(d,dict) and 'error' in d else 1)" 2>/dev/null; then
         printf '%s' "$resp" | _hb_print_err
@@ -1911,7 +1950,7 @@ cmd_heartbeat_remove() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat remove <name> [--purge]" >&2; exit 1; }
 
     if $purge; then
-        cli_send cli_request "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request_post "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1926,7 +1965,7 @@ except Exception as e:
         # Stops firing on schedule, hidden from `heartbeat list`, but
         # the WAKEUP.md and chat history stay readable via
         # `heartbeat list-archived` and the sidebar's Archived section.
-        cli_send cli_request "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request_post "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1942,7 +1981,7 @@ except Exception as e:
 cmd_heartbeat_unarchive() {
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat unarchive <name>" >&2; exit 1; }
-    cli_send cli_request "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+    cli_send cli_request_post "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -2004,7 +2043,7 @@ cmd_heartbeat_fire() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2; exit 1; }
     local params="name=$(urlencode "$name")"
     [ "$force" = "1" ] && params="${params}&force=1"
-    cli_send cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
+    cli_send cli_request_post "/cli/heartbeat/fire" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -2039,7 +2078,7 @@ cmd_heartbeat_enable_disable() {
     # Enabled/Disabled like a human would.
     local verb="Enabled"
     [ "$enabled" = "false" ] && verb="Disabled"
-    cli_send cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
+    cli_send cli_request_post "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -2060,7 +2099,7 @@ cmd_heartbeat_use_pinned_session() {
     local enabled="$1"; shift
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat use-pinned-session [on|off] <name>" >&2; exit 1; }
-    cli_send cli_request "/cli/heartbeat/set-use-workspace-session" \
+    cli_send cli_request_post "/cli/heartbeat/set-use-workspace-session" \
         "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
@@ -2135,7 +2174,7 @@ else:
         echo "--provider only applies with --set <session-id|workspace/handle>" >&2; exit 1
     fi
 
-    cli_send cli_request "/cli/heartbeat/set-session" \
+    cli_send cli_request_post "/cli/heartbeat/set-session" \
         "name=$(urlencode "$name")&mode=$mode&session_id=$(urlencode "$session_id")&provider=$(urlencode "$provider")" \
         | NAME="$name" python3 -c "
 import json, sys, os
@@ -2163,7 +2202,7 @@ cmd_heartbeat_rename() {
         echo "Usage: k2 heartbeat rename <old-name> <new-name>" >&2
         exit 1
     fi
-    cli_send cli_request "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
+    cli_send cli_request_post "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -2224,7 +2263,7 @@ cmd_heartbeat_edit() {
         fi
         params="${params}&instructions=$(urlencode "$instructions")"
     fi
-    cli_send cli_request "/cli/heartbeat/edit" "$params" | NAME="$name" FREQ="$freq" HAVE_INSTR="$have_instructions" python3 -c "
+    cli_send cli_request_post "/cli/heartbeat/edit" "$params" | NAME="$name" FREQ="$freq" HAVE_INSTR="$have_instructions" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -3147,7 +3186,7 @@ cmd_daemon_companion() {
             # /cli/companion/start is a GET in the dispatch table (no body).
             # Returns {"ok":true,"url":"<tunnel-url>"} on success or
             # {"error":"..."} on failure.
-            cli_request "/cli/companion/start" | python3 -c '
+            cli_request_post "/cli/companion/start" | python3 -c '
 import json, sys
 try:
     data = json.loads(sys.stdin.read())
@@ -3165,7 +3204,7 @@ except Exception as e:
 '
             ;;
         stop)
-            cli_request "/cli/companion/stop" | python3 -c '
+            cli_request_post "/cli/companion/stop" | python3 -c '
 import json, sys
 try:
     data = json.loads(sys.stdin.read())
@@ -3245,7 +3284,7 @@ cmd_review_approve() {
         echo "Usage: k2 review approve <agent> <branch>" >&2
         exit 1
     fi
-    cli_request "/cli/review/approve" "agent=$(urlencode "$agent")&branch=$(urlencode "$branch")"
+    cli_request_post "/cli/review/approve" "agent=$(urlencode "$agent")&branch=$(urlencode "$branch")"
 }
 
 cmd_review_reject() {
@@ -3263,7 +3302,7 @@ cmd_review_reject() {
     fi
     local params="agent=$(urlencode "$agent")"
     [ -n "$reason" ] && params="${params}&reason=$(urlencode "$reason")"
-    cli_request "/cli/review/reject" "$params"
+    cli_request_post "/cli/review/reject" "$params"
 }
 
 cmd_review_feedback() {
@@ -3279,7 +3318,7 @@ cmd_review_feedback() {
         echo "Usage: k2 review feedback <agent> --message \"...\"" >&2
         exit 1
     fi
-    cli_request "/cli/review/feedback" "agent=$(urlencode "$agent")&feedback=$(urlencode "$feedback")"
+    cli_request_post "/cli/review/feedback" "agent=$(urlencode "$agent")&feedback=$(urlencode "$feedback")"
 }
 
 # 0.39.0f Phase 2.1b: cmd_agents_running / cmd_agents_reap removed.
@@ -3372,7 +3411,7 @@ cmd_terminal_write() {
     fi
     local terminal_id
     terminal_id=$(resolve_write_session_id "$target" "$agent") || exit 1
-    cli_request "/cli/terminal/write" "id=$(urlencode "$terminal_id")&message=$(urlencode "$message")"
+    cli_request_post "/cli/terminal/write" "id=$(urlencode "$terminal_id")&message=$(urlencode "$message")"
 }
 
 cmd_terminal_read() {
@@ -3682,7 +3721,7 @@ talk_scout() {
         [[ "$i" -ge "$K2_TALK_SCOUT_MAX" ]] && break
         prev="$screen"
         # Advance → to the next question.
-        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=${right_url}&no_submit=true" >/dev/null
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$sid")&message=${right_url}&no_submit=true" >/dev/null
         sleep "$settle"
         rights=$((rights + 1))
         i=$((i + 1))
@@ -3691,7 +3730,7 @@ talk_scout() {
     # Walk ← back to Q1: exactly as many lefts as rights → form unchanged.
     local b
     for ((b = 0; b < rights; b++)); do
-        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=${left_url}&no_submit=true" >/dev/null
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$sid")&message=${left_url}&no_submit=true" >/dev/null
         sleep "$settle"
     done
 
@@ -3781,11 +3820,11 @@ talk_answers() {
     echo "── talk(BETA) answers: driving $target — ${cleaned[*]} then submit ('$K2_TALK_SUBMIT_KEY') ──" >&2
     # One digit per question — auto-selects + advances (no Enter).
     for a in "${cleaned[@]}"; do
-        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$a")&no_submit=true" >/dev/null
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$a")&no_submit=true" >/dev/null
         sleep "$settle"
     done
     # Final submit: pick "1. Submit answers" on the review screen.
-    cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$K2_TALK_SUBMIT_KEY")&no_submit=true" >/dev/null
+    cli_request_post "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$K2_TALK_SUBMIT_KEY")&no_submit=true" >/dev/null
     sleep "$settle"
 
     echo "── talk(BETA) answers: $target's screen after submit ──" >&2
@@ -3907,7 +3946,7 @@ cmd_talk() {
         # advances, so an injected Enter then confirms the NEXT question's
         # default — answering two questions per call (GH#11). Send exactly
         # the one key and let the menu confirm it itself.
-        cli_request "/cli/terminal/write" "id=$(urlencode "$drive_sid")&message=$(urlencode "$key")&no_submit=true" >/dev/null
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$drive_sid")&message=$(urlencode "$key")&no_submit=true" >/dev/null
         # Settle: give the TUI a beat to repaint after the keypress before
         # re-reading so the printed screen reflects the answer.
         sleep 0.7
@@ -4007,7 +4046,7 @@ EOF
     if [[ -n "$session" ]]; then
         local deliver_sid
         deliver_sid=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
-        cli_request "/cli/terminal/write" "id=$(urlencode "$deliver_sid")&message=$(urlencode "$text")" >/dev/null
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$deliver_sid")&message=$(urlencode "$text")" >/dev/null
         sleep 0.7
         cmd_terminal_read "$deliver_sid" --lines "$lines" || true
         return 0
@@ -4145,11 +4184,11 @@ except: pass
     if [ -n "$manager_terminal" ]; then
         # Manager is awake — send triage message
         local msg="New work detected. Run k2 checkin to see your inbox and triage work."
-        cli_request "/cli/terminal/write" "id=$(urlencode "$manager_terminal")&message=$(urlencode "$msg")"
+        cli_request_post "/cli/terminal/write" "id=$(urlencode "$manager_terminal")&message=$(urlencode "$msg")"
         echo "{\"status\":\"notified\",\"terminalId\":\"$manager_terminal\"}"
     else
         # Manager is asleep — launch it, then send triage message after startup
-        cli_request "/cli/agents/launch" "agent=manager"
+        cli_request_post "/cli/agents/launch" "agent=manager"
         # Wait for the terminal to be created and Claude to initialize
         local attempts=0
         while [ $attempts -lt 12 ]; do
@@ -4173,7 +4212,7 @@ except: pass
 " 2>/dev/null)
             if [ -n "$new_id" ]; then
                 local msg="New work detected. Run k2 checkin to see your inbox and triage work."
-                cli_request "/cli/terminal/write" "id=$(urlencode "$new_id")&message=$(urlencode "$msg")"
+                cli_request_post "/cli/terminal/write" "id=$(urlencode "$new_id")&message=$(urlencode "$msg")"
                 echo "{\"status\":\"launched_and_notified\",\"terminalId\":\"$new_id\"}"
                 return
             fi
@@ -4197,11 +4236,11 @@ cmd_agent_complete() {
         echo "Usage: k2 agent complete --agent <name> --file <filename>" >&2
         exit 1
     fi
-    cli_request "/cli/agent/complete" "agent=$(urlencode "$agent")&file=$(urlencode "$file")"
+    cli_request_post "/cli/agent/complete" "agent=$(urlencode "$agent")&file=$(urlencode "$file")"
 }
 
 cmd_workspace_cleanup() {
-    cli_request "/cli/workspace/cleanup"
+    cli_request_post "/cli/workspace/cleanup"
 }
 
 # 0.37.5 — resolve resume-chat launch args for a workspace's pinned
@@ -4255,7 +4294,7 @@ cmd_sessions_set_label() {
     local label="${label_parts[*]}"
     [[ -z "$label" ]] && { echo "Usage: k2 sessions set-label <session-id> <label> [--no-lock]" >&2; exit 1; }
     local params="id=$(urlencode "$session_id")&label=$(urlencode "$label")&lock=$lock"
-    cli_request "/cli/sessions/label" "$params" \
+    cli_request_post "/cli/sessions/label" "$params" \
         | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
@@ -4314,7 +4353,7 @@ except Exception:
         resolved_path="$target"
     fi
     local params="project=$(urlencode "$resolved_path")&name=$(urlencode "$new_name")"
-    cli_request "/cli/workspace/set-agent-display-name" "$params" \
+    cli_request_post "/cli/workspace/set-agent-display-name" "$params" \
         | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
@@ -4618,6 +4657,12 @@ else:
                     exit 2
                     ;;
             esac
+            # 0.44.4: an agent must not switch its own dangerous auto-approve
+            # flags on (owner token in-cell). Switching off is fine.
+            if [ "$val" = "1" ] && _cli_caller_is_agent_passport; then
+                _cli_refuse_agent_self_grant "api_skip_permissions" \
+                    "\`k2 workspace api-skip-permissions set <workspace> on\` from their own terminal"
+            fi
             local resolved_path
             resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
                 | python3 -c 'import json,sys
@@ -6967,7 +7012,7 @@ print("  k2 remote-session read  %s [--lines 50] --token <k2rs_…>" % sid)
             fi
             _rs_apply_target "$host" "$token" || return 1
             local raw
-            raw=$(cli_request "/cli/terminal/write" \
+            raw=$(cli_request_post "/cli/terminal/write" \
                 "id=$(urlencode "$sid")" \
                 "message=$(urlencode "$text")") || raw=""
             # Empty or ok:true → ack. Nested/string error → teach.
@@ -7080,7 +7125,7 @@ cmd_checkin() {
         esac
     done
     [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
-    cli_request "/cli/checkin" "agent=$agent" | python3 -c "
+    cli_request_post "/cli/checkin" "agent=$agent" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -7205,7 +7250,7 @@ cmd_status() {
     done
     [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
     [[ -z "$message" ]] && { echo "Error: status message required" >&2; exit 1; }
-    cli_request "/cli/status" "agent=$agent&message=$(urlencode "$message")"
+    cli_request_post "/cli/status" "agent=$agent&message=$(urlencode "$message")"
 }
 
 cmd_done() {
@@ -7221,7 +7266,7 @@ cmd_done() {
     [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$agent"
     [[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")"
-    cli_request "/cli/done" "$params"
+    cli_request_post "/cli/done" "$params"
 }
 
 cmd_whoami() {
@@ -7465,12 +7510,8 @@ except Exception:
     # stamps `from` server-side); falls back to TCP+owner transparently.
     response=$(cli_send cli_post_form "/cli/workspace/msg" "$params")
     local rc=$?
-    # Back-compat: a pre-0.39.45 daemon 405s the POST form (route not
-    # POST-allowlisted there). Retry once via the legacy GET query path.
-    if echo "$response" | grep -q "method not allowed"; then
-        response=$(cli_send cli_request "/cli/workspace/msg" "$params")
-        rc=$?
-    fi
+    # 0.44.4: the legacy GET retry for pre-0.39.45 daemons is gone — the
+    # daemon refuses GET on this route (it changes state).
     echo "$response"
 
     # Issue #9 — if the daemon WOKE a dormant canonical session to deliver,
@@ -7938,12 +7979,12 @@ EOF
     case "$action" in
         reset)
             local resp
-            resp=$(cli_request "/cli/whats_new/reset" "")
+            resp=$(cli_request_post "/cli/whats_new/reset" "")
             echo "$resp"
             echo "(K2 will show the popup again on next app launch.)" >&2
             ;;
         mark-seen)
-            cli_request "/cli/whats_new/mark_seen" ""
+            cli_request_post "/cli/whats_new/mark_seen" ""
             ;;
         show|all)
             local resp
@@ -8445,7 +8486,7 @@ cmd_reserve() {
     [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
     [[ ${#paths[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
     local joined=$(IFS=,; echo "${paths[*]}")
-    cli_request "/cli/reserve" "agent=$agent&paths=$(urlencode "$joined")"
+    cli_request_post "/cli/reserve" "agent=$agent&paths=$(urlencode "$joined")"
 }
 
 cmd_release() {
@@ -8463,7 +8504,7 @@ cmd_release() {
         local joined=$(IFS=,; echo "${paths[*]}")
         params="$params&paths=$(urlencode "$joined")"
     fi
-    cli_request "/cli/release" "$params"
+    cli_request_post "/cli/release" "$params"
 }
 
 cmd_connections() {
@@ -8622,7 +8663,7 @@ else:
             # a failed add looked identical to success with no output.
             # C1 (0.40.45): gated agents get exit 3 + JSON teaching
             # Settings path (agents_create_connections_disabled).
-            cli_request "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
+            cli_request_post "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:
@@ -8665,7 +8706,7 @@ else:
             local target="${1:-}"
             [[ -z "$target" ]] && { echo "Usage: k2 connections remove <workspace-name>" >&2; exit 1; }
             # C1 (0.40.45): same gated exit-3 teaching as add.
-            cli_request "/cli/connections" "action=remove&target=$(urlencode "$target")" | python3 -c "
+            cli_request_post "/cli/connections" "action=remove&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:
@@ -12197,7 +12238,7 @@ except Exception as e:
             local params="agent=$(urlencode "$name")"
             [ -n "$role" ] && params="$params&role=$(urlencode "$role")"
             [ -n "$source_skill" ] && params="$params&template=$(urlencode "$source_skill")"
-            cli_request "/cli/agents/create" "$params" | python3 -c "
+            cli_request_post "/cli/agents/create" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -12234,7 +12275,7 @@ except Exception as e:
                 echo "Usage: k2 skills remove <name>" >&2
                 exit 1
             fi
-            cli_request "/cli/agents/delete" "agent=$(urlencode "$name")" | python3 -c "
+            cli_request_post "/cli/agents/delete" "agent=$(urlencode "$name")" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -12246,7 +12287,7 @@ except Exception as e:
 " 2>/dev/null
             ;;
         regenerate)
-            cli_request "/cli/skills/regenerate" | python3 -c "
+            cli_request_post "/cli/skills/regenerate" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -12354,16 +12395,16 @@ cmd_workspace_create() {
     [ "$fanout" = true ] && extra+=("fanout=1")
     local resp
     if [ ${#extra[@]} -gt 0 ]; then
-        resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
+        resp=$(cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
     else
-        resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")")
+        resp=$(cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")")
     fi
     cli_print_or_fail "$resp"
 }
 
 # P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered workspace.
 cmd_trust_folders() {
-    cli_request "/cli/trust-folders"
+    cli_request_post "/cli/trust-folders"
 }
 
 cmd_workspace_preview() {
@@ -12467,11 +12508,11 @@ except Exception:
     target_path="$resolved"
     local resp
     if [ -n "$mode" ]; then
-        resp=$(cli_request "/cli/workspace/remove" \
+        resp=$(cli_request_post "/cli/workspace/remove" \
             "path=$(urlencode "$target_path")" \
             "mode=$(urlencode "$mode")")
     else
-        resp=$(cli_request "/cli/workspace/remove" "path=$(urlencode "$target_path")")
+        resp=$(cli_request_post "/cli/workspace/remove" "path=$(urlencode "$target_path")")
     fi
     # Surface daemon refusals cleanly (exit 1) instead of echoing raw
     # error JSON with exit 0 — notably the Projects V1 §4.5 PoC guard
@@ -12505,9 +12546,9 @@ cmd_workspace_open() {
     [ "$fanout" = true ] && extra+=("fanout=1")
     local resp
     if [ ${#extra[@]} -gt 0 ]; then
-        resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
+        resp=$(cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
     else
-        resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")")
+        resp=$(cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")")
     fi
     cli_print_or_fail "$resp"
 }
@@ -12583,7 +12624,7 @@ cmd_settings() {
                 exit 1
                 ;;
         esac
-        cli_request "/cli/mode" "set=$(urlencode "$set_mode")" | python3 -c "
+        cli_request_post "/cli/mode" "set=$(urlencode "$set_mode")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:
@@ -17018,7 +17059,7 @@ cmd_onboarding_adopt() {
     if [[ "$source" != /* ]]; then
         source="$target/$source"
     fi
-    cli_request "/cli/onboarding/adopt" \
+    cli_request_post "/cli/onboarding/adopt" \
         "project=$(urlencode "$target")&source=$(urlencode "$source")"
 }
 
@@ -17030,7 +17071,7 @@ cmd_onboarding_adopt() {
 cmd_onboarding_later() {
     local target="${1:-$PWD}"
     target="$(cd "$target" && pwd)"
-    cli_request "/cli/onboarding/skip" "project=$(urlencode "$target")"
+    cli_request_post "/cli/onboarding/skip" "project=$(urlencode "$target")"
 }
 
 # k2 onboarding fresh [project-path]
@@ -17040,7 +17081,7 @@ cmd_onboarding_later() {
 cmd_onboarding_fresh() {
     local target="${1:-$PWD}"
     target="$(cd "$target" && pwd)"
-    cli_request "/cli/onboarding/start-fresh" "project=$(urlencode "$target")"
+    cli_request_post "/cli/onboarding/start-fresh" "project=$(urlencode "$target")"
 }
 
 # ── Phase 2.1: Deprecation helpers ────────────────────────────────────
@@ -17604,6 +17645,25 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
         || echo "Error ($code): $hint" >&2
 }
 
+# 0.44.4 (noun-tiers A3 / VL3) — true when this CLI runs inside a K2 session
+# that carries a session passport (agent cell: $K2_HOOK_SOCK + scoped token).
+# The `agent` / `workspace` verbs re-source the disk owner token there
+# (COMPAT-58), so the daemon cannot tell the agent from the owner; agent
+# permission switches are refused here instead.
+_cli_caller_is_agent_passport() {
+    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    [ -n "$hook_sock" ] && [ -n "${SCOPED_TOKEN:-}" ]
+}
+
+# Refuse an agent permission switch from inside an agent session (exit 3,
+# the teaching refusal). $1 = the workspace setting, $2 = where a human
+# changes it.
+_cli_refuse_agent_self_grant() {
+    local field="$1" where="$2"
+    _agent_err "owner_only" "An agent can't grant itself '$field'. Ask a human (owner or admin) to change it: $where — or run this from a terminal outside a K2 agent session."
+    exit 3
+}
+
 # Resolve an agent token (name | path; ""→PWD) and fetch its conf JSON
 # from the daemon. Prints the conf object on stdout. Exit/return codes
 # per the agent-CLI contract: 0 ok, 1 daemon/transport error, 4 not
@@ -17913,6 +17973,22 @@ def http_get(route, params):
     except Exception as e:
         return {"error": "%s: %s" % (route, e)}
 
+# 0.44.4: state-changing routes refuse GET (405). Same query-string params,
+# sent as POST with an empty body.
+def http_post_query(route, params, timeout=30):
+    qs = urllib.parse.urlencode(dict(params, token=token))
+    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": "HTTP %s on %s" % (e.code, route)}
+    except Exception as e:
+        return {"error": "%s: %s" % (route, e)}
+
 def http_post_json(route, body):
     url = base + route + "?token=" + urllib.parse.quote(token, safe="")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
@@ -18124,7 +18200,7 @@ if fields:
 # 2. Rename (display name — AGENT.md frontmatter + live label).
 for a in actions:
     if a["step"] == "rename" and a["status"] == "pending":
-        resp = http_get("/cli/workspace/set-agent-display-name",
+        resp = http_post_query("/cli/workspace/set-agent-display-name",
                         {"project_path": path, "name": a["name"]})
         if resp.get("error") or not resp.get("success"):
             a["status"] = "failed"
@@ -18141,7 +18217,7 @@ for a in actions:
         # and save-agent-md refuses to write into a missing agent dir.
         agent_name = re.sub(r"[^A-Za-z0-9_-]", "-", os.path.basename(path)) or "agent"
         if not conf.get("personaPath"):
-            resp = http_get("/cli/agents/create",
+            resp = http_post_query("/cli/agents/create",
                             {"project_path": path, "name": agent_name, "role": ""})
             if resp.get("error"):
                 a["status"] = "failed"
@@ -18662,6 +18738,12 @@ cmd_agent_hire() {
             _agent_err "bad_usage" "invalid --db-access '$db_access' — valid: off, read, write"
             exit 2 ;;
     esac
+    # 0.44.4: an agent must not grant itself database access (the `agent`
+    # verb runs with the owner token in-cell). Lowering to `off` is fine.
+    if { [ "$db_access" = "read" ] || [ "$db_access" = "write" ]; } && _cli_caller_is_agent_passport; then
+        _cli_refuse_agent_self_grant "db_agent_access" \
+            "Settings → Workspaces → (workspace) → Allow this agent to create databases, or \`k2 agent hire <dir> --db-access write\` from their own terminal"
+    fi
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
 
@@ -18720,6 +18802,22 @@ def http_get(route, params, timeout=30):
     qs = urllib.parse.urlencode(dict(params, token=token))
     try:
         with urllib.request.urlopen(base + route + "?" + qs, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": "HTTP %s on %s" % (e.code, route)}
+    except Exception as e:
+        return {"error": "%s: %s" % (route, e)}
+
+# 0.44.4: state-changing routes refuse GET (405). Same query-string params,
+# sent as POST with an empty body.
+def http_post_query(route, params, timeout=30):
+    qs = urllib.parse.urlencode(dict(params, token=token))
+    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -19289,7 +19387,7 @@ if a and a["status"] == "pending":
     # (no-op when it exists); a template/--persona then writes through
     # /cli/agents/save-agent-md — the same backup-aware door
     # `k2 agent set --persona` uses.
-    resp = http_get("/cli/agents/create",
+    resp = http_post_query("/cli/agents/create",
                     {"project_path": path, "name": agent_name,
                      "role": template or ""})
     if isinstance(resp.get("error"), str) and resp["error"]:
@@ -19314,7 +19412,7 @@ if a and a["status"] == "pending":
         open_params["no_agents_md"] = "1"
     if fanout:
         open_params["fanout"] = "1"
-    resp = http_get("/cli/workspace/open", open_params)
+    resp = http_post_query("/cli/workspace/open", open_params)
     err = resp.get("error")
     if isinstance(err, str) and "already registered" in err:
         a["status"] = "skipped"
@@ -19396,7 +19494,7 @@ if fields:
 #    projects.name — addressing follows the rename).
 a = one("set-name")
 if a and a["status"] == "pending":
-    resp = http_get("/cli/workspace/set-agent-display-name",
+    resp = http_post_query("/cli/workspace/set-agent-display-name",
                     {"project_path": path, "name": a["name"]})
     if resp.get("error") or not resp.get("success"):
         step_failed(a, "daemon_error",
@@ -19464,7 +19562,7 @@ for a in by_step.get("connect", []):
     peer_path = pconf["path"]
     if peer_path == path:
         step_failed(a, "bad_usage", "cannot connect %s to itself" % display_name)
-    resp = http_get("/cli/connections",
+    resp = http_post_query("/cli/connections",
                     {"action": "add", "project": path, "target": peer_path})
     if isinstance(resp.get("error"), str) and resp["error"]:
         step_failed(a, "daemon_error", "connect %s failed: %s" % (peer, resp["error"]))
@@ -19554,7 +19652,7 @@ for a in by_step.get("seed-context", []):
 # 7. launch
 a = one("launch")
 if a and a["status"] == "pending":
-    resp = http_get("/cli/workspace/ensure-canonical-session", {"project": path},
+    resp = http_post_query("/cli/workspace/ensure-canonical-session", {"project": path},
                     timeout=120)
     if resp.get("error") or not resp.get("success"):
         step_failed(a, "daemon_error",
@@ -19570,7 +19668,7 @@ if a and a["status"] == "pending":
 #    /cli/workspace/msg with wake, which waits for READY first).
 a = one("onboard")
 if a and a["status"] == "pending":
-    resp = http_get("/cli/workspace/msg",
+    resp = http_post_query("/cli/workspace/msg",
                     {"workspace": path, "text": onboard, "from": "owner",
                      "wake": "true", "wake_timeout": "120"},
                     timeout=180)
@@ -20908,7 +21006,7 @@ try: print(json.load(sys.stdin).get("path",""))
 except: pass' 2>/dev/null)
         [[ -n "$resolved" ]] && target="$resolved"
     fi
-    cli_request "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
+    cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
 }
 
 cmd_workspace_profile() {
@@ -20957,7 +21055,7 @@ except: pass' 2>/dev/null)
         # longer recognizes as a routing key.
         agent_name="$(basename "$PROJECT")"
     fi
-    cli_request "/cli/agent/update" \
+    cli_request_post "/cli/agent/update" \
         "agent=$(urlencode "$agent_name")" \
         "field=$(urlencode "$field")" \
         "value=$(urlencode "$value")"
@@ -25292,7 +25390,7 @@ elif verb == "attachments":
     if env("M_GET"):
         params["get"] = env("M_GET")
         params["out"] = env("M_OUT")
-    d = call("GET", "/cli/mail/attachments", params=params)
+    d = call("POST" if env("M_GET") else "GET", "/cli/mail/attachments", params=params)
     if as_json:
         print(dumps(d))
     elif env("M_GET"):

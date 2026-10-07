@@ -11,10 +11,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const daemonCliGet = vi.fn()
+// 0.44.4: the mutations are POST (`daemonCliPostQuery`); reads stay GET.
+const daemonCliPostQuery = vi.fn()
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
     daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
+    daemonCliPostQuery: primaryOnly((...args: unknown[]) => daemonCliPostQuery(...args)),
   }
 })
 
@@ -31,6 +34,7 @@ import { primaryScope } from '@/kessel/server-scope'
 describe('workspace-agent — Plan B host-aware migration', () => {
   beforeEach(() => {
     daemonCliGet.mockReset()
+    daemonCliPostQuery.mockReset()
   })
 
   it('agentDisplayName GETs the snake_case route and unwraps display_name', async () => {
@@ -47,10 +51,11 @@ describe('workspace-agent — Plan B host-aware migration', () => {
     expect(await agentDisplayName(primaryScope(), '/work/proj')).toBe('')
   })
 
-  it('setAgentDisplayName GETs the mutation route with project + name', async () => {
-    daemonCliGet.mockResolvedValueOnce({ success: true })
+  it('setAgentDisplayName POSTs the mutation route with project + name', async () => {
+    daemonCliPostQuery.mockResolvedValueOnce({ success: true })
     await setAgentDisplayName(primaryScope(), '/work/proj', 'lead')
-    expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-agent-display-name', {
+    expect(daemonCliGet).not.toHaveBeenCalled()
+    expect(daemonCliPostQuery).toHaveBeenCalledWith('workspace/set-agent-display-name', {
       project: '/work/proj',
       name: 'lead',
     })
@@ -61,9 +66,9 @@ describe('workspace-agent — Plan B host-aware migration', () => {
   // workspace_sessions.harness and the resume resolver speaks the
   // right grammar on the next ensure.
   it('setChatSession sends the picked provider alongside the session id', async () => {
-    daemonCliGet.mockResolvedValueOnce({ success: true })
+    daemonCliPostQuery.mockResolvedValueOnce({ success: true })
     await setChatSession(primaryScope(), '/work/proj', 'sid-9', 'pi')
-    expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
+    expect(daemonCliPostQuery).toHaveBeenCalledWith('workspace/set-chat-session', {
       project: '/work/proj',
       session_id: 'sid-9',
       provider: 'pi',
@@ -71,9 +76,9 @@ describe('workspace-agent — Plan B host-aware migration', () => {
   })
 
   it('setChatSession OMITS provider when not given (keep stored harness)', async () => {
-    daemonCliGet.mockResolvedValueOnce({ success: true })
+    daemonCliPostQuery.mockResolvedValueOnce({ success: true })
     await setChatSession(primaryScope(), '/work/proj', 'sid-9')
-    expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
+    expect(daemonCliPostQuery).toHaveBeenCalledWith('workspace/set-chat-session', {
       project: '/work/proj',
       session_id: 'sid-9',
     })

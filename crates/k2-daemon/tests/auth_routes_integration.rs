@@ -977,13 +977,9 @@ async fn upload_binary_get_does_not_mutate() {
     let _g = lock();
     with_temp_home(|| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
-        // A GET can NOT write a file. Because upload-binary is in the
-        // `post_allowed` set, a GET isn't 405'd at the top-level gate; it
-        // falls through the POST-only arms to the `/cli/` catchall, which
-        // has no GET handler for it → 404 "route not found". This is the
-        // SAME no-silent-mutation contract as the other Unit 6 fs POST
-        // routes (see the dispatcher's Unit-6 arm comment): the status
-        // differs from a literal 405 but no write is possible.
+        // A GET can NOT write a file. 0.44.4: every POST-only route
+        // answers GET with 405 at the dispatcher prologue, before auth and
+        // before any handler (was a 404 from the catch-all).
         let r = http(
             d.port,
             "GET",
@@ -991,8 +987,8 @@ async fn upload_binary_get_does_not_mutate() {
             None,
         );
         assert_eq!(
-            r.status, 404,
-            "GET upload-binary must not mutate (404 via catchall); body={}",
+            r.status, 405,
+            "GET upload-binary must not mutate (405 POST required); body={}",
             r.body
         );
     });

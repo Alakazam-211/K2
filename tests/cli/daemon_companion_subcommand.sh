@@ -47,9 +47,9 @@ print("OK: companion status reports running=false on cold boot")
 # We do NOT require this to succeed (sandbox has no ngrok auth token),
 # but we DO require the daemon route to respond with structured JSON
 # rather than 404 / connection-refused / 5xx.
-echo "→ GET /cli/companion/start"
+echo "→ POST /cli/companion/start"
 start_status="$(curl -s -o /tmp/_k2so_companion_start.$$ \
-    -w "%{http_code}" --connect-timeout 3 --max-time 20 \
+    -w "%{http_code}" -X POST --data-raw "" --connect-timeout 3 --max-time 20 \
     "${base}/cli/companion/start?${qs}")"
 start_body="$(cat /tmp/_k2so_companion_start.$$)"
 rm -f /tmp/_k2so_companion_start.$$
@@ -71,8 +71,8 @@ echo "$start_body" | python3 -c 'import json, sys; json.loads(sys.stdin.read())'
 }
 
 # ── 3. stop → idempotent ─────────────────────────────────────────────
-echo "→ GET /cli/companion/stop"
-stop_body="$(curl -sf --connect-timeout 3 --max-time 10 \
+echo "→ POST /cli/companion/stop"
+stop_body="$(curl -sf -X POST --data-raw "" --connect-timeout 3 --max-time 10 \
     "${base}/cli/companion/stop?${qs}")"
 echo "  body: $stop_body"
 echo "$stop_body" | python3 -c '

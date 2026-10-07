@@ -5,7 +5,7 @@ import { useTabsStore } from '@/stores/tabs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { primaryRoom } from '@/stores/room'
@@ -1015,7 +1015,7 @@ export function HeartbeatsPanel({
     if (!project) return
     // D6: Add requires instructions; the editor already refuses blank.
     // The daemon writes them as the WAKEUP.md body (HB32).
-    await daemonCliGet(primaryScope(), 'heartbeat/add', {
+    await daemonCliPostQuery(primaryScope(), 'heartbeat/add', {
       project: project.path,
       name,
       frequency: spec.frequency,
@@ -1029,7 +1029,7 @@ export function HeartbeatsPanel({
 
   const handleEdit = async (name: string, spec: ScheduleSpec): Promise<void> => {
     if (!project) return
-    await daemonCliGet(primaryScope(), 'heartbeat/edit', {
+    await daemonCliPostQuery(primaryScope(), 'heartbeat/edit', {
       project: project.path,
       name,
       frequency: spec.frequency,
@@ -1047,7 +1047,7 @@ export function HeartbeatsPanel({
       `It will stop firing on its schedule and disappear from this list.\n` +
       `The chat history stays available in the sidebar's Archived section.`
     )) return
-    await daemonCliGet(primaryScope(), 'heartbeat/archive', { project: project.path, name })
+    await daemonCliPostQuery(primaryScope(), 'heartbeat/archive', { project: project.path, name })
     toast.addToast(`Archived heartbeat "${name}"`, 'info', 3000)
     await refresh()
     // Archiving changes the workspace's heartbeat aggregate (archived
@@ -1058,7 +1058,7 @@ export function HeartbeatsPanel({
 
   const handleToggle = async (row: HeartbeatRow): Promise<void> => {
     if (!project) return
-    await daemonCliGet(primaryScope(), 'heartbeat/enable', {
+    await daemonCliPostQuery(primaryScope(), 'heartbeat/enable', {
       project: project.path,
       name: row.name,
       enabled: !row.enabled,
@@ -1123,7 +1123,7 @@ export function HeartbeatsPanel({
       return
     }
     try {
-      await daemonCliGet(primaryScope(), 'heartbeat/rename', {
+      await daemonCliPostQuery(primaryScope(), 'heartbeat/rename', {
         project: project.path,
         from: row.name,
         to: newName,

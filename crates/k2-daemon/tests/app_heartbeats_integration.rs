@@ -254,6 +254,16 @@ fn owner_get(port: u16, path: &str, room: &Room, query: &str) -> Resp {
     )
 }
 
+/// 0.44.4: heartbeat writes are POST-only; the params ride the query string.
+fn owner_write(port: u16, path: &str, room: &Room, query: &str) -> Resp {
+    http(
+        port,
+        "POST",
+        &format!("{path}?token={OWNER_TOKEN}&project={}&{query}", room.path),
+        Some(""),
+    )
+}
+
 fn row(room: &Room, name: &str) -> Option<AgentHeartbeat> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -329,7 +339,7 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let b = seed_room("mktg");
 
         // Room B has an owner heartbeat the app must never see.
-        let r = owner_get(
+        let r = owner_write(
             port,
             "/cli/heartbeat/add",
             &b,
@@ -421,14 +431,16 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let r = app_get(port, &bob, "/cli/heartbeat/add", &format!("workspace={}", a.handle));
         assert_eq!(r.status, 405, "GET on a write path; {}", r.body);
         // AH7 / R1: never-allowlisted paths stay closed to app passes.
-        for path in [
-            "/cli/heartbeat/remove",
-            "/cli/heartbeat/unarchive",
-            "/cli/heartbeat/list-archived",
-            "/cli/heartbeat/scheduler-status",
-            "/cli/heartbeat/set-session",
-        ] {
+        for path in ["/cli/heartbeat/list-archived", "/cli/heartbeat/scheduler-status"] {
             let r = app_get(port, &bob, path, &format!("workspace={}&name=inbox-sweep", a.handle));
+            assert_eq!(r.status, 403, "{path} for an app pass; {}", r.body);
+        }
+        // 0.44.4: the write paths are POST-only (GET → 405 for everyone);
+        // as POST they stay closed to app passes.
+        for path in ["/cli/heartbeat/remove", "/cli/heartbeat/unarchive", "/cli/heartbeat/set-session"] {
+            let r = app_get(port, &bob, path, &format!("workspace={}&name=inbox-sweep", a.handle));
+            assert_eq!(r.status, 405, "GET {path}; {}", r.body);
+            let r = app_post(port, &bob, path, serde_json::json!({"workspace": a.handle, "name": "inbox-sweep"}));
             assert_eq!(r.status, 403, "{path} for an app pass; {}", r.body);
         }
         assert!(row(&a, "inbox-sweep").is_some(), "app remove must not delete");
@@ -491,9 +503,9 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
             assert_status(&r, 404, "no_such_heartbeat", path);
         }
         // Owner routes too (AH13): never a success.
-        let r = owner_get(port, "/cli/heartbeat/enable", &a, "name=ghost&enabled=false");
+        let r = owner_write(port, "/cli/heartbeat/enable", &a, "name=ghost&enabled=false");
         assert_status(&r, 404, "no_such_heartbeat", "owner enable unknown");
-        let r = owner_get(port, "/cli/heartbeat/archive", &a, "name=ghost");
+        let r = owner_write(port, "/cli/heartbeat/archive", &a, "name=ghost");
         assert_status(&r, 404, "no_such_heartbeat", "owner archive unknown");
         loop {
             match rx.try_recv() {
@@ -547,7 +559,7 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         );
 
         // Owner, Connect user, agent: same history, their own actor.
-        let r = owner_get(port, "/cli/heartbeat/enable", &a, "name=inbox-sweep&enabled=true");
+        let r = owner_write(port, "/cli/heartbeat/enable", &a, "name=inbox-sweep&enabled=true");
         assert_eq!(r.status, 200, "owner enable; {}", r.body);
         assert_eq!(
             last_change(&a, "inbox-sweep"),
@@ -571,9 +583,9 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let passport = mint_passport(&a);
         let r = http(
             port,
-            "GET",
+            "POST",
             &format!("/cli/heartbeat/enable?token={passport}&name=inbox-sweep&enabled=true"),
-            None,
+            Some(""),
         );
         assert_eq!(r.status, 200, "agent enable; {}", r.body);
         assert_eq!(
@@ -599,10 +611,10 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let r = app_post(port, &bob, "/cli/heartbeat/archive", serde_json::json!({"workspace": a.handle, "name": "to-archive"}));
         assert_status(&r, 404, "no_such_heartbeat", "archived looks unknown to an app");
         // The agent cannot hard delete (R1); the owner can.
-        let r = http(port, "GET", &format!("/cli/heartbeat/remove?token={passport}&name=to-archive"), None);
+        let r = http(port, "POST", &format!("/cli/heartbeat/remove?token={passport}&name=to-archive"), Some(""));
         assert_status(&r, 403, "owner_only", "agent remove");
         assert!(row(&a, "to-archive").is_some(), "agent remove refused");
-        let r = owner_get(port, "/cli/heartbeat/remove", &a, "name=to-archive");
+        let r = owner_write(port, "/cli/heartbeat/remove", &a, "name=to-archive");
         assert_eq!(r.status, 200, "owner remove; {}", r.body);
         assert!(row(&a, "to-archive").is_none(), "owner hard delete");
         assert_eq!(last_change(&a, "to-archive"), ("removed".to_string(), Some("owner-token".to_string())));
@@ -662,7 +674,7 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let r = owner_get(port, "/cli/heartbeat/show", &a, "name=ghost");
         assert_status(&r, 404, "no_such_heartbeat", "owner show unknown");
         // AH32 owner: instructions alone through the owner route.
-        let r = owner_get(port, "/cli/heartbeat/edit", &a, "name=inbox-check&instructions=Owner%20text");
+        let r = owner_write(port, "/cli/heartbeat/edit", &a, "name=inbox-check&instructions=Owner%20text");
         assert_eq!(r.status, 200, "owner edit instructions; {}", r.body);
         assert_eq!(
             last_change(&a, "inbox-check"),
@@ -777,7 +789,7 @@ async fn app_fire_now_gates_lease_and_rate_limits() {
 
         // The owner is never rate limited, and its fire rows say so.
         for _ in 0..2 {
-            let r = owner_get(port, "/cli/heartbeat/fire", &a, "name=hb");
+            let r = owner_write(port, "/cli/heartbeat/fire", &a, "name=hb");
             assert_eq!(r.status, 200, "owner fire; {}", r.body);
         }
         assert!(
@@ -799,7 +811,7 @@ async fn app_fire_now_gates_lease_and_rate_limits() {
         let r = fire("backoff-hb", serde_json::json!({}));
         assert_status(&r, 409, "backoff", "backoff");
         assert!(r.json().get("nextFireAt").is_some(), "{}", r.body);
-        let r = owner_get(port, "/cli/heartbeat/add", &a, "name=empty-hb&frequency=daily&spec=%7B%22time%22%3A%2207%3A00%22%7D");
+        let r = owner_write(port, "/cli/heartbeat/add", &a, "name=empty-hb&frequency=daily&spec=%7B%22time%22%3A%2207%3A00%22%7D");
         assert_eq!(r.status, 200, "owner add without a body; {}", r.body);
         let r = fire("empty-hb", serde_json::json!({}));
         assert_status(&r, 409, "wakeup_empty", "empty WAKEUP.md");
@@ -828,7 +840,7 @@ async fn wakeup_md_file_access_follows_r2() {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         let a = seed_room("files");
-        let r = owner_get(
+        let r = owner_write(
             port,
             "/cli/heartbeat/add",
             &a,

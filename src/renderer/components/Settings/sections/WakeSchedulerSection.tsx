@@ -3,7 +3,7 @@
 import { useTabsStore } from '@/stores/tabs'
 import React, { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
@@ -404,7 +404,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
         rows.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)),
       )
       try {
-        await daemonCliGet(primaryScope(), 'heartbeat/enable', {
+        await daemonCliPostQuery(primaryScope(), 'heartbeat/enable', {
           project: row.projectPath,
           name: row.name,
           enabled: next,

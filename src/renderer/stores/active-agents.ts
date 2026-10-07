@@ -1,7 +1,7 @@
 import { registerPrimaryRoomActivity } from './room'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import {
   terminalCreate,
@@ -1552,7 +1552,7 @@ export function startAgentPolling(): void {
               await terminalCreate(primaryScope(), { cwd, command, args, id: bgTerminalId })
             }
             // Register system-managed worktree session
-            daemonCliGet(primaryScope(), 'agents/lock', {
+            daemonCliPostQuery(primaryScope(), 'agents/lock', {
               project: cwd,
               agent: agentName,
               terminal_id: bgTerminalId,
@@ -1592,7 +1592,7 @@ export function startAgentPolling(): void {
           })
         }
         // Register system-managed session in DB (owner='system' so scheduler knows)
-        daemonCliGet(primaryScope(), 'agents/lock', {
+        daemonCliPostQuery(primaryScope(), 'agents/lock', {
           project: cwd,
           agent: agentName,
           terminal_id: bgTerminalId,

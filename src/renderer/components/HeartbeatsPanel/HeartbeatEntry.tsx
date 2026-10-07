@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
 import { openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
 import { useRoom, useRoomSupports } from '@/components/Room/RoomContext'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliPostQuery } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
@@ -83,7 +83,7 @@ export function HeartbeatEntryRow({
     if (!scopeMayWrite(room.scope, 'heartbeat/enable')) return
     setBusy(true)
     try {
-      await daemonCliGet(room.scope, 'heartbeat/enable', {
+      await daemonCliPostQuery(room.scope, 'heartbeat/enable', {
         project: projectPath,
         name: entry.row.name,
         enabled: entry.row.enabled ? '0' : '1',

@@ -139,10 +139,17 @@ async fn headless_list_route_and_cli_show_next_fire_and_wait_reason() {
     ]);
     assert!(!add_ws.contains("\"error\""), "workspace add failed: {add_ws}");
     let spec = urlencode(r#"{"every_seconds":900}"#);
-    let add_hb = curl(&[&format!(
-        "{base}/cli/heartbeat/add?token={token}&project={}&name=drive&frequency=hourly&spec={spec}",
-        urlencode(&ws)
-    )]);
+    // 0.44.4: heartbeat/add is POST-only (params stay in the query).
+    let add_hb = curl(&[
+        "-X",
+        "POST",
+        "--data-raw",
+        "",
+        &format!(
+            "{base}/cli/heartbeat/add?token={token}&project={}&name=drive&frequency=hourly&spec={spec}",
+            urlencode(&ws)
+        ),
+    ]);
     assert!(add_hb.contains("\"name\":\"drive\""), "heartbeat add failed: {add_hb}");
 
     // Route: the stored next fire and a named reason.

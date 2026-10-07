@@ -1,4 +1,4 @@
-import { daemonCliGetText } from '@/lib/daemon-cli'
+import { daemonCliPostQueryText } from '@/lib/daemon-cli'
 import type { HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
 import { assertScopeMayWrite, type ServerScope } from '@/kessel/server-scope'
@@ -15,7 +15,7 @@ export async function launchHeartbeat(
   // (never from a view-only room; on the allowlist for a usable one).
   assertScopeMayWrite(room.scope, 'heartbeat/launch')
   try {
-    const resp = await daemonCliGetText(room.scope, 'heartbeat/launch', {
+    const resp = await daemonCliPostQueryText(room.scope, 'heartbeat/launch', {
       project: projectPath,
       name,
       force: '1',

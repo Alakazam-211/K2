@@ -400,6 +400,66 @@ export async function daemonCliPost<T = unknown>(
 }
 
 /**
+ * POST /cli/<route>?<params>[&token=] with an empty body — the 0.44.4
+ * replacement for GET-shaped verbs (`terminal/write`, `heartbeat/enable`,
+ * `agents/lock`, …). The daemon now answers GET with 405 on any route
+ * that changes state; the params keep riding the query string exactly as
+ * they did on the GET, so the handler sees the same map.
+ *
+ * Unlike {@link daemonCliPost} this does NOT run the view-only / room write
+ * check: these calls used to be GETs, and call sites that write from a room
+ * already run `assertScopeMayWrite` themselves (unchanged).
+ *
+ * Older servers (pre-0.44.4) only route these paths as GET and answer the
+ * POST with their top-level `405 method not allowed for this route` before
+ * any handler runs, so replaying the same request as GET is side-effect
+ * safe; {@link isPreFourFourFourMethod405} detects exactly that answer.
+ */
+export async function daemonCliPostQuery<T = unknown>(
+  scope: ServerScope,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): Promise<T> {
+  assertServerScope(scope, 'daemonCliPostQuery')
+  const { res, text } = await postQueryWithOldServerFallback(scope, route, params)
+  return parseDaemonResponse<T>(res, text)
+}
+
+/** Text-body twin of {@link daemonCliPostQuery} (mirrors `daemonCliGetText`). */
+export async function daemonCliPostQueryText(
+  scope: ServerScope,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): Promise<string> {
+  assertServerScope(scope, 'daemonCliPostQueryText')
+  const { res, text } = await postQueryWithOldServerFallback(scope, route, params)
+  return parseDaemonText(res, text)
+}
+
+/** True for the pre-0.44.4 daemon's top-level method guard (route not on
+ *  its POST allowlist). A 0.44.4+ daemon never sends this for a POST to a
+ *  route that takes POST. */
+export function isPreFourFourFourMethod405(status: number, text: string): boolean {
+  return status === 405 && text.includes('method not allowed for this route')
+}
+
+async function postQueryWithOldServerFallback(
+  scope: ServerScope,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): Promise<CliHttpResult> {
+  const posted = await cliFetch(scope, (creds) => ({
+    url: getUrl(creds, route, params),
+    init: { method: 'POST' },
+  }))
+  if (!isPreFourFourFourMethod405(posted.res.status, posted.text)) return posted
+  return cliFetch(scope, (creds) => ({
+    url: getUrl(creds, route, params),
+    init: { method: 'GET' },
+  }))
+}
+
+/**
  * POST /cli/<route> against the LOCAL daemon, regardless of the active
  * host. The pull half of clone-to ("Clone to this computer") runs its
  * unpack + cleanup on the local daemon WHILE the remote host stays

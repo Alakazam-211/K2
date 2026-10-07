@@ -37,6 +37,12 @@ vi.mock('@/lib/daemon-cli', async () => {
       gets.calls.push([route, params])
       return route in gets.bodies ? gets.bodies[route] : []
     }),
+    // 0.44.4: heartbeat writes are POST (`daemonCliPostQuery`); recorded
+    // with the GETs so the call-order assertions read one list.
+    daemonCliPostQuery: primaryOnly(async (route: string, params?: unknown) => {
+      gets.calls.push([route, params])
+      return route in gets.bodies ? gets.bodies[route] : []
+    }),
     daemonCliGetText: primaryOnly(async () => '{}'),
     daemonCliPost: primaryOnly(async () => ({})),
     RecoveringError: class RecoveringError extends Error {},

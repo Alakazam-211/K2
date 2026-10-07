@@ -14,9 +14,10 @@
 // stay refused from a room. Those are server management: "Open B's server"
 // (switch) does them (plan decision 6).
 //
-// A GET-shaped verb (an older route that writes on GET) is listed too; its
-// call site checks `assertScopeMayWrite` / `scopeMayWrite` itself, since the
-// request layer only checks POSTs.
+// The former GET-shaped verbs (heartbeat/launch, heartbeat/enable,
+// workspace/set-chat-session, agents/lock) are POST-only since 0.44.4 and go
+// out through `daemonCliPostQuery`, which does not run the room check; their
+// call sites check `assertScopeMayWrite` / `scopeMayWrite` themselves.
 //
 // This computer's Tauri commands are a separate gate (`lib/local-only-
 // actions.ts`, MS57/MS67): a remote room runs none of them.
@@ -38,8 +39,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'workspace/ensure-pinned-chat': 'the pinned Chat starts B’s canonical chat session',
   'session/set-surfaced': 'closing a heartbeat tab minimizes it on B instead of killing it',
   'agents/ensure-cli': 'an agent launch (+ menu, Ctrl+1–9) makes sure that CLI is ready on B',
-  'workspace/set-chat-session': 'picking a chat for the pinned Chat on B (GET-shaped verb)',
-  'agents/lock': 'the pinned Chat / worktree chat claims its agent lock on B (GET-shaped verb)',
+  'workspace/set-chat-session': 'picking a chat for the pinned Chat on B (call site checks the room write)',
+  'agents/lock': 'the pinned Chat / worktree chat claims its agent lock on B (call site checks the room write)',
   // Legacy (Alacritty) terminal panes, daemon-owned on B.
   'terminal/create': 'a legacy terminal pane starts on B',
   'terminal/kill': 'a legacy terminal pane closes on B',
@@ -86,8 +87,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'git/commit': 'commit in B’s checkout',
 
   // Heartbeats (row launch and toggle; the scheduler is B's).
-  'heartbeat/launch': 'Launch on a heartbeat row fires it on B (GET-shaped verb)',
-  'heartbeat/enable': 'the heartbeat row toggle on B (GET-shaped verb)',
+  'heartbeat/launch': 'Launch on a heartbeat row fires it on B (call site checks the room write)',
+  'heartbeat/enable': 'the heartbeat row toggle on B (call site checks the room write)',
 
   // The Workspace panel.
   'workspace/set': 'the drawer’s completion bell and Hide API sessions toggle on B',

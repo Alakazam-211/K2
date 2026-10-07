@@ -212,9 +212,9 @@ async fn skills_create_get_is_method_gated() {
     let _g = lock();
     with_temp_home(|_workspace| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
-        // GET on a POST-only GAP path: the `is_post && post_allowed` arm
-        // guard can't match a GET, so it falls to the /cli/ catchall →
-        // crate::cli::dispatch → unknown route 404. Never a 200/mutation.
+        // GET on a POST-only GAP path. 0.44.4: the dispatcher answers a
+        // GET to any POST-only route with 405 before auth and before any
+        // handler (was a 404 from the catch-all). Never a 200/mutation.
         let r = http(
             d.port,
             "GET",
@@ -222,8 +222,8 @@ async fn skills_create_get_is_method_gated() {
             None,
         );
         assert_eq!(
-            r.status, 404,
-            "GET on POST-only create must 404 (method gate); body={}",
+            r.status, 405,
+            "GET on POST-only create must 405 (method gate); body={}",
             r.body
         );
     });

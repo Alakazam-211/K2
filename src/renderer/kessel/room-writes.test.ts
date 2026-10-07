@@ -65,7 +65,9 @@ function routePolicy(): Map<string, { kind: string; floor: string }> {
 }
 
 /** Writes the daemon takes as a GET (older verb routes). */
-const GET_SHAPED_WRITES = new Set(['heartbeat/launch', 'heartbeat/enable', 'workspace/set-chat-session', 'agents/lock'])
+// 0.44.4: the old GET-shaped verbs (heartbeat/launch, heartbeat/enable,
+// workspace/set-chat-session, agents/lock) are POST-only now; every room
+// write is a POST (or a `both` row).
 
 /** Room writes whose daemon floor is above Member. The room lists them, and
  *  the client sends them only for a login that clears the floor (0.43.2 Q3:
@@ -78,7 +80,7 @@ describe('the room write allowlist', () => {
     for (const route of ROOM_WRITE_ROUTES) {
       const p = policy.get(route)
       if (!p) throw new Error(`${route} is on the room allowlist but not in route_policy.rs`)
-      const want = GET_SHAPED_WRITES.has(route) ? ['get', 'both'] : ['post', 'both']
+      const want = ['post', 'both']
       expect([route, want.includes(p.kind)]).toEqual([route, true])
       const floor = ABOVE_MEMBER_ROOM_WRITES.has(route) ? ABOVE_MEMBER_ROOM_WRITES.get(route) : 'Member'
       expect([route, p.floor]).toEqual([route, floor])

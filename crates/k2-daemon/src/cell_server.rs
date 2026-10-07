@@ -555,7 +555,30 @@ mod unix_impl {
         this_session_id: &str,
     ) -> (String, &'static str, String) {
         let is_post = method.eq_ignore_ascii_case("POST");
+        // 0.44.4 — no state change over GET, mirrored from the TCP
+        // dispatcher: a GET to a POST-only route (or a readable route's
+        // write form) is 405 here too.
+        if !is_post && crate::routes::route_policy::get_refused_params(path, params) {
+            return (
+                "405 Method Not Allowed".to_string(),
+                "application/json",
+                r#"{"error":"POST required"}"#
+                    .to_string(),
+            );
+        }
         match path {
+            // 0.44.4: formerly GET-shaped agent verbs (heartbeat CRUD/fire,
+            // connections add/remove, mail attachment write) arrive as POST
+            // with query/form params — same handler, same stamped params as
+            // the GET form had. Ahead of the JSON-body mail POST arm.
+            p if is_post
+                && crate::routes::route_policy::is_post_shaped_get_verb(p)
+                && crate::session_token::is_agent_verb(p)
+                && p != "/cli/workspace/msg"
+                && p != "/cli/awareness/publish" =>
+            {
+                from_cli(crate::cli::dispatch(p, params))
+            }
             "/hook/complete" => (
                 "200 OK".to_string(),
                 "application/json",

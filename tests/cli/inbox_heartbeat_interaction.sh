@@ -106,7 +106,7 @@ HB_SPEC_ENC="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys
 ADD_URL="http://127.0.0.1:${K2SO_PORT}/cli/heartbeat/add?project=${WS_ENC}&name=${HB_NAME}&frequency=hourly&spec=${HB_SPEC_ENC}&token=${K2SO_TOKEN}"
 # Heartbeat/add is GET-only (not POST-allowlisted). The mutation is
 # behind query params.
-ADD_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$ADD_URL" 2>&1)"
+ADD_RESP="$(curl -sf -X POST --data-raw "" --connect-timeout 5 --max-time 15 "$ADD_URL" 2>&1)"
 echo "  /cli/heartbeat/add → $ADD_RESP"
 
 # Verify /cli/heartbeat/list shows the new row.
@@ -191,7 +191,7 @@ echo "  inbox/compose round-trips while heartbeat present (count: 4) ✓"
 
 REMOVE_URL="http://127.0.0.1:${K2SO_PORT}/cli/heartbeat/remove?project=${WS_ENC}&name=${HB_NAME}&token=${K2SO_TOKEN}"
 # GET-only like /cli/heartbeat/add.
-REMOVE_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$REMOVE_URL")"
+REMOVE_RESP="$(curl -sf -X POST --data-raw "" --connect-timeout 5 --max-time 15 "$REMOVE_URL")"
 echo "  /cli/heartbeat/remove → $REMOVE_RESP"
 
 RESP_AFTER_REMOVE="$(curl -sf --connect-timeout 5 --max-time 15 "$LIST_URL")"

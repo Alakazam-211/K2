@@ -208,6 +208,10 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(200, b'{"ok":true}')
     def do_POST(self):
+        # 0.44.4: terminal/spawn is POST-only; same refusal as the old GET.
+        if "/cli/terminal/spawn" in self.path:
+            self._send(403, b'{"error":"forbidden"}')
+            return
         self._send(403, b'{"error":{"code":"forbidden","hint":"stub"}}')
     def log_message(self, *a):
         pass

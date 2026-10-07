@@ -104,6 +104,10 @@ class H(BaseHTTPRequestHandler):
             body["waitReason"] = None if has else "wakeup_empty"
         self._send(200, body)
 
+    # 0.44.4: heartbeat/add is POST-only (params stay in the query).
+    def do_POST(self):
+        self.do_GET()
+
     def log_message(self, *_a):
         pass
 

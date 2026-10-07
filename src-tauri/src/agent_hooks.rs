@@ -62,7 +62,7 @@ pub fn k2so_heartbeat_force_fire(
     name: String,
 ) -> Result<String, String> {
     let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_get(
+    client.cli_post_query(
         "/cli/heartbeat/launch",
         &[("project", &project_path), ("name", &name)],
     )
@@ -78,7 +78,7 @@ pub fn k2so_heartbeat_smart_launch(
     name: String,
 ) -> Result<String, String> {
     let client = crate::daemon_client::DaemonClient::try_connect()?;
-    client.cli_get(
+    client.cli_post_query(
         "/cli/heartbeat/launch",
         &[("project", &project_path), ("name", &name)],
     )

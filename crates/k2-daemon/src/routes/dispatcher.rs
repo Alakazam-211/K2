@@ -492,6 +492,29 @@ async fn handle_one_request(
         .await;
         return DispatchOutcome::Done;
     }
+    // 0.44.4 — no state change over GET. A GET to a POST-only route (or a
+    // readable route's write form, `route_policy::GET_WRITE_PARAMS`) gets
+    // 405 for EVERY caller, before auth and before any handler runs.
+    if method == "GET" {
+        let raw_query = path_and_query.split_once('?').map(|(_, q)| q).unwrap_or("");
+        if super::route_policy::get_refused(post_path, raw_query) {
+            // Consume the whole request (Content-Length framed, even a GET
+            // body) so the keep-alive socket can answer the next one.
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            super::http::send_response(
+                &mut *stream,
+                "405 Method Not Allowed",
+                "application/json",
+                r#"{"error":"POST required"}"#,
+            )
+            .await;
+            return if client_wants_close {
+                DispatchOutcome::Done
+            } else {
+                DispatchOutcome::KeepAlive
+            };
+        }
+    }
 
     let (path, query) = match path_and_query.split_once('?') {
         Some((p, q)) => (p, q),
@@ -556,13 +579,29 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
-    // Hosted web CSRF: cookie-only credential on mutating /cli/* requires
-    // X-K2-Client: web (or X-K2-CSRF: web). WebSocket upgrades are GET and
-    // skip this gate. Query-token / Bearer callers (CLI, desktop) are
-    // unaffected. See `super::http::cookie_csrf_gate`.
+    // Hosted web CSRF: a cookie-only credential on any state-changing
+    // method (any path) requires X-K2-Client: web (or X-K2-CSRF: web).
+    // Query-token / Bearer callers (CLI, desktop, agents, app passes, API
+    // keys) are unaffected. See `super::http::cookie_csrf_gate`.
     if let Some(r) =
         super::http::cookie_csrf_gate(&method, &path, cookie_only, &headers_blob)
     {
+        let _ = stream.read(&mut buf).await;
+        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        return DispatchOutcome::Done;
+    }
+
+    // 0.44.4 Origin gate: EVERY cookie-only request — any method, GET and
+    // every WebSocket upgrade included (/events, sessions events/subscribe/
+    // grid/bytes, overlay, fs, activity, chat transcript, awareness, ops
+    // stream) — must come from this server's own origin (same Host or
+    // X-Forwarded-Host, `https://<label>.app.k2.dev` for Host
+    // `<label>.k2.dev`, or the Tauri webview), or carry
+    // `Sec-Fetch-Site: same-origin|none` when it has no Origin. `k2.dev` is
+    // not a public suffix, so SameSite does not stop a sibling `*.k2.dev`
+    // page, and `X-K2-Client` is forged by the edge Worker. Refused BEFORE
+    // any upgrade or handler.
+    if let Some(r) = super::http::cookie_origin_gate(cookie_only, &headers_blob) {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
@@ -3956,6 +3995,29 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // 0.44.4 (noun-tiers A3): agent permission switches need an
+            // Admin or Owner login (or the owner token). A Member login may
+            // still write every other workspace field. Nothing is applied
+            // when refused.
+            if let Some(field) =
+                crate::workspace_routes::agent_switch_fields_in(&body_bytes).first()
+            {
+                match super::http::actor_role(&query, state.token.as_str()) {
+                    Some(role) if role >= k2_core::connect_users::Role::Admin => {}
+                    Some(role) => {
+                        let r = crate::workspace_routes::agent_switch_role_required(field, role);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let r = crate::cli::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            }
             let result = tokio::task::spawn_blocking(move || {
                 crate::workspace_routes::handle_workspace_set(&body_bytes)
             })
@@ -5163,7 +5225,9 @@ async fn handle_one_request(
         // cap, enforced handler-side). Handlers run in spawn_blocking
         // (SQLite writes + blocking Stalwart dials; S5's send/reply
         // `--wait` holds the request up to 900 s).
-        p if is_post && post_allowed && p.starts_with("/cli/mail/") => {
+        // 0.44.4: `/cli/mail/attachments` POST (the `out=` write form) goes
+        // to the params arm below, not the JSON-body POST table.
+        p if is_post && post_allowed && p.starts_with("/cli/mail/") && p != "/cli/mail/attachments" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
@@ -6239,7 +6303,7 @@ async fn handle_one_request(
         // Per-workspace hosted-mail manage toggle. Dedicated arm:
         // `token_is_owner_or_admin` (Owner|Admin humans) else
         // mail_dual_auth_failure. GET 405. Not an agent verb. Not
-        // `workspace/set`. Not GET `/cli/dns-manage`.
+        // `workspace/set`. Not `/cli/dns-manage` (POST, Admin since 0.44.4).
         p if p == "/cli/mail-manage" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -8112,7 +8176,11 @@ async fn handle_one_request(
         // principal) rides any workspace token.
         p if p.starts_with("/cli/mail/") =>
         {
-            let _ = stream.read(&mut buf).await;
+            // GET reads, plus the POST `/cli/mail/attachments` write form
+            // (0.44.4). Same params shape either way.
+            let request_params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
@@ -8122,7 +8190,7 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let mut params = super::http::parse_params(&path, &query);
+            let mut params = request_params;
             if let Err(r) = crate::mail_routes::mail_manage_authorized(
                 p,
                 super::http::token_is_owner_or_admin(&query, state.token.as_str()),
@@ -8559,8 +8627,12 @@ async fn handle_one_request(
         // OR a `k2rs_` grant token. Handler enforces grant binding for
         // remote-session PTYs; non-remote sessions stay owner/connect-only
         // (grant token on a non-remote id → handler 403 NO_GRANT).
+        // 0.44.4: POST-only (GET → 405 centrally); `message` may ride the
+        // query string or a form/JSON body.
         p if p == "/cli/terminal/write" => {
-            let _ = stream.read(&mut buf).await;
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
             let is_grant = super::http::extract_token(&query)
                 .is_some_and(k2_core::remote_sessions::is_grant_token);
             if !is_grant && !super::http::token_ok(&query, state.token.as_str()) {
@@ -8568,7 +8640,6 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
                 crate::cli::dispatch(&p_owned, &params)
@@ -8688,7 +8759,11 @@ async fn handle_one_request(
         // List is free for any authenticated principal. Stamps
         // actor_privileged server-side — never trust the client.
         p if p == "/cli/connections" => {
-            let _ = stream.read(&mut buf).await;
+            // 0.44.4: add/remove come as POST (GET `action=add|remove` is
+            // refused centrally); fold a form/JSON body into the params.
+            let request_params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
             let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
                 p,
                 &query,
@@ -8701,7 +8776,7 @@ async fn handle_one_request(
                     .await;
                 return DispatchOutcome::Done;
             }
-            let mut params = super::http::parse_params(&path, &query);
+            let mut params = request_params;
             // Scoped agent principal is never privileged for mutate.
             let privileged = scoped_principal.is_none()
                 && super::http::token_is_owner_or_admin(&query, state.token.as_str());
@@ -8989,8 +9064,12 @@ async fn handle_one_request(
         // per-route handler all live in `crate::cli::dispatch`; main.rs
         // just translates the CliResponse into bytes.
         p if p.starts_with("/cli/") => {
-            let _ = stream.read(&mut buf).await;
-            let params = super::http::parse_params(&path, &query);
+            // 0.44.4: formerly GET-shaped verbs arrive here as POST; read
+            // the whole body (keep-alive framing) and fold a form/JSON body
+            // into the params (query wins).
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
             // Accept the owner daemon token OR a valid connect-user session
             // (token_ok) — matching every other /cli route. Owner-only routes
             // (users/*, tunnel/*) are gated with require_owner ABOVE this
@@ -9547,7 +9626,14 @@ mod tests {
 #[cfg(test)]
 mod keep_alive_consume_ratchet {
     const SOURCE: &str = include_str!("dispatcher.rs");
-    const CONSUMES: [&str; 4] = ["stream.read(", "read_post_body(", "read_exact(", "require_post("];
+    const CONSUMES: [&str; 5] = [
+        "stream.read(",
+        "read_post_body(",
+        "read_exact(",
+        "require_post(",
+        // 0.44.4: drains a GET or reads a POST body (Content-Length framed).
+        "read_request_params(",
+    ];
 
     fn block_end(lines: &[&str], start: usize) -> usize {
         let mut depth: i64 = 0;

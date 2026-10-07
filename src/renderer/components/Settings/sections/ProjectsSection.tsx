@@ -3,7 +3,7 @@ import React from 'react'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import {
@@ -1933,7 +1933,7 @@ function RemoteInstructToggle({
     try {
       // Path-scoped GET write (mirrors /cli/worktree). The daemon still
       // enforces the gate server-side; this only records the opt-in.
-      await daemonCliGet(primaryScope(), 'remote-instruct', {
+      await daemonCliPostQuery(primaryScope(), 'remote-instruct', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -2013,7 +2013,7 @@ function DnsManageToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliGet(primaryScope(), 'dns-manage', {
+      await daemonCliPostQuery(primaryScope(), 'dns-manage', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -2324,7 +2324,7 @@ function AgentsCreateConnectionsToggle({
     const next = !enabled
     setBusy(true)
     try {
-      await daemonCliGet(primaryScope(), 'agents-create-connections', {
+      await daemonCliPostQuery(primaryScope(), 'agents-create-connections', {
         project: project.path,
         enable: next ? '1' : '0',
       })
@@ -3318,7 +3318,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
     // already exists, k2so_agents_create returns the existing agent's
     // info without overwriting (post-0.37.0 unification behavior).
     try {
-      await daemonCliGet(primaryScope(), 'agents/create', {
+      await daemonCliPostQuery(primaryScope(), 'agents/create', {
         project: projectPath,
         name: techName,
         role: 'Custom agent — customize via the persona editor',
@@ -3361,7 +3361,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
         if (existing) {
           setAgentName(existing.name)
         } else {
-          await daemonCliGet(primaryScope(), 'agents/create', {
+          await daemonCliPostQuery(primaryScope(), 'agents/create', {
             project: projectPath,
             name: 'k2so-agent',
             role: 'K2 planner — builds PRDs, milestones, and technical plans',

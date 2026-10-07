@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
@@ -124,7 +124,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   useEffect(() => {
     const init = async () => {
       try {
-        const r = await daemonCliGet<{ path: string }>(primaryScope(), 'themes/ensure-dir')
+        const r = await daemonCliPostQuery<{ path: string }>(primaryScope(), 'themes/ensure-dir')
         const dir = r.path
         setThemesDir(dir)
 

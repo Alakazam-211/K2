@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
@@ -83,7 +83,7 @@ export default function AgentsPanel(): React.JSX.Element {
     if (!activeProject || !newName.trim() || !newRole.trim()) return
     setCreating(true)
     try {
-      await daemonCliGet(primaryScope(), 'agents/create', {
+      await daemonCliPostQuery(primaryScope(), 'agents/create', {
         project: activeProject.path,
         name: newName.trim().toLowerCase().replace(/\s+/g, '-'),
         role: newRole.trim(),
@@ -132,7 +132,7 @@ export default function AgentsPanel(): React.JSX.Element {
     })
     if (!confirmed) return
     try {
-      await daemonCliGet(primaryScope(), 'agents/delete', { project: activeProject.path, name })
+      await daemonCliPostQuery(primaryScope(), 'agents/delete', { project: activeProject.path, name })
       await fetchAgents()
     } catch (e) {
       console.error('[agents] Delete failed:', e)

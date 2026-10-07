@@ -650,10 +650,7 @@ fn dispatch_linked_send(
     project_id: &str,
     agent_name: &str,
     inbox: MailExternalInbox,
-    to: &[String],
-    cc: &[String],
-    subject: &str,
-    body: &str,
+    msg: &OutboundMessage,
     attachments: &[external_smtp::OutAttachment],
 ) -> CliResponse {
     let password = match linked_password(&inbox) {
@@ -664,14 +661,23 @@ fn dispatch_linked_send(
         &RealSmtpOps,
         &inbox,
         &password,
-        to,
-        cc,
-        subject,
-        body,
+        &msg.to,
+        &msg.cc,
+        &msg.all_bcc(),
+        &msg.subject,
+        &msg.text_body,
         attachments,
     ) {
         Ok(receipt) => {
-            record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
+            record_linked_outbox(
+                project_id,
+                agent_name,
+                &inbox.email_address,
+                &receipt,
+                &msg.text_body,
+                &msg.bcc,
+                &msg.policy_bcc,
+            );
             ok_json(serde_json::json!({
                 "ok": true,
                 "status": "submitted",
@@ -698,12 +704,16 @@ fn record_linked_outbox(
     from: &str,
     receipt: &external_smtp::LinkedReceipt,
     body: &str,
+    agent_bcc: &[String],
+    policy_bcc: &[String],
 ) {
     let msg = OutboundMessage {
         from_name: Some(agent_name.to_string()),
         from: from.to_string(),
         to: receipt.to.clone(),
         cc: receipt.cc.clone(),
+        bcc: agent_bcc.to_vec(),
+        policy_bcc: policy_bcc.to_vec(),
         subject: receipt.subject.clone(),
         text_body: body.to_string(),
         in_reply_to: None,
@@ -734,6 +744,7 @@ fn dispatch_linked_reply(
     source_uid_token: &str,
     body: &str,
     attachments: &[external_smtp::OutAttachment],
+    policy_bcc: &[String],
 ) -> CliResponse {
     let password = match linked_password(&inbox) {
         Ok(p) => p,
@@ -747,9 +758,18 @@ fn dispatch_linked_reply(
         source_uid_token,
         body,
         attachments,
+        policy_bcc,
     ) {
         Ok(receipt) => {
-            record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
+            record_linked_outbox(
+                project_id,
+                agent_name,
+                &inbox.email_address,
+                &receipt,
+                body,
+                &[],
+                policy_bcc,
+            );
             let recipient = receipt.to.first().cloned().unwrap_or_default();
             ok_json(serde_json::json!({
                 "ok": true,
@@ -769,7 +789,7 @@ fn dispatch_linked_reply(
 
 // ── POST /cli/mail/send ─────────────────────────────────────────────────
 
-/// S5: gated outbound. Body: `{project, to (string|[string]), subject,
+/// S5: gated outbound. Body: `{project, to (string|[string]), subject,|[string]), subject,
 /// body, cc?, from?, wait?, timeout?}`. From is SERVER-STAMPED (owned
 /// address; the workspace's single one when `from` is omitted).
 /// off → 403 `gated` (CLI exit 3); approval → pending row + owner
@@ -812,6 +832,11 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(l) => l,
         Err(resp) => return resp,
     };
+    // Agent-chosen blind copies — envelope only, never a header.
+    let bcc_raw = match string_list(&v["bcc"], "bcc") {
+        Ok(l) => l,
+        Err(resp) => return resp,
+    };
     let wait_timeout = match wait_params(&v) {
         Ok(w) => w,
         Err(resp) => return resp,
@@ -837,14 +862,14 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
 
     // Always-on recipient + size caps (§8.4) — shared by both sources,
-    // before any normalize churn on absurd lists.
-    if to_raw.len() + cc_raw.len() > send::MAX_RECIPIENTS {
+    // before any normalize churn on absurd lists. to + cc + bcc count.
+    let raw_total = to_raw.len() + cc_raw.len() + bcc_raw.len();
+    if raw_total > send::MAX_RECIPIENTS {
         return error_response(
             "400 Bad Request",
             "usage",
             &format!(
-                "too many recipients ({}) — max {} per message",
-                to_raw.len() + cc_raw.len(),
+                "too many recipients ({raw_total}) — max {} per message, counting to + cc + bcc",
                 send::MAX_RECIPIENTS
             ),
         );
@@ -857,6 +882,35 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(c) => c,
         Err(e) => return send_error_response(e),
     };
+    let bcc = match send::normalize_recipients(&bcc_raw) {
+        Ok(b) => b,
+        Err(e) => return send_error_response(e),
+    };
+    // The owner's "always BCC" policy — server-stamped from the
+    // workspace setting, never from the body (fail-closed read). It
+    // joins the envelope and the cap below: over the cap refuses, it
+    // never silently drops a recipient.
+    let policy_bcc = match send::policy_bcc_for_path(&path) {
+        Ok(p) => p,
+        Err(e) => return send_error_response(e),
+    };
+    let agent_name = k2_core::workspace::display::agent_display_name(&path);
+    let mut msg = OutboundMessage {
+        from_name: Some(agent_name.clone()),
+        from: from_inbox.address.clone(),
+        to,
+        cc,
+        bcc,
+        policy_bcc: Vec::new(),
+        subject: subject.to_string(),
+        text_body: body_text.to_string(),
+        in_reply_to: None,
+        references: None,
+    };
+    send::apply_policy_bcc(&mut msg, policy_bcc);
+    if let Err(e) = send::check_recipient_limit(&msg) {
+        return send_error_response(e);
+    }
     // The always-on message-size cap (§8.4) — on the composed text
     // (subject + body). Shared by both sources.
     if subject.len() + body_text.len() > send::MAX_MESSAGE_BYTES {
@@ -899,17 +953,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 Ok(a) => a,
                 Err(resp) => return resp,
             };
-            let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            dispatch_linked_send(
-                &project_id,
-                &agent_name,
-                inbox,
-                &to,
-                &cc,
-                subject,
-                body_text,
-                &attachments,
-            )
+            dispatch_linked_send(&project_id, &agent_name, inbox, &msg, &attachments)
         }
         // ── HOSTED: the existing governed Stalwart path ──
         Source::Hosted => {
@@ -947,17 +991,6 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             {
                 return send_error_response(e);
             }
-            let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            let msg = OutboundMessage {
-                from_name: Some(agent_name.clone()),
-                from: from_inbox.address,
-                to,
-                cc,
-                subject: subject.to_string(),
-                text_body: body_text.to_string(),
-                in_reply_to: None,
-                references: None,
-            };
             let send_after = match crate::mail::schedule::resolve_send_after(
                 v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
                 v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
@@ -1069,6 +1102,22 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             &format!("message too large — max {} bytes of text", send::MAX_MESSAGE_BYTES),
         );
     }
+    // The owner's "always BCC" policy rides replies too (server-stamped,
+    // fail-closed read). The reply's recipient stays locked; the policy
+    // copies are envelope-only.
+    let policy_bcc = match send::policy_bcc_for_path(&path) {
+        Ok(p) => p,
+        Err(e) => return send_error_response(e),
+    };
+    if 1 + policy_bcc.len() > send::MAX_RECIPIENTS {
+        return send_error_response(SendError::Usage(format!(
+            "too many recipients ({}) — max {} per message. This workspace's owner policy \
+             always BCCs {} address(es), which count toward the limit and can't be dropped",
+            1 + policy_bcc.len(),
+            send::MAX_RECIPIENTS,
+            policy_bcc.len()
+        )));
+    }
 
     match from_inbox.source {
         // ── LINKED: mail_agent_send gate then threaded SMTP (E4) ──
@@ -1097,6 +1146,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 &email_id,
                 body_text,
                 &attachments,
+                &policy_bcc,
             )
         }
         // ── HOSTED: the existing governed reply path ──
@@ -1154,11 +1204,13 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             }
 
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            let msg = OutboundMessage {
+            let mut msg = OutboundMessage {
                 from_name: Some(agent_name.clone()),
                 from: from_address.clone(),
                 to: vec![recipient],
                 cc: Vec::new(),
+                bcc: Vec::new(),
+                policy_bcc: Vec::new(),
                 subject: send::reply_subject(&ctx.subject),
                 text_body: body_text.to_string(),
                 in_reply_to: ctx.message_id.clone(),
@@ -1167,6 +1219,10 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     ctx.message_id.as_deref(),
                 ),
             };
+            send::apply_policy_bcc(&mut msg, policy_bcc);
+            if let Err(e) = send::check_recipient_limit(&msg) {
+                return send_error_response(e);
+            }
             let send_after = match crate::mail::schedule::resolve_send_after(
                 v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
                 v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
@@ -1861,6 +1917,8 @@ mod tests {
             from: "me@gmail.com".to_string(),
             to: vec!["pat@dest.example".to_string()],
             cc: Vec::new(),
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
             subject: "Hi via linked".to_string(),
             text_body: "the linked body".to_string(),
             in_reply_to: None,
@@ -1910,6 +1968,8 @@ mod tests {
             from: "me@gmail.com".to_string(),
             to: vec!["pat@dest.example".to_string()],
             cc: Vec::new(),
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
             subject: "Here are the files".to_string(),
             text_body: "see attached".to_string(),
             in_reply_to: None,
@@ -2090,6 +2150,8 @@ mod tests {
             from: from.clone(),
             to: vec!["x@example.com".to_string()],
             cc: vec![],
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
             subject: "s".to_string(),
             text_body: "b".to_string(),
             in_reply_to: None,
@@ -2241,6 +2303,8 @@ mod tests {
             from: format!("theirs@{name2}.example"),
             to: vec!["x@example.com".to_string()],
             cc: vec![],
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
             subject: "their secret subject".to_string(),
             text_body: "b".to_string(),
             in_reply_to: None,
@@ -2457,5 +2521,256 @@ mod tests {
             }
         }
         cleanup_linked(&project_id);
+    }
+
+    // ── BCC: agent --bcc + the owner's always-BCC policy ──
+
+    /// Records exactly what the production `StalwartClient` submit hands
+    /// the JMAP layer: the envelope rcptTo (`all_recipients`) and the
+    /// Email object (`submission_email_json` — the headers recipients see).
+    #[derive(Default)]
+    struct RecordingSubmit {
+        seen: std::sync::Mutex<Vec<(Vec<String>, serde_json::Value)>>,
+    }
+
+    impl SubmitBackend for RecordingSubmit {
+        fn submit(&self, _account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((msg.all_recipients(), send::submission_email_json(msg)));
+            Ok(())
+        }
+    }
+
+    fn seed_approval_sender(label: &str) -> (String, String, String) {
+        let (name, path) = unique(label);
+        let project_id = insert_project(&name, &path);
+        let domain = format!("{name}.example");
+        seed_domain(&domain, "direct");
+        seed_address(&project_id, &format!("bot@{domain}"), Some("acc-1"));
+        set_gating(&path, "approval");
+        (path, project_id, domain)
+    }
+
+    /// `--bcc` end to end through the REAL handlers: queued (approval),
+    /// audited in the outbox + the owner's approvals list, kept in the
+    /// stored message, and on approve it lands in the ENVELOPE while the
+    /// sent headers carry no trace of it.
+    #[test]
+    fn send_bcc_is_audited_survives_approval_and_rides_envelope_only() {
+        let (path, project_id, domain) = seed_approval_sender("blind");
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({
+                "cc": "cc@cust.example",
+                "bcc": ["boss@shop.example", "qa@shop.example"],
+            }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+
+        // Outbox (agent view): the BCCs are recorded, none from policy.
+        let resp = handle_outbox(&params(&[("project", &path), ("id", &id)]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(
+            v["outbound"]["bcc"],
+            serde_json::json!(["boss@shop.example", "qa@shop.example"]),
+            "{v}"
+        );
+        assert_eq!(v["outbound"]["policyBcc"], serde_json::json!([]));
+        assert_eq!(v["outbound"]["cc"], serde_json::json!(["cc@cust.example"]));
+
+        // The owner deciding sees them too.
+        let resp = handle_approvals_list(&HashMap::new());
+        let v = body_json(&resp);
+        let ours = v["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id.as_str())
+            .expect("queued");
+        assert_eq!(ours["bcc"], serde_json::json!(["boss@shop.example", "qa@shop.example"]));
+
+        // The stored message (what approve submits) still carries them.
+        let store = DbOutboundStore::default();
+        let stored = store.load_message(&id).expect("stored body");
+        assert_eq!(stored.bcc, vec!["boss@shop.example", "qa@shop.example"]);
+
+        // Approve → envelope has the BCCs, the Email headers don't.
+        let rec = RecordingSubmit::default();
+        let mut acct = |_from: &str| Ok("acc-1".to_string());
+        let out =
+            send::approve_and_submit(&store, Ok(&rec), &mut acct, &id, "owner", None, now_secs())
+                .expect("approve");
+        assert_eq!(out, send::ApproveOutcome::Submitted);
+        let seen = rec.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let (rcpt, email) = &seen[0];
+        assert!(rcpt.contains(&"boss@shop.example".to_string()), "{rcpt:?}");
+        assert!(rcpt.contains(&"qa@shop.example".to_string()), "{rcpt:?}");
+        assert!(rcpt.contains(&"human@example.com".to_string()), "{rcpt:?}");
+        assert!(rcpt.contains(&"cc@cust.example".to_string()), "{rcpt:?}");
+        let wire = email.to_string();
+        assert!(!wire.contains("boss@shop.example"), "bcc in headers: {wire}");
+        assert!(!wire.contains("qa@shop.example"), "bcc in headers: {wire}");
+        assert!(!wire.to_ascii_lowercase().contains("bcc"), "Bcc header present: {wire}");
+        drop(seen);
+
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// The always-on cap counts to + cc + bcc — 10 To + 1 Bcc is 11 and
+    /// refused before any row exists.
+    #[test]
+    fn send_recipient_limit_counts_to_cc_and_bcc() {
+        let (path, project_id, domain) = seed_approval_sender("blindlim");
+        let ten: Vec<String> = (0..10).map(|i| format!("c{i}@cust.example")).collect();
+        let six: Vec<String> = (0..6).map(|i| format!("c{i}@cust.example")).collect();
+        for extra in [
+            serde_json::json!({ "to": ten, "bcc": "boss@shop.example" }),
+            serde_json::json!({
+                "to": six,
+                "cc": ["d1@cust.example", "d2@cust.example"],
+                "bcc": ["b1@shop.example", "b2@shop.example", "b3@shop.example"],
+            }),
+        ] {
+            let resp = handle_send(&send_body(&path, extra.clone()));
+            assert_eq!(resp.status, "400 Bad Request", "{extra} → {}", resp.body);
+            let hint = body_json(&resp)["error"]["hint"].as_str().unwrap().to_string();
+            assert!(hint.contains("too many recipients (11)"), "{hint}");
+            assert!(hint.contains("bcc"), "{hint}");
+        }
+        assert_eq!(outbound_count(&project_id), 0, "a refused send writes nothing");
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// The owner's always-BCC policy is stamped onto every agent send at
+    /// send time and recorded as POLICY in the outbox. Nothing the agent
+    /// puts in the body removes it (no field reaches the policy), and an
+    /// agent `--bcc` of the same address is recorded once, as policy.
+    #[test]
+    fn policy_bcc_is_added_to_agent_sends_and_the_agent_cannot_drop_it() {
+        let (path, project_id, domain) = seed_approval_sender("pol");
+        k2_core::workspace::settings::set_mail_always_bcc(
+            &path,
+            &["owner@shop.example".to_string()],
+        )
+        .expect("owner sets the policy");
+
+        // Plain send: the policy copy is added.
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().unwrap().to_string();
+        let v = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(v["outbound"]["policyBcc"], serde_json::json!(["owner@shop.example"]), "{v}");
+        assert_eq!(v["outbound"]["bcc"], serde_json::json!([]));
+
+        // Every attempt to opt out from the request body is ignored.
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({
+                "bcc": ["owner@shop.example", "qa@shop.example"],
+                "policyBcc": [],
+                "policy_bcc": [],
+                "alwaysBcc": "",
+                "skipPolicyBcc": true,
+            }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().unwrap().to_string();
+        let v = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(v["outbound"]["policyBcc"], serde_json::json!(["owner@shop.example"]), "{v}");
+        assert_eq!(v["outbound"]["bcc"], serde_json::json!(["qa@shop.example"]), "{v}");
+        let stored = DbOutboundStore::default().load_message(&id).expect("stored");
+        assert!(
+            stored.all_recipients().contains(&"owner@shop.example".to_string()),
+            "policy copy is in the envelope the approve path submits: {stored:?}"
+        );
+
+        // The policy is still in force (the body never touched it).
+        assert_eq!(
+            k2_core::workspace::settings::mail_always_bcc_for_path(&path).unwrap(),
+            vec!["owner@shop.example".to_string()]
+        );
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// A policy that would push a send over the cap refuses with a clear
+    /// error naming the policy — it never silently drops a recipient, and
+    /// nothing is queued.
+    #[test]
+    fn policy_bcc_over_the_limit_refuses_with_a_clear_error() {
+        let (path, project_id, domain) = seed_approval_sender("pollim");
+        k2_core::workspace::settings::set_mail_always_bcc(
+            &path,
+            &["owner@shop.example".to_string(), "audit@shop.example".to_string()],
+        )
+        .expect("owner sets the policy");
+        let nine: Vec<String> = (0..9).map(|i| format!("c{i}@cust.example")).collect();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "to": nine })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "usage");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("too many recipients (11)"), "{hint}");
+        assert!(hint.contains("always BCCs 2"), "{hint}");
+        assert!(hint.contains("can't be dropped"), "{hint}");
+        assert_eq!(outbound_count(&project_id), 0, "nothing queued");
+
+        // 8 To + 2 policy = 10 is fine.
+        let eight: Vec<String> = (0..8).map(|i| format!("c{i}@cust.example")).collect();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "to": eight })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// A corrupt stored policy refuses the send (fail-closed) instead of
+    /// quietly sending without the owner's copy.
+    #[test]
+    fn corrupt_policy_refuses_the_send() {
+        let (path, project_id, domain) = seed_approval_sender("polbad");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_always_bcc = '{oops' WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("corrupt policy");
+        }
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        assert_eq!(resp.status, "502 Bad Gateway", "{}", resp.body);
+        assert!(resp.body.contains("always-BCC policy"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// Linked sends record agent vs policy BCCs in the outbox trail too.
+    #[test]
+    fn linked_outbox_records_agent_and_policy_bcc() {
+        let (name, path) = unique("linkbcc");
+        let project_id = insert_project(&name, &path);
+        let receipt = external_smtp::LinkedReceipt {
+            to: vec!["pat@dest.example".to_string()],
+            cc: Vec::new(),
+            subject: "Hi".to_string(),
+            attachments: Vec::new(),
+        };
+        record_linked_outbox(
+            &project_id,
+            "Agent",
+            "me@gmail.com",
+            &receipt,
+            "body",
+            &["boss@shop.example".to_string()],
+            &["owner@shop.example".to_string()],
+        );
+        let v = body_json(&handle_outbox(&params(&[("project", &path)])));
+        assert_eq!(v["count"], 1, "{v}");
+        assert_eq!(v["outbox"][0]["bcc"], serde_json::json!(["boss@shop.example"]));
+        assert_eq!(v["outbox"][0]["policyBcc"], serde_json::json!(["owner@shop.example"]));
+        cleanup(&project_id, None);
     }
 }

@@ -341,6 +341,19 @@ fn smtp_auth_for(inbox: &MailExternalInbox, password: &str) -> Result<SmtpAuth, 
 
 // ── Orchestration: compose + submit (fresh send / threaded reply) ───────
 
+/// The SMTP envelope recipient list (RCPT TO) over header + blind lists,
+/// in order, duplicates collapsed (case-insensitive). Blind lists live
+/// HERE only — never in the composed headers.
+fn envelope_recipients(lists: &[&[String]]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    lists
+        .iter()
+        .flat_map(|l| l.iter())
+        .filter(|a| seen.insert(a.to_ascii_lowercase()))
+        .cloned()
+        .collect()
+}
+
 fn as_mailaddrs(emails: &[String]) -> Vec<MailAddr> {
     emails.iter().map(|e| MailAddr { name: None, email: e.clone() }).collect()
 }
@@ -449,13 +462,17 @@ fn compose_outgoing_multipart(
 /// address). Recipients arrive already normalized + capped from the
 /// route. Composes the RFC 822 (From = the linked account, a real
 /// Message-ID) and submits over SMTP. Stamps the row's health either
-/// way (mirrors the draft path).
+/// way (mirrors the draft path). `bcc` = blind copies: added to the SMTP
+/// envelope ONLY (RCPT TO) — the composed message carries no Bcc header,
+/// so To/Cc recipients never see them.
+#[allow(clippy::too_many_arguments)]
 pub fn send_linked_message(
     smtp: &dyn SmtpOps,
     inbox: &MailExternalInbox,
     password: &str,
     to: &[String],
     cc: &[String],
+    bcc: &[String],
     subject: &str,
     body: &str,
     attachments: &[OutAttachment],
@@ -504,7 +521,7 @@ pub fn send_linked_message(
         )
         .map_err(ExtError::Engine)?
     };
-    let recipients: Vec<String> = to.iter().chain(cc.iter()).cloned().collect();
+    let recipients = envelope_recipients(&[to, cc, bcc]);
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
     result
@@ -523,6 +540,8 @@ pub fn send_linked_message(
 /// sender, reuses the hosted `reply_subject`/`build_out_references`
 /// guardrail helpers for the Subject/References, then submits over SMTP.
 /// Returns the recipient it sent to. Health is stamped on the row.
+/// `bcc` (the owner's always-BCC policy) rides the envelope only.
+#[allow(clippy::too_many_arguments)]
 pub fn send_linked_reply(
     imap: &dyn ImapOps,
     smtp: &dyn SmtpOps,
@@ -531,6 +550,7 @@ pub fn send_linked_reply(
     source_uid_token: &str,
     body: &str,
     attachments: &[OutAttachment],
+    bcc: &[String],
 ) -> Result<LinkedReceipt, ExtError> {
     let route = derive_smtp_route(inbox).map_err(ExtError::Engine)?;
     let src_raw = imap
@@ -604,7 +624,7 @@ pub fn send_linked_reply(
             return Err(ExtError::Engine(e));
         }
     };
-    let recipients = vec![recipient.clone()];
+    let recipients = envelope_recipients(&[std::slice::from_ref(&recipient), bcc]);
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
     result
@@ -643,6 +663,76 @@ mod tests {
     }
 
     // ── derivation table (the deterministic core) ──
+
+    /// Records the envelope recipients + the raw RFC 822 bytes a linked
+    /// submission would hand SMTP (no network — house rules).
+    #[derive(Default)]
+    struct RecordingSmtp {
+        seen: std::sync::Mutex<Vec<(Vec<String>, Vec<u8>)>>,
+    }
+
+    impl SmtpOps for RecordingSmtp {
+        fn submit(
+            &self,
+            _route: &SmtpRoute,
+            _username: &str,
+            _auth: &SmtpAuth,
+            _from: &str,
+            recipients: &[String],
+            rfc822: &[u8],
+        ) -> Result<(), String> {
+            self.seen.lock().unwrap().push((recipients.to_vec(), rfc822.to_vec()));
+            Ok(())
+        }
+    }
+
+    /// A real BCC on linked/BYO SMTP: the blind copies are RCPT TO
+    /// recipients, and the message bytes (single-part AND multipart)
+    /// carry no Bcc header and no trace of the address.
+    #[test]
+    fn linked_send_puts_bcc_in_the_envelope_never_the_headers() {
+        // No DB row → password auth (read_oauth_fields' missing-row rule).
+        let inbox = external::tests::test_inbox(
+            &uuid::Uuid::new_v4().to_string(),
+            "p-bcc",
+            "me@example.com",
+        );
+        let smtp = RecordingSmtp::default();
+        let to = vec!["cust@dest.example".to_string()];
+        let cc = vec!["cc@dest.example".to_string()];
+        let bcc = vec!["boss@shop.example".to_string(), "owner@shop.example".to_string()];
+        let att = OutAttachment {
+            filename: "a.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            bytes: b"x".to_vec(),
+        };
+        for attachments in [Vec::new(), vec![att]] {
+            send_linked_message(
+                &smtp, &inbox, "pw", &to, &cc, &bcc, "Quote", "hello", &attachments,
+            )
+            .expect("recorded submit");
+        }
+        let seen = smtp.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        for (rcpt, raw) in seen.iter() {
+            assert_eq!(
+                rcpt,
+                &vec![
+                    "cust@dest.example".to_string(),
+                    "cc@dest.example".to_string(),
+                    "boss@shop.example".to_string(),
+                    "owner@shop.example".to_string(),
+                ],
+                "envelope = to + cc + bcc"
+            );
+            let text = String::from_utf8_lossy(raw);
+            assert!(!text.to_ascii_lowercase().contains("bcc:"), "Bcc header: {text}");
+            assert!(!text.contains("boss@shop.example"), "bcc leaked: {text}");
+            assert!(!text.contains("owner@shop.example"), "bcc leaked: {text}");
+            assert!(text.contains("cust@dest.example"), "{text}");
+            assert!(text.contains("cc@dest.example"), "{text}");
+        }
+    }
 
     #[test]
     fn derive_smtp_route_covers_providers_generic_and_overrides() {

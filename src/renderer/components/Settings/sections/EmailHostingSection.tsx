@@ -1427,6 +1427,12 @@ function ApprovalCard({
         {' → '}
         <span className="font-mono">{item.to.join(', ')}</span>
         {item.cc.length > 0 && <span className="font-mono"> · cc {item.cc.join(', ')}</span>}
+        {(item.bcc?.length ?? 0) > 0 && (
+          <span className="font-mono"> · bcc {item.bcc?.join(', ')}</span>
+        )}
+        {(item.policyBcc?.length ?? 0) > 0 && (
+          <span className="font-mono"> · bcc (owner policy) {item.policyBcc?.join(', ')}</span>
+        )}
       </p>
       <p className="text-[10px] text-[var(--color-text-muted)]">
         {item.agentName ?? 'agent'}

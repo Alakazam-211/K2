@@ -245,6 +245,9 @@ struct DraftBody {
     to: serde_json::Value,
     subject: String,
     cc: serde_json::Value,
+    /// Compose drafts only: blind copies, kept as the draft's `Bcc:`
+    /// header (the human's client strips it at send time).
+    bcc: serde_json::Value,
     from: String,
     attachments: serde_json::Value,
 }
@@ -294,6 +297,10 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         Ok(l) => l,
         Err(resp) => return resp,
     };
+    let bcc_raw = match routes_send::string_list(&b.bcc, "bcc") {
+        Ok(l) => l,
+        Err(resp) => return resp,
+    };
     let has_id = !b.id.trim().is_empty();
     let has_to = !to_raw.is_empty();
     let has_subject = !b.subject.trim().is_empty();
@@ -310,6 +317,25 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             "400 Bad Request",
             "usage",
             "--cc is for compose drafts (k2 mail draft --to … --cc)",
+        );
+    }
+    if has_id && !bcc_raw.is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "--bcc is for compose drafts (k2 mail draft --to … --bcc)",
+        );
+    }
+    // Same always-on recipient cap as send: to + cc + bcc together.
+    let raw_total = to_raw.len() + cc_raw.len() + bcc_raw.len();
+    if raw_total > send::MAX_RECIPIENTS {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            &format!(
+                "too many recipients ({raw_total}) — max {} per message, counting to + cc + bcc",
+                send::MAX_RECIPIENTS
+            ),
         );
     }
     if has_id && has_from {
@@ -349,7 +375,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
 
     enum DraftKind {
         Reply { address: String, email_id: String, source_id: String },
-        Compose { to: Vec<String>, cc: Vec<String>, subject: String },
+        Compose { to: Vec<String>, cc: Vec<String>, bcc: Vec<String>, subject: String },
     }
     let kind = if has_id {
         let Some((address, email_id)) = messages::decode_message_id(&b.id) else {
@@ -369,9 +395,14 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             Ok(c) => c,
             Err(resp) => return resp,
         };
+        let bcc = match normalize_draft_recipients(&bcc_raw) {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        };
         DraftKind::Compose {
             to,
             cc,
+            bcc,
             subject: b.subject.trim().to_string(),
         }
     };
@@ -457,11 +488,13 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                         Err(e) => ext_error_response(e),
                     }
                 }
-                DraftKind::Compose { to, cc, subject } => {
+                DraftKind::Compose { to, cc, bcc, subject } => {
                     let to_addrs = as_mailaddrs(to);
                     let cc_addrs = as_mailaddrs(cc);
+                    let bcc_addrs = as_mailaddrs(bcc);
                     match external::save_compose_draft(
-                        ops, &inbox, &password, &to_addrs, &cc_addrs, subject, &b.body, &parts,
+                        ops, &inbox, &password, &to_addrs, &cc_addrs, &bcc_addrs, subject,
+                        &b.body, &parts,
                     ) {
                         Ok(folder) => ok_draft(folder),
                         Err(e) => ext_error_response(e),
@@ -970,6 +1003,62 @@ mod tests {
         assert!(text.contains("To: <someone@x.example>"), "{text}");
         assert!(text.contains("Subject: Hello"), "{text}");
         assert!(!text.contains("In-Reply-To:"), "{text}");
+        drop(appended);
+
+        let _ = std::fs::remove_dir_all(&path);
+        cleanup_project(&project_id);
+    }
+
+    /// Compose drafts take `bcc` (saved as the draft's Bcc header — the
+    /// human's client keeps it blind at send); reply drafts refuse it;
+    /// to + cc + bcc share the 10-recipient cap.
+    #[test]
+    fn draft_compose_bcc_lands_in_the_draft_and_counts_toward_the_cap() {
+        let resp = handle_draft(
+            serde_json::json!({
+                "project": "/tmp/x", "id": "m_abc", "body": "hi", "bcc": "b@x.example",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("--bcc is for compose drafts"), "{}", resp.body);
+
+        let resp = handle_draft(
+            serde_json::json!({
+                "project": "/tmp/x", "subject": "s", "body": "hi",
+                "to": (0..6).map(|i| format!("t{i}@x.example")).collect::<Vec<_>>(),
+                "cc": ["c1@x.example", "c2@x.example"],
+                "bcc": ["b1@x.example", "b2@x.example", "b3@x.example"],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("too many recipients (11)"), "{}", resp.body);
+
+        let (name, path) = unique("compose-bcc");
+        let project_id = insert_project(&name, &path);
+        std::fs::create_dir_all(&path).ok();
+        let mine = format!("mine-{}@ext.example", &project_id[..8]);
+        seed_linked(&project_id, &mine, "imap", "oauth", Some("Drafts"));
+        let ops = crate::mail::external::tests::FakeOps {
+            folders: vec![("Drafts".to_string(), true)],
+            ..Default::default()
+        };
+        let resp = handle_draft_with(
+            serde_json::json!({
+                "project": path, "to": "cust@x.example", "subject": "Quote",
+                "body": "draft me", "bcc": ["boss@shop.example"],
+            })
+            .to_string()
+            .as_bytes(),
+            &ops,
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let appended = ops.appended.lock().expect("lock");
+        let text = String::from_utf8(appended[0].1.clone()).expect("ascii");
+        assert!(text.contains("Bcc: <boss@shop.example>\r\n"), "{text}");
         drop(appended);
 
         let _ = std::fs::remove_dir_all(&path);

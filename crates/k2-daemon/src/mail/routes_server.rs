@@ -777,6 +777,10 @@ struct ConfigSetBody {
     address_cap: Option<i64>,
     quota_bytes: Option<i64>,
     quota_messages: Option<i64>,
+    /// The owner's per-workspace "always BCC" policy: a comma-separated
+    /// string or a list; `""` / `[]` clears it. OWNER/ADMIN ONLY — never
+    /// a scoped agent passport, mail-manage included.
+    always_bcc: Option<serde_json::Value>,
     defaults: Option<ConfigDefaultsBody>,
 }
 
@@ -792,8 +796,40 @@ struct ConfigDefaultsBody {
 const CONFIG_SET_SURFACE: &str =
     "nothing to set. The surface: {domain + sendMode [+ relayConfigId]} · {relay: \
      {id?, host, port, username, password|secretRef, tlsKind?, spfInclude?}} · \
-     {deleteRelayConfig} · {workspace + agentSend|addressCap|quotaBytes|quotaMessages} · \
-     {defaults: {agentSend?, addressCap?, quotaBytes?, quotaMessages?}}";
+     {deleteRelayConfig} · {workspace + agentSend|addressCap|quotaBytes|quotaMessages|\
+     alwaysBcc} · {defaults: {agentSend?, addressCap?, quotaBytes?, quotaMessages?}}";
+
+/// Parse the `alwaysBcc` value: `"a@x, b@y"` (comma-separated; `""`
+/// clears) or `["a@x", "b@y"]` (`[]` clears). Anything else is usage.
+fn parse_always_bcc(v: &serde_json::Value) -> Result<Vec<String>, CliResponse> {
+    let bad = || {
+        err_json(
+            "400 Bad Request",
+            "usage",
+            "'alwaysBcc' must be a comma-separated address string or a list of addresses \
+             ('' or [] clears the policy)"
+                .to_string(),
+        )
+    };
+    let items: Vec<String> = match v {
+        serde_json::Value::String(s) => s.split(',').map(str::to_string).collect(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(|i| i.as_str().map(str::to_string).ok_or_else(bad))
+            .collect::<Result<_, _>>()?,
+        _ => return Err(bad()),
+    };
+    Ok(items
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
+const ALWAYS_BCC_OWNER_ONLY_HINT: &str =
+    "the always-BCC policy is the owner's oversight control — only the owner or an admin can \
+     set or clear it (k2 hostmail config --workspace <ws> --always-bcc …). Agents, including \
+     mail-manage agents, can't change it for any workspace";
 
 /// POST `/cli/mail/config/set` — S6 (owner-or-admin, dispatcher-
 /// enforced). Validation first (the Mac example page exercises real
@@ -839,6 +875,25 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
                 .to_string(),
         );
     }
+    // The always-BCC policy is per-workspace only (no global default).
+    let always_bcc: Option<Vec<String>> = match b.always_bcc.as_ref() {
+        None => None,
+        Some(v) => match parse_always_bcc(v) {
+            Ok(list) => Some(list),
+            Err(resp) => return resp,
+        },
+    };
+    if always_bcc.is_some() && !wants_workspace {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "'alwaysBcc' needs 'workspace' — the policy is set per workspace".to_string(),
+        );
+    }
+    let wants_gating = b.agent_send.is_some()
+        || b.address_cap.is_some()
+        || b.quota_bytes.is_some()
+        || b.quota_messages.is_some();
     let any_action = b.relay.is_some()
         || b.delete_relay_config.is_some()
         || wants_send_mode
@@ -867,8 +922,17 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     };
 
     // C27: mail_manage may set sendMode (domain) and agentSend (workspace
-    // they admin). Global defaults / relay stay owner-or-admin.
+    // they admin). Global defaults / relay stay owner-or-admin. The
+    // always-BCC policy is the owner's oversight of the agent itself, so
+    // NO scoped passport may touch it — not even for its own workspace.
     if let Some(p) = crate::caller_workspace::request_principal() {
+        if always_bcc.is_some() {
+            return err_json(
+                "403 Forbidden",
+                "owner_only",
+                ALWAYS_BCC_OWNER_ONLY_HINT.to_string(),
+            );
+        }
         if b.defaults.is_some() || b.relay.is_some() || b.delete_relay_config.is_some() {
             return err_json(
                 "403 Forbidden",
@@ -888,8 +952,16 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         }
     }
 
-    // D3: nothing mail-shaped executes off-Linux.
-    if !mail_supported() {
+    // D3: nothing mail-shaped executes off-Linux — except a call that
+    // ONLY sets the always-BCC policy: linked/BYO sends run on every
+    // platform and the policy rides them too (a pure DB write).
+    let only_always_bcc = always_bcc.is_some()
+        && !wants_gating
+        && b.relay.is_none()
+        && b.delete_relay_config.is_none()
+        && !wants_send_mode
+        && b.defaults.is_none();
+    if !mail_supported() && !only_always_bcc {
         return unsupported();
     }
 
@@ -938,8 +1010,18 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
             Err(e) => return cfg_error_response(e),
         }
     }
-    // 4. Per-workspace gating.
-    if let Some(path) = workspace_path.as_deref() {
+    // 4a. The owner's always-BCC policy (owner/admin — checked above).
+    if let (Some(path), Some(list)) = (workspace_path.as_deref(), always_bcc.as_deref()) {
+        match config::set_workspace_always_bcc(path, list) {
+            Ok(v) => {
+                applied.insert("alwaysBcc".to_string(), v);
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+    // 4. Per-workspace gating (a bare `workspace` with nothing else still
+    // answers the "nothing to set" teaching error).
+    if let Some(path) = workspace_path.as_deref().filter(|_| wants_gating || always_bcc.is_none()) {
         match config::set_workspace_gating(
             path,
             b.agent_send.as_deref(),
@@ -1663,6 +1745,109 @@ mod tests {
             );
             assert_eq!(resp.status, "409 Conflict");
             assert!(resp.body.contains("unsupported"), "{}", resp.body);
+        }
+    }
+
+    /// The always-BCC policy is the OWNER's oversight control: the owner
+    /// (no scoped passport) sets and clears it and `k2 hostmail config`
+    /// shows it; the workspace's own agent — even with mail-manage on —
+    /// can neither set nor clear it. Works on every platform (linked
+    /// sends run everywhere), so it is not stopped by the D3 gate.
+    #[test]
+    fn always_bcc_owner_sets_and_clears_agent_and_mail_manage_cannot() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let short = &id[..12];
+        let name = format!("abcc-{short}");
+        let path = format!("/tmp/mail-always-bcc-{}-{short}", std::process::id());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_manage_enabled) \
+                 VALUES (?1, ?2, ?3, 1)",
+                rusqlite::params![id, name, path],
+            )
+            .expect("insert project");
+        }
+        let body = |v: serde_json::Value| serde_json::to_vec(&v).unwrap();
+        let policy = || k2_core::workspace::settings::mail_always_bcc_for_path(&path).unwrap();
+        let agent = crate::session_token::HookPrincipal {
+            workspace_uuid: id.clone(),
+            agent_address: "agent".to_string(),
+        };
+
+        // Agent (mail-manage enabled, its OWN workspace) cannot set it.
+        let resp = crate::caller_workspace::with_request_principal(Some(agent.clone()), || {
+            handle_config_set(&body(serde_json::json!({
+                "workspace": path, "alwaysBcc": "agent-pick@evil.example"
+            })))
+        });
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(resp.body.contains("owner_only"), "{}", resp.body);
+        assert!(resp.body.contains("oversight"), "{}", resp.body);
+        assert!(policy().is_empty(), "agent write must not land");
+
+        // Owner sets it (comma-separated string; normalized).
+        let resp = handle_config_set(&body(serde_json::json!({
+            "workspace": path, "alwaysBcc": "Owner@Shop.example, audit@shop.example"
+        })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(
+            v["applied"]["alwaysBcc"]["alwaysBcc"],
+            serde_json::json!(["owner@shop.example", "audit@shop.example"]),
+            "{v}"
+        );
+        assert_eq!(policy().len(), 2);
+
+        // Visible in the owner's config read.
+        let cfg = config::config_json();
+        let ours = cfg["workspaceOverrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["project"] == path.as_str())
+            .expect("override row listed");
+        assert_eq!(ours["alwaysBcc"].as_array().map(|a| a.len()), Some(2), "{ours}");
+
+        // Agent cannot clear it either (string or list form).
+        for clear in [serde_json::json!(""), serde_json::json!([])] {
+            let resp = crate::caller_workspace::with_request_principal(Some(agent.clone()), || {
+                handle_config_set(&body(serde_json::json!({
+                    "workspace": path, "alwaysBcc": clear
+                })))
+            });
+            assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+            assert_eq!(policy().len(), 2, "agent clear must not land");
+        }
+
+        // Validation: bad address, too many, missing workspace.
+        let resp = handle_config_set(&body(serde_json::json!({
+            "workspace": path, "alwaysBcc": "not-an-address"
+        })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let ten: Vec<String> = (0..10).map(|i| format!("o{i}@shop.example")).collect();
+        let resp = handle_config_set(&body(serde_json::json!({
+            "workspace": path, "alwaysBcc": ten
+        })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("at most 9"), "{}", resp.body);
+        let resp = handle_config_set(&body(serde_json::json!({ "alwaysBcc": "a@b.example" })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("'alwaysBcc' needs 'workspace'"), "{}", resp.body);
+        assert_eq!(policy().len(), 2, "rejected writes change nothing");
+
+        // Owner clears it.
+        let resp = handle_config_set(&body(serde_json::json!({
+            "workspace": path, "alwaysBcc": ""
+        })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert!(policy().is_empty());
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
         }
     }
 

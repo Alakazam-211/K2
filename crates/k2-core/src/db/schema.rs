@@ -3838,6 +3838,14 @@ pub struct MailOutbound {
     pub sent_at: Option<i64>,
     /// Unix seconds when the message may leave. None = immediate.
     pub send_after: Option<i64>,
+    /// 0131: JSON array of BCCs the AGENT added (`--bcc`). Envelope
+    /// only — never a header on the sent message.
+    #[serde(default)]
+    pub bcc_json: Option<String>,
+    /// 0131: JSON array of BCCs the owner's "always BCC" policy added at
+    /// send time (audited apart from the agent's own).
+    #[serde(default)]
+    pub policy_bcc_json: Option<String>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

@@ -825,12 +825,15 @@ pub fn compose_draft_rfc822(
 /// Compose a brand-new (non-reply) draft: From = the linked account,
 /// To/Subject/Cc from args, **no** In-Reply-To/References, **no**
 /// Message-ID. Optional multipart/mixed. Do not APPEND the SMTP/lettre
-/// wire form.
+/// wire form. `bcc` lands as a `Bcc:` header IN THE DRAFT — that is how
+/// mail clients store a draft's blind copies; the human's client strips
+/// it from the wire when they hit Send (a draft is never sent by K2).
 #[allow(clippy::too_many_arguments)]
 pub fn compose_new_draft_rfc822(
     inbox: &MailExternalInbox,
     to: &[MailAddr],
     cc: &[MailAddr],
+    bcc: &[MailAddr],
     subject: &str,
     body: &str,
     date_rfc2822: &str,
@@ -849,6 +852,9 @@ pub fn compose_new_draft_rfc822(
     h.push_str(&format!("To: {}\r\n", format_addr_list(to)));
     if !cc.is_empty() {
         h.push_str(&format!("Cc: {}\r\n", format_addr_list(cc)));
+    }
+    if !bcc.is_empty() {
+        h.push_str(&format!("Bcc: {}\r\n", format_addr_list(bcc)));
     }
     h.push_str(&format!("Subject: {}\r\n", encode_header_text(subject)));
     emit_draft_payload(&mut h, body, attachments, boundary);
@@ -1497,6 +1503,7 @@ pub fn save_compose_draft(
     password: &str,
     to: &[MailAddr],
     cc: &[MailAddr],
+    bcc: &[MailAddr],
     subject: &str,
     body: &str,
     attachments: &[Rfc822Attachment],
@@ -1509,9 +1516,10 @@ pub fn save_compose_draft(
     let folder = resolved_drafts_folder(ops, inbox, password)?;
     let date = chrono::Utc::now().to_rfc2822();
     let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
-    let rfc822 =
-        compose_new_draft_rfc822(inbox, to, cc, subject, body, &date, attachments, &boundary)
-            .map_err(ExtError::Engine)?;
+    let rfc822 = compose_new_draft_rfc822(
+        inbox, to, cc, bcc, subject, body, &date, attachments, &boundary,
+    )
+    .map_err(ExtError::Engine)?;
     append_draft_bytes(ops, inbox, password, &folder, &rfc822)
 }
 
@@ -2472,12 +2480,14 @@ a,b\r\n1,2\r\n\
         };
         let to = vec![MailAddr { name: None, email: "someone@x.example".to_string() }];
         let cc = vec![MailAddr { name: None, email: "cc@x.example".to_string() }];
+        let bcc = vec![MailAddr { name: None, email: "boss@x.example".to_string() }];
         let folder = save_compose_draft(
             &ops,
             &row,
             "pw",
             &to,
             &cc,
+            &bcc,
             "Hello",
             "the body",
             &[],
@@ -2490,6 +2500,9 @@ a,b\r\n1,2\r\n\
         let text = String::from_utf8(appended[0].1.clone()).expect("ascii");
         assert!(text.contains("To: <someone@x.example>\r\n"), "{text}");
         assert!(text.contains("Cc: <cc@x.example>\r\n"), "{text}");
+        // A DRAFT keeps its blind copies as a Bcc header (the human's
+        // client strips it at send) — it is never sent by K2.
+        assert!(text.contains("Bcc: <boss@x.example>\r\n"), "{text}");
         assert!(text.contains("Subject: Hello\r\n"), "{text}");
         assert!(!text.contains("In-Reply-To:"), "{text}");
         assert!(!text.contains("References:"), "{text}");
@@ -2555,6 +2568,7 @@ a,b\r\n1,2\r\n\
         let rfc822 = compose_new_draft_rfc822(
             &inbox,
             &to,
+            &[],
             &[],
             "Subj",
             "body-text",

@@ -144,6 +144,11 @@ export interface OutboundItem {
   from: string
   to: string[]
   cc: string[]
+  /** Blind copies the agent added (`--bcc`). Envelope only — never in
+   *  the sent headers. Absent on older daemons. */
+  bcc?: string[]
+  /** Blind copies the owner's always-BCC policy added at send time. */
+  policyBcc?: string[]
   subject: string
   status: 'pending_approval' | 'approved' | 'rejected' | 'submitted' | 'failed' | string
   statusNote: string

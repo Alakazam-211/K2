@@ -1054,6 +1054,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0129_hostmail_upgrade_progress",
             include_str!("../../drizzle_sql/0129_hostmail_upgrade_progress.sql"),
         ),
+        // 0131 — mail BCC: projects.mail_always_bcc (the owner's "always
+        // BCC" policy, JSON array) + mail_outbound.bcc_json /
+        // policy_bcc_json (outbox audit of agent vs policy BCCs). ALTER
+        // only. 0130 is reserved (hostmail backup, later).
+        (
+            "0131_mail_bcc",
+            include_str!("../../drizzle_sql/0131_mail_bcc.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1714,7 +1722,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0129_hostmail_upgrade_progress",
+            last_name, "0131_mail_bcc",
             "unexpected last migration name: {last_name}"
         );
     }

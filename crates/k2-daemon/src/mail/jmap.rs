@@ -2044,7 +2044,8 @@ impl StalwartClient {
     /// object built by the ops layer — no MIME composing) +
     /// `EmailSubmission/set create` referencing it (`#k2out`), in ONE
     /// request; the SMTP envelope is explicit (`mailFrom` = the
-    /// server-stamped From, `rcptTo` = to+cc). Returns Ok when the
+    /// server-stamped From, `rcptTo` = to+cc+bcc — BCCs live ONLY here,
+    /// never in the Email object's headers). Returns Ok when the
     /// server ACCEPTED the message for delivery — never "delivered"
     /// (pre-mortem #9: greylisting/retries are Stalwart's business).
     pub fn submission_send(

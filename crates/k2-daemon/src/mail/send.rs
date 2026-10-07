@@ -172,6 +172,17 @@ pub struct OutboundMessage {
     pub to: Vec<String>,
     #[serde(default)]
     pub cc: Vec<String>,
+    /// Blind copies the AGENT asked for (`--bcc`). ENVELOPE ONLY — never
+    /// rendered into a header ([`submission_email_json`] has no bcc), so
+    /// To/Cc recipients can't see them. Stored in the body file so they
+    /// survive the approval queue and scheduled sends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bcc: Vec<String>,
+    /// Blind copies the OWNER's "always BCC" policy added at send time
+    /// (server-stamped, never from the request body). Envelope only,
+    /// audited apart from [`Self::bcc`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_bcc: Vec<String>,
     pub subject: String,
     pub text_body: String,
     /// Reply threading (§8.4): the original's Message-ID.
@@ -183,16 +194,88 @@ pub struct OutboundMessage {
 }
 
 impl OutboundMessage {
-    /// All SMTP envelope recipients (to + cc, in order).
+    /// All SMTP envelope recipients (to + cc + agent bcc + policy bcc,
+    /// in order, duplicates collapsed — one RCPT TO per address).
     pub fn all_recipients(&self) -> Vec<String> {
-        self.to.iter().chain(self.cc.iter()).cloned().collect()
+        let mut seen: HashSet<String> = HashSet::new();
+        self.to
+            .iter()
+            .chain(self.cc.iter())
+            .chain(self.bcc.iter())
+            .chain(self.policy_bcc.iter())
+            .filter(|a| seen.insert(a.to_ascii_lowercase()))
+            .cloned()
+            .collect()
     }
+
+    /// Every blind (envelope-only) recipient: agent bcc + policy bcc.
+    pub fn all_bcc(&self) -> Vec<String> {
+        self.bcc.iter().chain(self.policy_bcc.iter()).cloned().collect()
+    }
+}
+
+// ── BCC: the owner's "always BCC" policy + the recipient cap ────────────
+
+/// Read + normalize the owner's "always BCC" policy for a workspace.
+/// FAIL-CLOSED: an unreadable or corrupt policy refuses the send (the
+/// owner's oversight copy is never silently dropped).
+pub fn policy_bcc_for_path(project_path: &str) -> Result<Vec<String>, SendError> {
+    let raw = k2_core::workspace::settings::mail_always_bcc_for_path(project_path).map_err(
+        |e| {
+            SendError::Engine(format!(
+                "could not read this workspace's always-BCC policy — refusing to send \
+                 (fail-closed): {e}"
+            ))
+        },
+    )?;
+    normalize_recipients(&raw).map_err(|e| {
+        SendError::Engine(format!(
+            "this workspace's always-BCC policy holds an invalid address — refusing to send \
+             (fail-closed); the owner can fix it with 'k2 hostmail config --workspace <ws> \
+             --always-bcc …': {e:?}"
+        ))
+    })
+}
+
+/// Stamp the policy BCCs onto a composed message. A policy address the
+/// agent ALSO passed as `--bcc` is recorded as policy (not twice); the
+/// agent's other BCCs stay as theirs. The caller has no way to drop a
+/// policy entry — this runs server-side after the body is parsed.
+pub fn apply_policy_bcc(msg: &mut OutboundMessage, policy: Vec<String>) {
+    let policy_lc: HashSet<String> = policy.iter().map(|a| a.to_ascii_lowercase()).collect();
+    msg.bcc.retain(|a| !policy_lc.contains(&a.to_ascii_lowercase()));
+    msg.policy_bcc = policy;
+}
+
+/// The always-on §8.4 recipient cap over the FINAL envelope (to + cc +
+/// bcc + policy bcc, duplicates collapsed). When the owner's policy is
+/// what pushes it over, the error says so — a recipient is never
+/// silently dropped to make room.
+pub fn check_recipient_limit(msg: &OutboundMessage) -> Result<(), SendError> {
+    let total = msg.all_recipients().len();
+    if total <= MAX_RECIPIENTS {
+        return Ok(());
+    }
+    if msg.policy_bcc.is_empty() {
+        return Err(SendError::Usage(format!(
+            "too many recipients ({total}) — max {MAX_RECIPIENTS} per message, counting to + \
+             cc + bcc"
+        )));
+    }
+    Err(SendError::Usage(format!(
+        "too many recipients ({total}) — max {MAX_RECIPIENTS} per message, counting to + cc + \
+         bcc. This workspace's owner policy always BCCs {} address(es) ({}), which count toward \
+         the limit and can't be dropped — send to fewer recipients",
+        msg.policy_bcc.len(),
+        msg.policy_bcc.join(", ")
+    )))
 }
 
 /// Pure builder: the RFC 8621 Email object for `Email/set create`
 /// (bodyValues text part; threading headers only when set). The JMAP
 /// layer adds `mailboxIds` — everything content-shaped lives here so
-/// it fixture-tests without a client.
+/// it fixture-tests without a client. BCCs are deliberately ABSENT:
+/// they ride only the submission envelope ([`OutboundMessage::all_recipients`]).
 pub fn submission_email_json(msg: &OutboundMessage) -> serde_json::Value {
     let addr_list = |list: &[String]| -> Vec<serde_json::Value> {
         list.iter().map(|e| serde_json::json!({ "email": e })).collect()
@@ -288,7 +371,7 @@ pub trait OutboundStore {
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
                              cc_json, subject, body_ref, attachments_ref, status, \
                              decided_by, note, created_at, updated_at, decided_at, sent_at, \
-                             send_after";
+                             send_after, bcc_json, policy_bcc_json";
 
 fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
     Ok(MailOutbound {
@@ -309,6 +392,8 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
         decided_at: r.get(14)?,
         sent_at: r.get(15)?,
         send_after: r.get(16)?,
+        bcc_json: r.get(17)?,
+        policy_bcc_json: r.get(18)?,
     })
 }
 
@@ -387,6 +472,19 @@ impl OutboundStore for DbOutboundStore {
                     .map_err(|e| format!("cc serialize: {e}"))?,
             )
         };
+        // BCC audit (0131): agent-added and policy-added kept apart so
+        // the outbox shows who put each blind copy there. Empty → NULL.
+        let json_or_null = |list: &[String], what: &str| -> Result<Option<String>, String> {
+            if list.is_empty() {
+                Ok(None)
+            } else {
+                serde_json::to_string(list)
+                    .map(Some)
+                    .map_err(|e| format!("{what} serialize: {e}"))
+            }
+        };
+        let bcc_json = json_or_null(&new.message.bcc, "bcc")?;
+        let policy_bcc_json = json_or_null(&new.message.policy_bcc, "policy bcc")?;
         // Filenames only — basenames, never paths, never bytes (they're
         // non-secret display names). Empty leaves the column NULL.
         let attachments_ref = if new.attachment_names.is_empty() {
@@ -404,8 +502,9 @@ impl OutboundStore for DbOutboundStore {
             conn.execute(
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
                  to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
-                 decided_at, created_at, updated_at, send_after) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
+                 decided_at, created_at, updated_at, send_after, bcc_json, policy_bcc_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, \
+                 ?15, ?16)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -421,6 +520,8 @@ impl OutboundStore for DbOutboundStore {
                     decided_at,
                     new.now,
                     new.send_after,
+                    bcc_json,
+                    policy_bcc_json,
                 ],
             )
         };
@@ -667,6 +768,11 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
         "from": row.from_address,
         "to": list(Some(row.to_json.as_str())),
         "cc": list(row.cc_json.as_deref()),
+        // Blind copies (envelope only — never in the sent headers):
+        // `bcc` = the agent's own `--bcc`; `policyBcc` = what the
+        // owner's "always BCC" policy added. Kept apart for the audit.
+        "bcc": list(row.bcc_json.as_deref()),
+        "policyBcc": list(row.policy_bcc_json.as_deref()),
         "subject": row.subject,
         "status": wire_status(&row.status),
         "statusNote": status_note(&row.status),
@@ -1227,6 +1333,8 @@ mod tests {
             from: "bot@acme.dev".to_string(),
             to: vec!["human@example.com".to_string()],
             cc: vec![],
+            bcc: vec![],
+            policy_bcc: vec![],
             subject: "Weekly digest".to_string(),
             text_body: "All green.".to_string(),
             in_reply_to: None,
@@ -1464,6 +1572,8 @@ mod tests {
             decided_at: None,
             sent_at: Some(1),
             send_after: None,
+            bcc_json: None,
+            policy_bcc_json: None,
         };
         let v = outbound_json(&base);
         assert_eq!(v["attachments"]["count"], 2);
@@ -1622,6 +1732,8 @@ mod tests {
             decided_at: None,
             sent_at: None,
             send_after: None,
+            bcc_json: None,
+            policy_bcc_json: None,
         }
     }
 
@@ -1775,6 +1887,108 @@ mod tests {
         assert_eq!(v["header:In-Reply-To:asText"], "<orig@github.com>");
         assert_eq!(v["header:References:asText"], "<r1@x> <orig@github.com>");
         assert_eq!(m.all_recipients().len(), 2);
+    }
+
+    // ── BCC (agent --bcc + owner always-BCC policy) ──
+
+    /// A real BCC: every blind copy is in the SMTP envelope the hosted
+    /// submit hands Stalwart (`all_recipients` → rcptTo), and NOTHING
+    /// about it is in the Email object (the headers To/Cc recipients
+    /// see). Duplicates across lists collapse to one RCPT.
+    #[test]
+    fn bcc_rides_the_envelope_and_never_the_email_headers() {
+        let mut m = msg();
+        m.cc = vec!["cc@example.com".to_string()];
+        m.bcc = vec!["boss@shop.example".to_string(), "human@example.com".to_string()];
+        m.policy_bcc = vec!["owner@shop.example".to_string()];
+
+        let rcpt = m.all_recipients();
+        assert_eq!(
+            rcpt,
+            vec![
+                "human@example.com".to_string(),
+                "cc@example.com".to_string(),
+                "boss@shop.example".to_string(),
+                "owner@shop.example".to_string(),
+            ],
+            "to + cc + bcc + policy bcc, deduped"
+        );
+
+        let v = submission_email_json(&m);
+        assert!(v.get("bcc").is_none(), "no bcc field on the Email object: {v}");
+        let wire = v.to_string();
+        assert!(!wire.to_ascii_lowercase().contains("bcc"), "no Bcc header anywhere: {wire}");
+        assert!(!wire.contains("boss@shop.example"), "agent bcc leaked into headers: {wire}");
+        assert!(!wire.contains("owner@shop.example"), "policy bcc leaked into headers: {wire}");
+        assert_eq!(v["cc"][0]["email"], "cc@example.com");
+    }
+
+    /// The policy stamps over an agent BCC of the same address (recorded
+    /// once, as policy) and the cap counts the final envelope; when the
+    /// policy pushes it over, the error names the policy — no recipient
+    /// is ever dropped to make room.
+    #[test]
+    fn policy_bcc_merges_and_the_limit_names_the_policy() {
+        let mut m = msg();
+        m.bcc = vec!["owner@shop.example".to_string(), "qa@shop.example".to_string()];
+        apply_policy_bcc(&mut m, vec!["owner@shop.example".to_string()]);
+        assert_eq!(m.bcc, vec!["qa@shop.example".to_string()]);
+        assert_eq!(m.policy_bcc, vec!["owner@shop.example".to_string()]);
+        check_recipient_limit(&m).expect("3 recipients is under the cap");
+
+        // 9 To + 2 policy = 11 > 10 → refused, naming the policy.
+        let mut m = msg();
+        m.to = (0..9).map(|i| format!("c{i}@cust.example")).collect();
+        apply_policy_bcc(
+            &mut m,
+            vec!["owner@shop.example".to_string(), "audit@shop.example".to_string()],
+        );
+        let err = check_recipient_limit(&m).expect_err("policy pushes over the cap");
+        let SendError::Usage(hint) = err else { panic!("usage expected: {err:?}") };
+        assert!(hint.contains("too many recipients (11)"), "{hint}");
+        assert!(hint.contains("always BCCs 2"), "{hint}");
+        assert!(hint.contains("owner@shop.example"), "{hint}");
+        assert_eq!(m.policy_bcc.len(), 2, "nothing was silently dropped");
+
+        // Without a policy the plain to + cc + bcc wording.
+        let mut m = msg();
+        m.to = (0..8).map(|i| format!("c{i}@cust.example")).collect();
+        m.bcc = (0..3).map(|i| format!("b{i}@cust.example")).collect();
+        let err = check_recipient_limit(&m).expect_err("11 > 10");
+        let SendError::Usage(hint) = err else { panic!("usage expected: {err:?}") };
+        assert!(hint.contains("to + cc + bcc"), "{hint}");
+    }
+
+    /// Body-file round trip: the stored composed message keeps both BCC
+    /// lists (the approval queue and the scheduler submit exactly this),
+    /// and a pre-0131 body file without them still parses.
+    #[test]
+    fn stored_message_keeps_bcc_lists_and_old_bodies_still_parse() {
+        let mut m = msg();
+        m.bcc = vec!["boss@shop.example".to_string()];
+        m.policy_bcc = vec!["owner@shop.example".to_string()];
+        let raw = serde_json::to_string(&m).expect("serialize");
+        let back: OutboundMessage = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(back.bcc, m.bcc);
+        assert_eq!(back.policy_bcc, m.policy_bcc);
+
+        let old = r#"{"from":"bot@acme.dev","to":["a@b.example"],"subject":"s","textBody":"t"}"#;
+        let back: OutboundMessage = serde_json::from_str(old).expect("old body parses");
+        assert!(back.bcc.is_empty() && back.policy_bcc.is_empty());
+    }
+
+    /// The outbox wire shape reports agent and policy BCCs apart.
+    #[test]
+    fn outbound_json_reports_agent_and_policy_bcc_apart() {
+        let mut row = pending_row("out_bcc");
+        row.bcc_json = Some(r#"["boss@shop.example"]"#.to_string());
+        row.policy_bcc_json = Some(r#"["owner@shop.example"]"#.to_string());
+        let v = outbound_json(&row);
+        assert_eq!(v["bcc"], serde_json::json!(["boss@shop.example"]));
+        assert_eq!(v["policyBcc"], serde_json::json!(["owner@shop.example"]));
+        let v = outbound_json(&pending_row("out_plain"));
+        assert_eq!(v["bcc"], serde_json::json!([]));
+        assert_eq!(v["policyBcc"], serde_json::json!([]));
     }
 
     // ── reply guardrails ──

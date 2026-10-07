@@ -24993,7 +24993,8 @@ _mail_py() {
     M_TO="${M_TO:-}" M_SUBJECT="${M_SUBJECT:-}" M_TIMEOUT="${M_TIMEOUT:-}" \
     M_SEND_AT="${M_SEND_AT:-}" M_SEND_IN="${M_SEND_IN:-}" \
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
-    M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_ATTACH="${M_ATTACH:-}" \
+    M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_BCC="${M_BCC:-}" M_ATTACH="${M_ATTACH:-}" \
+    M_ALWAYS_BCC="${M_ALWAYS_BCC:-}" M_ALWAYS_BCC_SET="${M_ALWAYS_BCC_SET:-false}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
     M_SEND_MODE="${M_SEND_MODE:-}" M_RELAY_HOST="${M_RELAY_HOST:-}" \
@@ -25232,6 +25233,10 @@ def print_outbound_row(r):
     print("%s  %-17s %-11s to %s — %s" % (
         r.get("id", ""), r.get("status", "?"), unix_ago(r.get("createdAt")),
         ", ".join(r.get("to") or []) or "?", r.get("subject") or "(no subject)"))
+    if r.get("bcc"):
+        print("    bcc: %s" % ", ".join(r["bcc"]))
+    if r.get("policyBcc"):
+        print("    bcc (owner policy): %s" % ", ".join(r["policyBcc"]))
     att = r.get("attachments") or {}
     if att.get("count"):
         # What rode this send — so an agent can verify its own attachment
@@ -25248,6 +25253,10 @@ def print_outbound_detail(r):
     print("to       : %s" % (", ".join(r.get("to") or []) or "?"))
     if r.get("cc"):
         print("cc       : %s" % ", ".join(r["cc"]))
+    if r.get("bcc"):
+        print("bcc      : %s" % ", ".join(r["bcc"]))
+    if r.get("policyBcc"):
+        print("bcc (owner policy): %s" % ", ".join(r["policyBcc"]))
     print("subject  : %s" % (r.get("subject") or "(no subject)"))
     att = r.get("attachments") or {}
     if att.get("count"):
@@ -25571,6 +25580,10 @@ elif verb == "send":
     cc = env_list("M_CC")
     if cc:
         body["cc"] = cc
+    bcc = env_list("M_BCC")
+    if bcc:
+        # Envelope-only blind copies (the daemon never writes a Bcc header).
+        body["bcc"] = bcc
     if env("M_FROM"):
         body["from"] = env("M_FROM")
     attach = env_lines("M_ATTACH")
@@ -25956,6 +25969,9 @@ elif verb == "config_set":
             body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") else v
     if env("M_QUOTA_GB") != "":
         body["quotaBytes"] = int(env("M_QUOTA_GB")) * (1 << 30)
+    if env("M_ALWAYS_BCC_SET") == "true":
+        # The owner's always-BCC policy; [] clears it (owner/admin only).
+        body["alwaysBcc"] = env_list("M_ALWAYS_BCC")
     quota_keys = ("quotaBytes", "quotaMessages")
     if any(k in body for k in quota_keys) and "workspace" not in body:
         defaults = body.setdefault("defaults", {})
@@ -25987,6 +26003,12 @@ elif verb == "approvals_list":
             print("%s  from %s (%s) — queued %s%s" % (r.get("id", ""),
                   r.get("from") or "?", who, unix_ago(r.get("createdAt")), exp))
             print("  to      : %s" % (", ".join(r.get("to") or []) or "?"))
+            if r.get("cc"):
+                print("  cc      : %s" % ", ".join(r["cc"]))
+            if r.get("bcc"):
+                print("  bcc     : %s" % ", ".join(r["bcc"]))
+            if r.get("policyBcc"):
+                print("  bcc (owner policy): %s" % ", ".join(r["policyBcc"]))
             print("  subject : %s" % (r.get("subject") or "(no subject)"))
             if r.get("bodyPreview") is not None:
                 print("  preview : %s" % r["bodyPreview"])
@@ -26026,6 +26048,9 @@ elif verb == "draft":
     cc = env_list("M_CC")
     if cc:
         body["cc"] = cc
+    bcc = env_list("M_BCC")
+    if bcc:
+        body["bcc"] = bcc
     if env("M_FROM"):
         body["from"] = env("M_FROM")
     attach = env_lines("M_ATTACH")
@@ -27347,7 +27372,7 @@ cmd_mail_wait() {
 
 cmd_mail_send() {
     if _wants_help "$@"; then cmd_help_mail_send; exit 0; fi
-    local to="" subject="" body="" body_file="" cc="" from="" attach=""
+    local to="" subject="" body="" body_file="" cc="" bcc="" from="" attach=""
     local wait=false timeout="" as_json=false send_at="" send_in=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -27367,6 +27392,9 @@ cmd_mail_send() {
             --cc)
                 [ $# -ge 2 ] || { _mail_err "usage" "--cc requires an address"; exit 2; }
                 cc="${cc}${cc:+$'\n'}$2"; shift 2 ;;
+            --bcc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--bcc requires an address"; exit 2; }
+                bcc="${bcc}${bcc:+$'\n'}$2"; shift 2 ;;
             --from)
                 [ $# -ge 2 ] || { _mail_err "usage" "--from requires one of your addresses (see 'k2 mail addresses')"; exit 2; }
                 from="$2"; shift 2 ;;
@@ -27385,7 +27413,7 @@ cmd_mail_send() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 to="${to}${to:+$'\n'}$1"; shift ;;
@@ -27433,7 +27461,7 @@ cmd_mail_send() {
         exit 2
     fi
     local M_VERB="send" M_JSON="$as_json" M_TO="$to" M_SUBJECT="$subject" \
-          M_BODY="$body" M_CC="$cc" M_FROM="$from" M_ATTACH="$attach" \
+          M_BODY="$body" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
           M_WAIT="$wait" M_TIMEOUT="$timeout" M_SEND_AT="$send_at" M_SEND_IN="$send_in"
     _mail_py
 }
@@ -27665,6 +27693,7 @@ cmd_mail_config() {
     if _wants_help "$@"; then cmd_help_mail_config; exit 0; fi
     local send_mode="" domain="" relay_host="" relay_port="" relay_user="" relay_pass=""
     local agent_send="" address_cap="" quota_bytes="" quota_gb="" quota_messages="" workspace="" as_json=false any_set=false
+    local always_bcc="" always_bcc_set=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --send-mode)
@@ -27707,6 +27736,11 @@ cmd_mail_config() {
             --workspace)
                 [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a workspace (name | path | UUID)"; exit 2; }
                 workspace="$2"; any_set=true; shift 2 ;;
+            --always-bcc)
+                # Owner/admin only (the daemon refuses agent passports).
+                # Comma-separated; '' clears the policy.
+                [ $# -ge 2 ] || { _mail_err "usage" "--always-bcc requires an address list (comma-separated; '' clears)"; exit 2; }
+                always_bcc="$2"; always_bcc_set=true; any_set=true; shift 2 ;;
             --json) as_json=true; shift ;;
             *)
                 _mail_err "usage" "unknown argument '$1' — see k2 mail config --help"
@@ -27753,13 +27787,18 @@ cmd_mail_config() {
         _mail_err "usage" "--quota-messages must be a non-negative number (0 = unlimited)"
         exit 2
     fi
+    if $always_bcc_set && [ -z "$workspace" ]; then
+        _mail_err "usage" "--always-bcc needs --workspace <ws> — the policy is set per workspace"
+        exit 2
+    fi
     local verb="config_get"
     $any_set && verb="config_set"
     local M_VERB="$verb" M_JSON="$as_json" M_SEND_MODE="$send_mode" M_DOMAIN="$domain" \
           M_RELAY_HOST="$relay_host" M_RELAY_PORT="$relay_port" M_RELAY_USER="$relay_user" \
           M_RELAY_PASS="$relay_pass" M_AGENT_SEND="$agent_send" \
           M_ADDRESS_CAP="$address_cap" M_QUOTA_BYTES="$quota_bytes" M_QUOTA_GB="$quota_gb" \
-          M_QUOTA_MESSAGES="$quota_messages" M_WORKSPACE="$workspace"
+          M_QUOTA_MESSAGES="$quota_messages" M_WORKSPACE="$workspace" \
+          M_ALWAYS_BCC="$always_bcc" M_ALWAYS_BCC_SET="$always_bcc_set"
     _mail_py
 }
 
@@ -27828,7 +27867,7 @@ cmd_mail_approvals() {
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false
-    local to="" subject="" cc="" from="" attach=""
+    local to="" subject="" cc="" bcc="" from="" attach=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --body)
@@ -27846,6 +27885,9 @@ cmd_mail_draft() {
             --cc)
                 [ $# -ge 2 ] || { _mail_err "usage" "--cc requires an address"; exit 2; }
                 cc="${cc}${cc:+$'\n'}$2"; shift 2 ;;
+            --bcc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--bcc requires an address"; exit 2; }
+                bcc="${bcc}${bcc:+$'\n'}$2"; shift 2 ;;
             --from)
                 [ $# -ge 2 ] || { _mail_err "usage" "--from requires a linked address (see 'k2 mail inboxes')"; exit 2; }
                 from="$2"; shift 2 ;;
@@ -27854,7 +27896,7 @@ cmd_mail_draft() {
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked>]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -27870,6 +27912,10 @@ cmd_mail_draft() {
     fi
     if [ -n "$id" ] && [ -n "$cc" ]; then
         _mail_err "usage" "--cc is for compose drafts (k2 mail draft --to … --cc)"
+        exit 2
+    fi
+    if [ -n "$id" ] && [ -n "$bcc" ]; then
+        _mail_err "usage" "--bcc is for compose drafts (k2 mail draft --to … --bcc)"
         exit 2
     fi
     if [ -n "$id" ] && [ -n "$from" ]; then
@@ -27905,7 +27951,7 @@ cmd_mail_draft() {
         exit 2
     fi
     local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_FROM="$from" M_ATTACH="$attach"
+          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach"
     _mail_py
 }
 
@@ -30622,10 +30668,17 @@ USAGE
 
 ARGUMENTS / FLAGS
   <to> / --to <addr>     Recipient (repeatable or comma-separated; max 10
-                         recipients per message including --cc)
+                         recipients per message counting --to + --cc +
+                         --bcc, plus any owner always-BCC policy)
   --subject <s>          Required
   --body <text>          Message text (or --body-file <f>)
   --cc <addr>            Cc (repeatable or comma-separated)
+  --bcc <addr>           Blind copy (repeatable or comma-separated). Rides
+                         the SMTP envelope only — To/Cc recipients never
+                         see it (no Bcc header). Recorded in `k2 mail
+                         outbox`. Your workspace owner may also have set an
+                         always-BCC policy; those copies are added by the
+                         daemon on every send and you can't remove them.
   --from <owned-addr>    Which of YOUR addresses sends (needed when you own
                          several). The sender is verified server-side — you
                          can only ever send as an address you own.
@@ -30814,6 +30867,8 @@ USAGE
                  [--agent-send off|approval|on] [--address-cap <n>]
                  [--quota-bytes N|--quota-gb N] [--quota-messages N]
                  [--workspace <ws>]
+  k2 hostmail config --workspace <ws> --always-bcc <addr>[,<addr>]
+  k2 hostmail config --workspace <ws> --always-bcc ''    Clear the policy
 
 FLAGS
   --send-mode <m>        Per-domain outbound path (pair with --domain):
@@ -30832,8 +30887,20 @@ FLAGS
   --quota-gb <n>         Same as --quota-bytes, in GiB (× 2^30). Not both.
   --quota-messages <n>   Mailbox message cap for NEW mints (0 = unlimited,
                          and that is the default). Pair with --workspace.
-  --workspace <ws>       Scope --agent-send/--address-cap/--quota-* to one
-                         workspace (required for mail_manage agents)
+  --workspace <ws>       Scope --agent-send/--address-cap/--quota-*/
+                         --always-bcc to one workspace (required for
+                         mail_manage agents)
+  --always-bcc <list>    OWNER/ADMIN ONLY. Blind-copy these addresses on
+                         EVERY email this workspace's agent sends (send and
+                         reply, hosted and linked; approval-queued and
+                         scheduled sends keep them). Comma-separated, max 9;
+                         '' clears. Counts toward the 10-recipient limit — a
+                         send that would exceed it is refused, never
+                         trimmed. The agent can't set, clear, or skip it
+                         (mail-manage agents included). The outbox marks
+                         these as "bcc (owner policy)". Shown under
+                         workspaceOverrides[].alwaysBcc in `k2 hostmail
+                         config`. Needs --workspace.
   --json                 JSON output
 EOF
 }
@@ -30870,7 +30937,7 @@ pointer to `k2 mail reply`. Graph compose-draft is out of v1.
 
 USAGE
   k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
-  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked>] [--json]
+  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
 
 ARGUMENTS
   <message-id>           Reply form: a message id from 'k2 mail messages'
@@ -30880,6 +30947,9 @@ FLAGS
   --to <addr>            Compose form: recipient (repeatable)
   --subject <s>          Compose form: subject (required with --to)
   --cc <addr>            Compose only: Cc (repeatable)
+  --bcc <addr>           Compose only: Bcc (repeatable). Saved as the
+                         draft's Bcc header; your human's mail client keeps
+                         it blind when they send. to + cc + bcc max 10.
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file

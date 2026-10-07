@@ -200,9 +200,10 @@ pub fn config_json() -> serde_json::Value {
         let mut overrides: Vec<serde_json::Value> = Vec::new();
         if let Ok(mut stmt) = conn.prepare(
             "SELECT path, mail_agent_send, mail_address_cap, mail_quota_bytes, \
-             mail_quota_messages FROM projects \
+             mail_quota_messages, mail_always_bcc FROM projects \
              WHERE mail_agent_send IS NOT NULL OR mail_address_cap IS NOT NULL \
              OR mail_quota_bytes IS NOT NULL OR mail_quota_messages IS NOT NULL \
+             OR mail_always_bcc IS NOT NULL \
              ORDER BY path",
         ) {
             let rows = stmt.query_map([], |r| {
@@ -212,16 +213,28 @@ pub fn config_json() -> serde_json::Value {
                     r.get::<_, Option<i64>>(2)?,
                     r.get::<_, Option<i64>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
                 ))
             });
             if let Ok(rows) = rows {
-                for (path, send, cap, q_bytes, q_msgs) in rows.flatten() {
+                for (path, send, cap, q_bytes, q_msgs, bcc_raw) in rows.flatten() {
+                    // The owner's always-BCC policy, shown as the list
+                    // the send path enforces. A corrupt value shows as
+                    // such (sends from that workspace refuse until fixed).
+                    let always_bcc: serde_json::Value = match bcc_raw.as_deref() {
+                        None => serde_json::json!([]),
+                        Some(raw) => match serde_json::from_str::<Vec<String>>(raw) {
+                            Ok(list) => serde_json::json!(list),
+                            Err(_) => serde_json::json!({ "invalid": raw }),
+                        },
+                    };
                     overrides.push(serde_json::json!({
                         "project": path,
                         "agentSend": send,
                         "addressCap": cap,
                         "quotaBytes": q_bytes,
                         "quotaMessages": q_msgs,
+                        "alwaysBcc": always_bcc,
                     }));
                 }
             }
@@ -838,6 +851,38 @@ pub fn set_workspace_gating(
         "addressCap": address_cap,
         "quotaBytes": quota_bytes,
         "quotaMessages": quota_messages,
+    }))
+}
+
+/// The owner's per-workspace "always BCC" policy (0131). Every address
+/// is validated + normalized; the list may hold at most
+/// `MAX_RECIPIENTS - 1` entries (a send still needs room for one To).
+/// Empty list clears the policy. `workspace_path` is already resolved
+/// and the caller is ALREADY known to be owner/admin (the route refuses
+/// any scoped agent passport, mail-manage included, before this runs).
+pub fn set_workspace_always_bcc(
+    workspace_path: &str,
+    addresses: &[String],
+) -> Result<serde_json::Value, CfgError> {
+    let normalized = super::send::normalize_recipients(addresses).map_err(|e| match e {
+        super::send::SendError::Usage(h) => {
+            CfgError::Usage(format!("alwaysBcc: {h}"))
+        }
+        other => CfgError::Usage(format!("alwaysBcc: {other:?}")),
+    })?;
+    let max = super::send::MAX_RECIPIENTS - 1;
+    if normalized.len() > max {
+        return Err(CfgError::Usage(format!(
+            "alwaysBcc may hold at most {max} addresses — every send counts them toward the \
+             {}-recipient limit and still needs at least one To",
+            super::send::MAX_RECIPIENTS
+        )));
+    }
+    k2_core::workspace::settings::set_mail_always_bcc(workspace_path, &normalized)
+        .map_err(CfgError::NotFound)?;
+    Ok(serde_json::json!({
+        "project": workspace_path,
+        "alwaysBcc": normalized,
     }))
 }
 

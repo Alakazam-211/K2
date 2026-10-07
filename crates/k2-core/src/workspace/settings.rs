@@ -809,6 +809,64 @@ pub fn mail_agent_send_for_path(project_path: &str) -> String {
     }
 }
 
+/// The owner's "always BCC" policy for `project_path` (0131): the
+/// addresses the daemon blind-copies on EVERY send from this
+/// workspace's agent. `Ok(vec![])` = no policy (NULL column, empty
+/// array, or an unregistered workspace).
+///
+/// FAIL-CLOSED: a stored value that doesn't parse as a JSON array of
+/// strings is an `Err` — the send path must refuse rather than quietly
+/// send without the owner's oversight copy. Addresses come back as
+/// stored (the daemon writer normalizes them before storing).
+///
+/// Not on [`allowed_project_setting_fields`]: the only writer is
+/// [`set_mail_always_bcc`], reached through the owner/admin mail config
+/// route — an agent can never set or clear its own oversight policy.
+pub fn mail_always_bcc_for_path(project_path: &str) -> Result<Vec<String>, String> {
+    let raw: Option<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        match conn.query_row(
+            "SELECT mail_always_bcc FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(format!("mail_always_bcc read: {e}")),
+        }
+    };
+    let Some(raw) = raw.filter(|s| !s.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str::<Vec<String>>(&raw)
+        .map_err(|e| format!("mail_always_bcc is not a JSON list of addresses: {e}"))
+}
+
+/// Persist the owner's "always BCC" policy (0131). Empty list clears it
+/// (NULL). Callers pass already-validated, normalized addresses (the
+/// daemon's mail config route owns validation + the owner/admin gate).
+/// Unknown workspace → loud `Err`.
+pub fn set_mail_always_bcc(project_path: &str, addresses: &[String]) -> Result<(), String> {
+    let value: Option<String> = if addresses.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(addresses).map_err(|e| format!("always-bcc serialize: {e}"))?)
+    };
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET mail_always_bcc = ?1 WHERE path = ?2",
+            rusqlite::params![value, project_path],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_path}"));
+    }
+    Ok(())
+}
+
 /// Daemon default concurrent host-session cells per workspace.
 ///
 /// Reads env `K2_SANDBOX_WORKSPACE_CELL_CAP`; falls back to
@@ -1669,6 +1727,49 @@ mod tests {
     }
 
     // ── K2 Mail gating settings (prd-email-server-v1 §12) ──────────
+
+    /// 0131 "always BCC": round-trips through the dedicated writer,
+    /// clears to none, fails CLOSED on a corrupt stored value, and is
+    /// NOT reachable through the generic workspace/set allowlist (the
+    /// agent must never be able to set or clear its own oversight copy).
+    #[test]
+    fn mail_always_bcc_roundtrip_clear_corrupt_and_not_on_allowlist() {
+        let path = unique_path("always-bcc");
+        let _pid = insert_project(&path);
+
+        assert_eq!(mail_always_bcc_for_path(&path).expect("read"), Vec::<String>::new());
+        assert_eq!(
+            mail_always_bcc_for_path("/tmp/never-registered-bcc").expect("unknown ws"),
+            Vec::<String>::new()
+        );
+
+        let list = vec!["owner@shop.example".to_string(), "audit@shop.example".to_string()];
+        set_mail_always_bcc(&path, &list).expect("set policy");
+        assert_eq!(mail_always_bcc_for_path(&path).expect("read"), list);
+
+        set_mail_always_bcc(&path, &[]).expect("clear policy");
+        assert_eq!(mail_always_bcc_for_path(&path).expect("read"), Vec::<String>::new());
+
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_always_bcc = 'not json' WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("corrupt the column");
+        }
+        let err = mail_always_bcc_for_path(&path).expect_err("corrupt policy must fail closed");
+        assert!(err.contains("mail_always_bcc"), "{err}");
+
+        let err = update_project_setting(&path, "mail_always_bcc", "[]")
+            .expect_err("workspace/set must not reach the always-BCC policy");
+        assert!(err.contains("Unknown setting"), "{err}");
+
+        let err = set_mail_always_bcc("/tmp/never-registered-bcc-set", &list)
+            .expect_err("unknown workspace must fail loudly");
+        assert!(err.contains("not found"), "{err}");
+    }
 
     /// `mail_agent_send`: write-validated enum; the EFFECTIVE resolver
     /// prefers the per-workspace override, inherits the global default

@@ -832,7 +832,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 // F4.1 — finished-while-unseen takes the icon slot (amber)
                 // until the tab is visited, matching the Active bar square.
                 return (
-                  <span className="block w-2.5 h-2.5 rounded-[2px] bg-[var(--color-status-warn-amber)]" />
+                  <span className="block w-2.5 h-2.5 bg-[var(--color-status-warn-amber)]" />
                 )
               }
               if (section === 'inbox') {
@@ -1124,7 +1124,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                         {/* F4.1 — finished-while-unseen: amber square holds the
                             slot until the tab is visited; hover still yields
                             the X so it can be closed without visiting. */}
-                        <span className="block w-2.5 h-2.5 rounded-[2px] bg-[var(--color-status-warn-amber)] group-hover/close:hidden" />
+                        <span className="block w-2.5 h-2.5 bg-[var(--color-status-warn-amber)] group-hover/close:hidden" />
                         <span className="hidden group-hover/close:block">{closeGlyph}</span>
                       </>
                     ) : (

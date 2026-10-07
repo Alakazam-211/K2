@@ -66,7 +66,7 @@ const h = vi.hoisted(() => ({
   remoteDrops: [] as Array<{ hostKey: string; paths: string[]; workspacePath: string | undefined }>,
   switched: [] as unknown[],
   keepAlive: [] as Array<{ hostKey: string; projectId: string }>,
-  rooms: [] as Array<{ key: string; activity: { applyHookStatus(id: string, s: string): void } }>,
+  rooms: [] as Array<{ key: string; scope: { id: string }; cwd: string }>,
   seq: 100,
   tickets: [] as Array<Record<string, unknown>>,
   /** The Home avatar cache (`GET /cli/home/avatars`), by row address. */
@@ -283,7 +283,7 @@ vi.mock('@/stores/home-rooms', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@/stores/home-rooms')>()
   const { roomTiers } = await import('@/lib/room-tiers')
   const { scopeForHost } = await import('@/kessel/server-scope')
-  const { createRoomActivity } = await import('@/stores/room')
+  const { activityStore } = await import('@/stores/activity')
   const { createStore } = await import('zustand/vanilla')
   const remoteProjects: Record<string, unknown[]> = {
     'akzm.k2.dev': [
@@ -294,15 +294,17 @@ vi.mock('@/stores/home-rooms', async (importOriginal) => {
     tiers: roomTiers,
     createRoom: (input) => {
       const projects = createStore(() => ({ projects: (remoteProjects[input.scope.hostKey] ?? []) as never[] }))
-      const activity = createRoomActivity(projects, input.workspace.projectId)
+      void projects
+      // S5: a room reads its server's activity rows (one store per server).
+      const activity = { setViewing: () => {} }
       const key = `${input.scope.hostKey}|${input.workspace.projectId}:${input.workspace.workspaceId}`
-      h.rooms.push({ key, activity })
+      h.rooms.push({ key, scope: input.scope, cwd: input.workspace.path })
       return {
         key,
         isPrimary: false,
         scope: input.scope,
         readOnly: false,
-        activityView: activity,
+        activityView: activityStore(input.scope),
         activity,
         cwd: () => input.workspace.path,
         activeProjectId: () => input.workspace.projectId,
@@ -368,11 +370,16 @@ import { useFeedbackStore } from '@/stores/feedback'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
-import { useActiveAgentsStore } from '@/stores/active-agents'
+import {
+  __resetActivityForTests,
+  __seedActivityForTests,
+  type ActivityDisplay,
+  type ActivityRow,
+} from '@/stores/activity'
 import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { hostPool } from '@/lib/host-pool-instance'
 import { homeRooms } from '@/stores/home-rooms'
-import { noteServerVersion } from '@/kessel/server-scope'
+import { noteServerVersion, primaryScope } from '@/kessel/server-scope'
 import { __reloadZenWindowForTests, useZenWindowStore, zenWindowKey } from '@/lib/zen/zen-window'
 import { __resetZenGardensForTests, useZenGardensStore } from '@/lib/zen/zen-gardens'
 import { useZenGardenHomesStore, ZEN_GARDEN_HOMES_KEY } from '@/lib/zen/zen-garden-homes'
@@ -409,6 +416,45 @@ import { useHomeAvatarStore } from '@/lib/home-avatars'
 const B = 'akzm.k2.dev'
 const C = 'scout.k2.dev'
 const D = 'old.k2.dev'
+/** The window server's rollup for cortana's workspace (S5). */
+function windowWorkspace(display: ActivityDisplay): void {
+  __seedActivityForTests(primaryScope(), {
+    workspaces: [
+      {
+        projectId: 'p1',
+        workspacePath: '/w/cortana',
+        display,
+        counts: { working: 0, monitoring: 0, waiting: 0, unverifiable: 0, idle: 0, [display]: 1 },
+        since: null,
+      },
+    ],
+  })
+}
+
+/** One session row on an open room's server, in the room's workspace. */
+function roomRow(index: number, display: ActivityDisplay): void {
+  const room = h.rooms[index]
+  if (!room) throw new Error(`no room ${index}`)
+  const row: ActivityRow = {
+    sessionId: 'sess-1',
+    agentName: 'tab-sess-1',
+    projectId: 'bp1',
+    workspacePath: room.cwd,
+    harness: 'claude',
+    display,
+    lead: { state: display === 'idle' ? 'idle' : 'working', outcome: 'none', since: 0, promptId: null },
+    children: { subagents: 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
+    turnStartedAt: null,
+    evidenceAt: 1,
+    evidenceSource: 'hook',
+    reason: 'turn_running',
+    staleSince: null,
+    confirmed: true,
+    rev: 1,
+  }
+  __seedActivityForTests(room.scope, { rows: [row] })
+}
+
 const ROWS = {
   cortana: { address: 'cortana::local', workspaceId: 'p1', label: 'cortana' },
   sales: { address: `sales::${B}`, workspaceId: 'bp1', label: 'sales' },
@@ -533,7 +579,7 @@ beforeEach(() => {
     // tested elsewhere).
     setActiveProject: (id: string | null) => useProjectsStore.setState({ activeProjectId: id }),
   })
-  useActiveAgentsStore.setState({ paneStatuses: new Map(), daemonPaneStatuses: new Map(), paneProjectMap: new Map() })
+  __resetActivityForTests()
   useHomesStore.setState({
     homes: [
       { id: 'h1', name: 'Work', rows: [ROWS.cortana, ROWS.sales, ROWS.julie, ROWS.ops] },
@@ -719,28 +765,33 @@ describe('Agents widget', () => {
     // Window's server, from active-agents.
     expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('idle')
     act(() =>
-      useActiveAgentsStore.setState({
-        paneStatuses: new Map([['pane1', 'working']]),
-        paneProjectMap: new Map([['pane1', 'p1']]),
-      }),
+      windowWorkspace('working'),
     )
     expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('working')
     expect(rowEl(ROWS.cortana.address).querySelector('[data-zen-activity]')?.textContent).toBe('working')
-    act(() => useActiveAgentsStore.setState({ paneStatuses: new Map([['pane1', 'permission']]) }))
+    act(() => windowWorkspace('waiting'))
     expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('needs-you')
+    // Q13: widgets get the daemon's real display, no compat shim.
+    act(() => windowWorkspace('monitoring'))
+    expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('monitoring')
+    expect(rowEl(ROWS.cortana.address).querySelector('[data-zen-activity]')?.textContent).toBe('monitoring')
+    act(() => windowWorkspace('unverifiable'))
+    expect(rowEl(ROWS.cortana.address).getAttribute('data-activity')).toBe('unverifiable')
+    expect(rowEl(ROWS.cortana.address).querySelector('[data-zen-activity]')?.textContent).toBe('no update')
+    act(() => windowWorkspace('waiting'))
 
     // Another server, closed row: the pool's summary activity.
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
     act(() => setPool({ [B]: poolEntry(B, { activity: [{ workspaceId: 'bp1', status: 'working' }] }), [C]: poolEntry(C, { role: 'viewer' }), [D]: poolEntry(D, { version: '0.43.0', features: [], activity: undefined }) }))
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('working')
 
-    // Open the remote room: its own slice (agent_status_changed) now wins.
+    // Open the remote room: its server's rows now win.
     await select(ROWS.sales.address)
     expect(h.rooms.length).toBe(1)
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
-    act(() => h.rooms[0].activity.applyHookStatus('sess-1', 'permission'))
+    act(() => roomRow(0, 'waiting'))
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('needs-you')
-    act(() => h.rooms[0].activity.applyHookStatus('sess-1', 'stop'))
+    act(() => roomRow(0, 'idle'))
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
 
     // A server whose summary has no activity (before 0.43.2): no status.
@@ -1551,7 +1602,7 @@ describe('coming back to a conversation focuses its message box', () => {
 
     // A remote update afterwards never takes the caret back.
     ;(document.activeElement as HTMLElement).blur()
-    act(() => useActiveAgentsStore.setState({ paneStatuses: new Map() }))
+    act(() => windowWorkspace('idle'))
     act(() => useHomesStore.getState().moveRow('h1', 1, 0))
     expect(isCompose()).toBe(false)
   })
@@ -1632,7 +1683,7 @@ describe('picking an agent focuses its message box', () => {
     // A remote update re-renders the box: focus is not taken back from
     // elsewhere.
     ;(document.activeElement as HTMLElement).blur()
-    act(() => useActiveAgentsStore.setState({ paneStatuses: new Map() }))
+    act(() => windowWorkspace('idle'))
     act(() => useHomesStore.getState().moveRow('h1', 1, 0))
     expect(document.activeElement?.hasAttribute('data-zen-compose-input')).toBe(false)
   })
@@ -1846,10 +1897,7 @@ describe('Conversation widget', () => {
     await threadReady(ROWS.cortana.address)
     expect(document.querySelector('[data-zen-permission]')).toBeNull()
     act(() =>
-      useActiveAgentsStore.setState({
-        paneStatuses: new Map([['pane1', 'permission']]),
-        paneProjectMap: new Map([['pane1', 'p1']]),
-      }),
+      windowWorkspace('waiting'),
     )
     const banner = document.querySelector('[data-zen-permission]')
     expect(banner?.textContent).toContain(zenPermissionText('cortana'))
@@ -1869,7 +1917,7 @@ describe('Conversation widget', () => {
     await mountZen()
     await select(ROWS.sales.address)
     await threadReady(ROWS.sales.address)
-    act(() => h.rooms[0].activity.applyHookStatus('sess-1', 'permission'))
+    act(() => roomRow(0, 'waiting'))
     const button = document.querySelector('[data-zen-permission] [data-zen-open-in-agents]')
     if (!(button instanceof HTMLElement)) throw new Error('no Open in Agents')
     await act(async () => {

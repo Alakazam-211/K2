@@ -4,7 +4,8 @@ import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { useToastStore } from '@/stores/toast'
-import { useActiveAgentsStore } from '@/stores/active-agents'
+import { projectHasUnseen, useActivity, workspaceDisplay } from '@/stores/activity'
+import { ActivityMark } from '@/components/Activity/ActivityMark'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useCommandPaletteStore } from '@/stores/command-palette'
 import { useAddWorkspaceDialogStore } from '@/stores/add-workspace-dialog'
@@ -96,21 +97,21 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
 
 // ── Agent status (shows spinner when agent is working) ───────────────────────
 
-/** 14px slot always — glyph only (braille / "done" / empty). Never unmount. */
+/** 14px slot always — glyph only (braille / state mark / "done" / empty).
+ *  Never unmount. The workspace's rollup from the window server's daemon
+ *  (prd-daemon-activity-and-thread-working-v1 RL1/RL10); "done" is this
+ *  client's unseen finished turn (RL11). */
 export function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element {
-  const projectStatus = useActiveAgentsStore((s) => s.getProjectStatus(projectId))
-  const working = projectStatus === 'working' || projectStatus === 'permission'
-  const review = projectStatus === 'review'
-  const color = projectStatus === 'permission'
-    ? 'text-[var(--color-status-error-soft)]'
-    : review
-      ? 'text-[var(--color-status-ok-soft)]'
-      : 'text-[var(--color-text-muted)]'
+  const display = useActivity(primaryScope(), (s) => workspaceDisplay(s, { projectId }))
+  const review = useActivity(primaryScope(), (s) => projectHasUnseen(s, projectId)) && display === 'idle'
+  const color = review ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-text-muted)]'
 
   return (
     <span className={`inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center leading-none ${color}`}>
-      {working ? (
+      {display === 'working' ? (
         <span className="braille-spinner text-[11px] font-mono" />
+      ) : display !== 'idle' ? (
+        <ActivityMark display={display} />
       ) : review ? (
         <span className="text-[10px] font-mono">done</span>
       ) : null}

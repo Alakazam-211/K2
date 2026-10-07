@@ -113,10 +113,6 @@ vi.mock('@/stores/session-labels', () => ({
 vi.mock('@/stores/active-agents', () => ({
   useActiveAgentsStore: {
     getState: () => ({
-      recordOutput: vi.fn(),
-      recordTitleActivity: vi.fn(),
-      markSeen: vi.fn(),
-      bindPaneAgentName: vi.fn(),
       agents: new Map(),
     }),
   },
@@ -138,15 +134,10 @@ import { useTabsStore } from '@/stores/tabs'
 import { getDaemonWs } from '../kessel/daemon-ws'
 
 // Home M3 — the pane's room: the mocked tabs store, an activity sink of
-// spies (MS68), the primary scope.
+// spies (MS68: the pane only says who is looking, S5), the primary scope.
 function activitySpies() {
   return {
-    recordOutput: vi.fn(),
-    recordTitleActivity: vi.fn(),
-    recordTitlePermission: vi.fn(),
-    markSeen: vi.fn(),
-    bindPaneAgentName: vi.fn(),
-    bindPaneProject: vi.fn(),
+    setViewing: vi.fn(),
   }
 }
 const room = testRoom({

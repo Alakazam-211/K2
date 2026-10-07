@@ -234,7 +234,7 @@ export function ZenConversation({
           <span className="flex items-center gap-1.5 truncate" style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
             <ZenStatusDot row={row} size={8} />
             <span data-zen-conversation-status={row.activity ?? row.state}>
-              {[row.server ?? 'this computer', row.state !== 'ok' ? row.stateLabel : row.activity === 'needs-you' ? 'needs you' : row.activity]
+              {[row.server ?? 'this computer', row.state !== 'ok' ? row.stateLabel : row.activity === 'needs-you' ? 'needs you' : row.activity === 'unverifiable' ? 'no update' : row.activity]
                 .filter(Boolean)
                 .join(' · ')}
             </span>

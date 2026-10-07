@@ -49,6 +49,7 @@ const ev = vi.hoisted(() => {
     sessionAdded: [] as Fn[],
     sessionRemoved: [] as Fn[],
     sessionActivity: [] as Fn[],
+    activity: [] as Fn[],
     tabSubs: [] as Array<{ path: string; handlers: Record<string, Fn> }>,
   }
   return { reg }
@@ -97,6 +98,16 @@ vi.mock('@/stores/session-events', async () => {
       expectPrimaryScope(scope)
       ev.reg.sessionActivity.push(fn)
       return () => void (ev.reg.sessionActivity = ev.reg.sessionActivity.filter((f) => f !== fn))
+    }),
+    // S5: the window server's activity feed (stores/activity.ts).
+    onActivityChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
+      expectPrimaryScope(scope)
+      ev.reg.activity.push(fn)
+      return () => void (ev.reg.activity = ev.reg.activity.filter((f) => f !== fn))
+    }),
+    onAppResync: vi.fn((scope: unknown) => {
+      expectPrimaryScope(scope)
+      return () => {}
     }),
     // A11: the daemon's hook-install failure toast (not exercised here).
     onHooksInstallFailed: vi.fn((scope: unknown) => {
@@ -207,43 +218,30 @@ afterEach(() => {
 
 // ── active-agents (#675.2) ──────────────────────────────────────────────
 
-describe('active-agents — agent_status_changed cutover', () => {
+describe('active-agents — the daemon owns activity (prd-daemon-activity-and-thread-working-v1 S5)', () => {
   afterEach(async () => {
     const { stopAgentPolling } = await import('./active-agents')
     stopAgentPolling()
   })
 
-  it('subscribes (no interval) when supported and refetches via lifecycle handler', async () => {
+  it('subscribes (no interval) to activity_changed, never to agent_status_changed', async () => {
     vi.useFakeTimers()
     const setInterval = vi.spyOn(globalThis, 'setInterval')
-    const { startAgentPolling, useActiveAgentsStore } = await import(
+    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
       './active-agents'
     )
-    const handle = vi
-      .spyOn(useActiveAgentsStore.getState(), 'handleLifecycleEvent')
-      .mockImplementation(() => undefined)
-    // Also stub pollOnce so the initial snapshot doesn't hit the daemon.
+    // Stub pollOnce so the initial snapshot doesn't hit the daemon.
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
 
     startAgentPolling()
-    expect(ev.reg.agent.length).toBe(1)
+    expect(ev.reg.activity.length).toBe(1)
+    expect(ev.reg.agent.length).toBe(0)
     expect(setInterval).not.toHaveBeenCalled()
-
-    // Firing the subscribed event maps through the canonical lifecycle path.
-    // 4th arg is optional workspacePath from the daemon broadcast.
-    ev.reg.agent[0]({ paneId: 'p1', tabId: 't1', status: 'start' })
-    expect(handle).toHaveBeenCalledWith('p1', 't1', 'start', undefined)
-
-    ev.reg.agent[0]({
-      paneId: 'p2',
-      tabId: 't2',
-      status: 'stop',
-      workspacePath: '/ws/foo',
-    })
-    expect(handle).toHaveBeenCalledWith('p2', 't2', 'stop', '/ws/foo')
+    stopAgentPolling()
+    expect(ev.reg.activity.length).toBe(0)
   })
 
-  it('falls back to the poll interval when NOT supported (no subscription)', async () => {
+  it('falls back to the poll interval when NOT supported; the activity feed still attaches', async () => {
     vi.useFakeTimers()
     supports.value = false
     const setInterval = vi.spyOn(globalThis, 'setInterval')
@@ -254,6 +252,7 @@ describe('active-agents — agent_status_changed cutover', () => {
 
     startAgentPolling()
     expect(ev.reg.agent.length).toBe(0)
+    expect(ev.reg.activity.length).toBe(1)
     expect(setInterval).toHaveBeenCalledTimes(1)
   })
 })

@@ -612,12 +612,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
   const displayName = useDisplayName(projectPath, agentName)
 
-  // P1.A — bind this pinned-Chat pane to ITS OWN project upfront (see the
-  // legacy body for the full rationale). Idempotent.
-  useEffect(() => {
-    room.activity.bindPaneProject(terminalIdRef.current, projectId)
-  }, [projectId])
-
   // Resolve phase. `ensuring` → first ensure in flight; `ready` → the
   // daemon confirmed a live session and we render TerminalPane; `idle` →
   // the daemon reported the session removed (e.g. user typed `exit`) — we
@@ -1280,9 +1274,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
 
-  useEffect(() => {
-    room.activity.bindPaneProject(terminalIdRef.current, projectId)
-  }, [projectId])
   const [launchConfig, setLaunchConfig] = useState<{
     command: string
     args: string[]

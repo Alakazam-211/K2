@@ -107,7 +107,7 @@ const h = vi.hoisted(() => {
     hook.setState = (p) => Object.assign(state, p)
     return hook
   }
-  const activity = hookOf({ getProjectStatus: (id: string) => (id === 'pl' ? 'working' : 'idle') })
+  const activity = hookOf({ agents: new Map(), liveSessionCwds: new Set<string>() })
   const presence = hookOf({ roster: [] as unknown[], supported: true })
   return { hookOf, activity, presence }
 })
@@ -172,6 +172,8 @@ import { usePanelsStore } from '@/stores/panels'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
+import { primaryScope } from '@/kessel/server-scope'
+import { __seedActivityForTests } from '@/stores/activity'
 import { __resetHostPoolForTests } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
@@ -262,6 +264,18 @@ function Shell(): React.JSX.Element {
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
+  // S5: the connected server's daemon says Cortana's workspace is working.
+  __seedActivityForTests(primaryScope(), {
+    workspaces: [
+      {
+        projectId: 'pl',
+        workspacePath: '/w/cortana',
+        display: 'working',
+        counts: { working: 1, monitoring: 0, waiting: 0, unverifiable: 0, idle: 0 },
+        since: null,
+      },
+    ],
+  })
   __resetConnectHostStoreForTests()
   useConnectHostStore.setState({ hosts: [boxB, boxC], connectionStatus: 'connected' })
   clearHostSelect()

@@ -1,4 +1,3 @@
-import { registerPrimaryRoomActivity } from './room'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
@@ -15,404 +14,143 @@ import { useProjectsStore } from './projects'
 import { usePresetsStore } from './presets'
 import { resolveAgentCommand, readProjectDefaultAgent } from '@/lib/agent-resolve'
 import { useSettingsStore } from './settings'
-import { KNOWN_AGENT_COMMANDS, AGENT_IDLE_THRESHOLD_MS } from '@shared/constants'
-import { agentChatId, worktreeChatId, parseTerminalId } from '@/lib/terminal-id'
-import { playCompletionSound } from '@/lib/completion-sound'
-import { useWindowFocusStore } from '@/stores/window-focus'
+import { KNOWN_AGENT_COMMANDS } from '@shared/constants'
+import { agentChatId, worktreeChatId } from '@/lib/terminal-id'
 // #625 — reset agent pane state on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
 import { serverSupports } from '@/lib/server-capabilities'
 import {
-  onAgentStatusChanged,
   onAppHello,
   onSessionAddedApp,
   onSessionRemovedApp,
-  onSessionActivityChanged,
   onHooksInstallFailed,
 } from '@/stores/session-events'
 import { primaryScope } from '@/kessel/server-scope'
+import {
+  activityStore,
+  agentNameForTerminal,
+  attachActivity,
+  isBusyDisplay,
+  registerActivityNotify,
+  resetActivity,
+  rowForTerminal,
+  type ActivityDisplay,
+  type ActivityRow,
+} from './activity'
 
-/**
- * Daemon-broadcast workspace path per pane (from agent_status_changed /
- * session_activity_changed). First-class for remote hosts — the client
- * must not invent ownership from the *viewed* workspace.
- */
-const _daemonPaneWorkspacePath = new Map<string, string>()
+// prd-daemon-activity-and-thread-working-v1 S5 (RL9): this store no longer
+// decides what an agent is doing. The daemon does (`stores/activity.ts`
+// holds its rows); this store keeps the window's live-session bookkeeping
+// (`agents` for the quit / close dialogs, `liveSessionCwds` for the Active
+// bar's live dot, background spawns) and turns the window server's turn ends
+// into toasts.
 
-/** Record a daemon-authoritative path for a pane (strong bind source). */
-function noteDaemonPaneWorkspacePath(paneId: string, workspacePath: string | null | undefined): void {
-  if (!paneId || !workspacePath) return
-  const trimmed = workspacePath.trim()
-  if (!trimmed) return
-  _daemonPaneWorkspacePath.set(paneId, trimmed)
-  const projectId = matchProjectIdByPath(trimmed)
-  if (projectId) {
-    _weakPaneProjectBinds.delete(paneId)
-    useActiveAgentsStore.getState().bindPaneProject(paneId, projectId)
-  }
-}
-
-/**
- * Strong ownership only — never the *viewed* workspace.
- * 1) daemon broadcast path (remote-safe)
- * 2) project id embedded in agent-chat / heartbeat terminal ids
- * 3) workspace stash key (`projectId:workspaceId`) containing this pane
- * 4) terminal cwd matched to a registered project path
- */
-function resolveStrongProjectId(paneId: string): string | null {
-  if (!paneId) return null
-
-  const daemonPath = _daemonPaneWorkspacePath.get(paneId)
-  if (daemonPath) {
-    const byDaemon = matchProjectIdByPath(daemonPath)
-    if (byDaemon) return byDaemon
-  }
-
-  const parsed = parseTerminalId(paneId)
-  if (parsed) {
-    if (parsed.kind === 'agent_chat' || parsed.kind === 'heartbeat_chat') {
-      return parsed.projectId
-    }
-    if (parsed.kind === 'worktree' || parsed.kind === 'legacy_worktree') {
-      const projects = useProjectsStore.getState().projects
-      for (const p of projects) {
-        if ((p.workspaces ?? []).some((w) => w.id === parsed.workspaceId)) {
-          return p.id
-        }
-      }
-    }
-  }
-
-  // Stashed workspace keys are `${projectId}:${workspaceId}` — if the pane
-  // lives in that snapshot, the project id in the key is authoritative
-  // (even when cwd metadata is missing). Local-only supplement.
-  const fromStash = findProjectIdInTabStash(paneId)
-  if (fromStash) return fromStash
-
-  const cwd = findTerminalCwdForPane(paneId)
-  if (cwd) {
-    const byPath = matchProjectIdByPath(cwd)
-    if (byPath) return byPath
-  }
-
-  return null
-}
-
-/**
- * Best-effort owner for labels / navigation.
- * Strong signals first; then map; active project ONLY if the pane is in
- * the current (foreground) tab strip — never for background agents.
- */
-function resolveOwnProjectId(paneId: string): string | null {
-  const strong = resolveStrongProjectId(paneId)
-  if (strong) return strong
-
-  const mapped = useActiveAgentsStore.getState().paneProjectMap.get(paneId)
-  // Reject a map entry that is clearly a foreground mis-stamp: it equals
-  // the viewed project but this pane is not in the current tab strip.
-  if (mapped) {
-    const active = useProjectsStore.getState().activeProjectId
-    if (mapped === active && !findTabForPane(paneId)) {
-      // fall through — don't trust it
-    } else {
-      return mapped
-    }
-  }
-
-  if (findTabForPane(paneId)) {
-    return useProjectsStore.getState().activeProjectId
-  }
-  return null
-}
-
-/** Pane ids bound only via "active project" fallback — eligible for
- *  eviction when the pane is not in the foreground tab strip (classic
- *  mis-stamp that painted the viewed workspace's orange Active-bar dot).
- *  Strong binds (agent-chat id / cwd / stash key) are never weak. */
-const _weakPaneProjectBinds = new Set<string>()
-
-/**
- * Re-bind pane→project from strong signals. Evicts *weak* map entries that
- * equal the viewed project while the pane is not in the current tabs.
- * Returns the project id after rebind, if any.
- */
-function ensurePaneProjectBound(paneId: string): string | null {
-  const strong = resolveStrongProjectId(paneId)
-  const store = useActiveAgentsStore.getState()
-  if (strong) {
-    _weakPaneProjectBinds.delete(paneId)
-    store.bindPaneProject(paneId, strong)
-    return strong
-  }
-
-  const active = useProjectsStore.getState().activeProjectId
-  // Pane is in the foreground tab strip → active project is a legitimate
-  // owner (plain terminal in the workspace you're looking at).
-  if (findTabForPane(paneId) && active) {
-    store.bindPaneProject(paneId, active)
-    // Foreground-tab bind is weak only until a strong signal appears —
-    // still correct while the tab remains; if the user switches away and
-    // this was a mis-stamp of a *different* agent's hook, eviction below
-    // on the next ensure call cleans it when findTabForPane is false.
-    _weakPaneProjectBinds.add(paneId)
-    return active
-  }
-
-  const mapped = store.paneProjectMap.get(paneId)
-  // Drop a weak mis-stamp: bound to the viewed project, pane not here.
-  if (
-    mapped &&
-    active &&
-    mapped === active &&
-    _weakPaneProjectBinds.has(paneId)
-  ) {
-    const next = new Map(store.paneProjectMap)
-    next.delete(paneId)
-    useActiveAgentsStore.setState({ paneProjectMap: next })
-    _weakPaneProjectBinds.delete(paneId)
-    return null
-  }
-  return mapped ?? null
-}
-
-/** Longest-prefix path match so worktrees under a parent repo win. */
-function matchProjectIdByPath(cwd: string): string | null {
-  const projects = useProjectsStore.getState().projects
-  let best: { id: string; len: number } | null = null
-  for (const p of projects) {
-    const candidates = [
-      p.path,
-      ...(p.workspaces ?? []).map((w) => w.worktreePath).filter(Boolean),
-    ] as string[]
-    for (const path of candidates) {
-      if (!path) continue
-      if (
-        cwd === path ||
-        cwd.startsWith(path.endsWith('/') ? path : `${path}/`) ||
-        cwd.startsWith(path.endsWith('\\') ? path : `${path}\\`)
-      ) {
-        if (!best || path.length > best.len) best = { id: p.id, len: path.length }
-      }
-    }
-  }
-  return best?.id ?? null
-}
-
-type TabLike = {
-  paneGroups: Map<string, { id?: string; items: Array<{ type: string; data: unknown }> }>
-}
-
-function tabContainsPane(tab: TabLike, paneId: string): boolean {
-  if (tab.paneGroups.has(paneId)) return true
-  for (const [pgId, pg] of tab.paneGroups) {
-    if (pgId === paneId || pg.id === paneId) return true
-    for (const item of pg.items) {
-      if (item.type !== 'terminal' && item.type !== 'agent') continue
-      const data = item.data as TerminalItemData & { terminalId?: string }
-      if (data.terminalId === paneId) return true
-    }
-  }
-  return false
-}
-
-function findProjectIdInTabStash(paneId: string): string | null {
-  const ts = useTabsStore.getState()
-  // Foreground layout is the active project — not a "stash" signal by itself.
-  for (const [key, snap] of Object.entries(ts.backgroundWorkspaces)) {
-    const inSnap =
-      snap.tabs.some((t) => tabContainsPane(t as never, paneId)) ||
-      snap.extraGroups.some((g) => g.tabs.some((t) => tabContainsPane(t as never, paneId)))
-    if (!inSnap) continue
-    // key = `${projectId}:${workspaceId}` — UUIDs have no colons.
-    const colon = key.indexOf(':')
-    if (colon > 0) return key.slice(0, colon)
-  }
-  return null
-}
-
-function findTerminalCwdForPane(paneId: string): string | null {
-  const scanTabs = (tabs: TabLike[]): string | null => {
-    for (const tab of tabs) {
-      for (const [, pg] of tab.paneGroups) {
+/** The terminal item (any column, foreground strip) a daemon row is about,
+ *  or the pinned Chat tab when the row is a workspace's pinned Chat (its
+ *  agent name is its project id, A36). */
+function findTabForRow(row: ActivityRow): { tabId: string; groupIndex: number } | null {
+  const tabsState = useTabsStore.getState()
+  const groups = [tabsState.tabs, ...tabsState.extraGroups.map((g) => g.tabs)]
+  for (let gi = 0; gi < groups.length; gi++) {
+    for (const tab of groups[gi]) {
+      for (const pg of tab.paneGroups.values()) {
         for (const item of pg.items) {
-          if (item.type !== 'terminal' && item.type !== 'agent') continue
-          const data = item.data as TerminalItemData
-          if (data.terminalId === paneId && data.cwd) return data.cwd
-        }
-      }
-      if (tab.paneGroups.has(paneId)) {
-        for (const item of tab.paneGroups.get(paneId)!.items) {
-          if (item.type === 'terminal' || item.type === 'agent') {
+          if (item.type === 'terminal') {
             const data = item.data as TerminalItemData
-            if (data.cwd) return data.cwd
+            if (data.sessionId === row.sessionId || agentNameForTerminal(data) === row.agentName) {
+              return { tabId: tab.id, groupIndex: gi }
+            }
+          }
+          if (item.type === 'agent' && row.projectId && row.agentName === row.projectId) {
+            const data = item.data as { terminalId?: string; section?: string }
+            if (data.section === 'chat' || data.terminalId === agentChatId(row.projectId, '')) {
+              return { tabId: tab.id, groupIndex: gi }
+            }
           }
         }
       }
     }
-    return null
-  }
-
-  const ts = useTabsStore.getState()
-  let cwd = scanTabs(ts.tabs as never)
-  if (cwd) return cwd
-  for (const g of ts.extraGroups) {
-    cwd = scanTabs(g.tabs as never)
-    if (cwd) return cwd
-  }
-  for (const snap of Object.values(ts.backgroundWorkspaces)) {
-    cwd = scanTabs(snap.tabs as never)
-    if (cwd) return cwd
-    for (const g of snap.extraGroups) {
-      cwd = scanTabs(g.tabs as never)
-      if (cwd) return cwd
-    }
   }
   return null
 }
 
 /**
- * Best-effort display name for a pane's agent, for completion / permission
- * toasts. Prefer the OWNING workspace name (not the viewed one), then tab
- * title / CLI command.
+ * Best-effort display name for a row's agent, for completion / needs-you
+ * toasts: the OWNING workspace's name (the daemon's `projectId`, never the
+ * viewed one), then the tab title.
  */
-function resolvePaneAgentLabel(paneId: string): string | null {
-  const projectId = resolveOwnProjectId(paneId)
-  if (projectId) {
-    const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+function rowAgentLabel(row: ActivityRow): string | null {
+  if (row.projectId) {
+    const project = useProjectsStore.getState().projects.find((p) => p.id === row.projectId)
     if (project?.name) return project.name
   }
-
-  const tabsState = useTabsStore.getState()
-  const scanTabs = (
-    tabs: typeof tabsState.tabs,
-  ): { tabTitle: string | null; command: string | null } => {
-    for (const tab of tabs) {
-      for (const [, pg] of tab.paneGroups) {
-        for (const item of pg.items) {
-          if (item.type !== 'terminal') continue
-          const data = item.data as TerminalItemData
-          if (data.terminalId !== paneId) continue
-          const cmd = data.command ?? data.commandHint ?? null
-          return { tabTitle: tab.title || null, command: cmd }
-        }
-      }
-      if (tab.paneGroups.has(paneId)) {
-        return { tabTitle: tab.title || null, command: null }
-      }
-    }
-    return { tabTitle: null, command: null }
-  }
-
-  let hit = scanTabs(tabsState.tabs)
-  if (!hit.tabTitle && !hit.command) {
-    for (const group of tabsState.extraGroups) {
-      hit = scanTabs(group.tabs)
-      if (hit.tabTitle || hit.command) break
-    }
-  }
-  // Background workspaces (agent finished while user is elsewhere).
-  if (!hit.tabTitle && !hit.command) {
-    for (const snap of Object.values(tabsState.backgroundWorkspaces)) {
-      hit = scanTabs(snap.tabs)
-      if (hit.tabTitle || hit.command) break
-      for (const g of snap.extraGroups) {
-        hit = scanTabs(g.tabs)
-        if (hit.tabTitle || hit.command) break
-      }
-      if (hit.tabTitle || hit.command) break
-    }
-  }
-
-  if (hit.tabTitle) return hit.tabTitle
-  if (hit.command) return hit.command
-  return null
-}
-
-/** Find the tab (any column group) that currently hosts `paneId`. */
-function findTabForPane(
-  paneId: string,
-): { tabId: string; groupIndex: number } | null {
-  const tabsState = useTabsStore.getState()
-  for (const tab of tabsState.tabs) {
-    if (tab.paneGroups.has(paneId)) return { tabId: tab.id, groupIndex: 0 }
-  }
-  for (let gi = 0; gi < tabsState.extraGroups.length; gi++) {
-    for (const tab of tabsState.extraGroups[gi].tabs) {
-      if (tab.paneGroups.has(paneId)) return { tabId: tab.id, groupIndex: gi + 1 }
-    }
-  }
-  return null
+  const hit = findTabForRow(row)
+  if (!hit) return null
+  const ts = useTabsStore.getState()
+  const tabs = hit.groupIndex === 0 ? ts.tabs : ts.extraGroups[hit.groupIndex - 1]?.tabs ?? []
+  return tabs.find((t) => t.id === hit.tabId)?.title || null
 }
 
 /**
- * Toast "View" / "Switch to tab" — open the workspace that owns the pane,
- * then select its tab. Pre-0.40.65 only called setActiveTab on the *current*
- * workspace's tab list, so a finish toast for a background agent (e.g.
- * ProposalWriter while viewing Cortana) never left the foreground workspace.
+ * Toast "View" — open the workspace that owns the row (the daemon's
+ * `projectId`), then select its tab. Pre-0.40.65 only called setActiveTab on
+ * the *current* workspace's tab list, so a finish toast for a background
+ * agent never left the foreground workspace.
  */
-function navigateToPane(
-  paneId: string,
-  opts?: { clearReview?: boolean },
-): void {
-  // Re-resolve ownership at click time (map may have been wrong if the
-  // pane started while another workspace was foregrounded).
-  const projectId = resolveOwnProjectId(paneId)
-
-  const selectAndClear = (): boolean => {
-    const hit = findTabForPane(paneId)
+function navigateToRow(row: ActivityRow): void {
+  const select = (): boolean => {
+    const hit = findTabForRow(row)
     if (!hit) return false
     if (hit.groupIndex === 0) {
       useTabsStore.getState().setActiveTab(hit.tabId)
     } else {
       useTabsStore.getState().setActiveTabInGroup(hit.groupIndex, hit.tabId)
     }
-    if (opts?.clearReview) {
-      const store = useActiveAgentsStore.getState()
-      const statuses = new Map(store.paneStatuses)
-      statuses.set(paneId, 'idle')
-      useActiveAgentsStore.setState({ paneStatuses: statuses })
-    }
     return true
   }
 
   void (async () => {
     const ps = useProjectsStore.getState()
-    if (projectId && projectId !== ps.activeProjectId) {
-      const project = ps.projects.find((p) => p.id === projectId)
+    if (row.projectId && row.projectId !== ps.activeProjectId) {
+      const project = ps.projects.find((p) => p.id === row.projectId)
       const ws = project?.workspaces?.[0]
       if (project && ws) {
         // Same gesture as the Active bar row click — stash current tabs,
         // restore this workspace's layout (async).
         ps.setActiveWorkspace(project.id, ws.id)
         for (let i = 0; i < 40; i++) {
-          if (findTabForPane(paneId)) break
+          if (findTabForRow(row)) break
           await new Promise((r) => setTimeout(r, 50))
         }
       }
     }
     // Same workspace (or restore finished / never found): select if present.
-    selectAndClear()
+    select()
   })()
 }
 
-export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
-
-/** 0.40.39 merge rule (pure, exported for tests) — the effective pane
- *  status a spinner should show. Precedence:
- *    1. client permission/review — hook-owned, higher signal than the
- *       daemon's title-derived working/idle.
- *    2. daemon truth if the daemon has spoken for this pane — this is
- *       what keeps a HIDDEN tab's spinner alive (the parked client pane
- *       writes a false idle; the daemon key overrides it).
- *    3. client status otherwise (legacy panes, hermes/cursor with no
- *       daemon signal, old daemons that never populate the daemon map). */
-export function mergePaneStatus(
-  client: PaneStatus | undefined,
-  daemon: PaneStatus | undefined,
-): PaneStatus {
-  if (client === 'permission' || client === 'review') return client
-  if (daemon !== undefined) return daemon
-  return client ?? 'idle'
+/** The window server's toasts (RL11, A36): "needs you" on → waiting and
+ *  "finished" on a settled turn end, each only for a session this client
+ *  isn't looking at, after the store's 1.5 s debounce. */
+const PRIMARY_TOASTER = {
+  needsYou(row: ActivityRow): void {
+    const label = rowAgentLabel(row)
+    useToastStore.getState().addToast(
+      label ? `${label} needs you` : 'An agent needs you',
+      'info',
+      5000,
+      { label: 'View', onClick: () => navigateToRow(row) },
+    )
+  },
+  finished(row: ActivityRow): void {
+    const label = rowAgentLabel(row)
+    useToastStore.getState().addToast(
+      label ? `${label} has finished working` : 'An agent has finished working',
+      'success',
+      4000,
+      { label: 'View', onClick: () => navigateToRow(row) },
+    )
+  },
 }
 
 /** Structural equality for the polled agents map. Lets `pollOnce` keep the
@@ -429,7 +167,7 @@ function agentMapsEqual(
       !bv ||
       av.command !== bv.command ||
       av.status !== bv.status ||
-      av.hookStatus !== bv.hookStatus ||
+      av.display !== bv.display ||
       av.tabId !== bv.tabId ||
       av.tabTitle !== bv.tabTitle ||
       av.groupIndex !== bv.groupIndex
@@ -459,159 +197,11 @@ export interface ActiveAgent {
   tabId: string
   tabTitle: string
   groupIndex: number
+  /** `active` while the daemon's row says working or waiting. */
   status: 'active' | 'idle'
-  /** Hook-based pane status (more accurate than polling) */
-  hookStatus: PaneStatus
+  /** The daemon's display for the session (idle when it has no row). */
+  display: ActivityDisplay
 }
-
-/** F4 — true when any of the project's panes finished while the user
- *  wasn't looking and hasn't been viewed since. Drives the Active-bar
- *  amber unseen-done dot. Reads `unseenDone` + `paneProjectMap` off the
- *  active-agents store (same shape as `projectHasLiveSession`). */
-export function projectHasUnseenDone(
-  unseenDone: Map<string, number>,
-  paneProjectMap: Map<string, string>,
-  projectId: string,
-): boolean {
-  for (const paneId of unseenDone.keys()) {
-    if (paneProjectMap.get(paneId) === projectId) return true
-  }
-  return false
-}
-
-// ── F4: unseen-done state machine ───────────────────────────────────
-// One new piece of state — unseen-done — set when a pane transitions
-// working|permission → idle while the user ISN'T looking at that pane,
-// and cleared the moment they look (TerminalPane's visible+focused
-// effect calls `markSeen`). Both the Active-bar amber dot and the
-// completion chime hang off the same set-transition.
-// Spec: .k2/notes/orange-dot-done-sound.md.
-
-/** Debounce "done" — Claude flickers working→idle→working at tool
- *  boundaries; only a stop that survives this window counts. */
-const UNSEEN_DONE_DEBOUNCE_MS = 4_000
-/** No unseen-done during the first ~5s after a pane's first activity
- *  signal — launch banners flicker working→idle on spawn. */
-const UNSEEN_DONE_SPAWN_GRACE_MS = 5_000
-/** paneId → pending done-debounce timer. */
-const _unseenDoneTimers = new Map<string, ReturnType<typeof setTimeout>>()
-/** paneId → when the pane FIRST reported activity (spawn-grace anchor). */
-const _paneFirstActiveAt = new Map<string, number>()
-
-/** "Is the user looking at this pane": its tab is the active tab in its
- *  group AND the pane's item is the active item of its pane group AND
- *  this window has OS focus. A pane not surfaced in any tab is not
- *  visible. (The per-pane TabVisibility context isn't readable at store
- *  level; the active-tab + active-item check is its store-side twin.) */
-function paneIsVisible(paneId: string): boolean {
-  if (!useWindowFocusStore.getState().isFocused) return false
-  const ts = useTabsStore.getState()
-  const groups = [{ tabs: ts.tabs, activeTabId: ts.activeTabId }, ...ts.extraGroups]
-  for (const group of groups) {
-    for (const tab of group.tabs) {
-      for (const pg of tab.paneGroups.values()) {
-        for (let i = 0; i < pg.items.length; i++) {
-          const item = pg.items[i]
-          if (item.type !== 'terminal') continue
-          if ((item.data as TerminalItemData).terminalId !== paneId) continue
-          return tab.id === group.activeTabId && i === pg.activeItemIndex
-        }
-      }
-    }
-  }
-  return false
-}
-
-/** Record that a pane went active (working/permission). Anchors the
- *  spawn grace, cancels any pending done-debounce (the flicker case),
- *  and clears a lingering unseen-done mark — the pane is live again. */
-function notePaneActive(paneId: string): void {
-  if (!_paneFirstActiveAt.has(paneId)) {
-    _paneFirstActiveAt.set(paneId, Date.now())
-  }
-  cancelUnseenDone(paneId)
-  useActiveAgentsStore.getState().markSeen(paneId)
-}
-
-function cancelUnseenDone(paneId: string): void {
-  const timer = _unseenDoneTimers.get(paneId)
-  if (timer === undefined) return
-  clearTimeout(timer)
-  _unseenDoneTimers.delete(paneId)
-}
-
-/** A pane just transitioned working|permission → idle. Start the done
- *  debounce; when it fires (the pane didn't re-enter working) and the
- *  user isn't looking at the pane, mark it unseen-done + chime. */
-function armUnseenDone(paneId: string): void {
-  cancelUnseenDone(paneId)
-  // Re-attribute BEFORE the mark can light a project square. A lifecycle
-  // start that stamped activeProjectId (viewed workspace) would otherwise
-  // paint the orange Active-bar dot on the wrong agent.
-  ensurePaneProjectBound(paneId)
-  // 0.40.39 — daemon-truth gate (same false-idle class as the spinner
-  // fix): a hidden pane's parked client feed writes a false idle and
-  // used to arm this timer ~1s after switch-away, chiming ~5.5s later
-  // whether or not the agent finished. If the DAEMON still says the
-  // pane is working, this is a false client idle — don't arm; the
-  // daemon's own working→idle transition (applyDaemonActivity) arms
-  // the real one when the agent truly completes.
-  {
-    const daemon = useActiveAgentsStore.getState().daemonPaneStatuses.get(paneId)
-    if (daemon === 'working' || daemon === 'permission') return
-  }
-  const firstActiveAt = _paneFirstActiveAt.get(paneId)
-  if (firstActiveAt !== undefined && Date.now() - firstActiveAt < UNSEEN_DONE_SPAWN_GRACE_MS) {
-    return
-  }
-  const timer = setTimeout(() => {
-    _unseenDoneTimers.delete(paneId)
-    // Re-bind again at fire time — stash/cwd may have been unavailable
-    // when the stop event first landed. Pass this bind to the chime so
-    // a late resolve can mute the correct workspace. Null → global only.
-    const projectId = ensurePaneProjectBound(paneId)
-    const s = useActiveAgentsStore.getState()
-    // Merged status (0.40.39): the client map alone reports false idle
-    // for parked panes — daemon truth must veto the chime at fire time
-    // too (arming raced a daemon working transition).
-    const status = mergePaneStatus(
-      s.paneStatuses.get(paneId),
-      s.daemonPaneStatuses.get(paneId),
-    )
-    // Belt-and-suspenders — re-entering working cancels the timer, but a
-    // racing write could land between cancel and fire.
-    if (status === 'working' || status === 'permission') return
-    if (paneIsVisible(paneId)) return
-    // Mark unseen-done on the pane (tab amber + chime). Active-bar orange
-    // only lights when paneProjectMap has a trustworthy bind
-    // (`projectHasUnseenDone` joins the two maps) — ensurePaneProjectBound
-    // above strips mis-stamps that equal the viewed workspace.
-    const next = new Map(s.unseenDone)
-    next.set(paneId, Date.now())
-    useActiveAgentsStore.setState({ unseenDone: next })
-    // Only UNSEEN completions chime — a watched pane never reaches here.
-    // MS21 — the window's Active bar is the primary room: its chime reads
-    // the primary room's project list.
-    playCompletionSound(projectId, useProjectsStore.getState().projects)
-  }, UNSEEN_DONE_DEBOUNCE_MS)
-  _unseenDoneTimers.set(paneId, timer)
-}
-
-/** Last time the Tauri `agent:lifecycle` hook fired for a pane. Used by the
- *  poll-based cleanup to avoid clobbering hook-driven 'working' states while
- *  hooks are actively reporting. A long grace covers quiet Claude turns
- *  (pure thinking, no tool calls) where no hook fires until Stop. */
-const _hookEventAt = new Map<string, number>()
-const HOOK_TRUST_GRACE_MS = 120_000
-const OUTPUT_TRUST_GRACE_MS = 3_000
-
-/** Panes whose 'permission' state was set from a TITLE signal (grok's
- *  `⚠ Action Required - ` prefix) rather than a lifecycle hook. Only
- *  these panes may have their permission state CLEARED by a title
- *  signal — a hook-set permission (claude) stays hook-owned, exactly
- *  as before. A real hook event for a pane strips its title ownership
- *  (see `handleLifecycleEvent`), so the hook always wins. */
-const _titlePermissionPanes = new Set<string>()
 
 // RETIRED 0.40.48 — renderer launch-failure heuristic ("Agent launch
 // failed — retrying in 30s" toast + 30s triage_decide auto-retry).
@@ -636,67 +226,15 @@ export interface BackgroundSpawn {
 
 interface ActiveAgentsState {
   agents: Map<string, ActiveAgent>
-  outputTimestamps: Map<string, number>
-  /** Hook-based pane statuses keyed by paneId (terminalId) */
-  paneStatuses: Map<string, PaneStatus>
-  /** 0.40.39 — DAEMON-TRUTH activity keyed by paneId (terminalId),
-   *  fed by session_activity_changed (Title/Bell, visibility-
-   *  independent). When a key exists here it OVERRIDES the client
-   *  paneStatuses for working/idle — that's what keeps a hidden tab's
-   *  spinner alive (the client pane writes a false idle when parked).
-   *  Client permission/review still win (hook-owned). Empty for old
-   *  daemons → behavior falls back to paneStatuses byte-for-byte. */
-  daemonPaneStatuses: Map<string, PaneStatus>
-  /** 0.40.39 — agentName → terminalId alias so a session_activity
-   *  event addressed by agentName (heartbeat/surfaced tabs whose
-   *  paneGroupId isn't the terminalId) maps to the right pane.
-   *  Registered by TerminalPane at spawn; outlives the pane. */
-  paneAgentAlias: Map<string, string>
-  /** Maps paneId → projectId so we know which project an agent belongs to */
-  paneProjectMap: Map<string, string>
   /** Terminals waiting to be briefly mounted off-screen to spawn their PTY */
   backgroundSpawns: BackgroundSpawn[]
   /** cwds of every live PTY — drives the Active-bar "has a live session" dot.
    *  Derived from the list-running poll; a workspace is "live" when any PTY's
    *  cwd is inside it. See `projectHasLiveSession`. */
   liveSessionCwds: Set<string>
-  /** F4 — paneId → completedAt (ms) for panes that finished while the user
-   *  wasn't looking. Drives the Active-bar amber dot; cleared by `markSeen`
-   *  (pane viewed / re-enters working). See `projectHasUnseenDone`. */
-  unseenDone: Map<string, number>
 
-  hasActiveAgents: () => boolean
   getActiveAgentsList: () => ActiveAgent[]
   getAgentsInTab: (tabId: string) => ActiveAgent[]
-  isTerminalRunningAgent: (terminalId: string) => boolean
-  getPaneStatus: (paneId: string) => PaneStatus
-  getAggregateStatus: () => PaneStatus
-  getProjectStatus: (projectId: string) => PaneStatus
-  recordOutput: (terminalId: string) => void
-  recordTitleActivity: (paneId: string, isWorking: boolean) => void
-  recordTitlePermission: (paneId: string, active: boolean) => void
-  bindPaneProject: (paneId: string, projectId: string) => void
-  /** F4 — clear a pane's unseen-done mark (the user looked at it, it
-   *  re-entered working, or its session closed). Cheap no-op when the
-   *  pane isn't marked. */
-  markSeen: (paneId: string) => void
-  handleLifecycleEvent: (
-    paneId: string,
-    tabId: string,
-    eventType: string,
-    /** Daemon-broadcast workspace path (remote-safe attribution). */
-    workspacePath?: string | null,
-  ) => void
-  /** 0.40.39 — apply a daemon-side activity transition. */
-  applyDaemonActivity: (e: {
-    workspacePath: string
-    agentName: string
-    paneGroupId: string | null
-    status: 'working' | 'idle' | 'permission'
-  }) => void
-  /** 0.40.39 — register agentName→terminalId so daemon activity events
-   *  addressed by agentName resolve to the right pane. */
-  bindPaneAgentName: (agentName: string, terminalId: string) => void
   addBackgroundSpawn: (spawn: BackgroundSpawn) => void
   removeBackgroundSpawn: (id: string) => void
   /** #688 — push a live PTY's cwd into `liveSessionCwds` (from a daemon
@@ -713,22 +251,8 @@ interface ActiveAgentsState {
 
 export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   agents: new Map(),
-  outputTimestamps: new Map(),
-  paneStatuses: new Map(),
-  daemonPaneStatuses: new Map(),
-  paneAgentAlias: new Map(),
-  paneProjectMap: new Map(),
   backgroundSpawns: [],
   liveSessionCwds: new Set(),
-  unseenDone: new Map(),
-
-  markSeen: (paneId: string) => {
-    const { unseenDone } = get()
-    if (!unseenDone.has(paneId)) return
-    const next = new Map(unseenDone)
-    next.delete(paneId)
-    set({ unseenDone: next })
-  },
 
   addBackgroundSpawn: (spawn: BackgroundSpawn) => {
     set((s) => ({ backgroundSpawns: [...s.backgroundSpawns, spawn] }))
@@ -755,406 +279,33 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     set({ liveSessionCwds: next })
   },
 
-  hasActiveAgents: () => {
-    // Check both polling-detected agents and effective (daemon-merged)
-    // pane statuses.
-    const { agents, paneStatuses, daemonPaneStatuses } = get()
-    if (agents.size > 0) return true
-    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
-    for (const id of keys) {
-      const st = mergePaneStatus(paneStatuses.get(id), daemonPaneStatuses.get(id))
-      if (st === 'working' || st === 'permission') return true
-    }
-    return false
-  },
-
   getActiveAgentsList: () => Array.from(get().agents.values()),
 
   getAgentsInTab: (tabId: string) =>
     Array.from(get().agents.values()).filter((a) => a.tabId === tabId),
-
-  isTerminalRunningAgent: (terminalId: string) => {
-    if (get().agents.has(terminalId)) return true
-    const { paneStatuses, daemonPaneStatuses } = get()
-    const st = mergePaneStatus(
-      paneStatuses.get(terminalId),
-      daemonPaneStatuses.get(terminalId),
-    )
-    return st === 'working' || st === 'permission'
-  },
-
-  getPaneStatus: (paneId: string) => {
-    const { paneStatuses, daemonPaneStatuses } = get()
-    return mergePaneStatus(paneStatuses.get(paneId), daemonPaneStatuses.get(paneId))
-  },
-
-  /** Get the highest-priority agent status for a specific project. */
-  getProjectStatus: (projectId: string): PaneStatus => {
-    const { paneStatuses, daemonPaneStatuses, paneProjectMap } = get()
-    let hasWorking = false
-    let hasPermission = false
-    let hasReview = false
-    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
-    for (const paneId of keys) {
-      if (paneProjectMap.get(paneId) === projectId) {
-        const status = mergePaneStatus(
-          paneStatuses.get(paneId),
-          daemonPaneStatuses.get(paneId),
-        )
-        if (status === 'permission') hasPermission = true
-        else if (status === 'working') hasWorking = true
-        else if (status === 'review') hasReview = true
-      }
-    }
-    if (hasPermission) return 'permission'
-    if (hasWorking) return 'working'
-    if (hasReview) return 'review'
-    return 'idle'
-  },
-
-  /** Get the highest-priority agent status across all panes. */
-  getAggregateStatus: (): PaneStatus => {
-    const { paneStatuses, daemonPaneStatuses } = get()
-    let hasWorking = false
-    let hasPermission = false
-    let hasReview = false
-    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
-    for (const id of keys) {
-      const status = mergePaneStatus(paneStatuses.get(id), daemonPaneStatuses.get(id))
-      if (status === 'permission') hasPermission = true
-      else if (status === 'working') hasWorking = true
-      else if (status === 'review') hasReview = true
-    }
-    // Priority: permission > working > review > idle
-    if (hasPermission) return 'permission'
-    if (hasWorking) return 'working'
-    if (hasReview) return 'review'
-    return 'idle'
-  },
-
-  applyDaemonActivity: (e) => {
-    // Resolve the pane key: paneGroupId is the terminalId for tab-spawned
-    // sessions; else the agentName may be a bound alias (heartbeat/
-    // surfaced) or equal a projectId (pinned chat → agentChatId).
-    const { paneAgentAlias } = get()
-    const paneId =
-      e.paneGroupId ??
-      paneAgentAlias.get(e.agentName) ??
-      e.agentName
-    // Daemon always includes workspacePath on session_activity_changed —
-    // bind before status so orange dots / toasts attribute correctly on
-    // remote hosts (no local tab stash required).
-    noteDaemonPaneWorkspacePath(paneId, e.workspacePath)
-    const next: PaneStatus = e.status
-    const map = new Map(get().daemonPaneStatuses)
-    const prev = map.get(paneId)
-    if (prev === next) return
-    map.set(paneId, next)
-    set({ daemonPaneStatuses: map })
-    // Route completion through the same unseen-done/chime machinery so
-    // the chime fires on TRUE daemon-observed completion. Arm ONLY on a
-    // real working/permission→idle transition — a first-ever idle (e.g.
-    // unregister's final idle for a session never seen working) must not
-    // chime. NOTE: the map update above must land BEFORE armUnseenDone
-    // so its daemon-truth gate reads 'idle', not the stale 'working'.
-    if (next === 'working') notePaneActive(paneId)
-    else if (next === 'idle' && (prev === 'working' || prev === 'permission')) {
-      armUnseenDone(paneId)
-    }
-  },
-
-  bindPaneAgentName: (agentName, terminalId) => {
-    if (get().paneAgentAlias.get(agentName) === terminalId) return
-    const map = new Map(get().paneAgentAlias)
-    map.set(agentName, terminalId)
-    set({ paneAgentAlias: map })
-  },
-
-  recordOutput: (terminalId: string) => {
-    get().outputTimestamps.set(terminalId, Date.now())
-  },
-
-  /**
-   * Light-touch state update from terminal title signals (braille-spinner
-   * prefix = working, ✳-family prefix = idle). Only flips between
-   * idle ↔ working so it never clobbers 'permission' or 'review' — those
-   * come from the Tauri lifecycle hook and have higher priority.
-   */
-  recordTitleActivity: (paneId: string, isWorking: boolean) => {
-    if (isWorking) ensureActivityStaleSweep()
-    const { paneStatuses, paneProjectMap } = get()
-    const current = paneStatuses.get(paneId) ?? 'idle'
-    if (current === 'permission' || current === 'review') return
-    const next: PaneStatus = isWorking ? 'working' : 'idle'
-    if (current === next) return
-    const newStatuses = new Map(paneStatuses)
-    newStatuses.set(paneId, next)
-    set({ paneStatuses: newStatuses })
-
-    // F4 — scan-driven transitions feed the unseen-done machine: a
-    // working→idle flip is a (debounced) completion candidate; re-entering
-    // working cancels a pending one and clears any lingering mark.
-    if (isWorking) notePaneActive(paneId)
-    else if (current === 'working') armUnseenDone(paneId)
-
-    // Bind pane → OWNING project on first 'working'. Prefer strong
-    // signals; title OSC usually only arrives for mounted (foreground)
-    // panes so activeProjectId is a last resort HERE (marked weak so a
-    // later ensure can evict it if the pane was never really here).
-    if (isWorking && !paneProjectMap.has(paneId)) {
-      const strong = resolveStrongProjectId(paneId)
-      let boundProjectId = strong ?? resolveOwnProjectId(paneId)
-      let weak = false
-      if (!boundProjectId) {
-        boundProjectId = useProjectsStore.getState().activeProjectId
-        weak = true
-      }
-      if (boundProjectId) {
-        get().bindPaneProject(paneId, boundProjectId)
-        if (weak || !strong) _weakPaneProjectBinds.add(paneId)
-        useProjectsStore.getState().touchInteraction(boundProjectId)
-      }
-    } else if (isWorking) {
-      // Correct a prior mis-stamp if we now have a strong signal.
-      ensurePaneProjectBound(paneId)
-    }
-  },
-
-  /**
-   * Slice 5 — TITLE-driven permission state (grok). Grok announces an
-   * open tool-permission gate in the terminal TITLE (`⚠ Action
-   * Required - ` prefix — 2026-07 TUI signal study) and has NO
-   * lifecycle hooks, so the title is its only permission source.
-   *
-   * `active=true` drives the SAME 'permission' pane state Claude's
-   * hook drives — it delegates to `handleLifecycleEvent('permission')`
-   * for the status write + toast + dedupe — and then marks the pane
-   * title-owned so `active=false` (the prefix went away → the gate
-   * resolved) can clear it back to 'idle'. The next braille tick /
-   * working phrase re-arms 'working' within a second.
-   *
-   * Claude's hook semantics are NOT weakened: a pane whose permission
-   * came from a real hook event is never in `_titlePermissionPanes`
-   * (every hook event strips title ownership first), so `active=false`
-   * no-ops for it — exactly the pre-slice-5 "title activity never
-   * clears permission" contract.
-   */
-  recordTitlePermission: (paneId: string, active: boolean) => {
-    if (active) {
-      // Bind pane→project BEFORE the status write so the sidebar can
-      // attribute the red state even when the gate is the first signal
-      // this pane ever emits (same P1.A discipline as
-      // recordTitleActivity: an agent-chat pane binds to its OWN
-      // embedded project, not whatever workspace is foregrounded).
-      ensurePaneProjectBound(paneId)
-      if (!get().paneProjectMap.has(paneId)) {
-        const bound = resolveOwnProjectId(paneId)
-        if (bound) get().bindPaneProject(paneId, bound)
-      }
-      // Reuse the hook path (status + toast + dedupe)…
-      get().handleLifecycleEvent(paneId, '', 'permission')
-      // …then mark title ownership. AFTER the call, because every
-      // hook event — including this internal one — strips ownership.
-      _titlePermissionPanes.add(paneId)
-      return
-    }
-    // Clear — ONLY for a title-owned permission.
-    if (!_titlePermissionPanes.has(paneId)) return
-    _titlePermissionPanes.delete(paneId)
-    const { paneStatuses } = get()
-    if (paneStatuses.get(paneId) !== 'permission') return
-    const newStatuses = new Map(paneStatuses)
-    newStatuses.set(paneId, 'idle')
-    set({ paneStatuses: newStatuses })
-    // F4 — permission→idle is a completion source too (the gate resolved
-    // and nothing re-armed working). A re-work within the debounce cancels.
-    armUnseenDone(paneId)
-  },
-
-  /**
-   * P1.A — register a pane→project mapping UPFRONT, before any
-   * title-activity signal can race. Called by AgentChatPane on mount so
-   * the pinned-Chat pane's `paneProjectMap` entry exists the moment its
-   * PTY is live; this guarantees `getProjectStatus(ownProject)` lights
-   * the spinner on the correct workspace even if the first braille tick
-   * fires while the user is viewing a different workspace. Idempotent:
-   * never overwrites an existing binding (a lifecycle 'start' hook may
-   * have already bound a more-specific project for the same pane).
-   */
-  bindPaneProject: (paneId: string, projectId: string) => {
-    if (!paneId || !projectId) return
-    const { paneProjectMap } = get()
-    if (paneProjectMap.get(paneId) === projectId) return
-    // Explicit bind (AgentChatPane, tests, strong ensure) is never weak.
-    _weakPaneProjectBinds.delete(paneId)
-    const newPaneProjectMap = new Map(paneProjectMap)
-    newPaneProjectMap.set(paneId, projectId)
-    set({ paneProjectMap: newPaneProjectMap })
-  },
-
-  handleLifecycleEvent: (
-    paneId: string,
-    _tabId: string,
-    eventType: string,
-    workspacePath?: string | null,
-  ) => {
-    const toast = useToastStore.getState()
-    const { paneStatuses } = get()
-    const newStatuses = new Map(paneStatuses)
-
-    // Record the hook fire so the poll-based cleanup doesn't race us.
-    _hookEventAt.set(paneId, Date.now())
-
-    // Daemon-broadcast path (agent_status_changed.workspacePath) — strong
-    // bind for remote-safe Active-bar attribution.
-    if (workspacePath) noteDaemonPaneWorkspacePath(paneId, workspacePath)
-
-    // Slice 5 — a lifecycle event supersedes any TITLE-owned permission
-    // marking: once a hook speaks for a pane, its permission state is
-    // hook-owned and a title signal can no longer clear it.
-    // (`recordTitlePermission(true)` re-adds the mark right after its
-    // internal delegation to this method — grok panes stay
-    // title-owned; claude panes never are.)
-    _titlePermissionPanes.delete(paneId)
-
-    if (eventType === 'start') {
-      newStatuses.set(paneId, 'working')
-      // F4 — the pane is active again: anchor the spawn grace, cancel a
-      // pending done-debounce, clear any lingering unseen-done mark.
-      notePaneActive(paneId)
-      // Strong bind only — never activeProjectId. Background agents finish
-      // while another workspace is viewed; stamping the viewed project
-      // painted its Active-bar square orange.
-      const ownProjectId = ensurePaneProjectBound(paneId)
-      if (ownProjectId) {
-        useProjectsStore.getState().touchInteraction(ownProjectId)
-      }
-    } else if (eventType === 'permission') {
-      // Skip duplicate permission toast if already in permission state
-      const currentStatus = paneStatuses.get(paneId)
-      newStatuses.set(paneId, 'permission')
-      // F4 — permission counts as active (the agent isn't done).
-      notePaneActive(paneId)
-      ensurePaneProjectBound(paneId)
-      if (currentStatus === 'permission') {
-        set({ paneStatuses: newStatuses })
-        return
-      }
-      // Notify user that agent needs attention — name the workspace when known.
-      const agentLabel = resolvePaneAgentLabel(paneId)
-      toast.addToast(
-        agentLabel ? `${agentLabel} needs your permission` : 'An agent needs your permission',
-        'info',
-        5000,
-        {
-          label: 'View',
-          onClick: () => navigateToPane(paneId),
-        }
-      )
-    } else if (eventType === 'stop') {
-      // Skip if already in stop/review/idle state (avoid duplicate toast from multiple stop events)
-      const currentStatus = paneStatuses.get(paneId)
-      if (currentStatus === 'review' || currentStatus === 'idle') {
-        set({ paneStatuses: newStatuses })
-        return
-      }
-
-      // F4 — hook-driven completion (working|permission → done). Debounced:
-      // only a stop that survives the window with the user not looking
-      // marks unseen-done (and chimes). ensurePaneProjectBound runs inside.
-      armUnseenDone(paneId)
-
-      // Check if the pane's tab is currently active *in the foreground*
-      // workspace — not "any" workspace.
-      const tabsState = useTabsStore.getState()
-      let isInActiveTab = false
-      for (const tab of tabsState.tabs) {
-        if (tab.id === tabsState.activeTabId && tab.paneGroups.has(paneId)) {
-          isInActiveTab = true
-          break
-        }
-      }
-      newStatuses.set(paneId, isInActiveTab ? 'idle' : 'review')
-
-      if (!isInActiveTab) {
-        ensurePaneProjectBound(paneId)
-        const agentLabel = resolvePaneAgentLabel(paneId)
-        toast.addToast(
-          agentLabel ? `${agentLabel} has finished working` : 'An agent has finished working',
-          'success',
-          4000,
-          {
-            label: 'View',
-            onClick: () => navigateToPane(paneId, { clearReview: true }),
-          }
-        )
-      }
-    }
-
-    set({ paneStatuses: newStatuses })
-
-    // Launch-failure detection RETIRED 0.40.48 — see the note at the
-    // top of the module. The daemon owns spawn health; no renderer
-    // timing guess, no toast, no 30s auto-retriage.
-
-    // RETIRED 0.36.3 — legacy auto-retriage loop.
-    //
-    // Pre-0.36.x model: every Claude-session 'stop' event triggered a
-    // renderer-driven triage that read `.k2so/agents/<name>/heartbeat.json`
-    // (legacy per-agent config) and immediately re-spawned the agent in a
-    // new tab. The loop was self-perpetuating — agent ends, retriage,
-    // spawn, agent ends, retriage… autoBackoff slowed it but never
-    // stopped it — and it bypassed `projects.heartbeat_mode='off'`
-    // because it called `triage_decide` (legacy) instead of
-    // `scheduler_tick` (gated). This is what was firing wakes against
-    // workspaces with no DB heartbeat rows (Cortana, etc.).
-    //
-    // Replaced by `agent_heartbeats` (DB-backed scheduled heartbeats
-    // owned by the workspace, fired by the daemon's heartbeat tick).
-    // Sessions now end and stay ended until their next scheduled fire.
-  },
 
   pollOnce: async () => {
     const tabsState = useTabsStore.getState()
 
     // Collect all terminals across all tab groups
     const terminals: Array<{
-      terminalId: string
+      data: TerminalItemData
       tabId: string
       tabTitle: string
       groupIndex: number
     }> = []
 
-    // Group 0
-    for (const tab of tabsState.tabs) {
-      for (const [, pg] of tab.paneGroups) {
-        for (const item of pg.items) {
-          if (item.type === 'terminal') {
-            const data = item.data as TerminalItemData
-            terminals.push({
-              terminalId: data.terminalId,
-              tabId: tab.id,
-              tabTitle: tab.title,
-              groupIndex: 0,
-            })
-          }
-        }
-      }
-    }
-
-    // Extra groups
-    for (let gi = 0; gi < tabsState.extraGroups.length; gi++) {
-      const group = tabsState.extraGroups[gi]
-      for (const tab of group.tabs) {
+    const groups = [tabsState.tabs, ...tabsState.extraGroups.map((g) => g.tabs)]
+    for (let gi = 0; gi < groups.length; gi++) {
+      for (const tab of groups[gi]) {
         for (const [, pg] of tab.paneGroups) {
           for (const item of pg.items) {
             if (item.type === 'terminal') {
-              const data = item.data as TerminalItemData
               terminals.push({
-                terminalId: data.terminalId,
+                data: item.data as TerminalItemData,
                 tabId: tab.id,
                 tabTitle: tab.title,
-                groupIndex: gi + 1,
+                groupIndex: gi,
               })
             }
           }
@@ -1162,11 +313,8 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       }
     }
 
-    // Poll each terminal for its foreground command
     const newAgents = new Map<string, ActiveAgent>()
-
-    const now = Date.now()
-    const { agents: oldAgents, outputTimestamps } = get()
+    const { agents: oldAgents } = get()
 
     // Fetch every live PTY's foreground command in a SINGLE request
     // (`/cli/terminal/list-running`) instead of one
@@ -1213,101 +361,22 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     }
     if (liveChanged) set({ liveSessionCwds: liveCwds })
 
+    // What each agent is doing is the daemon's row (S5), not a guess from
+    // output timing.
+    const activity = activityStore(primaryScope()).getState()
     for (const t of terminals) {
-      const command = cmdByTerminal.get(t.terminalId) ?? null
+      const command = cmdByTerminal.get(t.data.terminalId) ?? null
       if (command && KNOWN_AGENT_COMMANDS.has(command)) {
-        const lastOutput = outputTimestamps.get(t.terminalId) ?? 0
-        const status: 'active' | 'idle' = (now - lastOutput < AGENT_IDLE_THRESHOLD_MS) ? 'active' : 'idle'
-
-        newAgents.set(t.terminalId, {
-          terminalId: t.terminalId,
+        const display = rowForTerminal(activity, t.data)?.display ?? 'idle'
+        newAgents.set(t.data.terminalId, {
+          terminalId: t.data.terminalId,
           command,
           tabId: t.tabId,
           tabTitle: t.tabTitle,
           groupIndex: t.groupIndex,
-          status,
-          hookStatus: get().paneStatuses.get(t.terminalId) ?? 'idle',
+          status: isBusyDisplay(display) ? 'active' : 'idle',
+          display,
         })
-      }
-    }
-
-    // Detect transitions and fire toasts
-    const toast = useToastStore.getState()
-
-    // Only fire poll-based toasts if the hook system is NOT active for this pane.
-    // When hooks are working, handleLifecycleEvent handles all toasts.
-    const { paneStatuses } = get()
-
-    for (const [terminalId, newAgent] of newAgents) {
-      const oldAgent = oldAgents.get(terminalId)
-      if (oldAgent?.status === 'active' && newAgent.status === 'idle') {
-        if (!paneStatuses.has(terminalId)) {
-          toast.addToast(
-            `${newAgent.command} is waiting for input in "${newAgent.tabTitle}"`,
-            'info',
-            5000,
-            {
-              label: 'Switch to tab',
-              onClick: () => navigateToPane(terminalId),
-            }
-          )
-        }
-      }
-    }
-
-    for (const [terminalId, oldAgent] of oldAgents) {
-      if (!newAgents.has(terminalId) && oldAgent.status === 'active') {
-        if (!paneStatuses.has(terminalId)) {
-          toast.addToast(
-            `${oldAgent.command} finished in "${oldAgent.tabTitle}"`,
-            'success',
-            4000,
-            {
-              label: 'Switch to tab',
-              onClick: () => navigateToPane(terminalId, { clearReview: true }),
-            }
-          )
-        }
-      }
-    }
-
-    // Clean up output timestamps and pane statuses for terminals no longer running an agent.
-    // This handles the case where the user interrupts (Esc) and the hook 'stop' event never fires.
-    const cleanedStatuses = new Map(paneStatuses)
-    let statusesChanged = false
-    for (const terminalId of outputTimestamps.keys()) {
-      if (newAgents.has(terminalId)) continue
-      // Preserve the timestamp for panes with an active hook-driven
-      // status — it's the OUTPUT_TRUST_GRACE_MS signal that keeps the
-      // working state alive through the cleanup branch below. v2
-      // (Alacritty) panes never appear in `newAgents` because
-      // `terminal_get_foreground_command` only sees legacy
-      // TerminalManager sessions; without this exemption their
-      // 'working' state would get clobbered on every poll cycle and
-      // the braille spinner would never stay lit. Hook-driven legacy
-      // panes are unaffected (they're already in newAgents via the
-      // KNOWN_AGENT_COMMANDS check).
-      if (paneStatuses.has(terminalId)) continue
-      outputTimestamps.delete(terminalId)
-    }
-    const cleanupNow = Date.now()
-    for (const [paneId, status] of paneStatuses) {
-      if ((status === 'working' || status === 'permission') && !newAgents.has(paneId)) {
-        // The foreground command isn't a known agent — but that fires
-        // transiently during Claude's tool-use (child process briefly
-        // runs `bash`, `rg`, etc.). Only clear when *both* trust signals
-        // have gone quiet: hooks haven't fired in a long time AND output
-        // isn't flowing. Otherwise we clobber a legitimate working state.
-        const hookAge = cleanupNow - (_hookEventAt.get(paneId) ?? 0)
-        const outputAge = cleanupNow - (outputTimestamps.get(paneId) ?? 0)
-        if (hookAge < HOOK_TRUST_GRACE_MS) continue
-        if (outputAge < OUTPUT_TRUST_GRACE_MS) continue
-        cleanedStatuses.set(paneId, 'idle')
-        _hookEventAt.delete(paneId)
-        statusesChanged = true
-        // F4 — poll-cleanup completion (the interrupt/Esc path where the
-        // hook 'stop' never fires). Same debounced unseen-done candidate.
-        armUnseenDone(paneId)
       }
     }
 
@@ -1316,32 +385,25 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     // (~2.5s), forcing every component subscribing to `agents` (sidebar
     // Active section, IconRail, …) to re-render every cycle even when
     // nothing changed — sustained re-render churn that amplified the
-    // terminal-stall storm. (`paneStatuses` already had this guard.)
-    const agentsChanged = !agentMapsEqual(oldAgents, newAgents)
-    if (agentsChanged && statusesChanged) {
-      set({ agents: newAgents, paneStatuses: cleanedStatuses })
-    } else if (agentsChanged) {
-      set({ agents: newAgents })
-    } else if (statusesChanged) {
-      set({ paneStatuses: cleanedStatuses })
-    }
+    // terminal-stall storm.
+    if (!agentMapsEqual(oldAgents, newAgents)) set({ agents: newAgents })
   },
 }))
 
 // ── Polling ─────────────────────────────────────────────────────────
 let pollInterval: ReturnType<typeof setInterval> | null = null
-let hookUnlisten: (() => void) | null = null
-// 0.39.39 (#675.2) — push-subscription teardowns (agent_status_changed +
-// app-hello re-snapshot). Module-level so stopAgentPolling can clean them up.
-let agentStatusUnsub: (() => void) | null = null
+// 0.39.39 (#675.2) — push-subscription teardowns (app-hello re-snapshot).
+// Module-level so stopAgentPolling can clean them up.
 let agentHelloUnsub: (() => void) | null = null
 // #688 — app-level SessionAdded/SessionRemoved teardowns. These keep
 // `liveSessionCwds` fresh push-style (the 2.5s poll that used to do it is
 // gone). Module-level so stopAgentPolling can clean them up.
 let sessionAddedUnsub: (() => void) | null = null
 let sessionRemovedUnsub: (() => void) | null = null
-let sessionActivityUnsub: (() => void) | null = null
 let hooksInstallFailedUnsub: (() => void) | null = null
+// S5 — the window server's activity feed and its toasts.
+let activityRelease: (() => void) | null = null
+let activityNotifyRelease: (() => void) | null = null
 
 // #688 — map a session's canonical key (`agent_name`, the v2_session_map
 // key, stable across its add/remove pair) → the cwd it reported. Lets a
@@ -1371,56 +433,29 @@ function trackSessionRemoved(agentName: string, cwdHint: string): void {
     if (remaining === cwd) return // another live session keeps it green
   }
   useActiveAgentsStore.getState().removeLiveSessionCwd(cwd)
-  // 0.40.39 — drop the daemon-truth key + alias for the gone session so a
-  // stale spinner can't linger (the daemon also emits a final idle, but
-  // this is the belt-and-suspenders for a force-removed session).
-  const st = useActiveAgentsStore.getState()
-  const terminalId = st.paneAgentAlias.get(agentName) ?? agentName
-  if (st.daemonPaneStatuses.has(terminalId) || st.paneAgentAlias.has(agentName)) {
-    const dmap = new Map(st.daemonPaneStatuses)
-    dmap.delete(terminalId)
-    const amap = new Map(st.paneAgentAlias)
-    amap.delete(agentName)
-    useActiveAgentsStore.setState({ daemonPaneStatuses: dmap, paneAgentAlias: amap })
-  }
 }
 
-// Home M3 (MS68) — this store is the PRIMARY room's activity sink: the
-// window's Active bar, tab dots and chime. Terminal panes report through
-// their room's sink, never to this store directly.
-registerPrimaryRoomActivity({
-  recordOutput: (id) => useActiveAgentsStore.getState().recordOutput(id),
-  recordTitleActivity: (id, working) => useActiveAgentsStore.getState().recordTitleActivity(id, working),
-  recordTitlePermission: (id, active) => useActiveAgentsStore.getState().recordTitlePermission(id, active),
-  markSeen: (id) => useActiveAgentsStore.getState().markSeen(id),
-  bindPaneAgentName: (agentName, id) => useActiveAgentsStore.getState().bindPaneAgentName(agentName, id),
-  bindPaneProject: (id, projectId) => useActiveAgentsStore.getState().bindPaneProject(id, projectId),
-}, useActiveAgentsStore)
-
 export function startAgentPolling(): void {
-  if (pollInterval || agentStatusUnsub) return
-  // Initial poll — snapshot of current truth (paneStatuses derived from
-  // foreground commands + liveSessionCwds for the live-session dot).
+  if (pollInterval || agentHelloUnsub || activityRelease) return
+  // Initial poll — snapshot of current truth (the agents map + the
+  // liveSessionCwds live-session dot).
   useActiveAgentsStore.getState().pollOnce()
 
+  // prd-daemon-activity-and-thread-working-v1 S5 — the window server's
+  // activity rows (snapshot + `activity_changed`, or an older server's
+  // `session_activity_changed` as-is) and the toasts for its turn ends.
+  activityRelease = attachActivity(primaryScope())
+  activityNotifyRelease = registerActivityNotify(primaryScope(), {
+    toaster: PRIMARY_TOASTER,
+    // MS21 — the window's Active bar is the primary room: its chime reads
+    // the primary room's project list.
+    projects: () => useProjectsStore.getState().projects,
+    root: null,
+  })
+
   if (serverSupports('daemon-broadcasts')) {
-    // 0.39.39 (#675.2) — push-primary. The daemon emits `agent_status_changed`
-    // from its lifecycle-hook chokepoint (the canonical source for the same
-    // start/stop/permission buckets the Tauri `agent:lifecycle` event carries),
-    // so the ~2.5s poll that recomputed working/idle is GONE. We map each
-    // broadcast through `handleLifecycleEvent` — the exact path the Tauri hook
-    // uses — so spinner/toast/launch-failure logic is unchanged. The initial
-    // `pollOnce` above still seeds `liveSessionCwds`; on every WS (re)connect
-    // we re-`pollOnce` (via onAppHello) to backfill any missed transitions +
-    // refresh the live-session set.
-    agentStatusUnsub = onAgentStatusChanged(primaryScope(), (e) => {
-      useActiveAgentsStore.getState().handleLifecycleEvent(
-        e.paneId,
-        e.tabId,
-        e.status,
-        e.workspacePath,
-      )
-    })
+    // 0.39.39 (#675.2) — push-primary. On every WS (re)connect we re-`pollOnce`
+    // (via onAppHello) to refresh the agents map + the live-session set.
     agentHelloUnsub = onAppHello(primaryScope(), () => {
       useActiveAgentsStore.getState().pollOnce()
     })
@@ -1451,16 +486,6 @@ export function startAgentPolling(): void {
     sessionRemovedUnsub = onSessionRemovedApp(primaryScope(), (e) => {
       trackSessionRemoved(e.agent_name, e.workspace_path)
     })
-    // 0.40.39 — daemon-side activity (session_activity.rs). Visibility-
-    // independent working/idle/permission for EVERY session, so hidden/
-    // unmounted tab spinners stay correct. Gated on the capability so an
-    // old/remote daemon simply never populates daemonPaneStatuses and the
-    // merge rule falls back to the client feed.
-    if (serverSupports('session-activity')) {
-      sessionActivityUnsub = onSessionActivityChanged(primaryScope(), (e) => {
-        useActiveAgentsStore.getState().applyDaemonActivity(e)
-      })
-    }
   } else {
     // Fallback: legacy ~2.5s poll loop (older / remote daemon, no broadcasts).
     // Add jitter to avoid thundering-herd across multiple windows.
@@ -1515,15 +540,10 @@ export function startAgentPolling(): void {
     }
   }
 
-  // Listen for hook-based lifecycle events from the Rust notification server
+  // CLI-triggered launches and spawns from this computer's daemon. (The
+  // Tauri `agent:lifecycle` hook event is gone: the daemon owns activity,
+  // prd-daemon-activity-and-thread-working-v1 RL9/A35.)
   import('@tauri-apps/api/event').then(({ listen }) => {
-    listen<{ paneId: string; tabId: string; eventType: string }>('agent:lifecycle', (event) => {
-      const { paneId, tabId, eventType } = event.payload
-      useActiveAgentsStore.getState().handleLifecycleEvent(paneId, tabId, eventType)
-    }).then((fn) => {
-      hookUnlisten = fn
-    })
-
     // Listen for CLI-triggered agent launch requests
     listen<{ command: string; args: string[]; cwd: string; agentName: string; worktreePath?: string }>('cli:agent-launch', async (event) => {
       const { command, args, cwd, agentName, worktreePath } = event.payload
@@ -2008,10 +1028,6 @@ export function stopAgentPolling(): void {
     clearInterval(pollInterval)
     pollInterval = null
   }
-  if (agentStatusUnsub) {
-    agentStatusUnsub()
-    agentStatusUnsub = null
-  }
   if (agentHelloUnsub) {
     agentHelloUnsub()
     agentHelloUnsub = null
@@ -2028,109 +1044,41 @@ export function stopAgentPolling(): void {
     sessionRemovedUnsub()
     sessionRemovedUnsub = null
   }
-  if (sessionActivityUnsub) {
-    sessionActivityUnsub()
-    sessionActivityUnsub = null
+  if (activityNotifyRelease) {
+    activityNotifyRelease()
+    activityNotifyRelease = null
+  }
+  if (activityRelease) {
+    activityRelease()
+    activityRelease = null
   }
   _liveSessionCwdByKey.clear()
-  if (hookUnlisten) {
-    hookUnlisten()
-    hookUnlisten = null
-  }
-  // F4 — cancel pending done-debounces so a fire can't land after teardown.
-  for (const timer of _unseenDoneTimers.values()) {
-    clearTimeout(timer)
-  }
-  _unseenDoneTimers.clear()
-  _paneFirstActiveAt.clear()
 }
 
 // ── #625: host-switch reset of agent pane state ─────────────────────────
 //
-// `paneStatuses` / `paneProjectMap` / `agents` / `outputTimestamps` (store)
-// and `_hookEventAt` (module Map)
-// are keyed by pane/terminal IDs that belong to the LOCAL machine's
-// workspaces (paneProjectMap maps pane → LOCAL projectId). As store/module
-// singletons they survive the `<App key={hostKey}>` remount on a host
-// switch, so after connecting to a REMOTE daemon `getProjectStatus` /
-// `getAggregateStatus` / `hasActiveAgents` would attribute the local box's
-// spinners to the remote — lighting the expanded-nav spinner and the
-// Active Bar `paneStatuses` read against the wrong host.
+// `agents` / `liveSessionCwds` (store) and the window server's activity view
+// are keyed by sessions and cwds of the server the window WAS connected to.
+// As singletons they survive the `<App key={hostKey}>` remount on a host
+// switch, so after connecting to a REMOTE daemon the local box's spinners
+// would paint against the wrong host.
 //
-// On a real host CHANGE, wipe all of it: the new host's own polling +
-// lifecycle hooks repopulate it for the remote's panes.
+// On a real host CHANGE, wipe all of it: the new host's own snapshot (the
+// next hello) repopulates it.
 export function __resetAgentStateForHostSwitch(): void {
-  _hookEventAt.clear()
-  _titlePermissionPanes.clear()
-  _weakPaneProjectBinds.clear()
-  _daemonPaneWorkspacePath.clear()
-  // F4 — unseen-done marks/timers are keyed by the LOCAL host's paneIds.
-  for (const timer of _unseenDoneTimers.values()) {
-    clearTimeout(timer)
-  }
-  _unseenDoneTimers.clear()
-  _paneFirstActiveAt.clear()
   // #688 — the live-session cwd tracking is keyed by the LOCAL host's
   // sessions; wipe it on a host change so the new host's snapshot poll
   // re-seeds `liveSessionCwds` cleanly (and a stale local key can't keep a
   // remote cwd falsely green).
   _liveSessionCwdByKey.clear()
+  resetActivity(primaryScope())
   useActiveAgentsStore.setState({
     agents: new Map(),
-    outputTimestamps: new Map(),
-    paneStatuses: new Map(),
-  daemonPaneStatuses: new Map(),
-  paneAgentAlias: new Map(),
-    paneProjectMap: new Map(),
     backgroundSpawns: [],
     liveSessionCwds: new Set(),
-    unseenDone: new Map(),
   })
 }
 
 onActiveHostChange(() => {
   __resetAgentStateForHostSwitch()
 })
-
-// ── Stale-'working' sweep (activity-detection study, FM2) ──────────
-// Every working=false writer (title ✱ marker, bell, the pane's 1s-grace
-// idle watcher) lives inside a mounted TerminalPane — so a pane that
-// unmounts or parks mid-work leaves its 'working' entry frozen with
-// nothing left alive to clear it: the forever-spinner. This sweep is
-// the pane-independent backstop: a frame-driven 'working' entry whose
-// output heartbeat has gone silent past the threshold flips to idle.
-// Entries with NO output heartbeat are left alone — their working
-// state came from a lifecycle hook, and hooks deliver their own end
-// events (flipping those would false-idle hook-driven panes).
-// False-idle self-heals: the next title tick or frame re-arms
-// 'working' within a second. Guarded against Vite HMR re-eval
-// double-starting the interval.
-const STALE_WORKING_MS = 15_000
-const SWEEP_INTERVAL_MS = 5_000
-declare global {
-  interface Window {
-    __k2ActivityStaleSweep?: ReturnType<typeof setInterval>
-  }
-}
-/** Lazily started on the first working transition (NOT at module
- *  eval — test suites spy on setInterval with exact call counts, and
- *  an import-time interval would pollute them; production behavior is
- *  identical since a sweep with no 'working' entries is a no-op). */
-export function ensureActivityStaleSweep(): void {
-  if (typeof window === 'undefined' || window.__k2ActivityStaleSweep) return
-  window.__k2ActivityStaleSweep = setInterval(() => {
-    const s = useActiveAgentsStore.getState()
-    const now = Date.now()
-    let next: Map<string, PaneStatus> | null = null
-    for (const [paneId, status] of s.paneStatuses) {
-      if (status !== 'working') continue
-      const lastOutput = s.outputTimestamps.get(paneId)
-      if (lastOutput === undefined) continue
-      if (now - lastOutput > STALE_WORKING_MS) {
-        if (!next) next = new Map(s.paneStatuses)
-        next.set(paneId, 'idle')
-      }
-    }
-    if (next) useActiveAgentsStore.setState({ paneStatuses: next })
-  }, SWEEP_INTERVAL_MS)
-}

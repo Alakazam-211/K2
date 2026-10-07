@@ -109,6 +109,8 @@ import {
 } from './tabs'
 import { __activeBarMemoryForTests } from '@/components/Sidebar/ActiveBar'
 import { useActiveAgentsStore } from './active-agents'
+import { __seedActivityForTests, activityStore, workspaceDisplay, type ActivityRow } from './activity'
+import { primaryScope } from '@/kessel/server-scope'
 // #625 — newly-wired daemon-backed stores that must re-fetch on a host
 // change so the client is a pure view of the active host's daemon.
 import { useSettingsStore } from './settings'
@@ -159,6 +161,27 @@ function daemonCliGetCallsWithPath(path: string): unknown[][] {
   )
 }
 
+/** A row the LOCAL daemon reported before the switch. */
+function localRow(): ActivityRow {
+  return {
+    sessionId: 'sid-local',
+    agentName: 'tab-pane-local',
+    projectId: 'local-project-A',
+    workspacePath: '/local/a',
+    harness: 'claude',
+    display: 'working',
+    lead: { state: 'working', outcome: 'none', since: 0, promptId: null },
+    children: { subagents: 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
+    turnStartedAt: null,
+    evidenceAt: 1,
+    evidenceSource: 'hook',
+    reason: 'turn_running',
+    staleSince: null,
+    confirmed: true,
+    rev: 1,
+  }
+}
+
 function makeRemoteHost(): ConnectHost {
   return {
     id: 'host-1',
@@ -186,9 +209,19 @@ describe('#625 host-switch resets per-machine UI session state', () => {
       workspaceLayouts: { 'local-project-A:ws1': {} as never },
       activeWorkspaceKey: 'local-project-A:ws1',
     })
-    useActiveAgentsStore.setState({
-      paneStatuses: new Map([['pane-local', 'working']]),
-      paneProjectMap: new Map([['pane-local', 'local-project-A']]),
+    useActiveAgentsStore.setState({ liveSessionCwds: new Set(['/local/a']) })
+    __seedActivityForTests(primaryScope(), {
+      supported: true,
+      rows: [localRow()],
+      workspaces: [
+        {
+          projectId: 'local-project-A',
+          workspacePath: '/local/a',
+          display: 'working',
+          counts: { working: 1, monitoring: 0, waiting: 0, unverifiable: 0, idle: 0 },
+          since: null,
+        },
+      ],
     })
   })
 
@@ -226,15 +259,17 @@ describe('#625 host-switch resets per-machine UI session state', () => {
     expect(useTabsStore.getState().activeWorkspaceKey).toBeNull()
   })
 
-  it('clears active-agents pane state on a host change', () => {
-    expect(useActiveAgentsStore.getState().paneStatuses.size).toBe(1)
-    expect(useActiveAgentsStore.getState().paneProjectMap.size).toBe(1)
+  it('clears the window server’s activity rows and live sessions on a host change', () => {
+    const view = activityStore(primaryScope())
+    expect(view.getState().rows.size).toBe(1)
+    expect(workspaceDisplay(view.getState(), { projectId: 'local-project-A' })).toBe('working')
 
     useConnectHostStore.getState().selectHost(makeRemoteHost())
 
-    expect(useActiveAgentsStore.getState().paneStatuses.size).toBe(0)
-    expect(useActiveAgentsStore.getState().paneProjectMap.size).toBe(0)
-    expect(useActiveAgentsStore.getState().getProjectStatus('local-project-A')).toBe('idle')
+    expect(view.getState().rows.size).toBe(0)
+    expect(view.getState().supported).toBe(false)
+    expect(workspaceDisplay(view.getState(), { projectId: 'local-project-A' })).toBe('idle')
+    expect(useActiveAgentsStore.getState().liveSessionCwds.size).toBe(0)
   })
 
   it('does NOT reset on the initial local subscribe / a no-op reselect of local', () => {

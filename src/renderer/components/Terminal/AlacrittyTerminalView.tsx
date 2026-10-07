@@ -14,7 +14,6 @@ import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore } from '@/stores/settings'
 import { keyEventToSequence, naturalTextEditingSequence } from '@/lib/key-mapping'
 import { isFileDragActive, markDropConsumed, isImagePath, quotePathForImageDrop, bracketPaste } from '@/lib/file-drag'
-import { detectWorkingSignal } from '@/lib/agent-signals'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
 import { useRoom } from '@/components/Room/RoomContext'
@@ -237,11 +236,6 @@ export function AlacrittyTerminalView({
   const frameCountRef = useRef(0)
   const wheelEventCountRef = useRef(0)
 
-  // Working-state detection — last time we saw an LLM "working" hint in
-  // the bottom rows of the grid. The idle-check interval (see effect
-  // below) flips the pane status to idle once the hint has been absent
-  // long enough to rule out a single-frame gap.
-  const lastSeenWorkingAtRef = useRef(0)
   const [debugInfo, setDebugInfo] = useState({ frames: 0, offset: 0, wheel: 0 })
 
   // ── Measure cell metrics from DOM ───────────────────────────────────
@@ -276,16 +270,6 @@ export function AlacrittyTerminalView({
     frameCountRef.current++
     termModeRef.current = update.mode
 
-    // Viewport working-state detection — gated on displayOffset === 0 so
-    // a scrolled-up user doesn't accidentally pin the pane in 'working'
-    // state by keeping the spinner-row off-screen.
-    if (update.display_offset === 0) {
-      if (detectWorkingSignal(map, update.rows)) {
-        lastSeenWorkingAtRef.current = Date.now()
-        room.activity.recordTitleActivity(terminalId, true)
-      }
-    }
-
     setGridState({
       rows: update.rows,
       cols: update.cols,
@@ -307,23 +291,6 @@ export function AlacrittyTerminalView({
   // ── rAF-batched rendering ──────────────────────────────────────────
   // Each GridUpdate is a full visible-grid snapshot, so only the latest
   // frame matters — intermediate ones are safely overwritten.
-
-  // ── Working-state idle watcher ─────────────────────────────────────
-  // Working → idle transitions happen when no hint has been seen for
-  // 1s. We check on a 500ms timer so the transition is at most ~1.5s
-  // after the real transition, but never flickers on single-frame gaps.
-  useEffect(() => {
-    const IDLE_GRACE_MS = 1000
-    const interval = setInterval(() => {
-      const last = lastSeenWorkingAtRef.current
-      if (last === 0) return // never seen working — don't touch state
-      if (Date.now() - last > IDLE_GRACE_MS) {
-        room.activity.recordTitleActivity(terminalId, false)
-        lastSeenWorkingAtRef.current = 0
-      }
-    }, 500)
-    return () => clearInterval(interval)
-  }, [terminalId])
 
   const scheduleRender = useCallback((payload: GridUpdate) => {
     pendingFrameRef.current = payload
@@ -523,28 +490,17 @@ export function AlacrittyTerminalView({
         }
         prevMode = payload.mode
         scheduleRender(payload)
-        room.activity.recordOutput(terminalId)
       })
 
       unlistenExit = await listen<{ exitCode: number }>(`terminal:exit:${terminalId}`, (event) => {
         onExit?.(event.payload.exitCode)
       })
 
-      // Listen for terminal title changes (e.g. Claude chat names).
-      // Working-state detection now lives in the viewport scan inside
-      // applyGridUpdate; the title is only a fast-idle hint — when
-      // Claude / similar tools finish (or the user hits Esc) they
-      // restore the ✳-family idle prefix on the title, and we can clear
-      // the spinner immediately instead of waiting for the grid
-      // idle-grace window.
+      // Listen for terminal title changes (e.g. Claude chat names). The
+      // title is the tab label only: what the agent is doing comes from
+      // the daemon (prd-daemon-activity-and-thread-working-v1 RL9).
       unlistenTitle = await listen<string>(`terminal:title:${terminalId}`, (event) => {
         const raw = event.payload ?? ''
-        const isIdleMarker = /^[*✱✲✳✴✵✶✷✸✹⚹⁎∗※]/.test(raw)
-        if (isIdleMarker) {
-          lastSeenWorkingAtRef.current = 0
-          room.activity.recordTitleActivity(terminalId, false)
-        }
-
         const newTitle = stripOscIdleGlyphs(raw)
         if (newTitle && tabId) {
           const st = room.tabs.getState()

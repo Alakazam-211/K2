@@ -79,9 +79,10 @@ export const FEATURES = {
   /** Daemon-side per-session activity detection (session_activity.rs):
    *  the daemon emits session_activity_changed (Title/Bell-derived
    *  working/idle/permission) for every session regardless of pane
-   *  visibility. Gates the renderer subscription that feeds
-   *  daemonPaneStatuses; an older/remote daemon never emits it, so the
-   *  merge rule transparently falls back to client-side detection. */
+   *  visibility. Since prd-daemon-activity-and-thread-working-v1 S5 the
+   *  renderer reads that stream as-is from a server without the
+   *  `daemon-activity` reported feature (RL13) and needs no gate for it;
+   *  the key stays for version copy. */
   'session-activity': '0.40.39',
   /** Daemon-owned published services (`GET /cli/publish/list`,
    *  `POST /cli/publish/{start,stop}`, `publish_services_changed`).

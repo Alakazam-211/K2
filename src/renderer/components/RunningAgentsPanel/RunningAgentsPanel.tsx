@@ -7,6 +7,9 @@ import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
+import { rowForAgentName, useActivity, type ActivityDisplay } from '@/stores/activity'
+import { DISPLAY_LABEL } from '@/lib/activity-copy'
+import { ActivityMark } from '@/components/Activity/ActivityMark'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
 import { Surface } from '@/components/ui'
@@ -153,8 +156,14 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     if (selectedIndex >= filtered.length) setSelectedIndex(Math.max(0, filtered.length - 1))
   }, [filtered.length, selectedIndex])
 
-  // Get hook status for each terminal
-  const paneStatuses = useActiveAgentsStore((s) => s.paneStatuses)
+  // What each session is doing: the window server's daemon rows (S5).
+  const activityRows = useActivity(primaryScope(), (s) => s.rows)
+  const displayOf = (agent: RunningAgentInfo): ActivityDisplay => {
+    const row =
+      activityRows.get(agent.terminalId) ??
+      (agent.agentName ? rowForAgentName({ rows: activityRows }, agent.agentName) : null)
+    return row?.display ?? 'idle'
+  }
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -320,24 +329,9 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     return parts[parts.length - 1] || cwd
   }
 
-  const statusColor = (terminalId: string) => {
-    const status = paneStatuses.get(terminalId)
-    switch (status) {
-      case 'working': return 'var(--color-accent)'
-      case 'permission': return 'var(--color-status-error)'
-      case 'review': return 'var(--color-status-ok)'
-      default: return 'var(--color-neutral)'
-    }
-  }
-
-  const statusLabel = (terminalId: string) => {
-    const status = paneStatuses.get(terminalId)
-    switch (status) {
-      case 'working': return 'Working'
-      case 'permission': return 'Needs Permission'
-      case 'review': return 'Review'
-      default: return 'Idle'
-    }
+  const statusLabel = (agent: RunningAgentInfo): string => {
+    const label = DISPLAY_LABEL[displayOf(agent)]
+    return label.charAt(0).toUpperCase() + label.slice(1)
   }
 
   return (
@@ -429,12 +423,13 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
 
                     {/* Status */}
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <span
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{ backgroundColor: statusColor(agent.terminalId) }}
-                      />
+                      {displayOf(agent) === 'idle' ? (
+                        <span className="w-1.5 h-1.5 bg-[var(--color-neutral)]" />
+                      ) : (
+                        <ActivityMark display={displayOf(agent)} size={6} />
+                      )}
                       <span className="text-[10px] text-[var(--color-text-muted)]">
-                        {statusLabel(agent.terminalId)}
+                        {statusLabel(agent)}
                       </span>
                     </div>
 

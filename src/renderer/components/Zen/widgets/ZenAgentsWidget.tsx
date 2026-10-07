@@ -16,7 +16,9 @@
 // first Agents widget). Each row: avatar (the agent's picture when it has
 // one — `row.avatarUrl` from the bridge — else its initials),
 // name, the server when it isn't this computer, the agent's live status
-// (working, needs you, idle — no status when its server can't say), and the
+// (working, monitoring, needs you, no update, idle — the daemon's display,
+// prd-daemon-activity-and-thread-working-v1 Q13; no status when its server
+// can't say), and the
 // start of its last message. No unread dots (answer 9). A row that can't be
 // messaged says why ("Offline", "Sign in", "No access", "Update <server>").
 // Selecting a row opens its conversation in place (`conversation.open`):
@@ -70,10 +72,20 @@ function propOn(props: Record<string, unknown>, name: string): boolean {
   return props[name] !== false
 }
 
+/** Which `status` prop value shows an activity. The prop keeps its three
+ *  values (`working`, `needs-you`, `idle`): `monitoring` shows with
+ *  `working` and `unverifiable` with `idle` (Q13). */
+function statusGroup(activity: NonNullable<ZenAgentRow['activity']>): string {
+  if (activity === 'monitoring') return 'working'
+  if (activity === 'unverifiable') return 'idle'
+  return activity
+}
+
 /** The row as this widget's display props show it. */
 function displayRow(row: ZenAgentRow, props: Record<string, unknown>): ZenAgentRow {
   const statuses = Array.isArray(props.status) ? props.status.filter((s): s is string => typeof s === 'string') : null
-  const activity = row.activity !== null && statuses && !statuses.includes(row.activity) ? null : row.activity
+  const activity =
+    row.activity !== null && statuses && !statuses.includes(statusGroup(row.activity)) ? null : row.activity
   return {
     ...row,
     server: propOn(props, 'server-tag') ? row.server : null,
@@ -242,13 +254,28 @@ function useWidgetHome(bridge: ZenWidgetBridge, rows: ZenAgentRow[]): [string | 
   return [homeId, pick]
 }
 
-const ACTIVITY_TEXT = { working: 'working', 'needs-you': 'needs you', idle: 'idle' } as const
+const ACTIVITY_TEXT = {
+  working: 'working',
+  monitoring: 'monitoring',
+  'needs-you': 'needs you',
+  unverifiable: 'no update',
+  idle: 'idle',
+} as const
 
-/** The status mark on the avatar, and its word. */
+/** The status mark on the avatar, and its word. Monitoring is a hollow
+ *  accent ring, no update a dashed one (the daemon's displays, Q13). */
 export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: number }): React.JSX.Element | null {
   if (row.activity === null) return null
   const color =
     row.activity === 'working' ? 'var(--zen-working)' : row.activity === 'needs-you' ? 'var(--zen-needs-you)' : 'transparent'
+  const border =
+    row.activity === 'idle'
+      ? '1.5px solid var(--zen-text-muted)'
+      : row.activity === 'monitoring'
+        ? '2px solid var(--zen-accent)'
+        : row.activity === 'unverifiable'
+          ? '1.5px dashed var(--zen-text-muted)'
+          : '2px solid var(--zen-surface)'
   return (
     <span
       aria-hidden
@@ -260,7 +287,7 @@ export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: numb
         height: size,
         borderRadius: 999,
         background: color,
-        border: row.activity === 'idle' ? '1.5px solid var(--zen-text-muted)' : '2px solid var(--zen-surface)',
+        border,
         boxSizing: 'border-box',
       }}
     />
@@ -361,8 +388,10 @@ function AgentRow({
                       ? 'var(--zen-working)'
                       : row.activity === 'needs-you'
                         ? 'var(--zen-needs-you)'
-                        : 'var(--zen-text-muted)',
-                  fontWeight: row.activity === 'idle' ? 400 : 600,
+                        : row.activity === 'monitoring'
+                          ? 'var(--zen-accent)'
+                          : 'var(--zen-text-muted)',
+                  fontWeight: row.activity === 'idle' || row.activity === 'unverifiable' ? 400 : 600,
                 }}
               >
                 {ACTIVITY_TEXT[row.activity]}

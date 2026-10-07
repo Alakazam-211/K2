@@ -2,8 +2,10 @@
 //
 // The status is answered by THIS client, not by the connected daemon, so a
 // server switch never changes it:
-//   - a row on the connected server: working / idle / permission / review
-//     from the existing activity store; presence from the live roster;
+//   - a row on the connected server: working / monitoring / needs you /
+//     no update / idle / review from the daemon's activity rows
+//     (prd-daemon-activity-and-thread-working-v1 S5); presence from the
+//     live roster;
 //   - a row on another saved server: the connection pool's entry for that
 //     server (Home M2, `lib/host-pool.ts`): live / starting / offline from
 //     its PUBLIC `/boot-status` (`phase:"ready"` or `ready:true` — the
@@ -17,7 +19,7 @@
 // `/boot-status` never carries who is online; the summary is the separate
 // signed-in read.
 
-import type { PaneStatus } from '@/stores/active-agents'
+import { displayUnderRoot, type ActivityDisplay, type ScopeActivity } from '@/stores/activity'
 import type { HostEntry } from '@/lib/host-pool'
 import { roleAllowsRoom } from '@/lib/host-pool'
 import { usersForWorkspace, type RosterUser } from '@/stores/presence'
@@ -43,20 +45,30 @@ export interface PresenceWorkspace {
 }
 
 /** One row of `GET /cli/presence/summary` → `agentActivity[]` (Home 0.43.2,
- *  Z23): a registered workspace on that server with a busy agent. The
- *  server folds it; this client folds nothing. */
+ *  Z23): a registered workspace on that server with a non-idle agent. The
+ *  server folds it; this client folds nothing. `display` is the daemon's
+ *  real rollup (prd-daemon-activity-and-thread-working-v1 A31); a server
+ *  before it sends only `status`. */
 export interface PresenceActivity {
   workspaceId: string
   status: 'working' | 'permission'
+  display?: ActivityDisplay
 }
 
-/** What an OPEN room for the row says right now, from its own activity
- *  slice (Z23): `idle` when nothing in it is busy. */
-export type RoomRowActivity = 'working' | 'permission' | 'idle'
+/** What a Home row says an agent is doing: the daemon's display, with
+ *  `waiting` named `permission` (Home's "Needs you" kind). */
+export type RoomRowActivity = 'working' | 'permission' | 'monitoring' | 'unverifiable' | 'idle'
+
+/** The daemon's display as a Home row word. */
+export function homeActivityWord(display: ActivityDisplay): RoomRowActivity {
+  return display === 'waiting' ? 'permission' : display
+}
 
 export type RowStatusKind =
   | 'working'
   | 'permission'
+  | 'monitoring'
+  | 'unverifiable'
   | 'review'
   | 'idle'
   | 'live'
@@ -83,6 +95,8 @@ export interface RowStatus {
 const LABELS: Record<RowStatusKind, string> = {
   working: 'Working',
   permission: 'Needs you',
+  monitoring: 'Monitoring',
+  unverifiable: 'No update',
   review: 'Done',
   idle: 'Idle',
   live: 'Live',
@@ -119,7 +133,7 @@ export type RowStatusInput =
       row: HomeRowRef
       /** The matched workspace on the connected server (null = gone). */
       workspace: { id: string; path: string } | null
-      activity: PaneStatus
+      activity: RoomRowActivity | 'review'
       roster: RosterUser[]
       rosterSupported: boolean
       /** Your identity on that server (`owner` or your username). */
@@ -191,41 +205,32 @@ export function resolveRowStatus(input: RowStatusInput): RowStatus {
     })
   }
   const people = presenceForRow(e.presence, input.row, input.self)
-  // Home 0.43.2 (Z23): what the agent is doing. An open room's own slice
-  // is live; otherwise the server's folded summary (a closed row lags by
+  // Home 0.43.2 (Z23): what the agent is doing. An open room's server rows
+  // are live; otherwise the server's folded summary (a closed row lags by
   // at most HOME_POLL_MS). An older server sends no activity: "Live".
   const busy =
     input.roomActivity != null ? input.roomActivity : activityForRow(e.activity ?? null, input.row)
-  if (busy === 'working' || busy === 'permission') return status(busy, people, { note })
+  if (busy !== null && busy !== 'idle') return status(busy, people, { note })
   return status('live', people, { note })
 }
 
 /** The summary's activity for this row's workspace (by its id on that
- *  server), or null. */
+ *  server), or null: its real `display` when the server sends one
+ *  (S5), else the older `status` word. */
 export function activityForRow(
   activity: PresenceActivity[] | null,
   row: HomeRowRef,
-): PresenceActivity['status'] | null {
+): RoomRowActivity | null {
   if (!activity || !row.workspaceId) return null
-  return activity.find((a) => a.workspaceId === row.workspaceId)?.status ?? null
+  const hit = activity.find((a) => a.workspaceId === row.workspaceId)
+  if (!hit) return null
+  return hit.display ? homeActivityWord(hit.display) : hit.status
 }
 
-/** Fold an open room's activity slice into one word for its Home row: any
- *  pane waiting on you → `permission`, else any working → `working`, else
- *  `idle`. Daemon truth and the client feed merge per pane the way the tab
- *  dots do (`mergePaneStatus`). */
-export function roomRowActivity(
-  view: { paneStatuses: Map<string, PaneStatus>; daemonPaneStatuses: Map<string, PaneStatus> },
-  merge: (client: PaneStatus | undefined, daemon: PaneStatus | undefined) => PaneStatus,
-): RoomRowActivity {
-  let working = false
-  const keys = new Set([...view.paneStatuses.keys(), ...view.daemonPaneStatuses.keys()])
-  for (const k of keys) {
-    const s = merge(view.paneStatuses.get(k), view.daemonPaneStatuses.get(k))
-    if (s === 'permission') return 'permission'
-    if (s === 'working') working = true
-  }
-  return working ? 'working' : 'idle'
+/** An open room's word for its Home row: the highest display among its
+ *  server's rows under the room's workspace (RL1's rank). */
+export function roomRowActivity(view: Pick<ScopeActivity, 'rows'>, root: string): RoomRowActivity {
+  return homeActivityWord(displayUnderRoot(view, root))
 }
 
 /** The people a summary lists on this row's workspace, minus you. Match

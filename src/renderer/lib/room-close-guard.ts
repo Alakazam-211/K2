@@ -1,22 +1,24 @@
 // "An agent is still working — close anyway?" for a tab or pane (Home M5).
 //
 // The window's own room asks the window's active-agents store, as before. A
-// Home room on another server has its own activity (`room.activityView`: the
-// panes' title feed merged with that server's `session_activity_changed`);
-// the window's store never sees its terminals, so asking it would close a
+// Home room on another server asks its server's activity rows
+// (`room.activityView`, prd-daemon-activity-and-thread-working-v1 S5); the
+// window's store never sees its terminals, so asking it would close a
 // working agent on B with no prompt.
 
-import { mergePaneStatus, useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
+import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
+import { isBusyDisplay, terminalDisplay, type ActivityDisplay } from '@/stores/activity'
 import type { Room } from '@/stores/room'
 import type { Tab, TerminalItemData } from '@/stores/tabs'
 
-function isBusy(room: Room, terminalId: string): ReturnType<typeof mergePaneStatus> | null {
-  const v = room.activityView.getState()
-  const status = mergePaneStatus(v.paneStatuses.get(terminalId), v.daemonPaneStatuses.get(terminalId))
-  return status === 'working' || status === 'permission' ? status : null
+/** The daemon's display for the pane's session when it is mid-turn
+ *  (working or waiting on the human), else null. */
+function isBusy(room: Room, data: TerminalItemData): ActivityDisplay | null {
+  const display = terminalDisplay(room.activityView.getState(), data)
+  return isBusyDisplay(display) ? display : null
 }
 
-function asAgent(tab: Pick<Tab, 'id' | 'title'>, groupIndex: number, data: TerminalItemData, status: ActiveAgent['hookStatus']): ActiveAgent {
+function asAgent(tab: Pick<Tab, 'id' | 'title'>, groupIndex: number, data: TerminalItemData, display: ActivityDisplay): ActiveAgent {
   return {
     terminalId: data.terminalId,
     command: data.commandHint ?? data.command ?? 'agent',
@@ -24,7 +26,7 @@ function asAgent(tab: Pick<Tab, 'id' | 'title'>, groupIndex: number, data: Termi
     tabTitle: tab.title,
     groupIndex,
     status: 'active',
-    hookStatus: status,
+    display,
   }
 }
 
@@ -40,8 +42,8 @@ export function workingAgentsInTab(room: Room, tabId: string, groupIndex: number
     for (const item of pg.items) {
       if (item.type !== 'terminal') continue
       const data = item.data as TerminalItemData
-      const status = isBusy(room, data.terminalId)
-      if (status) out.push(asAgent(tab, groupIndex, data, status))
+      const display = isBusy(room, data)
+      if (display) out.push(asAgent(tab, groupIndex, data, display))
     }
   }
   return out
@@ -50,6 +52,6 @@ export function workingAgentsInTab(room: Room, tabId: string, groupIndex: number
 /** The agent still working in one terminal pane of `room`, or null. */
 export function workingAgentInPane(room: Room, tab: Pick<Tab, 'id' | 'title'>, data: TerminalItemData): ActiveAgent | null {
   if (room.isPrimary) return useActiveAgentsStore.getState().agents.get(data.terminalId) ?? null
-  const status = isBusy(room, data.terminalId)
-  return status ? asAgent(tab, 0, data, status) : null
+  const display = isBusy(room, data)
+  return display ? asAgent(tab, 0, data, display) : null
 }

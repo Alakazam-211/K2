@@ -43,6 +43,7 @@ import { dropDestination } from '@/lib/external-drop-router'
 import { fileUndoFor, useFileUndoStore } from '@/stores/file-undo'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { workingAgentsInTab } from '@/lib/room-close-guard'
+import { __resetActivityForTests, displayUnderRoot, terminalDisplay } from '@/stores/activity'
 import { openTerminalUrl } from '@/lib/terminal-link-open'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { TerminalItemData } from '@/stores/tabs'
@@ -83,20 +84,21 @@ beforeEach(() => {
   useFileUndoStore.getState().clear()
   useFileClipboardStore.getState().clear()
   h.opened = []
+  __resetActivityForTests()
 })
 
-describe('tab dots from the room’s server (session_activity_changed)', () => {
-  it('a pinned room takes its server’s activity for its own workspace only, and stops on dispose', async () => {
+describe('tab dots from the room’s server (session_activity_changed, an older server: RL13)', () => {
+  it('a pinned room shows its server’s stream as-is; its workspace reads only its own rows; dispose stops it', async () => {
     const room = pinned()
     emitActivity({ workspacePath: '/srv/anna', agentName: 'tab-t1', paneGroupId: 't1', status: 'working' })
-    emitActivity({ workspacePath: '/srv/anna/.worktrees/x', agentName: 'tab-t2', paneGroupId: 't2', status: 'working' })
+    emitActivity({ workspacePath: '/srv/anna/.worktrees/x', agentName: 'tab-t2', paneGroupId: 't2', status: 'permission' })
     emitActivity({ workspacePath: '/srv/anna-other', agentName: 'tab-t3', paneGroupId: 't3', status: 'working' })
-    const daemon = room.activityView.getState().daemonPaneStatuses
-    expect([...daemon.entries()]).toEqual([['t1', 'working'], ['t2', 'working']])
-    // A finished session whose pane is not reporting here is unseen-done.
-    emitActivity({ workspacePath: '/srv/anna', agentName: 'tab-t1', paneGroupId: 't1', status: 'idle' })
-    expect(room.activityView.getState().daemonPaneStatuses.get('t1')).toBe('idle')
-    expect(room.activityView.getState().unseenDone.has('t1')).toBe(true)
+    const view = room.activityView.getState()
+    expect(terminalDisplay(view, { terminalId: 't1' })).toBe('working')
+    expect(terminalDisplay(view, { terminalId: 't2' })).toBe('waiting')
+    expect(displayUnderRoot(view, '/srv/anna')).toBe('waiting')
+    emitActivity({ workspacePath: '/srv/anna', agentName: 'tab-t2', paneGroupId: 't2', status: 'idle' })
+    expect(displayUnderRoot(room.activityView.getState(), '/srv/anna')).toBe('working')
     await room.dispose()
     expect(h.activity.get(`host:${B_KEY}`)?.size).toBe(0)
   })
@@ -131,7 +133,7 @@ describe('terminal mode and the close prompt in a room', () => {
       expect(workingAgentsInTab(room, tab.id, 0)).toEqual([])
       emitActivity({ workspacePath: '/srv/anna', agentName: `tab-${data.terminalId}`, paneGroupId: data.terminalId, status: 'working' })
       const agents = workingAgentsInTab(room, tab.id, 0)
-      expect(agents.map((a) => [a.terminalId, a.tabId, a.hookStatus])).toEqual([[data.terminalId, tab.id, 'working']])
+      expect(agents.map((a) => [a.terminalId, a.tabId, a.display])).toEqual([[data.terminalId, tab.id, 'working']])
     } finally {
       await room.dispose()
     }

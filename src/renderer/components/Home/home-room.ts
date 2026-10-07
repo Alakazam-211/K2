@@ -38,7 +38,6 @@ import {
   type RoomRowActivity,
   type RowStatus,
 } from '@/lib/home-status'
-import { mergePaneStatus } from '@/stores/active-agents'
 import type { Room } from '@/stores/room'
 import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
@@ -124,15 +123,16 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
   return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity })
 }
 
-/** Home 0.43.2 (Z23): an open room's activity, live from its own slice
- *  (no poll); null when no room is open for the row. */
-function useRoomRowActivity(room: Pick<Room, 'activityView'> | null): RoomRowActivity | null {
+/** Home 0.43.2 (Z23): an open room's activity, live from its server's
+ *  rows (no poll, prd-daemon-activity-and-thread-working-v1 S5); null when
+ *  no room is open for the row. */
+function useRoomRowActivity(room: Pick<Room, 'activityView' | 'cwd'> | null): RoomRowActivity | null {
   const subscribe = useCallback(
     (onChange: () => void) => (room ? room.activityView.subscribe(onChange) : () => {}),
     [room],
   )
   const read = useCallback(
-    () => (room ? roomRowActivity(room.activityView.getState(), mergePaneStatus) : null),
+    () => (room ? roomRowActivity(room.activityView.getState(), room.cwd()) : null),
     [room],
   )
   return useSyncExternalStore(subscribe, read, read)

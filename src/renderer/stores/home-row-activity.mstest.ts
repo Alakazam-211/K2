@@ -1,6 +1,7 @@
 // Home 0.43.2 — "working dots everywhere" against two REAL daemons
-// (prd-home-seamless-0432 item 4: Z22, Z23, Z30; T4.4, T4.6). Run with
-// `bun run test:multiserver`.
+// (prd-home-seamless-0432 item 4: Z22, Z23, Z30; T4.4, T4.6; since
+// prd-daemon-activity-and-thread-working-v1 S5 the room reads B's activity
+// rows, `activity_changed` + the snapshot). Run with `bun run test:multiserver`.
 //
 // The window is on A (`local` = daemon A). B is a saved server, signed in as
 // the Member `anna`. Every activity signal is B's own: a real
@@ -9,9 +10,9 @@
 //   - A CLOSED row for B turns Working at the next pool check, from B's
 //     `/cli/presence/summary` (`agentActivity`), and Needs you on a newer
 //     permission hook.
-//   - An OPEN room for B hears B's hooks through its own workspace socket
-//     (no app socket on B, nothing on A): the tab goes working → permission
-//     → idle with unseen-done, and the row follows with no poll.
+//   - An OPEN room for B hears B's activity rows through its own workspace
+//     socket (no app socket on B, nothing on A): the tab goes working →
+//     waiting → idle with unseen-done, and the row follows with no poll.
 //   - A hook for another workspace on B changes nothing in the room.
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -68,7 +69,7 @@ import { homeRooms } from '@/stores/home-rooms'
 import { hostPool } from '@/lib/host-pool-instance'
 import { workspaceHandle } from '@/lib/home-address'
 import { resolveRowStatus, roomRowActivity } from '@/lib/home-status'
-import { mergePaneStatus } from '@/stores/active-agents'
+import { SPAWN_GRACE_MS, agentHasUnseen, displayUnderRoot, terminalDisplay } from '@/stores/activity'
 import { openAppBus } from '@/stores/session-events'
 import type { PinnedRoom } from '@/stores/room'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
@@ -188,7 +189,7 @@ describe('a closed Home row for B (T4.6, summary)', () => {
     const sid = await spawnOnB(agent, CHECKOUT)
     await hookOnB(sid, 'UserPromptSubmit', CHECKOUT)
     e = await hostPool.check(B_KEY)
-    expect(e.activity).toEqual([{ workspaceId: projB.id, status: 'working' }])
+    expect(e.activity).toEqual([{ workspaceId: projB.id, status: 'working', display: 'working' }])
     expect(rowStatus()).toBe('working')
 
     await hookOnB(sid, 'PermissionRequest', CHECKOUT)
@@ -222,7 +223,7 @@ describe('an open room for B (T4.4, T4.6 open half)', () => {
     expect(h.sockets.filter((u) => u.includes(`:${A_PORT}/cli/sessions/events?path=${encodeURIComponent(CHECKOUT)}`))).toEqual([])
   })
 
-  it('B’s hooks reach the room’s tab through its sessionId: working → permission → idle, one chime', async () => {
+  it('B’s rows reach the room’s tab through its sessionId: working → waiting → idle, one chime', async () => {
     room.tabs.getState().addTab(CHECKOUT)
     const tab = room.tabs.getState().tabs[room.tabs.getState().tabs.length - 1]
     const data = [...tab.paneGroups.values()][0].items[0].data as TerminalItemData
@@ -232,33 +233,36 @@ describe('an open room for B (T4.4, T4.6 open half)', () => {
     // TerminalPane stamps the session id it got back from v2/spawn.
     data.sessionId = sid
 
+    const view = () => room.activityView.getState()
     await hookOnB(sid, 'UserPromptSubmit', CHECKOUT)
-    await until(() => room.activityView.getState().paneStatuses.get(terminalId) === 'working', 'working in the room')
-    expect(roomRowActivity(room.activityView.getState(), mergePaneStatus)).toBe('working')
-    expect(rowStatus(roomRowActivity(room.activityView.getState(), mergePaneStatus))).toBe('working')
+    await until(() => terminalDisplay(view(), data) === 'working', 'working in the room')
+    expect(roomRowActivity(view(), CHECKOUT)).toBe('working')
+    expect(rowStatus(roomRowActivity(view(), CHECKOUT))).toBe('working')
 
     await hookOnB(sid, 'PermissionRequest', CHECKOUT)
-    await until(() => room.activityView.getState().paneStatuses.get(terminalId) === 'permission', 'permission in the room')
-    expect(rowStatus(roomRowActivity(room.activityView.getState(), mergePaneStatus))).toBe('permission')
+    await until(() => terminalDisplay(view(), data) === 'waiting', 'waiting in the room')
+    expect(rowStatus(roomRowActivity(view(), CHECKOUT))).toBe('permission')
 
+    // Past the launch grace, so the turn end marks and chimes (A36).
+    await new Promise((r) => setTimeout(r, SPAWN_GRACE_MS))
     const chimesBefore = h.chimes.length
     await hookOnB(sid, 'Stop', CHECKOUT)
-    await until(() => room.activityView.getState().paneStatuses.get(terminalId) === 'idle', 'idle in the room')
-    expect(room.activityView.getState().unseenDone.has(terminalId)).toBe(true)
+    await until(() => terminalDisplay(view(), data) === 'idle', 'idle in the room')
+    await until(() => agentHasUnseen(view(), agent, sid), 'unseen-done in the room')
     expect(h.chimes.slice(chimesBefore)).toEqual([projB.id])
   })
 
   it('a hook for another workspace on B changes nothing in the room', async () => {
     const agent = 'tab-row-activity-other'
     const otherSid = await spawnOnB(agent, OTHER)
-    const before = new Map(room.activityView.getState().paneStatuses)
+    const before = displayUnderRoot(room.activityView.getState(), CHECKOUT)
     await hookOnB(otherSid, 'UserPromptSubmit', OTHER)
     // The same hook reaches B's summary, so it has been processed by now.
     await until(async () => {
       const e = await hostPool.check(B_KEY)
       return (e.activity ?? []).some((a) => a.workspaceId === otherB.id)
     }, "the other workspace's hook on B")
-    expect(room.activityView.getState().paneStatuses).toEqual(before)
-    expect(roomRowActivity(room.activityView.getState(), mergePaneStatus)).toBe('idle')
+    expect(displayUnderRoot(room.activityView.getState(), CHECKOUT)).toBe(before)
+    expect(roomRowActivity(room.activityView.getState(), CHECKOUT)).toBe('idle')
   })
 })

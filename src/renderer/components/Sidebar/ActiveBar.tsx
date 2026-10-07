@@ -2,7 +2,9 @@ import { useMemo, useCallback, useState, useEffect, useRef, Fragment } from 'rea
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useActiveStore } from '@/stores/active'
-import { useActiveAgentsStore, projectHasLiveSession, projectHasUnseenDone } from '@/stores/active-agents'
+import { useActiveAgentsStore, projectHasLiveSession } from '@/stores/active-agents'
+import { activityStore, isLiveDisplay, projectHasUnseen, useActivity, workspaceDisplay } from '@/stores/activity'
+import { ActivityMark } from '@/components/Activity/ActivityMark'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore, clampActiveWindowHours } from '@/stores/settings'
@@ -70,7 +72,7 @@ export function hasEnabledHeartbeat(heartbeatEnabled: number): boolean {
 export interface ActiveBarDismissContext {
   /** This row is the currently focused (foreground) workspace. */
   isFocused: boolean
-  /** Some agent on this workspace reports status === 'active'. */
+  /** The daemon's rollup for this workspace is not idle (S5, A35). */
   agentRunning: boolean
   /** Workspace has ≥1 enabled heartbeat (EKG). */
   heartbeatEnabled: boolean
@@ -184,8 +186,6 @@ export function useActiveBarItems(): ProjectWithWorkspaces[] {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const backgroundWorkspaces = useTabsStore((s) => s.backgroundWorkspaces)
-  const hasActiveAgents = useActiveAgentsStore((s) => s.hasActiveAgents())
-  const paneStatuses = useActiveAgentsStore((s) => s.paneStatuses)
   const activeWindowHours = useSettingsStore((s) => s.activeWindowHours)
   // #672 — PRIMARY path: the canonical daemon-owned Active set, mirrored
   // 1:1 into useActiveStore (snapshot + active_changed deltas). When the
@@ -254,11 +254,6 @@ export function useActiveBarItems(): ProjectWithWorkspaces[] {
     // would clear the dismiss on the very next render after the
     // user dismissed the currently-active project.)
 
-    // Check if any pane has a non-idle hook status (agent was recently active)
-    const hasHookActivity = paneStatuses.size > 0 && Array.from(paneStatuses.values()).some(
-      (s) => s === 'working' || s === 'permission' || s === 'review'
-    )
-
     const result = projects.filter((p) => {
       // 0.37.13 — pinned + agent-mode workspaces are no longer
       // filtered out of Active. They show in both their own
@@ -287,8 +282,8 @@ export function useActiveBarItems(): ProjectWithWorkspaces[] {
       // 3. Is the currently-active workspace. The user is looking at
       // it right now; surfacing it in Active gives them an obvious
       // landing spot when they navigate away and come back. Pre-A
-      // this rule additionally required `hasActiveAgents ||
-      // hasHookActivity`, which meant v2 tabs whose agent-detection
+      // this rule additionally required an agent to be working, which
+      // meant v2 tabs whose agent-detection
       // hadn't lit up yet would never enter the bar — and once the
       // user navigated away they'd lose any "I was just here" trail.
       // Always-include-when-active matches the legacy Tauri behavior
@@ -322,7 +317,7 @@ export function useActiveBarItems(): ProjectWithWorkspaces[] {
     }
 
     return sortPinnedFirst(result)
-  }, [projects, activeProjectId, backgroundWorkspaces, hasActiveAgents, paneStatuses, tick, activeWindowHours, canonicalActive, canonicalActiveIds])
+  }, [projects, activeProjectId, backgroundWorkspaces, tick, activeWindowHours, canonicalActive, canonicalActiveIds])
 }
 
 /** Stable partition: manually-pinned (Active-pinned) workspaces float to the
@@ -350,19 +345,21 @@ function ActiveBarItem({
   onContextMenu: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   const shortcutNum = index < 9 ? index + 1 : index === 9 ? 0 : null
-  const projectAgentStatus = useActiveAgentsStore((s) => s.getProjectStatus(project.id))
-  const isAgentWorking = projectAgentStatus === 'working' || projectAgentStatus === 'permission'
+  // prd-daemon-activity-and-thread-working-v1 S5: the workspace's rollup
+  // from the window server's daemon (RL1/RL10).
+  const display = useActivity(primaryScope(), (s) => workspaceDisplay(s, { projectId: project.id, path: project.path }))
+  const isAgentWorking = isLiveDisplay(display)
   // Green "live session" dot — the workspace currently holds a live PTY
   // (i.e. it's consuming RAM and is reapable on dismiss/age-out). Selector
   // returns a boolean so the item only re-renders when its liveness flips.
   const hasLiveSession = useActiveAgentsStore((s) => projectHasLiveSession(s.liveSessionCwds, project.path))
   // F4 — amber "done, unseen" dot: an agent in this workspace finished
-  // while its pane wasn't being watched, and hasn't been viewed since.
-  // Renders in the liveness slot (precedence: permission(red) >
-  // working(spinner) > unseen-done(amber) > live(green)) so the row
-  // doesn't jump. Clicking the row focuses the workspace → the pane's
-  // visible-and-focused effect calls markSeen → dot extinguishes.
-  const hasUnseenDone = useActiveAgentsStore((s) => projectHasUnseenDone(s.unseenDone, s.paneProjectMap, project.id))
+  // while its pane wasn't being watched, and hasn't been viewed since
+  // (per-client view state, RL11). Renders in the liveness slot
+  // (precedence: activity mark > unseen-done(amber) > live(green)) so the
+  // row doesn't jump. Clicking the row focuses the workspace → the pane's
+  // visible-and-focused effect clears the mark → dot extinguishes.
+  const hasUnseenDone = useActivity(primaryScope(), (s) => projectHasUnseen(s, project.id))
 
   // EKG (heartbeat) badge — config-flag semantics: shown whenever this
   // workspace has ≥1 enabled heartbeat, i.e. it CAN self-drive. Persistent
@@ -390,13 +387,12 @@ function ActiveBarItem({
         size={18}
       />
       <span className="text-[11px] truncate flex-1">{project.name}</span>
-      {isAgentWorking && (
-        <span className={`text-[11px] font-mono flex-shrink-0 ${
-          projectAgentStatus === 'permission' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-muted)]'
-        }`}>
+      {display === 'working' && (
+        <span className="text-[11px] font-mono flex-shrink-0 text-[var(--color-text-muted)]">
           <span className="braille-spinner" />
         </span>
       )}
+      {isAgentWorking && display !== 'working' && <ActivityMark display={display} />}
       {showEkg && (
         <span
           className="flex-shrink-0 text-[var(--color-text-muted)] opacity-80"
@@ -438,8 +434,6 @@ export default function ActiveBar(): React.JSX.Element | null {
   const setManuallyActive = useProjectsStore((s) => s.setManuallyActive)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
   const setActiveFocusGroup = useFocusGroupsStore((s) => s.setActiveFocusGroup)
-  const agentMap = useActiveAgentsStore((s) => s.agents)
-  const agentStatus = useActiveAgentsStore((s) => s.getAggregateStatus())
   const shortcutLayout = useTerminalSettingsStore((s) => s.shortcutLayout)
 
   const handleClick = useCallback((project: ProjectWithWorkspaces) => {
@@ -463,9 +457,10 @@ export default function ActiveBar(): React.JSX.Element | null {
 
     const dismissEnabled = isActiveBarDismissEnabled({
       isFocused: project.id === activeProjectId,
+      // A35: the daemon's rollup, not the polled agents map.
       agentRunning:
         project.id === activeProjectId &&
-        Array.from(agentMap.values()).some((a) => a.status === 'active'),
+        isLiveDisplay(workspaceDisplay(activityStore(primaryScope()).getState(), { projectId: project.id, path: project.path })),
       heartbeatEnabled: hasEnabledHeartbeat(project.heartbeatEnabled),
     })
 
@@ -531,7 +526,7 @@ export default function ActiveBar(): React.JSX.Element | null {
       }
       await useProjectsStore.getState().fetchProjects()
     }
-  }, [activeProjectId, agentMap, setManuallyActive])
+  }, [activeProjectId, setManuallyActive])
 
   const [collapsed, setCollapsed] = useState(false)
 

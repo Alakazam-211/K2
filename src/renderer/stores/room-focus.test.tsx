@@ -10,8 +10,10 @@
 //   - The assistant refuses a room on another server (Q4).
 //   - On Home, Cmd+1–9 selects Home row N; on Agents it switches workspace
 //     as before (Q5).
-//   - A pinned room's activity goes to its own slice and its chime reads
-//     its own server's project record (MS68).
+//   (A pinned room's activity — its server's rows, and a chime that reads
+//   its own server's project record, MS68 — is `room-agent-status.test.ts`
+//   and `activity.test.ts` since prd-daemon-activity-and-thread-working-v1
+//   S5.)
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
@@ -27,12 +29,6 @@ vi.mock('@/lib/home-open', () => ({
 vi.mock('@/components/Home/home-room', () => ({
   homeRowOpenableNow: (row: { address: string }) => !row.address.startsWith('noaccess'),
 }))
-const chime = vi.hoisted(() => ({ calls: [] as Array<{ projectId: unknown; projects: unknown }> }))
-vi.mock('@/lib/completion-sound', () => ({
-  playCompletionSound: vi.fn((projectId: unknown, projects: unknown) => {
-    chime.calls.push({ projectId, projects })
-  }),
-}))
 
 import { MissingRoomError, RoomProvider, useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { TerminalArea } from '@/components/Terminal/TerminalArea'
@@ -40,7 +36,7 @@ import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { menuNewTab } from '@/lib/menu-new-tab'
 import { routeWorkspaceOp } from '@/lib/workspace-ops-router'
-import { createRoomActivity, type Room } from '@/stores/room'
+import type { Room } from '@/stores/room'
 import {
   __resetWindowRoomForTests,
   focusedRoom,
@@ -98,7 +94,6 @@ beforeEach(() => {
   __resetWindowRoomForTests()
   uninstallFocus = installRoomFocusTracking(document)
   opened.rows = []
-  chime.calls = []
 })
 
 afterEach(() => {
@@ -333,26 +328,5 @@ describe('Cmd+Option+1–9: Home switcher on Home, Agents switch elsewhere (0.43
     fireEvent.keyDown(window, { code: 'Digit2', key: '2', metaKey: true, altKey: true, shiftKey: true })
     expect(useHomesStore.getState().selectedId).toBe(ids[0])
     expect(setActiveWorkspace).not.toHaveBeenCalled()
-  })
-})
-
-describe("a pinned room's activity slice (MS68)", () => {
-  it("records into its own slice and chimes with its own server's project list", () => {
-    const serverB = projectsStoreOf([{ id: 'p1', path: '/work/k2', completionSoundEnabled: 1, workspaces: [] } as never])
-    const activity = createRoomActivity(serverB, 'p1')
-    activity.recordTitleActivity('term-1', true)
-    expect(activity.getState().paneStatuses.get('term-1')).toBe('working')
-    activity.recordTitleActivity('term-1', false)
-    expect(activity.getState().paneStatuses.get('term-1')).toBe('idle')
-    expect(activity.getState().unseenDone.has('term-1')).toBe(true)
-    expect(chime.calls).toEqual([{ projectId: 'p1', projects: serverB.getState().projects }])
-
-    activity.markSeen('term-1')
-    expect(activity.getState().unseenDone.has('term-1')).toBe(false)
-    // A permission gate is not a completion.
-    activity.recordTitlePermission('term-2', true)
-    activity.recordTitleActivity('term-2', false)
-    expect(activity.getState().paneStatuses.get('term-2')).toBe('permission')
-    expect(chime.calls.length).toBe(1)
   })
 })

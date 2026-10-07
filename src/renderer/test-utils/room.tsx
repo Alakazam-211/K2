@@ -68,12 +68,7 @@ const unset = (what: string) => (): never => {
  *  unless the suite passes its own. */
 function throwingActivity(): RoomActivitySink {
   return {
-    recordOutput: unset('activity.recordOutput'),
-    recordTitleActivity: unset('activity.recordTitleActivity'),
-    recordTitlePermission: unset('activity.recordTitlePermission'),
-    markSeen: unset('activity.markSeen'),
-    bindPaneAgentName: unset('activity.bindPaneAgentName'),
-    bindPaneProject: unset('activity.bindPaneProject'),
+    setViewing: unset('activity.setViewing'),
   }
 }
 

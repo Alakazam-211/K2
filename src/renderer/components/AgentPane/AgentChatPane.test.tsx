@@ -154,7 +154,7 @@ vi.mock('@/stores/projects', () => ({
     selector({ projects: [{ id: 'proj-1', path: '/ws' }] }),
 }))
 vi.mock('@/stores/active-agents', () => ({
-  useActiveAgentsStore: { getState: () => ({ bindPaneProject: vi.fn() }) },
+  useActiveAgentsStore: { getState: () => ({ agents: new Map() }) },
 }))
 // Pinned-chat retention — mocked (rather than the real tiny store) because
 // the real module imports `@/stores/settings`, whose module-init fetch graph
@@ -242,11 +242,10 @@ import { useTabsStore } from '@/stores/tabs'
 // Home M3 — the pane reads its room: the mocked tabs store, this suite's
 // project list, and an activity sink (MS68). The scope is the primary one,
 // so the `primaryOnly` request mocks still hold.
-const bindPaneProject = vi.fn()
 const room = testRoom({
   tabs: useTabsStore,
   projects: [{ id: 'proj-1', path: '/ws', workspaces: [] } as never],
-  activity: { bindPaneProject },
+  activity: { setViewing: vi.fn() },
   // Home M4: the pane reads its room's server's Active set (this suite's
   // live fixture).
   activeSet: {

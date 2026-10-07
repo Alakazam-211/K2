@@ -82,7 +82,6 @@ import {
   noteViewerInteractionBlocked,
 } from '@/stores/window-mode'
 import { useSessionLabelsStore } from '@/stores/session-labels'
-import { detectWorkingSignal, GROK_PERMISSION_TITLE_RE } from '@/lib/agent-signals'
 import {
   detectLinks,
   type DetectedLink,
@@ -1126,20 +1125,31 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     tabVisibleRef.current = isTabVisible
   }, [isTabVisible])
-  // F4 — the moment this pane is visible AND its window has OS focus, the
-  // user has "seen" it: clear any unseen-done mark (extinguishes the
-  // Active-bar amber dot). getState/subscribe (not a hook selector) so a
-  // focus flip clears the mark without re-rendering the pane — same
-  // discipline as the resize-gating subscriber below.
+  // F4 / prd-daemon-activity-and-thread-working-v1 RL11 — while this pane
+  // is visible AND its window has OS focus, the user is looking at its
+  // session: that clears its "done, unseen" mark (the Active-bar amber
+  // dot) and a turn that ends meanwhile never marks or chimes. The daemon
+  // decides what the agent is doing; this only says who is looking.
+  // getState/subscribe (not a hook selector) so a focus flip doesn't
+  // re-render the pane — same discipline as the resize-gating subscriber
+  // below.
   useEffect(() => {
     if (!isTabVisible) return
-    const maybeMarkSeen = (): void => {
-      if (!useWindowFocusStore.getState().isFocused) return
-      room.activity.markSeen(terminalId)
+    const agentName = attachAgentName ?? `tab-${terminalId}`
+    let viewing = false
+    const sync = (): void => {
+      const next = useWindowFocusStore.getState().isFocused
+      if (next === viewing) return
+      viewing = next
+      room.activity.setViewing(agentName, next)
     }
-    maybeMarkSeen()
-    return useWindowFocusStore.subscribe(maybeMarkSeen)
-  }, [isTabVisible, terminalId])
+    sync()
+    const unsub = useWindowFocusStore.subscribe(sync)
+    return () => {
+      unsub()
+      if (viewing) room.activity.setViewing(agentName, false)
+    }
+  }, [isTabVisible, terminalId, attachAgentName, room])
   // Pinned-chat retention — same ref-mirror pattern: `ws.onclose` and
   // `openGridWs.isStale` (both bound inside long-lived closures) must
   // read the LATEST retention flag without re-subscribing the socket.
@@ -1231,144 +1241,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const lastDetectPosRef = useRef({ x: 0, y: 0 })
   const lastDetectTimeRef = useRef(0)
 
-  // ── Activity detection ────────────────────────────────────────
-  // Mirrors AlacrittyTerminalView.tsx so v2 panes drive the same
-  // sidebar braille spinner / "Active" indicators as legacy. Two
-  // signals feed the active-agents store:
-  //   1. recordOutput(terminalId) on every grid change — the
-  //      heartbeat-style "this pane just produced bytes" signal.
-  //   2. detectWorkingSignal(rows) viewport scan — the stable
-  //      "is a CLI LLM mid-request" hint ("esc to interrupt",
-  //      "thinking…", etc.). Gated on displayOffset === 0 so a
-  //      scrolled-up user can't pin the pane in 'working' state.
-  // Idle transition fires from a 500ms interval that watches a
-  // 1s grace window since the last working signal.
-  const lastSeenWorkingAtRef = useRef<number>(0)
-
-  // Process one snapshot/delta payload for activity-store updates.
-  // Bumps the per-pane heartbeat unconditionally and runs the
-  // working-signal viewport scan when the user isn't scrolled.
-  const lastDetectLogAtRef = useRef(0)
-  const lastWorkingStateRef = useRef(false)
-  const recordActivityFromSnapshot = useCallback(
-    (snap: TermGridSnapshot) => {
-      room.activity.recordOutput(terminalId)
-
-      // Build the row→{text} map detectWorkingSignal expects from
-      // the WHOLE viewport. We deliberately do NOT gate on
-      // `displayOffset === 0` because some renderers / rapid output
-      // can leave the daemon-side display_offset non-zero even when
-      // the user is effectively at the bottom — and the false-
-      // positive cost (showing 'working' while scrolled-up) is much
-      // smaller than the false-negative cost (no spinner ever).
-      const lines = new Map<number, { text: string }>()
-      for (let r = 0; r < snap.grid.length; r++) {
-        lines.set(r, { text: rowToText(snap.grid[r]) })
-      }
-      const isWorking = detectWorkingSignal(lines, snap.rows)
-      if (isWorking) {
-        lastSeenWorkingAtRef.current = Date.now()
-        room.activity.recordTitleActivity(terminalId, true)
-      }
-
-      // DEV breadcrumbs.
-      //
-      // LOG-1: every working-state TRANSITION (idle→working,
-      // working→idle), so we can see exactly when the spinner
-      // should flip. Loud log level (warn) so it's easy to spot.
-      //
-      // LOG-2: throttled status — at most one info-level line per
-      // second showing whether detection matched + a sample of the
-      // bottom rows. Lets us see what text the scanner is actually
-      // looking at when the user reports "no spinner."
-      // FLIP fires once per working/idle transition — kept always-on in
-      // dev because it's infrequent and load-bearing for "did the
-      // spinner switch?" debugging.
-      // The per-second snapshot sample below is now opt-in via
-      // `localStorage.K2SO_V2_ACTIVITY_VERBOSE='1'`. It used to fire
-      // unconditionally and was the loudest single source of dev
-      // console noise (~1/sec per active agent).
-      if (import.meta.env.DEV) {
-        const wasWorking = lastWorkingStateRef.current
-        if (isWorking !== wasWorking) {
-          lastWorkingStateRef.current = isWorking
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[v2-activity] FLIP tid=${terminalId.slice(0, 8)} ${wasWorking ? 'working→idle' : 'idle→working'}`,
-          )
-        }
-        if (typeof localStorage !== 'undefined' && localStorage.getItem('K2SO_V2_ACTIVITY_VERBOSE') === '1') {
-          const now = Date.now()
-          if (now - lastDetectLogAtRef.current > 1000) {
-            lastDetectLogAtRef.current = now
-            const tail = Math.max(0, snap.rows - 5)
-            const sample: string[] = []
-            for (let r = tail; r < snap.rows; r++) {
-              const t = lines.get(r)?.text ?? ''
-              if (t.trim()) sample.push(t.slice(0, 90))
-            }
-            // eslint-disable-next-line no-console
-            console.info(
-              `[v2-activity] tid=${terminalId.slice(0, 8)} working=${isWorking} ` +
-                `displayOffset=${snap.displayOffset} rows=${snap.rows} ` +
-                `gridRows=${snap.grid.length}\n  bottom=${JSON.stringify(sample, null, 2)}`,
-            )
-          }
-        }
-      }
-    },
-    [terminalId],
-  )
-
-  // Drive activity detection off snapshot-state changes so it
-  // re-binds cleanly across Vite HMR / React Fast Refresh. (If
-  // we called recordActivityFromSnapshot from inside the
-  // ws.onmessage handler — captured in the boot effect's
-  // closure — HMR'd activity code wouldn't take effect on
-  // already-mounted sessions until the user closed and reopened
-  // the tab.) React batches setSnapshot calls so this effect
-  // runs once per coalesced grid update, not once per byte.
-  const activityWiredLoggedRef = useRef(false)
-  useEffect(() => {
-    if (!activityWiredLoggedRef.current && import.meta.env.DEV) {
-      activityWiredLoggedRef.current = true
-      // eslint-disable-next-line no-console
-      console.warn(`[v2-activity] WIRED tid=${terminalId.slice(0, 8)} — snapshot-driven detection is active`)
-    }
-    if (!snapshot) return
-    recordActivityFromSnapshot(snapshot)
-  }, [snapshot, recordActivityFromSnapshot, terminalId])
-
-  // ── Working-state idle watcher ────────────────────────────────
-  // Working → idle transitions when no signal has been seen for
-  // 1 s. Same 500 ms cadence as legacy so the transition is at
-  // most ~1.5 s after the real one but never flickers on a
-  // single-frame status-line gap.
-  useEffect(() => {
-    const IDLE_GRACE_MS = 1000
-    const interval = setInterval(() => {
-      const last = lastSeenWorkingAtRef.current
-      if (last === 0) return
-      if (Date.now() - last > IDLE_GRACE_MS) {
-        room.activity.recordTitleActivity(terminalId, false)
-        lastSeenWorkingAtRef.current = 0
-      }
-    }, 500)
-    return () => {
-      clearInterval(interval)
-      // Activity-detection study, FM1: this watcher (plus the title/bell
-      // handlers) is the only thing that ever writes working=false for
-      // this pane — and it dies here. A pane unmounting mid-work
-      // (workspace switch, tab close, retainer eviction) would strand
-      // its 'working' entry as a forever-spinner. The pane can no longer
-      // observe the session, so idle is the only honest value to leave
-      // behind; if the session is genuinely still working, a re-mount
-      // (or a retained pane's next frame) re-arms within a second.
-      // Never clobbers 'permission'/'review' (recordTitleActivity
-      // guards those).
-      room.activity.recordTitleActivity(terminalId, false)
-    }
-  }, [terminalId])
+  // ── Activity ──────────────────────────────────────────────────
+  // prd-daemon-activity-and-thread-working-v1 S5 (RL9): the pane no longer
+  // scans its grid, title or bell for "working". The daemon owns what the
+  // agent is doing (hooks, transcript, process, and its own screen-marker
+  // scan for harnesses with nothing else); the tab dots read its rows.
 
   // ── Lazy-spawn gate (2026-07-03: workspace-switch latency) ────
   //
@@ -1435,11 +1312,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // never matches a daemon-spawned session → /cli/sessions/v2/spawn
     // creates a duplicate PTY instead of attaching. See PRD.
     const agentName = attachAgentName ?? `tab-${terminalId}`
-    // 0.40.39 — register the alias so daemon session_activity events
-    // addressed by agentName (heartbeat / surfaced tabs whose agent_name
-    // isn't `tab-<terminalId>`) resolve to this pane's terminalId. The
-    // alias outlives the pane, so a hidden/unmounted tab still maps.
-    room.activity.bindPaneAgentName(agentName, terminalId)
 
     async function boot() {
       perfLog('mount', spawnedAt
@@ -2170,70 +2042,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             enqueueFrame({ kind: 'delta', payload: parsed.payload })
             break
           case 'title': {
-            // Mirror legacy's `terminal:title:<id>` handling. Claude
-            // Code uses braille-spinner glyphs in the title prefix
-            // while working and the ✱-family glyphs the moment it
-            // goes idle, so the title is the fastest, most reliable
-            // working/idle hint we have. See
-            // AlacrittyTerminalView.tsx:510-518 for the legacy
-            // version. We use the SAME regex so v2 and legacy agree.
-            //
-            // Per-agent title inventory (2026-07 TUI signal studies):
-            //  - claude: braille prefix while working (working rule);
-            //    ✱-family prefix on idle (idle rule).
-            //  - grok:   `⠙ - Thinking - grok` while working (the same
-            //    braille working rule catches it); idle title carries
-            //    NO glyph (`grok` / `<session title> - grok`), so idle
-            //    comes from the 1s idle watcher; `⚠ Action Required - `
-            //    prefix while a permission gate is open (dedicated
-            //    rule below — grok has no lifecycle hooks, so the
-            //    title is its ONLY permission source).
-            //  - codex:  `⠋ <cwd-basename>` while working (the braille
-            //    rule); idle is the bare basename (no glyph — the idle
-            //    watcher clears).
-            //  - cursor-agent: no busy title (flips to a conversation
-            //    summary at turn completion) — phrase scan + cadence.
-            //  - hermes: NO titles ever — phrase scan + output cadence
-            //    only (the safe unknown-agent default).
-            //  - gemini/pi: working-state titles unverified; both ride
-            //    the phrase scan.
+            // The title is the tab label's source only. Working / idle /
+            // permission come from the daemon's activity rows
+            // (prd-daemon-activity-and-thread-working-v1 RL9), never from
+            // the title's spinner glyphs.
             const raw = parsed.payload.title ?? ''
-            const isIdleMarker = /^[*✱✲✳✴✵✶✷✸✹⚹⁎∗※]/.test(raw)
-            const isWorkingMarker = /^[\u2800-\u28FF]/.test(raw)
-            const isGrokPermissionMarker = GROK_PERMISSION_TITLE_RE.test(raw)
-            // Per-title-change log. Fires every ~1s for any active
-            // agent. Opt-in via `localStorage.K2SO_V2_ACTIVITY_VERBOSE='1'`.
-            if (
-              import.meta.env.DEV &&
-              typeof localStorage !== 'undefined' &&
-              localStorage.getItem('K2SO_V2_ACTIVITY_VERBOSE') === '1'
-            ) {
-              // eslint-disable-next-line no-console
-              console.warn(
-                `[v2-activity] TITLE tid=${terminalId.slice(0, 8)} raw=${JSON.stringify(raw.slice(0, 60))} idleMarker=${isIdleMarker} workingMarker=${isWorkingMarker}`,
-              )
-            }
-            if (isGrokPermissionMarker) {
-              // Grok permission gate open — drive the SAME 'permission'
-              // pane state Claude's lifecycle hook drives (toast +
-              // sidebar red). recordTitlePermission tracks the pane as
-              // title-owned so the title can also CLEAR it below — a
-              // hook-set permission (claude) is never clearable from
-              // here.
-              room.activity.recordTitlePermission(terminalId, true)
-            } else {
-              // Any non-⚠ title clears a TITLE-owned permission (the
-              // grok gate resolved); no-op for every other pane —
-              // including hook-owned permission states.
-              room.activity.recordTitlePermission(terminalId, false)
-              if (isIdleMarker) {
-                lastSeenWorkingAtRef.current = 0
-                room.activity.recordTitleActivity(terminalId, false)
-              } else if (isWorkingMarker) {
-                lastSeenWorkingAtRef.current = Date.now()
-                room.activity.recordTitleActivity(terminalId, true)
-              }
-            }
             // Strip the leading marker chars + collapse whitespace
             // so the user-visible title doesn't have spinner noise
             // in it. Mirrors the legacy substitution.
@@ -2299,24 +2112,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             )
             break
           }
-          case 'bell': {
-            // Bell — same signal iTerm uses for "agent waiting"
-            // notifications. Claude rings the bell when it's done and
-            // ready for input (empirically verified) — use it as a
-            // definitive idle transition. Codex does NOT bell on its
-            // default config (the 2026-07 TUI study disproved the old
-            // "Claude / Codex" claim: zero BELs, including turn-ends
-            // with focus lost). No studied agent (grok/hermes/cursor/
-            // gemini/pi) bells spuriously either, so bell→idle stays
-            // safe without per-agent gating.
-            if (import.meta.env.DEV) {
-              // eslint-disable-next-line no-console
-              console.warn(`[v2-activity] BELL tid=${terminalId.slice(0, 8)}`)
-            }
-            lastSeenWorkingAtRef.current = 0
-            room.activity.recordTitleActivity(terminalId, false)
+          case 'bell':
+            // The daemon reads the bell itself (its title observer); the
+            // pane draws nothing for it (RL9).
             break
-          }
           case 'clipboard': {
             // OSC 52 copy from the child app (payload decoded and
             // size-capped daemon-side; read-back is never

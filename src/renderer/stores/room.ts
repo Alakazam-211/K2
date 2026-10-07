@@ -10,53 +10,50 @@
 // shortcuts, the assistant) acts on the FOCUSED room (`stores/window-room.ts`).
 //
 //   - `primaryRoom()` is the window's own room. It wraps today's singletons:
-//     `useTabsStore`, the projects store, the active-agents store. Agents,
-//     Home on the connected server, and Focus windows render it, so they
-//     behave exactly as before M3.
+//     `useTabsStore`, the projects store, the window server's activity view.
+//     Agents, Home on the connected server, and Focus windows render it, so
+//     they behave exactly as before M3.
 //   - `createPinnedRoom()` builds a room for one workspace on one scope, with
-//     its own tabs store, its own project list and its own activity slice.
+//     its own tabs store and its own project list; its activity is its
+//     server's (`stores/activity.ts`, one view per server).
 //     M3 makes it possible (tests build one); M4 opens pinned rooms in Home.
 
-import { create, type StoreApi } from 'zustand'
+import type { StoreApi } from 'zustand'
 import { LOCAL_HOME_HOST } from '@/lib/host-key'
-import { playCompletionSound } from '@/lib/completion-sound'
 import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
 import {
   createTabsStore,
   useTabsStore,
-  type Tab,
   type TabsStore,
   type TabsRoomWorkspace,
   type ProjectPathEntry,
-  type TerminalItemData,
 } from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
-import type { PaneStatus } from '@/stores/active-agents'
 import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
 import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
 import { remoteRoomScope, viewOnlyScope } from '@/kessel/server-scope'
 import {
-  onAgentStatusChanged,
-  onSessionActivityChanged,
-  type AgentStatusChangedEvent,
-  type SessionActivityChangedEvent,
-} from '@/stores/session-events'
+  activityStore,
+  attachActivity,
+  registerActivityNotify,
+  setViewing,
+  type ActivityViewStore,
+} from '@/stores/activity'
 
-/** Where a terminal pane reports what its agent is doing (MS68). The pane
- *  never reaches for a global store: the primary room's sink is the window's
- *  active-agents store (Active bar, tab dots, chime); a pinned room's sink is
- *  its own slice, and its chime reads ITS server's project record. */
+export { pathUnderRoot } from '@/stores/activity'
+
+/** What a terminal pane tells its room about activity (MS68,
+ *  prd-daemon-activity-and-thread-working-v1 S5). The daemon decides what
+ *  an agent is doing; the pane only says whether this client is looking at
+ *  it (pane visible + window focused), which clears and suppresses
+ *  "done, unseen" (RL11). Always the ROOM's server. */
 export interface RoomActivitySink {
-  recordOutput(terminalId: string): void
-  recordTitleActivity(terminalId: string, isWorking: boolean): void
-  recordTitlePermission(terminalId: string, active: boolean): void
-  markSeen(terminalId: string): void
-  bindPaneAgentName(agentName: string, terminalId: string): void
-  /** Bind a pane to the project it belongs to (the chime and Active-bar
-   *  marks read it). */
-  bindPaneProject(terminalId: string, projectId: string): void
+  setViewing(agentName: string, viewing: boolean): void
 }
+
+/** What a room's tab dots read: its server's activity rows. */
+export type RoomActivityViewStore = ActivityViewStore
 
 /** A room's project list as a read-only store (MS3: a path is only an
  *  identity inside the server it came from). */
@@ -75,9 +72,9 @@ export interface Room {
   readonly tabs: TabsStore
   /** This room's own project list (its server's `projects/list`). */
   readonly projects: RoomProjectsStore
-  /** MS68 — where its terminal panes report activity. */
+  /** MS68 — where its terminal panes say they are being looked at. */
   readonly activity: RoomActivitySink
-  /** What its tab dots read (the same activity, as state). */
+  /** What its tab dots read: its server's activity rows (S5). */
   readonly activityView: RoomActivityViewStore
   /** MS67 — may room code call THIS computer's Tauri commands
    *  (`projects_open_in_*`, `k2so_*`, `read_worktree_file`, local events)?
@@ -146,10 +143,10 @@ function roomIdFor(scope: ServerScope, projectId: string | null, workspaceId: st
 
 // ── The primary room ─────────────────────────────────────────────────────
 //
-// The projects store and the active-agents store register themselves here
-// at module load (they import this module; this module never imports them,
-// so a component that only needs the primary room does not pull in their
-// whole graph). Using the primary room before they are loaded throws.
+// The projects store registers itself here at module load (it imports this
+// module; this module never imports it, so a component that only needs the
+// primary room does not pull in its whole graph). Using the primary room
+// before it is loaded throws.
 
 /** The window's projects store, as the primary room reads it. */
 export type PrimaryProjectsStore = Pick<
@@ -162,29 +159,15 @@ export type PrimaryProjectsStore = Pick<
 >
 
 let primaryProjects: PrimaryProjectsStore | null = null
-let primaryActivity: RoomActivitySink | null = null
-let primaryActivityView: RoomActivityViewStore | null = null
 
 /** projects.ts registers the window's projects store. */
 export function registerPrimaryRoomProjects(store: PrimaryProjectsStore): void {
   primaryProjects = store
 }
 
-/** active-agents.ts registers the window's activity sink (MS68) and the
- *  store its tab dots read. */
-export function registerPrimaryRoomActivity(sink: RoomActivitySink, view: RoomActivityViewStore): void {
-  primaryActivity = sink
-  primaryActivityView = view
-}
-
 function requirePrimaryProjects(): PrimaryProjectsStore {
   if (!primaryProjects) throw new Error('primary room: the projects store is not loaded (registerPrimaryRoomProjects)')
   return primaryProjects
-}
-
-function requirePrimaryActivity(): RoomActivitySink {
-  if (!primaryActivity) throw new Error('primary room: the active-agents store is not loaded (registerPrimaryRoomActivity)')
-  return primaryActivity
 }
 
 /** cwd File-menu actions use in the primary room: active workspace, else
@@ -202,24 +185,10 @@ const PRIMARY_PROJECTS: RoomProjectsStore = {
   subscribe: (listener) => requirePrimaryProjects().subscribe(listener),
 }
 
-const PRIMARY_ACTIVITY_VIEW: RoomActivityViewStore = {
-  getState: () => requirePrimaryActivityView().getState(),
-  getInitialState: () => requirePrimaryActivityView().getInitialState(),
-  subscribe: (listener) => requirePrimaryActivityView().subscribe(listener),
-}
-
-function requirePrimaryActivityView(): RoomActivityViewStore {
-  if (!primaryActivityView) throw new Error('primary room: the active-agents store is not loaded (registerPrimaryRoomActivity)')
-  return primaryActivityView
-}
-
+// The window's server's activity (`primaryScope().id` is `primary` across a
+// server switch; active-agents.ts feeds it and resets it on a switch).
 const PRIMARY_ACTIVITY: RoomActivitySink = {
-  recordOutput: (id) => requirePrimaryActivity().recordOutput(id),
-  recordTitleActivity: (id, working) => requirePrimaryActivity().recordTitleActivity(id, working),
-  recordTitlePermission: (id, active) => requirePrimaryActivity().recordTitlePermission(id, active),
-  markSeen: (id) => requirePrimaryActivity().markSeen(id),
-  bindPaneAgentName: (agentName, id) => requirePrimaryActivity().bindPaneAgentName(agentName, id),
-  bindPaneProject: (id, projectId) => requirePrimaryActivity().bindPaneProject(id, projectId),
+  setViewing: (agentName, on) => setViewing(primaryScope(), agentName, on),
 }
 
 let primary: Room | null = null
@@ -236,7 +205,7 @@ export function primaryRoom(): Room {
     tabs: useTabsStore,
     projects: PRIMARY_PROJECTS,
     activity: PRIMARY_ACTIVITY,
-    activityView: PRIMARY_ACTIVITY_VIEW,
+    activityView: activityStore(scope),
     // Home M4 (MS57): a window connected to a remote server shows that
     // server's paths, so this computer's commands are off there.
     get localCommands(): boolean {
@@ -257,191 +226,6 @@ export function primaryRoom(): Room {
 }
 
 // ── Pinned rooms ─────────────────────────────────────────────────────────
-
-/** What a room's tab dots read (MS14 "per-room slice", MS21): the
- *  primary room reads the window's active-agents store (same fields); a
- *  pinned room its own slice. */
-export interface RoomActivityView {
-  /** terminal id → what its agent is doing (client-side detection). */
-  paneStatuses: Map<string, PaneStatus>
-  /** terminal id → the daemon's word on it (empty in a pinned room). */
-  daemonPaneStatuses: Map<string, PaneStatus>
-  /** terminal id → when it finished while unseen. */
-  unseenDone: Map<string, number>
-}
-
-export type RoomActivityViewStore = Pick<StoreApi<RoomActivityView>, 'getState' | 'getInitialState' | 'subscribe'>
-
-/** A pinned room's own activity slice (MS14 "per-room slice", MS68). */
-export interface RoomActivityState extends RoomActivityView {
-  /** daemon agent name → terminal id. */
-  aliases: Map<string, string>
-}
-
-export type RoomActivityStore = StoreApi<RoomActivityState> &
-  RoomActivitySink & {
-    /** Home M5 tab dots: the room's server's own word on a session
-     *  (`session_activity_changed`, visibility-independent). */
-    applyDaemonActivity(e: Pick<SessionActivityChangedEvent, 'agentName' | 'paneGroupId' | 'status'>): void
-    /** Home 0.43.2 (Z22): a lifecycle hook (`agent_status_changed`) for
-     *  pane `paneId` (already mapped to the room's terminal id).
-     *  `start` → working, `permission` → permission, `stop` → idle with
-     *  unseen-done and one chime. The hook wins over title activity: a
-     *  title can't clear a hook's permission. */
-    applyHookStatus(paneId: string, status: AgentStatusChangedEvent['status']): void
-  }
-
-/** The terminal id in `tabs` whose daemon session is `sessionId`, or null.
- *  A hook's `paneId` is the v2 session id (vs-live Z30), and a room's tab
- *  carries it as `TerminalItemData.sessionId`. */
-export function terminalForSession(
-  state: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[] }> },
-  sessionId: string,
-): string | null {
-  if (!sessionId) return null
-  const groups = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
-  for (const tabs of groups) {
-    for (const tab of tabs) {
-      for (const pg of tab.paneGroups.values()) {
-        for (const item of pg.items) {
-          if (item.type !== 'terminal') continue
-          const data = item.data as TerminalItemData
-          if (data.sessionId === sessionId || data.terminalId === sessionId) return data.terminalId
-        }
-      }
-    }
-  }
-  return null
-}
-
-/** Which pane of a room an `agent_status_changed` frame is about, or null
- *  when the frame isn't this room's (Z22, Z30):
- *   - a frame whose `workspacePath` is outside the room root is dropped
- *     before any lookup;
- *   - the pane is the tab whose `sessionId` is the frame's `paneId`, then
- *     the slice's agent-name aliases;
- *   - with a path under the root but no tab (the pinned Chat, a hidden
- *     session), the session id itself keys the slice, so the room — and
- *     its Home row — still knows the agent is busy;
- *   - with no path, only a tab of this room claims it. */
-export function roomPaneForHook(
-  e: Pick<AgentStatusChangedEvent, 'paneId' | 'workspacePath'>,
-  root: string,
-  tabsState: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[] }> },
-  aliases: ReadonlyMap<string, string>,
-): string | null {
-  const path = typeof e.workspacePath === 'string' && e.workspacePath.length > 0 ? e.workspacePath : null
-  if (path !== null && !pathUnderRoot(path, root)) return null
-  const pane = terminalForSession(tabsState, e.paneId) ?? aliases.get(e.paneId) ?? null
-  if (pane) return pane
-  return path !== null && e.paneId ? e.paneId : null
-}
-
-/** `/w/app` is under `/w`; `/w-other` is not (the daemon's own rule,
- *  `activity_events_ws.rs` boundary). */
-export function pathUnderRoot(path: string, root: string): boolean {
-  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
-  const a = norm(path)
-  const r = norm(root)
-  return r.length > 0 && (a === r || a.startsWith(`${r}/`))
-}
-
-/** Build a pinned room's activity slice. A working → idle transition marks
- *  the pane unseen-done and chimes with THIS room's project record (MS21):
- *  a B project id is never looked up in A's list. */
-export function createRoomActivity(
-  projects: RoomProjectsStore,
-  projectId: string,
-): RoomActivityStore {
-  const store = create<RoomActivityState>(() => ({
-    paneStatuses: new Map(),
-    daemonPaneStatuses: new Map(),
-    unseenDone: new Map(),
-    aliases: new Map(),
-  }))
-  const setStatus = (id: string, status: PaneStatus): void => {
-    const next = new Map(store.getState().paneStatuses)
-    next.set(id, status)
-    store.setState({ paneStatuses: next })
-  }
-  const sink: RoomActivitySink = {
-    recordOutput: () => {},
-    recordTitleActivity: (id, working) => {
-      const prev = store.getState().paneStatuses.get(id)
-      if (prev === 'permission') return
-      if (working) {
-        if (prev !== 'working') setStatus(id, 'working')
-        return
-      }
-      if (prev !== 'working') return
-      setStatus(id, 'idle')
-      const unseen = new Map(store.getState().unseenDone)
-      unseen.set(id, Date.now())
-      store.setState({ unseenDone: unseen })
-      playCompletionSound(projectId, projects.getState().projects)
-    },
-    recordTitlePermission: (id, active) => {
-      const prev = store.getState().paneStatuses.get(id)
-      if (active) setStatus(id, 'permission')
-      else if (prev === 'permission') setStatus(id, 'idle')
-    },
-    markSeen: (id) => {
-      if (!store.getState().unseenDone.has(id)) return
-      const unseen = new Map(store.getState().unseenDone)
-      unseen.delete(id)
-      store.setState({ unseenDone: unseen })
-    },
-    bindPaneAgentName: (agentName, id) => {
-      const next = new Map(store.getState().aliases)
-      next.set(agentName, id)
-      store.setState({ aliases: next })
-    },
-    // A pinned room holds one workspace: every pane is that project's.
-    bindPaneProject: () => {},
-  }
-  const applyDaemonActivity: RoomActivityStore['applyDaemonActivity'] = (e) => {
-    const st = store.getState()
-    const paneId = e.paneGroupId ?? st.aliases.get(e.agentName) ?? e.agentName
-    const prev = st.daemonPaneStatuses.get(paneId)
-    if (prev === e.status) return
-    const next = new Map(st.daemonPaneStatuses)
-    next.set(paneId, e.status)
-    store.setState({ daemonPaneStatuses: next })
-    // A finished session whose pane is not reporting here (another tab, a
-    // hidden pane): mark it unseen-done and chime with THIS room's project.
-    // A mounted pane's own title feed already did both (no double chime).
-    if (e.status !== 'idle' || (prev !== 'working' && prev !== 'permission')) return
-    if (st.paneStatuses.has(paneId)) return
-    const unseen = new Map(store.getState().unseenDone)
-    unseen.set(paneId, Date.now())
-    store.setState({ unseenDone: unseen })
-    playCompletionSound(projectId, projects.getState().projects)
-  }
-  const applyHookStatus: RoomActivityStore['applyHookStatus'] = (paneId, status) => {
-    const prev = store.getState().paneStatuses.get(paneId)
-    if (status === 'start') {
-      if (prev !== 'working') setStatus(paneId, 'working')
-      return
-    }
-    if (status === 'permission') {
-      if (prev !== 'permission') setStatus(paneId, 'permission')
-      return
-    }
-    if (status !== 'stop') return
-    if (prev !== 'working' && prev !== 'permission') {
-      // Already done (a title idle got here first, which chimed) or never
-      // seen busy: record idle, no second chime.
-      if (prev === undefined) setStatus(paneId, 'idle')
-      return
-    }
-    setStatus(paneId, 'idle')
-    const unseen = new Map(store.getState().unseenDone)
-    unseen.set(paneId, Date.now())
-    store.setState({ unseenDone: unseen })
-    playCompletionSound(projectId, projects.getState().projects)
-  }
-  return Object.assign(store, sink, { applyDaemonActivity, applyHookStatus })
-}
 
 export interface PinnedRoomInput {
   scope: ServerScope
@@ -511,22 +295,19 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
       heartbeatEntries: () => heartbeats.getState().active,
     },
   })
-  const activity = createRoomActivity(projects, workspace.projectId)
-  // Home M5 tab dots: the server's own activity for this workspace's
-  // sessions. It rides the room's workspace socket (the app-bus carrier).
-  const activityUnsub = onSessionActivityChanged(scope, (e) => {
-    if (!pathUnderRoot(e.workspacePath, workspace.path)) return
-    activity.applyDaemonActivity(e)
+  // prd-daemon-activity-and-thread-working-v1 S5: the room's tab dots and
+  // Home row read its server's activity rows, fed on the room's own socket
+  // (the app-bus carrier). Its turn ends chime with THIS room's project
+  // record (MS21), for its own workspace only.
+  const activityRelease = attachActivity(scope)
+  const notifyRelease = registerActivityNotify(scope, {
+    toaster: null,
+    projects: () => projects.getState().projects,
+    root: workspace.path,
   })
-  // Home 0.43.2 (Z22, Z30): the server's lifecycle hooks (permission, a
-  // clean stop). Same carrier, on THIS room's own server's bus — never the
-  // window's. `paneId` is the v2 session id; it maps to a pane through the
-  // room's tabs.
-  const hookUnsub = onAgentStatusChanged(scope, (e) => {
-    const pane = roomPaneForHook(e, workspace.path, tabs.getState(), activity.getState().aliases)
-    if (pane === null) return
-    activity.applyHookStatus(pane, e.status)
-  })
+  const activity: RoomActivitySink = {
+    setViewing: (agentName, on) => setViewing(scope, agentName, on),
+  }
   let disposed: Promise<void> | null = null
   return {
     key: scopedKey(scope, `${workspace.projectId}:${workspace.workspaceId}`),
@@ -535,7 +316,7 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     tabs,
     projects,
     activity,
-    activityView: activity,
+    activityView: activityStore(scope),
     localCommands,
     readOnly,
     presence: serverView.view.presence,
@@ -544,8 +325,8 @@ export function createPinnedRoom(input: PinnedRoomInput): PinnedRoom {
     dispose: () => {
       if (!disposed) {
         disposed = (async () => {
-          activityUnsub()
-          hookUnsub()
+          notifyRelease()
+          activityRelease()
           heartbeats.unsubscribeLive()
           try {
             await tabs.room.dispose()

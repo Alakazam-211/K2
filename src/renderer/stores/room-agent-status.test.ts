@@ -1,15 +1,20 @@
-// Home 0.43.2 (prd-home-seamless-0432 Z22, Z23, Z30; T4.4) — a pinned room
-// applies its own server's `agent_status_changed`.
+// prd-daemon-activity-and-thread-working-v1 S5 (T-S5e; was Home 0.43.2
+// Z22/Z23/Z30 T4.4) — a pinned room renders its OWN server's activity rows.
 //
-// The frame travels the real path: a workspace socket on the room's server
-// carrying the app bus (no app socket open there), into the room's handler,
-// matched to a pane through the tab's `sessionId` (a hook's `paneId` is the
-// v2 session id, never the terminal id). The two-daemon half (a real
-// `/hook/complete` on B) is `room-agent-status.mstest.ts`.
+// Frames travel the real path: a workspace socket on the room's server
+// carrying the app bus (no app socket open there), into that server's
+// activity store, never the window's. A tab maps to its row through its
+// `sessionId`. A server without `daemon-activity` shows its
+// `session_activity_changed` stream as-is (RL13). The snapshot route is
+// faked per server.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({ chimes: [] as Array<string | null> }))
+const h = vi.hoisted(() => ({
+  chimes: [] as Array<string | null>,
+  snapshots: [] as Array<{ scopeId: string; body: unknown }>,
+  pulls: [] as string[],
+}))
 
 const mem = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -23,6 +28,18 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
+}))
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: async (scope: { id: string }, route: string) => {
+    if (route !== 'activity/snapshot') throw new Error(`unexpected GET ${route}`)
+    h.pulls.push(scope.id)
+    const i = h.snapshots.findIndex((s) => s.scopeId === scope.id)
+    if (i < 0) throw new Error(`no snapshot queued for ${scope.id}`)
+    return h.snapshots.splice(i, 1)[0].body
+  },
+  daemonCliPost: async () => {
+    throw new Error('unexpected POST')
+  },
 }))
 vi.mock('@/lib/completion-sound', () => ({
   playCompletionSound: (projectId: string | null) => {
@@ -74,23 +91,17 @@ import { createStore } from 'zustand/vanilla'
 import { scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
-import { openAppBus, subscribeToWorkspaceSessionEvents, type UnsubscribeFn } from '@/stores/session-events'
-import {
-  createPinnedRoom,
-  createRoomActivity,
-  roomPaneForHook,
-  type PinnedRoom,
-  type RoomProjectsStore,
-} from '@/stores/room'
+import { openAppBus, subscribeToWorkspaceSessionEvents, type ActivityRow, type UnsubscribeFn } from '@/stores/session-events'
+import { createPinnedRoom, type PinnedRoom, type RoomProjectsStore } from '@/stores/room'
+import { __resetActivityForTests, activityStore, agentHasUnseen, terminalDisplay } from '@/stores/activity'
 import { roomRowActivity } from '@/lib/home-status'
-import { mergePaneStatus } from '@/stores/active-agents'
-import type { ProjectWithWorkspaces, } from '@/stores/projects'
+import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { TerminalItemData } from '@/stores/tabs'
 
 const B: ConnectHost = {
   id: 'id-b',
   label: 'B',
-  hostname: 'z3thon.k2.dev',
+  hostname: 'b.example.com',
   port: 443,
   secure: true,
   token: 'tok-b',
@@ -98,21 +109,27 @@ const B: ConnectHost = {
   lastConnectedAt: null,
 }
 const ROOT = '/srv/anna'
+const INSTANCE = 'inst-b'
 
 const cleanups: Array<() => unknown> = []
 
 beforeEach(() => {
   mem.clear()
   h.chimes = []
+  h.snapshots = []
+  h.pulls = []
   FakeWebSocket.instances = []
   __resetConnectHostStoreForTests()
   __resetServerScopesForTests()
+  __resetActivityForTests()
   resetGridDialQueueForTests()
   useConnectHostStore.getState().addHost(B)
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   while (cleanups.length > 0) await cleanups.pop()!()
+  __resetActivityForTests()
 })
 
 function emptyProjects(): RoomProjectsStore {
@@ -131,14 +148,14 @@ function pinned(): PinnedRoom {
 }
 
 /** Add a terminal tab whose daemon session is `sessionId`; returns its
- *  terminal id. */
-function tabWithSession(room: PinnedRoom, sessionId: string): string {
+ *  item data. */
+function tabWithSession(room: PinnedRoom, sessionId: string): TerminalItemData {
   room.tabs.getState().addTab(ROOT)
   const tab = room.tabs.getState().tabs[room.tabs.getState().tabs.length - 1]
   const data = [...tab.paneGroups.values()][0].items[0].data as TerminalItemData
   // TerminalPane stamps the v2 session id after spawn; stand in for it.
   data.sessionId = sessionId
-  return data.terminalId
+  return data
 }
 
 /** The room's server's workspace socket, carrying its app bus. */
@@ -148,98 +165,112 @@ async function carrier(room: PinnedRoom): Promise<FakeWebSocket> {
   cleanups.push(off)
   await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(before + 1))
   const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]
-  expect(ws.url.startsWith('wss://z3thon.k2.dev/cli/sessions/events?path=%2Fsrv%2Fanna')).toBe(true)
+  expect(ws.url.startsWith('wss://b.example.com/cli/sessions/events?path=%2Fsrv%2Fanna')).toBe(true)
   ws.open()
   return ws
 }
 
-function hook(ws: FakeWebSocket, paneId: string, status: 'start' | 'stop' | 'permission', workspacePath?: string): void {
-  if (!ws.onmessage) throw new Error('carrier socket has no onmessage')
-  ws.onmessage({
-    data: JSON.stringify({ kind: 'agent_status_changed', paneId, tabId: paneId, status, ...(workspacePath ? { workspacePath } : {}) }),
-  })
+function row(sessionId: string, display: ActivityRow['display'], workspacePath = ROOT): ActivityRow {
+  return {
+    sessionId,
+    agentName: `tab-${sessionId}`,
+    projectId: workspacePath === ROOT ? 'p-anna' : 'p-other',
+    workspacePath,
+    harness: 'claude',
+    display,
+    lead: { state: display === 'idle' ? 'idle' : 'working', outcome: 'none', since: 0, promptId: null },
+    children: { subagents: 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
+    turnStartedAt: null,
+    evidenceAt: 1,
+    evidenceSource: 'hook',
+    reason: 'turn_running',
+    staleSince: null,
+    confirmed: true,
+    rev: 1,
+  }
 }
 
-describe('a pinned room applies its server’s agent_status_changed (T4.4)', () => {
-  it('working → idle with unseen-done and one chime; other workspaces change nothing', async () => {
+function send(ws: FakeWebSocket, msg: unknown): void {
+  if (!ws.onmessage) throw new Error('carrier socket has no onmessage')
+  ws.onmessage({ data: JSON.stringify(msg) })
+}
+
+function changed(ws: FakeWebSocket, seq: number, r: ActivityRow, turnEnded: unknown = null): void {
+  send(ws, { kind: 'activity_changed', seq, instanceId: INSTANCE, row: r, removed: null, turnEnded, workspace: null })
+}
+
+/** The first frame from B pulls its snapshot (we hold none yet). */
+async function primed(ws: FakeWebSocket, room: PinnedRoom, rows: ActivityRow[]): Promise<void> {
+  h.snapshots.push({
+    scopeId: room.scope.id,
+    body: { instanceId: INSTANCE, seq: 1, serverNow: Date.now(), staleAfterSecs: 1800, rows, workspaces: [] },
+  })
+  changed(ws, 1, rows[0])
+  await vi.waitFor(() => expect(activityStore(room.scope).getState().seq).toBe(1))
+}
+
+describe('a pinned room renders its server’s activity rows (T-S5e)', () => {
+  it('reads B’s rows through its tab’s sessionId; a turn end under its root marks + chimes once', async () => {
     const room = pinned()
-    const term = tabWithSession(room, 'sid-1')
+    const data = tabWithSession(room, 'sid-1')
     const ws = await carrier(room)
     expect(openAppBus(room.scope).openSockets).toBe(0)
+    await primed(ws, room, [row('sid-1', 'idle')])
+    expect(h.pulls).toEqual([room.scope.id])
 
-    hook(ws, 'sid-1', 'start', ROOT)
-    expect(room.activityView.getState().paneStatuses.get(term)).toBe('working')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    changed(ws, 2, row('sid-1', 'working'))
+    expect(terminalDisplay(room.activityView.getState(), data)).toBe('working')
+    // The window's own server never sees B's rows.
+    expect(activityStore({ id: 'primary' }).getState().rows.size).toBe(0)
 
-    // Another workspace on the same server, and a nested-but-other path.
-    const before = new Map(room.activityView.getState().paneStatuses)
-    hook(ws, 'sid-other', 'start', '/srv/anna-other')
-    hook(ws, 'sid-1', 'stop', '/srv/anna-other')
-    hook(ws, 'sid-unknown', 'start')
-    expect(room.activityView.getState().paneStatuses).toEqual(before)
-
-    hook(ws, 'sid-1', 'stop', ROOT)
-    expect(room.activityView.getState().paneStatuses.get(term)).toBe('idle')
-    expect(room.activityView.getState().unseenDone.has(term)).toBe(true)
+    // Another workspace on the same server ends a turn: not this room's.
+    changed(ws, 3, row('sid-other', 'working', '/srv/anna-other'))
+    await vi.advanceTimersByTimeAsync(6_000)
+    changed(ws, 4, row('sid-other', 'idle', '/srv/anna-other'), { outcome: 'success', reason: 'turn_done', at: Date.now() })
+    changed(ws, 5, row('sid-1', 'idle'), { outcome: 'success', reason: 'turn_done', at: Date.now() })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(terminalDisplay(room.activityView.getState(), data)).toBe('idle')
+    expect(agentHasUnseen(room.activityView.getState(), 'tab-sid-1', 'sid-1')).toBe(true)
     expect(h.chimes).toEqual(['p-anna'])
-
-    // A second stop, or the title's own idle, never chimes again.
-    hook(ws, 'sid-1', 'stop', ROOT)
-    room.activity.recordTitleActivity(term, false)
-    expect(h.chimes).toEqual(['p-anna'])
-  })
-
-  it('a frame with no path counts only when the session is one of the room’s tabs', async () => {
-    const room = pinned()
-    const term = tabWithSession(room, 'sid-2')
-    const ws = await carrier(room)
-    hook(ws, 'sid-2', 'permission')
-    expect(room.activityView.getState().paneStatuses.get(term)).toBe('permission')
-    // The hook owns permission: a title idle can't clear it.
-    room.activity.recordTitleActivity(term, false)
-    expect(room.activityView.getState().paneStatuses.get(term)).toBe('permission')
   })
 
   it('a busy session under the root with no tab (the pinned Chat) still makes the room busy', async () => {
     const room = pinned()
     const ws = await carrier(room)
-    hook(ws, 'sid-chat', 'start', ROOT)
-    expect(roomRowActivity(room.activityView.getState(), mergePaneStatus)).toBe('working')
-    hook(ws, 'sid-chat', 'permission', `${ROOT}/sub`)
-    expect(roomRowActivity(room.activityView.getState(), mergePaneStatus)).toBe('permission')
+    await primed(ws, room, [row('sid-chat', 'working')])
+    expect(roomRowActivity(room.activityView.getState(), ROOT)).toBe('working')
+    changed(ws, 2, row('sid-chat', 'waiting'))
+    expect(roomRowActivity(room.activityView.getState(), ROOT)).toBe('permission')
+    changed(ws, 3, row('sid-chat', 'monitoring'))
+    expect(roomRowActivity(room.activityView.getState(), ROOT)).toBe('monitoring')
   })
 
   it('dispose stops the room hearing its server', async () => {
     const room = pinned()
-    const term = tabWithSession(room, 'sid-3')
+    const data = tabWithSession(room, 'sid-3')
     const ws = await carrier(room)
+    await primed(ws, room, [row('sid-3', 'idle')])
     await room.dispose()
-    hook(ws, 'sid-3', 'start', ROOT)
-    expect(room.activityView.getState().paneStatuses.has(term)).toBe(false)
-  })
-})
-
-describe('roomPaneForHook (Z30)', () => {
-  const tabsState = { tabs: [], extraGroups: [] }
-
-  it('drops a path outside the root before any lookup', () => {
-    const aliases = new Map([['sid-a', 't-a']])
-    expect(roomPaneForHook({ paneId: 'sid-a', workspacePath: '/srv/other' }, ROOT, tabsState, aliases)).toBe(null)
+    changed(ws, 2, row('sid-3', 'working'))
+    expect(terminalDisplay(room.activityView.getState(), data)).toBe('idle')
   })
 
-  it('maps through the aliases, then falls back to the session id under the root', () => {
-    const aliases = new Map([['sid-a', 't-a']])
-    expect(roomPaneForHook({ paneId: 'sid-a', workspacePath: ROOT }, ROOT, tabsState, aliases)).toBe('t-a')
-    expect(roomPaneForHook({ paneId: 'sid-b', workspacePath: ROOT }, ROOT, tabsState, aliases)).toBe('sid-b')
-    expect(roomPaneForHook({ paneId: 'sid-b' }, ROOT, tabsState, aliases)).toBe(null)
-  })
-})
-
-describe('createRoomActivity.applyHookStatus', () => {
-  it('a stop for a pane never seen busy records idle without a chime', () => {
-    const activity = createRoomActivity(emptyProjects(), 'p')
-    activity.applyHookStatus('t', 'stop')
-    expect(activity.getState().paneStatuses.get('t')).toBe('idle')
-    expect(activity.getState().unseenDone.size).toBe(0)
-    expect(h.chimes).toEqual([])
+  it('a server without daemon-activity: its session_activity_changed stream as-is, no snapshot (RL13)', async () => {
+    const room = pinned()
+    const data = tabWithSession(room, 'sid-4')
+    const ws = await carrier(room)
+    send(ws, {
+      kind: 'session_activity_changed',
+      workspacePath: ROOT,
+      agentName: `tab-${data.terminalId}`,
+      paneGroupId: data.terminalId,
+      status: 'working',
+    })
+    const view = room.activityView.getState()
+    expect(view.supported).toBe(false)
+    expect(terminalDisplay(view, data)).toBe('working')
+    expect(roomRowActivity(view, ROOT)).toBe('working')
+    expect(h.pulls).toEqual([])
   })
 })

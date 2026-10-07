@@ -28,12 +28,15 @@
 // Rows (`agents.list` / `agents.subscribe`): the view's rows in Home order
 // (so ⌘1–9 stays meaningful), multi-server, from the stores Home already
 // keeps:
-//   - live status (Z39, Z65), first source that knows: an open room's own
-//     activity (its `agent_status_changed` slice), then `active-agents` for a
-//     row on the window's server, then the pool's `presence/summary`
-//     `agentActivity`. A server that sends no activity (before 0.43.2) shows
-//     no status, never "idle" (Z71). `ZenDataHost` runs Home's row-status
-//     poll for every Home a view shows (G53);
+//   - live status (Z39, Z65), first source that knows: an open room's
+//     server rows, then the window server's rows for a row on the window's
+//     server (both the daemon's activity, prd-daemon-activity-and-thread-
+//     working-v1 S5), then the pool's `presence/summary` `agentActivity`.
+//     Widgets get the daemon's real display (Q13): `working`, `monitoring`,
+//     `needs-you` (the daemon's `waiting`), `unverifiable`, `idle`. A server
+//     that sends no activity (before 0.43.2) shows no status, never "idle"
+//     (Z71). `ZenDataHost` runs Home's row-status poll for every Home a view
+//     shows (G53);
 //   - availability from the pool (offline, sign in, no access) with Home's
 //     own row rules (`computeRowStatus`), plus "Update <server>" below the
 //     room floor;
@@ -65,7 +68,7 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { usePageViewStore } from '@/stores/page-view'
-import { useActiveAgentsStore, mergePaneStatus, type PaneStatus } from '@/stores/active-agents'
+import { workspaceDisplay, type ActivityDisplay } from '@/stores/activity'
 import { usePresenceStore, usersForWorkspace } from '@/stores/presence'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { homeRooms, type HomeRoomEntry } from '@/stores/home-rooms'
@@ -108,8 +111,12 @@ import { zenAgentsSource } from './zen-rail-views'
 
 // ── Shapes a widget sees ──────────────────────────────────────────────────
 
-/** What the agent is doing right now (answer 9). */
-export type ZenActivity = 'working' | 'needs-you' | 'idle'
+/** What the agent is doing right now (answer 9): the daemon's display
+ *  (prd-daemon-activity-and-thread-working-v1 Q13), with its `waiting`
+ *  named `needs-you`, the bridge's word since v1. `monitoring` = only
+ *  background work is left; `unverifiable` = nothing heard for a long time
+ *  (never "done"). */
+export type ZenActivity = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'idle'
 
 /** Whether the row can be messaged, and if not, why. */
 export type ZenRowState =
@@ -384,10 +391,8 @@ function serverLabel(hostKey: string, hosts: ConnectHost[]): string | null {
   return saved ? saved.label || saved.hostname : hostKey || 'unknown server'
 }
 
-function fromPane(s: PaneStatus): ZenActivity {
-  if (s === 'permission') return 'needs-you'
-  if (s === 'working') return 'working'
-  return 'idle'
+function fromDisplay(d: ActivityDisplay): ZenActivity {
+  return d === 'waiting' ? 'needs-you' : d
 }
 
 const STATE_LABEL: Record<Exclude<ZenRowState, 'ok' | 'update'>, string> = {
@@ -402,7 +407,7 @@ const STATE_LABEL: Record<Exclude<ZenRowState, 'ok' | 'update'>, string> = {
 
 function roomActivityOf(entry: HomeRoomEntry | undefined): ReturnType<typeof roomRowActivity> | null {
   if (!entry || entry.phase !== 'open' || !entry.room) return null
-  return roomRowActivity(entry.room.activityView.getState(), mergePaneStatus)
+  return roomRowActivity(entry.room.activityView.getState(), entry.room.cwd())
 }
 
 
@@ -670,7 +675,9 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
       state = 'ok'
       const ws = findWorkspaceForRow(projects, row)
       if (ws) {
-        activity = fromPane(useActiveAgentsStore.getState().getProjectStatus(ws.id))
+        activity = fromDisplay(
+          workspaceDisplay(primaryRoom().activityView.getState(), { projectId: ws.id, path: ws.path }),
+        )
         const presence = usePresenceStore.getState()
         const self = host.activeHost === 'local' ? 'owner' : host.activeHost.username || 'owner'
         people = presence.supported
@@ -686,13 +693,15 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     switch (status.kind) {
       case 'working':
       case 'permission':
+      case 'monitoring':
+      case 'unverifiable':
       case 'live':
       case 'idle':
       case 'review':
         state = 'ok'
         activity =
-          status.kind === 'working'
-            ? 'working'
+          status.kind === 'working' || status.kind === 'monitoring' || status.kind === 'unverifiable'
+            ? status.kind
             : status.kind === 'permission'
               ? 'needs-you'
               : roomActivity !== null || Array.isArray(entry?.activity)
@@ -789,7 +798,8 @@ function startLive(): void {
   unsubs.push(useConnectHostStore.subscribe(on))
   unsubs.push(useProjectsStore.subscribe(on))
   unsubs.push(useFocusGroupsStore.subscribe(on))
-  unsubs.push(useActiveAgentsStore.subscribe(on))
+  // The window server's activity rows (S5).
+  unsubs.push(primaryRoom().activityView.subscribe(on))
   unsubs.push(usePresenceStore.subscribe(on))
   unsubs.push(hostPool.store.subscribe(on))
   unsubs.push(useZenGardenHomesStore.subscribe(on))

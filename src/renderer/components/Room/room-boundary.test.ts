@@ -9,8 +9,10 @@
 //    code the focused room (`focusedRoom`). A file that stops using it must
 //    leave the list, so the list never goes stale.
 // 2. Room components never reach the window's globals for what their room
-//    owns: no `primaryScope()`, no direct active-agents activity writes
-//    (they go to `room.activity`, MS68).
+//    owns: no `primaryScope()`, and activity is read from `room.activityView`
+//    and reported through `room.activity` (MS68), never the window
+//    server's activity store directly (prd-daemon-activity-and-thread-
+//    working-v1 S5).
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -45,7 +47,7 @@ const PRIMARY_TABS_USERS: Record<string, string> = {
   'stores/tabs.ts': 'defines it: `useTabsStore = createTabsStore(primary binding)`',
   'stores/room.ts': 'the primary room wraps it',
   'stores/projects.ts': "the window's workspace switch drives the primary room",
-  'stores/active-agents.ts': "primary-only (MS14): the window's Active bar and this computer's daemon events",
+  'stores/active-agents.ts': "primary-only (MS14): the window's agents map, toasts' View and this computer's daemon events",
   'App.tsx': "quit / unload save and the dirty-dot of the window's own room",
   'components/Sidebar/ActiveBar.tsx': 'window sidebar: the primary room',
   'components/Sidebar/WorktreeDialog.tsx': 'window sidebar: the primary room',
@@ -100,8 +102,8 @@ describe('Home M3 room boundary', () => {
       const src = read(f)
       if (/\bprimaryScope\(\)/.test(src)) offenders.push(`${f}: primaryScope()`)
       if (/\buseTabsStore\b/.test(src)) offenders.push(`${f}: useTabsStore`)
-      if (/useActiveAgentsStore[\s\S]{0,40}\.(recordOutput|recordTitleActivity|recordTitlePermission|markSeen|bindPaneAgentName|bindPaneProject)\(/.test(src)) {
-        offenders.push(`${f}: activity written to the window's store, not room.activity`)
+      if (/(^|[^.\w])(activityStore|useActivity|setViewing)\(/m.test(src)) {
+        offenders.push(`${f}: the window server's activity, not room.activityView / room.activity`)
       }
       if (!/\buseRoom(Tabs|Projects|Supports)?\(|\bisFocusedRoom\(room\)/.test(src)) {
         offenders.push(`${f}: never reads its room`)

@@ -55,7 +55,11 @@ export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
 
 const STATUS_TEXT: Record<RowStatus['kind'], string> = {
   working: 'text-[var(--color-status-working)]',
-  permission: 'text-[var(--color-status-error-soft)]',
+  // prd-daemon-activity-and-thread-working-v1 S5: needs you is amber,
+  // monitoring the quieter blue, no update muted (the daemon's displays).
+  permission: 'text-[var(--color-status-warn-amber)]',
+  monitoring: 'text-[var(--color-accent)]',
+  unverifiable: 'text-[var(--color-text-muted)]',
   review: 'text-[var(--color-status-ok-soft)]',
   idle: 'text-[var(--color-text-muted)]',
   live: 'text-[var(--color-status-ok-soft)]',

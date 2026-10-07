@@ -14,7 +14,8 @@ import {
   type PresenceWorkspace,
 } from './home-status'
 import type { HostEntry } from './host-pool'
-import { mergePaneStatus, type PaneStatus } from '@/stores/active-agents'
+import type { ActivityDisplay, ActivityRow } from '@/stores/activity'
+import { parsePresenceActivity } from '@/lib/host-pool'
 import type { RosterUser } from '@/stores/presence'
 
 const row = { address: 'bee::b.k2.dev', workspaceId: 'pb' }
@@ -225,16 +226,54 @@ describe('Home 0.43.2 (Z23): what an agent on another server is doing', () => {
     expect(activityForRow(null, row)).toBe(null)
   })
 
-  it('roomRowActivity: permission beats working; the daemon’s word merges per pane like the tab dots', () => {
-    const view = (client: Array<[string, PaneStatus]>, daemon: Array<[string, PaneStatus]>) => ({
-      paneStatuses: new Map(client),
-      daemonPaneStatuses: new Map(daemon),
+  it('a server with daemon activity sends the real display; the row shows it (S5, A31)', () => {
+    const parsed = parsePresenceActivity([
+      { workspaceId: 'pb', status: 'working', display: 'monitoring' },
+      { workspaceId: 'pc', status: 'idle', display: 'unverifiable' },
+      { workspaceId: 'pd', status: 'permission', display: 'waiting' },
+      { workspaceId: 'pe', status: 'working' },
+      { workspaceId: 'pf', status: 'idle' },
+    ])
+    if (!parsed) throw new Error('parse returned null')
+    expect(parsed.map((a) => [a.workspaceId, a.display ?? null])).toEqual([
+      ['pb', 'monitoring'],
+      ['pc', 'unverifiable'],
+      ['pd', 'waiting'],
+      ['pe', null],
+    ])
+    expect(activityForRow(parsed, row)).toBe('monitoring')
+    expect(activityForRow(parsed, { ...row, workspaceId: 'pd' })).toBe('permission')
+    const mon = resolveRowStatus({ ...other, entry: probe({ activity: parsed }) })
+    expect([mon.kind, mon.label]).toEqual(['monitoring', 'Monitoring'])
+    const stale = resolveRowStatus({ ...other, row: { ...row, workspaceId: 'pc' }, entry: probe({ activity: parsed }) })
+    expect([stale.kind, stale.label]).toEqual(['unverifiable', 'No update'])
+  })
+
+  it('roomRowActivity: the highest display among the server’s rows under the room’s root', () => {
+    const r = (sessionId: string, display: ActivityDisplay, workspacePath: string): ActivityRow => ({
+      sessionId,
+      agentName: `tab-${sessionId}`,
+      projectId: null,
+      workspacePath,
+      harness: 'claude',
+      display,
+      lead: { state: 'idle', outcome: 'none', since: 0, promptId: null },
+      children: { subagents: 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
+      turnStartedAt: null,
+      evidenceAt: null,
+      evidenceSource: null,
+      reason: 'turn_done',
+      staleSince: null,
+      confirmed: true,
+      rev: 1,
     })
-    expect(roomRowActivity(view([], []), mergePaneStatus)).toBe('idle')
-    expect(roomRowActivity(view([['t1', 'working']], []), mergePaneStatus)).toBe('working')
-    expect(roomRowActivity(view([['t1', 'working'], ['t2', 'permission']], []), mergePaneStatus)).toBe('permission')
-    // A hidden pane's false client idle loses to the daemon's working.
-    expect(roomRowActivity(view([['t1', 'idle']], [['t1', 'working']]), mergePaneStatus)).toBe('working')
+    const view = (rows: ActivityRow[]) => ({ rows: new Map(rows.map((x) => [x.sessionId, x])) })
+    expect(roomRowActivity(view([]), '/srv/b')).toBe('idle')
+    expect(roomRowActivity(view([r('a', 'working', '/srv/b')]), '/srv/b')).toBe('working')
+    expect(roomRowActivity(view([r('a', 'working', '/srv/b'), r('b', 'waiting', '/srv/b/sub')]), '/srv/b')).toBe('permission')
+    expect(roomRowActivity(view([r('a', 'monitoring', '/srv/b'), r('b', 'unverifiable', '/srv/b')]), '/srv/b')).toBe('monitoring')
+    // Another workspace on the same server is not this room's.
+    expect(roomRowActivity(view([r('a', 'working', '/srv/b-other')]), '/srv/b')).toBe('idle')
   })
 })
 

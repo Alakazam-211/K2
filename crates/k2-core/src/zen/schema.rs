@@ -425,7 +425,7 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "status",
         ty: PropType::SubsetOf(AGENT_STATUSES),
         default: Some("[\"working\", \"idle\", \"needs-you\"]"),
-        doc: "which live statuses to show",
+        doc: "which live statuses to show (`monitoring` shows with `working`, `unverifiable` with `idle`)",
     },
     WidgetProp {
         kind: "conversation",

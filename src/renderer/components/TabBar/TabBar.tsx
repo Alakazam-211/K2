@@ -9,11 +9,20 @@ import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useStore } from 'zustand'
-import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
+import type { ActiveAgent } from '@/stores/active-agents'
+import {
+  agentHasUnseen,
+  agentNameForTerminal,
+  highestDisplay,
+  isBusyDisplay,
+  rowForAgentName,
+  terminalDisplay,
+  type ActivityDisplay,
+} from '@/stores/activity'
+import { ActivityMark } from '@/components/Activity/ActivityMark'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
-import { agentChatId } from '@/lib/terminal-id'
 import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
@@ -126,27 +135,18 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
   const reorderTabs = useRoomTabs((s) => s.reorderTabs)
-  // Home M4 (MS14/MS21): the ROOM's activity — the window's store for the
-  // primary room, the room's own slice for a pinned room.
-  const paneStatusMap = useStore(room.activityView, (s) => s.paneStatuses)
-  // 0.40.39 — daemon-truth activity (visibility-independent). Subscribed
-  // so the tab re-renders on daemon transitions; merged with the client
-  // map so a hidden pane's false idle can't kill the spinner.
-  const daemonStatusMap = useStore(room.activityView, (s) => s.daemonPaneStatuses)
-  // F4.1 (0.40.39) — per-TAB unseen-done: the tab whose agent finished
-  // while the user wasn't looking shows an amber square in the spinner/X
-  // slot until visited (markSeen clears the entry when the pane becomes
-  // visible+focused). Same store the Active bar's amber square reads, so
-  // the two can never disagree. Reserved orange TAB-highlight (API-
-  // launched tabs) is deliberately NOT reused here.
-  const unseenDoneMap = useStore(room.activityView, (s) => s.unseenDone)
-  const effStatus = (id: string): PaneStatus =>
-    mergePaneStatus(paneStatusMap.get(id), daemonStatusMap.get(id))
+  // prd-daemon-activity-and-thread-working-v1 S5: the ROOM's server's
+  // activity rows (Home M4, MS14/MS21) — what the daemon says each session
+  // is doing. A tab maps to its row by its `sessionId`, else its agent name
+  // (RL10). F4.1 — per-TAB unseen-done (per-client view state, RL11): the
+  // tab whose agent finished while the user wasn't looking shows an amber
+  // square in the spinner/X slot until visited. Same store the Active
+  // bar's amber square reads, so the two can never disagree.
+  const activity = useStore(room.activityView)
   // This TabBar is scoped to one workspace (`cwd`); resolve its projectId so
-  // the pinned Chat tab can read its daemon-backed chat pane's working status.
-  // The chat pane is keyed `agent-chat:<projectId>` in `paneStatuses` — it's
-  // an `agent` item, NOT a `terminal` item, so the generic working-detection
-  // below (which only inspects terminal panes) never sees it.
+  // the pinned Chat tab can read its pinned session's row (agent name = the
+  // project id, A36). The chat pane is an `agent` item, NOT a `terminal`
+  // item, so the per-terminal lookup below never sees it.
   // MS3 — resolved in THIS room's own project list: the same path on
   // another server is another project.
   const projectId = useRoomProjects((projects) => projects.find((p) => p.path === cwd)?.id ?? null)
@@ -725,22 +725,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId
           const isDirty = tab.isDirty ?? false
-          // Braille spinner reads ONLY the canonical activity store
-          // (paneStatuses — snapshot-driven detection + title/bell
-          // heuristics + daemon lifecycle broadcasts), the same source
-          // the nav Active bar and sidebar use. The legacy 5s
+          // The tab's mark reads ONLY the daemon's activity rows (S5: the
+          // highest display among its terminals' sessions), the same
+          // source the nav Active bar and sidebar use. The legacy 5s
           // output-recency `agents` map used to OR in here, lighting
           // the spinner when the Active bar showed idle (and vice
           // versa). The close-confirmation dialog reads agents on demand
           // via getState().getAgentsInTab — no subscription needed here.
-          const terminalIds = Array.from(tab.paneGroups.values())
-            .flatMap(pg => pg.items.filter(i => i.type === 'terminal').map(i => (i.data as TerminalItemData).terminalId))
-          const isAgentActive = terminalIds.some(id => {
-            const s = effStatus(id)
-            return s === 'working' || s === 'permission'
-          })
+          const terminalItems = Array.from(tab.paneGroups.values())
+            .flatMap(pg => pg.items.filter(i => i.type === 'terminal').map(i => i.data as TerminalItemData))
+          const tabDisplay: ActivityDisplay = highestDisplay(terminalItems.map(d => terminalDisplay(activity, d)))
+          const isAgentActive = isBusyDisplay(tabDisplay)
           const hasUnseenDone =
-            !isAgentActive && terminalIds.some(id => unseenDoneMap.has(id))
+            tabDisplay === 'idle' &&
+            terminalItems.some(d => agentHasUnseen(activity, agentNameForTerminal(d), d.sessionId))
           const isDragged = reorderDragIndex === index
           const showDropBefore = reorderDropIndex === index
           const showDropAfter = reorderDropIndex === tabs.length && index === tabs.length - 1
@@ -810,25 +808,25 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 : undefined
 
             // The pinned Chat tab's working signal lives on its daemon-backed
-            // chat pane (`agent-chat:<projectId>`), invisible to the generic
-            // terminal-pane check above. Read it directly so the icon→spinner
-            // swap (and activity underline) fire. Chat-only — the Inbox tab is
-            // a passive queue with no working state. Same flag the Active bar
-            // uses (paneStatuses, set by recordTitleActivity / lifecycle hook).
-            const chatStatus = section === 'chat' && projectId
-              ? effStatus(agentChatId(projectId, ''))
-              : undefined
-            const chatWorking = chatStatus === 'working' || chatStatus === 'permission'
-            const systemTabActive = isAgentActive || chatWorking
+            // chat session (agent name = the project id), invisible to the
+            // generic terminal-pane check above. Read its row directly so the
+            // icon→mark swap (and activity underline) fire. Chat-only — the
+            // Inbox tab is a passive queue with no working state.
+            const chatDisplay: ActivityDisplay = section === 'chat' && projectId
+              ? highestDisplay([tabDisplay, rowForAgentName(activity, projectId)?.display ?? 'idle'])
+              : tabDisplay
+            const systemTabActive = isBusyDisplay(chatDisplay)
             const chatUnseenDone =
-              !systemTabActive && section === 'chat' && projectId
-                ? unseenDoneMap.has(agentChatId(projectId, '')) ||
-                  terminalIds.some(id => unseenDoneMap.has(id))
+              chatDisplay === 'idle' && section === 'chat' && projectId
+                ? agentHasUnseen(activity, projectId) || hasUnseenDone
                 : hasUnseenDone
 
             const iconSvg = (() => {
-              if (systemTabActive) {
+              if (chatDisplay === 'working') {
                 return <span className="braille-spinner text-[11px]" />
+              }
+              if (chatDisplay !== 'idle') {
+                return <ActivityMark display={chatDisplay} size={9} />
               }
               if (chatUnseenDone) {
                 // F4.1 — finished-while-unseen takes the icon slot (amber)
@@ -1111,9 +1109,14 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                             : 'Close tab'
                     }
                   >
-                    {isAgentActive ? (
+                    {tabDisplay === 'working' ? (
                       <>
                         <span className="braille-spinner text-[10px] text-[var(--color-text-muted)] group-hover/close:hidden" />
+                        <span className="hidden group-hover/close:block">{closeGlyph}</span>
+                      </>
+                    ) : tabDisplay !== 'idle' ? (
+                      <>
+                        <ActivityMark display={tabDisplay} className="group-hover/close:hidden" />
                         <span className="hidden group-hover/close:block">{closeGlyph}</span>
                       </>
                     ) : hasUnseenDone ? (

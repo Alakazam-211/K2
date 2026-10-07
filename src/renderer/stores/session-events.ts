@@ -828,6 +828,7 @@ export function subscribeToWorkspaceSessionEvents(
         return
       }
       if (carrier) carrier.frame(msg)
+      if (isResyncFrame(msg)) return
       // Home 0.43.2 (Z24/Z25): the kinds this socket handles come from the
       // shared registry. Every other registry kind (app-level frames the
       // daemon fans to every `?path=`, heartbeat frames the tab-events
@@ -961,6 +962,9 @@ type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
 type WorkspaceResourcesHandler = (e: WorkspaceResourcesChangedEvent) => void
 /** RL4/A28: receives the hello frame (its `instance_id` tells a restart). */
 type AppHelloHandler = (hello: HelloEvent) => void
+/** RL4/A30: a `{"kind":"resync"}` control frame — the server is about to
+ *  close this socket for lagging; re-read whatever it feeds. */
+type AppResyncHandler = () => void
 // #688 — app-level session add/remove. The per-workspace
 // `subscribeToWorkspaceSessionEvents` only sees its OWN cwd; the
 // Active-bar "live session" dot needs liveness across EVERY workspace
@@ -1032,6 +1036,7 @@ interface AppBusHandlers {
   publishServices: Set<PublishServicesHandler>
   workspaceResources: Set<WorkspaceResourcesHandler>
   appHello: Set<AppHelloHandler>
+  appResync: Set<AppResyncHandler>
   sessionAdded: Set<SessionAddedHandler>
   sessionRemoved: Set<SessionRemovedHandler>
   presenceChanged: Set<PresenceChangedHandler>
@@ -1068,6 +1073,7 @@ function createBusState(scopeId: string): BusState {
       publishServices: new Set(),
       workspaceResources: new Set(),
       appHello: new Set(),
+      appResync: new Set(),
       sessionAdded: new Set(),
       sessionRemoved: new Set(),
       presenceChanged: new Set(),
@@ -1167,6 +1173,19 @@ export function onWorkspaceResourcesChanged(
  *  that may have drifted while the socket was down. Returns an unsub fn. */
 export function onAppHello(scope: ServerScope, fn: AppHelloHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.appHello, fn)
+}
+
+/** prd-daemon-activity-and-thread-working-v1 RL4/A30 — fires on an app
+ *  socket's `{"kind":"resync"}` control frame (sent before a lag close), so
+ *  consumers re-pull their snapshot. Returns an unsub fn. */
+export function onAppResync(scope: ServerScope, fn: AppResyncHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.appResync, fn)
+}
+
+/** A `{"kind":"resync"}` control frame (RL4/A30). Not a bus event: no
+ *  registry entry, handled before the dispatch table like `hello`. */
+function isResyncFrame(msg: { kind: string }): boolean {
+  return msg.kind === 'resync'
 }
 
 /** #688 — subscribe to APP-LEVEL `session_added` (EVERY workspace, not just
@@ -1324,6 +1343,10 @@ function registerAppBusCarrier(scope: ServerScope): { frame(msg: SessionEventMes
       if (bus.openSockets > 0) return
       if (msg.kind === 'hello') {
         for (const fn of bus.handlers.appHello) fn(msg)
+        return
+      }
+      if (isResyncFrame(msg)) {
+        for (const fn of bus.handlers.appResync) fn()
         return
       }
       if (!CARRIED_KINDS.has(msg.kind)) return
@@ -1648,6 +1671,10 @@ export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
         // Fan out to Wave B app-level consumers so they re-snapshot their
         // own truth (llm/agent/tunnel) after the same drop window.
         for (const h of bus.handlers.appHello) h(msg)
+        return
+      }
+      if (isResyncFrame(msg)) {
+        for (const h of bus.handlers.appResync) h()
         return
       }
       if (msg.kind === 'active_changed' && scope.isPrimary) {

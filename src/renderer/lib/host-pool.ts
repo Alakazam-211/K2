@@ -39,16 +39,27 @@ import type { ConnectHost, LoginResult } from '@/stores/connect-host'
 import { LOCAL_HOME_HOST, savedHostForKey } from '@/lib/host-key'
 import type { LoginCoordinator, LoginBlock } from '@/lib/host-login-coord'
 import type { PresenceActivity, PresenceWorkspace } from '@/lib/home-status'
+import type { ActivityDisplay } from '@/stores/session-events'
+
+const DISPLAYS: ReadonlySet<string> = new Set(['working', 'monitoring', 'waiting', 'unverifiable', 'idle'])
 
 /** Home 0.43.2 (Z23): the summary's `agentActivity`, keeping only rows the
- *  client understands. Absent (a server before 0.43.2) → null. */
+ *  client understands. Absent (a server before 0.43.2) → null. A server
+ *  with daemon activity (prd-daemon-activity-and-thread-working-v1 A31)
+ *  also sends the real `display` (`monitoring` rows say `working`,
+ *  `unverifiable` ones `idle`, in `status`); it is kept when known. */
 export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
   if (!Array.isArray(raw)) return null
   const out: PresenceActivity[] = []
   for (const r of raw) {
     if (!r || typeof r !== 'object') continue
-    const { workspaceId, status } = r as { workspaceId?: unknown; status?: unknown }
+    const { workspaceId, status, display } = r as { workspaceId?: unknown; status?: unknown; display?: unknown }
     if (typeof workspaceId !== 'string' || workspaceId.length === 0) continue
+    const real = typeof display === 'string' && DISPLAYS.has(display) ? (display as ActivityDisplay) : null
+    if (real) {
+      out.push({ workspaceId, status: status === 'permission' ? 'permission' : 'working', display: real })
+      continue
+    }
     if (status !== 'working' && status !== 'permission') continue
     out.push({ workspaceId, status })
   }

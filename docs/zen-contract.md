@@ -209,7 +209,7 @@ filtered from a Home**):
 | `agents` | `order` | `"home"` | `"home"` | row order |
 | `agents` | `server-tag` | bool | `true` | tag rows from another server |
 | `agents` | `preview` | bool | `true` | last message under each row |
-| `agents` | `status` | list of `working`, `idle`, `needs-you` | all three | which live statuses show |
+| `agents` | `status` | list of `working`, `idle`, `needs-you` | all three | which live statuses show (`monitoring` shows with `working`, `unverifiable` with `idle`; a row's `activity` is one of `working`, `monitoring`, `needs-you`, `unverifiable`, `idle`, prd-daemon-activity-and-thread-working-v1 Q13) |
 | `conversation` | `agents` | string (a widget id) | the page's first `agents` widget (column order) | follow that widget's picked agent; **always sent** unless `agent` is set |
 | `conversation` | `agent` | string | unset | pin one agent's conversation (name or address), no list needed |
 | `conversation` | `home` | string | unset | with `agent`: the Home to look it up in (id or name) |

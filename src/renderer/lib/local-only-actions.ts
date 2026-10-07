@@ -92,7 +92,6 @@ export const LOCAL_ONLY_ACTIONS: Readonly<Record<string, LocalOnlyAction>> = Obj
 
   // ── This computer's daemon events re-emitted by Tauri (MS14) ───────────
   'sync:projects': { kind: 'event', inRemoteRoom: 'off', why: 'this computer’s daemon changed its projects' },
-  'agent:lifecycle': { kind: 'event', inRemoteRoom: 'off', why: 'this computer’s daemon' },
   'cli:agent-launch': { kind: 'event', inRemoteRoom: 'off', why: 'this computer’s daemon' },
 })
 

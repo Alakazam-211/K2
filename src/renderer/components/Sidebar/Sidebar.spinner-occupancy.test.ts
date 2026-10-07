@@ -34,10 +34,12 @@ describe('AgentSpinner occupancy', () => {
     expect(agentSpinner).not.toMatch(/React\.JSX\.Element\s*\|\s*null/)
   })
 
-  it('only the glyph is conditional (working braille / review done / idle empty)', () => {
+  it('only the glyph is conditional (working braille / other daemon states a mark / review done / idle empty)', () => {
     expect(agentSpinner).toContain('braille-spinner')
+    expect(agentSpinner).toContain('<ActivityMark')
     expect(agentSpinner).toContain('done')
-    expect(agentSpinner).toMatch(/working \? \(/)
+    expect(agentSpinner).toMatch(/display === 'working' \? \(/)
+    expect(agentSpinner).toMatch(/display !== 'idle' \? \(/)
     expect(agentSpinner).toMatch(/review \? \(/)
   })
 })

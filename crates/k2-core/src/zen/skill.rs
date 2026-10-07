@@ -361,6 +361,14 @@ the widget is granted. Caps: ",
 - `focusGroups.get()`, `focusGroups.set(id)`, `focusGroups.subscribe(cb)`: `agents:read` (the app's focus groups, for the Agents view)\n\
 - `app.open(page)` (`home`, `agents`, `projects` or `tickets`: switches the Garden's view in this window, inside Zen; Zen stays on), `app.current()`, `app.subscribeCurrent(fn)`, `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
 - `gardens.list()`, `gardens.current()`, `gardens.switch(id)`, `zen.exit()`, `controls.bind(kind, element, gardenId?)`, `theme.get()`: no cap\n\n\
+Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's\n\
+server says it is doing (the daemon decides; K2 never guesses). `working`;\n\
+`monitoring` (the turn is done, only background work is left); `needs-you` (the\n\
+daemon's `waiting`: a permission prompt or a question in the terminal);\n\
+`unverifiable` (nothing heard for 30 minutes while the session is open; never\n\
+treat it as done); `idle`; or `null` when that server can't say. The Agents\n\
+widget's `status` prop keeps three values: `monitoring` shows with `working`, and\n\
+`unverifiable` with `idle`.\n\n\
 Built-in widgets get their caps from K2. In Zen v2, a user widget asks for caps in\n\
 its manifest and the human grants them in the K2 app. Agents request caps; they\n\
 never grant them.\n",

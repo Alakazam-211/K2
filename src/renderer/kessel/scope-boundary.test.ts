@@ -108,6 +108,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Projects/ProjectSettings.tsx',
   'components/Projects/ProjectsPage.tsx',
   'components/RemoteFolderPicker/RemoteFolderPicker.tsx',
+  'components/RenameAgentDialog/RenameAgentDialog.tsx',
   'components/RunningAgentsPanel/RunningAgentsPanel.tsx',
   'components/Settings/ContextCatalogCreator.tsx',
   'components/Settings/CustomThemeCreator.tsx',

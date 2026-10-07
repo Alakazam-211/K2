@@ -11,6 +11,7 @@ import AddWorkspaceDialog from './components/AddWorkspaceDialog/AddWorkspaceDial
 import RemoteFolderPicker from './components/RemoteFolderPicker/RemoteFolderPicker'
 import { pickWorkspaceFolder } from './lib/pick-workspace-folder'
 import RemoveWorkspaceDialog from './components/RemoveWorkspaceDialog/RemoveWorkspaceDialog'
+import RenameAgentDialog from './components/RenameAgentDialog/RenameAgentDialog'
 import CloneToDialog from './components/CloneToDialog/CloneToDialog'
 import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
@@ -1086,6 +1087,7 @@ function AppRoot(): React.JSX.Element {
       <AddWorkspaceDialog />
       <RemoteFolderPicker />
       <RemoveWorkspaceDialog />
+      <RenameAgentDialog />
       <CloneToDialog />
       <CommandPalette />
       {!settingsOpen && <RunningAgentsPanel />}

@@ -25,12 +25,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // ── Mock the host-aware daemon-cli layer (the thing we migrated TO) ──────
 const daemonCliGet = vi.fn()
 const daemonCliPost = vi.fn()
+const daemonCliPostQuery = vi.fn()
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
     daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGet(...args)),
     daemonCliGetText: vi.fn(),
     daemonCliPost: primaryOnly((...args: unknown[]) => daemonCliPost(...args)),
+    daemonCliPostQuery: primaryOnly((...args: unknown[]) => daemonCliPostQuery(...args)),
   }
 })
 
@@ -168,6 +170,7 @@ describe('projects store — Plan B host-aware migration', () => {
   beforeEach(() => {
     daemonCliGet.mockReset()
     daemonCliPost.mockReset()
+    daemonCliPostQuery.mockReset()
     emitMock.mockClear()
     addToast.mockClear()
     restoreWorkspaceMock.mockClear()
@@ -298,6 +301,54 @@ describe('projects store — Plan B host-aware migration', () => {
     expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
+  })
+
+  it('renameAgentDisplayName paints optimistically, POSTs set-agent-display-name (never set-handle), no refetch', async () => {
+    const p = mkProject('p-agent') as unknown as ProjectWithWorkspaces
+    p.name = 'Old Agent'
+    p.handle = 'old-agent'
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
+
+    let resolvePost!: (v: unknown) => void
+    daemonCliPostQuery.mockImplementationOnce(
+      () => new Promise((resolve) => { resolvePost = resolve }),
+    )
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    const pending = useProjectsStore.getState().renameAgentDisplayName('p-agent', 'Sales Team')
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('Sales Team')
+
+    resolvePost({ success: true, display_name: 'Sales Team' })
+    await pending
+
+    expect(daemonCliPostQuery).toHaveBeenCalledTimes(1)
+    expect(daemonCliPostQuery).toHaveBeenCalledWith('workspace/set-agent-display-name', {
+      project: '/tmp/p-agent',
+      name: 'Sales Team',
+    })
+    expect(daemonCliPost).not.toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(emitMock).toHaveBeenCalledWith('sync:projects')
+    const after = (useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0]
+    expect(after.name).toBe('Sales Team')
+    expect(after.handle).toBe('old-agent')
+    fetchSpy.mockRestore()
+  })
+
+  it('renameAgentDisplayName rolls back and rethrows when the daemon refuses', async () => {
+    const p = mkProject('p-agent-fail') as unknown as ProjectWithWorkspaces
+    p.name = 'Keep Me'
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
+    daemonCliPostQuery.mockRejectedValueOnce(new Error('role_required'))
+
+    await expect(
+      useProjectsStore.getState().renameAgentDisplayName('p-agent-fail', 'Nope'),
+    ).rejects.toThrow('role_required')
+
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('Keep Me')
+    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
   })
 
   it('reorderProjects POSTs projects/reorder and emits sync:projects', async () => {

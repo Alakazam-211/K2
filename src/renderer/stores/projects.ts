@@ -33,6 +33,7 @@ import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 import { takeHostSelect } from '@/lib/home-pending-select'
 import { primaryScope } from '@/kessel/server-scope'
+import { setAgentDisplayName } from '@/lib/workspace-agent'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -309,6 +310,12 @@ interface ProjectsState {
   /** Optimistic rename: patches the store immediately, POSTs
    *  `projects/update`, rolls back on failure. Does NOT full-refetch on success. */
   renameProject: (id: string, name: string) => Promise<void>
+  /** Sidebar "Rename agent…": set the agent's DISPLAY name through the
+   *  daemon (`workspace/set-agent-display-name`; handle unchanged).
+   *  Optimistic paint, rolls back and rethrows on failure so the dialog
+   *  can show the error. Does NOT full-refetch on success; other clients
+   *  refetch on the daemon's ProjectsChanged. */
+  renameAgentDisplayName: (id: string, name: string) => Promise<void>
   touchInteraction: (projectId: string) => void
   setManuallyActive: (projectId: string, active: boolean) => Promise<void>
 }
@@ -914,6 +921,27 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         ),
       }))
       console.error('[projects] renameProject failed:', err)
+    }
+  },
+
+  renameAgentDisplayName: async (id: string, name: string) => {
+    const existing = get().projects.find((p) => p.id === id)
+    if (!existing) throw new Error(`unknown workspace ${id}`)
+    const previousName = existing.name
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)),
+    }))
+    try {
+      await setAgentDisplayName(primaryScope(), existing.path, name)
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, name: previousName } : p,
+        ),
+      }))
+      throw err
     }
   },
 

@@ -10,6 +10,7 @@ import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useCommandPaletteStore } from '@/stores/command-palette'
 import { useAddWorkspaceDialogStore } from '@/stores/add-workspace-dialog'
 import { useRemoveWorkspaceDialogStore } from '@/stores/remove-workspace-dialog'
+import { RENAME_AGENT_MENU_ID, renameAgentMenuItem, useRenameAgentDialogStore } from '@/stores/rename-agent-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 // Plan B — daemon-data writes (nav-visible / project pins / workspace
@@ -875,15 +876,10 @@ export default function Sidebar(): React.JSX.Element {
         { id: 'settings', label: 'Workspace Settings' },
         { id: 'view-wiki', label: 'View Wiki' },
         { id: 'separator-settings', label: '', type: 'separator' },
-        // Display name vs folder path is unsolved — folder renames are
-        // too invasive. Keep the row visible (disabled + badge) so the
-        // intent stays on the map without a broken prompt.
-        {
-          id: 'rename',
-          label: 'Rename',
-          enabled: false,
-          badge: 'coming soon',
-        },
+        // Rename agent… — the agent's DISPLAY name only. The handle (the
+        // address) and the folder never change from here. Disabled when
+        // this window's server would refuse the write.
+        renameAgentMenuItem(primaryScope()),
         { id: 'open-finder', label: 'Open in Finder' },
         { id: 'copy-path', label: 'Copy Path' },
         { id: 'focus-window', label: 'Open in Focus Window' },
@@ -931,6 +927,13 @@ export default function Sidebar(): React.JSX.Element {
 
       if (clickedId === 'settings') {
         useSettingsStore.getState().openSettings('projects', project.id)
+      } else if (clickedId === RENAME_AGENT_MENU_ID) {
+        useRenameAgentDialogStore.getState().open({
+          projectId: project.id,
+          projectPath: project.path,
+          currentName: project.name,
+          handle: project.handle ?? '',
+        })
       } else if (clickedId === 'view-wiki') {
         usePageViewStore.getState().openWiki(project.path)
       } else if (clickedId === 'clone-here') {

@@ -41,8 +41,9 @@ const RIPPLES_D = [rippleArc(6.6, 5), rippleArc(10, 7.6)]
 
 // ── enso ───────────────────────────────────────────────────────────────
 // Rosson 2026-10-07: the stroke starts at the bottom left and loops
-// clockwise round to the bottom right (the old -52° start turned 180°).
-const ENSO_START_DEG = 128
+// clockwise round to the bottom right (the old -52° start turned 180°,
+// then 10° counterclockwise — Rosson 2026-10-07).
+const ENSO_START_DEG = 118
 const ENSO_SWEEP_DEG = 318
 const ENSO_STEPS = 48
 

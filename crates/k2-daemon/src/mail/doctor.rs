@@ -33,7 +33,10 @@
 //!   mail hostname's Domain, its SAN list must be exactly the mail host.
 //!   An empty list (the guided-setup default) makes Stalwart order every
 //!   autoconfig/mta-sts/MX name in one order; one bad name = no cert.
-//!   Soft (warn), never gates direct send.
+//!   On a K2-issuer box ([`crate::mail::cert_owner`]) Manual is the pass
+//!   and Automatic the warning; a tls-alpn box left Manual after K2
+//!   stopped owning the cert warns with `k2 hostmail cert owner
+//!   --stalwart-acme`. Soft (warn), never gates direct send.
 //! - `disk` — headroom for mail storage (pre-mortem #12).
 //!
 //! Plus, for a DOMAIN run (`domain = Some`): `mx`/`spf`/`dkim`/`dmarc`
@@ -190,6 +193,8 @@ pub struct ServerCtx {
     pub hostname: String,
     pub port_plan: Option<String>,
     pub status: String,
+    /// Who owns the mail certificate ([`crate::mail::cert_owner`]).
+    pub cert_owner: crate::mail::cert_owner::CertOwner,
 }
 
 /// A domain's context for the per-domain checks: the CURRENT effective
@@ -436,6 +441,8 @@ pub fn run_checks_with_ptr_resolver(
     // CAL43: Stalwart's ACME name list for the mail hostname.
     checks.push(acme_cert_names_check(
         &ctx.hostname,
+        ctx.port_plan.as_deref(),
+        ctx.cert_owner,
         env.mail_cert_management(&ctx.hostname),
     ));
 
@@ -493,19 +500,36 @@ pub fn run_checks_with_ptr_resolver(
 const EXTRA_NAMES_ID: &str = "extra-name-certs";
 const EXTRA_NAMES_LABEL: &str = "Extra mail names have their own certificate";
 
+/// What [`extra_name_certs_check`] reads about one name's certificate.
+pub struct ExtraNameProbes<'a> {
+    /// Default-verifying handshake on `https://<name>/`.
+    pub https_cert: &'a dyn Fn(&str) -> Result<(), String>,
+    /// SHA-256 of the leaf K2 planted for the name (box store), if any.
+    pub planted_sha256: &'a dyn Fn(&str) -> Option<String>,
+    /// The leaf Stalwart presents for SNI `<name>` on its TLS port.
+    pub served: &'a dyn Fn(&str) -> crate::domains::status::Served,
+    pub local_expiry: &'a dyn Fn(&str) -> Option<i64>,
+}
+
 /// CAL44: autoconfig / autodiscover / mta-sts / ua-auto-config names
 /// that resolve to this box must present a valid certificate for their
-/// own name (a verified handshake via `https_cert`); a K2-issued one
-/// within 14 days of expiry is flagged too (the daemon's renewer starts
-/// at 30 days, so this means it has not managed yet). Pure over the
-/// seams. Warn at most — never gates direct send.
+/// own name (a verified handshake via `https_cert`). When K2 issued one,
+/// the name counts as done only once Stalwart presents THAT certificate
+/// for THAT SNI name (leaf SHA-256 equal to the planted one) — a valid
+/// certificate from elsewhere, or K2's planted-but-never-loaded one, stays
+/// a warning. A K2-issued one within 14 days of expiry is flagged too
+/// (the daemon's renewer starts at 30 days, so this means it has not
+/// managed yet). Pure over the seams. Warn at most — never gates direct
+/// send.
 pub fn extra_name_certs_check(
     resolver: &dyn DnsResolver,
-    https_cert: &dyn Fn(&str) -> Result<(), String>,
+    probes: &ExtraNameProbes<'_>,
     apexes: &[crate::mail::cert_names::DoctorApex],
-    local_expiry: &dyn Fn(&str) -> Option<i64>,
     now: i64,
 ) -> DoctorCheck {
+    use crate::domains::status::Served;
+    let https_cert = probes.https_cert;
+    let local_expiry = probes.local_expiry;
     use crate::domains::renew::WARN_WITHIN_SECS;
     use crate::mail::cert_names::{points_here, PointsHere};
     let mk = |status: &'static str, detail: String| DoctorCheck {
@@ -520,6 +544,7 @@ pub fn extra_name_certs_check(
     let mut missing_byo: Vec<String> = Vec::new();
     let mut byo_zones: Vec<String> = Vec::new();
     let mut due: Vec<String> = Vec::new();
+    let mut not_live: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
     for apex in apexes {
         for name in &apex.names {
@@ -535,7 +560,17 @@ pub fn extra_name_certs_check(
                         }
                     }
                     Ok(()) => {
-                        if local_expiry(name).is_some_and(|e| e - now < WARN_WITHIN_SECS) {
+                        let live = match (probes.planted_sha256)(name) {
+                            // K2 never issued this name: the valid
+                            // certificate is someone else's; nothing to match.
+                            None => true,
+                            Some(planted) => {
+                                matches!((probes.served)(name), Served::Leaf(s) if s == planted)
+                            }
+                        };
+                        if !live {
+                            not_live.push(name.clone());
+                        } else if local_expiry(name).is_some_and(|e| e - now < WARN_WITHIN_SECS) {
                             due.push(name.clone());
                         } else {
                             ok.push(name.clone());
@@ -561,6 +596,15 @@ pub fn extra_name_certs_check(
              ns1/ns2.k2.dev only). Point them elsewhere or move the zone to K2 DNS",
             missing_byo.join(", "),
             byo_zones.join(", ")
+        ));
+    }
+    if !not_live.is_empty() {
+        problems.push(format!(
+            "{} have a K2 certificate on this box, but Stalwart does not present it for \
+             that name yet (the leaf it serves is not the one K2 planted) — the hot reload \
+             did not land. Restart Stalwart: `sudo systemctl restart stalwart` (on boxes \
+             without the mail helper that is the way; never `k2 hostmail disable/enable`)",
+            not_live.join(", ")
         ));
     }
     if !due.is_empty() {
@@ -591,11 +635,18 @@ const ACME_NAMES_ID: &str = "acme-cert-names";
 const ACME_NAMES_LABEL: &str = "Stalwart ACME orders the mail host only";
 
 /// CAL43 / C24: grade the Stalwart ACME name list for the mail
-/// hostname's Domain. Pure. Never gates direct send.
+/// hostname's Domain, by who owns the certificate
+/// ([`crate::mail::cert_owner`]). K2-issuer box: Manual is right,
+/// Automatic is a warning (K2 switches it). Otherwise the commit-1 rules,
+/// plus a warning when a tls-alpn box was left Manual after K2 stopped
+/// owning the certificate. Pure. Never gates direct send.
 pub fn acme_cert_names_check(
     hostname: &str,
+    port_plan: Option<&str>,
+    owner: crate::mail::cert_owner::CertOwner,
     observed: Result<Option<CertManagement>, String>,
 ) -> DoctorCheck {
+    use crate::mail::cert_owner::{CertOwner, RESTORE_COMMAND};
     let mk = |status: &'static str, detail: String| DoctorCheck {
         id: ACME_NAMES_ID.into(),
         label: ACME_NAMES_LABEL.into(),
@@ -616,10 +667,31 @@ pub fn acme_cert_names_check(
             ST_UNKNOWN,
             format!("no Stalwart domain carries the mail hostname {hostname}"),
         ),
+        Ok(Some(CertManagement::Manual)) if owner == CertOwner::K2 => mk(
+            ST_PASS,
+            "Manual (K2 owns and renews this certificate)".into(),
+        ),
+        Ok(Some(CertManagement::Manual)) if port_plan == Some("tls-alpn") => mk(
+            ST_WARN,
+            format!(
+                "Stalwart ACME is off (Manual) but K2 does not own the certificate for \
+                 {hostname} (owner: {}), so nothing renews it. Either let K2 own it \
+                 again (`k2 domain name add {hostname} --role mail`, then \
+                 `k2 hostmail cert renew`), or hand it back to Stalwart ACME, mail host \
+                 only: `{RESTORE_COMMAND}`. Never `k2 hostmail disable/enable`",
+                owner.as_str()
+            ),
+        ),
         Ok(Some(CertManagement::Manual)) => mk(
             ST_INFO,
             "Stalwart ACME is off for this domain — the mail cert comes from K2's \
              issuer, Caddy, or a planted certificate"
+                .into(),
+        ),
+        Ok(Some(CertManagement::Automatic { .. })) if owner == CertOwner::K2 => mk(
+            ST_WARN,
+            "Stalwart ACME is still on for a K2-owned domain — K2 switches it to Manual \
+             at the next renew/boot reconcile (`k2 hostmail cert renew` does it now)"
                 .into(),
         ),
         Ok(Some(CertManagement::Other(t))) => mk(
@@ -1470,7 +1542,8 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
                 .to_string(),
         )
     })?;
-    let ctx = ServerCtx { hostname, port_plan, status };
+    let cert_owner = crate::mail::cert_owner::mail_cert_owner(&hostname);
+    let ctx = ServerCtx { hostname, port_plan, status, cert_owner };
 
     // Domain context (optional).
     let mut domain_ctx: Option<(String, DomainCtx)> = None;
@@ -1510,9 +1583,14 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
         .checks
         .extend(super::bans::doctor_ban_checks());
     // K2-issued certificates (domains::renew): warn when one is within
-    // 14 days of expiry or its last renewal failed. Never gates_direct.
+    // 14 days of expiry, its last renewal failed, or the mail cert K2
+    // planted is not the one Stalwart serves. Never gates_direct.
     report.checks.push(crate::domains::renew::doctor_check_live(
         dctx.as_ref().map(|d| d.domain.as_str()),
+        Some((
+            ctx.hostname.as_str(),
+            crate::domains::status::stalwart_tls_port(ctx.port_plan.as_deref()),
+        )),
     ));
     // Calendars S2 (CAL27/CAL28): WebDAV-files posture (server level)
     // and, per domain, the DAV SRV rows on the zone's own nameservers.
@@ -1540,11 +1618,16 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
         &resolver,
         &ctx.hostname,
     );
+    let tls_port = crate::domains::status::stalwart_tls_port(ctx.port_plan.as_deref());
     report.checks.push(extra_name_certs_check(
         &resolver,
-        &|name: &str| env.https_cert(name),
+        &ExtraNameProbes {
+            https_cert: &|name: &str| env.https_cert(name),
+            planted_sha256: &super::cert_names::local_sha256,
+            served: &|name: &str| crate::domains::status::served_leaf(name, tls_port),
+            local_expiry: &super::cert_names::local_expiry,
+        },
         &extra_apexes,
-        &super::cert_names::local_expiry,
         now,
     ));
     let (grade, direct_blockers) = grade_of(&report.checks);
@@ -1884,6 +1967,8 @@ mod tests {
             hostname: "mail.acme.dev".into(),
             port_plan: Some("tls-alpn".into()),
             status: "running".into(),
+            // A box whose mail host is not attached (Stalwart ACME).
+            cert_owner: crate::mail::cert_owner::CertOwner::StalwartAcme,
         }
     }
 
@@ -2114,6 +2199,8 @@ mod tests {
         // A single wrong name is not the mail host either.
         let c = acme_cert_names_check(
             "mail.acme.dev",
+            Some("tls-alpn"),
+            crate::mail::cert_owner::CertOwner::StalwartAcme,
             auto(&["autoconfig.acme.dev"]).map_err(str::to_string),
         );
         assert_eq!(c.status, ST_WARN, "{c:?}");
@@ -2121,8 +2208,13 @@ mod tests {
 
     #[test]
     fn acme_cert_names_passes_locked_and_skips_manual_or_unreadable() {
+        use crate::mail::cert_owner::CertOwner;
+        let plan = Some("tls-alpn");
+        let acme = CertOwner::StalwartAcme;
         let c = acme_cert_names_check(
             "mail.acme.dev",
+            plan,
+            acme,
             Ok(Some(CertManagement::Automatic {
                 acme_provider_id: "acme-p1".into(),
                 subject_alternative_names: vec!["MAIL.acme.dev.".into()],
@@ -2131,16 +2223,24 @@ mod tests {
         assert_eq!(c.status, ST_PASS, "{c:?}");
         assert_eq!(c.id, "acme-cert-names");
 
-        let c = acme_cert_names_check("mail.acme.dev", Ok(Some(CertManagement::Manual)));
+        // Manual on a non-tls-alpn plan: Caddy / a planted cert serves it.
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            Some("http-01"),
+            acme,
+            Ok(Some(CertManagement::Manual)),
+        );
         assert_eq!(c.status, ST_INFO, "{c:?}");
 
         let c = acme_cert_names_check(
             "mail.acme.dev",
+            plan,
+            acme,
             Ok(Some(CertManagement::Other("Future".into()))),
         );
         assert_eq!(c.status, ST_WARN, "{c:?}");
 
-        let c = acme_cert_names_check("mail.acme.dev", Ok(None));
+        let c = acme_cert_names_check("mail.acme.dev", plan, acme, Ok(None));
         assert_eq!(c.status, ST_UNKNOWN, "{c:?}");
 
         let env = FakeEnv { cert_mgmt: Err("mail server is stopped"), ..FakeEnv::default() };
@@ -2645,6 +2745,31 @@ mod tests {
         d
     }
 
+    use crate::domains::status::Served;
+
+    /// One extra-name run with every name answering the same probes.
+    fn xcheck(
+        dns: &FakeDns,
+        https: &dyn Fn(&str) -> Result<(), String>,
+        planted: Option<&str>,
+        served: Served,
+        expiry: Option<i64>,
+        apexes: &[crate::mail::cert_names::DoctorApex],
+    ) -> DoctorCheck {
+        let planted = planted.map(str::to_string);
+        extra_name_certs_check(
+            dns,
+            &ExtraNameProbes {
+                https_cert: https,
+                planted_sha256: &|_| planted.clone(),
+                served: &|_| served.clone(),
+                local_expiry: &|_| expiry,
+            },
+            apexes,
+            1000,
+        )
+    }
+
     /// akzm today: autoconfig/autodiscover point here, present the mail
     /// cert → warn naming exactly those, with the issue command.
     #[test]
@@ -2655,7 +2780,7 @@ mod tests {
             probed.lock().unwrap().push(n.to_string());
             Err("certificate not valid for name".into())
         };
-        let c = extra_name_certs_check(&dns, &https, &[extra_apex(true)], &|_| None, 1000);
+        let c = xcheck(&dns, &https, None, Served::Nothing, None, &[extra_apex(true)]);
         assert_eq!(c.id, "extra-name-certs");
         assert_eq!(c.status, ST_WARN, "{}", c.detail);
         assert!(!c.gates_direct, "soft only");
@@ -2668,7 +2793,7 @@ mod tests {
             "only names pointing here are probed"
         );
         // Not K2-hosted: K2 cannot issue — says so instead of the command.
-        let c = extra_name_certs_check(&dns, &https, &[extra_apex(false)], &|_| None, 1000);
+        let c = xcheck(&dns, &https, None, Served::Nothing, None, &[extra_apex(false)]);
         assert_eq!(c.status, ST_WARN);
         assert!(c.detail.contains("not K2-hosted"), "{}", c.detail);
         assert!(!c.detail.contains("cert names issue"), "{}", c.detail);
@@ -2678,30 +2803,119 @@ mod tests {
     fn extra_name_certs_pass_info_due_and_unknown() {
         let dns = extra_dns(&["autoconfig.example.com"]);
         let ok = |_: &str| -> Result<(), String> { Ok(()) };
-        let far = |_: &str| Some(1000 + 60 * 86_400);
-        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &far, 1000);
+        let live = || Served::Leaf("aa11".into());
+        let far = Some(1000 + 60 * 86_400);
+        let c = xcheck(&dns, &ok, Some("aa11"), live(), far, &[extra_apex(true)]);
         assert_eq!(c.status, ST_PASS, "{}", c.detail);
         assert!(c.detail.contains("autoconfig.example.com"));
         // Inside the renewal window but more than 14 days left → the
         // renewer's job, no warning yet.
-        let window = |_: &str| Some(1000 + 20 * 86_400);
-        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &window, 1000);
+        let c = xcheck(&dns, &ok, Some("aa11"), live(), Some(1000 + 20 * 86_400), &[extra_apex(true)]);
         assert_eq!(c.status, ST_PASS, "{}", c.detail);
         // Within 14 days → warn with the renew command.
-        let soon = |_: &str| Some(1000 + 86_400);
-        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &soon, 1000);
+        let c = xcheck(&dns, &ok, Some("aa11"), live(), Some(1000 + 86_400), &[extra_apex(true)]);
         assert_eq!(c.status, ST_WARN);
         assert!(c.detail.contains("cert names renew"), "{}", c.detail);
         // Nothing points here → info.
-        let c = extra_name_certs_check(&extra_dns(&[]), &ok, &[extra_apex(true)], &far, 1000);
+        let c = xcheck(&extra_dns(&[]), &ok, Some("aa11"), live(), far, &[extra_apex(true)]);
         assert_eq!(c.status, ST_INFO, "{}", c.detail);
         // A DNS failure → unknown, never pass.
         let mut broken = extra_dns(&[]);
         broken.broken.push("autoconfig.example.com".into());
-        let c = extra_name_certs_check(&broken, &ok, &[extra_apex(true)], &far, 1000);
+        let c = xcheck(&broken, &ok, Some("aa11"), live(), far, &[extra_apex(true)]);
         assert_eq!(c.status, ST_UNKNOWN, "{}", c.detail);
         // No hosted domains → info.
-        let c = extra_name_certs_check(&dns, &ok, &[], &far, 1000);
+        let c = xcheck(&dns, &ok, Some("aa11"), live(), far, &[]);
         assert_eq!(c.status, ST_INFO);
     }
+
+    /// (f) A K2 per-name certificate counts only once Stalwart presents
+    /// THAT leaf for THAT SNI name: a valid certificate whose fingerprint
+    /// is not the planted one (or no handshake) stays a warning naming
+    /// the restart remedy.
+    #[test]
+    fn extra_name_cert_counts_only_when_the_served_leaf_is_the_planted_one() {
+        let dns = extra_dns(&["autoconfig.example.com"]);
+        let ok = |_: &str| -> Result<(), String> { Ok(()) };
+        let far = Some(1000 + 60 * 86_400);
+        for served in [Served::Leaf("bb22".into()), Served::Nothing] {
+            let c = xcheck(&dns, &ok, Some("aa11"), served, far, &[extra_apex(true)]);
+            assert_eq!(c.status, ST_WARN, "{}", c.detail);
+            assert!(c.detail.contains("autoconfig.example.com"), "{}", c.detail);
+            assert!(c.detail.contains("hot reload did not land"), "{}", c.detail);
+            assert!(c.detail.contains("sudo systemctl restart stalwart"), "{}", c.detail);
+            assert!(c.detail.contains("never `k2 hostmail disable/enable`"), "{}", c.detail);
+        }
+        // K2 never issued it: a valid certificate from elsewhere is fine.
+        let c = xcheck(&dns, &ok, None, Served::Leaf("cc33".into()), None, &[extra_apex(true)]);
+        assert_eq!(c.status, ST_PASS, "{}", c.detail);
+    }
+
+    // ── Who owns the mail certificate (cert_owner) ──
+
+    #[test]
+    fn acme_cert_names_on_a_k2_issuer_box() {
+        use crate::mail::cert_owner::CertOwner;
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            Some("tls-alpn"),
+            CertOwner::K2,
+            Ok(Some(CertManagement::Manual)),
+        );
+        assert_eq!(c.status, ST_PASS, "{c:?}");
+        assert_eq!(c.detail, "Manual (K2 owns and renews this certificate)");
+        for sans in [vec![], vec!["mail.acme.dev".to_string()]] {
+            let c = acme_cert_names_check(
+                "mail.acme.dev",
+                Some("tls-alpn"),
+                CertOwner::K2,
+                Ok(Some(CertManagement::Automatic {
+                    acme_provider_id: "acme-p1".into(),
+                    subject_alternative_names: sans,
+                })),
+            );
+            assert_eq!(c.status, ST_WARN, "{c:?}");
+            assert!(
+                c.detail.contains("Stalwart ACME is still on for a K2-owned domain")
+                    && c.detail.contains("switches it to Manual at the next renew/boot reconcile"),
+                "{}",
+                c.detail
+            );
+            assert!(!c.gates_direct);
+        }
+        // Through the runner (ServerCtx carries the owner).
+        let env = FakeEnv { cert_mgmt: Ok(Some(CertManagement::Manual)), ..FakeEnv::default() };
+        let k2_ctx = ServerCtx { cert_owner: CertOwner::K2, ..ctx() };
+        let r = run_checks(&healthy_dns(), &env, &k2_ctx, None, 1000);
+        assert_eq!(check(&r, "acme-cert-names").status, ST_PASS);
+    }
+
+    /// Detached while Manual (or attached but never K2-planted) on a
+    /// tls-alpn box: warn and name the owner command; other plans keep the
+    /// commit-1 info.
+    #[test]
+    fn acme_cert_names_detached_while_manual_warns_with_the_remedy() {
+        use crate::mail::cert_owner::{CertOwner, RESTORE_COMMAND};
+        for owner in [CertOwner::StalwartAcme, CertOwner::Unknown] {
+            let c = acme_cert_names_check(
+                "mail.acme.dev",
+                Some("tls-alpn"),
+                owner,
+                Ok(Some(CertManagement::Manual)),
+            );
+            assert_eq!(c.status, ST_WARN, "{c:?}");
+            assert!(c.detail.contains(RESTORE_COMMAND), "{}", c.detail);
+            assert!(c.detail.contains("k2 domain name add mail.acme.dev --role mail"), "{}", c.detail);
+            assert!(c.detail.contains("Never `k2 hostmail disable/enable`"), "{}", c.detail);
+            assert!(!c.gates_direct);
+        }
+        let c = acme_cert_names_check(
+            "mail.acme.dev",
+            Some("dns-01"),
+            CertOwner::StalwartAcme,
+            Ok(Some(CertManagement::Manual)),
+        );
+        assert_eq!(c.status, ST_INFO, "{c:?}");
+    }
 }
+

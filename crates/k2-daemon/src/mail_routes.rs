@@ -216,6 +216,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // CAL44: per-name certificates for the extra mail-family names
         // (GET = state; POST = issue/renew). Same gate as cert/renew.
         "/cli/mail/cert/names" => crate::mail::cert_names::handle_get(params),
+        // Who owns the mail certificate (GET = state; POST = the owner
+        // command {action: stalwart-acme}). Same gate as cert/renew.
+        "/cli/mail/cert/owner" => crate::mail::cert_owner::handle_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -370,6 +373,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         }
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         "/cli/mail/cert/names" => crate::mail::cert_names::handle_post(body),
+        "/cli/mail/cert/owner" => crate::mail::cert_owner::handle_post(body),
         "/cli/mail/list" => crate::mail::lists::handle_list_create(body),
         "/cli/mail/list/members" => crate::mail::lists::handle_members_post(body),
         "/cli/mail/list/delete" => crate::mail::lists::handle_list_delete(body),
@@ -471,6 +475,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail/import"
         || path == "/cli/mail/cert/renew"
         || path == "/cli/mail/cert/names"
+        || path == "/cli/mail/cert/owner"
         || path == "/cli/mail/server/rotate-admin"
 }
 
@@ -545,6 +550,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/footer/unset"
             | "/cli/mail/cert/renew"
             | "/cli/mail/cert/names"
+            | "/cli/mail/cert/owner"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
             | "/cli/mail/list"
@@ -1022,7 +1028,13 @@ mod tests {
     /// as a read and POST as the mutation; other methods 405.
     #[test]
     fn cert_names_route_is_gated_like_cert_renew() {
-        let p = "/cli/mail/cert/names";
+        // `/cli/mail/cert/owner` (the owner command) has the same gate.
+        for p in ["/cli/mail/cert/names", "/cli/mail/cert/owner"] {
+            cert_route_is_gated_like_cert_renew(p);
+        }
+    }
+
+    fn cert_route_is_gated_like_cert_renew(p: &str) {
         let renew = "/cli/mail/cert/renew";
         assert_eq!(is_mail_manage_surface(p), is_mail_manage_surface(renew));
         assert_eq!(is_mail_owner_surface(p), is_mail_owner_surface(renew));

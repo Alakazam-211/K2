@@ -800,15 +800,29 @@ pub const DOCTOR_ID: &str = "k2-cert-renewal";
 const DOCTOR_LABEL: &str = "K2-issued certificates renew on time";
 
 /// One K2-issued name for the doctor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DoctorEntry {
     pub name: String,
     pub leaf: Option<LeafInfo>,
     pub rec: Option<RenewRecord>,
+    /// SHA-256 of the leaf K2 planted into Stalwart (mail host only).
+    pub planted_sha256: Option<String>,
+    /// What Stalwart presents for the name (`None` = not probed).
+    pub served: Option<crate::domains::status::Served>,
+    /// The port `served` was read on.
+    pub port: u16,
 }
 
+/// The remedy when the planted certificate is not the one being served.
+pub const NOT_LOADED_REMEDY: &str = "the hot reload did not land — restart Stalwart: \
+     `sudo systemctl restart stalwart` (on boxes without the mail helper that is the way; \
+     never `k2 hostmail disable/enable`)";
+
 /// Warn (never gates direct send) when a K2-issued certificate is within
-/// [`WARN_WITHIN_SECS`] of expiry or its last renewal attempt failed.
+/// [`WARN_WITHIN_SECS`] of expiry, its last renewal attempt failed (at
+/// once — the current certificate keeps serving meanwhile), or the
+/// certificate K2 planted is not the one Stalwart presents (planted but
+/// never loaded).
 pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::DoctorCheck {
     use crate::mail::doctor::{DoctorCheck, ST_INFO, ST_PASS, ST_WARN};
     let mk = |status: &'static str, detail: String| DoctorCheck {
@@ -827,6 +841,22 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
         let Some(leaf) = e.leaf.as_ref() else { continue };
         let left = leaf.not_after - now;
         let failed = e.rec.as_ref().filter(|r| r.failures > 0);
+        if let (Some(planted), Some(crate::domains::status::Served::Leaf(served))) =
+            (e.planted_sha256.as_deref(), e.served.as_ref())
+        {
+            if planted != served {
+                problems.push(format!(
+                    "{}: the certificate K2 planted (sha256 {}…) is not what Stalwart serves \
+                     on :{} (sha256 {}…) — if `k2 hostmail cert renew` succeeded but tls-cert \
+                     still shows the old leaf, {NOT_LOADED_REMEDY}",
+                    e.name,
+                    &planted[..planted.len().min(16)],
+                    e.port,
+                    &served[..served.len().min(16)],
+                ));
+                continue;
+            }
+        }
         if left < WARN_WITHIN_SECS || failed.is_some() {
             let when = if left <= 0 {
                 "has EXPIRED".to_string()
@@ -835,7 +865,8 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
             };
             let why = match failed {
                 Some(r) => format!(
-                    "; last renewal failed ({} in a row): {}{}",
+                    "; last renewal failed ({} in a row; the current certificate keeps \
+                     serving): {}{}",
                     r.failures,
                     r.last_error.as_deref().unwrap_or("no detail"),
                     r.next_attempt
@@ -872,8 +903,12 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
 }
 
 /// The doctor check over every attached K2-issued name (`only_apex` =
-/// names under one hosted domain).
-pub fn doctor_check_live(only_apex: Option<&str>) -> crate::mail::doctor::DoctorCheck {
+/// names under one hosted domain). `mail` = (mail host, Stalwart's TLS
+/// port): that one name is probed for the leaf Stalwart presents.
+pub fn doctor_check_live(
+    only_apex: Option<&str>,
+    mail: Option<(&str, u16)>,
+) -> crate::mail::doctor::DoctorCheck {
     let file = load();
     let mut names: BTreeSet<String> = LiveScan
         .attached()
@@ -888,10 +923,21 @@ pub fn doctor_check_live(only_apex: Option<&str>) -> crate::mail::doctor::Doctor
     let entries: Vec<DoctorEntry> = names
         .into_iter()
         .filter(|n| only_apex.is_none_or(|a| k2_core::domains::hostname_under_apex(n, a)))
-        .map(|name| DoctorEntry {
-            leaf: leaf_from_store(&name),
-            rec: file.names.get(&name).cloned(),
-            name,
+        .map(|name| {
+            let rec = file.names.get(&name).cloned();
+            let probe = mail
+                .filter(|(host, _)| norm(host) == name)
+                .filter(|_| rec.as_ref().is_some_and(|r| r.stalwart_cert_id.is_some()));
+            let (planted_sha256, served, port) = match probe {
+                Some((host, port)) => (
+                    crate::domains::store::load(&name)
+                        .and_then(|p| crate::domains::status::pem_leaf_sha256(&p.chain_pem)),
+                    Some(crate::domains::status::served_leaf(host, port)),
+                    port,
+                ),
+                None => (None, None, 0),
+            };
+            DoctorEntry { leaf: leaf_from_store(&name), rec, name, planted_sha256, served, port }
         })
         .collect();
     doctor_check(&entries, chrono::Utc::now().timestamp())
@@ -1117,7 +1163,7 @@ mod tests {
         assert!(crate::domains::store::host_dir(orphan).is_dir(), "never deleted");
         // The doctor and status only list attached names, so the orphan
         // never warns.
-        let entries = vec![DoctorEntry { name: "app.example.com".into(), leaf: Some(le(NOW + 89 * DAY)), rec: None }];
+        let entries = vec![DoctorEntry { name: "app.example.com".into(), leaf: Some(le(NOW + 89 * DAY)), ..Default::default() }];
         assert_eq!(doctor_check(&entries, NOW).status, "pass");
         // Production enumeration reads SQLite, never the store dirs.
         let _ = k2_core::db::init_for_tests();
@@ -1385,18 +1431,111 @@ mod tests {
             name: name.into(),
             leaf: Some(leaf),
             rec,
+            ..Default::default()
         };
         let c = doctor_check(&[entry("a.example.com", ok.clone(), None)], NOW);
         assert_eq!((c.status, c.gates_direct), ("pass", false));
         let c = doctor_check(&[entry("a.example.com", soon.clone(), None)], NOW);
         assert_eq!(c.status, "warn");
         assert!(c.detail.contains("expires in 10 days"), "{}", c.detail);
-        let c = doctor_check(&[entry("a.example.com", ok.clone(), Some(failing))], NOW);
+        let c = doctor_check(&[entry("a.example.com", ok.clone(), Some(failing.clone()))], NOW);
         assert_eq!(c.status, "warn", "a failed attempt warns even with time left");
         assert!(c.detail.contains("rateLimited"), "{}", c.detail);
+        assert!(c.detail.contains("the current certificate keeps serving"), "{}", c.detail);
         assert!(!c.gates_direct);
         let c = doctor_check(&[entry("a.example.com", soon, Some(uploaded))], NOW);
         assert_eq!(c.status, "info", "uploaded certs are not K2's to renew");
         assert_eq!(c.id, DOCTOR_ID);
+    }
+
+    /// (g) Planted but never loaded: the mail cert K2 planted is not the
+    /// leaf Stalwart presents → warn with the restart remedy (never the
+    /// helper by hand, never disable/enable). Equal fingerprints pass;
+    /// an unprobed / unanswered port is left to tls-cert.
+    #[test]
+    fn planted_but_not_served_mail_cert_warns_with_the_restart_remedy() {
+        use crate::domains::status::Served;
+        let mail = |served: Option<Served>| DoctorEntry {
+            name: "mail.example.com".into(),
+            leaf: Some(le(NOW + 80 * DAY)),
+            rec: Some(RenewRecord { stalwart_cert_id: Some("c1".into()), ..Default::default() }),
+            planted_sha256: Some("aaaa1111bbbb2222cccc".into()),
+            served,
+            port: 443,
+        };
+        let c = doctor_check(&[mail(Some(Served::Leaf("ffff0000eeee".into())))], NOW);
+        assert_eq!(c.status, "warn", "{}", c.detail);
+        assert!(c.detail.contains("mail.example.com"), "{}", c.detail);
+        assert!(c.detail.contains("is not what Stalwart serves on :443"), "{}", c.detail);
+        assert!(c.detail.contains("hot reload did not land"), "{}", c.detail);
+        assert!(c.detail.contains("`sudo systemctl restart stalwart`"), "{}", c.detail);
+        assert!(c.detail.contains("never `k2 hostmail disable/enable`"), "{}", c.detail);
+        assert!(!c.gates_direct);
+        let c = doctor_check(&[mail(Some(Served::Leaf("aaaa1111bbbb2222cccc".into())))], NOW);
+        assert_eq!(c.status, "pass", "{}", c.detail);
+        for unprobed in [None, Some(Served::Nothing)] {
+            let c = doctor_check(&[mail(unprobed)], NOW);
+            assert_eq!(c.status, "pass", "{}", c.detail);
+        }
+    }
+
+    /// The live doctor probes the mail host only, and compares Stalwart's
+    /// served leaf with the PEM K2 planted (box store + renewal.json).
+    #[test]
+    fn live_doctor_compares_the_served_mail_leaf_with_the_planted_one() {
+        use crate::domains::status::{pem_leaf_sha256, set_test_served, Served};
+        let _home = crate::test_support::TempHome::new();
+        let _ = k2_core::db::init_for_tests();
+        let host = "mail.served-live.test";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding(&conn, "served-live.test", None, false).unwrap();
+            k2_core::domains::upsert_name(&conn, host, "served-live.test", ROLE_MAIL).unwrap();
+        }
+        let pem = crate::domains::acme::test_le_pem(host);
+        crate::domains::store::install(host, &pem.chain_pem, &pem.key_pem).expect("install");
+        update(|f| f.names.entry(host.into()).or_default().stalwart_cert_id = Some("c1".into()))
+            .expect("renewal.json");
+        let planted = pem_leaf_sha256(&pem.chain_pem).expect("sha");
+
+        set_test_served(host, Some(Served::Leaf("0".repeat(64))));
+        let c = doctor_check_live(Some("served-live.test"), Some((host, 443)));
+        assert_eq!(c.status, "warn", "{}", c.detail);
+        assert!(c.detail.contains("hot reload did not land"), "{}", c.detail);
+
+        set_test_served(host, Some(Served::Leaf(planted)));
+        let c = doctor_check_live(Some("served-live.test"), Some((host, 443)));
+        assert_eq!(c.status, "pass", "{}", c.detail);
+        set_test_served(host, None);
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, "served-live.test");
+    }
+
+    /// (d) A failed renewal never leaves the box without its current
+    /// certificate: the scan records lastError and backoff, the doctor
+    /// warns at once (not only at 14 days), and nothing is planted.
+    #[test]
+    fn failed_renewal_keeps_the_current_cert_and_warns_at_once() {
+        let _home = crate::test_support::TempHome::new();
+        let rows = vec![row("mail.example.com", "mail", Some(binding("example.com", true, Some("active"))))];
+        // 25 days left: inside the renewal window, outside the 14-day warning.
+        let current = le(NOW + 25 * DAY);
+        let mut fake = Fake::new(rows).leaf("mail.example.com", current.clone());
+        fake.fail.insert("mail.example.com".into(), IssueError::Order("dns-01: tunnel token rejected".into()));
+        scan(&mut fake);
+        assert_eq!(fake.leaves["mail.example.com"], current, "the serving certificate is untouched");
+        let rec = load().names["mail.example.com"].clone();
+        assert_eq!(rec.last_result.as_deref(), Some("failed"));
+        assert!(rec.last_error.as_deref().unwrap_or_default().contains("tunnel token rejected"));
+        assert!(!rec.plant_pending, "an order failure plants nothing");
+        let c = doctor_check(
+            &[DoctorEntry { name: "mail.example.com".into(), leaf: Some(current), rec: Some(rec), ..Default::default() }],
+            NOW,
+        );
+        assert_eq!(c.status, "warn", "warns immediately: {}", c.detail);
+        assert!(c.detail.contains("tunnel token rejected"), "{}", c.detail);
     }
 }

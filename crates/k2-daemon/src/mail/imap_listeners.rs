@@ -547,13 +547,16 @@ fn run_startup_reconcile_live() {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)).is_ok()
     };
-    for line in startup_pass(&client, &port_answers, &mut LiveDoors) {
+    for line in startup_pass(&client, &port_answers, &mut LiveDoors { why: "IMAP listener" }) {
         k2_core::log_debug!("{line}");
     }
 }
 
-/// Production restart doors (Linux boot thread only; tests use fakes).
-pub(crate) struct LiveDoors;
+/// Production restart doors (tests use fakes). `why` labels the wait
+/// error ("IMAP listener", "upgrade", "TLS reload").
+pub(crate) struct LiveDoors {
+    pub why: &'static str,
+}
 
 impl RestartDoors for LiveDoors {
     fn helper_state(&mut self) -> super::helper::HelperState {
@@ -575,7 +578,7 @@ impl RestartDoors for LiveDoors {
     fn restart(&mut self, path: RestartPath) -> Result<(), String> {
         use super::supervisor;
         match path {
-            RestartPath::MailHelper => supervisor::restart_stalwart_and_wait("IMAP listener"),
+            RestartPath::MailHelper => supervisor::restart_stalwart_and_wait(self.why),
             RestartPath::PlainSudo => {
                 let out = std::process::Command::new(super::helper::SUDO_PATH)
                     .args(["-n", SYSTEMCTL_PATH, "restart", supervisor::STALWART_UNIT])
@@ -590,10 +593,7 @@ impl RestartDoors for LiveDoors {
                         out.status.code()
                     ));
                 }
-                supervisor::wait_stalwart_active_with(
-                    &super::sysops::RealSystemOps,
-                    "IMAP listener",
-                )
+                supervisor::wait_stalwart_active_with(&super::sysops::RealSystemOps, self.why)
             }
         }
     }

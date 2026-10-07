@@ -593,16 +593,49 @@ pub fn stalwart_unit_state() -> String {
     }
 }
 
-/// Restart the Stalwart unit so listeners re-read Certificate objects.
-/// JMAP `x:Certificate/set` persists in RocksDB but 443/465 keep the
-/// previous acceptor until this restart. Not `hostmail disable`.
+/// Restart the Stalwart unit so listeners re-read Certificate objects —
+/// the fallback when `ReloadTlsCertificates` failed after a cert plant.
+/// Rides the one restart chain ([`super::imap_listeners::restart_once`]):
+/// the mail helper when it is installed, else `sudo -n
+/// /usr/bin/systemctl restart stalwart` (boxes such as akzm have no
+/// helper, but their sudoers allows systemctl). No open door is a loud
+/// error. Not `hostmail disable`.
 pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
     // Never start Stalwart under a running upgrade (it stops Stalwart to
     // snapshot the store). The upgrade's own start loads the new cert.
     if upgrade_running().load(Ordering::SeqCst) {
         return Err(UPGRADE_RUNNING_HINT.to_string());
     }
-    restart_stalwart_and_wait("TLS reload")
+    #[cfg(test)]
+    {
+        // Tests never probe sudo or touch systemd; the door chain is
+        // covered by `restart_to_reload_tls_with` over fake doors.
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    {
+        let mut doors = super::imap_listeners::LiveDoors { why: "TLS reload" };
+        restart_to_reload_tls_with(&mut doors).map(|_| ())
+    }
+}
+
+/// [`restart_stalwart_to_reload_tls`] over injected doors: helper, then
+/// plain sudo; neither open = Err naming both fixes (the certificate is
+/// stored and loads on Stalwart's next restart).
+pub fn restart_to_reload_tls_with(
+    doors: &mut dyn super::imap_listeners::RestartDoors,
+) -> Result<super::imap_listeners::RestartPath, String> {
+    use super::imap_listeners::{restart_once, RestartReport, SYSTEMCTL_PATH};
+    match restart_once(doors)? {
+        RestartReport::Restarted(path) => Ok(path),
+        RestartReport::NotRestarted { helper: state } => Err(format!(
+            "no door can restart Stalwart to load the certificate (mail helper: {}; \
+             `sudo -n {SYSTEMCTL_PATH} restart stalwart` is not allowed). As root: \
+             systemctl restart stalwart — or let the daemon do it: {}",
+            state.as_str(),
+            helper::install_command()
+        )),
+    }
 }
 
 /// `systemctl restart stalwart`, then wait (bounded) for the unit to be
@@ -3092,6 +3125,55 @@ mod tests {
             assert!(!step_is_done("download"));
         }
         clean_row();
+    }
+
+    /// Fake restart doors for the TLS-reload fallback.
+    struct TlsDoors {
+        helper: HelperState,
+        sudo_ok: bool,
+        calls: Vec<String>,
+    }
+
+    impl crate::mail::imap_listeners::RestartDoors for TlsDoors {
+        fn helper_state(&mut self) -> HelperState {
+            self.calls.push("helper?".into());
+            self.helper
+        }
+        fn plain_sudo_allowed(&mut self) -> bool {
+            self.calls.push("sudo?".into());
+            self.sudo_ok
+        }
+        fn restart(
+            &mut self,
+            path: crate::mail::imap_listeners::RestartPath,
+        ) -> Result<(), String> {
+            self.calls.push(format!("restart {path:?}"));
+            Ok(())
+        }
+    }
+
+    /// The TLS-reload restart fallback is the 0.44.2 chain: helper when
+    /// installed, else `sudo -n systemctl restart stalwart`; neither open
+    /// is a loud error (never a silent Ok).
+    #[test]
+    fn tls_reload_restart_uses_helper_then_plain_sudo_then_fails_loud() {
+        use crate::mail::imap_listeners::RestartPath;
+        let mut helper = TlsDoors { helper: HelperState::Installed, sudo_ok: false, calls: vec![] };
+        assert_eq!(restart_to_reload_tls_with(&mut helper).expect("helper"), RestartPath::MailHelper);
+        assert_eq!(helper.calls, vec!["helper?", "restart MailHelper"]);
+
+        // akzm: no helper, sudoers allows systemctl.
+        let mut sudo = TlsDoors { helper: HelperState::Missing, sudo_ok: true, calls: vec![] };
+        assert_eq!(restart_to_reload_tls_with(&mut sudo).expect("sudo"), RestartPath::PlainSudo);
+        assert_eq!(sudo.calls, vec!["helper?", "sudo?", "restart PlainSudo"]);
+
+        let mut none = TlsDoors { helper: HelperState::Missing, sudo_ok: false, calls: vec![] };
+        let err = restart_to_reload_tls_with(&mut none).expect_err("no door = loud error");
+        assert!(err.contains("no door can restart Stalwart"), "{err}");
+        assert!(err.contains("mail helper: missing"), "{err}");
+        assert!(err.contains("sudo -n /usr/bin/systemctl restart stalwart"), "{err}");
+        assert!(err.contains(&helper::install_command()), "{err}");
+        assert_eq!(none.calls, vec!["helper?", "sudo?"], "never a restart attempt");
     }
 
     #[test]

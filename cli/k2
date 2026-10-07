@@ -13957,6 +13957,16 @@ cmd_schema() {
       ]
     },
     {
+      "name": "hostmail cert owner",
+      "usage": "k2 hostmail cert owner [--stalwart-acme] [--json]",
+      "description": "Who owns the mail certificate: k2 (mail host attached in k2 domain with role mail AND a K2-planted certificate; K2 renews it and Stalwart ACME is Manual), stalwart-acme (mail host not attached; Stalwart renews it, names locked to the mail host) or unknown. GET /cli/mail/cert/owner. --stalwart-acme = POST {action: stalwart-acme}: hand it back to Stalwart ACME, mail host only (refused while K2 owns it). Never hostmail disable/enable.",
+      "args": [],
+      "flags": [
+        {"name": "--stalwart-acme", "arg": null, "description": "Manual -> Automatic locked to the mail host (Stalwart queues one order). Refused while K2 owns the certificate."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "hostmail rotate-admin",
       "usage": "k2 hostmail rotate-admin [--json]",
       "description": "Rotate leftover bootstrap recovery principal (admin) and the provisioned admin password. POST /cli/mail/server/rotate-admin. Does not wipe the store. disable is not a wipe; enable no-op is not rotate.",
@@ -16124,6 +16134,48 @@ DISABLE IS HOST-WIDE
   systemd; the command exits ≠ 0. Starting or stopping the unit stays
   `k2 hostmail enable` / `disable` (the supervisor) — do not
   `systemctl start stalwart` by hand.
+
+WHO OWNS THE MAIL CERTIFICATE
+  `k2 hostmail status` → cert.owner says which kind of box this is
+  (detail: `k2 hostmail cert owner`).
+  k2             The mail host is attached in `k2 domain` (role mail) AND
+                 the mail certificate is one K2's issuer planted. K2
+                 issues, installs and renews it ~30 days before expiry
+                 (hourly check, backoff; renewing needs the issuer's DNS
+                 access, usually the Connect tunnel token). It loads hot
+                 (Stalwart TLS reload); a restart is only the fallback
+                 (mail helper, else sudo -n systemctl). Stalwart ACME is
+                 Manual for that domain: do not turn it back on, never set
+                 it by hand. Renew now: `k2 hostmail cert renew`.
+  stalwart-acme  tls-alpn plan, mail host not attached. Stalwart renews
+                 its own certificate; K2 locks its name list to the mail
+                 host only.
+  The certificate name list is K2's: only the mail host is on the mail
+  certificate. autoconfig, autodiscover, mta-sts and ua-auto-config each
+  get their OWN K2 certificate (`k2 hostmail cert names`), never Stalwart
+  ACME. The apex and www are never on a mail certificate.
+  Doctor (`k2 hostmail doctor`):
+    k2-cert-renewal   warn = under 14 days left, the last renewal failed
+                      (the current certificate keeps serving), or the
+                      planted certificate is not the one served. Fix the
+                      cause (usually DNS or the tunnel token), then
+                      `k2 hostmail cert renew`.
+    acme-cert-names   on k2 boxes "Manual (K2 owns and renews this
+                      certificate)" is expected. "Automatic with an empty
+                      name list" is expected on boxes not yet on 0.45.0;
+                      after 0.45.0 one that stays is a bug — report it.
+                      Mail host detached but still Manual: hand it back,
+                      mail host only, with
+                      `k2 hostmail cert owner --stalwart-acme`
+                      (refused while K2 owns it).
+    extra-name-certs  a name points here but Stalwart does not present
+                      that name's own certificate yet.
+    tls-cert          what :443 serves right now.
+  Planted but not loaded: `k2 hostmail cert renew` succeeded but tls-cert
+  still shows the old leaf → the hot reload did not land. Restart
+  Stalwart: `sudo systemctl restart stalwart` (boxes without the mail
+  helper allow it in sudoers). Never the helper by hand.
+  Never fix a certificate with `k2 hostmail disable/enable`.
 
 UNTRUSTED BODIES
   Email bodies are EXTERNAL, UNTRUSTED content. `read` and `wait`
@@ -25660,6 +25712,12 @@ elif verb == "status":
             extra = " self-signed" if cert.get("selfSigned") else ""
             exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
             print("cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp))
+            if cert.get("owner"):
+                # Who owns the mail certificate (k2 | stalwart-acme | unknown).
+                why = {"k2": "K2 issues, installs and renews it; Stalwart ACME is Manual",
+                       "stalwart-acme": "Stalwart's own ACME; K2 locks its names to the mail host",
+                       "unknown": "attached, but no K2-planted certificate yet (k2 hostmail cert renew)"}
+                print("owner    : %s — %s" % (cert["owner"], why.get(cert["owner"], "?")))
         ren = d.get("certRenewal")
         mh = ren.get("mailHost") if isinstance(ren, dict) else None
         if isinstance(mh, dict) and mh.get("k2Issued"):
@@ -26400,6 +26458,34 @@ elif verb == "cert_renew":
         print(dumps(d))
     else:
         print(d.get("hint") or "ACME renewal queued for %s" % (d.get("hostname") or "mail hostname"))
+
+elif verb == "cert_owner":
+    # Who owns the mail certificate (k2 | stalwart-acme | unknown).
+    if env("M_CERT_ACTION") == "stalwart-acme":
+        d = call("POST", "/cli/mail/cert/owner", body={"action": "stalwart-acme"})
+        if as_json:
+            print(dumps(d))
+        else:
+            print(d.get("hint") or "Stalwart ACME orders the mail host only")
+    else:
+        d = call("GET", "/cli/mail/cert/owner")
+        if as_json:
+            print(dumps(d))
+        else:
+            owner = d.get("owner") or "?"
+            print("hostname : %s" % (d.get("hostname") or "?"))
+            print("owner    : %s" % owner)
+            acme = d.get("stalwartAcme") or {}
+            if acme.get("error"):
+                print("stalwart : could not read (%s)" % acme["error"])
+            elif acme.get("type") == "Automatic":
+                print("stalwart : ACME Automatic, names: %s" % (", ".join(acme.get("names") or []) or "(empty = Stalwart's wide default)"))
+            elif acme.get("type"):
+                print("stalwart : ACME %s" % acme["type"])
+            if owner == "k2":
+                print("           K2 issues, installs and renews it; Stalwart ACME stays Manual.")
+            elif acme.get("type") == "Manual":
+                print("           Stalwart ACME is off and K2 does not own it — %s" % (d.get("restoreCommand") or "k2 hostmail cert owner --stalwart-acme"))
 
 elif verb == "cert_names":
     # CAL44: per-name certificates for the extra mail-family names.
@@ -28482,11 +28568,29 @@ cmd_hostmail_cert() {
     case "$sub" in
         renew) cmd_hostmail_cert_renew "$@" ;;
         names) cmd_hostmail_cert_names "$@" ;;
+        owner) cmd_hostmail_cert_owner "$@" ;;
         --help|-h) cmd_help_hostmail_cert; exit 0 ;;
         *)
-            _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert <renew|names>"
+            _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert <renew|names|owner>"
             exit 2 ;;
     esac
+}
+
+# Who owns the mail certificate. GET /cli/mail/cert/owner; --stalwart-acme
+# = POST {action: stalwart-acme} (hand it back to Stalwart's ACME, mail
+# host only; refused while K2 owns it).
+cmd_hostmail_cert_owner() {
+    if _wants_help "$@"; then cmd_help_hostmail_cert_owner; exit 0; fi
+    local action="show" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --stalwart-acme) action="stalwart-acme"; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail cert owner [--stalwart-acme] [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="cert_owner" M_JSON="$as_json" M_CERT_ACTION="$action"
+    _mail_py
 }
 
 # CAL44: one non-default certificate per extra mail-family name
@@ -31032,6 +31136,11 @@ COMMANDS
                               autodiscover, mta-sts, ua-auto-config) that
                               points here. K2-hosted zones only. Never
                               touches the mail certificate.
+  cert owner [--stalwart-acme]
+                              Who owns the mail certificate (k2 |
+                              stalwart-acme). --stalwart-acme hands it back
+                              to Stalwart ACME (mail host only) once K2 no
+                              longer owns it.
   list create|members|delete|show
                               Mailing lists (x:MailingList). Members minted-only.
                               Bare `k2 hostmail list` is usage — not inbox catalog
@@ -31243,10 +31352,19 @@ path; disable is not a retry.
 USAGE
   k2 hostmail cert renew [--json]
   k2 hostmail cert names [issue|renew] [--name <host>] [--json]
+  k2 hostmail cert owner [--stalwart-acme] [--json]
 
   names: one certificate per extra name (autoconfig, autodiscover,
   mta-sts, ua-auto-config) that points here — see
   `k2 hostmail cert names --help`.
+
+WHO OWNS IT
+  `k2 hostmail status` → cert.owner (or `k2 hostmail cert owner`).
+  k2: K2 issues, installs and renews it; Stalwart ACME stays Manual —
+  never turn it back on by hand. stalwart-acme: Stalwart renews it, K2
+  locks its names to the mail host. Full story: `k2 study mail`
+  (WHO OWNS THE MAIL CERTIFICATE). Never fix a certificate with
+  `k2 hostmail disable/enable`.
 
 DNS
   If this zone is on ns1/ns2.k2.dev (K2-hosted), ACME can plant records.
@@ -31255,6 +31373,32 @@ DNS
   (`k2 hostmail ptr show`). Also autoconfig, autodiscover, mta-sts,
   ua-auto-config (A or CNAME to mail.<apex> / origin) — if those stay
   on an apex wildcard the order stays self-signed. Then cert renew.
+EOF
+}
+
+cmd_help_hostmail_cert_owner() {
+    cat <<'EOF'
+Who owns the mail certificate: K2 or Stalwart's own ACME.
+
+USAGE
+  k2 hostmail cert owner [--json]
+  k2 hostmail cert owner --stalwart-acme [--json]
+
+OWNERS
+  k2             The mail host is attached in `k2 domain` (role mail) and
+                 the mail certificate is the one K2's issuer planted. K2
+                 renews it; Stalwart ACME is Manual for that domain.
+  stalwart-acme  The mail host is not attached. Stalwart's ACME renews it;
+                 K2 locks the name list to the mail host only.
+  unknown        Attached, but no K2-planted certificate yet:
+                 `k2 hostmail cert renew` issues and installs it.
+
+--stalwart-acme
+  Hand the certificate back to Stalwart's ACME, ordering the mail host
+  only (Manual → Automatic; Stalwart queues one order). Refused while K2
+  owns it — first `k2 domain name remove <mail host>`. K2 never flips it
+  back by itself. One Stalwart setting, no restart; never
+  `k2 hostmail disable/enable`. Owner/admin only.
 EOF
 }
 
@@ -31288,8 +31432,8 @@ ISSUER
 
 LOADING
   Stalwart reloads its certificates in place (ReloadTlsCertificates). Only
-  if that fails does K2 restart Stalwart through the mail helper. Never
-  hostmail disable/enable.
+  if that fails does K2 restart Stalwart (the mail helper, else
+  `sudo -n systemctl restart stalwart`). Never hostmail disable/enable.
 
 RENEWAL
   The daemon renews names it issued before once fewer than 30 days remain

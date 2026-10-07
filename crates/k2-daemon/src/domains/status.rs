@@ -391,6 +391,75 @@ pub fn from_pem_file(hostname: &str) -> Option<ProbeResult> {
     }
 }
 
+/// SHA-256 of a DER certificate, lowercase hex (the leaf fingerprint).
+pub fn der_sha256_hex(der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Fingerprint of the leaf of a PEM chain (`None` = no parseable PEM).
+pub fn pem_leaf_sha256(chain_pem: &str) -> Option<String> {
+    pem_first_cert_der(chain_pem).map(|d| der_sha256_hex(&d))
+}
+
+/// What a TLS port presents for one SNI name, by leaf fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Served {
+    /// Handshake completed far enough to capture this leaf (SHA-256).
+    Leaf(String),
+    /// No handshake (closed port, timeout, DNS).
+    Nothing,
+}
+
+/// The leaf `host:port` presents for SNI `host` — capture only, no
+/// verification (trust is checked elsewhere; this answers "which
+/// certificate is live"). Tests inject answers with [`set_test_served`].
+pub fn served_leaf(host: &str, port: u16) -> Served {
+    #[cfg(test)]
+    {
+        let _ = port;
+        return TEST_SERVED.with(|c| {
+            c.borrow()
+                .get(&host.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or(Served::Nothing)
+        });
+    }
+    #[cfg(not(test))]
+    match probe_port(host, port) {
+        Raw::Handshake { leaf_der } => Served::Leaf(der_sha256_hex(&leaf_der)),
+        Raw::Missing => Served::Nothing,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SERVED: std::cell::RefCell<std::collections::HashMap<String, Served>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Test seam: what [`served_leaf`] answers for `host` (`None` clears).
+#[cfg(test)]
+pub(crate) fn set_test_served(host: &str, served: Option<Served>) {
+    TEST_SERVED.with(|c| {
+        let mut m = c.borrow_mut();
+        match served {
+            Some(s) => m.insert(host.to_ascii_lowercase(), s),
+            None => m.remove(&host.to_ascii_lowercase()),
+        };
+    });
+}
+
+/// The port where Stalwart itself presents its certificates: 443 when it
+/// owns HTTPS (port plan `tls-alpn`), else 465 (Caddy owns 443 then).
+pub fn stalwart_tls_port(port_plan: Option<&str>) -> u16 {
+    if port_plan == Some("tls-alpn") {
+        443
+    } else {
+        465
+    }
+}
+
 /// CAL44: the leaf's notAfter (unix seconds) from a PEM chain.
 pub(crate) fn pem_leaf_not_after(chain_pem: &str) -> Option<i64> {
     let der = pem_first_cert_der(chain_pem)?;

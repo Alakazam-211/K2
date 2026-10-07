@@ -262,7 +262,38 @@ fn plant_mail_if_needed(
         return Ok(());
     }
     store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem)?;
-    crate::domains::status::reject_live_self_signed(hostname)
+    crate::domains::status::reject_live_self_signed(hostname)?;
+    // K2's issuer just planted and loaded the certificate of an attached
+    // role-mail host: this is a K2-issuer box. Stalwart ACME → Manual
+    // (never fails the plant; retried at the next renew / boot).
+    crate::mail::cert_owner::after_k2_plant(hostname);
+    Ok(())
+}
+
+/// Test helper (other modules): a Let's-Encrypt-like PEM for `hostname`
+/// (90 days), as the box store would hold one from K2's issuer.
+#[cfg(test)]
+pub(crate) fn test_le_pem(hostname: &str) -> InstalledPem {
+    let mut ca_params =
+        CertificateParams::new(vec!["Let's Encrypt R11".to_string()]).expect("ca params");
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::OrganizationName, "Let's Encrypt");
+    ca_dn.push(DnType::CommonName, "R11");
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().expect("ca key");
+    let ca = ca_params.self_signed(&ca_key).expect("ca");
+    let mut leaf = CertificateParams::new(vec![hostname.to_string()]).expect("leaf params");
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, hostname.to_string());
+    leaf.distinguished_name = dn;
+    let leaf_key = KeyPair::generate().expect("leaf key");
+    let cert = leaf.signed_by(&leaf_key, &ca, &ca_key).expect("sign");
+    InstalledPem {
+        hostname: hostname.to_string(),
+        chain_pem: format!("{}{}", cert.pem(), ca.pem()),
+        key_pem: leaf_key.serialize_pem(),
+    }
 }
 
 fn lookup_attached(hostname: &str) -> Result<(DomainBinding, DomainName), String> {
@@ -1210,5 +1241,141 @@ mod tests {
         };
         std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
         assert_eq!(kind, ChallengeKind::Dns01);
+    }
+
+    /// K2-issuer boxes: a successful K2 plant+load of the mail certificate
+    /// switches Stalwart ACME to Manual (cert_owner::after_k2_plant); a
+    /// failed plant, a plant whose probe is still self-signed, or a
+    /// non-mail name never does.
+    #[test]
+    fn mail_plant_switches_stalwart_acme_to_manual_only_after_success() {
+        let _home = crate::test_support::TempHome::new();
+        let issued_probe = |host: &str| crate::domains::status::ProbeResult {
+            state: "issued".into(),
+            self_signed: false,
+            names: vec![host.into()],
+            expires_at: Some(chrono::Utc::now().timestamp() + 86_400),
+            issuer: Some("CN=R11, O=Let's Encrypt".into()),
+        };
+        let _ = crate::mail::cert_owner::take_test_after_plant();
+
+        attach_mail("manual-ok.test", "mail.manual-ok.test");
+        let le = mint_le_like("mail.manual-ok.test");
+        store::install("mail.manual-ok.test", &le.chain_pem, &le.key_pem).expect("install");
+        {
+            let _j = store::set_test_jmap_plant(Some(Ok(())));
+            let _p = crate::domains::status::set_test_probe(Some(issued_probe("mail.manual-ok.test")));
+            issue_attached("mail.manual-ok.test").expect("plant");
+        }
+        assert_eq!(
+            crate::mail::cert_owner::take_test_after_plant(),
+            vec!["mail.manual-ok.test".to_string()],
+            "one Manual switch after the plant"
+        );
+
+        // Stalwart refused the plant: no Manual switch.
+        {
+            let _j = store::set_test_jmap_plant(Some(Err("x:Certificate/set: invalidProperties".into())));
+            let _p = crate::domains::status::set_test_probe(Some(issued_probe("mail.manual-ok.test")));
+            issue_attached("mail.manual-ok.test").expect_err("plant refused");
+        }
+        assert!(crate::mail::cert_owner::take_test_after_plant().is_empty());
+
+        // Planted but 443/465 still self-signed: no Manual switch.
+        {
+            let _j = store::set_test_jmap_plant(Some(Ok(())));
+            let _p = crate::domains::status::set_test_probe(Some(crate::domains::status::ProbeResult {
+                state: "self-signed".into(),
+                self_signed: true,
+                names: vec!["localhost".into()],
+                expires_at: None,
+                issuer: Some("CN=rcgen self signed".into()),
+            }));
+            issue_attached("mail.manual-ok.test").expect_err("still self-signed");
+        }
+        assert!(crate::mail::cert_owner::take_test_after_plant().is_empty());
+
+        // A non-mail name never touches Stalwart.
+        {
+            let _ = k2_core::db::init_for_tests();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_name(&conn, "app.manual-ok.test", "manual-ok.test", "other").unwrap();
+        }
+        let le = mint_le_like("app.manual-ok.test");
+        store::install("app.manual-ok.test", &le.chain_pem, &le.key_pem).expect("install");
+        issue_attached("app.manual-ok.test").expect("re-use, no plant");
+        assert!(crate::mail::cert_owner::take_test_after_plant().is_empty());
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, "manual-ok.test");
+    }
+
+    /// (d) No failure path ever falls back to a self-signed / rcgen
+    /// certificate. Ratchet over the production source of every module
+    /// that plants or renews mail / domain certificates: a certificate is
+    /// only ever minted in `mint_fake_le` (reached only through
+    /// `fake_issue`, itself only behind `fake_enabled()` — tests or the
+    /// explicit K2_ACME_FAKE knob) or the test helper `test_le_pem`.
+    #[test]
+    fn no_production_path_mints_a_self_signed_certificate() {
+        fn prod(src: &str) -> &str {
+            src.split("\n#[cfg(test)]\nmod tests").next().expect("source")
+        }
+        /// (fn name, body) chunks of a source file.
+        fn fns(src: &str) -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            for chunk in src
+                .split("\nfn ")
+                .skip(1)
+                .chain(src.split("\npub fn ").skip(1))
+                .chain(src.split("\npub(crate) fn ").skip(1))
+            {
+                let name: String =
+                    chunk.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                let body = chunk.split("\n}\n").next().unwrap_or(chunk).to_string();
+                out.push((name, body));
+            }
+            out
+        }
+        let mint = [".self_signed(", "CertificateParams::new", "generate_simple_self_signed"];
+        for (file, src) in [
+            ("domains/store.rs", include_str!("store.rs")),
+            ("domains/renew.rs", include_str!("renew.rs")),
+            ("domains/routes.rs", include_str!("routes.rs")),
+            ("mail/cert_names.rs", include_str!("../mail/cert_names.rs")),
+            ("mail/cert_owner.rs", include_str!("../mail/cert_owner.rs")),
+            ("mail/jmap.rs", include_str!("../mail/jmap.rs")),
+            ("mail/routes_server.rs", include_str!("../mail/routes_server.rs")),
+            ("mail/supervisor.rs", include_str!("../mail/supervisor.rs")),
+        ] {
+            for m in mint {
+                assert!(!prod(src).contains(m), "{file} production code mints a certificate ({m})");
+            }
+        }
+        let acme = prod(include_str!("acme.rs"));
+        let acme_fns = fns(acme);
+        for want in ["mint_fake_le", "fake_issue", "issue_with_challenge", "issue_extra_name"] {
+            assert!(acme_fns.iter().any(|(n, _)| n == want), "scan must see fn {want}");
+        }
+        for (name, body) in acme_fns {
+            if mint.iter().any(|m| body.contains(m)) {
+                assert!(
+                    name == "mint_fake_le" || name == "test_le_pem",
+                    "acme.rs fn {name} mints a certificate"
+                );
+            }
+            if name != "mint_fake_le" && body.contains("mint_fake_le(") {
+                assert_eq!(name, "fake_issue", "mint_fake_le reached from {name}");
+            }
+            if name != "fake_issue" && body.contains("fake_issue(") {
+                assert!(body.contains("if fake_enabled()"), "fn {name} reaches fake_issue without fake_enabled()");
+            }
+        }
+        assert!(
+            acme.contains("#[cfg(test)]\npub(crate) fn test_le_pem"),
+            "test_le_pem stays test-only"
+        );
     }
 }

@@ -1193,6 +1193,10 @@ async fn async_main() {
     // them once. Linux-only detached thread; per-account permissions only
     // — never a Stalwart restart or hostmail disable/enable (CAL39).
     mail::dav::spawn_startup_backfill();
+    // K2-issuer boxes (mail host attached + a K2-planted mail cert): make
+    // sure Stalwart's own ACME is Manual for the mail host's Domain. One
+    // registry write, no restart; never flips back. Linux-only thread.
+    mail::cert_owner::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();
 
     // Files-drawer multi-writer live refresh — recursive watcher over

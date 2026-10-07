@@ -326,6 +326,31 @@ assert_contains "hostmail owner" "$mail_out" "k2 hostmail"
 assert_contains "disable host-wide" "$mail_out" "DISABLE IS HOST-WIDE"
 assert_contains "systemctl is-active" "$mail_out" "systemctl is-active stalwart"
 assert_contains "supervisor writes" "$mail_out" "k2 hostmail enable"
+assert_contains "cert owner section" "$mail_out" "WHO OWNS THE MAIL CERTIFICATE"
+assert_contains "cert.owner in status" "$mail_out" "cert.owner"
+assert_contains "k2 owner defined by attach + planted" "$mail_out" "the mail certificate is one K2's issuer planted"
+assert_absent "owner never defined by zone on K2 DNS" "$mail_out" "zone on K2 DNS"
+assert_contains "stalwart ACME manual" "$mail_out" "Manual for that domain: do not turn it back on"
+assert_contains "renew now" "$mail_out" "k2 hostmail cert renew"
+assert_contains "own certs per extra name" "$mail_out" "get their OWN K2 certificate"
+assert_contains "apex and www never" "$mail_out" "The apex and www are never on a mail certificate."
+assert_contains "doctor k2-cert-renewal" "$mail_out" "k2-cert-renewal"
+assert_contains "doctor acme-cert-names manual" "$mail_out" "Manual (K2 owns and renews this"
+assert_contains "pre-0.45.0 empty list expected" "$mail_out" "not yet on 0.45.0"
+assert_contains "flip-back next to acme-cert-names" "$mail_out" "k2 hostmail cert owner --stalwart-acme"
+assert_contains "doctor extra-name-certs" "$mail_out" "extra-name-certs"
+assert_contains "doctor tls-cert" "$mail_out" "tls-cert          what :443 serves right now."
+assert_contains "planted not loaded remedy" "$mail_out" "sudo systemctl restart stalwart"
+assert_contains "never disable/enable for certs" "$mail_out" "Never fix a certificate with \`k2 hostmail disable/enable\`."
+acme_line="$(printf '%s\n' "$mail_out" | grep -n 'acme-cert-names ' | head -1 | cut -d: -f1)"
+flip_line="$(printf '%s\n' "$mail_out" | grep -n 'k2 hostmail cert owner --stalwart-acme' | head -1 | cut -d: -f1)"
+if [ -n "$acme_line" ] && [ -n "$flip_line" ] && [ $((flip_line - acme_line)) -ge 0 ] && [ $((flip_line - acme_line)) -le 8 ]; then
+    echo "  PASS: flip-back command sits with the acme-cert-names line"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: flip-back command must sit with the acme-cert-names line ($acme_line/$flip_line)" >&2
+    fail=$((fail + 1))
+fi
 
 echo "== k2 study nosuch =="
 set +e

@@ -198,6 +198,15 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     // K2-issued certificate renewal (domains::renew): the mail host's
     // renewal state + the background renewer's last scan. Local reads.
     body["certRenewal"] = crate::domains::renew::mail_status_json(hostname.as_deref());
+    // Who owns the mail certificate (mail::cert_owner — the one K2-issuer
+    // definition): k2 | stalwart-acme | unknown. Local reads only.
+    if let Some(cert) = body.get_mut("cert").and_then(|c| c.as_object_mut()) {
+        let owner = match hostname.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+            Some(h) => crate::mail::cert_owner::mail_cert_owner(h),
+            None => crate::mail::cert_owner::CertOwner::Unknown,
+        };
+        cert.insert("owner".into(), serde_json::json!(owner.as_str()));
+    }
     // Linux only: the root door enable / cert restart / boot reconcile
     // need. Cached 30 s (each probe is a `sudo -n -l`).
     if mail_supported() {
@@ -540,8 +549,9 @@ pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
     if attached {
         // The custom-domain issuer plants the cert and loads it with
         // ReloadTlsCertificates (no mail helper needed); only if that
-        // fails does it restart Stalwart through the helper, and then
-        // the error names the helper. A box without the helper renews.
+        // fails does it restart Stalwart (the helper, else `sudo -n
+        // systemctl restart stalwart`), and no open door is a loud error.
+        // A K2 plant also switches Stalwart ACME to Manual (cert_owner).
         let mut params = std::collections::HashMap::new();
         params.insert("hostname".into(), hostname);
         return crate::domains::routes::handle_renew(&params);
@@ -1400,6 +1410,55 @@ mod tests {
             "{v}"
         );
         assert!(v.get("cert").is_some(), "C24 status shows cert without --health: {v}");
+        clean_row();
+    }
+
+    /// `cert.owner` is the one K2-issuer definition: stalwart-acme while
+    /// the mail host is not attached, unknown once attached but not
+    /// planted, k2 with a K2-planted Let's Encrypt cert on record.
+    #[test]
+    fn status_cert_owner_follows_the_k2_issuer_definition() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _home = crate::test_support::TempHome::new();
+        let _unit = supervisor::with_test_unit_state("active");
+        clean_row();
+        let host = "mail.owner-status.test";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, port_plan, updated_at) \
+                 VALUES (1, 'running', ?1, ?2, 'tls-alpn', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, host],
+            )
+            .expect("seed row");
+        }
+        let owner = || {
+            let v: serde_json::Value =
+                serde_json::from_str(&handle_status(&HashMap::new()).body).expect("json");
+            v["cert"]["owner"].as_str().expect("cert.owner").to_string()
+        };
+        assert_eq!(owner(), "stalwart-acme");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding(&conn, "owner-status.test", None, false).unwrap();
+            k2_core::domains::upsert_name(&conn, host, "owner-status.test", k2_core::domains::ROLE_MAIL)
+                .unwrap();
+        }
+        assert_eq!(owner(), "unknown");
+        let pem = crate::domains::acme::test_le_pem(host);
+        crate::domains::store::install(host, &pem.chain_pem, &pem.key_pem).expect("install");
+        crate::domains::renew::update(|f| {
+            f.names.entry(host.into()).or_default().stalwart_cert_id = Some("c1".into())
+        })
+        .expect("renewal.json");
+        assert_eq!(owner(), "k2");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = k2_core::domains::remove_binding(&conn, "owner-status.test");
+        }
         clean_row();
     }
 

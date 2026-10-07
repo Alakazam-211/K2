@@ -1139,7 +1139,7 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
         .spawn(move || {
             let _latch = LatchGuard;
             let ops = super::sysops::RealSystemOps;
-            let mut doors = imap_listeners::LiveDoors;
+            let mut doors = imap_listeners::LiveDoors { why: "upgrade" };
             let probe = LiveProbe;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run(&ops, &mut doors, &probe, &plan)

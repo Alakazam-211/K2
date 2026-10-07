@@ -1074,6 +1074,16 @@ pub fn local_expiry(name: &str) -> Option<i64> {
     inventory_from_store(name).and_then(|i| i.not_after)
 }
 
+/// The doctor's "which leaf did K2 plant for this name": the SHA-256 of
+/// the box store's leaf, only when K2 planted it into Stalwart
+/// (`extra-names.json` has its Certificate id).
+pub fn local_sha256(name: &str) -> Option<String> {
+    let state = load_state();
+    state.get(&norm(name))?.stalwart_cert_id.as_ref()?;
+    let pem = crate::domains::store::load(name)?;
+    crate::domains::status::pem_leaf_sha256(&pem.chain_pem)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

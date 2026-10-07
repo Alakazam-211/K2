@@ -182,7 +182,8 @@ pub trait MailTlsOps {
     fn plant_default(&mut self, chain_pem: &str, key_pem: &str) -> Result<String, String>;
     /// `x:Action/set` `ReloadTlsCertificates` (no restart).
     fn reload_tls(&mut self) -> Result<(), String>;
-    /// The existing `restart_stalwart_to_reload_tls` path (mail helper).
+    /// The existing `restart_stalwart_to_reload_tls` path (mail helper,
+    /// else `sudo -n systemctl restart stalwart`).
     fn restart_stalwart(&mut self) -> Result<(), String>;
     /// `x:Certificate/set` destroy (an id already gone is Ok).
     fn destroy_certificate(&mut self, id: &str) -> Result<(), String>;
@@ -222,7 +223,7 @@ pub struct PlantReport {
 /// The mail host's certificate IS Stalwart's default (it also answers
 /// clients that send no SNI name): plant it as a new Certificate and
 /// point `defaultCertificateId` at it, then load it with
-/// `ReloadTlsCertificates` — a restart (mail helper) only if that action
+/// `ReloadTlsCertificates` — a restart (helper, else sudo) only if that action
 /// fails; never hostmail disable/enable. Once loaded, the Certificates K2
 /// planted for this name before are destroyed (Stalwart already prefers
 /// the newest notAfter per name and deletes expired ones itself; this

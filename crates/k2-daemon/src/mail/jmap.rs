@@ -574,8 +574,9 @@ impl StalwartClient {
     /// Lock the list to exactly `[host]`, keeping `acmeProviderId`.
     ///
     /// Idempotent: an already-locked Domain is not written. A `Manual`
-    /// Domain (no Stalwart ACME, e.g. http-01/dns-01 plans) is left
-    /// alone. Updating an Automatic Domain does not queue an order by
+    /// Domain (no Stalwart ACME, e.g. http-01/dns-01 plans, or a K2-issuer
+    /// box — `mail::cert_owner`) is left alone: the lock never flips
+    /// Manual back to Automatic. Updating an Automatic Domain does not queue an order by
     /// itself (Stalwart only schedules one on Manual → Automatic).
     pub fn lock_acme_cert_names_to_mail_host(
         &self,
@@ -614,6 +615,44 @@ impl StalwartClient {
         Ok(CertNamesLock::Locked { previous })
     }
 
+    /// K2-issuer boxes: turn Stalwart's own ACME off for one Domain —
+    /// `x:Domain/set` with ONLY `certificateManagement: {"@type":
+    /// "Manual"}`. Stalwart 0.16 (`registry/mapping/domain.rs`
+    /// `validate_domain`) schedules nothing for a Manual Domain, and a
+    /// Domain update does not reload the TLS map: Certificate objects and
+    /// `SystemSettings.defaultCertificateId` are not touched, so the
+    /// certificate K2 planted keeps serving. No restart.
+    pub fn domain_set_cert_management_manual(&self, domain_id: &str) -> Result<(), String> {
+        let resp = self.registry_call("x:Domain/set", cert_management_manual_args(domain_id))?;
+        parse_set_updated("x:Domain/set", domain_id, &resp)
+    }
+
+    /// The owner's way back (`k2 hostmail cert owner --stalwart-acme`):
+    /// `Automatic` with `acmeProviderId` and exactly `[host]` (the CAL43
+    /// lock). Stalwart queues one ACME order on Manual → Automatic.
+    pub fn domain_set_cert_management_locked(
+        &self,
+        domain_id: &str,
+        acme_provider_id: &str,
+        host: &str,
+    ) -> Result<(), String> {
+        let host = normalize_cert_host(host)?;
+        let resp = self.registry_call(
+            "x:Domain/set",
+            cert_names_lock_update_args(domain_id, acme_provider_id, &host),
+        )?;
+        parse_set_updated("x:Domain/set", domain_id, &resp)
+    }
+
+    /// Ids of every `AcmeProvider` (Stalwart's ACME accounts). Read only.
+    pub fn acme_provider_ids(&self) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:AcmeProvider/get",
+            serde_json::json!({ "properties": ["id"] }),
+        )?;
+        parse_get_list_ids("x:AcmeProvider/get", &resp)
+    }
+
     /// Retry ACME for the **mail hostname only** (C8/C24 — no extra
     /// SAN names in the request). Stalwart has no dedicated "renew now"
     /// method; the documented on-demand path is `x:Task/set` create of
@@ -630,8 +669,19 @@ impl StalwartClient {
             format!("no Stalwart domain for mail hostname '{host}' — cannot retry ACME")
         })?;
         let lock_host = normalize_cert_host(host)?;
-        self.lock_cert_names_on(&domain_id, &lock_host)
+        let lock = self
+            .lock_cert_names_on(&domain_id, &lock_host)
             .map_err(|e| format!("CAL43 cert-name lock before ACME retry failed: {e}"))?;
+        if lock == CertNamesLock::NotAutomatic {
+            // A Manual Domain: Stalwart would refuse the task ("ACME not
+            // configured"). Never flip it back here — say who owns it.
+            return Err(format!(
+                "Stalwart ACME is off (Manual) for {lock_host}, so Stalwart has nothing to \
+                 renew. K2 renews the mail certificate only while {lock_host} is attached \
+                 (`k2 domain`); to hand it back to Stalwart's own ACME run \
+                 `k2 hostmail cert owner --stalwart-acme`"
+            ));
+        }
         let due = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let args = serde_json::json!({
             "create": {
@@ -3078,6 +3128,30 @@ fn cert_names_lock_update_args(
             }
         }
     })
+}
+
+/// The K2-issuer `x:Domain/set` update: `certificateManagement` →
+/// `Manual`, and nothing else on the Domain (Stalwart's `Manual` variant
+/// carries no fields — `registry/schema/structs.rs` `CertificateManagement`).
+fn cert_management_manual_args(domain_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "update": {
+            domain_id: { "certificateManagement": { "@type": "Manual" } }
+        }
+    })
+}
+
+/// The `id`s of a `*/get` reply's `list` (empty list = Ok(empty)).
+fn parse_get_list_ids(method: &str, args: &serde_json::Value) -> Result<Vec<String>, String> {
+    let list = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{method}: reply has no list: {args}"))?;
+    Ok(list
+        .iter()
+        .filter_map(|e| e.get("id").and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect())
 }
 
 /// Pure `x:Domain/get` parser for `certificateManagement`. The SAN
@@ -5990,6 +6064,95 @@ pub(crate) mod tests {
         assert!(err.contains("CAL43"), "{err}");
         assert!(err.contains("forbidden"), "{err}");
         let sent: Vec<String> = rx.iter().collect();
+        assert!(!sent.iter().any(|r| r.contains("x:Task/set")), "{sent:#?}");
+    }
+
+    /// K2-issuer boxes: the Manual write changes ONLY the Domain's
+    /// certificateManagement — never a Certificate, never
+    /// SystemSettings.defaultCertificateId, never a reload or restart.
+    #[test]
+    fn manual_switch_touches_only_certificate_management() {
+        let args = cert_management_manual_args("dom-host");
+        let update = args["update"].as_object().expect("update map");
+        assert_eq!(update.len(), 1, "{args}");
+        let patch = update["dom-host"].as_object().expect("patch");
+        assert_eq!(patch.len(), 1, "only certificateManagement: {args}");
+        assert_eq!(patch["certificateManagement"], serde_json::json!({ "@type": "Manual" }));
+        assert!(args.get("create").is_none() && args.get("destroy").is_none(), "{args}");
+
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_set_updated_reply("dom-host"),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        client.domain_set_cert_management_manual("dom-host").expect("manual");
+        let _sess = rx.recv().expect("session");
+        let set = body_json(&rx.recv().expect("set"));
+        let calls = set["methodCalls"].as_array().expect("calls");
+        assert_eq!(calls.len(), 1, "one call: {set}");
+        assert_eq!(calls[0][0], "x:Domain/set");
+        assert_eq!(calls[0][1]["update"], args["update"]);
+        let rest: Vec<String> = rx.iter().collect();
+        assert!(rest.is_empty(), "nothing after the one Domain/set: {rest:#?}");
+        let all = format!("{set}");
+        for never in ["x:Certificate", "x:SystemSettings", "defaultCertificateId", "x:Action"] {
+            assert!(!all.contains(never), "{never} in {all}");
+        }
+    }
+
+    #[test]
+    fn manual_switch_surfaces_a_rejected_update() {
+        let rejected = serde_json::json!({
+            "methodResponses": [["x:Domain/set", {
+                "notUpdated": { "dom-host": { "type": "forbidden" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) =
+            spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), rejected]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client
+            .domain_set_cert_management_manual("dom-host")
+            .expect_err("loud");
+        assert!(err.contains("forbidden"), "{err}");
+    }
+
+    #[test]
+    fn acme_provider_ids_reads_the_list() {
+        let reply = serde_json::json!({
+            "methodResponses": [["x:AcmeProvider/get", {
+                "accountId": "b",
+                "list": [{ "id": "acme-p1" }, { "id": "acme-p2" }],
+                "notFound": [],
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), reply]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(client.acme_provider_ids().expect("ids"), vec!["acme-p1", "acme-p2"]);
+        let _sess = rx.recv().expect("session");
+        let g = body_json(&rx.recv().expect("get"));
+        assert_eq!(g["methodCalls"][0][0], "x:AcmeProvider/get");
+        assert!(parse_get_list_ids("x:AcmeProvider/get", &serde_json::json!({})).is_err());
+    }
+
+    /// A Manual Domain is never flipped back by `cert renew`, and no
+    /// AcmeRenewal is queued for it: the error names the owner command.
+    #[test]
+    fn renew_refuses_a_manual_domain_without_flipping_it() {
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            domain_query_reply(&["dom-host"]),
+            cert_mgmt_get_reply("dom-host", serde_json::json!({ "@type": "Manual" })),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client
+            .renew_acme_for_mail_hostname("mail.example.com")
+            .expect_err("manual = nothing for Stalwart to renew");
+        assert!(err.contains("Manual"), "{err}");
+        assert!(err.contains("k2 hostmail cert owner --stalwart-acme"), "{err}");
+        let sent: Vec<String> = rx.iter().collect();
+        assert!(!sent.iter().any(|r| r.contains("x:Domain/set")), "{sent:#?}");
         assert!(!sent.iter().any(|r| r.contains("x:Task/set")), "{sent:#?}");
     }
 

@@ -23,7 +23,10 @@
 #
 # The daemon (user k2) then runs `sudo -n /usr/local/libexec/k2-mail-helper
 # <verb>` — an exact-argv allowlist (ensure-user, mkdir, chown, write,
-# install-bin, systemctl, remove). The agent never gets a root shell.
+# install-bin, systemctl, remove; protocol 2 adds version, usage,
+# snapshot-data, restore-data and `systemctl stop stalwart` for
+# `k2 hostmail upgrade` — every box needs this script re-run before its
+# first upgrade). The agent never gets a root shell.
 # It never touches /etc/sudoers.d/k2-pg-helper, never touches Stalwart, and
 # never creates /usr/local/bin/stalwart (`k2 hostmail enable` does that
 # through the helper).

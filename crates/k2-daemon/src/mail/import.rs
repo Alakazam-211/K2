@@ -67,6 +67,46 @@ fn err_json(status: &'static str, code: &str, hint: String) -> CliResponse {
     }
 }
 
+/// Imports running in this daemon right now. `k2 hostmail upgrade`
+/// refuses while it is non-zero (IT6: a snapshot taken mid-import, then
+/// restored, would lose or — on a retry — duplicate mail), and an import
+/// refuses while an upgrade runs. Imports only ever run in this process
+/// (`POST /cli/mail/import`), so an in-memory count is the whole truth.
+static IMPORTS_RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Number of imports in flight (upgrade preflight).
+pub fn imports_running() -> usize {
+    IMPORTS_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Holds one slot of [`IMPORTS_RUNNING`] for an import's lifetime.
+pub(crate) struct ImportGuard(());
+
+impl ImportGuard {
+    /// Claim a slot, or `None` while a Stalwart upgrade runs. Increment
+    /// first, then check (the upgrade sets its flag first, then checks the
+    /// count), so the two can never both proceed.
+    pub(crate) fn begin() -> Option<Self> {
+        Self::begin_with(crate::mail::supervisor::upgrade_running())
+    }
+
+    fn begin_with(upgrade_flag: &std::sync::atomic::AtomicBool) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        IMPORTS_RUNNING.fetch_add(1, Ordering::SeqCst);
+        if upgrade_flag.load(Ordering::SeqCst) {
+            IMPORTS_RUNNING.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(()))
+    }
+}
+
+impl Drop for ImportGuard {
+    fn drop(&mut self) {
+        IMPORTS_RUNNING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn skip_maildir_file_name(name: &str) -> bool {
     let base = name
         .split_once(':')
@@ -353,6 +393,13 @@ pub fn handle_import(body: &[u8]) -> CliResponse {
         );
     }
     let _ = b.project;
+    let Some(_import_slot) = ImportGuard::begin() else {
+        return err_json(
+            "409 Conflict",
+            "upgrade_in_progress",
+            crate::mail::supervisor::UPGRADE_RUNNING_HINT.to_string(),
+        );
+    };
     let row = match authorize_address(address) {
         Ok(r) => r,
         Err(resp) => return resp,
@@ -674,5 +721,21 @@ mod tests {
         let r = handle_import(br#"{"address":"a@b.test"}"#);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("maildir"), "{}", r.body);
+    }
+
+    /// IT6: an import holds a slot for its lifetime (the upgrade preflight
+    /// reads the count) and is refused while an upgrade runs.
+    #[test]
+    fn import_slot_counts_and_yields_to_a_running_upgrade() {
+        use std::sync::atomic::AtomicBool;
+        let idle = AtomicBool::new(false);
+        let before = imports_running();
+        let slot = ImportGuard::begin_with(&idle).expect("no upgrade running");
+        assert!(imports_running() > before, "slot counted");
+        drop(slot);
+        let upgrading = AtomicBool::new(true);
+        let mid = imports_running();
+        assert!(ImportGuard::begin_with(&upgrading).is_none(), "refused mid-upgrade");
+        assert_eq!(imports_running(), mid, "a refused import leaves no slot");
     }
 }

@@ -473,6 +473,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/server/enable", Admin),
     post("/cli/mail/server/rotate-admin", Admin),
     post("/cli/mail/server/uninstall", Admin),
+    post("/cli/mail/server/upgrade", Admin),
     post("/cli/mail/spam/allow", Admin),
     post("/cli/mail/spam/block", Admin),
     get("/cli/mail/spam/quarantine", Admin),

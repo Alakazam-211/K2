@@ -37,6 +37,9 @@
 //! - [`supervisor`] — install / bootstrap / health / upgrade /
 //!   disable / uninstall of the Stalwart sidecar (S1). The ONLY module
 //!   that knows Stalwart exists as a process.
+//! - [`upgrade`] — `k2 hostmail upgrade` (calendars S1): explicit,
+//!   owner-only Stalwart upgrade to the pin with snapshot + rollback
+//!   through the root helper. Never automatic.
 //! - [`preflight`] — the §5.1 read-only checklist (S1); pure logic
 //!   over an injected environment trait.
 //! - [`sysops`] — every fs/systemd/download/journald effect behind one
@@ -154,6 +157,7 @@ pub mod spam;
 pub mod helper;
 pub mod supervisor;
 pub mod sysops;
+pub mod upgrade;
 
 /// Serializes every test that touches the SINGLETON `mail_server` row
 /// (the process-global shared test DB makes concurrent row writers
@@ -169,11 +173,3 @@ pub(crate) fn mail_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
-/// The "not built yet" contract for non-route skeleton fns (today only
-/// [`supervisor`]'s upgrade op): a structured one-line error, never a
-/// panic/todo!() — a stray call in production must fail loudly AND
-/// recoverably. (The route-side 501 twin retired with S6 — every
-/// `/cli/mail/*` route in the partition map is real now.)
-pub(crate) fn not_built_err(slice: &str, what: &str) -> String {
-    format!("{what}: not built yet — mail slice {slice}")
-}

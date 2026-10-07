@@ -678,7 +678,7 @@ export const SAMPLE_STATUS: MailStatus = {
   supported: false,
   state: 'not-installed',
   version: null,
-  pinnedVersion: '0.16.10',
+  pinnedVersion: '0.16.20',
   hostname: null,
   portPlan: null,
   enableProgress: null,

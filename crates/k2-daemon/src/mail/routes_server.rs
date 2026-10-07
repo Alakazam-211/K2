@@ -89,6 +89,8 @@ fn unsupported() -> CliResponse {
 ///   "lastError": <last_error|null>,
 ///   "helper": "installed" | "missing" | "not allowed by sudoers",  // Linux only
 ///   "helperFix": <root install command — only when helper != installed>,
+///   "upgradeAvailable": <installed version present and != pinnedVersion>,
+///   "upgrade": <last `k2 hostmail upgrade` record | null>,
 ///   "health": <live verdict — only present with ?health=1 on Linux> }
 /// ```
 ///
@@ -174,6 +176,13 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
             installed,
             hostname.as_deref(),
             port_plan.as_deref(),
+        ),
+        // Calendars S1 (CAL15/CAL56): installed != pinned, never semver.
+        "upgradeAvailable": crate::mail::upgrade::upgrade_available(version.as_deref()),
+        // The last `k2 hostmail upgrade` record (null = never run). A
+        // `running` record no thread owns reads `interrupted`.
+        "upgrade": crate::mail::upgrade::status_upgrade_json(
+            supervisor::upgrade_running().load(std::sync::atomic::Ordering::SeqCst),
         ),
     });
     // L14: omit `health` unless `?health=1` actually ran the probe.
@@ -340,6 +349,9 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
     if let Some(resp) = helper_unavailable_response(helper_state) {
         return resp;
     }
+    if let Some(resp) = upgrade_running_response() {
+        return resp;
+    }
     if !supervisor::try_begin_enable() {
         return err_json(
             "409 Conflict",
@@ -426,6 +438,9 @@ pub fn handle_server_disable(_body: &[u8]) -> CliResponse {
     };
     if !mail_supported() {
         return unsupported();
+    }
+    if let Some(resp) = upgrade_running_response() {
+        return resp;
     }
     if let Err(e) = supervisor::disable() {
         return CliResponse::internal_error(e);
@@ -600,6 +615,9 @@ pub fn handle_server_uninstall(body: &[u8]) -> CliResponse {
     if !mail_supported() {
         return unsupported();
     }
+    if let Some(resp) = upgrade_running_response() {
+        return resp;
+    }
     if let Err(e) = supervisor::uninstall(purge) {
         return CliResponse::internal_error(e);
     }
@@ -611,6 +629,88 @@ pub fn handle_server_uninstall(body: &[u8]) -> CliResponse {
         })
         .to_string(),
     )
+}
+
+/// 409 `upgrade_in_progress` while `k2 hostmail upgrade` runs (it has
+/// Stalwart stopped for the snapshot) — disable / uninstall / enable.
+pub(crate) fn upgrade_running_response() -> Option<CliResponse> {
+    if !supervisor::upgrade_running().load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    Some(err_json(
+        "409 Conflict",
+        "upgrade_in_progress",
+        supervisor::UPGRADE_RUNNING_HINT.to_string(),
+    ))
+}
+
+/// The parsed POST `/cli/mail/server/upgrade` body. Unknown keys and
+/// non-boolean flags are a 400 (a typo like `dry_run` must never start a
+/// real upgrade).
+pub(crate) fn parse_upgrade_body(body: &[u8]) -> Result<crate::mail::upgrade::UpgradeRequest, String> {
+    let trimmed = std::str::from_utf8(body).map(str::trim).unwrap_or("");
+    let parsed: serde_json::Value = if trimmed.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice(body).map_err(|e| format!("invalid JSON body: {e}"))?
+    };
+    let Some(obj) = parsed.as_object() else {
+        return Err("body must be a JSON object".into());
+    };
+    let mut req = crate::mail::upgrade::UpgradeRequest::default();
+    for (k, v) in obj {
+        let flag = v
+            .as_bool()
+            .ok_or_else(|| format!("'{k}' must be true or false"))?;
+        match k.as_str() {
+            "dryRun" => req.dry_run = flag,
+            "acknowledgeFailed" => req.acknowledge_failed = flag,
+            other => {
+                return Err(format!(
+                    "unknown field '{other}' — the body is {{\"dryRun\": bool}} or \
+                     {{\"acknowledgeFailed\": true}}"
+                ))
+            }
+        }
+    }
+    if req.dry_run && req.acknowledge_failed {
+        return Err("dryRun and acknowledgeFailed are separate calls".into());
+    }
+    Ok(req)
+}
+
+/// POST `/cli/mail/server/upgrade` — calendars S1 (CAL7/CAL14/CAL15):
+/// the explicit Stalwart upgrade to the pin, owner/admin only
+/// (`is_owner_level_mutation` + exact agent DENY + ROUTES Admin).
+/// Body `{}` (run), `{"dryRun":true}` (plan only, never an effect) or
+/// `{"acknowledgeFailed":true}` (clear a failed-rollback block). A run
+/// preflights synchronously, then continues in the background; poll GET
+/// `/cli/mail/status` → `upgrade`. Never called by boot, a daemon update
+/// or enable.
+pub fn handle_server_upgrade(body: &[u8]) -> CliResponse {
+    let req = match parse_upgrade_body(body) {
+        Ok(r) => r,
+        Err(e) => return err_json("400 Bad Request", "usage", e),
+    };
+    if !mail_supported() {
+        return unsupported();
+    }
+    use crate::mail::upgrade::UpgradeStart;
+    match supervisor::upgrade(req) {
+        UpgradeStart::Noop(v)
+        | UpgradeStart::DryRun(v)
+        | UpgradeStart::Started(v)
+        | UpgradeStart::Acknowledged(v) => CliResponse::ok_json(v.to_string()),
+        UpgradeStart::Refused { code, body, .. } => CliResponse {
+            status: if code == "spawn_failed" {
+                "500 Internal Server Error"
+            } else {
+                "409 Conflict"
+            },
+            content_type: "application/json",
+            body: body.to_string(),
+        },
+    }
 }
 
 // ── S6: config + doctor ─────────────────────────────────────────────────
@@ -937,6 +1037,8 @@ mod tests {
             v.get("health").is_none(),
             "health omitted unless ?health=1, got {v}"
         );
+        assert_eq!(v["upgradeAvailable"], false, "nothing installed: {v}");
+        assert!(v["upgrade"].is_null(), "{v}");
 
         {
             let db = k2_core::db::shared();
@@ -955,6 +1057,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["state"], "error");
         assert_eq!(v["version"], "0.16.10");
+        // CAL15: the pin moved to 0.16.20, so this box has an upgrade.
+        assert_eq!(v["pinnedVersion"], "0.16.20");
+        assert_eq!(v["upgradeAvailable"], true, "{v}");
+        assert!(v["upgrade"].is_null(), "never upgraded: {v}");
         assert_eq!(v["hostname"], "mail.acme.dev");
         assert_eq!(v["portPlan"], "tls-alpn");
         assert_eq!(v["enableProgress"]["steps"]["download"]["at"], 100);
@@ -965,7 +1071,58 @@ mod tests {
             cfg!(target_os = "linux"),
             "supported is the RUNTIME gate, independent of install state"
         );
+        // On the pin: no upgrade available; the last run's record shows.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_server SET installed_version = ?1, \
+                 upgrade_progress_json = '{\"state\":\"succeeded\",\"from\":\"0.16.10\"}' \
+                 WHERE id = 1",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("update row");
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&handle_status(&HashMap::new()).body).expect("json");
+        assert_eq!(v["upgradeAvailable"], false, "{v}");
+        assert_eq!(v["upgrade"]["state"], "succeeded", "{v}");
         clean_row();
+    }
+
+    /// Calendars S1: the upgrade body is strict (a typo never starts a
+    /// real upgrade), then the platform gate; deeper behavior is the
+    /// fake-engine suite in `mail::upgrade`.
+    #[test]
+    fn upgrade_route_validates_the_body_then_gates_on_platform() {
+        for bad in [
+            &br#"{"dry_run":true}"#[..],
+            br#"{"dryRun":"yes"}"#,
+            br#"{"dryRun":true,"acknowledgeFailed":true}"#,
+            br#"[]"#,
+            br#"not json"#,
+        ] {
+            let r = handle_server_upgrade(bad);
+            assert_eq!(r.status, "400 Bad Request", "{}: {}", String::from_utf8_lossy(bad), r.body);
+            assert!(r.body.contains("usage"), "{}", r.body);
+        }
+        assert_eq!(
+            parse_upgrade_body(b"").expect("empty = run"),
+            crate::mail::upgrade::UpgradeRequest::default()
+        );
+        assert!(parse_upgrade_body(br#"{"dryRun":true}"#).expect("dry").dry_run);
+        assert!(
+            parse_upgrade_body(br#"{"acknowledgeFailed":true}"#)
+                .expect("ack")
+                .acknowledge_failed
+        );
+        if !cfg!(target_os = "linux") {
+            for body in [&b"{}"[..], br#"{"dryRun":true}"#] {
+                let r = handle_server_upgrade(body);
+                assert_eq!(r.status, "409 Conflict", "{}", r.body);
+                assert!(r.body.contains("unsupported"), "{}", r.body);
+            }
+        }
     }
 
     /// Preflight is a REAL read-only route. On non-Linux (the test

@@ -14,6 +14,7 @@
 //! | POST /cli/mail/server/disable     | mail/routes_server.rs   |
 //! | POST /cli/mail/server/rotate-admin| mail/routes_server.rs   |
 //! | POST /cli/mail/server/uninstall   | mail/routes_server.rs   |
+//! | POST /cli/mail/server/upgrade     | mail/routes_server.rs   |
 //! | GET  /cli/mail/config             | mail/routes_server.rs   |
 //! | POST /cli/mail/config/set         | mail/routes_server.rs   |
 //! | GET  /cli/mail/doctor             | mail/routes_server.rs   |
@@ -219,6 +220,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/server/disable"
         | "/cli/mail/server/rotate-admin"
         | "/cli/mail/server/uninstall"
+        | "/cli/mail/server/upgrade"
         | "/cli/mail/config/set"
         | "/cli/mail/domain/add"
         | "/cli/mail/domain/remove"
@@ -302,6 +304,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/server/disable" => routes_server::handle_server_disable(body),
         "/cli/mail/server/rotate-admin" => routes_server::handle_server_rotate_admin(body),
         "/cli/mail/server/uninstall" => routes_server::handle_server_uninstall(body),
+        // Calendars S1: explicit Stalwart upgrade (owner/admin; never M5).
+        "/cli/mail/server/upgrade" => routes_server::handle_server_upgrade(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),
         "/cli/mail/doctor" => routes_server::handle_doctor_run(body),
         "/cli/mail/domain/add" => routes_domains::handle_domain_add(body),
@@ -572,6 +576,8 @@ const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k
 fn leftover_m6_hint(path: &str) -> String {
     let verb = if path == "/cli/mail/server/uninstall" {
         "k2 hostmail uninstall"
+    } else if path == "/cli/mail/server/upgrade" {
+        "k2 hostmail upgrade"
     } else if path == "/cli/mail/domain/remove" {
         "k2 hostmail domain remove"
     } else if path.starts_with("/cli/mail/oauth-config") {
@@ -876,6 +882,7 @@ mod tests {
         }
         for p in [
             "/cli/mail/server/uninstall",
+            "/cli/mail/server/upgrade",
             "/cli/mail/domain/remove",
             "/cli/mail/oauth-config",
             "/cli/mail/address/create",
@@ -918,6 +925,37 @@ mod tests {
         assert_ne!(get.status, "404 Not Found");
         assert_ne!(get.status, "405 Method Not Allowed");
         let post = dispatch_post(p, br#"{"action":"bogus"}"#);
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// Calendars S1 (CAL6): the Stalwart upgrade is owner/admin only,
+    /// POST-only, and the agents-manage-mail toggle never opens it.
+    #[test]
+    fn server_upgrade_route_is_owner_only_post_only_never_m5() {
+        let p = "/cli/mail/server/upgrade";
+        assert!(is_owner_level_mutation(p));
+        assert!(is_mail_owner_surface(p));
+        assert!(!is_mail_manage_surface(p), "the M5 toggle must not open {p}");
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let body = mail_manage_authorized(p, false, Some(&principal))
+            .err()
+            .expect("scoped agent must be refused")
+            .body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(body.contains("k2 hostmail upgrade"), "names the verb: {body}");
+        assert!(
+            !body.contains("Allow agents to manage hosted mail"),
+            "must not promise the toggle: {body}"
+        );
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+        assert!(!crate::session_token::is_agent_verb(p), "exact agent DENY");
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_eq!(get.status, "405 Method Not Allowed", "{}", get.body);
+        let post = dispatch_post(p, br#"{"bogus":true}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
     }
 
@@ -1585,6 +1623,7 @@ mod tests {
             "/cli/mail/server/disable",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/server/uninstall",
+            "/cli/mail/server/upgrade",
             "/cli/mail/config/set",
             "/cli/mail/domain/add",
             "/cli/mail/domain/remove",

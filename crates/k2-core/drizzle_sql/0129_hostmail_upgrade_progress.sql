@@ -1,0 +1,11 @@
+-- Hosted-mail calendars S1 (prd-hostmail-calendars-v1 CAL7/CAL14): the
+-- explicit Stalwart upgrade's progress + outcome, as JSON
+-- {"state":"running|succeeded|noop|aborted|rolled_back|rollback_failed",
+--  "from","to","step","steps":[{"step","at","ok","detail"}],
+--  "wasRunning","snapshotDir","startedAt","finishedAt","error",
+--  "manualSteps":[…]}. NULL = never upgraded. Polled by GET
+-- /cli/mail/status (`upgrade`). A `rollback_failed` (or an interrupted
+-- `running`) row blocks the next upgrade until the owner acknowledges it.
+-- Additive ALTER; do not reuse enable_progress_json (enable resume reads
+-- it) or dav_policy_json / bans_migrate_json.
+ALTER TABLE mail_server ADD COLUMN upgrade_progress_json TEXT;

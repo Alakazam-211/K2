@@ -553,7 +553,7 @@ fn run_startup_reconcile_live() {
 }
 
 /// Production restart doors (Linux boot thread only; tests use fakes).
-struct LiveDoors;
+pub(crate) struct LiveDoors;
 
 impl RestartDoors for LiveDoors {
     fn helper_state(&mut self) -> super::helper::HelperState {

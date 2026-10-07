@@ -468,6 +468,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         // `/cli/mail/server/` or `/cli/mail/domain/` — exact-DENY the
         // blast leftovers. Writer `/cli/mail-manage` is not an agent verb.
         "/cli/mail/server/uninstall",
+        // Calendars S1: replaces the Stalwart binary (owner/admin only, CAL6).
+        "/cli/mail/server/upgrade",
         "/cli/mail/domain/remove",
         // Calendars S2: host-wide DAV policy (owner/admin only, CAL22).
         "/cli/mail/dav",
@@ -1501,6 +1503,7 @@ mod tests {
         // Leftover M6 stay denied (uninstall / remove / OAuth / link / writer).
         for p in [
             "/cli/mail/server/uninstall",
+            "/cli/mail/server/upgrade",
             "/cli/mail/domain/remove",
             "/cli/mail/dav",
             "/cli/mail/external/add",

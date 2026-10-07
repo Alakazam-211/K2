@@ -13885,8 +13885,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13909,6 +13909,17 @@ cmd_schema() {
         {"name": "--purge", "arg": null, "description": "Required. Delete mail data with the server."},
         {"name": "--confirm-hostname", "arg": "host", "description": "Mail hostname, must match the server. Required with --purge."},
         {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail upgrade",
+      "usage": "k2 hostmail upgrade [--dry-run] [--json] | k2 hostmail upgrade --acknowledge-failed [--json]",
+      "description": "Owner-only, explicit Stalwart upgrade to this daemon's pinned version (never automatic; enable refuses a version mismatch and names this verb). POST /cli/mail/server/upgrade {} | {\"dryRun\":true} | {\"acknowledgeFailed\":true}. Preflight refuses with no side effect: not installed, already on the pin (no-op), unknown installed version, mail helper missing/older (hint = the root install command), free space < data + config + 1 GiB, an import/enable/upgrade running, an unacknowledged failed rollback. Runs: download+verify both tarballs, stop, snapshot /var/lib/stalwart + /etc/stalwart to /var/lib/stalwart.k2-snap, install, start, health check (JMAP ping + IMAP greeting); on failure restore + reinstall the old binary (rolled_back) or report rollback_failed with manual steps. The CLI watches GET /cli/mail/status (upgrade) until it ends; exit 0 only when upgraded or already current. Never uses hostmail disable/enable; never re-runs an import.",
+      "args": [],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Plan, sizes, outage estimate and rollback plan; changes nothing. Exit 1 when blocked."},
+        {"name": "--acknowledge-failed", "arg": null, "description": "Clear a rollback_failed / interrupted block after the manual repair. Upgrades nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (the final upgrade record when watching)."}
       ]
     },
     {
@@ -16098,7 +16109,8 @@ AGENT SURFACE
 OWNER VERBS — EXIT 3 (leftover M6)
   uninstall, domain remove, oauth/link admin, mail-manage toggle,
   `k2 hostmail calendar` (CalDAV/CardDAV/WebDAV-files policy for every
-  hosted address; the toggle never opens it).
+  hosted address; the toggle never opens it), `k2 hostmail upgrade`
+  (replaces the Stalwart binary; never automatic).
   Approving your own mail is futile. Ask your human.
 
 MAIL_MANAGE AGENTS
@@ -24923,6 +24935,7 @@ _mail_py() {
     M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
     M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
     M_DAV_ACTION="${M_DAV_ACTION:-}" M_FILES="${M_FILES:-}" \
+    M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -25568,6 +25581,20 @@ elif verb == "status":
                   " do not start/stop it by hand)")
         print("version  : %s  (pinned %s)"
               % (d.get("version") or "(not installed)", d.get("pinnedVersion", "?")))
+        if d.get("upgradeAvailable"):
+            # Calendars S1 (CAL15): explicit only, never automatic.
+            print("upgrade  : available — k2 hostmail upgrade --dry-run, then k2 hostmail upgrade")
+        up = d.get("upgrade")
+        if isinstance(up, dict) and up.get("state"):
+            line = "last upgrade: %s" % up["state"]
+            if up.get("step"):
+                line += " (step %s)" % up["step"]
+            if up.get("error"):
+                line += " — %s" % up["error"]
+            print(line)
+            if up.get("state") in ("rollback_failed", "interrupted"):
+                print("           manual steps: k2 hostmail status --json (upgrade.manualSteps),"
+                      " then k2 hostmail upgrade --acknowledge-failed")
         if d.get("hostname"):
             print("hostname : %s" % d["hostname"])
         if d.get("portPlan"):
@@ -26202,6 +26229,110 @@ elif verb == "server_uninstall":
     d = call("POST", "/cli/mail/server/uninstall",
              body={"purgeData": True, "confirmHostname": hostname})
     print(dumps(d) if as_json else (d.get("hint") or "mail server uninstalled."))
+
+elif verb == "server_upgrade":
+    # Calendars S1: explicit Stalwart upgrade (owner/admin). The daemon
+    # preflights synchronously, then runs in the background; we poll
+    # /cli/mail/status (upgrade) until it ends. Ctrl-C stops the polling,
+    # never the upgrade.
+    def _hb(n):
+        if n is None:
+            return "?"
+        n = float(n)
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if n < 1024 or unit == "TiB":
+                return ("%d %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+            n /= 1024.0
+    if env("M_ACK_FAILED") == "true":
+        d = call("POST", "/cli/mail/server/upgrade", body={"acknowledgeFailed": True})
+        print(dumps(d) if as_json else (d.get("hint") or "acknowledged."))
+    elif env("M_DRY_RUN") == "true":
+        d = call("POST", "/cli/mail/server/upgrade", body={"dryRun": True}, timeout=120)
+        if as_json:
+            print(dumps(d))
+        elif d.get("outcome") == "noop":
+            print(d.get("hint") or "already on the pinned version (no-op)")
+        else:
+            print("upgrade  : Stalwart %s -> %s  (%s)" % (
+                d.get("from") or "?", d.get("to") or "?",
+                "ready" if d.get("ready") else "BLOCKED — nothing will run"))
+            print("server   : %s (running now: %s)" % (
+                d.get("state") or "?", "yes" if d.get("wasRunning") else "no"))
+            for b in d.get("blockers") or []:
+                print("blocked  : [%s] %s" % (b.get("code"), b.get("hint")))
+            if d.get("dataBytes") is not None:
+                print("data     : %s data + %s config -> snapshot %s (free %s)" % (
+                    _hb(d.get("dataBytes")), _hb(d.get("configBytes")),
+                    d.get("snapshotDir") or "?", _hb(d.get("freeBytes"))))
+            out = d.get("outage")
+            if isinstance(out, dict):
+                print("outage   : ~%ss typical; up to %ss if it fails and rolls back" % (
+                    out.get("typicalSecs"), out.get("worstCaseSecs")))
+                print("           (%s)" % out.get("assumption"))
+            print("plan     :")
+            for i, s in enumerate(d.get("plan") or [], 1):
+                print("  %d. %s" % (i, s))
+            print("rollback :")
+            for s in d.get("rollback") or []:
+                print("  - %s" % s)
+            for n in d.get("notes") or []:
+                print("note     : %s" % n)
+        if d.get("dryRun") and not d.get("ready"):
+            sys.exit(1)
+    else:
+        d = call("POST", "/cli/mail/server/upgrade", body={}, timeout=120)
+        if d.get("outcome") == "noop":
+            print(dumps(d) if as_json else (d.get("hint") or "already on the pinned version (no-op)"))
+            sys.exit(0)
+        if not as_json:
+            out = d.get("outage") or {}
+            print("upgrading Stalwart %s -> %s in the background (outage ~%ss; Ctrl-C stops"
+                  " watching, not the upgrade)" % (d.get("from") or "?", d.get("to") or "?",
+                                                   out.get("typicalSecs", "?")))
+        try:
+            interval = float(os.environ.get("K2_HOSTMAIL_UPGRADE_POLL") or "2")
+        except ValueError:
+            interval = 2.0
+        deadline = time.time() + 6 * 3600
+        seen = 0
+        final = None
+        terminal = ("succeeded", "aborted", "rolled_back", "rollback_failed", "interrupted")
+        while time.time() < deadline:
+            time.sleep(interval)
+            s = request("GET", "/cli/mail/status")
+            if not isinstance(s, dict) or s.get("error"):
+                continue  # daemon busy or restarting — keep watching
+            up = s.get("upgrade") or {}
+            steps = up.get("steps") or []
+            if not as_json:
+                for st in steps[seen:]:
+                    print("  %-18s %-6s %s" % (st.get("step"), "ok" if st.get("ok") else "FAILED",
+                                               st.get("detail") or ""))
+            seen = len(steps)
+            if up.get("state") in terminal:
+                final = up
+                break
+        if final is None:
+            die({"code": "timeout", "hint": "the upgrade is still running after 6h — check k2 hostmail status"}, 2)
+        if as_json:
+            print(dumps(final))
+        else:
+            state = final.get("state")
+            if state == "succeeded":
+                print("upgraded : Stalwart %s (snapshot kept at %s)" % (
+                    final.get("to"), final.get("snapshotDir") or "?"))
+            else:
+                print("result   : %s" % state)
+            if final.get("error"):
+                print("error    : %s" % final["error"])
+            if final.get("warning"):
+                print("WARNING  : %s" % final["warning"])
+            if state == "rollback_failed":
+                sys.stderr.write("ROLLBACK FAILED — mail may be down. Manual steps (as root):\n")
+                for s in final.get("manualSteps") or []:
+                    sys.stderr.write("  %s\n" % s)
+        if final.get("state") != "succeeded":
+            sys.exit(1)
 
 elif verb == "cert_renew":
     d = call("POST", "/cli/mail/cert/renew", body={})
@@ -27946,6 +28077,7 @@ cmd_hostmail() {
         enable)  cmd_hostmail_enable "$@" ;;
         disable) cmd_hostmail_disable "$@" ;;
         uninstall) cmd_hostmail_uninstall "$@" ;;
+        upgrade) cmd_hostmail_upgrade "$@" ;;
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
         password) cmd_hostmail_password "$@" ;;
         app-password) cmd_hostmail_app_password "$@" ;;
@@ -27976,7 +28108,7 @@ cmd_hostmail() {
         calendar) cmd_hostmail_calendar "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar>"
             exit 2 ;;
     esac
 }
@@ -28029,6 +28161,25 @@ cmd_hostmail_uninstall() {
         exit 2
     fi
     local M_VERB="server_uninstall" M_JSON="$as_json" M_HOSTNAME="$hostname"
+    _mail_py
+}
+
+cmd_hostmail_upgrade() {
+    if _wants_help "$@"; then cmd_help_hostmail_upgrade; exit 0; fi
+    local as_json=false dry_run=false ack=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --dry-run) dry_run=true; shift ;;
+            --acknowledge-failed) ack=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail upgrade [--dry-run] [--json] | k2 hostmail upgrade --acknowledge-failed [--json]"; exit 2 ;;
+        esac
+    done
+    if [ "$dry_run" = true ] && [ "$ack" = true ]; then
+        _mail_err "usage" "--dry-run and --acknowledge-failed are separate calls (nothing was sent)"
+        exit 2
+    fi
+    local M_VERB="server_upgrade" M_JSON="$as_json" M_DRY_RUN="$dry_run" M_ACK_FAILED="$ack"
     _mail_py
 }
 
@@ -30602,6 +30753,10 @@ COMMANDS
                               Owner-only wipe of the server and its data.
                               --purge without --confirm-hostname exits 2
                               and does not POST. Not mail_manage.
+  upgrade [--dry-run]         Move Stalwart to this daemon's pinned version:
+                              stop → snapshot → install → health check,
+                              rolls back on failure. Owner-only, never
+                              automatic. --dry-run prints the plan + outage.
   rotate-admin                Rotate leftover recovery principal `admin` and
                               the provisioned admin password. Does not wipe
                               the store. enable no-op is not rotate.
@@ -30692,6 +30847,10 @@ the command root runs once per box:
   curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>
 Never create /usr/local/bin/stalwart by hand.
 
+Enable never changes an installed Stalwart version. When the installed
+version differs from this daemon's pin, enable refuses and names
+`k2 hostmail upgrade` (explicit, with snapshot + rollback).
+
 USAGE
   k2 hostmail enable --hostname <name> [--json]
 
@@ -30717,6 +30876,63 @@ FLAGS
   --confirm-hostname <host>
                          Mail hostname. Must match the server. Required.
   --json                 JSON output
+EOF
+}
+
+cmd_help_hostmail_upgrade() {
+    cat <<'EOF'
+Move the hosted mail server (Stalwart) to the version this daemon pins.
+Owner/admin only (agent tokens exit 3; the "agents manage hosted mail"
+toggle never opens it). NEVER automatic: a daemon update or enable never
+changes the Stalwart version — enable refuses a mismatch and names this
+verb. POST /cli/mail/server/upgrade.
+
+Preflight (refuses, changes nothing):
+  - hosted mail not installed, or enable not finished
+  - already on the pin → no-op, exit 0
+  - installed version is not the one this daemon can roll back to
+  - the mail helper is missing or older than this daemon (needs the
+    `version`, `snapshot-data` and `restore-data` verbs) — the error is
+    the one root command that installs the matching helper
+  - free space under /var/lib < data dir + config dir + 1 GiB
+  - a mail import, an enable or another upgrade is running
+  - the last upgrade's rollback failed (or it was interrupted) and has
+    not been acknowledged
+
+Sequence (Stalwart is down from the stop to the health check):
+  1. download + sha256-verify the new AND the old Stalwart tarball
+     (mail keeps flowing)
+  2. stop Stalwart (mail helper: systemctl stop stalwart)
+  3. snapshot /var/lib/stalwart + /etc/stalwart → /var/lib/stalwart.k2-snap
+  4. install the new binary (atomic rename)
+  5. start (mail helper: systemctl restart stalwart)
+  6. health check: JMAP ping + IMAP greeting on the stored IMAP listener
+A box that was stopped/disabled before is started for the health check
+and stopped again. The snapshot is kept until the next upgrade.
+
+On failure after the snapshot: stop → restore the snapshot → reinstall
+the old binary → start + health check (if it was running) → "rolled_back"
+(exit 1). If the rollback itself fails: "rollback_failed", status error,
+and exact manual steps on stderr (also `k2 hostmail status --json` →
+upgrade.manualSteps); the next upgrade is blocked until
+`k2 hostmail upgrade --acknowledge-failed`.
+
+Never uses hostmail disable/enable. Never re-runs a Maildir import; mail
+not yet imported (e.g. a cPanel tail) is not in the snapshot. Pick a
+quiet window, and do not stack it with a daemon update, a helper install
+or a cert reissue.
+
+USAGE
+  k2 hostmail upgrade --dry-run [--json]    plan, outage estimate, blockers
+  k2 hostmail upgrade [--json]              run it and watch (exit 0 = upgraded)
+  k2 hostmail upgrade --acknowledge-failed  clear a failed-rollback block
+                                            after the manual repair
+
+FLAGS
+  --dry-run              Print the plan, sizes, outage window and rollback
+                         plan. Changes nothing. Exit 1 when blocked.
+  --acknowledge-failed   Only clears the block; upgrades nothing.
+  --json                 JSON output (the final upgrade record when watching)
 EOF
 }
 

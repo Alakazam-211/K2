@@ -46,14 +46,24 @@ use super::sysops::{RealSystemOps, SystemOps};
 
 /// The PINNED Stalwart version the supervisor installs and manages.
 ///
-/// v0.16.10 — latest v0.16.x at S1 build time (released 2026-06-21).
+/// v0.16.20 (calendars S1, prd-hostmail-calendars-v1 CAL13): the 0.16.14
+/// shared-calendar MAIL FROM fix, 0.16.18 JMAP scheduling + recurrences
+/// and the 0.16.19 per-user Calendar/set fix. Previous pin: v0.16.10
+/// ([`STALWART_PREVIOUS_VERSION`]) — the only version `k2 hostmail
+/// upgrade` moves FROM, and the rollback target.
 /// Pinning is load-bearing: v0.16 removed the whole REST API relative
 /// to earlier lines, upstream has no mgmt-API stability policy, and
 /// the config format churns between minors (PRD §4, §16, pre-mortem
 /// #8). Upgrades are explicit, K2-shipped, tested operations — the
 /// supervisor REFUSES to manage an unrecognized on-disk version, and
 /// the daemon updating itself never touches the Stalwart version.
-pub const STALWART_PINNED_VERSION: &str = "0.16.10";
+pub const STALWART_PINNED_VERSION: &str = "0.16.20";
+
+/// The pin before [`STALWART_PINNED_VERSION`]: what a box enabled by an
+/// older daemon has installed, the ONLY version `k2 hostmail upgrade`
+/// moves from, and the binary a failed upgrade reinstalls. Compared with
+/// `!=` (CAL56: never semver ordering).
+pub const STALWART_PREVIOUS_VERSION: &str = "0.16.10";
 
 /// One pinned release artifact: Rust `std::env::consts::ARCH` name →
 /// upstream target triple + the sha256 of the release tarball.
@@ -67,14 +77,35 @@ pub struct StalwartArtifact {
 /// Baked-in checksums for the pinned release (PRD §4.1 — "checksums
 /// baked into the daemon at build time").
 ///
-/// REAL values for v0.16.10, verified TWO independent ways at bake
-/// time (2026-07-08): (1) extracted from the release's signed sigstore
-/// bundles (`…tar.gz.sigstore.json` → messageSignature.messageDigest),
-/// (2) sha256 of the actually-downloaded tarballs. Both matched.
-/// (Re-verified against a fresh download during the 2026-07-10 live
-/// rework.) glibc builds — K2 Linux deployments are Ubuntu/Debian-
-/// class boxes (musl/Alpine support would add the musl triples here).
+/// REAL values for v0.16.20. The fork release `Alakazam-211/stalwart`
+/// v0.16.20 MIRRORS the upstream `stalwartlabs/stalwart` v0.16.20
+/// tarballs byte for byte (not a fork build). Verified THREE ways on
+/// 2026-10-06: (1) sha256 of the downloaded fork assets, (2) sha256 of
+/// the downloaded upstream assets of the same names (identical bytes),
+/// (3) the upstream sigstore bundles (`…tar.gz.sigstore.json` →
+/// messageSignature.messageDigest; Fulcio identity
+/// `stalwartlabs/stalwart/.github/workflows/ci.yml@refs/tags/v0.16.20`,
+/// commit 6d5c6589). All matched the fork release body. glibc builds —
+/// K2 Linux deployments are Ubuntu/Debian-class boxes (musl/Alpine
+/// support would add the musl triples here).
 pub const STALWART_SHA256: &[StalwartArtifact] = &[
+    StalwartArtifact {
+        arch: "x86_64",
+        triple: "x86_64-unknown-linux-gnu",
+        sha256: "55184f166f89a0918c6523bb70be300370b63934357731b199dc26a12ca15abf",
+    },
+    StalwartArtifact {
+        arch: "aarch64",
+        triple: "aarch64-unknown-linux-gnu",
+        sha256: "82183ce973665d2b99822b4a1f9911a8ba14788fd73ee93ce9be92352ccdea64",
+    },
+];
+
+/// Checksums for [`STALWART_PREVIOUS_VERSION`] (v0.16.10), kept so a
+/// failed upgrade can reinstall the old binary (CAL14). Verified two
+/// ways at the original bake (2026-07-08): the release's signed sigstore
+/// bundles and the downloaded tarballs; re-verified 2026-07-10.
+pub const STALWART_PREVIOUS_SHA256: &[StalwartArtifact] = &[
     StalwartArtifact {
         arch: "x86_64",
         triple: "x86_64-unknown-linux-gnu",
@@ -99,7 +130,19 @@ pub fn checksum_is_placeholder(a: &StalwartArtifact) -> bool {
 
 /// Resolve the pinned artifact for a `std::env::consts::ARCH` value.
 pub fn artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String> {
-    let art = STALWART_SHA256
+    artifact_in(STALWART_SHA256, arch)
+}
+
+/// The [`STALWART_PREVIOUS_VERSION`] artifact for `arch` (rollback).
+pub fn previous_artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String> {
+    artifact_in(STALWART_PREVIOUS_SHA256, arch)
+}
+
+fn artifact_in(
+    table: &'static [StalwartArtifact],
+    arch: &str,
+) -> Result<&'static StalwartArtifact, String> {
+    let art = table
         .iter()
         .find(|a| a.arch == arch)
         .ok_or_else(|| {
@@ -114,11 +157,16 @@ pub fn artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String
     Ok(art)
 }
 
-/// Enable fetches from the Alakazam fork release; pin still 0.16.10;
-/// K2 does not rebuild Stalwart.
+/// Enable fetches the pin from the Alakazam fork release (a mirror of
+/// the upstream tarball); K2 does not rebuild Stalwart.
 pub fn tarball_url(triple: &str) -> String {
+    tarball_url_for(STALWART_PINNED_VERSION, triple)
+}
+
+/// The fork release tarball for `version` (pin or previous).
+pub fn tarball_url_for(version: &str, triple: &str) -> String {
     format!(
-        "https://github.com/Alakazam-211/stalwart/releases/download/v{STALWART_PINNED_VERSION}/stalwart-{triple}.tar.gz"
+        "https://github.com/Alakazam-211/stalwart/releases/download/v{version}/stalwart-{triple}.tar.gz"
     )
 }
 
@@ -134,6 +182,18 @@ pub const STALWART_UNIT: &str = "stalwart";
 pub const STALWART_UNIT_PATH: &str = "/etc/systemd/system/stalwart.service";
 pub const STALWART_DROPIN_DIR: &str = "/etc/systemd/system/stalwart.service.d";
 pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k2-hardening.conf";
+/// `k2 hostmail upgrade`'s pre-upgrade snapshot (helper `snapshot-data`):
+/// `data/` = a copy of [`STALWART_DATA_DIR`], `config/` = a copy of
+/// [`STALWART_CONFIG_DIR`], plus [`STALWART_SNAPSHOT_MARKER`] written
+/// last. Fixed path, root 0700; kept after a successful upgrade until the
+/// next upgrade replaces it.
+pub const STALWART_SNAPSHOT_DIR: &str = "/var/lib/stalwart.k2-snap";
+/// Written LAST inside the snapshot; no marker = incomplete, and restore
+/// refuses it.
+pub const STALWART_SNAPSHOT_MARKER: &str = "K2-SNAPSHOT.json";
+/// Where `install-bin` stages the binary before the atomic rename onto
+/// [`STALWART_BIN`] (never a truncate-in-place of a live binary).
+pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
 
 /// Stalwart's bootstrap-mode listener (plain HTTP `http-recovery` on
 /// :8080 — ✔ live-verified). After Bootstrap/set + restart the
@@ -335,7 +395,7 @@ pub trait BootstrapApi: Send {
 
 // ── mail_server row helpers ─────────────────────────────────────────────
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -359,7 +419,7 @@ fn ensure_installing_row(hostname: &str, port_plan: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn set_status(status: &str) {
+pub(crate) fn set_status(status: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let _ = conn.execute(
@@ -368,7 +428,7 @@ fn set_status(status: &str) {
     );
 }
 
-fn set_last_error(err: Option<&str>) {
+pub(crate) fn set_last_error(err: Option<&str>) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let _ = conn.execute(
@@ -377,7 +437,7 @@ fn set_last_error(err: Option<&str>) {
     );
 }
 
-fn row_field(col: &str) -> Option<String> {
+pub(crate) fn row_field(col: &str) -> Option<String> {
     // `col` is always a compile-time constant from this module — never
     // caller input — so the format! is not an injection surface.
     let db = k2_core::db::shared();
@@ -391,7 +451,7 @@ fn row_field(col: &str) -> Option<String> {
     .flatten()
 }
 
-fn set_row_field(col: &str, value: &str) {
+pub(crate) fn set_row_field(col: &str, value: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let _ = conn.execute(
@@ -537,6 +597,11 @@ pub fn stalwart_unit_state() -> String {
 /// JMAP `x:Certificate/set` persists in RocksDB but 443/465 keep the
 /// previous acceptor until this restart. Not `hostmail disable`.
 pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
+    // Never start Stalwart under a running upgrade (it stops Stalwart to
+    // snapshot the store). The upgrade's own start loads the new cert.
+    if upgrade_running().load(Ordering::SeqCst) {
+        return Err(UPGRADE_RUNNING_HINT.to_string());
+    }
     restart_stalwart_and_wait("TLS reload")
 }
 
@@ -1090,7 +1155,7 @@ pub(crate) fn note_enable_progress_hint(key: &str, value: &str) {
 
 /// Emit the standard daemon event on a supervised-state transition
 /// (PRD §4.1: failures raise the standard event → app notification).
-fn emit_state_change(previous: &str, state: &str, detail: Option<&str>) {
+pub(crate) fn emit_state_change(previous: &str, state: &str, detail: Option<&str>) {
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::MailServerStateChanged,
         serde_json::json!({ "state": state, "previous": previous, "detail": detail }),
@@ -1114,6 +1179,31 @@ pub fn try_begin_enable() -> bool {
 
 pub fn end_enable() {
     enable_running().store(false, Ordering::SeqCst);
+}
+
+/// Set while `k2 hostmail upgrade` runs (it ALSO holds the enable latch,
+/// so enable, the health loop, the DAV backfill and the IMAP boot
+/// reconcile stay out). Disable / uninstall / the TLS-reload restart
+/// read this to refuse instead of racing the stop → snapshot window.
+pub fn upgrade_running() -> &'static AtomicBool {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    &RUNNING
+}
+
+/// The refusal every Stalwart-touching mutation gives mid-upgrade.
+pub const UPGRADE_RUNNING_HINT: &str = "a Stalwart upgrade is running (k2 hostmail upgrade) — \
+     wait for it to finish (k2 hostmail status shows its progress), then retry";
+
+/// CAL15: enable never replaces an installed binary of another version.
+/// The refusal names the one verb that does.
+pub fn enable_version_mismatch_message(installed: &str) -> String {
+    format!(
+        "installed Stalwart {installed} does not match this daemon's pin \
+         {STALWART_PINNED_VERSION} — refusing to manage it. Run `k2 hostmail upgrade` \
+         (try `k2 hostmail upgrade --dry-run` first): it stops Stalwart, snapshots the \
+         data, installs {STALWART_PINNED_VERSION}, health-checks, and rolls back on \
+         failure. Enable never replaces an installed version."
+    )
 }
 
 /// The ordered step ids — the contract between the machine and status
@@ -1182,11 +1272,7 @@ pub fn run_enable(
     // a silent re-install over it.
     if let Some(installed) = row_field("installed_version") {
         if installed != STALWART_PINNED_VERSION {
-            return Err(format!(
-                "installed Stalwart {installed} does not match this daemon's pin \
-                 {STALWART_PINNED_VERSION} — refusing to manage it (upgrades are an \
-                 explicit supervisor operation)"
-            ));
+            return Err(enable_version_mismatch_message(&installed));
         }
     }
     // Every install / unit / systemd step is a `sudo -n` of the mail
@@ -2032,13 +2118,14 @@ pub fn uninstall(purge_data: bool) -> Result<(), String> {
     uninstall_with(&RealSystemOps, &FileSecretStore::default(), purge_data)
 }
 
-/// Post-S1 — explicit pinned upgrade: snapshot config + data dir,
-/// swap the verified binary, health-check, auto-rollback on failure
-/// (pre-mortem #8). NEVER called from any auto-update path.
-#[allow(dead_code)] // wired when the first pin bump ships.
-pub fn upgrade(to_version: &str) -> Result<(), String> {
-    let _ = to_version;
-    Err(super::not_built_err("S1", "mail supervisor upgrade"))
+/// Explicit pinned upgrade (CAL7/CAL14/CAL15, pre-mortem #8): preflight,
+/// then stop → snapshot config + data dir → install the verified pin →
+/// start → health check, with snapshot restore + previous-binary reinstall
+/// on failure. The engine lives in [`super::upgrade`]; this is the one
+/// entry the owner route calls. NEVER called from boot, a daemon update,
+/// or enable.
+pub fn upgrade(req: super::upgrade::UpgradeRequest) -> super::upgrade::UpgradeStart {
+    super::upgrade::start_live(req)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -2059,10 +2146,14 @@ mod tests {
         assert_eq!(mail_supported(), cfg!(target_os = "linux"));
     }
 
+    /// CAL13: pin 0.16.20 = the fork's mirror of the upstream tarballs
+    /// (shas verified fork == upstream == upstream sigstore digest,
+    /// 2026-10-06); 0.16.10 kept as the rollback table.
     #[test]
     fn pinned_artifacts_have_real_checksums_and_urls() {
-        assert_eq!(STALWART_PINNED_VERSION, "0.16.10");
-        for art in STALWART_SHA256 {
+        assert_eq!(STALWART_PINNED_VERSION, "0.16.20");
+        assert_eq!(STALWART_PREVIOUS_VERSION, "0.16.10");
+        for art in STALWART_SHA256.iter().chain(STALWART_PREVIOUS_SHA256) {
             assert!(
                 !checksum_is_placeholder(art),
                 "{}: pinned checksum must be real 64-hex",
@@ -2071,12 +2162,62 @@ mod tests {
         }
         let art = artifact_for_arch("x86_64").expect("x86_64 supported");
         assert_eq!(
+            art.sha256,
+            "55184f166f89a0918c6523bb70be300370b63934357731b199dc26a12ca15abf"
+        );
+        assert_eq!(
+            artifact_for_arch("aarch64").expect("aarch64").sha256,
+            "82183ce973665d2b99822b4a1f9911a8ba14788fd73ee93ce9be92352ccdea64"
+        );
+        assert_eq!(
+            previous_artifact_for_arch("x86_64").expect("prev").sha256,
+            "3ec4ab7eff49f61280f2fe2e4f9645ce5308d1840286ef0c0437524f92ac6a33"
+        );
+        assert_eq!(
+            previous_artifact_for_arch("aarch64").expect("prev").sha256,
+            "0c9a80174a8a187477ac0ae4fcca8b7e0f17c84f6cae7b9304d2539459ba44ac"
+        );
+        assert_eq!(
             tarball_url(art.triple),
+            "https://github.com/Alakazam-211/stalwart/releases/download/v0.16.20/stalwart-x86_64-unknown-linux-gnu.tar.gz"
+        );
+        assert_eq!(
+            tarball_url_for(STALWART_PREVIOUS_VERSION, art.triple),
             "https://github.com/Alakazam-211/stalwart/releases/download/v0.16.10/stalwart-x86_64-unknown-linux-gnu.tar.gz"
         );
-        assert!(artifact_for_arch("aarch64").is_ok());
         let err = artifact_for_arch("riscv64").expect_err("unsupported arch");
         assert!(err.contains("riscv64"), "{err}");
+        assert!(previous_artifact_for_arch("riscv64").is_err());
+    }
+
+    /// CAL15: a box left on the previous pin (disabled / stopped / error)
+    /// gets a refusal from enable that names the one verb that upgrades.
+    #[test]
+    fn enable_refuses_the_previous_pin_and_names_hostmail_upgrade() {
+        let _g = db_guard();
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, installed_version, updated_at) \
+                 VALUES (1, 'disabled', ?1, ?1, 100)",
+                rusqlite::params![STALWART_PREVIOUS_VERSION],
+            )
+            .expect("seed row");
+        }
+        let ops = FakeSystemOps::default();
+        let mut api = FakeApi::default();
+        let secrets = FakeSecrets::default();
+        let err = run_enable(&ops, &mut api, &secrets, &fake_artifact(), "mail.acme.dev", "tls-alpn")
+            .expect_err("must refuse");
+        assert!(err.contains(STALWART_PREVIOUS_VERSION), "{err}");
+        assert!(err.contains(STALWART_PINNED_VERSION), "{err}");
+        assert!(err.contains("k2 hostmail upgrade"), "{err}");
+        assert!(err.contains("--dry-run"), "{err}");
+        assert!(ops.recorded().is_empty(), "no effect: {:?}", ops.recorded());
+        assert_eq!(current_status().as_deref(), Some("disabled"), "row untouched");
+        clean_row();
     }
 
     #[test]

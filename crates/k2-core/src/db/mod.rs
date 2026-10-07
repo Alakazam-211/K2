@@ -1047,6 +1047,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0128_hostmail_dav_policy",
             include_str!("../../drizzle_sql/0128_hostmail_dav_policy.sql"),
         ),
+        // 0129 — hosted-mail calendars S1: mail_server.upgrade_progress_json
+        // (explicit Stalwart upgrade progress + outcome). ALTER only; NULL =
+        // never upgraded.
+        (
+            "0129_hostmail_upgrade_progress",
+            include_str!("../../drizzle_sql/0129_hostmail_upgrade_progress.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1707,7 +1714,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0128_hostmail_dav_policy",
+            last_name, "0129_hostmail_upgrade_progress",
             "unexpected last migration name: {last_name}"
         );
     }

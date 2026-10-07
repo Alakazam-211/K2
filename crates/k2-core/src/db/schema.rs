@@ -3745,6 +3745,9 @@ pub struct MailServer {
     /// 0128: hosted-mail DAV policy (`{"calendars","files","appliedAt",
     /// "backfilledAt"}`). NULL = never applied (everything on).
     pub dav_policy_json: Option<String>,
+    /// 0129: explicit Stalwart upgrade progress + outcome (`state`, `from`,
+    /// `to`, `steps`, `snapshotDir`, …). NULL = never upgraded.
+    pub upgrade_progress_json: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

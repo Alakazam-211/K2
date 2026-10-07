@@ -58,6 +58,15 @@ pub trait SystemOps: Send + Sync {
     /// every privileged flow checks it BEFORE its first effect so a box
     /// without the helper stops with the install command, not EACCES.
     fn mail_helper_state(&self) -> helper::HelperState;
+    /// Read-only helper query (`version` | `usage`): its stdout. An older
+    /// helper answers `version` with an error ("refused arguments").
+    fn helper_query(&self, verb: &str) -> Result<String, String>;
+    /// Helper `snapshot-data` (fixed paths, refuses unless Stalwart is
+    /// stopped). Returns the helper's JSON report.
+    fn snapshot_data(&self) -> Result<String, String>;
+    /// Helper `restore-data` (fixed paths, refuses unless Stalwart is
+    /// stopped and a complete snapshot exists).
+    fn restore_data(&self) -> Result<String, String>;
 }
 
 /// Production implementation.
@@ -216,6 +225,25 @@ impl SystemOps for RealSystemOps {
     fn mail_helper_state(&self) -> helper::HelperState {
         helper::probe_state()
     }
+
+    fn helper_query(&self, verb: &str) -> Result<String, String> {
+        match helper::parse_argv(&[verb])? {
+            cmd @ (helper::HelperCommand::Version | helper::HelperCommand::Usage) => {
+                Self::run_mail_helper(&cmd.argv(), None)
+            }
+            _ => Err(format!("mail helper: '{verb}' is not a query verb")),
+        }
+    }
+
+    fn snapshot_data(&self) -> Result<String, String> {
+        let argv = helper_argv(&["snapshot-data"])?;
+        Self::run_mail_helper(&argv, None)
+    }
+
+    fn restore_data(&self) -> Result<String, String> {
+        let argv = helper_argv(&["restore-data"])?;
+        Self::run_mail_helper(&argv, None)
+    }
 }
 
 // ── Test fake ───────────────────────────────────────────────────────────
@@ -244,6 +272,19 @@ pub(crate) mod fake {
         /// `mail_helper_state` answer (default: installed). Not recorded
         /// in `ops` — it is a read, and flows assert effect sequences.
         pub helper_state: helper::HelperState,
+        /// Per-URL `download` bodies (falls back to `download_body`).
+        pub download_bodies: HashMap<String, Vec<u8>>,
+        /// `helper_query` stdout per verb. A missing verb answers like a
+        /// protocol-1 helper: "mail helper: refused arguments".
+        pub helper_answers: HashMap<String, String>,
+        /// Recorded effect lines that FAIL. Each entry fails ONE matching
+        /// call (listed twice = fails twice); the line is still recorded.
+        pub fail_on: Mutex<Vec<String>>,
+        /// `Some` = a stateful unit: `is-active stalwart` answers from it,
+        /// and stop / restart / enable --now / disable --now move it.
+        pub unit_active: Mutex<Option<bool>>,
+        /// Tarball bytes passed to `extract_tar_gz_member`, in order.
+        pub extracted: Mutex<Vec<Vec<u8>>>,
     }
 
     impl Default for FakeSystemOps {
@@ -256,6 +297,11 @@ pub(crate) mod fake {
                 query_answers: HashMap::new(),
                 written: Mutex::new(HashMap::new()),
                 helper_state: helper::HelperState::Installed,
+                download_bodies: HashMap::new(),
+                helper_answers: HashMap::new(),
+                fail_on: Mutex::new(Vec::new()),
+                unit_active: Mutex::new(None),
+                extracted: Mutex::new(Vec::new()),
             }
         }
     }
@@ -270,6 +316,28 @@ pub(crate) mod fake {
         pub fn recorded(&self) -> Vec<String> {
             self.ops.lock().unwrap_or_else(|p| p.into_inner()).clone()
         }
+        /// Record `line`, then fail it if `fail_on` lists it (consumed).
+        pub fn effect(&self, line: String) -> Result<(), String> {
+            self.record(line.clone());
+            let mut fails = self.fail_on.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(i) = fails.iter().position(|l| *l == line) {
+                fails.remove(i);
+                return Err(format!("injected failure: {line}"));
+            }
+            Ok(())
+        }
+        pub fn fail(&self, line: &str) {
+            self.fail_on
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(line.to_string());
+        }
+        pub fn set_unit_active(&self, active: Option<bool>) {
+            *self.unit_active.lock().unwrap_or_else(|p| p.into_inner()) = active;
+        }
+        pub fn unit_is_active(&self) -> Option<bool> {
+            *self.unit_active.lock().unwrap_or_else(|p| p.into_inner())
+        }
     }
 
     impl SystemOps for FakeSystemOps {
@@ -277,14 +345,18 @@ pub(crate) mod fake {
             self.record(format!("download {url}"));
             match &self.download_error {
                 Some(e) => Err(e.clone()),
-                None => Ok(self.download_body.clone()),
+                None => Ok(self
+                    .download_bodies
+                    .get(url)
+                    .cloned()
+                    .unwrap_or_else(|| self.download_body.clone())),
             }
         }
         fn write_file(&self, path: &str, contents: &[u8], mode: u32) -> Result<(), String> {
-            self.record(format!(
+            self.effect(format!(
                 "write {path} ({} bytes, mode {mode:o})",
                 contents.len()
-            ));
+            ))?;
             self.written
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -292,12 +364,10 @@ pub(crate) mod fake {
             Ok(())
         }
         fn create_dir_all(&self, path: &str) -> Result<(), String> {
-            self.record(format!("mkdir {path}"));
-            Ok(())
+            self.effect(format!("mkdir {path}"))
         }
         fn remove_path(&self, path: &str) -> Result<(), String> {
-            self.record(format!("rm {path}"));
-            Ok(())
+            self.effect(format!("rm {path}"))
         }
         fn path_exists(&self, path: &str) -> bool {
             self.existing_paths.iter().any(|p| p == path)
@@ -309,29 +379,43 @@ pub(crate) mod fake {
         }
         fn extract_tar_gz_member(
             &self,
-            _archive: &[u8],
+            archive: &[u8],
             member: &str,
             dest: &str,
             mode: u32,
         ) -> Result<(), String> {
-            self.record(format!("extract {member} -> {dest} (mode {mode:o})"));
-            Ok(())
+            self.extracted
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(archive.to_vec());
+            self.effect(format!("extract {member} -> {dest} (mode {mode:o})"))
         }
         fn ensure_system_user(&self, user: &str) -> Result<(), String> {
-            self.record(format!("useradd {user}"));
-            Ok(())
+            self.effect(format!("useradd {user}"))
         }
         fn chown_recursive(&self, path: &str, user: &str) -> Result<(), String> {
-            self.record(format!("chown {user} {path}"));
-            Ok(())
+            self.effect(format!("chown {user} {path}"))
         }
         fn systemctl(&self, args: &[&str]) -> Result<String, String> {
-            self.record(format!("systemctl {}", args.join(" ")));
+            self.effect(format!("systemctl {}", args.join(" ")))?;
+            let mut unit = self.unit_active.lock().unwrap_or_else(|p| p.into_inner());
+            if unit.is_some() {
+                match args {
+                    ["stop", _] | ["disable", "--now", _] => *unit = Some(false),
+                    ["restart", _] | ["enable", "--now", _] => *unit = Some(true),
+                    _ => {}
+                }
+            }
             Ok(String::new())
         }
         fn systemctl_query(&self, args: &[&str]) -> String {
             let key = args.join(" ");
             self.record(format!("systemctl? {key}"));
+            if key == "is-active stalwart" {
+                if let Some(active) = self.unit_is_active() {
+                    return if active { "active" } else { "inactive" }.to_string();
+                }
+            }
             self.query_answers.get(&key).cloned().unwrap_or_default()
         }
         fn sleep_ms(&self, _ms: u64) {
@@ -339,6 +423,21 @@ pub(crate) mod fake {
         }
         fn mail_helper_state(&self) -> helper::HelperState {
             self.helper_state
+        }
+        fn helper_query(&self, verb: &str) -> Result<String, String> {
+            self.effect(format!("helper {verb}"))?;
+            self.helper_answers
+                .get(verb)
+                .cloned()
+                .ok_or_else(|| "mail helper: refused arguments".to_string())
+        }
+        fn snapshot_data(&self) -> Result<String, String> {
+            self.effect("snapshot-data".into())?;
+            Ok("{}".into())
+        }
+        fn restore_data(&self) -> Result<String, String> {
+            self.effect("restore-data".into())?;
+            Ok("{}".into())
         }
     }
 }

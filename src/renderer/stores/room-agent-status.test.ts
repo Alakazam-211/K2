@@ -4,9 +4,9 @@
 // Frames travel the real path: a workspace socket on the room's server
 // carrying the app bus (no app socket open there), into that server's
 // activity store, never the window's. A tab maps to its row through its
-// `sessionId`. A server without `daemon-activity` shows its
-// `session_activity_changed` stream as-is (RL13). The snapshot route is
-// faked per server.
+// `sessionId`. A server without `daemon-activity` (0.44.x) is fed by the
+// legacy adapter: its observer and hook events over the same socket (RL13).
+// The snapshot and `agents/running` routes are faked per server.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   chimes: [] as Array<string | null>,
   snapshots: [] as Array<{ scopeId: string; body: unknown }>,
   pulls: [] as string[],
+  running: new Map<string, Array<{ terminalId: string; agentName: string; cwd: string }>>(),
 }))
 
 const mem = new Map<string, string>()
@@ -31,6 +32,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: async (scope: { id: string }, route: string) => {
+    if (route === 'agents/running') return h.running.get(scope.id) ?? []
     if (route !== 'activity/snapshot') throw new Error(`unexpected GET ${route}`)
     h.pulls.push(scope.id)
     const i = h.snapshots.findIndex((s) => s.scopeId === scope.id)
@@ -88,12 +90,19 @@ class FakeWebSocket {
 vi.stubGlobal('WebSocket', FakeWebSocket)
 
 import { createStore } from 'zustand/vanilla'
-import { scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
+import { noteServerVersion, scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
 import { openAppBus, subscribeToWorkspaceSessionEvents, type ActivityRow, type UnsubscribeFn } from '@/stores/session-events'
 import { createPinnedRoom, type PinnedRoom, type RoomProjectsStore } from '@/stores/room'
-import { __resetActivityForTests, activityStore, agentHasUnseen, terminalDisplay } from '@/stores/activity'
+import {
+  __resetActivityForTests,
+  activityStore,
+  agentHasUnseen,
+  projectHasUnseen,
+  terminalDisplay,
+  workspaceDisplay,
+} from '@/stores/activity'
 import { roomRowActivity } from '@/lib/home-status'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { TerminalItemData } from '@/stores/tabs'
@@ -118,6 +127,7 @@ beforeEach(() => {
   h.chimes = []
   h.snapshots = []
   h.pulls = []
+  h.running.clear()
   FakeWebSocket.instances = []
   __resetConnectHostStoreForTests()
   __resetServerScopesForTests()
@@ -136,11 +146,17 @@ function emptyProjects(): RoomProjectsStore {
   return createStore<{ projects: ProjectWithWorkspaces[] }>(() => ({ projects: [] })) as RoomProjectsStore
 }
 
-function pinned(): PinnedRoom {
+/** B's project list as the room loaded it (attribution for legacy rows). */
+function annaProjects(): RoomProjectsStore {
+  const projects = [{ id: 'p-anna', path: ROOT }] as unknown as ProjectWithWorkspaces[]
+  return createStore<{ projects: ProjectWithWorkspaces[] }>(() => ({ projects })) as RoomProjectsStore
+}
+
+function pinned(projects: RoomProjectsStore = emptyProjects()): PinnedRoom {
   const room = createPinnedRoom({
     scope: scopeForHost(B),
     workspace: { projectId: 'p-anna', workspaceId: 'w', path: ROOT },
-    projects: emptyProjects(),
+    projects,
     activateProject: () => {},
   })
   cleanups.push(() => room.dispose())
@@ -256,10 +272,18 @@ describe('a pinned room renders its server’s activity rows (T-S5e)', () => {
     expect(terminalDisplay(room.activityView.getState(), data)).toBe('idle')
   })
 
-  it('a server without daemon-activity: its session_activity_changed stream as-is, no snapshot (RL13)', async () => {
-    const room = pinned()
+  it('a 0.44.x server (no daemon-activity): its observer and hook events light the tab, the room row and its project (RL13)', async () => {
+    // What B's /boot-status said: a 0.44.x feature list.
+    noteServerVersion('b.example.com', '0.44.3', ['spawn-attach-only', 'tickets-list-all', 'thread-latest'])
+    const room = pinned(annaProjects())
     const data = tabWithSession(room, 'sid-4')
+    h.running.set(room.scope.id, [{ terminalId: 'sid-4', agentName: `tab-${data.terminalId}`, cwd: ROOT }])
     const ws = await carrier(room)
+    // The socket opened: B's hello re-seeds which agent is which session.
+    send(ws, { kind: 'hello', workspace_path: ROOT, subscriber_id: 1, instance_id: INSTANCE })
+    await vi.waitFor(() => expect(room.activityView.getState().rows.size).toBe(0))
+
+    // B's title/bell observer: the frame a 0.44.4 daemon sends.
     send(ws, {
       kind: 'session_activity_changed',
       workspacePath: ROOT,
@@ -267,10 +291,64 @@ describe('a pinned room renders its server’s activity rows (T-S5e)', () => {
       paneGroupId: data.terminalId,
       status: 'working',
     })
-    const view = room.activityView.getState()
+    let view = room.activityView.getState()
     expect(view.supported).toBe(false)
     expect(terminalDisplay(view, data)).toBe('working')
     expect(roomRowActivity(view, ROOT)).toBe('working')
+    expect(workspaceDisplay(view, { projectId: 'p-anna' })).toBe('working')
+
+    // B's hook bucket, keyed by the session id: a permission wins.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    send(ws, { kind: 'agent_status_changed', paneId: 'sid-4', tabId: 'sid-4', status: 'permission', workspacePath: ROOT })
+    view = room.activityView.getState()
+    expect(terminalDisplay(view, data)).toBe('waiting')
+    expect(roomRowActivity(view, ROOT)).toBe('permission')
+    expect([...view.rows.keys()]).toEqual(['sid-4'])
+
+    send(ws, { kind: 'agent_status_changed', paneId: 'sid-4', tabId: 'sid-4', status: 'start', workspacePath: ROOT })
+    await vi.advanceTimersByTimeAsync(6_000)
+    send(ws, {
+      kind: 'session_activity_changed',
+      workspacePath: ROOT,
+      agentName: `tab-${data.terminalId}`,
+      paneGroupId: data.terminalId,
+      status: 'idle',
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    view = room.activityView.getState()
+    expect(terminalDisplay(view, data)).toBe('idle')
+    expect(agentHasUnseen(view, `tab-${data.terminalId}`, 'sid-4')).toBe(true)
+    expect(projectHasUnseen(view, 'p-anna')).toBe(true)
+    expect(h.chimes).toEqual(['p-anna'])
+    // Never asked B for a snapshot it hasn't got.
     expect(h.pulls).toEqual([])
+    // The window's own server never sees B's rows.
+    expect(activityStore({ id: 'primary' }).getState().rows.size).toBe(0)
+  })
+
+  it('a server that reports daemon-activity: the same legacy frames change nothing (RL13)', async () => {
+    noteServerVersion('b.example.com', '0.45.0', ['spawn-attach-only', 'daemon-activity'])
+    // Known up front: the room pulls B's snapshot as it attaches.
+    h.snapshots.push({
+      scopeId: scopeForHost(B).id,
+      body: { instanceId: INSTANCE, seq: 1, serverNow: Date.now(), staleAfterSecs: 1800, rows: [row('sid-5', 'working')], workspaces: [] },
+    })
+    const room = pinned(annaProjects())
+    const data = tabWithSession(room, 'sid-5')
+    await vi.waitFor(() => expect(activityStore(room.scope).getState().seq).toBe(1))
+    const ws = await carrier(room)
+    send(ws, {
+      kind: 'session_activity_changed',
+      workspacePath: ROOT,
+      agentName: `tab-${data.terminalId}`,
+      paneGroupId: data.terminalId,
+      status: 'idle',
+    })
+    send(ws, { kind: 'agent_status_changed', paneId: 'sid-5', tabId: 'sid-5', status: 'permission', workspacePath: ROOT })
+    const view = room.activityView.getState()
+    expect(view.supported).toBe(true)
+    expect(terminalDisplay(view, data)).toBe('working')
+    expect([...view.rows.keys()]).toEqual(['sid-5'])
+    expect(h.pulls).toEqual([room.scope.id])
   })
 })

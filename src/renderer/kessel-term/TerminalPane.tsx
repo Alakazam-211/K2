@@ -73,6 +73,8 @@ import { scopeMayWrite } from '@/kessel/server-scope'
 import { planRoomSpawn } from '@/lib/room-spawn'
 import { openTerminalUrl } from '@/lib/terminal-link-open'
 import { paneRoomMode } from '@/stores/room'
+import { LEGACY_SCREEN_ROWS } from '@/stores/activity-legacy'
+import { forgetLegacyScreen, isLegacyActivityServer, noteLegacyScreen } from '@/stores/activity'
 import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -1246,6 +1248,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // scans its grid, title or bell for "working". The daemon owns what the
   // agent is doing (hooks, transcript, process, and its own screen-marker
   // scan for harnesses with nothing else); the tab dots read its rows.
+  //
+  // RL13 — except on an older server (no `daemon-activity`), which has no
+  // screen scan of its own: there the pane hands its bottom rows to the
+  // legacy adapter (`stores/activity-legacy.ts`), which looks for a busy
+  // footer. Nothing is read on a server with daemon activity.
+  useEffect(() => {
+    if (!snapshot || !isLegacyActivityServer(room.scope)) return
+    const bottom = snapshot.grid.slice(-LEGACY_SCREEN_ROWS).map(rowToText)
+    noteLegacyScreen(room.scope, attachAgentName ?? `tab-${terminalId}`, bottom, cwd || null)
+  }, [snapshot, room, attachAgentName, terminalId, cwd])
+  useEffect(() => {
+    const agentName = attachAgentName ?? `tab-${terminalId}`
+    return () => forgetLegacyScreen(room.scope, agentName)
+  }, [room, attachAgentName, terminalId])
 
   // ── Lazy-spawn gate (2026-07-03: workspace-switch latency) ────
   //

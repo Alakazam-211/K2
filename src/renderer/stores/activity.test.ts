@@ -13,8 +13,11 @@ import type {
   ActivityRow,
   ActivitySnapshot,
   ActivityWorkspace,
+  AgentStatusChangedEvent,
   HelloEvent,
   SessionActivityChangedEvent,
+  SessionAddedEvent,
+  SessionRemovedEvent,
 } from '@/stores/session-events'
 
 type Handlers = {
@@ -22,8 +25,21 @@ type Handlers = {
   hello: Array<(e: HelloEvent) => void>
   resync: Array<() => void>
   legacy: Array<(e: SessionActivityChangedEvent) => void>
+  agentStatus: Array<(e: AgentStatusChangedEvent) => void>
+  sessionAdded: Array<(e: SessionAddedEvent) => void>
+  sessionRemoved: Array<(e: SessionRemovedEvent) => void>
 }
-const bus: Handlers = { activity: [], hello: [], resync: [], legacy: [] }
+
+/** One app bus per server (scope id), like the real registry. */
+const buses = new Map<string, Handlers>()
+function busOf(scopeId: string): Handlers {
+  let b = buses.get(scopeId)
+  if (!b) {
+    b = { activity: [], hello: [], resync: [], legacy: [], agentStatus: [], sessionAdded: [], sessionRemoved: [] }
+    buses.set(scopeId, b)
+  }
+  return b
+}
 
 function add<T>(list: T[], fn: T): () => void {
   list.push(fn)
@@ -33,24 +49,40 @@ function add<T>(list: T[], fn: T): () => void {
   }
 }
 
+type ScopeArg = { id: string }
 vi.mock('@/stores/session-events', () => ({
-  onActivityChanged: (_s: unknown, fn: (e: ActivityChangedEvent) => void) => add(bus.activity, fn),
-  onAppHello: (_s: unknown, fn: (e: HelloEvent) => void) => add(bus.hello, fn),
-  onAppResync: (_s: unknown, fn: () => void) => add(bus.resync, fn),
-  onSessionActivityChanged: (_s: unknown, fn: (e: SessionActivityChangedEvent) => void) => add(bus.legacy, fn),
+  onActivityChanged: (s: ScopeArg, fn: (e: ActivityChangedEvent) => void) => add(busOf(s.id).activity, fn),
+  onAppHello: (s: ScopeArg, fn: (e: HelloEvent) => void) => add(busOf(s.id).hello, fn),
+  onAppResync: (s: ScopeArg, fn: () => void) => add(busOf(s.id).resync, fn),
+  onSessionActivityChanged: (s: ScopeArg, fn: (e: SessionActivityChangedEvent) => void) => add(busOf(s.id).legacy, fn),
+  onAgentStatusChanged: (s: ScopeArg, fn: (e: AgentStatusChangedEvent) => void) => add(busOf(s.id).agentStatus, fn),
+  onSessionAddedApp: (s: ScopeArg, fn: (e: SessionAddedEvent) => void) => add(busOf(s.id).sessionAdded, fn),
+  onSessionRemovedApp: (s: ScopeArg, fn: (e: SessionRemovedEvent) => void) => add(busOf(s.id).sessionRemoved, fn),
 }))
 
-/** Snapshot replies, in order; a pull with none queued fails the test. */
-const snapshots: ActivitySnapshot[] = []
-const daemonCliGet = vi.fn(async (_scope: unknown, route: string): Promise<ActivitySnapshot> => {
+/** Snapshot replies per server, in order; a pull with none queued fails the
+ *  pull (and the test, through the `afterEach` / assertions). */
+const snapshotQueues = new Map<string, ActivitySnapshot[]>()
+function snapshotsOf(scopeId: string): ActivitySnapshot[] {
+  let q = snapshotQueues.get(scopeId)
+  if (!q) {
+    q = []
+    snapshotQueues.set(scopeId, q)
+  }
+  return q
+}
+/** `GET /cli/agents/running` per server (an older server's agent ↔ session ids). */
+const running = new Map<string, Array<{ terminalId: string; agentName: string; cwd: string }>>()
+const daemonCliGet = vi.fn(async (scope: ScopeArg, route: string): Promise<unknown> => {
+  if (route === 'agents/running') return running.get(scope.id) ?? []
   if (route !== 'activity/snapshot') throw new Error(`unexpected GET ${route}`)
-  const next = snapshots.shift()
+  const next = snapshotsOf(scope.id).shift()
   if (!next) throw new Error('a snapshot was pulled but the test queued none')
   return next
 })
 const daemonCliPost = vi.fn(async () => ({}))
 vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: (scope: unknown, route: string) => daemonCliGet(scope, route),
+  daemonCliGet: (scope: ScopeArg, route: string) => daemonCliGet(scope, route),
   daemonCliPost: () => daemonCliPost(),
 }))
 vi.mock('@/lib/completion-sound', () => ({ playCompletionSound: vi.fn() }))
@@ -65,6 +97,9 @@ import {
   agentHasUnseen,
   attachActivity,
   displayUnderRoot,
+  forgetLegacyScreen,
+  isLegacyActivityServer,
+  noteLegacyScreen,
   projectHasUnseen,
   registerActivityNotify,
   resetActivity,
@@ -75,10 +110,13 @@ import {
   workspaceDisplay,
   type ActivityToaster,
 } from './activity'
+import { LEGACY_SCREEN_GRACE_MS } from './activity-legacy'
 import type { ServerScope } from '@/kessel/server-scope'
 
 let supports = true
 const SCOPE = { id: 'host:test', serverSupports: () => supports } as unknown as ServerScope
+const bus = busOf(SCOPE.id)
+const snapshots = snapshotsOf(SCOPE.id)
 const INSTANCE = 'inst-1'
 
 function row(sessionId: string, display: ActivityDisplay, over: Partial<ActivityRow> = {}): ActivityRow {
@@ -161,14 +199,21 @@ beforeEach(() => {
   daemonCliGet.mockClear()
   daemonCliPost.mockClear()
   vi.mocked(playCompletionSound).mockClear()
-  snapshots.length = 0
+  for (const q of snapshotQueues.values()) q.length = 0
+  running.clear()
   supports = true
 })
 
 afterEach(() => {
   __resetActivityForTests()
   vi.useRealTimers()
-  if (snapshots.length !== 0) throw new Error(`${snapshots.length} queued snapshot(s) were never pulled`)
+  for (const [id, q] of snapshotQueues) {
+    if (q.length !== 0) throw new Error(`${q.length} queued snapshot(s) for ${id} were never pulled`)
+  }
+  for (const [id, b] of buses) {
+    const left = Object.entries(b).filter(([, list]) => list.length > 0)
+    if (left.length > 0) throw new Error(`${id}: handlers left after reset: ${left.map(([k]) => k).join(', ')}`)
+  }
 })
 
 describe('the feed (T-S5a, RL4)', () => {
@@ -286,47 +331,317 @@ describe('the feed (T-S5a, RL4)', () => {
   })
 })
 
-describe('an older server (Q5, RL13, T-S5e)', () => {
-  it('shows its session_activity_changed stream as-is, with no snapshot pull', () => {
-    supports = false
-    attachActivity(SCOPE)
-    hello()
-    expect(daemonCliGet).not.toHaveBeenCalled()
-    for (const fn of bus.legacy) {
-      fn({ kind: 'session_activity_changed', workspacePath: '/srv/old', agentName: 'tab-t1', paneGroupId: 't1', status: 'permission' })
-    }
-    expect(state().supported).toBe(false)
-    const r = rowForAgentName(state(), 'tab-t1')
-    if (!r) throw new Error('no legacy row')
-    expect(r.display).toBe('waiting')
-    expect(terminalDisplay(state(), { terminalId: 't1' })).toBe('waiting')
-    expect(workspaceDisplay(state(), { path: '/srv/old' })).toBe('waiting')
-    expect(displayUnderRoot(state(), '/srv')).toBe('waiting')
+// ── An older server: the legacy adapter (Q5, RL13, T-S5e) ─────────────────
+//
+// The frame shapes below are what a 0.44.4 daemon (`v0.44.4`, built and run
+// headless on a temp HOME with a shim agent) sent a client's app socket for
+// one shim turn: `session_added`, then `session_activity_changed` working →
+// idle from its title/bell observer; `GET /cli/activity/snapshot` → 404;
+// `GET /cli/agents/running` → `[{terminalId, agentName, cwd, …}]`. Paths are
+// synthesized.
+
+const OLD = { id: 'host:old', serverSupports: () => false } as unknown as ServerScope
+const OLD_PROJECTS = [
+  { id: 'p-old', path: '/srv/old' },
+  { id: 'p-nested', path: '/srv/old/nested' },
+]
+
+function oldState() {
+  return activityStore(OLD).getState()
+}
+
+function observerOn(scope: ServerScope, agentName: string, status: SessionActivityChangedEvent['status'], workspacePath = '/srv/old'): void {
+  const b = busOf(scope.id)
+  if (b.legacy.length !== 1) throw new Error(`expected one observer handler on ${scope.id}, got ${b.legacy.length}`)
+  b.legacy[0]({
+    kind: 'session_activity_changed',
+    workspacePath,
+    agentName,
+    paneGroupId: agentName.startsWith('tab-') ? agentName.slice(4) : null,
+    status,
+  })
+}
+
+function hookOn(scope: ServerScope, paneId: string, status: AgentStatusChangedEvent['status'], workspacePath = '/srv/old'): void {
+  const b = busOf(scope.id)
+  if (b.agentStatus.length !== 1) throw new Error(`expected one hook handler on ${scope.id}, got ${b.agentStatus.length}`)
+  b.agentStatus[0]({ kind: 'agent_status_changed', paneId, tabId: paneId, status, workspacePath })
+}
+
+function sessionAddedOn(scope: ServerScope, agentName: string, sessionId: string, workspacePath = '/srv/old'): void {
+  const b = busOf(scope.id)
+  if (b.sessionAdded.length !== 1) throw new Error(`expected one session_added handler on ${scope.id}`)
+  b.sessionAdded[0]({
+    kind: 'session_added',
+    workspace_path: workspacePath,
+    pane_group_id: agentName.startsWith('tab-') ? agentName.slice(4) : null,
+    agent_name: agentName,
+    command: 'claude',
+    args: [],
+    session_id: sessionId,
+    isV2: true,
+  })
+}
+
+function helloOn(scope: ServerScope, instanceId: string): void {
+  for (const fn of busOf(scope.id).hello) fn({ kind: 'hello', workspace_path: '', subscriber_id: 1, instance_id: instanceId })
+}
+
+function getRoutes(): string[] {
+  return daemonCliGet.mock.calls.map((c) => `${c[0].id} ${c[1]}`)
+}
+
+async function attachOld(toaster: ActivityToaster | null = null): Promise<void> {
+  attachActivity(OLD)
+  registerActivityNotify(OLD, { toaster, projects: () => OLD_PROJECTS, root: null })
+  await settle()
+}
+
+describe('an older server: legacy events drive the dots (Q5, RL13, T-S5e)', () => {
+  it('the observer stream lights a tab, the Sidebar, the Active bar, Home and a room, with no snapshot pull', async () => {
+    running.set(OLD.id, [{ terminalId: 'sid-1', agentName: 'tab-t1', cwd: '/srv/old' }])
+    await attachOld()
+    expect(isLegacyActivityServer(OLD)).toBe(true)
+    // Seeded agent ↔ session ids; never asked for a snapshot it hasn't got.
+    expect(getRoutes()).toEqual(['host:old agents/running'])
+
+    sessionAddedOn(OLD, 'p-old', 'sid-chat')
+    observerOn(OLD, 'tab-t1', 'working')
+    expect(oldState().supported).toBe(false)
+    // A tab: before reconcile by its agent name, after by its session id.
+    expect(terminalDisplay(oldState(), { terminalId: 't1' })).toBe('working')
+    expect(terminalDisplay(oldState(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('working')
+    // The Sidebar's spinner reads by project id alone (Sidebar.tsx AgentSpinner).
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old' })).toBe('working')
+    // The Active bar reads by id, then path.
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old', path: '/srv/old' })).toBe('working')
+    // Home's open-room row and the room's tab strip read the same rows.
+    expect(displayUnderRoot(oldState(), '/srv/old')).toBe('working')
+    expect(mustOldRow('sid-1').projectId).toBe('p-old')
+
+    // The pinned Chat (agent name = project id) on the TabBar.
+    observerOn(OLD, 'p-old', 'permission')
+    expect(rowForAgentName(oldState(), 'p-old')?.display).toBe('waiting')
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old' })).toBe('waiting')
+
+    // A session in a nested workspace belongs to the deepest project.
+    observerOn(OLD, 'tab-n1', 'working', '/srv/old/nested/app')
+    expect(rowForAgentName(oldState(), 'tab-n1')?.projectId).toBe('p-nested')
+    expect(workspaceDisplay(oldState(), { projectId: 'p-nested' })).toBe('working')
+
+    observerOn(OLD, 'tab-t1', 'idle')
+    observerOn(OLD, 'p-old', 'idle')
+    observerOn(OLD, 'tab-n1', 'idle')
+    expect(terminalDisplay(oldState(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('idle')
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old' })).toBe('idle')
+    expect(displayUnderRoot(oldState(), '/srv/old')).toBe('idle')
+    expect(getRoutes()).toEqual(['host:old agents/running'])
   })
 
-  it('a server with daemon activity ignores the compat stream', async () => {
-    snapshots.push(snap(1, []))
+  it('hooks: a permission wins, a start alone lights its session, and one session is one row', async () => {
+    running.set(OLD.id, [{ terminalId: 'sid-1', agentName: 'tab-t1', cwd: '/srv/old' }])
+    await attachOld()
+
+    hookOn(OLD, 'sid-1', 'start')
+    expect([...oldState().rows.keys()]).toEqual(['sid-1'])
+    expect(terminalDisplay(oldState(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('working')
+    // Once the observer has spoken for the session it decides working/idle.
+    observerOn(OLD, 'tab-t1', 'idle')
+    expect([...oldState().rows.keys()]).toEqual(['sid-1'])
+    expect(terminalDisplay(oldState(), { terminalId: 't1' })).toBe('idle')
+    // …but a hook permission wins over it (claude's "needs you").
+    observerOn(OLD, 'tab-t1', 'working')
+    hookOn(OLD, 'sid-1', 'permission')
+    expect(terminalDisplay(oldState(), { terminalId: 't1' })).toBe('waiting')
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old' })).toBe('waiting')
+    hookOn(OLD, 'sid-1', 'start')
+    expect(terminalDisplay(oldState(), { terminalId: 't1' })).toBe('working')
+
+    // A hook for a session this client hasn't matched to an agent name: its
+    // own row, found by the tab's session id.
+    hookOn(OLD, 'sid-9', 'start')
+    expect(terminalDisplay(oldState(), { terminalId: 't9', sessionId: 'sid-9' })).toBe('working')
+    // `session_added` matches it; the observer then decides for it.
+    sessionAddedOn(OLD, 'tab-t9', 'sid-9')
+    observerOn(OLD, 'tab-t9', 'idle')
+    expect(terminalDisplay(oldState(), { terminalId: 't9' })).toBe('idle')
+    expect([...oldState().rows.keys()].sort()).toEqual(['sid-1', 'sid-9'])
+    // `session_removed` forgets it.
+    for (const fn of busOf(OLD.id).sessionRemoved) {
+      fn({ kind: 'session_removed', workspace_path: '/srv/old', pane_group_id: 't9', agent_name: 'tab-t9' })
+    }
+    expect([...oldState().rows.keys()]).toEqual(['sid-1'])
+  })
+
+  it("a pane's busy footer lights a harness with no title and no hook, and decays", async () => {
+    vi.useFakeTimers()
+    attachActivity(OLD)
+    registerActivityNotify(OLD, { toaster: null, projects: () => OLD_PROJECTS, root: null })
+    await vi.advanceTimersByTimeAsync(0)
+
+    noteLegacyScreen(OLD, 'tab-h1', ['', 'Hermes ▸ msg=interrupt · /queue · /bg'], '/srv/old')
+    expect(terminalDisplay(oldState(), { terminalId: 'h1' })).toBe('working')
+    expect(workspaceDisplay(oldState(), { projectId: 'p-old' })).toBe('working')
+    // Each frame that still shows it renews it.
+    await vi.advanceTimersByTimeAsync(LEGACY_SCREEN_GRACE_MS - 100)
+    noteLegacyScreen(OLD, 'tab-h1', ['msg=interrupt'], '/srv/old')
+    await vi.advanceTimersByTimeAsync(LEGACY_SCREEN_GRACE_MS - 100)
+    expect(terminalDisplay(oldState(), { terminalId: 'h1' })).toBe('working')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(terminalDisplay(oldState(), { terminalId: 'h1' })).toBe('idle')
+
+    // A screen with no footer lights nothing.
+    noteLegacyScreen(OLD, 'tab-h2', ['$ ls', 'README.md'], '/srv/old')
+    expect(terminalDisplay(oldState(), { terminalId: 'h2' })).toBe('idle')
+    // An unmounted pane stops counting at once.
+    noteLegacyScreen(OLD, 'tab-h3', ['esc to cancel'], '/srv/old')
+    expect(terminalDisplay(oldState(), { terminalId: 'h3' })).toBe('working')
+    forgetLegacyScreen(OLD, 'tab-h3')
+    expect(terminalDisplay(oldState(), { terminalId: 'h3' })).toBe('idle')
+    // Once the observer has spoken for a session, the footer doesn't override it.
+    observerOn(OLD, 'tab-h1', 'idle')
+    noteLegacyScreen(OLD, 'tab-h1', ['esc to interrupt'], '/srv/old')
+    expect(terminalDisplay(oldState(), { terminalId: 'h1' })).toBe('idle')
+  })
+
+  it('a busy → idle change is a finished turn: toast, unseen done on its project, chime', async () => {
+    vi.useFakeTimers()
+    const toaster: ActivityToaster = { needsYou: vi.fn(), finished: vi.fn() }
+    running.set(OLD.id, [{ terminalId: 'sid-1', agentName: 'tab-t1', cwd: '/srv/old' }])
+    attachActivity(OLD)
+    registerActivityNotify(OLD, { toaster, projects: () => OLD_PROJECTS, root: null })
+    await vi.advanceTimersByTimeAsync(0)
+    observerOn(OLD, 'tab-t1', 'working')
+    await vi.advanceTimersByTimeAsync(SPAWN_GRACE_MS)
+    observerOn(OLD, 'tab-t1', 'idle')
+    await vi.advanceTimersByTimeAsync(CHIME_DEBOUNCE_MS)
+    expect(toaster.finished).toHaveBeenCalledTimes(1)
+    expect(projectHasUnseen(oldState(), 'p-old')).toBe(true)
+    expect(agentHasUnseen(oldState(), 'tab-t1', 'sid-1')).toBe(true)
+    expect(playCompletionSound).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(playCompletionSound).mock.calls[0][0]).toBe('p-old')
+    // Needs you, from a hook permission.
+    hookOn(OLD, 'sid-1', 'permission')
+    await vi.advanceTimersByTimeAsync(NOTIFY_DEBOUNCE_MS)
+    expect(toaster.needsYou).toHaveBeenCalledTimes(1)
+  })
+
+  it('a server switch reset drops the legacy view; the next events light it again', async () => {
+    await attachOld()
+    observerOn(OLD, 'tab-t1', 'working')
+    resetActivity(OLD)
+    expect(oldState().rows.size).toBe(0)
+    observerOn(OLD, 'tab-t2', 'working')
+    expect([...oldState().rows.keys()]).toEqual(['legacy:tab-t2'])
+  })
+
+  it('features read as absent: a hello re-seeds agent ids and never pulls a snapshot', async () => {
+    await attachOld()
+    helloOn(OLD, 'inst-old')
+    await settle()
+    expect(getRoutes()).toEqual(['host:old agents/running', 'host:old agents/running'])
+  })
+})
+
+describe('a server with daemon activity ignores every legacy event (RL13)', () => {
+  it('daemon rows drive the dots; observer, hook, session and footer events change nothing', async () => {
+    snapshots.push(snap(1, [row('s1', 'working', { agentName: 'tab-t1' })]))
     attachActivity(SCOPE)
     await settle()
-    for (const fn of bus.legacy) {
-      fn({ kind: 'session_activity_changed', workspacePath: '/srv/ws', agentName: 'tab-x', paneGroupId: null, status: 'working' })
-    }
-    expect(state().rows.size).toBe(0)
+    expect(isLegacyActivityServer(SCOPE)).toBe(false)
+    observerOn(SCOPE, 'tab-t1', 'idle', '/srv/ws')
+    observerOn(SCOPE, 'tab-x', 'working', '/srv/ws')
+    hookOn(SCOPE, 's1', 'permission', '/srv/ws')
+    hookOn(SCOPE, 's2', 'start', '/srv/ws')
+    sessionAddedOn(SCOPE, 'tab-y', 's3', '/srv/ws')
+    noteLegacyScreen(SCOPE, 'tab-t1', ['esc to interrupt'], '/srv/ws')
+    expect([...state().rows.keys()]).toEqual(['s1'])
+    expect(terminalDisplay(state(), { terminalId: 't1', sessionId: 's1' })).toBe('working')
+    expect(workspaceDisplay(state(), { projectId: 'p1' })).toBe('working')
+    emit(frame(2, row('s1', 'idle', { agentName: 'tab-t1' })))
+    expect(terminalDisplay(state(), { terminalId: 't1', sessionId: 's1' })).toBe('idle')
+    expect(getRoutes()).toEqual(['host:test activity/snapshot'])
+  })
+})
+
+describe('a window on a new server and a room on an old one (RL13, per server)', () => {
+  it('each server is fed its own way, and neither leaks into the other', async () => {
+    snapshots.push(snap(1, [row('s1', 'idle', { agentName: 'tab-new' })]))
+    attachActivity(SCOPE)
+    registerActivityNotify(SCOPE, { toaster: null, projects: () => [{ id: 'p1', path: '/srv/ws' }], root: null })
+    running.set(OLD.id, [{ terminalId: 'sid-old', agentName: 'tab-old', cwd: '/srv/old' }])
+    attachActivity(OLD)
+    registerActivityNotify(OLD, { toaster: null, projects: () => OLD_PROJECTS, root: '/srv/old' })
+    await settle()
+    expect(getRoutes().sort()).toEqual(['host:old agents/running', 'host:test activity/snapshot'])
+
+    // The room's old server: its observer lights its rows only.
+    observerOn(OLD, 'tab-old', 'working')
+    expect(terminalDisplay(oldState(), { terminalId: 'old', sessionId: 'sid-old' })).toBe('working')
+    expect(displayUnderRoot(oldState(), '/srv/old')).toBe('working')
+    expect(terminalDisplay(state(), { terminalId: 'old', sessionId: 'sid-old' })).toBe('idle')
+    // The window's new server: its compat stream is ignored, its frames rule.
+    observerOn(SCOPE, 'tab-new', 'working', '/srv/ws')
+    expect(terminalDisplay(state(), { terminalId: 'new', sessionId: 's1' })).toBe('idle')
+    emit(frame(2, row('s1', 'working', { agentName: 'tab-new' })))
+    expect(terminalDisplay(state(), { terminalId: 'new', sessionId: 's1' })).toBe('working')
+    expect(workspaceDisplay(state(), { projectId: 'p1' })).toBe('working')
+    // …and the old server's view is untouched by the new one's frame.
+    expect([...oldState().rows.keys()]).toEqual(['sid-old'])
+    expect(oldState().supported).toBe(false)
+    expect(state().supported).toBe(true)
+  })
+})
+
+describe("before a server's features are read (RL13)", () => {
+  it('its compat stream keeps the dots lit; once it reports daemon-activity, the next hello pulls and daemon rows take over', async () => {
+    let known = false
+    const LATE = { id: 'host:late', serverSupports: (f: string) => known && f === 'daemon-activity' } as unknown as ServerScope
+    const late = () => activityStore(LATE).getState()
+    running.set(LATE.id, [{ terminalId: 'sid-1', agentName: 'tab-t1', cwd: '/srv/late' }])
+    attachActivity(LATE)
+    await settle()
+    expect(getRoutes()).toEqual(['host:late agents/running'])
+    // Not empty meanwhile: a new server's compat stream is shown.
+    observerOn(LATE, 'tab-t1', 'working', '/srv/late')
+    expect(terminalDisplay(late(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('working')
+
+    // Its /boot-status is read: it has daemon activity. The next hello
+    // (or frame) pulls, and the snapshot replaces the legacy view.
+    known = true
+    expect(isLegacyActivityServer(LATE)).toBe(false)
+    snapshotsOf(LATE.id).push(snap(4, [row('sid-1', 'monitoring', { agentName: 'tab-t1', workspacePath: '/srv/late' })]))
+    helloOn(LATE, INSTANCE)
+    await settle()
+    expect(late().supported).toBe(true)
+    expect([...late().rows.keys()]).toEqual(['sid-1'])
+    expect(terminalDisplay(late(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('monitoring')
+    // From now on its compat stream is ignored.
+    observerOn(LATE, 'tab-t1', 'idle', '/srv/late')
+    expect(terminalDisplay(late(), { terminalId: 't1', sessionId: 'sid-1' })).toBe('monitoring')
   })
 
-  it('the first activity_changed from a server thought old switches to daemon rows', async () => {
+  it('the first activity_changed frame proves daemon rows even before its features are read', async () => {
     supports = false
     attachActivity(SCOPE)
-    for (const fn of bus.legacy) {
-      fn({ kind: 'session_activity_changed', workspacePath: '/srv/ws', agentName: 'tab-x', paneGroupId: null, status: 'working' })
-    }
+    await settle()
+    observerOn(SCOPE, 'tab-x', 'working', '/srv/ws')
+    expect([...state().rows.keys()]).toEqual(['legacy:tab-x'])
     snapshots.push(snap(4, [row('s1', 'idle')]))
     emit(frame(4, row('s1', 'idle')))
     await settle()
     expect(state().supported).toBe(true)
     expect([...state().rows.keys()]).toEqual(['s1'])
+    observerOn(SCOPE, 'tab-x', 'working', '/srv/ws')
+    expect([...state().rows.keys()]).toEqual(['s1'])
   })
 })
+
+function mustOldRow(sid: string): ActivityRow {
+  const r = oldState().rows.get(sid)
+  if (!r) throw new Error(`no row ${sid} on the old server`)
+  return r
+}
 
 describe('surface mappings (T-S5c, RL10)', () => {
   it('a tab maps to its row by sessionId, then by its agent name', async () => {

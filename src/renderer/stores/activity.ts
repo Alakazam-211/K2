@@ -17,8 +17,11 @@
 //     `seq` gap. Frames apply in `seq` order; an older `seq` is dropped.
 //     Frames that arrive while a pull is in flight wait for it.
 //   - An older server without the `daemon-activity` reported feature (RL13,
-//     Q5): its `session_activity_changed` stream is shown as it is, one row
-//     per agent name. No merging, no scanning.
+//     Q5) has no rows to give. Its dots come from the legacy adapter
+//     (`stores/activity-legacy.ts`): its observer and hook events, plus a
+//     mounted pane's busy footer, made into rows in this same view. Decided
+//     per server: the server's own `/boot-status` features, until the
+//     first `activity_changed` frame or snapshot proves it has daemon rows.
 //   - "Done, unseen" (`unseenDone`) is per-client view state (RL11): set when
 //     a turn the daemon ended (`turnEnded`) settles while this client isn't
 //     looking at the session, cleared when it looks or the row works again.
@@ -36,16 +39,30 @@ import { asArray } from '@/lib/as-array'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   onActivityChanged,
+  onAgentStatusChanged,
   onAppHello,
   onAppResync,
   onSessionActivityChanged,
+  onSessionAddedApp,
+  onSessionRemovedApp,
   type ActivityChangedEvent,
   type ActivityDisplay,
   type ActivityRow,
   type ActivitySnapshot,
   type ActivityWorkspace,
+  type AgentStatusChangedEvent,
   type SessionActivityChangedEvent,
 } from '@/stores/session-events'
+import {
+  LEGACY_SCREEN_GRACE_MS,
+  LEGACY_SCREEN_ROWS,
+  emptyLegacyFeed,
+  legacyRollups,
+  legacyRows,
+  legacyScreenShowsBusy,
+  type LegacyFeed,
+  type LegacyProject,
+} from '@/stores/activity-legacy'
 
 export type { ActivityDisplay, ActivityRow, ActivityWorkspace } from '@/stores/session-events'
 
@@ -61,7 +78,7 @@ export interface UnseenDone {
 export interface ScopeActivity {
   /** The server speaks `activity_changed` (RL8): its rows are daemon rows.
    *  False until the first snapshot or frame; an older server stays false
-   *  and shows its `session_activity_changed` stream (RL13). */
+   *  and its rows come from the legacy adapter (RL13). */
   supported: boolean
   instanceId: string | null
   /** The last `seq` applied. */
@@ -267,8 +284,9 @@ export interface ActivityToaster {
  *  root (only its rows chime) and its server's project list (MS21). */
 export interface ActivityNotifyHost {
   toaster: ActivityToaster | null
-  /** The project list the chime's per-workspace mute reads. */
-  projects(): readonly ChimeProject[]
+  /** The project list the chime's per-workspace mute reads (and, on an
+   *  older server, what its legacy rows are attributed to by path). */
+  projects(): readonly (ChimeProject & { path?: string })[]
   /** Only rows under this path notify; null = every row on the server. */
   root: string | null
 }
@@ -476,10 +494,20 @@ interface Engine {
   pulling: Promise<void> | null
   /** Frames that wait for the in-flight pull, applied after it in order. */
   buffer: ActivityChangedEvent[]
+  /** RL13 — what an older server told this client (`stores/activity-legacy`). */
+  legacy: LegacyFeed
+  /** agent name → when its pane's busy footer stops counting. */
+  screenTimers: Map<string, ReturnType<typeof setTimeout>>
 }
 
 const _engines = new Map<string, Engine>()
 
+/** Does this server have daemon rows? Proven by a snapshot or frame, else
+ *  what its `/boot-status` features say. A server that does not say so —
+ *  or whose features this client hasn't read yet — is fed by the legacy
+ *  adapter until the first frame proves otherwise: its compat
+ *  `session_activity_changed` keeps a new server's dots lit meanwhile, so
+ *  nothing flashes empty either way. */
 function serverHasDaemonActivity(engine: Engine): boolean {
   return storeFor(engine.scope.id).getState().supported || engine.scope.serverSupports('daemon-activity')
 }
@@ -490,8 +518,17 @@ function rollupMap(list: readonly ActivityWorkspace[]): Map<string, ActivityWork
   return out
 }
 
+/** Drop everything the legacy adapter held (the server has daemon rows, or
+ *  this scope now points at another server). */
+function clearLegacy(engine: Engine): void {
+  for (const t of engine.screenTimers.values()) clearTimeout(t)
+  engine.screenTimers.clear()
+  engine.legacy = emptyLegacyFeed()
+}
+
 function applySnapshot(engine: Engine, snap: ActivitySnapshot): void {
   const scopeId = engine.scope.id
+  clearLegacy(engine)
   const rows = new Map<string, ActivityRow>()
   for (const row of asArray<ActivityRow>(snap.rows)) rows.set(row.sessionId, row)
   const n = notifierFor(scopeId)
@@ -536,8 +573,9 @@ function applyFrame(engine: Engine, e: ActivityChangedEvent): void {
 function onFrame(engine: Engine, e: ActivityChangedEvent): void {
   const store = storeFor(engine.scope.id)
   if (!store.getState().supported) {
-    // The server speaks activity_changed: drop an older-server view, if
-    // any, and take the daemon's rows from the next snapshot.
+    // The server speaks activity_changed: drop the legacy view, if any,
+    // and take the daemon's rows from the next snapshot.
+    clearLegacy(engine)
     store.setState({ supported: true, rows: new Map(), workspaces: new Map() })
   }
   if (engine.pulling) {
@@ -586,65 +624,139 @@ function pullSnapshot(engine: Engine): Promise<void> {
   return engine.pulling
 }
 
-/** RL13: an older server's `session_activity_changed`, shown as it is. */
-function onLegacy(engine: Engine, e: SessionActivityChangedEvent): void {
-  if (serverHasDaemonActivity(engine)) return
+// ── An older server (RL13, Q5): the legacy adapter ───────────────────────
+
+/** Is `engine` fed by the legacy adapter right now? */
+function legacyLive(engine: Engine): boolean {
+  return !serverHasDaemonActivity(engine)
+}
+
+/** The server's projects this client knows, for attributing legacy rows
+ *  (the window's list for the primary scope, each room's for its own). */
+function legacyProjects(scopeId: string): LegacyProject[] {
+  const n = _notifiers.get(scopeId)
+  if (!n) return []
+  const out: LegacyProject[] = []
+  for (const h of n.hosts) for (const p of h.projects()) out.push({ id: p.id, path: p.path })
+  return out
+}
+
+/** Rebuild the view from the legacy feed and report each change to the
+ *  notifier the way a frame would. 0.44.x has no turn-end record, so a
+ *  busy → settled change stands in for one. */
+function recomputeLegacy(engine: Engine): void {
   const scopeId = engine.scope.id
   const store = storeFor(scopeId)
   const st = store.getState()
-  const sid = `legacy:${e.agentName}`
-  const display: ActivityDisplay = e.status === 'permission' ? 'waiting' : e.status
-  const prev = st.rows.get(sid) ?? null
-  if (prev?.display === display) return
   const now = Date.now()
-  const row: ActivityRow = {
-    sessionId: sid,
-    agentName: e.agentName,
-    projectId: null,
-    workspacePath: e.workspacePath || null,
-    harness: 'unknown',
-    display,
-    lead: {
-      state: display === 'idle' ? 'idle' : display === 'waiting' ? 'waiting' : 'working',
-      outcome: 'none',
-      since: now,
-      promptId: null,
-    },
-    children: { subagents: 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
-    turnStartedAt: display === 'working' ? (prev?.turnStartedAt ?? now) : null,
-    evidenceAt: now,
-    evidenceSource: 'title',
-    reason: '',
-    staleSince: null,
-    confirmed: true,
-    rev: (prev?.rev ?? 0) + 1,
+  const rows = legacyRows(engine.legacy, st.rows, legacyProjects(scopeId), now)
+  store.setState({ rows, workspaces: legacyRollups(rows, workspaceKey, highestDisplay) })
+  for (const [sid, prev] of st.rows) {
+    if (!rows.has(sid)) notifyChange(scopeId, prev, null, sid, null)
   }
-  const rows = new Map(st.rows)
-  rows.set(sid, row)
-  // The rollup of an older server's stream: the highest display per path.
-  const byPath = new Map<string, ActivityDisplay[]>()
-  for (const r of rows.values()) {
-    const path = r.workspacePath ?? ''
-    byPath.set(path, [...(byPath.get(path) ?? []), r.display])
+  for (const [sid, next] of rows) {
+    const prev = st.rows.get(sid) ?? null
+    if (prev?.display === next.display) continue
+    const turnEnded =
+      prev && isBusyDisplay(prev.display) && !isBusyDisplay(next.display)
+        ? { outcome: 'success' as const, reason: 'turn_done', at: now }
+        : null
+    notifyChange(scopeId, prev, next, null, turnEnded)
   }
-  const workspaces = new Map<string, ActivityWorkspace>()
-  for (const [path, list] of byPath) {
-    const counts = { working: 0, monitoring: 0, waiting: 0, idle: 0, unverifiable: 0 }
-    for (const d of list) counts[d] += 1
-    workspaces.set(workspaceKey(null, path), {
-      projectId: null,
-      workspacePath: path,
-      display: highestDisplay(list),
-      counts,
-      since: null,
-    })
+}
+
+function onLegacyObserver(engine: Engine, e: SessionActivityChangedEvent): void {
+  if (!legacyLive(engine) || !e.agentName) return
+  engine.legacy.observer.set(e.agentName, { status: e.status, workspacePath: e.workspacePath || null })
+  recomputeLegacy(engine)
+}
+
+function onLegacyHook(engine: Engine, e: AgentStatusChangedEvent): void {
+  if (!legacyLive(engine) || !e.paneId) return
+  engine.legacy.hooks.set(e.paneId, { status: e.status, workspacePath: e.workspacePath || null })
+  recomputeLegacy(engine)
+}
+
+function learnLegacySession(engine: Engine, agentName: string, sessionId: string, cwd: string): void {
+  if (!agentName || !sessionId) return
+  engine.legacy.sessionOf.set(agentName, sessionId)
+  if (cwd) engine.legacy.cwdOf.set(agentName, cwd)
+}
+
+function forgetLegacySession(engine: Engine, agentName: string): void {
+  const sid = engine.legacy.sessionOf.get(agentName)
+  if (sid) engine.legacy.hooks.delete(sid)
+  engine.legacy.sessionOf.delete(agentName)
+  engine.legacy.cwdOf.delete(agentName)
+  engine.legacy.observer.delete(agentName)
+  engine.legacy.screen.delete(agentName)
+  const t = engine.screenTimers.get(agentName)
+  if (t !== undefined) clearTimeout(t)
+  engine.screenTimers.delete(agentName)
+}
+
+/** Which v2 session each agent name is (`GET /cli/agents/running`), so a
+ *  hook keyed by session id and an observer keyed by agent name land on
+ *  one row. On attach and on every hello while the server is legacy. */
+async function seedLegacy(engine: Engine): Promise<void> {
+  let list: Array<{ terminalId?: unknown; agentName?: unknown; cwd?: unknown }>
+  try {
+    list = asArray(await daemonCliGet<unknown>(engine.scope, 'agents/running'))
+  } catch (err) {
+    console.warn('[activity] legacy agents/running failed:', err)
+    return
   }
-  store.setState({ rows, workspaces })
-  const turnEnded =
-    prev && isBusyDisplay(prev.display) && display === 'idle'
-      ? { outcome: 'success' as const, reason: 'turn_done', at: now }
-      : null
-  notifyChange(scopeId, prev, row, null, turnEnded)
+  if (_engines.get(engine.scope.id) !== engine || !legacyLive(engine)) return
+  for (const a of list) {
+    if (typeof a?.agentName !== 'string' || typeof a.terminalId !== 'string') continue
+    learnLegacySession(engine, a.agentName, a.terminalId, typeof a.cwd === 'string' ? a.cwd : '')
+  }
+  recomputeLegacy(engine)
+}
+
+/** Should a pane on `scope`'s server scan its bottom rows for a busy footer?
+ *  Only while that server is fed by the legacy adapter (RL13). */
+export function isLegacyActivityServer(scope: Pick<ServerScope, 'id'>): boolean {
+  const engine = _engines.get(scope.id)
+  return engine !== undefined && legacyLive(engine)
+}
+
+/** A mounted pane's bottom rows (an older server only): a busy footer
+ *  lights its session for `LEGACY_SCREEN_GRACE_MS`, renewed by each frame
+ *  that still shows it. */
+export function noteLegacyScreen(
+  scope: Pick<ServerScope, 'id'>,
+  agentName: string,
+  rows: readonly string[],
+  workspacePath: string | null,
+): void {
+  const engine = _engines.get(scope.id)
+  if (!engine || !legacyLive(engine) || !agentName) return
+  if (!legacyScreenShowsBusy(rows.slice(-LEGACY_SCREEN_ROWS))) return
+  const t = engine.screenTimers.get(agentName)
+  if (t !== undefined) clearTimeout(t)
+  engine.screenTimers.set(
+    agentName,
+    setTimeout(() => {
+      engine.screenTimers.delete(agentName)
+      if (!engine.legacy.screen.delete(agentName)) return
+      if (legacyLive(engine)) recomputeLegacy(engine)
+    }, LEGACY_SCREEN_GRACE_MS),
+  )
+  if (engine.legacy.screen.has(agentName)) return
+  engine.legacy.screen.set(agentName, { workspacePath })
+  recomputeLegacy(engine)
+}
+
+/** The pane stopped watching (unmounted): its footer no longer counts.
+ *  It can't see the session any more, so idle is the honest value. */
+export function forgetLegacyScreen(scope: Pick<ServerScope, 'id'>, agentName: string): void {
+  const engine = _engines.get(scope.id)
+  if (!engine) return
+  const t = engine.screenTimers.get(agentName)
+  if (t !== undefined) clearTimeout(t)
+  engine.screenTimers.delete(agentName)
+  if (engine.legacy.screen.delete(agentName) && legacyLive(engine)) recomputeLegacy(engine)
 }
 
 /** Feed `scope`'s activity store from its server (refcounted: the window
@@ -653,21 +765,42 @@ function onLegacy(engine: Engine, e: SessionActivityChangedEvent): void {
 export function attachActivity(scope: ServerScope): () => void {
   let engine = _engines.get(scope.id)
   if (!engine) {
-    const created: Engine = { scope, refs: 0, unsubs: [], pulling: null, buffer: [] }
+    const created: Engine = {
+      scope,
+      refs: 0,
+      unsubs: [],
+      pulling: null,
+      buffer: [],
+      legacy: emptyLegacyFeed(),
+      screenTimers: new Map(),
+    }
     created.unsubs.push(
       onActivityChanged(scope, (e) => onFrame(created, e)),
       onAppHello(scope, () => {
         if (serverHasDaemonActivity(created)) void pullSnapshot(created)
+        else void seedLegacy(created)
       }),
       onAppResync(scope, () => {
         if (serverHasDaemonActivity(created)) void pullSnapshot(created)
       }),
-      onSessionActivityChanged(scope, (e) => onLegacy(created, e)),
+      onSessionActivityChanged(scope, (e) => onLegacyObserver(created, e)),
+      onAgentStatusChanged(scope, (e) => onLegacyHook(created, e)),
+      onSessionAddedApp(scope, (e) => {
+        if (!legacyLive(created)) return
+        learnLegacySession(created, e.agent_name, e.session_id, e.workspace_path)
+        recomputeLegacy(created)
+      }),
+      onSessionRemovedApp(scope, (e) => {
+        if (!legacyLive(created)) return
+        forgetLegacySession(created, e.agent_name)
+        recomputeLegacy(created)
+      }),
     )
     _engines.set(scope.id, created)
     engine = created
     // The socket may already be open (no hello is coming): pull now.
     if (serverHasDaemonActivity(created)) void pullSnapshot(created)
+    else void seedLegacy(created)
   }
   engine.refs += 1
   let released = false
@@ -678,13 +811,14 @@ export function attachActivity(scope: ServerScope): () => void {
     owned.refs -= 1
     if (owned.refs > 0) return
     for (const u of owned.unsubs) u()
+    clearLegacy(owned)
     _engines.delete(scope.id)
   }
 }
 
 /** Forget everything held for `scope` (a server switch: the window's
  *  scope now points at another daemon). The feed stays attached; the next
- *  hello pulls the new server's snapshot. */
+ *  hello pulls the new server's snapshot, or seeds its legacy feed. */
 export function resetActivity(scope: Pick<ServerScope, 'id'>): void {
   const n = _notifiers.get(scope.id)
   if (n) {
@@ -695,7 +829,10 @@ export function resetActivity(scope: Pick<ServerScope, 'id'>): void {
     n.pendingDone.clear()
   }
   const engine = _engines.get(scope.id)
-  if (engine) engine.buffer = []
+  if (engine) {
+    engine.buffer = []
+    clearLegacy(engine)
+  }
   storeFor(scope.id).setState(emptyState())
 }
 
@@ -715,7 +852,10 @@ export function __seedActivityForTests(
 
 /** Test seam: drop every store, feed and timer. */
 export function __resetActivityForTests(): void {
-  for (const engine of _engines.values()) for (const u of engine.unsubs) u()
+  for (const engine of _engines.values()) {
+    for (const u of engine.unsubs) u()
+    clearLegacy(engine)
+  }
   _engines.clear()
   for (const n of _notifiers.values()) {
     for (const t of [...n.toastTimers.values(), ...n.chimeTimers.values(), ...n.waitTimers.values()]) clearTimeout(t)

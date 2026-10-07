@@ -1117,15 +1117,15 @@ export function ConnectionGate(): React.ReactElement {
         // The window's own server's REPORTED features (`/boot-status`
         // `features`). The Home pool notes them only for servers it checks,
         // so `primaryScope().serverSupports('tickets-list-all')` would read
-        // false on a remote window host without this. Local always
-        // supports everything, so only a remote is noted.
-        if (isRemote) {
-          noteServerVersion(
-            homeHostKey(useConnectHostStore.getState().activeHost),
-            status?.version ?? null,
-            reportedFeatureList(status?.features),
-          )
-        }
+        // false on a remote window host without this. Local is noted too:
+        // a dev build runs against whatever daemon is installed, and an
+        // older one lacks keys this app expects (`daemon-activity`,
+        // prd-daemon-activity-and-thread-working-v1 RL13).
+        noteServerVersion(
+          homeHostKey(useConnectHostStore.getState().activeHost),
+          status?.version ?? null,
+          reportedFeatureList(status?.features),
+        )
         // Remember this host reached 'accept' at least once → a later
         // drop becomes a SOFT reconnect (overlay) instead of a blank.
         acceptedOnce = true

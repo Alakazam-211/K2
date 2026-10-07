@@ -216,6 +216,13 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/** Deliver one app-level event to every handler registered for it. */
+function fire(list: Array<(...a: unknown[]) => void>): (e: unknown) => void {
+  return (e) => {
+    for (const fn of [...list]) fn(e)
+  }
+}
+
 // ── active-agents (#675.2) ──────────────────────────────────────────────
 
 describe('active-agents — the daemon owns activity (prd-daemon-activity-and-thread-working-v1 S5)', () => {
@@ -224,7 +231,7 @@ describe('active-agents — the daemon owns activity (prd-daemon-activity-and-th
     stopAgentPolling()
   })
 
-  it('subscribes (no interval) to activity_changed, never to agent_status_changed', async () => {
+  it('subscribes (no interval) to activity_changed; agent_status_changed only reaches the legacy adapter', async () => {
     vi.useFakeTimers()
     const setInterval = vi.spyOn(globalThis, 'setInterval')
     const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
@@ -235,10 +242,13 @@ describe('active-agents — the daemon owns activity (prd-daemon-activity-and-th
 
     startAgentPolling()
     expect(ev.reg.activity.length).toBe(1)
-    expect(ev.reg.agent.length).toBe(0)
+    // The one hook subscriber is the activity feed's legacy adapter (RL13),
+    // which drops it on a server with daemon activity (activity.test.ts).
+    expect(ev.reg.agent.length).toBe(1)
     expect(setInterval).not.toHaveBeenCalled()
     stopAgentPolling()
     expect(ev.reg.activity.length).toBe(0)
+    expect(ev.reg.agent.length).toBe(0)
   })
 
   it('falls back to the poll interval when NOT supported; the activity feed still attaches', async () => {
@@ -251,7 +261,7 @@ describe('active-agents — the daemon owns activity (prd-daemon-activity-and-th
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
 
     startAgentPolling()
-    expect(ev.reg.agent.length).toBe(0)
+    expect(ev.reg.agent.length).toBe(1)
     expect(ev.reg.activity.length).toBe(1)
     expect(setInterval).toHaveBeenCalledTimes(1)
   })
@@ -280,8 +290,10 @@ describe('active-agents — live-session dot push (#688)', () => {
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
 
     startAgentPolling()
-    expect(ev.reg.sessionAdded.length).toBe(1)
-    expect(ev.reg.sessionRemoved.length).toBe(1)
+    // The live-session dot, and the activity feed's legacy adapter (RL13:
+    // it learns agent ↔ session ids from them on an older server only).
+    expect(ev.reg.sessionAdded.length).toBe(2)
+    expect(ev.reg.sessionRemoved.length).toBe(2)
 
     // Baseline: workspace cwd is NOT live.
     expect(
@@ -292,7 +304,7 @@ describe('active-agents — live-session dot push (#688)', () => {
     ).toBe(false)
 
     // A daemon-owned pinned chat opened after startup → SessionAdded.
-    ev.reg.sessionAdded[0]({
+    fire(ev.reg.sessionAdded)({
       kind: 'session_added',
       workspace_path: '/ws/pinned',
       pane_group_id: null,
@@ -322,7 +334,7 @@ describe('active-agents — live-session dot push (#688)', () => {
 
     startAgentPolling()
 
-    ev.reg.sessionAdded[0]({
+    fire(ev.reg.sessionAdded)({
       kind: 'session_added',
       workspace_path: '/ws/pinned',
       pane_group_id: null,
@@ -335,7 +347,7 @@ describe('active-agents — live-session dot push (#688)', () => {
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/pinned')).toBe(true)
 
     // The pinned chat exits → SessionRemoved (carries the same cwd + key).
-    ev.reg.sessionRemoved[0]({
+    fire(ev.reg.sessionRemoved)({
       kind: 'session_removed',
       workspace_path: '/ws/pinned',
       pane_group_id: null,
@@ -354,25 +366,25 @@ describe('active-agents — live-session dot push (#688)', () => {
     startAgentPolling()
 
     // Two live sessions in the SAME cwd.
-    ev.reg.sessionAdded[0]({
+    fire(ev.reg.sessionAdded)({
       kind: 'session_added', workspace_path: '/ws/shared', pane_group_id: null,
       agent_name: 'keyA', command: 'claude', args: [], session_id: 's-a', isV2: true,
     })
-    ev.reg.sessionAdded[0]({
+    fire(ev.reg.sessionAdded)({
       kind: 'session_added', workspace_path: '/ws/shared', pane_group_id: 'tab-x',
       agent_name: 'tab-x', command: 'claude', args: [], session_id: 's-b', isV2: true,
     })
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/shared')).toBe(true)
 
     // Closing ONE must not grey the dot — the other still lives there.
-    ev.reg.sessionRemoved[0]({
+    fire(ev.reg.sessionRemoved)({
       kind: 'session_removed', workspace_path: '/ws/shared', pane_group_id: null,
       agent_name: 'keyA',
     })
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/shared')).toBe(true)
 
     // Closing the last one greys it.
-    ev.reg.sessionRemoved[0]({
+    fire(ev.reg.sessionRemoved)({
       kind: 'session_removed', workspace_path: '/ws/shared', pane_group_id: 'tab-x',
       agent_name: 'tab-x',
     })

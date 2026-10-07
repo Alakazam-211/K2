@@ -158,7 +158,7 @@ const PRIMARY: ServerScope = {
   serverSupports(feature: FeatureKey | ReportedFeatureKey): boolean {
     if (isReportedFeature(feature)) {
       const active = windowActiveHost()
-      return active === 'local' || reportedSupports(homeHostKey(active), feature)
+      return active === 'local' ? localReportedSupports(feature) : reportedSupports(homeHostKey(active), feature)
     }
     return serverSupports(feature)
   },
@@ -192,6 +192,16 @@ export function noteServerVersion(hostKey: string, version: string | null, featu
 
 function reportedSupports(hostKey: string, feature: ReportedFeatureKey): boolean {
   return knownFeatures.get(canonicalHostKey(hostKey))?.has(feature) ?? false
+}
+
+/** This computer's daemon ships with this app, so it is taken to have every
+ *  reported feature — until its own `/boot-status` list was read and says
+ *  otherwise. A dev build (`tauri dev`) tolerates an older installed daemon,
+ *  and that daemon's list is the truth for it
+ *  (prd-daemon-activity-and-thread-working-v1 RL13: a 0.44.x daemon has no
+ *  `daemon-activity`). */
+function localReportedSupports(feature: ReportedFeatureKey): boolean {
+  return knownFeatures.get(LOCAL_HOME_HOST)?.has(feature) ?? true
 }
 
 
@@ -238,8 +248,8 @@ function makeHostScope(hostKey: string): ServerScope {
       return daemonWsBase(await creds())
     },
     serverSupports(feature: FeatureKey | ReportedFeatureKey): boolean {
+      if (isReportedFeature(feature)) return isLocal ? localReportedSupports(feature) : reportedSupports(hostKey, feature)
       if (isLocal) return true
-      if (isReportedFeature(feature)) return reportedSupports(hostKey, feature)
       if (isWindowHost()) return serverSupports(feature)
       const version = knownVersions.get(hostKey)
       if (!version) return false

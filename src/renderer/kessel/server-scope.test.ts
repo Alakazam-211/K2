@@ -240,6 +240,28 @@ describe('scopeForHost — pinned to one saved server', () => {
     expect(scopeForHost('local').serverSupports('spawn-attach-only')).toBe(true)
   })
 
+  it("this computer's daemon is taken to have every reported feature until its own list says otherwise (RL13)", () => {
+    const primary = primaryScope()
+    const local = scopeForHost('local')
+    // Not read yet: the paired daemon is assumed (release builds pair exactly).
+    expect(primary.serverSupports('daemon-activity')).toBe(true)
+    expect(local.serverSupports('daemon-activity')).toBe(true)
+    // A dev build on an older installed daemon (0.44.x lists no daemon-activity).
+    noteServerVersion('local', '0.44.3', ['spawn-attach-only', 'tickets-list-all', 'thread-latest'])
+    expect(primary.serverSupports('daemon-activity')).toBe(false)
+    expect(local.serverSupports('daemon-activity')).toBe(false)
+    expect(primary.serverSupports('tickets-list-all')).toBe(true)
+    // Version-gated keys stay paired for local.
+    expect(local.serverSupports('canonical-active')).toBe(true)
+    // The daemon is replaced by one that lists it.
+    noteServerVersion('local', '0.45.0', ['spawn-attach-only', 'daemon-activity'])
+    expect(primary.serverSupports('daemon-activity')).toBe(true)
+    expect(local.serverSupports('daemon-activity')).toBe(true)
+    // A remote window host never borrows this computer's list.
+    useConnectHostStore.getState().selectHost(ROSSON)
+    expect(primary.serverSupports('daemon-activity')).toBe(false)
+  })
+
   it('scopedKey never collides across two servers for the same key', () => {
     const a = scopeForHost(ROSSON)
     const b = scopeForHost(LAN)

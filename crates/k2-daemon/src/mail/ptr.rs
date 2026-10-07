@@ -616,6 +616,9 @@ mod tests {
                 .cloned()
                 .ok_or(DnsError::NotFound)
         }
+        fn srv(&self, name: &str) -> Result<Vec<crate::mail::dns_verify::SrvAnswer>, DnsError> {
+            panic!("ptr never looks up SRV ({name})")
+        }
     }
 
     struct RecordingDeps {

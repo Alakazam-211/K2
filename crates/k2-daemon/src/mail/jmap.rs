@@ -1263,21 +1263,24 @@ impl StalwartClient {
         password: &str,
         quota_bytes: u64,
         max_messages: u64,
+        permissions: Option<&serde_json::Value>,
     ) -> Result<String, String> {
-        let args = serde_json::json!({
-            "create": {
-                CREATE_TAG: {
-                    "@type": "User",
-                    "name": local_part,
-                    "domainId": stalwart_domain_id,
-                    "credentials": { "0": { "@type": "Password", "secret": password } },
-                    "quotas": {
-                        "maxDiskQuota": quota_bytes,
-                        "maxEmails": max_messages,
-                    },
-                }
-            }
+        let mut account = serde_json::json!({
+            "@type": "User",
+            "name": local_part,
+            "domainId": stalwart_domain_id,
+            "credentials": { "0": { "@type": "Password", "secret": password } },
+            "quotas": {
+                "maxDiskQuota": quota_bytes,
+                "maxEmails": max_messages,
+            },
         });
+        // Calendars S2: the owner's DAV policy rides the create, so a
+        // new mailbox never has a window with WebDAV/CalDAV on.
+        if let Some(p) = permissions {
+            account["permissions"] = p.clone();
+        }
+        let args = serde_json::json!({ "create": { CREATE_TAG: account } });
         let resp = self.registry_call("x:Account/set", args)?;
         parse_set_created_id("x:Account/set", &resp)
     }
@@ -1351,6 +1354,47 @@ impl StalwartClient {
             }),
         )?;
         parse_account_get_quotas(stalwart_account_id, &resp)
+    }
+
+    /// Calendars S2 (DAV policy): raw `x:Account/get` rows with the
+    /// fields the policy needs (`@type`, `name`, `roles`,
+    /// `permissions`). Ids Stalwart does not know are simply absent.
+    pub fn account_get_permissions(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["name", "roles", "permissions"],
+            }),
+        )?;
+        resp.get("list")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .ok_or_else(|| "x:Account/get: reply has no list".to_string())
+    }
+
+    /// Calendars S2: replace one account's `permissions` with the
+    /// already-merged value from `mail::dav::merge_permissions`
+    /// (`Inherit` | `Merge` | `Replace`). Stalwart invalidates the
+    /// account's cached access token itself on a permissions change.
+    pub fn account_set_permissions(
+        &self,
+        stalwart_account_id: &str,
+        permissions: &serde_json::Value,
+    ) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({
+                "update": { stalwart_account_id: { "permissions": permissions } }
+            }),
+        )?;
+        parse_set_updated("x:Account/set", stalwart_account_id, &resp)
     }
 
     /// `x:Account/query` with no name filter — every registry account id.
@@ -6005,7 +6049,7 @@ mod s3_account_tests {
 
         let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
         let id = c
-            .account_create("research-bot", "b", "s3cret-pw", 1_073_741_824, 10_000)
+            .account_create("research-bot", "b", "s3cret-pw", 1_073_741_824, 10_000, None)
             .expect("create round-trip");
         assert_eq!(id, "e");
 
@@ -6026,6 +6070,86 @@ mod s3_account_tests {
         assert_eq!(create["credentials"]["0"]["secret"], "s3cret-pw");
         assert_eq!(create["quotas"]["maxDiskQuota"], 1_073_741_824u64, "§12: 1 GB quota");
         assert_eq!(create["quotas"]["maxEmails"], 10_000, "§12: 10k message cap");
+        assert!(
+            create.get("permissions").is_none(),
+            "no DAV policy → Stalwart's Inherit default: {create}"
+        );
+    }
+
+    /// Calendars S2: a stored DAV policy rides the create call.
+    #[test]
+    fn account_create_carries_the_dav_policy_permissions() {
+        let created_reply = serde_json::json!({
+            "methodResponses": [["x:Account/set", { "created": { "k2": { "id": "e" } } }, "0"]],
+        })
+        .to_string();
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, created_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let perms = serde_json::json!({
+            "@type": "Merge",
+            "enabledPermissions": {},
+            "disabledPermissions": {"davFileGet": true},
+        });
+        c.account_create("bot", "b", "pw", 1, 1, Some(&perms)).expect("create");
+        let _sess = rx.recv().expect("session");
+        let body = body_json(&rx.recv().expect("set"));
+        assert_eq!(body["methodCalls"][0][1]["create"]["k2"]["permissions"], perms);
+    }
+
+    /// Calendars S2: read = one x:Account/get for every id with the
+    /// policy fields; write = one x:Account/set update of `permissions`
+    /// only (no name/credentials/quotas in the patch).
+    #[test]
+    fn account_permissions_get_and_set_wire_shapes() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let get_reply = serde_json::json!({
+            "methodResponses": [["x:Account/get", {
+                "list": [{"id": "e", "@type": "User", "name": "bot", "roles": {"@type": "User"},
+                          "permissions": {"@type": "Inherit"}}],
+                "notFound": ["zz"],
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Account/set", { "updated": { "e": null } }, "0"]],
+        })
+        .to_string();
+        // The session is discovered once and cached by the client.
+        let (port, rx) = spawn_mock_server(vec![session, get_reply, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let rows = c
+            .account_get_permissions(&["e".to_string(), "zz".to_string()])
+            .expect("get");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["permissions"]["@type"], "Inherit");
+        let _sess = rx.recv().expect("session");
+        let get = body_json(&rx.recv().expect("get"));
+        assert_eq!(get["methodCalls"][0][0], "x:Account/get");
+        assert_eq!(get["methodCalls"][0][1]["ids"], serde_json::json!(["e", "zz"]));
+        assert_eq!(
+            get["methodCalls"][0][1]["properties"],
+            serde_json::json!(["name", "roles", "permissions"])
+        );
+
+        let perms = serde_json::json!({
+            "@type": "Merge",
+            "enabledPermissions": {},
+            "disabledPermissions": {"davFileGet": true},
+        });
+        c.account_set_permissions("e", &perms).expect("set");
+        let set = body_json(&rx.recv().expect("set"));
+        assert_eq!(set["methodCalls"][0][0], "x:Account/set");
+        let patch = &set["methodCalls"][0][1]["update"]["e"];
+        assert_eq!(patch, &serde_json::json!({ "permissions": perms }));
+
+        // Empty id list never dials.
+        let idle = StalwartClient::new("http://127.0.0.1:9", "k2-test-key");
+        assert!(idle.account_get_permissions(&[]).expect("empty").is_empty());
     }
 
     #[test]
@@ -6141,7 +6265,7 @@ mod s3_account_tests {
         drop(listener); // port now closed
         let c = StalwartClient::new(format!("http://{addr}"), "k2-test-key");
         let err = c
-            .account_create("bot", "dom-1", "super-secret-pw", 1, 1)
+            .account_create("bot", "dom-1", "super-secret-pw", 1, 1, None)
             .expect_err("closed port must fail");
         assert!(!err.contains("super-secret-pw"), "password leaked: {err}");
     }

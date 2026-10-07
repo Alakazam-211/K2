@@ -1040,6 +1040,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0127_domain_binding_status",
             include_str!("../../drizzle_sql/0127_domain_binding_status.sql"),
         ),
+        // 0128 — hosted-mail calendars S2: mail_server.dav_policy_json
+        // (owner CalDAV/CardDAV/WebDAV-files policy + backfill marker).
+        // ALTER only; NULL = never applied.
+        (
+            "0128_hostmail_dav_policy",
+            include_str!("../../drizzle_sql/0128_hostmail_dav_policy.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1700,7 +1707,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0127_domain_binding_status",
+            last_name, "0128_hostmail_dav_policy",
             "unexpected last migration name: {last_name}"
         );
     }

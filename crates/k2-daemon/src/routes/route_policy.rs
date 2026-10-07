@@ -416,6 +416,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/cert/renew", Admin),
     get("/cli/mail/config", Member),
     post("/cli/mail/config/set", Admin),
+    both("/cli/mail/dav", Admin),
     post("/cli/mail/delete", Member),
     both("/cli/mail/dkim", Admin),
     post("/cli/mail/dkim/retire", Admin),

@@ -469,6 +469,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         // blast leftovers. Writer `/cli/mail-manage` is not an agent verb.
         "/cli/mail/server/uninstall",
         "/cli/mail/domain/remove",
+        // Calendars S2: host-wide DAV policy (owner/admin only, CAL22).
+        "/cli/mail/dav",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/oauth-config",
@@ -1500,6 +1502,7 @@ mod tests {
         for p in [
             "/cli/mail/server/uninstall",
             "/cli/mail/domain/remove",
+            "/cli/mail/dav",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/oauth-config",

@@ -209,6 +209,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/bans" => crate::mail::bans::handle_bans_list(params),
         "/cli/mail/allowlist" => crate::mail::bans::handle_allowlist_list(params),
         "/cli/mail/bans/migrate" => crate::mail::bans::handle_migrate_status(params),
+        // Calendars S2: owner DAV policy status (GET) — enable/disable
+        // are the POST on the same path. Owner-only (is_owner_level_mutation).
+        "/cli/mail/dav" => crate::mail::dav::handle_dav_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -386,6 +389,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/allowlist/remove" => crate::mail::bans::handle_allowlist_remove(body),
         "/cli/mail/bans/migrate" => crate::mail::bans::handle_migrate_post(body),
         "/cli/mail/bans/migrate/restore" => crate::mail::bans::handle_migrate_restore(body),
+        // Calendars S2: {action: status|enable|disable, files?: on|off}.
+        "/cli/mail/dav" => crate::mail::dav::handle_dav_post(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -423,6 +428,12 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // (§11/§11.1.3); the GET on the same path is a plain read and
         // never reaches this classifier (it only sees POSTs).
         || path == "/cli/mail/doctor"
+        // Calendars S2 (CAL6/CAL22): the host-wide DAV policy (CalDAV,
+        // CardDAV, WebDAV files for every hosted address) is owner/admin
+        // only — GET status and POST enable/disable alike. Deliberately
+        // NOT in is_mail_manage_surface: the per-workspace "agents manage
+        // hosted mail" toggle must never open it.
+        || path == "/cli/mail/dav"
 }
 
 /// Owner/admin hostmail surfaces (POST + GET) that a valid scoped agent
@@ -571,6 +582,8 @@ fn leftover_m6_hint(path: &str) -> String {
         "k2 mail link"
     } else if path == "/cli/mail-manage" {
         "POST /cli/mail-manage"
+    } else if path == "/cli/mail/dav" {
+        "k2 hostmail calendar"
     } else {
         path
     };
@@ -876,6 +889,36 @@ mod tests {
         ] {
             assert!(!is_mail_manage_surface(p), "not M5: {p}");
         }
+    }
+
+    /// Calendars S2 (CAL6/CAL22): the DAV policy is owner/admin only on
+    /// BOTH methods, and the agents-manage-mail toggle never opens it.
+    #[test]
+    fn dav_policy_route_is_owner_only_never_m5() {
+        let p = "/cli/mail/dav";
+        assert!(!is_mail_manage_surface(p), "the M5 toggle must not open {p}");
+        assert!(is_owner_level_mutation(p));
+        assert!(is_mail_owner_surface(p));
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let agent = mail_manage_authorized(p, false, Some(&principal));
+        let body = agent.err().expect("scoped agent must be refused").body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(body.contains("k2 hostmail calendar"), "names the verb: {body}");
+        assert!(
+            !body.contains("Allow agents to manage hosted mail"),
+            "must not promise the toggle: {body}"
+        );
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+        // GET status and POST enable/disable both dispatch (no 405 / 404).
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_ne!(get.status, "404 Not Found");
+        assert_ne!(get.status, "405 Method Not Allowed");
+        let post = dispatch_post(p, br#"{"action":"bogus"}"#);
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
     }
 
     #[test]

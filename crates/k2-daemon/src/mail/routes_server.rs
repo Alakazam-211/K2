@@ -129,6 +129,7 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         )
         .ok()
     };
+    let installed = row.is_some();
     let (sqlite_state, version, hostname, port_plan, progress, sqlite_last_error) = match row {
         Some((status, installed, hostname, plan, progress, last_error)) => {
             (status, installed, hostname, plan, progress, last_error)
@@ -167,6 +168,13 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         "enableProgress": enable_progress,
         "lastError": last_error,
         "cert": supervisor::tls_cert_status(hostname.as_deref()),
+        // Calendars S2 (CAL26): {enabled, files, policy, reachable, url,
+        // reason}. reachable = tls-alpn OR the Caddy mail Host site.
+        "calendar": crate::mail::dav::status_block(
+            installed,
+            hostname.as_deref(),
+            port_plan.as_deref(),
+        ),
     });
     // L14: omit `health` unless `?health=1` actually ran the probe.
     // Never emit `"health": null` — clients treat a missing key as

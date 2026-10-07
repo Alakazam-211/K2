@@ -110,6 +110,7 @@ pub mod bans;
 pub mod catchall;
 pub mod autoconfig;
 pub mod config;
+pub mod dav;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;

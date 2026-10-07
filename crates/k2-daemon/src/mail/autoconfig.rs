@@ -26,12 +26,40 @@ fn is_autoconfig_row(row: &RecordRow) -> bool {
         || n.contains("_submissions._tcp")
         || n.contains("_jmap._tcp")
         || n.contains("ua-auto-config")
+        // Calendars S2 (CAL25, S0.5): Stalwart's zone file emits
+        // `_caldavs._tcp` / `_carddavs._tcp` SRV 0 1 443 <host> while
+        // CalDAV/CardDAV are on (its default). Kept, never invented.
+        || is_dav_srv_name(&n)
+}
+
+fn is_dav_srv_name(lower_name: &str) -> bool {
+    lower_name.contains("_caldavs._tcp") || lower_name.contains("_carddavs._tcp")
+}
+
+/// CAL25: a DAV SRV row's target is the apex's mail host
+/// (`mail_hostname_for_apex`), whatever host Stalwart's zone file named
+/// (its server name). Priority, weight and port stay as emitted.
+fn pin_dav_srv_target(row: &mut RecordRow, host: &str) {
+    if !row.rtype.eq_ignore_ascii_case("SRV") || !is_dav_srv_name(&row.name.to_ascii_lowercase()) {
+        return;
+    }
+    let host = host.trim().trim_end_matches('.');
+    if host.is_empty() {
+        return;
+    }
+    let parts: Vec<&str> = row.expected.split_whitespace().collect();
+    if parts.len() != 4 {
+        return;
+    }
+    let pinned = format!("{} {} {} {host}.", parts[0], parts[1], parts[2]);
+    row.expected = pinned.clone();
+    row.expected_display = pinned;
 }
 
 /// Current mail hostname for autoconfig targets: attached
 /// `domain_names.role=mail` on this apex, else `mail_server.hostname`.
 /// Never leave `mail.<connect>.k2.dev` on a custom apex (L2).
-fn mail_hostname_for_apex(apex: &str) -> Option<String> {
+pub(crate) fn mail_hostname_for_apex(apex: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Ok(names) = k2_core::domains::list_names_for_apex(&conn, apex) {
@@ -58,9 +86,16 @@ pub(crate) fn autoconfig_rows(
     let recs = domains::parse_zone_file(zone_text);
     let mut rows = domains::build_rows(domain, &recs, hostname);
     domains::apply_current_hostname_advanced(&mut rows, hostname);
-    rows.into_iter()
+    let mut rows: Vec<RecordRow> = rows
+        .into_iter()
         .filter(|r| r.category == CAT_ADVANCED && is_autoconfig_row(r))
-        .collect()
+        .collect();
+    if let Some(host) = hostname {
+        for row in rows.iter_mut() {
+            pin_dav_srv_target(row, host);
+        }
+    }
+    rows
 }
 
 fn record_json(row: &RecordRow) -> serde_json::Value {
@@ -73,13 +108,16 @@ fn record_json(row: &RecordRow) -> serde_json::Value {
     })
 }
 
-fn show_payload(domain: &str, rows: &[RecordRow]) -> serde_json::Value {
+fn show_payload(domain: &str, rows: &[RecordRow], mail_host: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "ok": true,
         "domain": domain,
         "records": rows.iter().map(record_json).collect::<Vec<_>>(),
         "thunderbirdUrl": format!("http://autoconfig.{domain}/mail/config-v1.1.xml"),
         "autodiscoverUrl": format!("https://autodiscover.{domain}/autodiscover/autodiscover.xml"),
+        // Calendars S2: where CalDAV/CardDAV clients start (the
+        // _caldavs/_carddavs SRV rows above point at the same host).
+        "caldavUrl": crate::mail::dav::caldav_url(mail_host),
     })
 }
 
@@ -235,7 +273,7 @@ pub fn handle_autoconfig_get(params: &HashMap<String, String>) -> CliResponse {
     };
     let hostname = mail_hostname_for_apex(&domain);
     let rows = autoconfig_rows(&domain, &zone, hostname.as_deref());
-    CliResponse::ok_json(show_payload(&domain, &rows).to_string())
+    CliResponse::ok_json(show_payload(&domain, &rows, hostname.as_deref()).to_string())
 }
 
 /// POST `/cli/mail/autoconfig` `{domain}` — plant if we host NS.
@@ -264,7 +302,7 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
     };
     let hostname = mail_hostname_for_apex(&domain);
     let rows = autoconfig_rows(&domain, &zone, hostname.as_deref());
-    let mut payload = show_payload(&domain, &rows);
+    let mut payload = show_payload(&domain, &rows, hostname.as_deref());
     payload["bind"] = serde_json::json!(false);
     let Some(zone_id) = lookup_dns_zone_id(&domain) else {
         payload["planted"] = serde_json::json!(false);
@@ -413,6 +451,42 @@ mod tests {
         .expect_err("400 must fail");
         assert!(err.contains("HTTP 400"), "{err}");
         assert!(err.contains("autoconfig.example.com"), "{err}");
+    }
+
+    /// Calendars S2 (CAL25): the DAV SRV rows Stalwart emits are kept,
+    /// target the apex's mail host (not the server name), and plant
+    /// zone-relative with the priority in `prio`.
+    #[test]
+    fn dav_srv_rows_are_kept_and_target_the_mail_host() {
+        let zone = "\
+autoconfig.example.com. IN CNAME box.example.net.\n\
+_jmap._tcp.example.com. IN SRV 0 1 443 box.example.net.\n\
+_caldavs._tcp.example.com. IN SRV 0 1 443 box.example.net.\n\
+_carddavs._tcp.example.com. IN SRV 0 1 443 box.example.net.\n\
+_webdav._tcp.example.com. IN SRV 0 1 443 box.example.net.\n";
+        let rows = autoconfig_rows("example.com", zone, Some("mail.example.com"));
+        let find = |n: &str| rows.iter().find(|r| r.name == n).unwrap_or_else(|| panic!("{n} kept: {rows:?}"));
+        for n in ["_caldavs._tcp.example.com", "_carddavs._tcp.example.com"] {
+            let r = find(n);
+            assert_eq!(r.rtype, "SRV");
+            assert_eq!(r.expected, "0 1 443 mail.example.com.", "{n}");
+        }
+        assert!(
+            !rows.iter().any(|r| r.name.contains("_webdav")),
+            "never widen past what CalDAV/CardDAV need: {rows:?}"
+        );
+        let mut sent: Vec<serde_json::Value> = Vec::new();
+        plant_record_via("zone-1", "example.com", find("_caldavs._tcp.example.com"), &mut |_, body| {
+            sent.push(serde_json::from_str(body).expect("JSON"));
+            Ok(crate::dns::proxy::DnsHttpResponse { status: 201, body: "{}".into() })
+        })
+        .expect("plant");
+        assert_eq!(sent[0]["name"], "_caldavs._tcp");
+        assert_eq!(sent[0]["prio"], 0);
+        assert_eq!(sent[0]["content"], "1 443 mail.example.com.");
+        // The standard fixture emits no DAV SRV: none invented.
+        let fixture = autoconfig_rows("acme.dev", ZONE_FIXTURE, Some("mail.acme.dev"));
+        assert!(!fixture.iter().any(|r| r.name.contains("dav")), "{fixture:?}");
     }
 
     #[test]

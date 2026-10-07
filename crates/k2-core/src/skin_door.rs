@@ -219,6 +219,48 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
     out
 }
 
+/// True when `caddyfile` (as [`render_caddyfile`] writes it) carries the
+/// mail Host site for `host`: a named `host:443` site whose first line
+/// reverse-proxies to Stalwart's [`MAIL_HTTPS_UPSTREAM`] (every path,
+/// so CalDAV/CardDAV ride it). The Skin Direct site on the same host is
+/// a path filter, not this. Pure.
+pub fn caddyfile_has_mail_site(caddyfile: &str, host: &str) -> bool {
+    let want = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if want.is_empty() {
+        return false;
+    }
+    let lines: Vec<&str> = caddyfile.lines().map(str::trim).collect();
+    for (i, line) in lines.iter().enumerate() {
+        let Some(addrs) = line.strip_suffix('{') else {
+            continue;
+        };
+        let names_host = addrs
+            .split(',')
+            .map(|a| a.trim().to_ascii_lowercase())
+            .any(|a| a == format!("{want}:443"));
+        if !names_host {
+            continue;
+        }
+        let next = lines[i + 1..].iter().find(|l| !l.is_empty());
+        if next.is_some_and(|l| {
+            l.starts_with("reverse_proxy ") && l.contains(MAIL_HTTPS_UPSTREAM)
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Calendars S2 reach: the rendered Caddyfile has the mail Host site for
+/// `host` AND Caddy is running. Reads the file on disk (a box gets the
+/// site only on its next render).
+pub fn mail_site_live(host: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(caddyfile_path()) else {
+        return false;
+    };
+    caddyfile_has_mail_site(&text, host) && caddy_snapshot().running
+}
+
 fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     out.push_str(" {\n");
     push_handle(out, "/boot-status*", daemon);
@@ -1206,6 +1248,42 @@ mod tests {
         }
         assert!(saw_skin_proxy, "{file}");
         assert!(saw_mail_proxy, "{file}");
+    }
+
+    /// Calendars S2 reach: the mail Host site (every path → :8443) is
+    /// what makes CalDAV reachable on Caddy plans; the skin path filter
+    /// on the same host is not.
+    #[test]
+    fn caddyfile_mail_site_detected_on_both_bind_shapes_only() {
+        for bind80 in [false, true] {
+            let file = render_caddyfile(&spec_hosts(
+                Some("box.example.com"),
+                Some("mail.example.com"),
+                ":443",
+                bind80,
+            ));
+            assert!(caddyfile_has_mail_site(&file, "mail.example.com"), "{file}");
+            assert!(caddyfile_has_mail_site(&file, "Mail.Example.com."), "{file}");
+            assert!(!caddyfile_has_mail_site(&file, "box.example.com"), "skin site is a filter: {file}");
+            assert!(!caddyfile_has_mail_site(&file, "other.example.com"), "{file}");
+        }
+        let fallback = render_caddyfile(&spec_hosts(
+            Some("box.example.com"),
+            Some("mail.example.com"),
+            "0.0.0.0:38472",
+            false,
+        ));
+        assert!(!caddyfile_has_mail_site(&fallback, "mail.example.com"), "{fallback}");
+        // Same host for skin and mail: the mail site is filtered out.
+        let same = render_caddyfile(&spec_hosts(
+            Some("mail.example.com"),
+            Some("mail.example.com"),
+            ":443",
+            false,
+        ));
+        assert!(!caddyfile_has_mail_site(&same, "mail.example.com"), "{same}");
+        assert!(!caddyfile_has_mail_site("", "mail.example.com"));
+        assert!(!caddyfile_has_mail_site(&same, ""));
     }
 
     #[test]

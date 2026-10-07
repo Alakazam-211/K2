@@ -1188,6 +1188,11 @@ async fn async_main() {
     // (create-only set, never listeners_apply), restarts Stalwart once
     // after a create. Logs and carries on on any failure.
     mail::imap_listeners::spawn_startup_reconcile();
+    // Calendars S2: when the owner's DAV policy (k2 hostmail calendar
+    // enable|disable) has accounts left over (backfilledAt unset), finish
+    // them once. Linux-only detached thread; per-account permissions only
+    // — never a Stalwart restart or hostmail disable/enable (CAL39).
+    mail::dav::spawn_startup_backfill();
     sql::supervisor::spawn_health_loop();
 
     // Files-drawer multi-writer live refresh — recursive watcher over

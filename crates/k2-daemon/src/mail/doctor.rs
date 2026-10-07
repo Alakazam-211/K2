@@ -176,6 +176,11 @@ pub trait DoctorEnv {
     /// CAL43: the mail hostname's Stalwart Domain `certificateManagement`
     /// (`Ok(None)` = no such Domain). Loopback management API only.
     fn mail_cert_management(&self, hostname: &str) -> Result<Option<CertManagement>, String>;
+    /// Calendars S2 (CAL27): one HTTPS request with redirects NOT
+    /// followed and default certificate verification (a completed
+    /// handshake = the cert covers the name). Returns the status and
+    /// the `Location` header. Unauthenticated; never a body upload.
+    fn http_probe(&self, url: &str, method: &str) -> Result<(u16, Option<String>), String>;
 }
 
 // ── The check table (pure over the seams) ───────────────────────────────
@@ -434,6 +439,9 @@ pub fn run_checks_with_ptr_resolver(
         env.mail_cert_management(&ctx.hostname),
     ));
 
+    // Calendars S2 (CAL27): CalDAV discovery on the mail host.
+    checks.push(caldav_check(env, &ctx.hostname));
+
     // Disk headroom (pre-mortem #12).
     checks.push(match env.disk_free_bytes() {
         Some(free) if free >= MIN_DISK_BYTES => DoctorCheck {
@@ -549,6 +557,187 @@ pub fn acme_cert_names_check(
                 )
             }
         }
+    }
+}
+
+// ── Calendars S2 (CAL27, CAL37, CAL38) ──────────────────────────────────
+
+/// CAL38: calendar clients retry bad passwords, and Stalwart bans the IP.
+pub const CALENDAR_BANS_HINT: &str =
+    "A calendar client retrying a wrong password gets its IP banned (Stalwart auth \
+     bans) — see `k2 hostmail bans list`, `k2 hostmail bans clear <ip>`, and keep \
+     known office IPs on `k2 hostmail allowlist`.";
+
+fn location_ends_dav_cal(loc: &str) -> bool {
+    let path = loc
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/');
+    path.ends_with("/dav/cal")
+}
+
+/// CAL27 `caldav`: `GET https://<host>/.well-known/caldav` must redirect
+/// (3xx) to `/dav/cal`, and an unauthenticated `PROPFIND /dav/cal` must
+/// ask for credentials (401; 207 accepted). Both requests use a
+/// verifying TLS stack, so a pass also proves the cert covers `host`.
+/// Warn only; never gates direct send.
+pub fn caldav_check(env: &dyn DoctorEnv, host: &str) -> DoctorCheck {
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: "caldav".into(),
+        label: "CalDAV discovery answers on the mail host".into(),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    let host = host.trim().trim_end_matches('.');
+    let lower = host.to_ascii_lowercase();
+    if lower == "k2.dev" || lower.ends_with(".k2.dev") {
+        return mk(
+            ST_WARN,
+            format!(
+                "{host} is a K2 control-plane name, not this box — calendar clients need \
+                 the mail host on your own domain"
+            ),
+        );
+    }
+    let fix = "check `k2 hostmail status` (calendar.reachable / calendar.reason)";
+    let wk = format!("https://{host}/.well-known/caldav");
+    let (code, location) = match env.http_probe(&wk, "GET") {
+        Ok(v) => v,
+        Err(e) => {
+            return mk(
+                ST_WARN,
+                format!(
+                    "no verified HTTPS answer from {wk}: {e} — the certificate must cover \
+                     {host} and :443 must reach Stalwart; {fix}"
+                ),
+            )
+        }
+    };
+    if !(300..400).contains(&code) || !location.as_deref().is_some_and(location_ends_dav_cal) {
+        return mk(
+            ST_WARN,
+            format!(
+                "{wk} answered {code}{} — expected a redirect to /dav/cal (something other \
+                 than Stalwart is answering on :443); {fix}",
+                location.map(|l| format!(" → {l}")).unwrap_or_default()
+            ),
+        );
+    }
+    let dav = format!("https://{host}/dav/cal");
+    match env.http_probe(&dav, "PROPFIND") {
+        Ok((401, _)) | Ok((207, _)) => mk(
+            ST_PASS,
+            format!(
+                "{wk} → {code} /dav/cal → asks for a login (verified TLS for {host}). \
+                 {CALENDAR_BANS_HINT}"
+            ),
+        ),
+        Ok((other, _)) => mk(
+            ST_WARN,
+            format!("{dav} answered {other}; expected 401 (login required) — {fix}"),
+        ),
+        Err(e) => mk(ST_WARN, format!("no verified HTTPS answer from {dav}: {e} — {fix}")),
+    }
+}
+
+/// CAL27/CAL37/IT4 `caldav-srv`: `_caldavs._tcp` and `_carddavs._tcp`
+/// on `domain` must point at `mail_host`:443. `resolver` should be the
+/// zone's own nameservers — one authoritative answer passes; public
+/// resolvers are not required to agree yet. Warn only.
+pub fn caldav_srv_check(
+    resolver: Result<&dyn DnsResolver, String>,
+    domain: &str,
+    mail_host: &str,
+) -> DoctorCheck {
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: "caldav-srv".into(),
+        label: format!("CalDAV/CardDAV SRV records for {domain}"),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    let apply = format!(
+        "run `k2 hostmail autoconfig apply {domain}` (plants them when this server hosts the \
+         zone; otherwise `k2 hostmail autoconfig show {domain}` prints them for your DNS host)"
+    );
+    let resolver = match resolver {
+        Ok(r) => r,
+        Err(e) => return mk(ST_UNKNOWN, format!("could not ask {domain}'s nameservers: {e}")),
+    };
+    let mut missing = Vec::new();
+    let mut wrong = Vec::new();
+    for svc in ["_caldavs._tcp", "_carddavs._tcp"] {
+        let name = format!("{svc}.{domain}");
+        match resolver.srv(&name) {
+            Ok(answers) => {
+                let good = answers
+                    .iter()
+                    .any(|a| a.port == 443 && dns_verify::host_eq(&a.target, mail_host));
+                if !good {
+                    let seen: Vec<String> = answers
+                        .iter()
+                        .map(|a| format!("{} {} {} {}", a.priority, a.weight, a.port, a.target))
+                        .collect();
+                    wrong.push(format!("{name} → {}", seen.join(", ")));
+                }
+            }
+            Err(DnsError::NotFound) => missing.push(name),
+            Err(DnsError::Other(e)) => {
+                return mk(ST_UNKNOWN, format!("SRV lookup for {name} failed: {e}"))
+            }
+        }
+    }
+    if missing.is_empty() && wrong.is_empty() {
+        return mk(
+            ST_PASS,
+            format!("both point at {mail_host}:443 (authoritative nameservers)"),
+        );
+    }
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("missing: {}", missing.join(", ")));
+    }
+    if !wrong.is_empty() {
+        parts.push(format!("not {mail_host}:443: {}", wrong.join("; ")));
+    }
+    mk(
+        ST_WARN,
+        format!(
+            "{} — calendar apps can still be set up by hand with https://{mail_host}/; {apply}",
+            parts.join("; ")
+        ),
+    )
+}
+
+/// CAL28 `webdav-files`: warn while WebDAV file storage is on for
+/// hosted addresses (policy never applied, or `--files on`). Warn only.
+pub fn webdav_files_check(policy: Result<Option<&super::dav::DavPolicy>, String>) -> DoctorCheck {
+    use super::dav::OnOff;
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: "webdav-files".into(),
+        label: "WebDAV file storage off for hosted addresses".into(),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    match policy {
+        Err(e) => mk(ST_UNKNOWN, format!("the stored DAV policy is unreadable: {e}")),
+        Ok(None) => mk(
+            ST_WARN,
+            "webdav-files: on — Stalwart's default lets every hosted address store files \
+             over WebDAV. `k2 hostmail calendar enable` (or `disable`) turns file storage \
+             off for every address (keep it with `--files on`)"
+                .into(),
+        ),
+        Ok(Some(p)) if p.files == OnOff::On => mk(
+            ST_WARN,
+            "webdav-files: on (chosen with --files on) — every hosted address can store \
+             files over WebDAV. `k2 hostmail calendar enable --files off` turns it off"
+                .into(),
+        ),
+        Ok(Some(_)) => mk(ST_PASS, "webdav-files: off for every hosted address".into()),
     }
 }
 
@@ -1084,6 +1273,29 @@ impl DoctorEnv for RealDoctorEnv {
             None => Ok(None),
         }
     }
+
+    fn http_probe(&self, url: &str, method: &str) -> Result<(u16, Option<String>), String> {
+        // Redirects NOT followed (the 3xx IS the answer under test);
+        // default-verifying rustls — never accept an invalid cert.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+        let method = reqwest::Method::from_bytes(method.as_bytes())
+            .map_err(|e| format!("http method {method}: {e}"))?;
+        let resp = client
+            .request(method, url)
+            .header("Depth", "0")
+            .send()
+            .map_err(|e| e.to_string())?;
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        Ok((resp.status().as_u16(), location))
+    }
 }
 
 // ── Persistence + the production entry points ──────────────────────────
@@ -1200,6 +1412,23 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
     report
         .checks
         .extend(super::bans::doctor_ban_checks());
+    // Calendars S2 (CAL27/CAL28): WebDAV-files posture (server level)
+    // and, per domain, the DAV SRV rows on the zone's own nameservers.
+    // Soft only — never gates_direct.
+    let policy = super::dav::load_policy();
+    report.checks.push(webdav_files_check(policy.as_ref().map(Option::as_ref).map_err(Clone::clone)));
+    if let Some(d) = dctx.as_ref() {
+        let mail_host = super::autoconfig::mail_hostname_for_apex(&d.domain)
+            .unwrap_or_else(|| ctx.hostname.clone());
+        let auth = dns_verify::SystemResolver::authoritative_for(&d.domain);
+        let auth_ref: Result<&dyn DnsResolver, String> = match auth.as_ref() {
+            Ok(r) => Ok(r),
+            Err(e) => Err(e.clone()),
+        };
+        report
+            .checks
+            .push(caldav_srv_check(auth_ref, &d.domain, &mail_host));
+    }
     let (grade, direct_blockers) = grade_of(&report.checks);
     report.grade = grade;
     report.direct_blockers = direct_blockers;
@@ -1412,6 +1641,7 @@ mod tests {
         ptr: HashMap<String, Vec<String>>,
         txt: HashMap<String, Vec<Vec<String>>>,
         mx: HashMap<String, Vec<dns_verify::MxHost>>,
+        srv: HashMap<String, Vec<dns_verify::SrvAnswer>>,
         broken: Vec<String>,
     }
 
@@ -1441,6 +1671,12 @@ mod tests {
             }
             self.ptr.get(&key).cloned().ok_or(DnsError::NotFound)
         }
+        fn srv(&self, name: &str) -> Result<Vec<dns_verify::SrvAnswer>, DnsError> {
+            if self.broken.iter().any(|b| b == name) {
+                return Err(DnsError::Other("timeout".into()));
+            }
+            self.srv.get(name).cloned().ok_or(DnsError::NotFound)
+        }
     }
 
     struct FakeEnv {
@@ -1451,6 +1687,9 @@ mod tests {
         cert: Result<(), &'static str>,
         disk: Option<u64>,
         cert_mgmt: Result<Option<CertManagement>, &'static str>,
+        /// (url, method) → canned answer. Unlisted → transport error.
+        http: Vec<((&'static str, &'static str), Result<(u16, Option<&'static str>), &'static str>)>,
+        http_calls: std::sync::Mutex<Vec<(String, String)>>,
     }
 
     impl Default for FakeEnv {
@@ -1469,6 +1708,14 @@ mod tests {
                     acme_provider_id: "acme-p1".into(),
                     subject_alternative_names: vec!["mail.acme.dev".into()],
                 })),
+                http: vec![
+                    (
+                        ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                        Ok((307, Some("/dav/cal"))),
+                    ),
+                    (("https://mail.acme.dev/dav/cal", "PROPFIND"), Ok((401, None))),
+                ],
+                http_calls: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
@@ -1500,6 +1747,17 @@ mod tests {
         ) -> Result<Option<CertManagement>, String> {
             assert_eq!(hostname, "mail.acme.dev");
             self.cert_mgmt.clone().map_err(str::to_string)
+        }
+        fn http_probe(&self, url: &str, method: &str) -> Result<(u16, Option<String>), String> {
+            self.http_calls
+                .lock()
+                .unwrap()
+                .push((url.to_string(), method.to_string()));
+            match self.http.iter().find(|((u, m), _)| *u == url && *m == method) {
+                Some((_, Ok((code, loc)))) => Ok((*code, loc.map(str::to_string))),
+                Some((_, Err(e))) => Err(e.to_string()),
+                None => Err(format!("no fake answer for {method} {url}")),
+            }
         }
     }
 
@@ -1547,11 +1805,13 @@ mod tests {
             "starttls-587",
             "tls-cert",
             "acme-cert-names",
+            "caldav",
             "disk",
         ] {
             assert!(r.checks.iter().any(|c| c.id == id), "missing check {id}");
         }
         assert_eq!(check(&r, "acme-cert-names").status, ST_PASS);
+        assert_eq!(check(&r, "caldav").status, ST_PASS);
         assert_eq!(check(&r, "ptr").status, ST_PASS);
         assert_eq!(check(&r, "fcrdns").status, ST_PASS);
         assert_eq!(check(&r, "open-relay").status, ST_PASS);
@@ -1564,6 +1824,141 @@ mod tests {
         assert_eq!(v["hostname"], "mail.acme.dev");
         assert_eq!(v["ip"], "203.0.113.7");
         assert!(v["domain"].is_null());
+    }
+
+    // ── Calendars S2: caldav / caldav-srv / webdav-files ──
+
+    #[test]
+    fn caldav_passes_on_redirect_then_401_with_redirects_unfollowed() {
+        let env = FakeEnv::default();
+        let c = caldav_check(&env, "mail.acme.dev");
+        assert_eq!(c.status, ST_PASS, "{}", c.detail);
+        assert!(!c.gates_direct);
+        assert!(c.detail.contains("k2 hostmail bans"), "CAL38 bans hint: {}", c.detail);
+        assert!(c.detail.contains("allowlist"), "{}", c.detail);
+        assert_eq!(
+            env.http_calls.lock().unwrap().as_slice(),
+            [
+                ("https://mail.acme.dev/.well-known/caldav".to_string(), "GET".to_string()),
+                ("https://mail.acme.dev/dav/cal".to_string(), "PROPFIND".to_string()),
+            ]
+        );
+        // Absolute Location and a 207 both count.
+        let env = FakeEnv {
+            http: vec![
+                (
+                    ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                    Ok((301, Some("https://mail.acme.dev/dav/cal/"))),
+                ),
+                (("https://mail.acme.dev/dav/cal", "PROPFIND"), Ok((207, None))),
+            ],
+            ..FakeEnv::default()
+        };
+        assert_eq!(caldav_check(&env, "mail.acme.dev").status, ST_PASS);
+    }
+
+    #[test]
+    fn caldav_warns_on_tls_failure_wrong_redirect_or_open_collection() {
+        let tls = FakeEnv {
+            http: vec![(
+                ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                Err("invalid peer certificate: NotValidForName"),
+            )],
+            ..FakeEnv::default()
+        };
+        let c = caldav_check(&tls, "mail.acme.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("certificate must cover mail.acme.dev"), "{}", c.detail);
+        assert_eq!(tls.http_calls.lock().unwrap().len(), 1, "stop after the failed handshake");
+
+        let not_stalwart = FakeEnv {
+            http: vec![(
+                ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                Ok((404, None)),
+            )],
+            ..FakeEnv::default()
+        };
+        let c = caldav_check(&not_stalwart, "mail.acme.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("404"), "{}", c.detail);
+
+        let elsewhere = FakeEnv {
+            http: vec![(
+                ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                Ok((302, Some("https://www.example.com/"))),
+            )],
+            ..FakeEnv::default()
+        };
+        assert_eq!(caldav_check(&elsewhere, "mail.acme.dev").status, ST_WARN);
+
+        let open = FakeEnv {
+            http: vec![
+                (
+                    ("https://mail.acme.dev/.well-known/caldav", "GET"),
+                    Ok((307, Some("/dav/cal"))),
+                ),
+                (("https://mail.acme.dev/dav/cal", "PROPFIND"), Ok((200, None))),
+            ],
+            ..FakeEnv::default()
+        };
+        assert_eq!(caldav_check(&open, "mail.acme.dev").status, ST_WARN);
+
+        // Never probe a control-plane name.
+        let env = FakeEnv::default();
+        let c = caldav_check(&env, "mail.box.k2.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(env.http_calls.lock().unwrap().is_empty());
+    }
+
+    fn srv(target: &str, port: u16) -> dns_verify::SrvAnswer {
+        dns_verify::SrvAnswer { priority: 0, weight: 1, port, target: target.into() }
+    }
+
+    #[test]
+    fn caldav_srv_passes_on_one_authoritative_answer_and_names_apply() {
+        let mut dns = FakeDns::default();
+        dns.srv.insert("_caldavs._tcp.acme.dev".into(), vec![srv("mail.acme.dev.", 443)]);
+        dns.srv.insert("_carddavs._tcp.acme.dev".into(), vec![srv("Mail.Acme.Dev", 443)]);
+        let c = caldav_srv_check(Ok(&dns), "acme.dev", "mail.acme.dev");
+        assert_eq!(c.status, ST_PASS, "{}", c.detail);
+        assert!(!c.gates_direct);
+
+        let mut missing = FakeDns::default();
+        missing.srv.insert("_caldavs._tcp.acme.dev".into(), vec![srv("mail.acme.dev", 443)]);
+        let c = caldav_srv_check(Ok(&missing), "acme.dev", "mail.acme.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("_carddavs._tcp.acme.dev"), "{}", c.detail);
+        assert!(c.detail.contains("k2 hostmail autoconfig apply acme.dev"), "CAL37: {}", c.detail);
+
+        let mut wrong = FakeDns::default();
+        wrong.srv.insert("_caldavs._tcp.acme.dev".into(), vec![srv("box.example.net", 443)]);
+        wrong.srv.insert("_carddavs._tcp.acme.dev".into(), vec![srv("mail.acme.dev", 8443)]);
+        let c = caldav_srv_check(Ok(&wrong), "acme.dev", "mail.acme.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("box.example.net"), "{}", c.detail);
+
+        let mut broken = FakeDns::default();
+        broken.broken.push("_caldavs._tcp.acme.dev".into());
+        assert_eq!(caldav_srv_check(Ok(&broken), "acme.dev", "mail.acme.dev").status, ST_UNKNOWN);
+        assert_eq!(
+            caldav_srv_check(Err("no address for any nameserver".into()), "acme.dev", "mail.acme.dev").status,
+            ST_UNKNOWN
+        );
+    }
+
+    #[test]
+    fn webdav_files_warns_until_turned_off() {
+        use crate::mail::dav::{DavPolicy, OnOff};
+        let c = webdav_files_check(Ok(None));
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("webdav-files: on"), "{}", c.detail);
+        assert!(c.detail.contains("k2 hostmail calendar"), "{}", c.detail);
+        assert!(!c.gates_direct);
+        let on = DavPolicy { calendars: OnOff::On, files: OnOff::On, applied_at: 1, backfilled_at: Some(1) };
+        assert_eq!(webdav_files_check(Ok(Some(&on))).status, ST_WARN);
+        let off = DavPolicy { files: OnOff::Off, ..on };
+        assert_eq!(webdav_files_check(Ok(Some(&off))).status, ST_PASS);
+        assert_eq!(webdav_files_check(Err("junk".into())).status, ST_UNKNOWN);
     }
 
     // ── CAL43: Stalwart ACME name list ──

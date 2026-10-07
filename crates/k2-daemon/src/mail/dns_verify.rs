@@ -72,6 +72,17 @@ pub trait DnsResolver: Send + Sync {
     fn a(&self, name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError>;
     /// PTR names for `ip` (S6: rDNS/FCrDNS).
     fn ptr(&self, ip: std::net::IpAddr) -> Result<Vec<String>, DnsError>;
+    /// SRV answers (calendars S2: `_caldavs._tcp` / `_carddavs._tcp`).
+    fn srv(&self, name: &str) -> Result<Vec<SrvAnswer>, DnsError>;
+}
+
+/// One live SRV answer. `target` has no trailing dot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrvAnswer {
+    pub priority: u16,
+    pub weight: u16,
+    pub port: u16,
+    pub target: String,
 }
 
 /// Production resolver: hickory (system configuration — the same
@@ -112,6 +123,40 @@ impl SystemResolver {
         hickory_resolver::Resolver::new(ResolverConfig::google(), opts)
             .map(|inner| Self { inner })
             .map_err(|e| format!("google DNS resolver unavailable: {e}"))
+    }
+
+    /// Calendars S2 (IT4): ask the zone's OWN nameservers, no cache.
+    /// One authoritative answer is enough for the doctor; public
+    /// resolvers catch up on their TTL. The NS names come from the
+    /// system resolver; every IPv4 of every NS is a server here.
+    pub fn authoritative_for(zone: &str) -> Result<Self, String> {
+        use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+        let system = Self::new()?;
+        let ns = system
+            .inner
+            .ns_lookup(fqdn(zone))
+            .map_err(|e| format!("NS lookup for {zone}: {e}"))?;
+        let mut ips: Vec<std::net::IpAddr> = Vec::new();
+        for name in ns.iter() {
+            if let Ok(a) = system.inner.ipv4_lookup(name.0.to_utf8()) {
+                for ip in a.iter() {
+                    let ip = std::net::IpAddr::V4(ip.0);
+                    if !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        if ips.is_empty() {
+            return Err(format!("no address for any nameserver of {zone}"));
+        }
+        let group = NameServerConfigGroup::from_ips_clear(&ips, 53, true);
+        let mut opts = ResolverOpts::default();
+        opts.cache_size = 0;
+        opts.recursion_desired = false;
+        hickory_resolver::Resolver::new(ResolverConfig::from_parts(None, vec![], group), opts)
+            .map(|inner| Self { inner })
+            .map_err(|e| format!("authoritative resolver for {zone}: {e}"))
     }
 
     /// Cloudflare only, no cache — ACME wait must re-query each poll.
@@ -186,6 +231,22 @@ impl DnsResolver for SystemResolver {
             .map(|l| {
                 l.iter()
                     .map(|ptr| ptr.0.to_utf8().trim_end_matches('.').to_string())
+                    .collect()
+            })
+            .map_err(map_resolve_err)
+    }
+
+    fn srv(&self, name: &str) -> Result<Vec<SrvAnswer>, DnsError> {
+        self.inner
+            .srv_lookup(fqdn(name))
+            .map(|l| {
+                l.iter()
+                    .map(|s| SrvAnswer {
+                        priority: s.priority(),
+                        weight: s.weight(),
+                        port: s.port(),
+                        target: s.target().to_utf8().trim_end_matches('.').to_string(),
+                    })
                     .collect()
             })
             .map_err(map_resolve_err)
@@ -617,6 +678,9 @@ mod tests {
         }
         fn ptr(&self, _ip: std::net::IpAddr) -> Result<Vec<String>, DnsError> {
             Err(DnsError::NotFound)
+        }
+        fn srv(&self, name: &str) -> Result<Vec<SrvAnswer>, DnsError> {
+            panic!("record verification never looks up SRV ({name})")
         }
     }
 

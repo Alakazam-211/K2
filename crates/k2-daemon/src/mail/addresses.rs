@@ -189,6 +189,8 @@ pub fn normalize_address(raw: &str) -> Result<String, AddrError> {
 /// mint compensation path (and, later, the retention purge slice) —
 /// retire uses `disable_account` (§7.2: data kept).
 pub trait AddressEngine {
+    /// `permissions`: the owner's DAV policy for new accounts
+    /// (`mail::dav::mint_permissions`); `None` = Stalwart's default.
     fn create_account(
         &self,
         local_part: &str,
@@ -196,6 +198,7 @@ pub trait AddressEngine {
         password: &str,
         quota_bytes: u64,
         max_messages: u64,
+        permissions: Option<&serde_json::Value>,
     ) -> Result<String, String>;
     fn disable_account(&self, stalwart_account_id: &str) -> Result<(), String>;
     fn destroy_account(&self, stalwart_account_id: &str) -> Result<(), String>;
@@ -213,6 +216,7 @@ impl AddressEngine for StalwartClient {
         password: &str,
         quota_bytes: u64,
         max_messages: u64,
+        permissions: Option<&serde_json::Value>,
     ) -> Result<String, String> {
         self.account_create(
             local_part,
@@ -220,6 +224,7 @@ impl AddressEngine for StalwartClient {
             password,
             quota_bytes,
             max_messages,
+            permissions,
         )
     }
     fn disable_account(&self, stalwart_account_id: &str) -> Result<(), String> {
@@ -619,6 +624,10 @@ pub fn mint_address(
     let row_id = uuid::Uuid::new_v4().to_string();
     let password = secrets::generate_secret().map_err(AddrError::Engine)?;
     let (quota_bytes, quota_messages) = mint_quotas_for_project(project_id);
+    // Calendars S2: the owner's DAV policy (CalDAV/CardDAV, WebDAV
+    // files) applies from the first login. Unreadable policy = refuse,
+    // never mint with Stalwart's everything-on default by accident.
+    let dav_permissions = super::dav::mint_permissions().map_err(AddrError::Engine)?;
     let account_id = engine
         .create_account(
             &local,
@@ -626,6 +635,7 @@ pub fn mint_address(
             &password,
             quota_bytes,
             quota_messages,
+            dav_permissions.as_ref(),
         )
         .map_err(AddrError::Engine)?;
     let secret_ref = match secrets_store.store(&format!("account-{row_id}"), &password) {
@@ -924,6 +934,7 @@ pub(crate) mod tests {
     pub(crate) struct FakeAddrEngine {
         pub created: Mutex<Vec<(String, String)>>, // (local, domain_id)
         pub created_quotas: Mutex<Vec<(u64, u64)>>, // (bytes, messages)
+        pub created_permissions: Mutex<Vec<Option<serde_json::Value>>>,
         pub disabled: Mutex<Vec<String>>,
         pub destroyed: Mutex<Vec<String>>,
         pub passwords_set: Mutex<Vec<(String, String)>>, // (account_id, secret)
@@ -939,6 +950,7 @@ pub(crate) mod tests {
             Self {
                 created: Mutex::new(Vec::new()),
                 created_quotas: Mutex::new(Vec::new()),
+                created_permissions: Mutex::new(Vec::new()),
                 disabled: Mutex::new(Vec::new()),
                 destroyed: Mutex::new(Vec::new()),
                 passwords_set: Mutex::new(Vec::new()),
@@ -959,6 +971,7 @@ pub(crate) mod tests {
             password: &str,
             quota_bytes: u64,
             max_messages: u64,
+            permissions: Option<&serde_json::Value>,
         ) -> Result<String, String> {
             assert_eq!(password.len(), 64, "32 random bytes as hex");
             if self.fail_create {
@@ -971,6 +984,10 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .push((local_part.to_string(), stalwart_domain_id.to_string()));
+            self.created_permissions
+                .lock()
+                .unwrap()
+                .push(permissions.cloned());
             self.created_quotas
                 .lock()
                 .unwrap()
@@ -1290,6 +1307,51 @@ pub(crate) mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].0, format!("account-{}", row.id));
         assert_eq!(stored[0].1.len(), 64, "32-byte random password, hex");
+        cleanup_domain(&domain);
+    }
+
+    /// Calendars S2: a stored DAV policy rides the create call; no
+    /// policy → no `permissions` (Stalwart's Inherit default).
+    #[test]
+    fn mint_applies_the_stored_dav_policy_at_create() {
+        let _g = crate::mail::mail_server_test_lock();
+        let reset = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM mail_server WHERE id = 1", []).expect("clear");
+        };
+        reset();
+        let domain = unique("dav-mint") + ".example";
+        cleanup_domain(&domain);
+        seed_domain(&domain, "verified", Some("stw-dav"));
+        let vault = FakeVault::default();
+        let project = unique("proj");
+
+        let engine = FakeAddrEngine::ok();
+        mint_address(&engine, &vault, &project, 0, "plain", Some(&domain), None).expect("mint");
+        assert_eq!(engine.created_permissions.lock().unwrap().as_slice(), [None]);
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, dav_policy_json, updated_at) \
+                 VALUES (1, 'running', '0.16.10', 'mail.example.com', \
+                 '{\"calendars\":\"on\",\"files\":\"off\",\"appliedAt\":1,\"backfilledAt\":1}', 1)",
+                [],
+            )
+            .expect("seed server");
+        }
+        let engine = FakeAddrEngine::ok();
+        mint_address(&engine, &vault, &project, 0, "dav", Some(&domain), None).expect("mint");
+        let perms = engine.created_permissions.lock().unwrap();
+        let p = perms[0].as_ref().expect("policy permissions on create");
+        assert_eq!(p["@type"], "Merge");
+        assert_eq!(p["disabledPermissions"]["davFileGet"], true);
+        assert_eq!(p["disabledPermissions"]["jmapFileNodeGet"], true);
+        assert!(p["disabledPermissions"].get("davCalGet").is_none(), "calendars stay on: {p}");
+        drop(perms);
+        reset();
         cleanup_domain(&domain);
     }
 

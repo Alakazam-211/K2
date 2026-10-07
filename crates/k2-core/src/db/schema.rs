@@ -3742,6 +3742,9 @@ pub struct MailServer {
     /// `restoreAt`). Daemon health loop auto-restores; do not reuse
     /// `enable_progress_json`.
     pub bans_migrate_json: Option<String>,
+    /// 0128: hosted-mail DAV policy (`{"calendars","files","appliedAt",
+    /// "backfilledAt"}`). NULL = never applied (everything on).
+    pub dav_policy_json: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

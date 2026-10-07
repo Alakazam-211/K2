@@ -13885,8 +13885,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -14170,6 +14170,33 @@ cmd_schema() {
       "description": "Destroy AllowedIp then ReloadSettings. POST /cli/mail/allowlist/remove. mail_manage.",
       "args": [{"name": "address", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail calendar status",
+      "usage": "k2 hostmail calendar status [--json]",
+      "description": "DAV policy for every hosted address (calendars = CalDAV+CardDAV on/off, files = WebDAV file storage on/off, policy default|applied) plus reach: reachable (tls-alpn plan or K2's Caddy mail Host site), url (https://<mail host>/.well-known/caldav, never *.k2.dev), reason (the paths a foreign :443 proxy must forward). GET /cli/mail/dav. Owner/admin only, not mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail calendar enable",
+      "usage": "k2 hostmail calendar enable [--files on|off] [--json]",
+      "description": "Allow CalDAV/CardDAV for every hosted address via per-account Stalwart permissions (Merge; other settings kept). First run also turns WebDAV files off unless --files on. New mints carry the policy; leftovers finish on the next daemon start. Never restarts Stalwart or uses hostmail disable/enable. Resets on uninstall. POST /cli/mail/dav {action:enable}. Owner/admin only. GET on the path is status.",
+      "args": [],
+      "flags": [
+        {"name": "--files", "arg": "on|off", "description": "WebDAV file storage (default off on the first run, then the stored choice)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail calendar disable",
+      "usage": "k2 hostmail calendar disable [--files on|off] [--json]",
+      "description": "Deny CalDAV/CardDAV, JMAP calendars/contacts and calendar scheduling/alarm sending for every hosted address (user logins only). First run also turns WebDAV files off unless --files on. Never restarts Stalwart. POST /cli/mail/dav {action:disable}. Owner/admin only.",
+      "args": [],
+      "flags": [
+        {"name": "--files", "arg": "on|off", "description": "WebDAV file storage (default off on the first run, then the stored choice)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "dns access",
@@ -16069,7 +16096,9 @@ AGENT SURFACE
   k2 mail draft    linked Gmail Drafts (always on for draft)
 
 OWNER VERBS — EXIT 3 (leftover M6)
-  uninstall, domain remove, oauth/link admin, mail-manage toggle.
+  uninstall, domain remove, oauth/link admin, mail-manage toggle,
+  `k2 hostmail calendar` (CalDAV/CardDAV/WebDAV-files policy for every
+  hosted address; the toggle never opens it).
   Approving your own mail is futile. Ask your human.
 
 MAIL_MANAGE AGENTS
@@ -24893,6 +24922,7 @@ _mail_py() {
     M_MAILBOX="${M_MAILBOX:-}" M_RIGHTS="${M_RIGHTS:-}" \
     M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
     M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
+    M_DAV_ACTION="${M_DAV_ACTION:-}" M_FILES="${M_FILES:-}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -25561,6 +25591,16 @@ elif verb == "status":
             extra = " self-signed" if cert.get("selfSigned") else ""
             exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
             print("cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp))
+        cal = d.get("calendar")
+        if isinstance(cal, dict):
+            # Calendars S2: owner DAV policy + whether clients can reach it.
+            print("calendar : %s, files %s, %s%s" % (
+                "on" if cal.get("enabled") else "off",
+                "on" if cal.get("files") else "off",
+                "reachable" if cal.get("reachable") else "not reachable",
+                (" " + cal["url"]) if cal.get("url") else ""))
+            if cal.get("reason"):
+                print("           %s" % cal["reason"])
         if d.get("health") is not None:
             print("health   : %s" % dumps(d["health"]))
     # C17: print state + lastError, then exit ≠ 0 when systemd disagrees
@@ -26624,6 +26664,8 @@ elif verb == "autoconfig_show":
     else:
         print("thunderbird  %s" % (d.get("thunderbirdUrl") or ""))
         print("autodiscover %s" % (d.get("autodiscoverUrl") or ""))
+        if d.get("caldavUrl"):
+            print("caldav       %s  (CalDAV/CardDAV: _caldavs/_carddavs SRV)" % d["caldavUrl"])
         for rec in d.get("records") or []:
             print("%s  %s  %s" % (rec.get("type") or "?", rec.get("name") or "?", rec.get("value") or rec.get("display") or ""))
 
@@ -26638,6 +26680,44 @@ elif verb == "autoconfig_apply":
             print(d.get("hint") or "print these records at your registrar:")
             for rec in d.get("records") or []:
                 print("%s  %s  %s" % (rec.get("type") or "?", rec.get("name") or "?", rec.get("value") or rec.get("display") or ""))
+
+elif verb == "dav":
+    # Calendars S2: owner DAV policy. status = GET; enable/disable = POST
+    # (per-account Stalwart permissions; never hostmail disable/enable).
+    action = env("M_DAV_ACTION")
+    if action == "status":
+        d = call("GET", "/cli/mail/dav")
+    else:
+        body = {"action": action}
+        if env("M_FILES"):
+            body["files"] = env("M_FILES")
+        d = call("POST", "/cli/mail/dav", body=body, timeout=300)
+    if as_json:
+        print(dumps(d))
+    else:
+        if d.get("policy") == "default":
+            policy = "Stalwart default (never set — run enable or disable once)"
+        elif d.get("policy") == "applied":
+            policy = "set by the owner"
+            if d.get("backfilledAt") is None:
+                policy += "; some accounts not done yet (finished on the next daemon start)"
+        else:
+            policy = d.get("policy") or "?"
+        print("calendars : %s  (CalDAV + CardDAV for every hosted address)" % ("on" if d.get("enabled") else "off"))
+        print("files     : %s  (WebDAV file storage)" % ("on" if d.get("files") else "off"))
+        print("policy    : %s" % policy)
+        print("reachable : %s" % ("yes" if d.get("reachable") else "no"))
+        if d.get("url"):
+            print("url       : %s" % d["url"])
+        if d.get("reason"):
+            print("reason    : %s" % d["reason"])
+        acc = d.get("accounts")
+        if isinstance(acc, dict):
+            print("accounts  : %s total, %s updated, %s unchanged, %s skipped" % (
+                acc.get("total", "?"), acc.get("updated", "?"), acc.get("unchanged", "?"),
+                len(acc.get("skipped") or [])))
+        print("note      : a calendar app retrying a wrong password gets its IP banned —"
+              " k2 hostmail bans list / k2 hostmail allowlist")
 
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
@@ -27893,9 +27973,10 @@ cmd_hostmail() {
         ptr)     cmd_hostmail_ptr "$@" ;;
         bans)    cmd_hostmail_bans "$@" ;;
         allowlist) cmd_hostmail_allowlist "$@" ;;
+        calendar) cmd_hostmail_calendar "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar>"
             exit 2 ;;
     esac
 }
@@ -29386,6 +29467,54 @@ cmd_hostmail_dmarc() {
 }
 
 
+cmd_hostmail_calendar() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_calendar; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        status|enable|disable) cmd_hostmail_calendar_action "$sub" "$@" ;;
+        --help|-h) cmd_help_hostmail_calendar; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown calendar command '$sub' — usage: k2 hostmail calendar <status|enable|disable> [--files on|off] [--json]"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_calendar_action() {
+    local action="$1"; shift
+    if _wants_help "$@"; then
+        case "$action" in
+            status) cmd_help_hostmail_calendar_status ;;
+            enable) cmd_help_hostmail_calendar_enable ;;
+            disable) cmd_help_hostmail_calendar_disable ;;
+        esac
+        exit 0
+    fi
+    local as_json=false files=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --files)
+                [ $# -ge 2 ] || { _mail_err "usage" "--files requires on|off — usage: k2 hostmail calendar $action [--files on|off] [--json]"; exit 2; }
+                case "$2" in
+                    on|off) files="$2" ;;
+                    *) _mail_err "usage" "--files must be on or off (got '$2')"; exit 2 ;;
+                esac
+                shift 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail calendar $action [--files on|off] [--json]"
+                exit 2 ;;
+        esac
+    done
+    if [ "$action" = "status" ] && [ -n "$files" ]; then
+        _mail_err "usage" "--files goes with enable|disable, not status"
+        exit 2
+    fi
+    local M_VERB="dav" M_JSON="$as_json" M_DAV_ACTION="$action" M_FILES="$files"
+    _mail_py
+}
+
+
 cmd_hostmail_ptr() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_ptr; exit 0; fi
     local sub="$1"; shift
@@ -30521,8 +30650,9 @@ COMMANDS
   queue list|retry|drop       Outbound x:QueuedMessage. drop is not mailbox Trash.
   acl grant|revoke|show       IMAP/JMAP sharing between minted Users. Not
                               `k2 mail access grant` (agent layer).
-  autoconfig show|apply       dnsZoneFile advanced rows. apply plants via k2 dns
-                              if we host NS; BYO prints. Not A8 bind.
+  autoconfig show|apply       dnsZoneFile advanced rows (incl. CalDAV/CardDAV
+                              SRV). apply plants via k2 dns if we host NS;
+                              BYO prints. Not A8 bind.
   ptr show|set <hostname>     HELO + reverse DNS. show = origin/rDNS/alignment;
                               set = Stalwart HELO then CP POST /api/dns/ptr
                               (Bearer k2c_). mail_manage. Not auto on enable.
@@ -30535,6 +30665,12 @@ COMMANDS
                               Pair clear with allowlist (fail counters survive).
   allowlist list|add|remove   AllowedIp (beats blocked; ReloadSettings).
                               Standing IPs in add --help only — never auto-insert.
+  calendar status|enable|disable [--files on|off]
+                              CalDAV/CardDAV (and WebDAV files) for every
+                              hosted address. Owner/admin only (not
+                              mail_manage). First enable|disable turns
+                              WebDAV files off unless --files on. Never
+                              restarts Stalwart.
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -31324,9 +31460,85 @@ Autoconfig / Autodiscover DNS from Stalwart dnsZoneFile advanced rows.
 apply plants via k2 dns (POST /cli/dns/records/add) only if the apex
 is a zone on GET /cli/dns/zones. BYO prints records. Not A8 bind.
 
+Includes the CalDAV/CardDAV discovery records Stalwart emits
+(_caldavs._tcp / _carddavs._tcp SRV 0 1 443 <mail host>), so Apple
+Calendar, Thunderbird and DAVx5 find the server from the address alone.
+Never applied automatically: boxes set up before calendars get them by
+rerunning `k2 hostmail autoconfig apply <domain>` (the doctor's
+caldav-srv check says so).
+
 USAGE
   k2 hostmail autoconfig show <domain> [--json]
   k2 hostmail autoconfig apply <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_calendar() {
+    cat <<'EOF'
+CalDAV + CardDAV (calendars and contacts) for every hosted address, and
+WebDAV file storage. Owner/admin only — the "agents manage hosted mail"
+workspace toggle does not open it. GET|POST /cli/mail/dav.
+
+The policy is per-account Stalwart permissions (x:Account/set
+permissions Merge): it never restarts Stalwart and never uses
+`k2 hostmail disable/enable`. New addresses get it at creation; existing
+ones are updated right away (any left over finish on the next daemon
+start). Other permission settings on an account are kept.
+
+Default before the first run: Stalwart's own (everything on). The FIRST
+enable or disable also turns WebDAV file storage off, unless --files on.
+The policy resets on `k2 hostmail uninstall` (the server row is deleted).
+
+Clients sign in at https://<mail host>/ (`status` prints the url). A
+calendar app retrying a wrong password gets its IP banned: see
+`k2 hostmail bans list`, `k2 hostmail bans clear <ip>`, and keep office
+IPs on `k2 hostmail allowlist`.
+
+USAGE
+  k2 hostmail calendar status [--json]
+  k2 hostmail calendar enable [--files on|off] [--json]
+  k2 hostmail calendar disable [--files on|off] [--json]
+EOF
+}
+
+cmd_help_hostmail_calendar_status() {
+    cat <<'EOF'
+Show the DAV policy (calendars on/off, files on/off, default or set),
+whether calendar clients can reach CalDAV on this box, the discovery
+url, and why not. reachable = Stalwart owns :443 (tls-alpn plan) or
+K2's Caddy serves the mail host; otherwise the reason names the paths
+your proxy must forward (/.well-known/caldav, /.well-known/carddav,
+/dav/ → https://127.0.0.1:8443). GET /cli/mail/dav. Owner/admin.
+Auth bans: `k2 hostmail bans list` / `k2 hostmail allowlist`.
+
+USAGE
+  k2 hostmail calendar status [--json]
+EOF
+}
+
+cmd_help_hostmail_calendar_enable() {
+    cat <<'EOF'
+Allow CalDAV + CardDAV (and their JMAP calendar/contacts methods) for
+every hosted address. First run also turns WebDAV files off unless
+--files on; later runs keep the stored files choice unless --files is
+given. POST /cli/mail/dav {action:"enable", files?}. Owner/admin.
+Never restarts Stalwart. Resets on `k2 hostmail uninstall`.
+
+USAGE
+  k2 hostmail calendar enable [--files on|off] [--json]
+EOF
+}
+
+cmd_help_hostmail_calendar_disable() {
+    cat <<'EOF'
+Deny CalDAV + CardDAV, JMAP calendars/contacts, and calendar
+scheduling/alarm sending for every hosted address (user logins only —
+the daemon's own access is unaffected). First run also turns WebDAV
+files off unless --files on. POST /cli/mail/dav {action:"disable",
+files?}. Owner/admin. Never restarts Stalwart. Resets on uninstall.
+
+USAGE
+  k2 hostmail calendar disable [--files on|off] [--json]
 EOF
 }
 

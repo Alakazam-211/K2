@@ -24,7 +24,7 @@
 //! case but we treat it as a no-op).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -32,9 +32,10 @@ use tokio::sync::broadcast;
 /// Capacity for the broadcast channel. Small enough that a stalled
 /// subscriber doesn't bloat memory, large enough that bursts (e.g.
 /// opening 10 tabs back-to-back) don't drop events under realistic
-/// network jitter. Lagged subscribers get `RecvError::Lagged` and
-/// the WS handler in `session_events_ws.rs` treats that as a hint
-/// to re-emit the current truth via a fresh snapshot.
+/// network jitter. A lagged `/cli/sessions/events` subscriber is
+/// closed with 4008 (`session_events_ws`, RL6): the client reconnects
+/// and re-pulls its snapshots (`GET /cli/activity/snapshot` among
+/// them). In-process subscribers re-read their source instead.
 pub const EVENT_CHANNEL_CAP: usize = 256;
 
 /// One lifecycle event for a daemon-owned PTY session. Serialized
@@ -162,7 +163,7 @@ pub enum SessionEvent {
     // **Routing classes** (see `session_events_ws::event_matches_workspace`):
     //   - APP-LEVEL  (forwarded to EVERY subscriber regardless of `?path=`):
     //     `LlmStatusChanged`, `TunnelStatusChanged`, `AgentStatusChanged`,
-//     `SessionActivityChanged`.
+    //     `SessionActivityChanged`, `ActivityChanged`.
     //   - WORKSPACE-SCOPED (forwarded only when the carried path matches
     //     the subscriber's `?path=` via the cwd-prefix rule):
     //     `ReviewQueueChanged`, `ReviewChanged`, `TabTitleChanged`,
@@ -224,13 +225,15 @@ pub enum SessionEvent {
         workspace_path: Option<String>,
     },
 
-    /// 0.40.39 — daemon-side per-session activity (session_activity.rs,
-    /// the 0.40.23 deferred item). Title/Bell-derived working|idle|
+    /// 0.40.39 — daemon-side per-session activity, working|idle|
     /// permission, emitted on TRANSITIONS only, for EVERY live session
     /// regardless of any client's pane visibility. APP-LEVEL routing.
-    /// Distinct from `AgentStatusChanged` (hook-driven lifecycle whose
-    /// `stop` arm drives toasts/review): this is high-frequency turn
-    /// state, consumed only by the activity store.
+    /// Since prd-daemon-activity-and-thread-working-v1 S4 (RL5) it is a
+    /// compat event derived from the activity store's row display
+    /// (`working` / `monitoring` → `working`, `waiting` → `permission`,
+    /// `idle` / `unverifiable` → `idle`, plus `idle` on row removal), no
+    /// longer from the title observer. Deprecated: `activity_changed`
+    /// replaces it. The app activity socket still reads it until S8.
     /// Wire: `{ "kind": "session_activity_changed", "workspacePath":
     /// string, "agentName": string, "paneGroupId": string|null,
     /// "status": "working"|"idle"|"permission" }`.
@@ -461,6 +464,28 @@ pub enum SessionEvent {
     /// string, "error": string, "path"?: string } ] }`.
     HooksInstallFailed { failures: Vec<serde_json::Value> },
 
+    /// prd-daemon-activity-and-thread-working-v1 S4 (RL2, §7.3) — one
+    /// activity row changed or went away (`activity_events`). APP-LEVEL.
+    /// Carries the row (§7.2) or the removed session id, the row's
+    /// workspace rollup (RL1), a turn end when the lead just went idle,
+    /// a store-wide `seq` (gap-free on this bus; a gap means a missed
+    /// frame, so the client re-pulls `GET /cli/activity/snapshot`, RL4)
+    /// and the daemon `instanceId`. Each row sends at most one frame per
+    /// 100 ms; the last state always goes out.
+    /// Wire: `{ "kind": "activity_changed", "seq": number, "instanceId":
+    /// string, "row": Row|null, "removed": string|null, "turnEnded":
+    /// { "outcome", "reason", "at" }|null, "workspace": Rollup|null }`.
+    ActivityChanged {
+        seq: u64,
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+        row: Option<serde_json::Value>,
+        removed: Option<String>,
+        #[serde(rename = "turnEnded")]
+        turn_ended: Option<serde_json::Value>,
+        workspace: Option<serde_json::Value>,
+    },
+
     /// Zen Mode v1 (prd-zen-mode-v1 Z12) — this computer's `~/.k2/zen/`
     /// changed effectively (a theme or page now resolves differently, or
     /// its errors changed). APP-LEVEL refetch signal, deliberately
@@ -654,6 +679,7 @@ impl SessionEvent {
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
+            SessionEvent::ActivityChanged { .. } => "activity_changed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
@@ -724,159 +750,6 @@ pub fn emit_tunnel_subdomains_changed() {
 
 static SENDER: OnceLock<broadcast::Sender<SessionEvent>> = OnceLock::new();
 
-/// Observability (Phase B) — the latest `AgentStatusChanged` per `paneId`
-/// (== terminal id == the daemon-side session id), with the unix-seconds
-/// timestamp we observed it. This is a **memoization of the same truth the
-/// `/cli/sessions/events` stream carries, not a parallel one**: it is
-/// written ONLY from inside [`emit`] (the single chokepoint every
-/// `AgentStatusChanged` flows through — `events.rs::DaemonBroadcastSink`),
-/// so a reader of this cache and a subscriber of the bus are fed by the
-/// identical event. `/cli/ops/overview` reads it so a pane can render each
-/// agent's working/idle status in one round-trip without a live WS.
-///
-/// Bounded by the number of distinct panes the daemon has seen since boot;
-/// entries are overwritten in place. No eviction — a `paneId` count is the
-/// live-tab count, which stays small.
-static AGENT_STATUS: OnceLock<Mutex<HashMap<String, (String, i64)>>> = OnceLock::new();
-
-fn agent_status_map() -> &'static Mutex<HashMap<String, (String, i64)>> {
-    AGENT_STATUS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn unix_now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// Record the latest agent status for a pane. Called from [`emit`] on every
-/// `AgentStatusChanged` so the cache can never drift from the bus.
-fn record_agent_status(pane_id: &str, status: &str) {
-    if pane_id.is_empty() {
-        return;
-    }
-    if let Ok(mut map) = agent_status_map().lock() {
-        map.insert(pane_id.to_string(), (status.to_string(), unix_now_secs()));
-    }
-}
-
-/// Observability read accessor — the latest cached `(status, observed_at)`
-/// for a pane/session id, or `None` if no `AgentStatusChanged` has been seen
-/// for it since boot. `status` is the raw canonical bucket the bus carries
-/// (`start` | `stop` | `permission`); callers normalize for display. Same
-/// source of truth as `/cli/sessions/events` (see [`AGENT_STATUS`]).
-pub fn agent_status_for(pane_id: &str) -> Option<(String, i64)> {
-    agent_status_map().lock().ok()?.get(pane_id).cloned()
-}
-
-/// Test-only — drop the agent-status cache so the global map doesn't leak
-/// between cases.
-#[cfg(test)]
-pub fn clear_agent_status_for_tests() {
-    if let Ok(mut map) = agent_status_map().lock() {
-        map.clear();
-    }
-}
-
-// ── Home 0.43.2 (Z23 / Z31) — what each live session is doing ─────────────
-//
-// `GET /cli/presence/summary` tells a Home row on another server whether an
-// agent there is working. Two daemon sources say so, and both pass through
-// [`emit`]:
-//   - `SessionActivityChanged` (title/bell, keyed by the v2 map key the
-//     observer runs under, `session_activity.rs`), memoized here and dropped
-//     on `SessionRemoved`;
-//   - `AgentStatusChanged` (hooks, keyed by the v2 session id). `AGENT_STATUS`
-//     above keeps its shape for `/cli/ops/overview`; this side map holds the
-//     same status in activity words plus an order stamp.
-// For one session the newer of the two wins. The order stamp is a process
-// counter, not a clock, so two writes in the same second still order.
-
-static MEMO_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// One memo entry: (`working` | `idle` | `permission`, order stamp).
-type OrderedStatus = (String, u64);
-
-/// v2 map key → latest title/bell activity.
-static SESSION_ACTIVITY: OnceLock<Mutex<HashMap<String, OrderedStatus>>> = OnceLock::new();
-
-/// Hook pane id (v2 session id) → latest hook status, in activity words.
-static HOOK_ACTIVITY: OnceLock<Mutex<HashMap<String, OrderedStatus>>> = OnceLock::new();
-
-fn session_activity_map() -> &'static Mutex<HashMap<String, OrderedStatus>> {
-    SESSION_ACTIVITY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn hook_activity_map() -> &'static Mutex<HashMap<String, OrderedStatus>> {
-    HOOK_ACTIVITY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn next_memo_seq() -> u64 {
-    MEMO_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Write the memos for one event. Called only from [`emit`].
-fn record_memos(event: &SessionEvent) {
-    match event {
-        SessionEvent::AgentStatusChanged { pane_id, status, .. } => {
-            if pane_id.is_empty() {
-                return;
-            }
-            record_agent_status(pane_id, status);
-            if let Ok(mut map) = hook_activity_map().lock() {
-                let word = hook_status_as_activity(status).to_string();
-                map.insert(pane_id.clone(), (word, next_memo_seq()));
-            }
-        }
-        SessionEvent::SessionActivityChanged { agent_name, status, .. } => {
-            if agent_name.is_empty() {
-                return;
-            }
-            if let Ok(mut map) = session_activity_map().lock() {
-                map.insert(agent_name.clone(), (status.clone(), next_memo_seq()));
-            }
-        }
-        SessionEvent::SessionRemoved { agent_name, .. } => {
-            if let Ok(mut map) = session_activity_map().lock() {
-                map.remove(agent_name);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The hook bucket (`start` | `stop` | `permission`) in the activity
-/// vocabulary (`working` | `idle` | `permission`).
-pub fn hook_status_as_activity(raw: &str) -> &str {
-    match raw {
-        "start" => "working",
-        "stop" => "idle",
-        other => other,
-    }
-}
-
-/// What one live session is doing, from the newer of its two memos:
-/// `working`, `idle` or `permission`. `None` when neither source has said
-/// anything since boot. `agent_name` is the v2 map key; `session_id` is the
-/// hook's pane id.
-pub fn live_session_status(agent_name: &str, session_id: &str) -> Option<String> {
-    let activity = session_activity_map()
-        .lock()
-        .ok()
-        .and_then(|m| m.get(agent_name).cloned());
-    let hook = hook_activity_map()
-        .lock()
-        .ok()
-        .and_then(|m| m.get(session_id).cloned());
-    match (activity, hook) {
-        (Some((a, a_seq)), Some((h, h_seq))) => Some(if h_seq > a_seq { h } else { a }),
-        (Some((a, _)), None) => Some(a),
-        (None, Some((h, _))) => Some(h),
-        (None, None) => None,
-    }
-}
-
 /// Lazy accessor for the broadcast sender. First caller creates the
 /// channel. Cheap — the OnceLock is a single atomic load on the hot
 /// path.
@@ -896,12 +769,9 @@ pub fn subscribe() -> broadcast::Receiver<SessionEvent> {
 /// bounded — broadcast doesn't synchronize beyond a single atomic
 /// per subscriber.
 pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<SessionEvent>> {
-    // Observability (Phase B): memoize the latest agent status off the SAME
-    // event that's about to hit the bus, so `/cli/ops/overview` and a
-    // `/cli/sessions/events` subscriber read one truth. This is the only
-    // writer of AGENT_STATUS. Home 0.43.2: the session-activity memo is
-    // written here too, for `/cli/presence/summary`.
-    record_memos(&event);
+    // prd-daemon-activity-and-thread-working-v1 S4 (RL7): the hook and
+    // title memos are gone; `/cli/presence/summary`, `/cli/ops/overview`
+    // and the `/v1` busy check read the activity store.
     sender().send(event)
 }
 
@@ -1211,6 +1081,40 @@ mod tests {
         );
     }
 
+    /// prd-daemon-activity-and-thread-working-v1 §7.3: the renderer's
+    /// activity store (S5) codes against exactly these keys; a removal
+    /// and an end carry `null`s, never missing keys.
+    #[test]
+    fn activity_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::ActivityChanged {
+            seq: 7,
+            instance_id: "0123456789abcdef".into(),
+            row: Some(serde_json::json!({ "sessionId": "s1", "display": "working" })),
+            removed: None,
+            turn_ended: None,
+            workspace: Some(serde_json::json!({ "projectId": "p1", "display": "working" })),
+        });
+        assert_eq!(json["kind"], "activity_changed");
+        assert_eq!(json["seq"], 7);
+        assert_eq!(json["instanceId"], "0123456789abcdef");
+        assert_eq!(json["row"]["display"], "working");
+        assert!(json["removed"].is_null() && json["turnEnded"].is_null());
+        assert_keys(&json, &["kind", "seq", "instanceId", "row", "removed", "turnEnded", "workspace"]);
+
+        let gone = as_json(&SessionEvent::ActivityChanged {
+            seq: 8,
+            instance_id: "0123456789abcdef".into(),
+            row: None,
+            removed: Some("s1".into()),
+            turn_ended: Some(serde_json::json!({ "outcome": "success", "reason": "turn_done", "at": 1 })),
+            workspace: None,
+        });
+        assert!(gone["row"].is_null() && gone["workspace"].is_null());
+        assert_eq!(gone["removed"], "s1");
+        assert_eq!(gone["turnEnded"]["outcome"], "success");
+        assert_keys(&gone, &["kind", "seq", "instanceId", "row", "removed", "turnEnded", "workspace"]);
+    }
+
     #[test]
     fn review_queue_changed_frozen_contract() {
         let json = as_json(&SessionEvent::ReviewQueueChanged {
@@ -1452,67 +1356,6 @@ mod tests {
         assert_eq!(json["workspacePath"], "/x/foo");
         assert_eq!(json["projectId"], "proj-uuid");
         assert_keys(&json, &["kind", "workspacePath", "projectId"]);
-    }
-
-    /// Observability (Phase B) no-divergence guard: a single `emit` of an
-    /// `AgentStatusChanged` feeds BOTH the broadcast subscriber (what
-    /// `/cli/sessions/events` delivers) AND the `AGENT_STATUS` cache (what
-    /// `/cli/ops/overview` reads). They must carry the IDENTICAL status —
-    /// there is one writer (`emit`), so the cache can never drift from the
-    /// stream.
-    #[tokio::test(flavor = "current_thread")]
-    async fn agent_status_cache_matches_broadcast_truth() {
-        clear_agent_status_for_tests();
-        let pane = format!(
-            "ops-probe-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0),
-        );
-        let mut rx = subscribe();
-        let _ = emit(SessionEvent::AgentStatusChanged {
-            pane_id: pane.clone(),
-            tab_id: "tab-x".into(),
-            status: "start".into(),
-            workspace_path: None,
-        });
-
-        // Drain until our probe arrives (the global bus may carry other
-        // tests' events). This is what a `/cli/sessions/events` subscriber
-        // would receive.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        let stream_status = loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                panic!("did not receive probe AgentStatusChanged in time");
-            }
-            match tokio::time::timeout(remaining, rx.recv()).await {
-                Ok(Ok(SessionEvent::AgentStatusChanged { pane_id, status, .. }))
-                    if pane_id == pane =>
-                {
-                    break status;
-                }
-                Ok(Ok(_)) => continue, // contamination from another test
-                Ok(Err(_)) => panic!("receiver closed"),
-                Err(_) => panic!("timed out waiting for probe event"),
-            }
-        };
-
-        // The cache the overview reads must hold the SAME status.
-        let (cached_status, observed_at) =
-            agent_status_for(&pane).expect("cache populated by the same emit");
-        assert_eq!(
-            cached_status, stream_status,
-            "overview cache must match the broadcast truth (no divergent source)"
-        );
-        assert_eq!(cached_status, "start");
-        assert!(observed_at > 0, "observed_at timestamp must be stamped");
-
-        // A pane that never emitted has no cached status.
-        assert!(agent_status_for("ops-never-emitted").is_none());
-        clear_agent_status_for_tests();
     }
 
     #[test]
@@ -1902,64 +1745,5 @@ mod tests {
     fn resolve_workspace_for_path_empty_input() {
         assert_eq!(resolve_workspace_for_path(""), "");
         assert_eq!(resolve_workspace_for_path("/"), "/");
-    }
-
-    // Home 0.43.2 (Z31) — the per-session activity memo. Unique keys per
-    // case, so the process-wide maps never collide with another test.
-
-    fn activity(agent: &str, status: &str) -> SessionEvent {
-        SessionEvent::SessionActivityChanged {
-            workspace_path: "/x/memo".into(),
-            agent_name: agent.into(),
-            pane_group_id: None,
-            status: status.into(),
-        }
-    }
-
-    fn hook(session_id: &str, status: &str) -> SessionEvent {
-        SessionEvent::AgentStatusChanged {
-            pane_id: session_id.into(),
-            tab_id: "tab".into(),
-            status: status.into(),
-            workspace_path: None,
-        }
-    }
-
-    #[test]
-    fn live_session_status_takes_the_newer_of_hook_and_activity() {
-        let agent = format!("tab-memo-{}", uuid::Uuid::new_v4());
-        let sid = uuid::Uuid::new_v4().to_string();
-        assert_eq!(live_session_status(&agent, &sid), None, "nothing said yet");
-
-        let _ = emit(activity(&agent, "working"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
-
-        // A newer hook wins over the older title activity.
-        let _ = emit(hook(&sid, "permission"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("permission"));
-
-        // A newer title activity wins over the older hook.
-        let _ = emit(activity(&agent, "idle"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("idle"));
-
-        // The hook bucket is mapped into the activity words.
-        let _ = emit(hook(&sid, "start"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
-        let _ = emit(hook(&sid, "stop"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("idle"));
-    }
-
-    #[test]
-    fn session_removed_drops_the_activity_memo() {
-        let agent = format!("tab-memo-{}", uuid::Uuid::new_v4());
-        let sid = uuid::Uuid::new_v4().to_string();
-        let _ = emit(activity(&agent, "working"));
-        assert_eq!(live_session_status(&agent, &sid).as_deref(), Some("working"));
-        let _ = emit(SessionEvent::SessionRemoved {
-            workspace_path: "/x/memo".into(),
-            pane_group_id: None,
-            agent_name: agent.clone(),
-        });
-        assert_eq!(live_session_status(&agent, &sid), None, "a removed session has no activity");
     }
 }

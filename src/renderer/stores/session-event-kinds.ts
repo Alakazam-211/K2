@@ -58,7 +58,9 @@ export const SESSION_EVENT_ROUTES = {
   active_changed: { class: 'app', app: true, carried: true },
   llm_status_changed: { class: 'app', app: true },
   // Home 0.43.2 (Z22): a pinned room applies hook status through its own
-  // server's carrier.
+  // server's carrier. Both are deprecated compat since
+  // prd-daemon-activity-and-thread-working-v1 S4 (RL5): the daemon derives
+  // them from its activity rows, and `activity_changed` replaces them.
   agent_status_changed: { class: 'app', app: true, carried: true },
   session_activity_changed: { class: 'app', app: true, carried: true },
   review_queue_changed: {
@@ -105,6 +107,9 @@ export const SESSION_EVENT_ROUTES = {
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.
   hooks_install_failed: { class: 'app', app: true, carried: true },
+  // prd-daemon-activity-and-thread-working-v1 RL2/A27: the daemon's activity
+  // rows (+ seq). Carried: a room renders its own server's rows.
+  activity_changed: { class: 'app', app: true, carried: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

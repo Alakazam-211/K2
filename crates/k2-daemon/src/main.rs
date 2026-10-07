@@ -161,6 +161,8 @@ mod hook_install;
 mod activity_store;
 // S3: transcript + screen evidence for the store.
 mod activity_transcript;
+mod activity_events;
+mod activity_routes;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;
@@ -1252,6 +1254,8 @@ async fn async_main() {
     // S2: the activity store consumes the hook plane and runs its timers
     // (row deadlines, 10 s liveness sweep) before any route can take a hook.
     activity_store::spawn();
+    // S4: rows go out as `activity_changed` (+ seq) and the compat events.
+    activity_events::spawn();
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");

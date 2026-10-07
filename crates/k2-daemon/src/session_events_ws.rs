@@ -245,14 +245,18 @@ pub async fn serve_session_events_connection(
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
-                        // Subscriber fell behind. Skip the dropped
-                        // events — the renderer's reconcile-on-
-                        // reconnect path is the recovery story.
+                        // RL6 / A30: a subscriber that fell behind has
+                        // lost frames it can't get back (an
+                        // `activity_changed` `seq` gap among them). Close
+                        // with 4008 so the client reconnects and re-pulls
+                        // its snapshots, as `overlay_ws` does. Never 4001
+                        // (kicked: the client would stay signed out).
                         log_debug!(
-                            "[daemon/session_events_ws] subscriber {} lagged {n} events",
+                            "[daemon/session_events_ws] subscriber {} lagged {n} events; closing 4008",
                             subscriber_id,
                         );
-                        continue;
+                        let _ = write.send(lagged_close_message()).await;
+                        break;
                     }
                     Err(RecvError::Closed) => {
                         // Bus channel closed — only happens on daemon
@@ -302,6 +306,21 @@ pub async fn serve_session_events_connection(
         subscriber_id,
         workspace_path,
     );
+}
+
+/// RL6 / A30: the close code for a subscriber that fell behind the bus.
+/// The client reconnects (any close but a kick does) and its hello
+/// handlers re-pull truth. Distinct from 4001 (kicked) and 4003 (revoked).
+pub const LAGGED_CLOSE_CODE: u16 = 4008;
+
+/// The close frame for a lagged subscriber ([`LAGGED_CLOSE_CODE`]).
+pub fn lagged_close_message() -> Message {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    Message::Close(Some(CloseFrame {
+        code: CloseCode::from(LAGGED_CLOSE_CODE),
+        reason: std::borrow::Cow::Borrowed("lagged"),
+    }))
 }
 
 /// The `kind` of the handshake frame. Not a `SessionEvent` variant; the
@@ -357,6 +376,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::ZenChanged {} => None,
         // A11 — hook install problems: daemon-global, every client may toast.
         SessionEvent::HooksInstallFailed { .. } => None,
+        // S4 (RL2) — activity rows: app-level like the compat events below;
+        // a client maps rows to its own tabs and rooms.
+        SessionEvent::ActivityChanged { .. } => None,
         // 0.40.39 — daemon-side activity: app-level (the store maps
         // agent/pane keys itself; spinners exist on every host's UI).
         SessionEvent::SessionActivityChanged { .. } => None,
@@ -723,6 +745,14 @@ mod tests {
             SessionEvent::TokenUsageChanged {},
             SessionEvent::ZenChanged {},
             SessionEvent::HooksInstallFailed { failures: vec![] },
+            SessionEvent::ActivityChanged {
+                seq: 1,
+                instance_id: "0123456789abcdef".into(),
+                row: None,
+                removed: Some("s".into()),
+                turn_ended: None,
+                workspace: None,
+            },
             SessionEvent::PresenceChanged { roster: vec![] },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },

@@ -7,8 +7,8 @@
 //!   * Phase A — `GET /cli/ops/activity` over the persistent `activity_feed`
 //!     SQLite table (the one durable audit surface that had no HTTP route).
 //!   * Phase B — `GET /cli/ops/overview` over the live `v2_session_map` +
-//!     the canonical Active set (`compute_active_project_ids`) + the cached
-//!     `AgentStatusChanged` state — one snapshot of every live agent.
+//!     the canonical Active set (`compute_active_project_ids`) + the
+//!     activity store's rows — one snapshot of every live agent.
 //!
 //! Both routes are **read-only GET**. They reach this module through the
 //! unified `/cli/*` dispatch (`cli::dispatch`), which gates every request on
@@ -122,29 +122,22 @@ struct OverviewSession {
     /// (derived from `compute_active_project_ids`, the SAME source that
     /// produces the `ActiveChanged` event).
     active: bool,
-    /// Normalized status: `working` (start) | `idle` (stop) | `permission`,
-    /// or `null` when no `AgentStatusChanged` has been observed for this
-    /// session since boot. Derived from the cached `AgentStatusChanged` —
-    /// the SAME source `/cli/sessions/events` carries.
+    /// `working` | `idle` | `permission`, or `null` while the session's
+    /// activity row has no evidence yet (unconfirmed). The old words
+    /// (prd-daemon-activity-and-thread-working-v1 A31: `monitoring` →
+    /// `working`, `waiting` → `permission`, `unverifiable` → `idle`) from
+    /// the activity store, the SAME rows `activity_changed` carries.
     agent_status: Option<String>,
+    /// The row's real display (`working` | `monitoring` | `waiting` |
+    /// `idle` | `unverifiable`), `null` while unconfirmed.
+    display: Option<String>,
     /// `live` when this session's PTY is a heartbeat's active terminal,
     /// else `null` (derived from `workspace_heartbeats.active_terminal_id`,
     /// the same truth `HeartbeatStateChanged` carries).
     heartbeat_state: Option<String>,
-    /// Unix seconds of the last observed `AgentStatusChanged` for this
-    /// session, or `null` if none seen.
+    /// Unix seconds of the row's last evidence (`evidenceAt`), or `null`
+    /// if none since registration.
     last_activity_at: Option<i64>,
-}
-
-/// Map the raw `AgentStatusChanged` bucket to the working|idle vocabulary
-/// the overview exposes. Pure + deterministic, so it can't introduce
-/// divergence from the cached value.
-fn normalize_status(raw: &str) -> String {
-    match raw {
-        "start" => "working".to_string(),
-        "stop" => "idle".to_string(),
-        other => other.to_string(),
-    }
 }
 
 pub(crate) fn unix_now_ms() -> i64 {
@@ -183,9 +176,8 @@ pub(crate) fn live_sessions() -> Vec<LiveSession> {
 /// `GET /cli/ops/overview` — one JSON snapshot of every live session on this
 /// daemon, for a pane's initial render. Built by reading the live
 /// `v2_session_map` and tagging each session with status derived from the
-/// SAME sources `/cli/sessions/events` uses (Active set + cached
-/// `AgentStatusChanged`), so the pane and the live event stream never
-/// disagree.
+/// SAME sources `/cli/sessions/events` uses (Active set + the activity
+/// store's rows), so the pane and the live event stream never disagree.
 fn handle_overview() -> CliResponse {
     // `active` — canonical Active set, the SAME function the ActiveChanged
     // broadcast (`active_reaper::recompute_and_broadcast_active`) calls.
@@ -197,6 +189,7 @@ fn handle_overview() -> CliResponse {
         };
 
     let sessions = live_sessions();
+    let displays = crate::activity_events::displays();
 
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -212,10 +205,16 @@ fn handle_overview() -> CliResponse {
                 .unwrap_or(false)
         };
 
-        // agent_status: latest cached AgentStatusChanged for this session.
-        let cached = crate::session_events::agent_status_for(&session_id);
-        let agent_status = cached.as_ref().map(|(raw, _)| normalize_status(raw));
-        let last_activity_at = cached.as_ref().map(|(_, ts)| *ts);
+        // agent_status / display: the session's activity row, once it has
+        // evidence (an unconfirmed row has nothing to say yet).
+        let (agent_status, display, last_activity_at) = match displays.get(&session_id) {
+            Some((d, row)) if row["confirmed"] == serde_json::Value::Bool(true) => (
+                Some(crate::activity_events::legacy_word(*d).to_string()),
+                Some(d.as_str().to_string()),
+                row["evidenceAt"].as_i64().map(|ms| ms / 1000),
+            ),
+            _ => (None, None, None),
+        };
 
         // heartbeat_state: live iff this PTY backs a heartbeat's active
         // terminal (same column HeartbeatStateChanged is derived from).
@@ -233,6 +232,7 @@ fn handle_overview() -> CliResponse {
             agent_address,
             active,
             agent_status,
+            display,
             heartbeat_state,
             last_activity_at,
         });
@@ -248,15 +248,6 @@ fn handle_overview() -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalize_status_maps_buckets_to_working_idle() {
-        assert_eq!(normalize_status("start"), "working");
-        assert_eq!(normalize_status("stop"), "idle");
-        // Unknown/other buckets pass through verbatim (e.g. permission).
-        assert_eq!(normalize_status("permission"), "permission");
-        assert_eq!(normalize_status("whatever"), "whatever");
-    }
 
     #[test]
     fn activity_requires_project_param() {

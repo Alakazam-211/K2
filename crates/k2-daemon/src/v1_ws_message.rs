@@ -40,29 +40,36 @@ fn decode_ws_segment(raw: &str) -> Option<String> {
     Some(s)
 }
 
-/// The canonical agent's current hook status for a live session at `project_path`
-/// (`working`|`idle`|`permission`|…), or `None` when no live session / no status
-/// observed. Reads the SAME cached `AgentStatusChanged` the ops overview uses.
-fn canonical_status_for_path(project_path: &str) -> Option<String> {
-    for (_addr, session) in crate::v2_session_map::snapshot() {
+/// A31 (prd-daemon-activity-and-thread-working-v1): whether a display
+/// refuses a `/v1` message, and the old word it is reported as. Busy =
+/// `working` or `waiting` only; `monitoring` (lead idle, background work),
+/// `unverifiable` and `idle` accept the message, so integrators see no
+/// more refusals than the old hook-only gate gave them.
+pub fn busy_word(display: k2_core::activity::Display) -> Option<&'static str> {
+    use k2_core::activity::Display;
+    match display {
+        Display::Working | Display::Waiting => Some(crate::activity_events::legacy_word(display)),
+        Display::Monitoring | Display::Unverifiable | Display::Idle => None,
+    }
+}
+
+/// `working` | `permission` when a live session at `project_path` is busy
+/// (its activity-store row, the SAME rows the ops overview reads), else
+/// `None`.
+pub fn busy_status_for_path(project_path: &str) -> Option<&'static str> {
+    let displays = crate::activity_events::displays();
+    crate::v2_session_map::snapshot().into_iter().find_map(|(_addr, session)| {
         let matches = session
             .cwd
             .as_ref()
-            .map(|p| p.to_string_lossy() == project_path)
-            .unwrap_or(false);
-        if matches {
-            if let Some((raw, _ts)) =
-                crate::session_events::agent_status_for(&session.session_id.to_string())
-            {
-                return Some(match raw.as_str() {
-                    "start" => "working".to_string(),
-                    "stop" => "idle".to_string(),
-                    other => other.to_string(),
-                });
-            }
+            .is_some_and(|p| p.to_string_lossy() == project_path);
+        if !matches {
+            return None;
         }
-    }
-    None
+        displays
+            .get(&session.session_id.to_string())
+            .and_then(|(d, _)| busy_word(*d))
+    })
 }
 
 pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
@@ -116,19 +123,17 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
     }
 
     // (3) BUSY — refuse to inject into a working / HITL-permission agent.
-    if let Some(status) = canonical_status_for_path(&project_path) {
-        if status == "working" || status == "permission" {
-            return CliResponse {
-                status: "409 Conflict",
-                content_type: "application/json",
-                body: serde_json::json!({
-                    "delivered": false,
-                    "reason": "agent_busy",
-                    "agentStatus": status,
-                })
-                .to_string(),
-            };
-        }
+    if let Some(status) = busy_status_for_path(&project_path) {
+        return CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "delivered": false,
+                "reason": "agent_busy",
+                "agentStatus": status,
+            })
+            .to_string(),
+        };
     }
 
     // Deliver via the SAME engine as `k2 talk` (wake=true → live-inject or
@@ -155,6 +160,18 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
 mod tests {
     use super::*;
     use crate::routes::http::V1Principal;
+
+    /// T-S4g (A31): `monitoring` accepts a message, `working` and
+    /// `waiting` refuse it with the old word.
+    #[test]
+    fn busy_is_working_or_waiting_only() {
+        use k2_core::activity::Display;
+        assert_eq!(busy_word(Display::Working), Some("working"));
+        assert_eq!(busy_word(Display::Waiting), Some("permission"));
+        assert_eq!(busy_word(Display::Monitoring), None);
+        assert_eq!(busy_word(Display::Unverifiable), None);
+        assert_eq!(busy_word(Display::Idle), None);
+    }
 
     /// Phase 0 — missing `canonical_message` capability → uniform 404.
     #[test]

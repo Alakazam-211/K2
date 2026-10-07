@@ -29,5 +29,6 @@
   "remote_session_access_denied": "app",
   "fs_changed": "app",
   "zen_changed": "app",
-  "hooks_install_failed": "app"
+  "hooks_install_failed": "app",
+  "activity_changed": "app"
 }

@@ -76,6 +76,8 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
         cwd: session.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
         program: session.program.clone(),
     });
+    // S4 (RL2): announce the new row (idle, unconfirmed) on the bus.
+    crate::activity_events::note_registered(&session.session_id.to_string());
     let map_arc = shared();
     let displaced = {
         let mut map = map_arc.lock().unwrap();
@@ -319,18 +321,9 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
             },
         );
 
-        // 0.40.39 — a force-removed session must not strand a WORKING
-        // spinner: emit the terminal idle here (the observer's own exit
-        // paths cover the normal ChildExit case; duplicate idles are
-        // transition-deduped client-side).
-        let _ = crate::session_events::emit(
-            crate::session_events::SessionEvent::SessionActivityChanged {
-                workspace_path: cwd_emit.clone(),
-                agent_name: agent_name.to_string(),
-                pane_group_id: crate::session_events::pane_group_id_from_agent(agent_name),
-                status: "idle".to_string(),
-            },
-        );
+        // A force-removed session must not strand a WORKING spinner. Since
+        // S4 (RL5) the compat `session_activity_changed` idle comes from the
+        // activity store's row removal below (`activity_events`).
 
         let terminal_id = session.session_id.to_string();
         // DA2: the activity row goes with the session (RL5 compat `stop`

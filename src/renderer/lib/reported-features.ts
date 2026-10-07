@@ -29,6 +29,11 @@ export const REPORTED_FEATURES = {
    *  Thread item per addr in one request, for Zen's list previews. A server
    *  without the key gets one `GET /cli/thread?addr=&limit=1` per row. */
   'thread-latest': 'thread-latest',
+  /** prd-daemon-activity-and-thread-working-v1 RL8/A34: the daemon owns agent
+   *  activity (`activity_changed` + `GET /cli/activity/snapshot`). A client
+   *  renders those rows; a server without the key gets RL13 (its
+   *  `session_activity_changed` stream as-is). */
+  'daemon-activity': 'daemon-activity',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

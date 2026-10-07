@@ -704,3 +704,54 @@ async fn activity_hook_routes_refuse_foreign_origin_cookies() {
         assert_eq!(r.status, 200, "Bearer Admin with foreign Origin: {}", r.body);
     });
 }
+
+/// prd-daemon-activity-and-thread-working-v1 S4: `GET /cli/activity/snapshot`
+/// is a read, but a cookie read from a foreign origin is refused like any
+/// other (0.44.4); same-origin, the hosted web client, the Tauri webview and
+/// token callers get the snapshot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activity_snapshot_get_refuses_foreign_origin_cookies() {
+    let _g = lock();
+    with_temp_home(|_| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let member = provision(d.port, &format!("sn{}", &uuid::Uuid::new_v4().to_string()[..6]), "member");
+        let cookie = format!("Cookie: k2_session={member}");
+        let evil = format!("Origin: {EVIL}");
+        let host = "rosson.k2.dev";
+        let path = "/cli/activity/snapshot";
+
+        for bad in [
+            evil.as_str(),
+            "Origin: https://mallory.app.k2.dev",
+            "Sec-Fetch-Site: cross-site",
+            "Sec-Fetch-Site: same-site",
+        ] {
+            let r = req(d.port, "GET", path, host, &[&cookie, bad], None);
+            assert_origin_refused(&r, &format!("snapshot {bad}"));
+        }
+
+        let is_snapshot = |r: &Resp, label: &str| {
+            assert_eq!(r.status, 200, "{label}: {}", r.body);
+            assert!(json(&r.body)["rows"].is_array(), "{label}: {}", r.body);
+        };
+        let r = req(d.port, "GET", path, host, &[&cookie, "Sec-Fetch-Site: same-origin"], None);
+        is_snapshot(&r, "same-origin cookie");
+        let r = req(
+            d.port,
+            "GET",
+            path,
+            host,
+            &[&cookie, "Origin: https://rosson.app.k2.dev", "X-Forwarded-Proto: https"],
+            None,
+        );
+        is_snapshot(&r, "own app origin cookie");
+        let lo_host = format!("127.0.0.1:{}", d.port);
+        let r = req(d.port, "GET", path, &lo_host, &[&cookie, "Origin: tauri://localhost"], None);
+        is_snapshot(&r, "Tauri origin cookie");
+        let bearer = format!("Authorization: Bearer {member}");
+        let r = req(d.port, "GET", path, host, &[&bearer, &evil], None);
+        is_snapshot(&r, "Bearer login with foreign Origin");
+        let r = req(d.port, "GET", &format!("{path}?token={OWNER_TOKEN}"), host, &[&evil], None);
+        is_snapshot(&r, "owner token with foreign Origin");
+    });
+}

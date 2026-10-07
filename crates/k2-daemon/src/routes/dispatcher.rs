@@ -1110,6 +1110,40 @@ async fn handle_one_request(
                 }
             }
         }
+        // prd-daemon-activity-and-thread-working-v1 RL3: every activity
+        // row + workspace rollup + `seq`, pulled by a client on socket
+        // (re)open, daemon restart and `seq` gap. A plain read: owner
+        // token or a live Connect login (Member). App passes are refused
+        // until their guest projection lands (S8, AP3). GET-only.
+        "/cli/activity/snapshot" => {
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "405 Method Not Allowed",
+                    "application/json",
+                    r#"{"error":"GET required"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || crate::activity_routes::handle_snapshot(&params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Session Stream WS subscribe endpoint (0.34.0 Phase 2).
         // Lives on a /cli/ path but routes to the WS handler rather
         // than crate::cli::dispatch because it's an HTTP upgrade, not a

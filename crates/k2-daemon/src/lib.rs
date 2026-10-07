@@ -159,6 +159,9 @@ pub mod session_activity;
 pub mod hook_ingest;
 pub mod activity_store;
 pub mod activity_transcript;
+// prd-daemon-activity-and-thread-working-v1 S4: activity_changed + snapshot.
+pub mod activity_events;
+pub mod activity_routes;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
@@ -308,6 +311,7 @@ pub mod test_harness {
         // The activity store consumes the hook plane in main.rs; run it
         // here too so `/hook/*` reaches rows and the compat events.
         crate::activity_store::spawn();
+        crate::activity_events::spawn();
 
         // The dispatcher 503s every real route until boot-status is
         // `ready`; flip it so auth tests see real status codes.

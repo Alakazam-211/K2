@@ -15,8 +15,9 @@ static IDLE_TX: OnceLock<mpsc::UnboundedSender<String>> = OnceLock::new();
 
 const IDLE_DEBOUNCE: Duration = Duration::from_secs(20);
 
-/// Child exit / channel close. `SessionActivityChanged` idle and
-/// unregister are observed on the bus inside [`spawn`].
+/// A session's lead went idle (prd-daemon-activity-and-thread-working-v1
+/// A29: called by `activity_events` on every activity-store turn end).
+/// Unregister is observed on the bus inside [`spawn`].
 pub fn note_idle_workspace(workspace_path: &str) {
     if workspace_path.is_empty() {
         return;
@@ -79,11 +80,6 @@ pub fn spawn() {
         loop {
             let cwd = tokio::select! {
                 ev = events.recv() => match ev {
-                    Ok(SessionEvent::SessionActivityChanged { status, workspace_path, .. })
-                        if status == "idle" =>
-                    {
-                        Some(workspace_path)
-                    }
                     Ok(SessionEvent::SessionRemoved { workspace_path, .. }) => Some(workspace_path),
                     Ok(_) => None,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,

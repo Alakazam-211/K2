@@ -110,6 +110,8 @@ use Floor::{Admin, Member, NoLogin, Owner, Public};
 /// a binary search; a unit test pins the order and uniqueness).
 pub const ROUTES: &[Route] = &[
     get("/cli/activity/events", Member),
+    // prd-daemon-activity-and-thread-working-v1 RL3: rows + rollups + seq.
+    get("/cli/activity/snapshot", Member),
     // k2 sidecar v1: the "Allow hiring and managing agents" switch.
     post("/cli/agent-access/set", Admin),
     post("/cli/agent/complete", Member),
@@ -1157,6 +1159,9 @@ mod tests {
         assert!(post_allowed("/cli/hooks/install"));
         assert!(post_allowed("/hook/event"));
         assert!(!post_allowed("/hook/complete"), "the legacy hook stays GET-only");
+        // S4: the activity snapshot is a plain read.
+        assert!(!post_allowed("/cli/activity/snapshot"));
+        assert_eq!(lookup("/cli/activity/snapshot").and_then(|r| r.get), Some(Member));
     }
 
     // ── source walk: every /cli route literal is classified ───────────

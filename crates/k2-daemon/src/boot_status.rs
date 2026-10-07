@@ -218,6 +218,11 @@ pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
 /// local-only Home avatar cache (`/cli/home/avatars*`).
 pub const FEATURE_HOME_AVATARS: &str = "home-avatars-v1";
 
+/// prd-daemon-activity-and-thread-working-v1 RL8 / A34: this daemon owns
+/// agent activity (`activity_changed` + `GET /cli/activity/snapshot`). A
+/// client renders its rows; a server without the key gets RL13.
+pub const FEATURE_DAEMON_ACTIVITY: &str = "daemon-activity";
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -232,6 +237,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ZEN_CHROME);
     out.push(FEATURE_THREAD_LATEST);
     out.push(FEATURE_HOME_AVATARS);
+    out.push(FEATURE_DAEMON_ACTIVITY);
     out
 }
 
@@ -245,7 +251,16 @@ mod tests {
         assert!(attach_only_supported());
         assert_eq!(
             features(),
-            vec!["spawn-attach-only", "tickets-list-all", "zen-v1", "zen-gardens-v1", "zen-chrome-v1", "thread-latest", "home-avatars-v1"]
+            vec![
+                "spawn-attach-only",
+                "tickets-list-all",
+                "zen-v1",
+                "zen-gardens-v1",
+                "zen-chrome-v1",
+                "thread-latest",
+                "home-avatars-v1",
+                "daemon-activity"
+            ]
         );
     }
 

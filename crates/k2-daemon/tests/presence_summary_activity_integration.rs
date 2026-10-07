@@ -4,13 +4,16 @@
 //! A Home row on another server reads this summary. It now carries
 //! `agentActivity` (registered workspaces with a working or waiting agent)
 //! and `activeProjectIds` (the canonical Active set). The test drives the
-//! REAL sources through the REAL dispatcher:
+//! REAL sources through the REAL dispatcher into the daemon activity
+//! store (prd-daemon-activity-and-thread-working-v1 S4, RL7), which the
+//! summary reads:
 //!   - a real `cat` PTY registered in the v2 map; a braille title written
 //!     through it reaches the session-activity observer (`working`);
 //!   - a real `/hook/complete` call with that session's id as `paneId`
-//!     (the v2 session id, vs-live Z30) through the daemon's broadcast sink
-//!     (`permission`, newer, wins);
+//!     (the v2 session id, vs-live Z30): `permission` (display `waiting`;
+//!     once a hook spoke, title evidence no longer counts);
 //!   - unregistering the session drops it.
+//! Each entry keeps the old `status` word and adds the real `display`.
 //! `online` and `workspaces` keep their shape for older clients.
 //!
 //! ISOLATION: `$HOME`, the shared DB, the v2 map and the hook sink are
@@ -204,7 +207,7 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         session.write(b"\x1b]0;\xe2\xa0\x8b Working\x07\n".to_vec());
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working" }]),
+            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working", "display": "working" }]),
             "title activity",
         );
 
@@ -218,7 +221,7 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         assert_eq!(r.status, 200, "hook: {}", r.body);
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "permission" }]),
+            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "permission", "display": "waiting" }]),
             "permission hook",
         );
 
@@ -240,7 +243,7 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         assert_eq!(r.status, 200, "hook: {}", r.body);
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working" }]),
+            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working", "display": "working" }]),
             "start hook",
         );
         let removed = v2_session_map::unregister(agent).expect("session was registered");

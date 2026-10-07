@@ -32,10 +32,11 @@
 //! rule only prefers daemon truth for keys the daemon has spoken for).
 //!
 //! prd-daemon-activity-and-thread-working-v1 S2 (DA28): every transition
-//! also feeds the daemon activity store as title evidence, which counts
-//! only for a session with no hook and no transcript evidence. A child
-//! exit always counts (`pty_exited`). The `SessionActivityChanged` emit
-//! stays until S4 moves the compat events onto the store.
+//! feeds the daemon activity store as title evidence, which counts only
+//! for a session with no hook and no transcript evidence. A child exit
+//! always counts (`pty_exited`). Since S4 (RL5, A29) this observer emits
+//! nothing on the bus: the compat `SessionActivityChanged` and the
+//! token-ledger idle scan come from the store (`activity_events`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,23 +44,13 @@ use std::time::Duration;
 use k2_core::log_debug;
 use k2_core::terminal::{AlacEvent, DaemonPtySession};
 
-/// Wire status values (kept as &'static str — the event contract is the
-/// SSOT and these are the only three values it may carry).
+/// The observer's three states (fed to the activity store as title
+/// evidence).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activity {
     Working,
     Idle,
     Permission,
-}
-
-impl Activity {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Activity::Working => "working",
-            Activity::Idle => "idle",
-            Activity::Permission => "permission",
-        }
-    }
 }
 
 /// WORKING evidence expires this long after the last spinner-glyph
@@ -118,34 +109,20 @@ pub fn next_state(current: Activity, title: Option<&str>, bell: bool, grace_expi
     current
 }
 
-fn emit_status(agent_name: &str, session_id: &str, workspace_path: &str, status: Activity) {
+fn emit_status(session_id: &str, status: Activity) {
     let signal = match status {
         Activity::Working => k2_core::activity::TitleSignal::Working,
         Activity::Idle => k2_core::activity::TitleSignal::Idle,
         Activity::Permission => k2_core::activity::TitleSignal::Permission,
     };
     crate::activity_store::apply_title(session_id, signal);
-    let pane_group_id = crate::session_events::pane_group_id_from_agent(agent_name);
-    let _ = crate::session_events::emit(
-        crate::session_events::SessionEvent::SessionActivityChanged {
-            workspace_path: workspace_path.to_string(),
-            agent_name: agent_name.to_string(),
-            pane_group_id,
-            status: status.as_str().to_string(),
-        },
-    );
 }
 
 /// Spawn the observer for one registered session. Lives and dies with
-/// the PTY: exits on ChildExit or channel close (last Arc dropped), and
-/// `v2_session_map::unregister` emits the final idle independently so a
-/// force-removed session can't strand a WORKING state.
+/// the PTY: exits on ChildExit or channel close (last Arc dropped). A
+/// force-removed session can't strand a WORKING state: its activity row
+/// goes away in `v2_session_map::unregister`.
 pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
-    let workspace_path = session
-        .cwd
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let session_id = session.session_id.to_string();
     let mut rx = session.subscribe_events();
     tokio::spawn(async move {
@@ -169,12 +146,9 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
                 Some(Ok(AlacEvent::Bell)) => (None, true, false),
                 Some(Ok(AlacEvent::ChildExit(_))) => {
                     if state != Activity::Idle {
-                        emit_status(&agent_name, &session_id, &workspace_path, Activity::Idle);
+                        emit_status(&session_id, Activity::Idle);
                     }
                     crate::activity_store::apply(&session_id, k2_core::activity::Evidence::PtyExited);
-                    // Already-idle exits do not emit. The ledger still
-                    // needs this session, and only this workspace.
-                    crate::token_usage_scan::note_idle_workspace(&workspace_path);
                     log_debug!("[session-activity] observer exit (child) agent={agent_name}");
                     return;
                 }
@@ -182,10 +156,9 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
                 Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
                 Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                     if state != Activity::Idle {
-                        emit_status(&agent_name, &session_id, &workspace_path, Activity::Idle);
+                        emit_status(&session_id, Activity::Idle);
                     }
                     crate::activity_store::apply(&session_id, k2_core::activity::Evidence::PtyExited);
-                    crate::token_usage_scan::note_idle_workspace(&workspace_path);
                     log_debug!("[session-activity] observer exit (closed) agent={agent_name}");
                     return;
                 }
@@ -202,7 +175,7 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
 
             if new_state != state {
                 state = new_state;
-                emit_status(&agent_name, &session_id, &workspace_path, state);
+                emit_status(&session_id, state);
             }
         }
     });

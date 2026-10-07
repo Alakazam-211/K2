@@ -89,10 +89,12 @@ export interface HelloEvent {
   subscriber_id: number
   /** 0.40.48 (optional — older daemons omit it): the daemon's per-boot
    *  instance id, snake_case on the WS wire (`instance_id`; the HTTP
-   *  /boot-status carries the camelCase `instanceId`). Restart DETECTION
-   *  is owned by ConnectionGate's boot-status health poll — consumers here
-   *  already re-snapshot on every hello, which covers the restart case —
-   *  so this is currently informational/wire-documenting only. */
+   *  /boot-status carries the camelCase `instanceId`). The primary room's
+   *  restart detection is ConnectionGate's boot-status poll; a remote room
+   *  reads it here (prd-daemon-activity-and-thread-working-v1 RL4/A28:
+   *  `onAppHello` handlers receive this frame, and an id that differs
+   *  from the last one seen means a daemon restart, so the activity
+   *  snapshot is re-pulled). */
   instance_id?: string
 }
 
@@ -132,7 +134,10 @@ export interface LlmStatusChangedEvent {
 }
 
 /** APP-LEVEL — an agent's working/idle status flipped. Replaces the
- *  list-running + agent-status poll in `stores/active-agents.ts`. */
+ *  list-running + agent-status poll in `stores/active-agents.ts`.
+ *  Deprecated compat (prd-daemon-activity-and-thread-working-v1 RL5): the
+ *  daemon derives it from its activity row; `activity_changed` replaces
+ *  it. */
 export interface AgentStatusChangedEvent {
   kind: 'agent_status_changed'
   /** The `K2_PANE_ID` the PTY was spawned with. For a v2 session this is
@@ -151,6 +156,10 @@ export interface AgentStatusChangedEvent {
  *  (session_activity.rs): Title/Bell-derived, visibility-independent.
  *  Feeds the activity store's daemon-truth map so tab spinners stay
  *  correct for hidden/unmounted panes. */
+/** Deprecated compat (prd-daemon-activity-and-thread-working-v1 RL5): from
+ *  the daemon's activity row (`monitoring` → working, `waiting` →
+ *  permission, `unverifiable` → idle), no longer the title observer.
+ *  `activity_changed` replaces it. */
 export interface SessionActivityChangedEvent {
   kind: 'session_activity_changed'
   workspacePath: string
@@ -443,6 +452,77 @@ export interface HooksInstallFailedEvent {
   failures: Array<{ cli: string; error: string; path?: string }>
 }
 
+/** prd-daemon-activity-and-thread-working-v1 DA19/§7.2: what one live
+ *  session's agent is doing, as the daemon decided it. */
+export type ActivityDisplay = 'working' | 'monitoring' | 'waiting' | 'idle' | 'unverifiable'
+
+/** §7.2 — one activity row (one live v2 session). No tool or task names. */
+export interface ActivityRow {
+  sessionId: string
+  agentName: string
+  projectId: string | null
+  workspacePath: string | null
+  harness: string
+  display: ActivityDisplay
+  lead: {
+    state: 'idle' | 'working' | 'waiting'
+    outcome: 'none' | 'success' | 'failure' | 'cancelled' | 'boundary'
+    since: number
+    promptId: string | null
+  }
+  children: {
+    subagents: number
+    shells: number
+    monitors: number
+    crons: number
+    unknown: number
+    owed: number
+    waiting: number
+  }
+  turnStartedAt: number | null
+  evidenceAt: number | null
+  evidenceSource: 'hook' | 'transcript' | 'title' | 'process' | 'screen' | null
+  /** DA31 vocabulary (`k2-core/src/activity/fixtures/reasons.json`). */
+  reason: string
+  staleSince: number | null
+  confirmed: boolean
+  rev: number
+}
+
+/** RL1 — one workspace's rollup: the highest display across its sessions
+ *  (`waiting > working > monitoring > unverifiable > idle`). */
+export interface ActivityWorkspace {
+  projectId: string | null
+  workspacePath: string | null
+  display: ActivityDisplay
+  counts: Record<ActivityDisplay, number>
+  /** The earliest `turnStartedAt` among the `working` sessions. */
+  since: number | null
+}
+
+/** APP-LEVEL (RL2, §7.3) — one activity row changed or went away. `seq` is
+ *  store-wide and gap-free; a gap, a new `instance_id` on hello, or a
+ *  (re)opened socket means "pull `GET /cli/activity/snapshot`" (RL4). */
+export interface ActivityChangedEvent {
+  kind: 'activity_changed'
+  seq: number
+  instanceId: string
+  row: ActivityRow | null
+  removed: string | null
+  turnEnded: { outcome: ActivityRow['lead']['outcome']; reason: string; at: number } | null
+  workspace: ActivityWorkspace | null
+}
+
+/** §7.4 — `GET /cli/activity/snapshot[?workspace=]`. */
+export interface ActivitySnapshot {
+  instanceId: string
+  seq: number
+  serverNow: number
+  staleAfterSecs: number
+  rows: ActivityRow[]
+  workspaces: ActivityWorkspace[]
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -471,6 +551,7 @@ export type SessionEventMessage =
   | FsChangedEvent
   | ZenChangedEvent
   | HooksInstallFailedEvent
+  | ActivityChangedEvent
   | ReviewQueueChangedEvent
   | ReviewChangedEvent
   | MailChangedEvent
@@ -878,7 +959,8 @@ type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
 type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
 type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
 type WorkspaceResourcesHandler = (e: WorkspaceResourcesChangedEvent) => void
-type AppHelloHandler = () => void
+/** RL4/A28: receives the hello frame (its `instance_id` tells a restart). */
+type AppHelloHandler = (hello: HelloEvent) => void
 // #688 — app-level session add/remove. The per-workspace
 // `subscribeToWorkspaceSessionEvents` only sees its OWN cwd; the
 // Active-bar "live session" dot needs liveness across EVERY workspace
@@ -918,6 +1000,7 @@ type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type ZenChangedHandler = () => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
+type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
@@ -962,6 +1045,7 @@ interface AppBusHandlers {
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
+  activityChanged: Set<ActivityChangedHandler>
 }
 
 interface BusState {
@@ -997,6 +1081,7 @@ function createBusState(scopeId: string): BusState {
       activeChanged: new Set(),
       zenChanged: new Set(),
       hooksInstallFailed: new Set(),
+      activityChanged: new Set(),
     },
   }
 }
@@ -1171,6 +1256,12 @@ export function onHooksInstallFailed(scope: ServerScope, fn: HooksInstallFailedH
   return addHandler(busFor(scope).handlers.hooksInstallFailed, fn)
 }
 
+/** RL2 — subscribe to APP-LEVEL `activity_changed` (the daemon's activity
+ *  rows, prd-daemon-activity-and-thread-working-v1). */
+export function onActivityChanged(scope: ServerScope, fn: ActivityChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.activityChanged, fn)
+}
+
 /** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
  *  `fs_changed` (paths under a workspace mutated on the host by agents,
  *  other clients, or `/cli/fs/*`). The primary bus survives host-switch
@@ -1232,7 +1323,7 @@ function registerAppBusCarrier(scope: ServerScope): { frame(msg: SessionEventMes
       const bus = busFor(scope)
       if (bus.openSockets > 0) return
       if (msg.kind === 'hello') {
-        for (const fn of bus.handlers.appHello) fn()
+        for (const fn of bus.handlers.appHello) fn(msg)
         return
       }
       if (!CARRIED_KINDS.has(msg.kind)) return
@@ -1258,8 +1349,8 @@ export function appBusCarrierCountForTests(scope: ServerScope): number {
  *  compile. `hello` is handled before the table by both callers (it
  *  re-snapshots); its entry fans out to `onAppHello`. */
 const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
-  hello: (h) => {
-    for (const fn of h.appHello) fn()
+  hello: (h, m) => {
+    for (const fn of h.appHello) fn(m)
   },
   active_changed: (h, m) => {
     for (const fn of h.activeChanged) fn(m)
@@ -1324,6 +1415,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)
   },
+  activity_changed: (h, m) => {
+    for (const fn of h.activityChanged) fn(m)
+  },
 }
 
 /** Dispatch one app-level frame on `bus`. `socket` names the caller for
@@ -1363,6 +1457,7 @@ export interface AppBus {
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
   onHooksInstallFailed(fn: HooksInstallFailedHandler): UnsubscribeFn
+  onActivityChanged(fn: ActivityChangedHandler): UnsubscribeFn
 }
 
 const _facades = new Map<string, AppBus>()
@@ -1404,6 +1499,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
     onHooksInstallFailed: (fn) => onHooksInstallFailed(scope, fn),
+    onActivityChanged: (fn) => onActivityChanged(scope, fn),
   }
   _facades.set(scope.id, facade)
   return facade
@@ -1551,7 +1647,7 @@ export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {
         void refreshActiveSnapshot(scope)
         // Fan out to Wave B app-level consumers so they re-snapshot their
         // own truth (llm/agent/tunnel) after the same drop window.
-        for (const h of bus.handlers.appHello) h()
+        for (const h of bus.handlers.appHello) h(msg)
         return
       }
       if (msg.kind === 'active_changed' && scope.isPrimary) {

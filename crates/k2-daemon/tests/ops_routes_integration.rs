@@ -316,35 +316,50 @@ async fn overview_lists_live_session_with_status_matching_event_source() {
             .expect("session has cwd");
         seed_project("ops-live-pid", &session_cwd, Some(now_secs()));
 
-        // Drive an AgentStatusChanged through the SAME emit `/cli/sessions/
-        // events` uses; capture what a bus subscriber receives so we can
-        // prove the overview reports the identical truth.
+        // A live session with no evidence yet says nothing.
+        let r = http(d.port, "GET", &format!("/cli/ops/overview?token={OWNER_TOKEN}"));
+        assert_eq!(r.status, 200, "owner GET overview → 200; body={}", r.body);
+        let arr: serde_json::Value = serde_json::from_str(&r.body).expect("parse overview array");
+        let entry = arr
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|e| e["sessionId"] == serde_json::json!(sid))
+            .unwrap_or_else(|| panic!("overview must list the live session; body={}", r.body))
+            .clone();
+        assert!(entry["agentStatus"].is_null() && entry["display"].is_null(), "unconfirmed: {entry}");
+
+        // Drive the activity store through the real hook route (a legacy
+        // `/hook/complete` start for this live pane) and capture what a
+        // bus subscriber receives, so we can prove the overview reports
+        // the identical truth (prd-daemon-activity-and-thread-working-v1
+        // RL7: both read the store).
         let mut rx = session_events::subscribe();
-        let _ = session_events::emit(session_events::SessionEvent::AgentStatusChanged {
-            pane_id: sid.clone(),
-            tab_id: agent_address.to_string(),
-            status: "start".into(),
-            workspace_path: None,
-        });
-        // Drain to our probe (global bus may carry other events).
-        let stream_status = futures_block(async {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let r = http(
+            d.port,
+            "GET",
+            &format!("/hook/complete?token={OWNER_TOKEN}&paneId={sid}&tabId=t&eventType=UserPromptSubmit"),
+        );
+        assert_eq!(r.status, 200, "hook: {}", r.body);
+        let stream_display = futures_block(async {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                assert!(!remaining.is_zero(), "probe AgentStatusChanged not received");
+                assert!(!remaining.is_zero(), "activity_changed for the session not received");
                 match tokio::time::timeout(remaining, rx.recv()).await {
-                    Ok(Ok(session_events::SessionEvent::AgentStatusChanged {
-                        pane_id,
-                        status,
-                        ..
-                    })) if pane_id == sid => break status,
+                    Ok(Ok(session_events::SessionEvent::ActivityChanged { row: Some(row), .. }))
+                        if row["sessionId"] == serde_json::json!(sid) =>
+                    {
+                        break row["display"].as_str().expect("display").to_string()
+                    }
                     Ok(Ok(_)) => continue,
-                    Ok(Err(_)) => panic!("receiver closed"),
-                    Err(_) => panic!("timed out waiting for probe event"),
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                    Ok(Err(e)) => panic!("receiver: {e}"),
+                    Err(_) => panic!("timed out waiting for activity_changed"),
                 }
             }
         });
-        assert_eq!(stream_status, "start", "the events-stream truth is 'start'");
+        assert_eq!(stream_display, "working", "the events-stream truth is 'working'");
 
         let r = http(
             d.port,
@@ -362,14 +377,15 @@ async fn overview_lists_live_session_with_status_matching_event_source() {
 
         assert_eq!(entry["agentAddress"], agent_address);
         assert_eq!(entry["workspacePath"], session_cwd);
-        // agent_status is the normalized form of the SAME status the events
-        // stream delivered (start → working): no divergent source.
+        // agent_status is the old word for the SAME row the events stream
+        // delivered: no divergent source.
         assert_eq!(
             entry["agentStatus"], "working",
-            "overview status must derive from the same AgentStatusChanged the \
-             events stream carried ({stream_status}); body={}",
+            "overview status must derive from the same row the events stream \
+             carried ({stream_display}); body={}",
             r.body
         );
+        assert_eq!(entry["display"], "working", "body={}", r.body);
         assert_eq!(
             entry["active"], true,
             "session's project is Active per compute_active_project_ids; body={}",
@@ -383,7 +399,7 @@ async fn overview_lists_live_session_with_status_matching_event_source() {
         );
         assert!(
             entry["lastActivityAt"].as_i64().unwrap_or(0) > 0,
-            "last_activity_at stamped from the status emit; body={}",
+            "last_activity_at stamped from the row's evidence; body={}",
             r.body
         );
 

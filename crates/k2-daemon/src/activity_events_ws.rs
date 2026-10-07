@@ -46,6 +46,10 @@ use crate::session_events::{self, SessionEvent};
 /// Wire path. Not `/cli/sessions/events`.
 pub const ACTIVITY_EVENTS_WS_PATH: &str = "/cli/activity/events";
 
+/// RL6 / A30: sent to a guest socket that fell behind the bus, just
+/// before it is closed with 4008. The app re-opens and re-reads.
+pub const RESYNC_FRAME: &str = r#"{"kind":"resync"}"#;
+
 /// AH29 — the caps that open this socket (any one, in the room).
 /// `tickets:read` joined in 0.43.3 (prd-app-tickets-websocket-v1).
 pub const SOCKET_CAPS: [&str; 3] = [
@@ -425,7 +429,14 @@ pub async fn serve_activity_events_connection(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // RL6 / A30: frames were lost. Tell the app to
+                        // re-pull its state, then close 4008 (never 4001,
+                        // which means kicked).
+                        let _ = write.send(Message::Text(RESYNC_FRAME.to_string().into())).await;
+                        let _ = write.send(crate::session_events_ws::lagged_close_message()).await;
+                        break;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }

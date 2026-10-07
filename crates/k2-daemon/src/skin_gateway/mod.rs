@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -16,15 +16,30 @@ use tokio::sync::Mutex;
 
 pub const COOKIE_NAME: &str = "k2_skin_ui";
 pub const GATEWAY_FORBIDDEN_JSON: &str = r#"{"error":"not allowed"}"#;
+/// 403 body for a state-changing request or socket that came from another
+/// origin (security-review-app-cookie-csrf-v1 §6 option 1). Written before
+/// the session lookup and before any upstream connect.
+pub const CROSS_ORIGIN_REFUSED_JSON: &str =
+    r#"{"error":"cross-origin request refused","code":"cross_origin_refused"}"#;
 const LOGIN_HTML: &str = include_str!("login.html");
 const RESET_HTML: &str = include_str!("reset.html");
 const APP_HTML: &str = include_str!("app.html");
 const APP_CSS: &str = include_str!("app.css");
 const APP_JS: &str = include_str!("app.js");
 
+/// Cookie `Max-Age` and gateway map lifetime: the same TTL the daemon
+/// gives the `k2skn_` session pass it mints on `/cli/skin/login`
+/// (`skin::create_session_token` uses `connect_users::session_ttl_days`).
+fn session_max_age_secs() -> i64 {
+    k2_core::connect_users::session_ttl_days().saturating_mul(86_400)
+}
+
 #[derive(Clone)]
 struct Session {
     token: String,
+    /// Dropped from the map once past this; the pass is expired upstream
+    /// by then too.
+    expires: Instant,
 }
 
 struct Gateway {
@@ -223,93 +238,116 @@ pub fn never_proxy(path: &str) -> bool {
         || p == "/v1"
 }
 
+/// Every `(method, path)` the helper forwards with the guest's pass. The
+/// one list: [`allowlisted_http`] reads it, and the cross-origin tests walk
+/// it, so a new mutating route is covered the moment it is added here.
+pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
+    ("GET", "/cli/skin/agents"),
+    ("HEAD", "/cli/skin/agents"),
+    ("GET", "/cli/thread"),
+    ("HEAD", "/cli/thread"),
+    ("POST", "/cli/thread/post"),
+    ("POST", "/cli/thread/answer"),
+    ("POST", "/cli/thread/void"),
+    ("GET", "/cli/fs/read-dir"),
+    ("HEAD", "/cli/fs/read-dir"),
+    ("GET", "/cli/fs/read-file"),
+    ("HEAD", "/cli/fs/read-file"),
+    ("GET", "/cli/fs/read-binary"),
+    ("HEAD", "/cli/fs/read-binary"),
+    ("GET", "/cli/fs/read-range"),
+    ("HEAD", "/cli/fs/read-range"),
+    ("POST", "/cli/fs/write-file"),
+    ("POST", "/cli/fs/upload-binary"),
+    ("POST", "/cli/fs/create"),
+    ("POST", "/cli/fs/copy"),
+    ("POST", "/cli/fs/move"),
+    ("POST", "/cli/fs/rename"),
+    ("GET", "/cli/workspace/resources"),
+    ("POST", "/cli/workspace/resources/add"),
+    ("POST", "/cli/workspace/resources/remove"),
+    ("POST", "/cli/workspace/ensure-pinned-chat"),
+    ("GET", "/cli/feedback/list"),
+    ("HEAD", "/cli/feedback/list"),
+    ("GET", "/cli/feedback/show"),
+    ("HEAD", "/cli/feedback/show"),
+    ("POST", "/cli/feedback/create"),
+    ("POST", "/cli/feedback/comment"),
+    ("POST", "/cli/feedback/answer"),
+    ("POST", "/cli/feedback/resolve"),
+    ("POST", "/cli/feedback/assign"),
+    ("GET", "/cli/wiki/index"),
+    ("HEAD", "/cli/wiki/index"),
+    ("GET", "/cli/wiki/note"),
+    ("HEAD", "/cli/wiki/note"),
+    ("GET", "/cli/store/list"),
+    ("HEAD", "/cli/store/list"),
+    ("GET", "/cli/store/get"),
+    ("HEAD", "/cli/store/get"),
+    ("GET", "/cli/store/query"),
+    ("HEAD", "/cli/store/query"),
+    ("GET", "/cli/db/tables"),
+    ("HEAD", "/cli/db/tables"),
+    ("GET", "/cli/db/rows"),
+    ("HEAD", "/cli/db/rows"),
+    ("POST", "/cli/db/rows"),
+    ("POST", "/cli/db/rows/update"),
+    ("POST", "/cli/db/rows/delete"),
+    ("POST", "/cli/db/query"),
+    ("POST", "/cli/skin/password/change"),
+    // App heartbeats (prd-app-heartbeats-surface-v1 AH5/AH6).
+    // Reads: heartbeats:read. Writes: POST only, heartbeats:write.
+    ("GET", "/cli/heartbeat/list"),
+    ("HEAD", "/cli/heartbeat/list"),
+    ("GET", "/cli/heartbeat/show"),
+    ("HEAD", "/cli/heartbeat/show"),
+    ("GET", "/cli/heartbeat/status"),
+    ("HEAD", "/cli/heartbeat/status"),
+    ("GET", "/cli/heartbeat/fires-list"),
+    ("HEAD", "/cli/heartbeat/fires-list"),
+    ("POST", "/cli/heartbeat/add"),
+    ("POST", "/cli/heartbeat/edit"),
+    ("POST", "/cli/heartbeat/enable"),
+    ("POST", "/cli/heartbeat/rename"),
+    ("POST", "/cli/heartbeat/archive"),
+    ("POST", "/cli/heartbeat/fire"),
+];
+
+/// POST routes the helper answers itself (login, logout, password). They
+/// are not proxied as-is but they change state, so the cross-origin check
+/// covers them (and the tests walk this list).
+#[allow(dead_code)] // read by tests; the bin target compiles this module privately
+pub const GATEWAY_POST_ROUTES: &[&str] = &[
+    "/login",
+    "/logout",
+    "/cli/skin/password/reset",
+    "/cli/skin/password/change",
+];
+
 pub fn allowlisted_http(method: &str, path: &str) -> bool {
     let p = path_only(path);
     let m = method.to_ascii_uppercase();
-    matches!(
-        (m.as_str(), p),
-        ("GET", "/cli/skin/agents")
-            | ("HEAD", "/cli/skin/agents")
-            | ("GET", "/cli/thread")
-            | ("HEAD", "/cli/thread")
-            | ("POST", "/cli/thread/post")
-            | ("POST", "/cli/thread/answer")
-            | ("POST", "/cli/thread/void")
-            | ("GET", "/cli/fs/read-dir")
-            | ("HEAD", "/cli/fs/read-dir")
-            | ("GET", "/cli/fs/read-file")
-            | ("HEAD", "/cli/fs/read-file")
-            | ("GET", "/cli/fs/read-binary")
-            | ("HEAD", "/cli/fs/read-binary")
-            | ("GET", "/cli/fs/read-range")
-            | ("HEAD", "/cli/fs/read-range")
-            | ("POST", "/cli/fs/write-file")
-            | ("POST", "/cli/fs/upload-binary")
-            | ("POST", "/cli/fs/create")
-            | ("POST", "/cli/fs/copy")
-            | ("POST", "/cli/fs/move")
-            | ("POST", "/cli/fs/rename")
-            | ("GET", "/cli/workspace/resources")
-            | ("POST", "/cli/workspace/resources/add")
-            | ("POST", "/cli/workspace/resources/remove")
-            | ("POST", "/cli/workspace/ensure-pinned-chat")
-            | ("GET", "/cli/feedback/list")
-            | ("HEAD", "/cli/feedback/list")
-            | ("GET", "/cli/feedback/show")
-            | ("HEAD", "/cli/feedback/show")
-            | ("POST", "/cli/feedback/create")
-            | ("POST", "/cli/feedback/comment")
-            | ("POST", "/cli/feedback/answer")
-            | ("POST", "/cli/feedback/resolve")
-            | ("POST", "/cli/feedback/assign")
-            | ("GET", "/cli/wiki/index")
-            | ("HEAD", "/cli/wiki/index")
-            | ("GET", "/cli/wiki/note")
-            | ("HEAD", "/cli/wiki/note")
-            | ("GET", "/cli/store/list")
-            | ("HEAD", "/cli/store/list")
-            | ("GET", "/cli/store/get")
-            | ("HEAD", "/cli/store/get")
-            | ("GET", "/cli/store/query")
-            | ("HEAD", "/cli/store/query")
-            | ("GET", "/cli/db/tables")
-            | ("HEAD", "/cli/db/tables")
-            | ("GET", "/cli/db/rows")
-            | ("HEAD", "/cli/db/rows")
-            | ("POST", "/cli/db/rows")
-            | ("POST", "/cli/db/rows/update")
-            | ("POST", "/cli/db/rows/delete")
-            | ("POST", "/cli/db/query")
-            | ("POST", "/cli/skin/password/change")
-            // App heartbeats (prd-app-heartbeats-surface-v1 AH5/AH6).
-            // Reads: heartbeats:read. Writes: POST only, heartbeats:write.
-            | ("GET", "/cli/heartbeat/list")
-            | ("HEAD", "/cli/heartbeat/list")
-            | ("GET", "/cli/heartbeat/show")
-            | ("HEAD", "/cli/heartbeat/show")
-            | ("GET", "/cli/heartbeat/status")
-            | ("HEAD", "/cli/heartbeat/status")
-            | ("GET", "/cli/heartbeat/fires-list")
-            | ("HEAD", "/cli/heartbeat/fires-list")
-            | ("POST", "/cli/heartbeat/add")
-            | ("POST", "/cli/heartbeat/edit")
-            | ("POST", "/cli/heartbeat/enable")
-            | ("POST", "/cli/heartbeat/rename")
-            | ("POST", "/cli/heartbeat/archive")
-            | ("POST", "/cli/heartbeat/fire")
-    )
+    HTTP_ALLOWLIST
+        .iter()
+        .any(|(am, ap)| *am == m.as_str() && *ap == p)
 }
 
 /// The one table of sockets the helper forwards, and the query parameter
 /// each one must carry. A socket cannot be allowlisted without naming its
 /// parameter (GA1). `/cli/activity/events` was once allowlisted without it,
 /// so the helper asked it for `conversation=` and refused every app.
+pub const WS_ALLOWLIST: &[(&str, &str)] = &[
+    ("/cli/overlay/events", "conversation"),
+    ("/cli/fs/events", "workspace"),
+    ("/cli/activity/events", "workspace"),
+];
+
 pub fn ws_required_param(path: &str) -> Option<&'static str> {
-    match path_only(path) {
-        "/cli/overlay/events" => Some("conversation"),
-        "/cli/fs/events" | "/cli/activity/events" => Some("workspace"),
-        _ => None,
-    }
+    let p = path_only(path);
+    WS_ALLOWLIST
+        .iter()
+        .find(|(wp, _)| *wp == p)
+        .map(|(_, param)| *param)
 }
 
 pub fn allowlisted_ws(path: &str) -> bool {
@@ -355,6 +393,10 @@ async fn serve(args: Args) -> Result<(), String> {
         root: args.root,
         sessions: Mutex::new(HashMap::new()),
     });
+    serve_listener(listener, gw).await
+}
+
+async fn serve_listener(listener: TcpListener, gw: Arc<Gateway>) -> Result<(), String> {
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| format!("accept: {e}"))?;
         let gw = Arc::clone(&gw);
@@ -405,14 +447,24 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
     }
     let upgrade = header_has_upgrade(&head);
     let cookie = extract_cookie(&head, COOKIE_NAME);
-    let xf_proto = header_value(&head, "x-forwarded-proto");
-    let secure = xf_proto
-        .map(|v| v.eq_ignore_ascii_case("https"))
-        .unwrap_or(false);
+    let secure = request_is_secure(&head);
 
     if never_proxy(&path) {
         write_json(&mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
         return Ok(());
+    }
+
+    // CSRF / cross-site WebSocket hijack guard. Every state-changing
+    // request (any method but GET/HEAD — including /login, /logout and
+    // the password routes) and every WebSocket upgrade must come from this
+    // app's own origin. Runs before the session lookup and before any
+    // upstream connect, so a refused request never reaches the daemon.
+    // Rule and rationale: [`check_request_origin`].
+    if needs_origin_check(&method, upgrade) {
+        if let Err(_why) = check_request_origin(&head) {
+            write_json(&mut stream, "403 Forbidden", CROSS_ORIGIN_REFUSED_JSON).await;
+            return Ok(());
+        }
     }
 
     if upgrade {
@@ -424,10 +476,7 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
             write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
             return Ok(());
         };
-        let token = {
-            let g = gw.sessions.lock().await;
-            g.get(&sid).map(|s| s.token.clone())
-        };
+        let token = session_token(&gw, &sid).await;
         let Some(token) = token else {
             write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
             return Ok(());
@@ -441,7 +490,7 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
             handle_login(&gw, &mut stream, &head, &body, secure).await;
         }
         ("POST", "/logout") => {
-            handle_logout(&gw, &mut stream, cookie.as_deref()).await;
+            handle_logout(&gw, &mut stream, cookie.as_deref(), secure).await;
         }
         // Public consume; do not require cookie.
         ("POST", "/cli/skin/password/reset") => {
@@ -458,10 +507,7 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
                 write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
                 return Ok(());
             };
-            let token = {
-                let g = gw.sessions.lock().await;
-                g.get(&sid).map(|s| s.token.clone())
-            };
+            let token = session_token(&gw, &sid).await;
             let Some(token) = token else {
                 write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
                 return Ok(());
@@ -480,6 +526,204 @@ fn header_has_upgrade(head: &str) -> bool {
         let l = l.to_ascii_lowercase();
         l.starts_with("upgrade:") && l.contains("websocket")
     })
+}
+
+/// GET and HEAD are reads (credentialed CORS reads fail, and `no-cors`
+/// responses are opaque). Everything else, and every upgrade, is checked.
+fn needs_origin_check(method: &str, upgrade: bool) -> bool {
+    upgrade || !(method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD"))
+}
+
+/// Why a request was refused. Only for tests and logs; the client always
+/// gets [`CROSS_ORIGIN_REFUSED_JSON`].
+#[derive(Debug, PartialEq, Eq)]
+enum OriginRefusal {
+    MultipleOrigin,
+    MultipleSecFetchSite,
+    SecFetchSiteForeign,
+    NullOriginWithoutSecFetch,
+    BadHost,
+    ForeignOrigin,
+}
+
+/// The CSRF rule for state-changing requests and WebSocket upgrades
+/// (security-review-app-cookie-csrf-v1 §6 option 1).
+///
+/// 1. More than one `Origin` or `Sec-Fetch-Site` header: refused.
+/// 2. `Sec-Fetch-Site`, when present, must be `same-origin` or `none`.
+///    Browsers set it and page script cannot forge it.
+/// 3. `Origin`, when present, must be this app's own origin:
+///    `<scheme>://<Host>` (see [`request_scheme`]), default port ignored,
+///    case-insensitive. On a loopback Host both `http://` and `https://`
+///    are accepted (dev, `--skin-gateway` on 127.0.0.1, roadmap skin).
+///    Anything with a path, userinfo, or another host is refused. `Host`
+///    cannot be set by a browser, so it names the origin the page is on.
+/// 4. `Origin: null` is refused unless `Sec-Fetch-Site` passed rule 2.
+///    A same-origin page with `Referrer-Policy: no-referrer` sends
+///    `Origin: null` on POST, and `Sec-Fetch-Site: same-origin` vouches for
+///    it; sandboxed frames, `data:` URLs and cross-site redirects (the
+///    other sources of `null`) get `cross-site` and fail rule 2.
+/// 5. **Neither header present: allowed.** This is the server-caller
+///    rule. Every current browser sends `Origin` on every non-GET/HEAD
+///    request and on every WebSocket handshake, so a request with neither
+///    signal is not a browser and cannot be carrying a victim's cookie. A
+///    customer's own backend (BFF) that logs in through `/login` and
+///    replays the `k2_skin_ui` cookie server-side, or `curl`, keeps
+///    working, cookie or not. (The helper never accepts a browser
+///    `Authorization` header, so "Bearer-only" callers have nothing to
+///    reach here; BYO backends call the daemon directly with their pass.)
+fn check_request_origin(head: &str) -> Result<(), OriginRefusal> {
+    let origins = header_values(head, "origin");
+    let sec_fetch = header_values(head, "sec-fetch-site");
+    if origins.len() > 1 {
+        return Err(OriginRefusal::MultipleOrigin);
+    }
+    if sec_fetch.len() > 1 {
+        return Err(OriginRefusal::MultipleSecFetchSite);
+    }
+    if let Some(site) = sec_fetch.first() {
+        let ok = site.eq_ignore_ascii_case("same-origin") || site.eq_ignore_ascii_case("none");
+        if !ok {
+            return Err(OriginRefusal::SecFetchSiteForeign);
+        }
+    }
+    let Some(origin) = origins.first() else {
+        // Rule 5 (no signals) or rule 2 passed with no Origin.
+        return Ok(());
+    };
+    if origin.eq_ignore_ascii_case("null") {
+        return if sec_fetch.is_empty() {
+            Err(OriginRefusal::NullOriginWithoutSecFetch)
+        } else {
+            Ok(())
+        };
+    }
+    let hosts = header_values(head, "host");
+    if hosts.len() != 1 || hosts[0].is_empty() {
+        return Err(OriginRefusal::BadHost);
+    }
+    if origin_matches_host(origin, hosts[0], request_scheme(head)) {
+        Ok(())
+    } else {
+        Err(OriginRefusal::ForeignOrigin)
+    }
+}
+
+/// True when `origin` is exactly `<scheme>://<host>` for this request.
+fn origin_matches_host(origin: &str, host: &str, scheme: &str) -> bool {
+    let Some((o_scheme, o_rest)) = origin.split_once("://") else {
+        return false;
+    };
+    let o_scheme = o_scheme.to_ascii_lowercase();
+    if o_scheme != "http" && o_scheme != "https" {
+        return false;
+    }
+    if o_rest.is_empty()
+        || o_rest
+            .chars()
+            .any(|c| matches!(c, '/' | '?' | '#' | '@' | ',' | '\\') || c.is_whitespace())
+    {
+        return false;
+    }
+    let scheme_ok = o_scheme == scheme || host_is_loopback(host);
+    scheme_ok && normalize_authority(&o_scheme, o_rest) == normalize_authority(&o_scheme, host)
+}
+
+/// Lowercase `host[:port]` and drop the scheme's default port.
+fn normalize_authority(scheme: &str, authority: &str) -> String {
+    let a = authority.trim().to_ascii_lowercase();
+    let default = if scheme == "https" { ":443" } else { ":80" };
+    match a.strip_suffix(default) {
+        Some(stripped) if !stripped.is_empty() => stripped.to_string(),
+        _ => a,
+    }
+}
+
+/// Host part of `host[:port]` / `[v6][:port]`.
+fn host_name(host: &str) -> &str {
+    let h = host.trim();
+    if let Some(rest) = h.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match h.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => h,
+    }
+}
+
+/// 127.0.0.0/8, ::1, `localhost`, `*.localhost`. Browsers treat these as
+/// secure contexts over plain http; the helper itself only binds loopback.
+fn host_is_loopback(host: &str) -> bool {
+    let name = host_name(host).to_ascii_lowercase();
+    if name == "localhost" || name.ends_with(".localhost") {
+        return true;
+    }
+    name.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// The scheme the browser used to reach this app.
+///
+/// Behind the tunnel (`<label>.<sub>.k2.dev`, custom domains) TLS ends at
+/// the daemon's tunnel TLS listener, which byte-splices to this helper and
+/// adds **no** `X-Forwarded-Proto` (`tunnel_tls_listener.rs`,
+/// `Route::Internal`). So the default for a non-loopback Host is `https`.
+/// An explicit `X-Forwarded-Proto` (Caddy sets it on every proxied request)
+/// wins: `http` from a plain-http front such as an air-gapped LAN door, or
+/// `https` from a TLS front on loopback. A browser cannot add this header
+/// to a cross-site request, so it only ever describes the sender's own
+/// connection. Loopback Host with no header: `http` (dev).
+fn request_scheme(head: &str) -> &'static str {
+    if let Some(xfp) = header_value(head, "x-forwarded-proto") {
+        let first = xfp.split(',').next().unwrap_or("").trim();
+        if first.eq_ignore_ascii_case("https") {
+            return "https";
+        }
+        if first.eq_ignore_ascii_case("http") {
+            return "http";
+        }
+    }
+    match header_value(head, "host") {
+        Some(h) if host_is_loopback(h) => "http",
+        _ => "https",
+    }
+}
+
+/// `Secure` on the cookie: always, except a loopback/dev Host over http
+/// or an explicit plain-http front ([`request_scheme`]).
+fn request_is_secure(head: &str) -> bool {
+    request_scheme(head) == "https"
+}
+
+/// Every value of header `name` (trimmed, empty values included), headers
+/// only — the request line is skipped.
+fn header_values<'a>(head: &'a str, name: &str) -> Vec<&'a str> {
+    head.lines()
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|line| {
+            let colon = line.find(':')?;
+            line[..colon]
+                .trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| line[colon + 1..].trim())
+        })
+        .collect()
+}
+
+/// The `k2skn_` pass behind cookie `sid`, or `None` (unknown or expired;
+/// an expired entry is dropped).
+async fn session_token(gw: &Gateway, sid: &str) -> Option<String> {
+    let mut g = gw.sessions.lock().await;
+    match g.get(sid) {
+        Some(s) if s.expires > Instant::now() => Some(s.token.clone()),
+        Some(_) => {
+            g.remove(sid);
+            None
+        }
+        None => None,
+    }
 }
 
 fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
@@ -509,8 +753,12 @@ fn extract_cookie(head: &str, name: &str) -> Option<String> {
     None
 }
 
+/// `HttpOnly; SameSite=Lax; Path=/; Max-Age=<pass TTL>`, plus `Secure`
+/// unless the request is loopback/dev or an explicit plain-http front
+/// ([`request_is_secure`]). Host-only (no `Domain`).
 fn set_cookie_value(id: &str, secure: bool) -> String {
-    let mut v = format!("{COOKIE_NAME}={id}; HttpOnly; SameSite=Lax; Path=/");
+    let max_age = session_max_age_secs();
+    let mut v = format!("{COOKIE_NAME}={id}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
     if secure {
         v.push_str("; Secure");
     }
@@ -589,7 +837,20 @@ async fn handle_login(
                 return;
             }
             let sid = opaque_session_id();
-            gw.sessions.lock().await.insert(sid.clone(), Session { token });
+            {
+                let now = Instant::now();
+                let mut g = gw.sessions.lock().await;
+                // Drop passes that have expired so the map cannot grow forever.
+                g.retain(|_, s| s.expires > now);
+                g.insert(
+                    sid.clone(),
+                    Session {
+                        token,
+                        expires: now
+                            + Duration::from_secs(session_max_age_secs().max(0) as u64),
+                    },
+                );
+            }
             write_json_cookie(stream, "200 OK", &out, &set_cookie_value(&sid, secure)).await;
         }
         Err(_) => {
@@ -662,7 +923,7 @@ fn opaque_session_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
-async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str>) {
+async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str>, secure: bool) {
     if let Some(sid) = cookie {
         let token = {
             let mut g = gw.sessions.lock().await;
@@ -676,7 +937,7 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
         stream,
         "200 OK",
         r#"{"ok":true}"#,
-        &clear_cookie_value(false),
+        &clear_cookie_value(secure),
     )
     .await;
 }
@@ -716,10 +977,7 @@ async fn handle_password_change(
         write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
         return;
     };
-    let token = {
-        let g = gw.sessions.lock().await;
-        g.get(sid).map(|s| s.token.clone())
-    };
+    let token = session_token(gw, sid).await;
     let Some(token) = token else {
         write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
         return;
@@ -1016,6 +1274,7 @@ async fn proxy_http(
                 if l.starts_with("content-length:")
                     || l.starts_with("transfer-encoding:")
                     || l.starts_with("connection:")
+                    || is_cors_header(line)
                     || line.is_empty()
                 {
                     continue;
@@ -1032,6 +1291,32 @@ async fn proxy_http(
             write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         }
     }
+}
+
+/// `Access-Control-*` from the daemon (`ACAO: *`, `ACEH: *`) is never
+/// passed to the browser: the helper serves one origin and needs no CORS.
+fn is_cors_header(line: &str) -> bool {
+    line.trim_start()
+        .get(..15)
+        .map(|p| p.eq_ignore_ascii_case("access-control-"))
+        .unwrap_or(false)
+}
+
+/// Rebuild an upstream upgrade response head without CORS headers.
+fn strip_cors_from_head(head: &str) -> String {
+    let mut out = String::with_capacity(head.len());
+    for line in head.split("\r\n") {
+        if line.is_empty() {
+            continue;
+        }
+        if is_cors_header(line) {
+            continue;
+        }
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+    out.push_str("\r\n");
+    out
 }
 
 fn strip_token_query(query: &str) -> String {
@@ -1102,6 +1387,41 @@ async fn proxy_upgrade(
         return;
     }
     let _ = up.flush().await;
+    // Read the daemon's handshake reply head, drop CORS headers, then
+    // splice. Bytes after the head (a refusal body, or the first frames)
+    // are passed through untouched.
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break Some(i + 4);
+        }
+        if raw.len() > 64 * 1024 {
+            break None;
+        }
+        match tokio::time::timeout(Duration::from_secs(10), up.read(&mut chunk)).await {
+            Ok(Ok(n)) if n > 0 => raw.extend_from_slice(&chunk[..n]),
+            _ => break None,
+        }
+    };
+    let Some(end) = head_end else {
+        if raw.is_empty() {
+            write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+        } else {
+            // Unparseable head: forward as-is rather than guess.
+            let _ = client.write_all(&raw).await;
+        }
+        return;
+    };
+    let head = String::from_utf8_lossy(&raw[..end]).into_owned();
+    let out = strip_cors_from_head(&head);
+    if client.write_all(out.as_bytes()).await.is_err() {
+        return;
+    }
+    if end < raw.len() && client.write_all(&raw[end..]).await.is_err() {
+        return;
+    }
+    let _ = client.flush().await;
     let _ = tokio::io::copy_bidirectional(client, &mut up).await;
 }
 
@@ -1590,13 +1910,662 @@ mod tests {
         assert_eq!(COOKIE_NAME, "k2_skin_ui");
         assert_ne!(COOKIE_NAME, "k2_skin_session");
         let v = set_cookie_value("abc", false);
-        assert!(v.contains("HttpOnly"));
-        assert!(v.contains("SameSite=Lax"));
-        assert!(v.contains("Path=/"));
-        assert!(!v.contains("Secure"), "{v}");
+        assert_eq!(
+            v,
+            "k2_skin_ui=abc; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800",
+            "loopback/dev cookie"
+        );
         let s = set_cookie_value("abc", true);
-        assert!(s.contains("Secure"), "{s}");
+        assert_eq!(
+            s,
+            "k2_skin_ui=abc; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800; Secure"
+        );
+        assert_eq!(
+            session_max_age_secs(),
+            k2_core::connect_users::session_ttl_days() * 86_400,
+            "cookie Max-Age is the session pass TTL"
+        );
+        assert_eq!(
+            clear_cookie_value(true),
+            "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+        );
         assert!(!v.contains("k2skn_"));
+    }
+
+    // ---- Origin predicate (security-review-app-cookie-csrf-v1 §7.5) ----
+
+    fn req(method: &str, extra: &str) -> String {
+        format!("{method} /cli/thread/post HTTP/1.1\r\n{extra}\r\n")
+    }
+
+    #[test]
+    fn origin_check_applies_to_writes_and_upgrades_only() {
+        assert!(!needs_origin_check("GET", false));
+        assert!(!needs_origin_check("HEAD", false));
+        assert!(!needs_origin_check("get", false));
+        assert!(needs_origin_check("GET", true), "every upgrade");
+        for m in ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "post", "FOO"] {
+            assert!(needs_origin_check(m, false), "{m}");
+        }
+    }
+
+    #[test]
+    fn origin_predicate_matrix() {
+        let ok = |extra: &str| check_request_origin(&req("POST", extra));
+        // Same origin, default port in Host or Origin either way, any case.
+        assert_eq!(ok("Host: a.b.k2.dev\r\nOrigin: https://a.b.k2.dev\r\n"), Ok(()));
+        assert_eq!(ok("Host: a.b.k2.dev:443\r\nOrigin: https://a.b.k2.dev\r\n"), Ok(()));
+        assert_eq!(ok("Host: a.b.k2.dev\r\nOrigin: https://a.b.k2.dev:443\r\n"), Ok(()));
+        assert_eq!(ok("Host: A.B.K2.DEV\r\nOrigin: HTTPS://a.b.k2.dev\r\n"), Ok(()));
+        assert_eq!(ok("host: a.b.k2.dev\r\norigin: https://A.b.k2.dev\r\n"), Ok(()));
+        assert_eq!(ok("Host: a.b.k2.dev:8443\r\nOrigin: https://a.b.k2.dev:8443\r\n"), Ok(()));
+        // Port mismatch.
+        assert_eq!(
+            ok("Host: a.b.k2.dev:8443\r\nOrigin: https://a.b.k2.dev\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // Trailing dot is a different string: refused (fail closed).
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: https://a.b.k2.dev.\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // Sibling on the same site.
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: https://evil.k2.dev\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: https://a.b.k2.dev.evil.com\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // http on a non-loopback Host behind the tunnel: refused.
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: http://a.b.k2.dev\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // ...unless a plain-http front says so.
+        assert_eq!(
+            ok("Host: 10.0.0.5:38471\r\nX-Forwarded-Proto: http\r\nOrigin: http://10.0.0.5:38471\r\n"),
+            Ok(())
+        );
+        // Origin with a path, userinfo, query, or a list.
+        for o in [
+            "https://a.b.k2.dev/",
+            "https://a.b.k2.dev/x",
+            "https://u@a.b.k2.dev",
+            "https://a.b.k2.dev?x",
+            "https://a.b.k2.dev, https://a.b.k2.dev",
+            "a.b.k2.dev",
+            "ftp://a.b.k2.dev",
+            "https://",
+        ] {
+            assert_eq!(
+                ok(&format!("Host: a.b.k2.dev\r\nOrigin: {o}\r\n")),
+                Err(OriginRefusal::ForeignOrigin),
+                "{o}"
+            );
+        }
+        // Several Origin headers.
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: https://a.b.k2.dev\r\nOrigin: https://a.b.k2.dev\r\n"),
+            Err(OriginRefusal::MultipleOrigin)
+        );
+        // Empty Origin value is not "absent".
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nOrigin: \r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // Missing or doubled Host with an Origin.
+        assert_eq!(ok("Origin: https://a.b.k2.dev\r\n"), Err(OriginRefusal::BadHost));
+        assert_eq!(
+            ok("Host: a.b.k2.dev\r\nHost: evil.k2.dev\r\nOrigin: https://a.b.k2.dev\r\n"),
+            Err(OriginRefusal::BadHost)
+        );
+        // Loopback dev: http and https, any loopback spelling.
+        for (host, origin) in [
+            ("127.0.0.1:38480", "http://127.0.0.1:38480"),
+            ("127.0.0.1:38480", "https://127.0.0.1:38480"),
+            ("localhost:5173", "http://localhost:5173"),
+            ("[::1]:9000", "http://[::1]:9000"),
+            ("app.localhost:9000", "http://app.localhost:9000"),
+        ] {
+            assert_eq!(
+                ok(&format!("Host: {host}\r\nOrigin: {origin}\r\n")),
+                Ok(()),
+                "{host} {origin}"
+            );
+        }
+        assert_eq!(
+            ok("Host: 127.0.0.1:38480\r\nOrigin: http://127.0.0.1:9999\r\n"),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        assert_eq!(
+            ok("Host: 127.0.0.1:38480\r\nOrigin: http://localhost:38480\r\n"),
+            Err(OriginRefusal::ForeignOrigin),
+            "localhost and 127.0.0.1 are different origins"
+        );
+    }
+
+    #[test]
+    fn sec_fetch_site_and_null_origin_rules() {
+        let ok = |extra: &str| check_request_origin(&req("POST", extra));
+        let h = "Host: a.b.k2.dev\r\n";
+        // No Origin: Sec-Fetch-Site decides.
+        assert_eq!(ok(&format!("{h}Sec-Fetch-Site: same-origin\r\n")), Ok(()));
+        assert_eq!(ok(&format!("{h}Sec-Fetch-Site: none\r\n")), Ok(()));
+        assert_eq!(
+            ok(&format!("{h}Sec-Fetch-Site: same-site\r\n")),
+            Err(OriginRefusal::SecFetchSiteForeign)
+        );
+        assert_eq!(
+            ok(&format!("{h}Sec-Fetch-Site: cross-site\r\n")),
+            Err(OriginRefusal::SecFetchSiteForeign)
+        );
+        assert_eq!(
+            ok(&format!("{h}Sec-Fetch-Site: same-origin\r\nSec-Fetch-Site: same-origin\r\n")),
+            Err(OriginRefusal::MultipleSecFetchSite)
+        );
+        // A matching Origin does not excuse a foreign Sec-Fetch-Site.
+        assert_eq!(
+            ok(&format!("{h}Origin: https://a.b.k2.dev\r\nSec-Fetch-Site: cross-site\r\n")),
+            Err(OriginRefusal::SecFetchSiteForeign)
+        );
+        // A same-origin Sec-Fetch-Site does not excuse a foreign Origin.
+        assert_eq!(
+            ok(&format!("{h}Origin: https://evil.k2.dev\r\nSec-Fetch-Site: same-origin\r\n")),
+            Err(OriginRefusal::ForeignOrigin)
+        );
+        // Origin: null — refused alone, allowed when the browser vouches.
+        assert_eq!(
+            ok(&format!("{h}Origin: null\r\n")),
+            Err(OriginRefusal::NullOriginWithoutSecFetch)
+        );
+        assert_eq!(
+            ok(&format!("{h}Origin: null\r\nSec-Fetch-Site: cross-site\r\n")),
+            Err(OriginRefusal::SecFetchSiteForeign)
+        );
+        assert_eq!(ok(&format!("{h}Origin: null\r\nSec-Fetch-Site: same-origin\r\n")), Ok(()));
+        // Server-caller rule: no browser signal at all → allowed.
+        assert_eq!(ok(h), Ok(()));
+        assert_eq!(ok(&format!("{h}Cookie: k2_skin_ui=abc\r\n")), Ok(()));
+    }
+
+    #[test]
+    fn scheme_and_secure_follow_host_and_explicit_front() {
+        let sec = |extra: &str| request_is_secure(&req("POST", extra));
+        assert!(sec("Host: a.b.k2.dev\r\n"), "tunnel default is https");
+        assert!(sec("Host: app.customer.com\r\n"));
+        assert!(sec(""), "no Host: assume https");
+        assert!(!sec("Host: 127.0.0.1:38480\r\n"), "loopback dev");
+        assert!(!sec("Host: localhost:5173\r\n"));
+        assert!(sec("Host: 127.0.0.1:38480\r\nX-Forwarded-Proto: https\r\n"));
+        assert!(!sec("Host: 10.0.0.5:38471\r\nX-Forwarded-Proto: http\r\n"));
+        assert!(sec("Host: a.b.k2.dev\r\nX-Forwarded-Proto: https, http\r\n"));
+        assert!(sec("Host: a.b.k2.dev\r\nX-Forwarded-Proto: bogus\r\n"));
+    }
+
+    #[test]
+    fn cors_headers_are_recognised_any_case() {
+        assert!(is_cors_header("Access-Control-Allow-Origin: *"));
+        assert!(is_cors_header("access-control-expose-headers: *"));
+        assert!(is_cors_header("ACCESS-CONTROL-ALLOW-CREDENTIALS: true"));
+        assert!(!is_cors_header("Content-Type: application/json"));
+        assert!(!is_cors_header("X-Access-Control: no"));
+        let h = strip_cors_from_head(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        );
+        assert_eq!(h, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
+    }
+
+    #[test]
+    fn route_tables_drive_the_allowlists() {
+        // The table is the allowlist: every row passes, case-insensitive
+        // method, and nothing outside it does.
+        for (m, p) in HTTP_ALLOWLIST {
+            assert!(allowlisted_http(m, p), "{m} {p}");
+            assert!(allowlisted_http(&m.to_ascii_lowercase(), p), "{m} {p}");
+        }
+        assert!(HTTP_ALLOWLIST.iter().any(|(m, _)| *m == "POST"));
+        for (p, param) in WS_ALLOWLIST {
+            assert_eq!(ws_required_param(p), Some(*param));
+        }
+    }
+
+    // ---- Stand-in upstream + live helper (no daemon, no real data) ----
+
+    use std::sync::Mutex as StdMutex;
+
+    struct Stub {
+        port: u16,
+        /// `METHOD /path?query` of every request the helper sent upstream.
+        seen: Arc<StdMutex<Vec<String>>>,
+    }
+
+    impl Stub {
+        fn seen(&self) -> Vec<String> {
+            self.seen.lock().expect("stub log").clone()
+        }
+    }
+
+    const STUB_PASS: &str = "k2skn_stubpassnotreal0000000000";
+
+    /// A fake daemon: `/cli/skin/login` hands out a fake pass; upgrades get
+    /// a 101 with CORS headers; everything else 200 JSON with the daemon's
+    /// CORS headers so stripping can be observed.
+    async fn start_stub() -> Stub {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("stub bind");
+        let port = listener.local_addr().expect("stub addr").port();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else { return };
+                let log = Arc::clone(&log);
+                tokio::spawn(async move {
+                    let mut raw = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    let end = loop {
+                        if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                        match s.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => raw.extend_from_slice(&buf[..n]),
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&raw[..end]).into_owned();
+                    let clen = header_value(&head, "content-length")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while raw.len() - end < clen {
+                        match s.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => raw.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let first = head.lines().next().unwrap_or("").to_string();
+                    let mut parts = first.split_whitespace();
+                    let line = format!(
+                        "{} {}",
+                        parts.next().unwrap_or(""),
+                        parts.next().unwrap_or("")
+                    );
+                    log.lock().expect("stub log").push(line.clone());
+                    let resp = if header_has_upgrade(&head) {
+                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: stub\r\nAccess-Control-Allow-Origin: *\r\n\r\n".to_string()
+                    } else {
+                        let body = if line.starts_with("POST /cli/skin/login") {
+                            format!(r#"{{"ok":true,"token":"{STUB_PASS}","username":"stub"}}"#)
+                        } else {
+                            r#"{"ok":true}"#.to_string()
+                        };
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: *\r\nAccess-Control-Allow-Credentials: true\r\nX-Stub: yes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    let _ = s.write_all(resp.as_bytes()).await;
+                    let _ = s.flush().await;
+                });
+            }
+        });
+        Stub { port, seen }
+    }
+
+    async fn start_helper(upstream_port: u16) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("helper bind");
+        let port = listener.local_addr().expect("helper addr").port();
+        let gw = Arc::new(Gateway {
+            upstream_host: format!("127.0.0.1:{upstream_port}"),
+            root: None,
+            sessions: Mutex::new(HashMap::new()),
+        });
+        tokio::spawn(async move {
+            let _ = serve_listener(listener, gw).await;
+        });
+        port
+    }
+
+    struct Reply {
+        status: u16,
+        head: String,
+        body: String,
+    }
+
+    /// One raw request; reads until the helper closes (it always does).
+    async fn send(port: u16, method: &str, target: &str, headers: &str, body: &str) -> Reply {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.expect("connect helper");
+        let req = if body.is_empty() && (method == "GET" || method == "HEAD") {
+            format!("{method} {target} HTTP/1.1\r\n{headers}\r\n")
+        } else {
+            format!(
+                "{method} {target} HTTP/1.1\r\n{headers}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        s.write_all(req.as_bytes()).await.expect("write helper");
+        let mut raw = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut raw))
+            .await
+            .expect("helper must answer and close within 10s")
+            .expect("read helper");
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let (head, body) = text
+            .split_once("\r\n\r\n")
+            .unwrap_or_else(|| panic!("no HTTP head from helper: {text:?}"));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .unwrap_or_else(|| panic!("bad status line: {head:?}"));
+        Reply {
+            status,
+            head: head.to_string(),
+            body: body.to_string(),
+        }
+    }
+
+    fn set_cookie_of(r: &Reply) -> Option<String> {
+        header_values(&format!("{}\r\n", r.head), "set-cookie")
+            .first()
+            .map(|v| v.to_string())
+    }
+
+    const APP: &str = "app.acme.k2.dev";
+    const SAME: &str = "Origin: https://app.acme.k2.dev\r\n";
+
+    /// Log in with a same-origin Origin; returns `Cookie: …` header line.
+    async fn login(helper: u16) -> String {
+        let r = send(
+            helper,
+            "POST",
+            "/login",
+            &format!("Host: {APP}\r\n{SAME}"),
+            r#"{"username":"stub","password":"not-a-real-password"}"#,
+        )
+        .await;
+        assert_eq!(r.status, 200, "same-origin login: {}", r.body);
+        assert!(!r.body.contains("k2skn_"), "{}", r.body);
+        let sc = set_cookie_of(&r).expect("Set-Cookie on login");
+        let sid = sc
+            .strip_prefix("k2_skin_ui=")
+            .and_then(|v| v.split(';').next())
+            .expect("k2_skin_ui value")
+            .to_string();
+        format!("Cookie: k2_skin_ui={sid}\r\n")
+    }
+
+    /// Every state-changing route the helper knows, from its own tables.
+    fn mutating_routes() -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = HTTP_ALLOWLIST
+            .iter()
+            .filter(|(m, _)| *m != "GET" && *m != "HEAD")
+            .map(|(m, p)| (m.to_string(), p.to_string()))
+            .collect();
+        for p in GATEWAY_POST_ROUTES {
+            if !v.iter().any(|(_, vp)| vp == p) {
+                v.push(("POST".into(), p.to_string()));
+            }
+        }
+        v
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_refuses_cross_origin_writes_and_upstream_never_called() {
+        let stub = start_stub().await;
+        let helper = start_helper(stub.port).await;
+        let routes = mutating_routes();
+        // 1 thread/post … heartbeat/fire + /login + /logout + reset.
+        assert!(routes.len() >= 30, "walked only {} routes", routes.len());
+        assert!(routes.iter().any(|(_, p)| p == "/login"));
+        assert!(routes.iter().any(|(_, p)| p == "/logout"));
+        assert!(routes.iter().any(|(_, p)| p == "/cli/skin/password/reset"));
+        let cookie = login(helper).await;
+        let foreign_cases = [
+            "Origin: https://evil.k2.dev\r\n",
+            "Origin: https://evil.k2.dev\r\nSec-Fetch-Site: same-site\r\n",
+            "Origin: null\r\n",
+            "Sec-Fetch-Site: cross-site\r\n",
+            "Sec-Fetch-Site: same-site\r\n",
+            "Origin: http://app.acme.k2.dev\r\n",
+        ];
+        for (m, p) in &routes {
+            for bad in foreign_cases {
+                let before = stub.seen();
+                let r = send(
+                    helper,
+                    m,
+                    &format!("{p}?addr=room"),
+                    &format!("Host: {APP}\r\n{cookie}{bad}"),
+                    r#"{"username":"stub","password":"x","addr":"room","text":"hi"}"#,
+                )
+                .await;
+                assert_eq!(r.status, 403, "{m} {p} with {bad:?}: {}", r.body);
+                assert_eq!(r.body, CROSS_ORIGIN_REFUSED_JSON, "{m} {p}");
+                assert!(
+                    set_cookie_of(&r).is_none(),
+                    "a refusal must not set or clear the cookie: {m} {p}"
+                );
+                assert_eq!(
+                    stub.seen(),
+                    before,
+                    "{m} {p} with {bad:?} must not reach the upstream"
+                );
+            }
+        }
+        // The session survived every refused /logout and password change.
+        let still = send(
+            helper,
+            "POST",
+            "/cli/thread/post",
+            &format!("Host: {APP}\r\n{cookie}{SAME}"),
+            r#"{"addr":"room","text":"still here"}"#,
+        )
+        .await;
+        assert_eq!(still.status, 200, "session must survive refused logouts: {}", still.body);
+        // An unknown POST is refused as cross-origin too, before routing.
+        let unknown = send(
+            helper,
+            "POST",
+            "/cli/not/a/route",
+            &format!("Host: {APP}\r\n{cookie}Origin: https://evil.k2.dev\r\n"),
+            "{}",
+        )
+        .await;
+        assert_eq!(unknown.status, 403, "{}", unknown.body);
+        assert_eq!(unknown.body, CROSS_ORIGIN_REFUSED_JSON);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_same_origin_writes_reach_upstream_without_cors() {
+        let stub = start_stub().await;
+        let helper = start_helper(stub.port).await;
+        let ok_cases = [
+            SAME.to_string(),
+            "Origin: https://app.acme.k2.dev:443\r\nSec-Fetch-Site: same-origin\r\n".to_string(),
+            "Sec-Fetch-Site: same-origin\r\n".to_string(),
+            "Origin: null\r\nSec-Fetch-Site: same-origin\r\n".to_string(),
+            // Server-caller rule: no Origin and no Sec-Fetch-Site.
+            String::new(),
+        ];
+        for (m, p) in mutating_routes() {
+            if p == "/login" || p == "/logout" || p == "/cli/skin/password/change" {
+                continue; // session-changing; covered below
+            }
+            for good in &ok_cases {
+                let cookie = login(helper).await;
+                let before = stub.seen().len();
+                let r = send(
+                    helper,
+                    &m,
+                    &format!("{p}?addr=room"),
+                    &format!("Host: {APP}\r\n{cookie}{good}"),
+                    r#"{"addr":"room","text":"hi"}"#,
+                )
+                .await;
+                assert_eq!(r.status, 200, "{m} {p} with {good:?}: {}", r.body);
+                let after = stub.seen();
+                assert_eq!(after.len(), before + 1, "{m} {p} must reach upstream once");
+                // Proxied routes keep the query; the helper's own reset
+                // route calls the daemon on the bare path.
+                let want = if GATEWAY_POST_ROUTES.contains(&p.as_str()) {
+                    format!("{m} {p}")
+                } else {
+                    format!("{m} {p}?addr=room")
+                };
+                assert_eq!(after.last().expect("upstream line"), &want, "{m} {p}");
+                let lower = r.head.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("access-control-"),
+                    "CORS headers must be stripped: {}",
+                    r.head
+                );
+                if !GATEWAY_POST_ROUTES.contains(&p.as_str()) {
+                    assert!(r.head.contains("X-Stub: yes"), "other headers kept: {}", r.head);
+                }
+            }
+        }
+        // Password change and logout, same origin: reach upstream and clear
+        // the cookie with Secure (non-loopback Host).
+        for p in ["/cli/skin/password/change", "/logout"] {
+            let cookie = login(helper).await;
+            let before = stub.seen().len();
+            let r = send(
+                helper,
+                "POST",
+                p,
+                &format!("Host: {APP}\r\n{cookie}{SAME}"),
+                r#"{"oldPassword":"x","password":"y"}"#,
+            )
+            .await;
+            assert_eq!(r.status, 200, "{p}: {}", r.body);
+            assert_eq!(stub.seen().len(), before + 1, "{p} upstream once");
+            assert_eq!(
+                set_cookie_of(&r).expect("clear cookie"),
+                "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure",
+                "{p}"
+            );
+            let gone = send(
+                helper,
+                "POST",
+                "/cli/thread/post",
+                &format!("Host: {APP}\r\n{cookie}{SAME}"),
+                "{}",
+            )
+            .await;
+            assert_eq!(gone.status, 401, "{p} ends the session: {}", gone.body);
+        }
+        // Reads are not origin-gated (credentialed CORS reads fail anyway).
+        let cookie = login(helper).await;
+        let read = send(
+            helper,
+            "GET",
+            "/cli/thread?addr=room",
+            &format!("Host: {APP}\r\n{cookie}Origin: https://evil.k2.dev\r\n"),
+            "",
+        )
+        .await;
+        assert_eq!(read.status, 200, "{}", read.body);
+        assert!(!read.head.to_ascii_lowercase().contains("access-control-"), "{}", read.head);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_websocket_origin_and_cors() {
+        let stub = start_stub().await;
+        let helper = start_helper(stub.port).await;
+        let cookie = login(helper).await;
+        let up = "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n";
+        for (p, param) in WS_ALLOWLIST {
+            let target = format!("{p}?{param}=room");
+            for bad in [
+                "Origin: https://evil.k2.dev\r\n",
+                "Origin: null\r\n",
+                "Origin: https://app.acme.k2.dev\r\nSec-Fetch-Site: cross-site\r\n",
+            ] {
+                let before = stub.seen();
+                let r = send(helper, "GET", &target, &format!("Host: {APP}\r\n{cookie}{up}{bad}"), "")
+                    .await;
+                assert_eq!(r.status, 403, "{p} {bad:?}: {}", r.body);
+                assert_eq!(r.body, CROSS_ORIGIN_REFUSED_JSON);
+                assert_eq!(stub.seen(), before, "{p} {bad:?} must not dial upstream");
+            }
+            let before = stub.seen().len();
+            let r = send(helper, "GET", &target, &format!("Host: {APP}\r\n{cookie}{up}{SAME}"), "")
+                .await;
+            assert_eq!(r.status, 101, "{p} same origin: {}", r.head);
+            assert!(
+                !r.head.to_ascii_lowercase().contains("access-control-"),
+                "101 must not carry CORS: {}",
+                r.head
+            );
+            assert!(r.head.contains("Sec-WebSocket-Accept: stub"), "{}", r.head);
+            assert_eq!(stub.seen().len(), before + 1, "{p} dialled once");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_cookie_attributes_by_host() {
+        let stub = start_stub().await;
+        let helper = start_helper(stub.port).await;
+        let body = r#"{"username":"stub","password":"not-a-real-password"}"#;
+        let max_age = session_max_age_secs();
+        for (host, origin, xfp, secure) in [
+            (APP, "https://app.acme.k2.dev", "", true),
+            ("app.customer.example", "https://app.customer.example", "", true),
+            ("127.0.0.1:38480", "http://127.0.0.1:38480", "", false),
+            ("localhost:38480", "http://localhost:38480", "", false),
+            ("127.0.0.1:38480", "https://127.0.0.1:38480", "X-Forwarded-Proto: https\r\n", true),
+        ] {
+            let r = send(
+                helper,
+                "POST",
+                "/login",
+                &format!("Host: {host}\r\nOrigin: {origin}\r\n{xfp}"),
+                body,
+            )
+            .await;
+            assert_eq!(r.status, 200, "{host}: {}", r.body);
+            let sc = set_cookie_of(&r).expect("Set-Cookie");
+            let sid = sc
+                .strip_prefix("k2_skin_ui=")
+                .and_then(|v| v.split(';').next())
+                .expect("sid");
+            let mut want =
+                format!("k2_skin_ui={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
+            if secure {
+                want.push_str("; Secure");
+            }
+            assert_eq!(sc, want, "{host}");
+            assert!(!sc.contains("Domain"), "host-only: {sc}");
+        }
+        assert_eq!(max_age, 7 * 86_400, "pass TTL is 7 days today");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_expired_session_is_dropped() {
+        let stub = start_stub().await;
+        let gw = Gateway {
+            upstream_host: format!("127.0.0.1:{}", stub.port),
+            root: None,
+            sessions: Mutex::new(HashMap::new()),
+        };
+        gw.sessions.lock().await.insert(
+            "old".into(),
+            Session {
+                token: STUB_PASS.into(),
+                expires: Instant::now() - Duration::from_secs(1),
+            },
+        );
+        gw.sessions.lock().await.insert(
+            "new".into(),
+            Session {
+                token: STUB_PASS.into(),
+                expires: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        assert_eq!(session_token(&gw, "old").await, None);
+        assert!(!gw.sessions.lock().await.contains_key("old"), "expired entry removed");
+        assert_eq!(session_token(&gw, "new").await.as_deref(), Some(STUB_PASS));
     }
 
     #[test]

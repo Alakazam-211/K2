@@ -40,6 +40,18 @@ fn http_ex(
     body: Option<&str>,
     extra_headers: &str,
 ) -> Resp {
+    http_host(port, "127.0.0.1", method, path_and_query, body, extra_headers)
+}
+
+/// [`http_ex`] with an explicit `Host` (the published app's host name).
+fn http_host(
+    port: u16,
+    host: &str,
+    method: &str,
+    path_and_query: &str,
+    body: Option<&str>,
+    extra_headers: &str,
+) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
@@ -53,10 +65,10 @@ fn http_ex(
     };
     let req = match body {
         Some(b) => format!(
-            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}\r\n{b}",
+            "{method} {path_and_query} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}\r\n{b}",
             b.len()
         ),
-        None => format!("{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}\r\n"),
+        None => format!("{method} {path_and_query} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n"),
     };
     stream.write_all(req.as_bytes()).expect("write");
     stream.flush().expect("flush");
@@ -3368,5 +3380,249 @@ async fn publish_run_skin_gateway_heartbeats_and_socket() {
         drop(sock);
         stop_skin(dport, &docs_path);
         let _ = std::fs::remove_dir_all(&docs_path);
+    });
+}
+
+/// security-review-app-cookie-csrf-v1 §7 against a real temp daemon: a
+/// state-changing request or socket from another origin is refused by the
+/// helper and the side effect does not happen; the same request from the
+/// app's own origin (or from a non-browser caller with no Origin and no
+/// Sec-Fetch-Site) lands; daemon CORS headers never reach the browser; the
+/// cookie is Secure with the pass TTL on a non-loopback Host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_refuses_cross_origin() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgxo{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, conv, path) = seed_workspace(&handle);
+        add_user(dport, "guest");
+        set_rooms(dport, "guest", &handle);
+        set_password(dport, "guest", "s3cret-horse");
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+
+        let host = "agents.acme.k2.dev";
+        let same = "Origin: https://agents.acme.k2.dev";
+        let creds = r#"{"username":"guest","password":"s3cret-horse"}"#;
+
+        // Login CSRF: refused, no cookie.
+        let evil_login = http_host(
+            gport,
+            host,
+            "POST",
+            "/login",
+            Some(creds),
+            "Origin: https://evil.k2.dev",
+        );
+        assert_eq!(evil_login.status, 403, "{}", evil_login.body);
+        assert!(
+            evil_login.body.contains("cross_origin_refused"),
+            "{}",
+            evil_login.body
+        );
+        assert!(
+            header_value(&evil_login.headers, "set-cookie").is_none(),
+            "{}",
+            evil_login.headers
+        );
+
+        // Same-origin login on the tunnel host: Secure + Max-Age = pass TTL.
+        let login = http_host(gport, host, "POST", "/login", Some(creds), same);
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sc = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        let sid = cookie_k2_skin_ui(&sc).expect("opaque id");
+        let max_age = k2_core::connect_users::session_ttl_days() * 86_400;
+        assert_eq!(
+            sc,
+            format!("k2_skin_ui={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}; Secure"),
+            "cookie on a non-loopback Host with no X-Forwarded-Proto"
+        );
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let read_thread = || {
+            let r = http_host(
+                gport,
+                host,
+                "GET",
+                &format!("/cli/thread?addr={handle}"),
+                None,
+                &cookie,
+            );
+            assert_eq!(r.status, 200, "thread read; {}", r.body);
+            r
+        };
+
+        // Foreign Origin and foreign Sec-Fetch-Site: 403, nothing posted.
+        let marker = format!("csrf-{}", uuid::Uuid::new_v4());
+        let post_body = format!(r#"{{"addr":"{handle}","text":"{marker}"}}"#);
+        for bad in [
+            format!("{cookie}\r\nOrigin: https://evil.k2.dev"),
+            format!("{cookie}\r\nOrigin: null"),
+            format!("{cookie}\r\nSec-Fetch-Site: cross-site"),
+            format!("{cookie}\r\nSec-Fetch-Site: same-site"),
+        ] {
+            let r = http_host(gport, host, "POST", "/cli/thread/post", Some(&post_body), &bad);
+            assert_eq!(r.status, 403, "{bad:?}: {}", r.body);
+            assert!(r.body.contains("cross_origin_refused"), "{}", r.body);
+        }
+        // Read the store directly (same process as the temp daemon): a
+        // skin post may respawn the pinned Chat and move the address to a
+        // new conversation, so check every conversation seen.
+        let bodies = |c: &str| -> Vec<String> {
+            k2_core::overlay::read_thread_page(c, None, None, 500)
+                .expect("read thread store")
+                .items
+                .into_iter()
+                .filter_map(|i| i.doc.body)
+                .collect()
+        };
+        let before = read_thread();
+        let before_conv = json(&before.body)["conversation_id"]
+            .as_str()
+            .expect("conversation_id")
+            .to_string();
+        for c in [conv.as_str(), before_conv.as_str()] {
+            assert!(
+                !bodies(c).iter().any(|b| b.contains(&marker)),
+                "a refused post must not land in {c}"
+            );
+        }
+
+        // Refused logout leaves the session alone.
+        let evil_logout = http_host(
+            gport,
+            host,
+            "POST",
+            "/logout",
+            None,
+            &format!("{cookie}\r\nOrigin: https://evil.k2.dev"),
+        );
+        assert_eq!(evil_logout.status, 403, "{}", evil_logout.body);
+        let _still = read_thread();
+
+        // Same origin: lands, and the daemon's ACAO: * does not come back.
+        let direct = http(
+            dport,
+            "GET",
+            &format!("/cli/skin/agents?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert!(
+            direct
+                .headers
+                .to_ascii_lowercase()
+                .contains("access-control-allow-origin"),
+            "precondition: the daemon sends CORS headers: {}",
+            direct.headers
+        );
+        let ok = http_host(
+            gport,
+            host,
+            "POST",
+            "/cli/thread/post",
+            Some(&post_body),
+            &format!("{cookie}\r\n{same}\r\nSec-Fetch-Site: same-origin"),
+        );
+        assert_eq!(ok.status, 200, "same-origin post; {}", ok.body);
+        assert!(
+            !ok.headers.to_ascii_lowercase().contains("access-control-"),
+            "CORS headers stripped: {}",
+            ok.headers
+        );
+        let posted_conv = json(&ok.body)["conversation_id"]
+            .as_str()
+            .expect("post conversation_id")
+            .to_string();
+        assert!(
+            bodies(&posted_conv).iter().any(|b| b == &marker),
+            "same-origin post lands in {posted_conv}"
+        );
+        let after = read_thread();
+        assert!(
+            !after.headers.to_ascii_lowercase().contains("access-control-"),
+            "{}",
+            after.headers
+        );
+
+        // Server-caller rule: no Origin and no Sec-Fetch-Site → allowed.
+        let marker2 = format!("server-{}", uuid::Uuid::new_v4());
+        let server = http_host(
+            gport,
+            host,
+            "POST",
+            "/cli/thread/post",
+            Some(&format!(r#"{{"addr":"{handle}","text":"{marker2}"}}"#)),
+            &cookie,
+        );
+        assert_eq!(server.status, 200, "server caller; {}", server.body);
+        let server_conv = json(&server.body)["conversation_id"]
+            .as_str()
+            .expect("server conversation_id")
+            .to_string();
+        assert!(
+            bodies(&server_conv).iter().any(|b| b == &marker2),
+            "server-caller post lands in {server_conv}"
+        );
+
+        // Sockets: foreign Origin refused by the helper; own origin 101.
+        // The address's current conversation (a skin post may have moved it).
+        let ws_path = format!("/cli/overlay/events?conversation={server_conv}");
+        let evil_ws = ws_upgrade(
+            gport,
+            &ws_path,
+            &format!("{cookie}\r\nOrigin: https://evil.k2.dev"),
+        );
+        assert_eq!(evil_ws.status, 403, "{}", evil_ws.body);
+        assert!(
+            evil_ws.body.contains("cross_origin_refused"),
+            "{}",
+            evil_ws.body
+        );
+        let own_ws = ws_upgrade(
+            gport,
+            &ws_path,
+            // `ws_upgrade` sends `Host: 127.0.0.1` (no port), so the
+            // page's own origin is exactly `http://127.0.0.1`.
+            &format!("{cookie}\r\nOrigin: http://127.0.0.1"),
+        );
+        assert_eq!(
+            own_ws.status, 101,
+            "{}\n{}",
+            own_ws.headers, own_ws.body
+        );
+        assert!(
+            !own_ws.headers.to_ascii_lowercase().contains("access-control-"),
+            "{}",
+            own_ws.headers
+        );
+
+        // Same-origin logout clears with Secure and ends the session.
+        let out = http_host(
+            gport,
+            host,
+            "POST",
+            "/logout",
+            None,
+            &format!("{cookie}\r\n{same}"),
+        );
+        assert_eq!(out.status, 200, "{}", out.body);
+        assert_eq!(
+            header_value(&out.headers, "set-cookie").expect("clear"),
+            "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+        );
+        let gone = http_host(
+            gport,
+            host,
+            "GET",
+            &format!("/cli/thread?addr={handle}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(gone.status, 401, "{}", gone.body);
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
     });
 }

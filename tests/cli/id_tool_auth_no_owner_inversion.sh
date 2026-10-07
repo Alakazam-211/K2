@@ -63,6 +63,8 @@ assert_eq "remote-session → remote-session" "$(_cli_tool_id_for_verb remote-se
 assert_eq "activity → activity" "$(_cli_tool_id_for_verb activity)" "activity"
 assert_eq "skills → skills" "$(_cli_tool_id_for_verb skills)" "skills"
 assert_eq "unknown → empty" "$(_cli_tool_id_for_verb totally-unknown)" ""
+assert_eq "llm → llm-accounts" "$(_cli_tool_id_for_verb llm)" "llm-accounts"
+assert_eq "llm-accounts mode id" "$(_cli_tool_default_mode llm-accounts)" "id"
 
 assert_eq "msg mode id" "$(_cli_tool_default_mode msg)" "id"
 assert_eq "mail mode id" "$(_cli_tool_default_mode mail)" "id"
@@ -82,6 +84,7 @@ assert_ok "store is locked" _cli_tool_is_locked store
 assert_ok "dns is locked" _cli_tool_is_locked dns
 assert_ok "sessions-spawn is locked" _cli_tool_is_locked sessions-spawn
 assert_ok "remote-session is locked" _cli_tool_is_locked remote-session
+assert_ok "llm-accounts is locked" _cli_tool_is_locked llm-accounts
 if _cli_tool_is_locked msg; then
     echo "  FAIL: msg must not be locked" >&2
     fail=$((fail + 1))

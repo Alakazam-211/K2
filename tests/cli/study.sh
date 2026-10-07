@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-accounts"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -319,6 +319,22 @@ assert_contains "brief file" "$sc_out" ".k2/sidecars/<name>/BRIEF.md"
 assert_contains "switch named" "$sc_out" "Allow hiring and managing"
 assert_contains "guardrail sentence" "$sc_out" "guardrails, not locks"
 assert_contains "handback" "$sc_out" "k2 msg <primary>"
+
+echo "== k2 study llm-accounts =="
+la_out="$("$K2" study llm-accounts)"
+assert_contains "one active login" "$la_out" "ONE active login per server"
+assert_contains "wallet path" "$la_out" "~/.k2/llm-accounts/<tool>/<id>/"
+assert_contains "every session" "$la_out" "Switching a login affects every session on this server."
+assert_contains "never the active one" "$la_out" "K2 never refreshes the"
+assert_contains "air-gap" "$la_out" "Under air-gap"
+assert_contains "read-only terminals" "$la_out" "Agents and K2 terminals are read-only"
+assert_contains "not a security boundary" "$la_out" "not a security boundary"
+assert_contains "bundles never carry it" "$la_out" "never carry the wallet"
+assert_contains "no auto rotation" "$la_out" "never rotates logins"
+la_json="$("$K2" study llm-accounts --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="llm-accounts" and "needs_login" in d["body"], d["id"]' "$la_json"
+echo "  PASS: llm-accounts --json id+body"
+pass=$((pass + 1))
 
 echo "== k2 study people =="
 people_out="$("$K2" study people)"

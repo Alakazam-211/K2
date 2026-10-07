@@ -190,6 +190,8 @@ mod tunnel_tls_listener;
 // PRD connect-login-edge-only §2 — the loopback tunnel-ingress listener
 // (dispatch tagged `Ingress::Tunnel`); E2E splice + cleartext frpc land here.
 mod tunnel_ingress_listener;
+// Dial nested-subdomain targets; `localhost` tries 127.0.0.1 then ::1.
+mod upstream_dial;
 mod update_routes;
 mod v2_session_map;
 mod v2_spawn;

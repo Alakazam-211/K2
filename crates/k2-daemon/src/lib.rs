@@ -188,6 +188,7 @@ pub mod themes_routes;
 pub mod triage;
 pub mod tunnel_tls_listener;
 pub mod tunnel_ingress_listener;
+pub mod upstream_dial;
 pub mod update_routes;
 pub mod v2_session_map;
 pub mod v2_spawn;

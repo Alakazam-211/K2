@@ -509,7 +509,8 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
 ///     the unmodified `dispatch()` serves it);
 ///   * a **configured nested** label `<label>.<sub>.k2.dev` → proxy the
 ///     decrypted stream to its internal `target` endpoint (e.g.
-///     `localhost:3000`);
+///     `localhost:3000`, dialed as 127.0.0.1 then ::1); if no address
+///     accepts, the visitor gets a `502 Bad Gateway`, never a 404;
 ///   * an **unknown / unprovisioned nested** label → a clean 404 + close
 ///     (never leak an unprovisioned nested host to the daemon).
 ///
@@ -538,8 +539,9 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
 // a WS-frame-aware idle accounting (a real proxy), not a blunt byte timer.
 
 /// Dial a same-host splice backend with the H2 connect timeout applied.
-/// Generic over anything `TcpStream::connect` accepts (a `(host, port)`
-/// tuple for the daemon path, a `&str` "host:port" for nested targets).
+/// Used for the daemon path (`(host, port)` tuple). Nested targets go
+/// through [`crate::upstream_dial::dial_target`] instead (localhost rule +
+/// per-address error log).
 async fn connect_upstream<A: tokio::net::ToSocketAddrs>(addr: &A) -> Result<TcpStream, String> {
     match tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
         Ok(Ok(s)) => Ok(s),
@@ -548,6 +550,39 @@ async fn connect_upstream<A: tokio::net::ToSocketAddrs>(addr: &A) -> Result<TcpS
             "upstream connect timed out after {UPSTREAM_CONNECT_TIMEOUT:?}"
         )),
     }
+}
+
+/// Body of the 502 a visitor gets when a nested label's app is not
+/// accepting connections. Deliberately says nothing about the internal
+/// target (the address and errors go to the daemon log only).
+pub(crate) const UNREACHABLE_BODY: &str =
+    "Service not reachable: the app behind this address is not accepting connections.\n";
+
+/// Best-effort: read the visitor's request head (so closing the socket does
+/// not reset it before the reply lands), then answer `502 Bad Gateway` and
+/// close the TLS stream cleanly.
+async fn write_unreachable_502<S>(tls: &mut S)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut head = Vec::new();
+    let mut buf = [0u8; 4096];
+    while head.len() < 64 * 1024 && !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        match tokio::time::timeout(Duration::from_secs(2), tls.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => head.extend_from_slice(&buf[..n]),
+            _ => break,
+        }
+    }
+    let resp = format!(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n\
+         Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        UNREACHABLE_BODY.len(),
+        UNREACHABLE_BODY
+    );
+    let _ = tls.write_all(resp.as_bytes()).await;
+    let _ = tls.flush().await;
+    let _ = tls.shutdown().await;
 }
 
 async fn serve_one(
@@ -617,10 +652,22 @@ async fn serve_one(
         Route::Internal(target) => {
             // Configured nested subdomain → proxy the decrypted stream to the
             // user's chosen internal endpoint on this same machine.
-            // H2: bound the upstream dial.
-            let mut upstream = connect_upstream(&target.as_str()).await.map_err(|e| {
-                format!("connect to internal endpoint {target} for SNI {sni}: {e}")
-            })?;
+            // H2: bound the upstream dial. `localhost` targets try 127.0.0.1
+            // then ::1 (never the resolver alone) — an IPv4-only app on a box
+            // whose `localhost` resolves to `::1` was unreachable before.
+            let mut upstream =
+                match crate::upstream_dial::dial_target(&target, UPSTREAM_CONNECT_TIMEOUT).await {
+                    Ok(s) => s,
+                    Err(fail) => {
+                        // Answer the visitor with a 502, not a dropped
+                        // connection (which the edge surfaced as a 404).
+                        log_debug!(
+                            "[daemon/e2e] {sni}: upstream {fail} — answering 502"
+                        );
+                        write_unreachable_502(&mut tls).await;
+                        return Ok(());
+                    }
+                };
             log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
             let res = tokio::io::copy_bidirectional(&mut tls, &mut upstream)
                 .await
@@ -989,6 +1036,68 @@ mod tests {
         );
 
         // Reset the global cache so we don't bleed into sibling tests.
+        subdomains::store(SubdomainMap::default());
+    }
+
+    /// The field bug: a nested label targets `localhost:PORT`, the app
+    /// listens on 127.0.0.1 only, and the box resolves `localhost` to `::1`.
+    /// The proxy must reach the app whatever the resolver says (the dial
+    /// never asks it for `localhost`). And a label whose app is down gets a
+    /// 502, not a 404 and not a silent close.
+    #[tokio::test]
+    async fn nested_localhost_target_reaches_ipv4_app_and_dead_app_is_502() {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let daemon_port = install_test_ingress_state();
+
+        // IPv4-only app (spawn_tagged_stub binds 127.0.0.1).
+        let app_port = spawn_tagged_stub("V4APP").await;
+        // A port nothing listens on, on either loopback.
+        let dead_port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            l.local_addr().unwrap().port()
+        };
+
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("web".to_string(), format!("localhost:{app_port}"));
+        targets.insert("down".to_string(), format!("localhost:{dead_port}"));
+        subdomains::store(SubdomainMap {
+            primary: "example".to_string(),
+            targets,
+        });
+
+        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) =
+            k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
+        let server_config =
+            k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config");
+        let shared = Arc::new(ArcSwap::from_pointee(server_config));
+        let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let https_port = tls_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            accept_loop(tls_listener, shared, daemon_port).await;
+        });
+
+        let ok = tls_client_get(&cert_pem, https_port, "web.example.k2.dev", "/").await;
+        assert!(
+            ok.starts_with("HTTP/1.1 200 OK\r\n") && ok.contains("V4APP"),
+            "localhost target must reach the IPv4-only app, got:\n{ok}"
+        );
+
+        let down = tls_client_get(&cert_pem, https_port, "down.example.k2.dev", "/").await;
+        assert!(
+            down.starts_with("HTTP/1.1 502 Bad Gateway\r\n")
+                && down.contains(UNREACHABLE_BODY)
+                && !down.contains("404"),
+            "unreachable app must answer 502 (not 404, not a silent close), got:\n{down}"
+        );
+        assert!(
+            !down.contains(&dead_port.to_string()),
+            "the 502 body must not leak the internal target, got:\n{down}"
+        );
+
         subdomains::store(SubdomainMap::default());
     }
 

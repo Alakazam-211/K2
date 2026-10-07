@@ -10394,6 +10394,54 @@ _nudge_subdomain_refresh() {
     return 0
 }
 
+# Hint only (never blocks, always returns 0): when a nested target is
+# local (`localhost`, `127.0.0.1`, `[::1]`) and nothing is listening on
+# it, say so. For `localhost` the daemon dials 127.0.0.1 then ::1, so we
+# probe both and warn only when neither answers.
+_warn_if_local_target_down() {
+    local target="${1:-}"
+    [ -n "$target" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 - "$target" <<'PY' >&2 || true
+import socket, sys
+t = sys.argv[1].strip()
+for p in ("http://", "https://"):
+    if t.startswith(p):
+        t = t[len(p):]
+t = t.split("/", 1)[0]
+if t.startswith("["):
+    host, _, rest = t[1:].partition("]")
+    port = rest[1:] if rest.startswith(":") else ""
+else:
+    host, _, port = t.rpartition(":")
+try:
+    port = int(port)
+except ValueError:
+    sys.exit(0)
+h = host.lower().rstrip(".")
+if h == "localhost":
+    addrs = [("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)]
+elif h == "127.0.0.1":
+    addrs = [("127.0.0.1", socket.AF_INET)]
+elif h == "::1":
+    addrs = [("::1", socket.AF_INET6)]
+else:
+    sys.exit(0)
+for ip, fam in addrs:
+    try:
+        s = socket.socket(fam, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        s.connect((ip, port))
+        s.close()
+        sys.exit(0)
+    except OSError:
+        pass
+tried = " or ".join("[%s]:%d" % (ip, port) if ":" in ip else "%s:%d" % (ip, port) for ip, _ in addrs)
+print("Warning: nothing is listening on %s yet. Visitors will see 502 (service not reachable) until your app is running on that port." % tried)
+PY
+    return 0
+}
+
 # U7 — nested label `skin` is the Skin front door, never a publish target.
 _refuse_reserved_nested_label() {
     local label
@@ -10488,6 +10536,7 @@ print("  effective: %s" % d.get("effective","?"))
             # the UIs immediately.
             _stamp_subdomain_attrib claim "$label" "$target"
             _nudge_subdomain_refresh
+            _warn_if_local_target_down "$target"
             ;;
         list)
             # GH#33: --json for agent scripting (parity with tunnel/dns/mail).
@@ -10638,6 +10687,7 @@ print("  effective: %s" % d.get("effective","?"))
             # map refresh so the new target shows immediately.
             _stamp_subdomain_attrib claim "$label" "$target"
             _nudge_subdomain_refresh
+            _warn_if_local_target_down "$target"
             ;;
         rm|remove|delete)
             local label="${1:-}"

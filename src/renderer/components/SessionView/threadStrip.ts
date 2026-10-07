@@ -3,10 +3,18 @@
 // clock in, three lines out. The renderer only labels what the daemon
 // decided; it never works out a state of its own.
 //
-//   line 1  the state, the time since the user's message, Stop
-//   line 2  the current step: the tool line, "Thinking… 8s", "Working…"
+//   line 1  a pulse, the state word where it adds something, the time
+//           since the user's message, Stop
+//   line 2  the current step, the main line: the tool line, "Thinking… 8s",
+//           "Delivering…", "Stuck on a permission prompt"
 //   line 3  the tally: "Read 3 files · ran 2 commands", subagents,
 //           background tasks
+//
+// "Working" is said at most once: while a step line says what the agent is
+// doing the header has no state word (the pulse says it), and when the step
+// is unknown the header reads "Working" and there is no step line. The
+// strip never tells anyone to go to the terminal: a wait is stated as a
+// fact, with no call to action.
 //
 // Every clock is the daemon's: server times read as `Date.now() + skewMs`
 // (the frame's `serverNow`). An ended turn shows nothing (Decision 2, Q8),
@@ -31,10 +39,17 @@ export interface ThreadStripStep {
 
 export interface ThreadStripView {
   tone: ThreadStripTone
-  /** "Working", "Monitoring", "Needs you", "Stopped", "No update in 34m". */
+  /** The state word, only where it adds something: "Working" (no step
+   *  known), "Monitoring", "Needs you", "Stopped", "No update in 34m".
+   *  Empty while the step line says what the agent is doing. */
   label: string
-  /** "1m 12s since your message", "you stopped it after 14s", … */
+  /** The header's clock or note: "1m 12s", "you stopped it after 14s", … */
   since: string
+  /** Hover text for `since` ("since your message"), or null. */
+  sinceTitle: string | null
+  /** The whole strip in words, for assistive tech: "Agent working, 1m 12s
+   *  since your message". */
+  ariaLabel: string
   step: ThreadStripStep | null
   /** Muted bits, joined with " · ". */
   tally: string[]
@@ -73,7 +88,7 @@ function childBits(turn: ThreadTurn): string[] {
   const out: string[] = []
   if (turn.subagents > 0) {
     const done = turn.subagentsDone > 0 ? `, ${turn.subagentsDone} done` : ''
-    out.push(`${plural(turn.subagents, 'subagent', 'subagents')} working${done}`)
+    out.push(`${plural(turn.subagents, 'subagent', 'subagents')} running${done}`)
   } else if (turn.subagentsDone > 0) {
     out.push(`${plural(turn.subagentsDone, 'subagent', 'subagents')} done`)
   }
@@ -81,22 +96,32 @@ function childBits(turn: ThreadTurn): string[] {
   return out
 }
 
+/** The step line, or null when the step is unknown (the header then says
+ *  "Working" instead). */
 function stepOf(turn: ThreadTurn, serverNow: number): ThreadStripStep | null {
   const inPhase = stripClock(serverNow - turn.phaseSince)
   switch (turn.phase) {
     case 'tool':
-      return turn.line ? { kind: 'line', text: turn.line, elapsed: inPhase } : { kind: 'plain', text: 'Working…', elapsed: null }
+      return turn.line ? { kind: 'line', text: turn.line, elapsed: inPhase } : null
     case 'thinking':
       return { kind: 'thinking', text: `Thinking… ${inPhase}`, elapsed: null }
     case 'waiting':
-      return { kind: 'needs', text: 'Waiting for you', elapsed: inPhase }
+      return {
+        kind: 'needs',
+        text: turn.waitingOn === 'question' ? 'Stuck on a question' : 'Stuck on a permission prompt',
+        elapsed: inPhase,
+      }
     case 'delivering':
       return { kind: 'plain', text: 'Delivering…', elapsed: null }
     case 'working':
-      return { kind: 'plain', text: 'Working…', elapsed: null }
     case 'stale':
       return null
   }
+}
+
+/** A step for assistive tech: the tool line without its backticks. */
+function spokenStep(step: ThreadStripStep | null): string {
+  return step ? `: ${step.text.replace(/`/g, '')}` : ''
 }
 
 /** The strip for `turn` at `now` (this client's clock), or null: nothing
@@ -105,30 +130,50 @@ export function threadStripView(turn: ThreadTurn, now: number): ThreadStripView 
   const serverNow = now + turn.skewMs
   if (turn.end) {
     if (turn.end.reason !== 'interrupted' || serverNow - turn.end.at >= STOPPED_LINGER_MS) return null
+    const since = `you stopped it after ${stripClock(turn.end.at - turn.startedAt)}`
     return {
       tone: 'stopped',
       label: 'Stopped',
-      since: `you stopped it after ${stripClock(turn.end.at - turn.startedAt)}`,
+      since,
+      sinceTitle: null,
+      ariaLabel: `Stopped, ${since}`,
       step: null,
       tally: [],
       stoppable: false,
     }
   }
-  const sinceMessage = `${stripClock(serverNow - turn.startedAt)} since your message`
+  const clock = stripClock(serverNow - turn.startedAt)
+  const sinceMessage = `${clock} since your message`
   const tally = [...tallyBits(turn.tally), ...childBits(turn)]
+  const step = stepOf(turn, serverNow)
   switch (turn.state) {
     case 'working':
-    case 'monitoring':
+    case 'monitoring': {
+      // The pulse says "working"; the word only stands in for an unknown
+      // step. Monitoring keeps its word: it tells you something.
+      const word = turn.state === 'working' ? 'Working' : 'Monitoring'
       return {
         tone: turn.state,
-        label: turn.state === 'working' ? 'Working' : 'Monitoring',
-        since: sinceMessage,
-        step: stepOf(turn, serverNow),
+        label: turn.state === 'monitoring' || !step ? word : '',
+        since: clock,
+        sinceTitle: 'since your message',
+        ariaLabel: `Agent ${word.toLowerCase()}, ${sinceMessage}${spokenStep(step)}`,
+        step,
         tally,
         stoppable: true,
       }
+    }
     case 'needs-you':
-      return { tone: 'needs-you', label: 'Needs you', since: sinceMessage, step: stepOf(turn, serverNow), tally, stoppable: false }
+      return {
+        tone: 'needs-you',
+        label: 'Needs you',
+        since: clock,
+        sinceTitle: 'since your message',
+        ariaLabel: `Agent needs you, ${sinceMessage}${spokenStep(step)}`,
+        step,
+        tally,
+        stoppable: false,
+      }
     case 'unverifiable': {
       // A24: phase `stale` starts at the row's `staleSince`.
       const minutes = minutesWithoutUpdate({ evidenceAt: null, staleSince: turn.phaseSince }, now, turn.skewMs)
@@ -136,6 +181,8 @@ export function threadStripView(turn: ThreadTurn, now: number): ThreadStripView 
         tone: 'unverifiable',
         label: `No update in ${minutes}m`,
         since: 'the session is still open',
+        sinceTitle: null,
+        ariaLabel: `No update in ${minutes}m, the session is still open`,
         step: null,
         tally,
         stoppable: false,

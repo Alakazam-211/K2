@@ -665,17 +665,22 @@ describe('Thread working strip (S7)', () => {
     threadHook.turnsReported = true
   })
 
-  it('T-S7a: a tool frame reads state, time since your message on the server clock, the line, the tally', () => {
+  it('T-S7a: a tool frame reads the pulse, time since your message on the server clock, the line, the tally', () => {
     threadHook.turn = turnOf()
     renderInRoom(overlayRoom, pane())
     expect(strip()?.getAttribute('data-tone')).toBe('working')
-    expect(text('thread-strip-state')).toBe('Working')
+    // The step line says what it's doing: no state word in the header.
+    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
     // 72 s on the server's clock; this client's own clock would say 70 s.
-    expect(text('thread-strip-since')).toBe('· 1m 12s since your message')
+    expect(text('thread-strip-since')).toBe('1m 12s')
+    expect(screen.getByTestId('thread-strip-since').getAttribute('title')).toBe('since your message')
+    expect(strip()?.getAttribute('aria-label')).toBe('Agent working, 1m 12s since your message: Running cargo test')
     expect(text('thread-strip-step-text')).toBe('Running cargo test')
     expect(screen.getByTestId('thread-strip-step-text').querySelector('code')?.textContent).toBe('cargo test')
     expect(text('thread-strip-step')).toContain('12s')
-    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands · 2 subagents working, 1 done · 1 background task')
+    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands · 2 subagents running, 1 done · 1 background task')
+    // "working" is said at most once, and never "subagents working".
+    expect((strip()?.textContent ?? '').match(/working/gi)).toBeNull()
     // The strip sits under the last message.
     const content = screen.getByTestId('thread-item').parentElement
     expect(content?.lastElementChild).toBe(strip())
@@ -687,7 +692,7 @@ describe('Thread working strip (S7)', () => {
     act(() => {
       vi.advanceTimersByTime(8_000)
     })
-    expect(text('thread-strip-since')).toBe('· 1m 20s since your message')
+    expect(text('thread-strip-since')).toBe('1m 20s')
     expect(text('thread-strip-step')).toContain('20s')
   })
 
@@ -696,16 +701,25 @@ describe('Thread working strip (S7)', () => {
     renderInRoom(overlayRoom, pane())
     expect(text('thread-strip-step-text')).toBe('Thinking… 8s')
     expect(screen.getByTestId('thread-strip-step-text').className).toContain('thread-strip-shimmer')
+    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
   })
 
-  it('T-S7a: delivering and plain working read their own lines', () => {
+  it('T-S7a: delivering reads its own line; an unknown step says "Working" once, in the header', () => {
     threadHook.turn = turnOf({ phase: 'delivering', line: null, subagents: 0, subagentsDone: 0, background: 0, tally: {} })
     const view = renderInRoom(overlayRoom, pane())
     expect(text('thread-strip-step-text')).toBe('Delivering…')
+    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
+    expect(strip()?.textContent).not.toMatch(/working/i)
     expect(screen.queryByTestId('thread-strip-tally')).toBeNull()
-    threadHook.turn = turnOf({ phase: 'working', line: null, rev: 4 })
-    view.rerender(pane())
-    expect(text('thread-strip-step-text')).toBe('Working…')
+    for (const [phase, rev] of [['working', 4], ['tool', 5]] as const) {
+      threadHook.turn = turnOf({ phase, line: null, rev })
+      view.rerender(pane())
+      expect(text('thread-strip-state'), phase).toBe('Working')
+      expect(text('thread-strip-since'), phase).toBe('· 1m 12s')
+      expect(screen.queryByTestId('thread-strip-step'), phase).toBeNull()
+      expect((strip()?.textContent ?? '').match(/working/gi), phase).toHaveLength(1)
+      expect(strip()?.getAttribute('aria-label'), phase).toBe('Agent working, 1m 12s since your message')
+    }
   })
 
   it('T-S7a: an end removes the strip (no stored row, no trace; Q8)', () => {
@@ -741,13 +755,21 @@ describe('Thread working strip (S7)', () => {
     expect(strip()?.getAttribute('data-tone')).toBe('needs-you')
     expect(strip()?.className).toContain('--color-status-warn-amber')
     expect(text('thread-strip-state')).toBe('Needs you')
-    expect(text('thread-strip-step-text')).toBe('Waiting for you')
+    expect(text('thread-strip-since')).toBe('· 1m 12s')
+    // A fact, with no call to action and no pointer to the terminal.
+    expect(text('thread-strip-step-text')).toBe('Stuck on a permission prompt')
+    expect(strip()?.textContent).not.toMatch(/terminal|approve/i)
     expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+    threadHook.turn = turnOf({ state: 'needs-you', phase: 'waiting', line: null, waitingOn: 'question', rev: 4 })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(text('thread-strip-step-text')).toBe('Stuck on a question')
 
     threadHook.turn = turnOf({ state: 'monitoring', rev: 5 })
     view.rerender(pane({ onStop: () => {} }))
     expect(strip()?.getAttribute('data-tone')).toBe('monitoring')
     expect(strip()?.className).toContain('--color-accent')
+    // Monitoring keeps its word: it says something the pulse doesn't.
+    expect(text('thread-strip-state')).toBe('Monitoring')
     expect(screen.getByTestId('thread-strip-stop')).not.toBeNull()
   })
 

@@ -309,6 +309,9 @@ export interface ThreadTurn {
   subagentsDone: number
   background: number
   tally: ThreadTurnTally
+  /** Phase `waiting`: what the agent is stuck on. Null otherwise (and from
+   *  a server that doesn't say). */
+  waitingOn: 'permission' | 'question' | null
   end: ThreadTurnEnd | null
   rev: number
   /** `serverNow − Date.now()` when this frame arrived. Server times read
@@ -361,6 +364,7 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
     subagentsDone: count(a.subagentsDone),
     background: count(a.background),
     tally: { read: count(t.read), search: count(t.search), cmd: count(t.cmd), edit: count(t.edit) },
+    waitingOn: a.waitingOn === 'permission' || a.waitingOn === 'question' ? a.waitingOn : null,
     end,
     rev: finite(a.rev) ?? 0,
     skewMs: serverNow - receivedAt,

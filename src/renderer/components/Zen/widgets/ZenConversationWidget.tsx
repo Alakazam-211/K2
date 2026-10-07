@@ -42,7 +42,7 @@ const CARD_TOKENS = {
 } as React.CSSProperties
 
 export const zenEmptyThreadText = (label: string): string => `Message ${label}. It reads this like a text.`
-export const zenPermissionText = (label: string): string => `${label} is waiting for permission in its terminal.`
+export const zenPermissionText = (label: string): string => `${label} is stuck on a permission prompt.`
 
 function itemText(item: OverlayThreadItem): string {
   const d = item.doc

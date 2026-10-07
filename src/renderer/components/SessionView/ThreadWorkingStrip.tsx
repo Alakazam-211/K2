@@ -93,6 +93,7 @@ export function ThreadWorkingStrip({
   return (
     <div
       role="status"
+      aria-label={view.ariaLabel}
       data-testid="thread-working-strip"
       data-tone={view.tone}
       data-phase={turn.phase}
@@ -100,14 +101,17 @@ export function ThreadWorkingStrip({
     >
       <div className="flex items-center gap-2 min-w-0">
         <span aria-hidden className={`inline-block flex-none w-2 h-2 box-border ${MARK[view.tone]}`} />
-        <span data-testid="thread-strip-state" className={`text-[11px] font-bold ${LABEL_COLOR[view.tone]}`}>
-          {view.label}
-        </span>
+        {view.label && (
+          <span data-testid="thread-strip-state" className={`text-[11px] font-bold ${LABEL_COLOR[view.tone]}`}>
+            {view.label}
+          </span>
+        )}
         <span
           data-testid="thread-strip-since"
+          title={view.sinceTitle ?? undefined}
           className="min-w-0 truncate text-[11px] text-[var(--color-text-muted)] tabular-nums"
         >
-          · {view.since}
+          {view.label ? `· ${view.since}` : view.since}
         </span>
         {view.stoppable && onStop && (
           <button

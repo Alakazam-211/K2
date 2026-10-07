@@ -44,7 +44,8 @@
 //!   `PreToolUse` until its Post; a transcript tool call for hookless
 //!   Codex / Grok) → `thinking` (lead working, no tool, 1.5 s since the
 //!   last prompt or tool result; or a transcript reasoning record) →
-//!   `waiting` (row waiting) → `stale` (row unverifiable, A24). Thinking is
+//!   `waiting` (row waiting; `waitingOn` names a permission prompt or a
+//!   question) → `stale` (row unverifiable, A24). Thinking is
 //!   a timer; no thinking text exists here.
 //! - **Catch-up (TW9).** `since_seq` never replays an ephemeral frame, so
 //!   `GET /cli/thread/activity?addr=` returns [`current_turn`]: the live
@@ -115,6 +116,9 @@ pub struct RowSnap {
     pub turn_started_at: Option<i64>,
     pub evidence_at: Option<i64>,
     pub stale_since: Option<i64>,
+    /// The row waits on a question (AskUserQuestion), not a permission
+    /// prompt: the strip names which.
+    pub waiting_question: bool,
     /// TW7: running, waiting or owed subagents.
     pub subagents: usize,
     /// TW7: running background shells and monitors.
@@ -132,6 +136,7 @@ impl RowSnap {
             turn_started_at: row.turn_started_at,
             evidence_at: row.evidence_at,
             stale_since: row.stale_since,
+            waiting_question: row.reason == Reason::WaitingQuestion,
             subagents,
             background,
         }
@@ -773,6 +778,10 @@ impl Tracker {
             "subagentsDone": turn.subagents_done.len(),
             "background": snap.map_or(0, |s| s.background),
             "tally": turn.tally.to_json(),
+            "waitingOn": (phase == "waiting").then(|| match snap {
+                Some(s) if s.waiting_question => "question",
+                _ => "permission",
+            }),
             "end": Value::Null,
         })
     }
@@ -995,6 +1004,7 @@ mod tests {
             turn_started_at: Some(turn),
             evidence_at: Some(turn),
             stale_since: None,
+            waiting_question: false,
             subagents: 0,
             background: 0,
         }
@@ -1303,6 +1313,9 @@ mod tests {
         let b = only(&t.row_changed(SID, &row.lookup(), 1_700)).clone();
         assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("waiting"), Some("needs-you")));
         assert_eq!(b["phaseSince"], 1_700);
+        assert_eq!(b["waitingOn"], "permission");
+        row.set(RowSnap { waiting_question: true, lead_since: 1_800, ..snap(LeadState::Waiting, Display::Waiting, 900) });
+        assert_eq!(t.current(CONV, &row.lookup(), 1_800).expect("live")["waitingOn"], "question");
         row.set(RowSnap { subagents: 2, background: 1, ..snap(LeadState::Working, Display::Working, 900) });
         let mut sub = hook(r#"{"hook_event_name":"SubagentStop","agent_id":"a1","agent_type":"general"}"#);
         t.envelope(&sub, 2_300, &row.lookup(), 2_300);

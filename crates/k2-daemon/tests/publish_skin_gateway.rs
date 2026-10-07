@@ -3626,3 +3626,352 @@ async fn publish_run_skin_gateway_refuses_cross_origin() {
         let _ = std::fs::remove_dir_all(&path);
     });
 }
+
+// ── prd-daemon-activity-and-thread-working-v1 S8: app guests ────────────
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// A live session under `cwd` whose PTY runs `cat` (never an agent CLI).
+/// Registering it in the v2 map creates its activity row (DA2), so the
+/// 10 s liveness sweep keeps it. The spawn guard resolves every program
+/// from `K2_TEST_AGENT_SHIM_DIR` only, so `cat` gets a shim there too.
+fn spawn_cat(cwd: &str, key: &str) -> std::sync::Arc<k2_core::terminal::DaemonPtySession> {
+    let shim_dir = std::env::var_os("K2_TEST_AGENT_SHIM_DIR").expect("with_temp_home sets the shim dir");
+    let shim = std::path::Path::new(&shim_dir).join("cat");
+    if !shim.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&shim, "#!/bin/sh\nexec /bin/cat\n").expect("write cat shim");
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod cat shim");
+    }
+    let cfg = k2_core::terminal::DaemonPtyConfig {
+        cols: 80,
+        rows: 24,
+        cwd: Some(std::path::PathBuf::from(cwd)),
+        program: Some("cat".to_string()),
+        ..k2_core::terminal::DaemonPtyConfig::default()
+    };
+    let session = k2_core::terminal::DaemonPtySession::spawn(cfg).expect("spawn cat PTY");
+    k2_daemon::v2_session_map::register(key.to_string(), std::sync::Arc::clone(&session));
+    session
+}
+
+/// Apply a synthetic Claude hook payload to a session's row at `at`.
+fn activity_hook(sid: &str, body: serde_json::Value, at: i64) {
+    use k2_core::agent_hooks::envelope::{self, HookHeaders, HookSource};
+    let env = envelope::parse(
+        &HookHeaders {
+            pane: sid.to_string(),
+            agent_pid: Some(4242),
+            source: HookSource::Claude,
+            hook_version: Some(2),
+            cli_version: Some("2.1.292".into()),
+            truncated: false,
+            event_hint: None,
+        },
+        body.to_string().as_bytes(),
+    )
+    .expect("synthetic hook parses");
+    k2_daemon::activity_store::apply_at(sid, k2_core::activity::Evidence::Hook(&env), at);
+}
+
+fn sorted_keys(v: &serde_json::Value) -> Vec<String> {
+    let mut keys: Vec<String> = v.as_object().unwrap_or_else(|| panic!("object: {v}")).keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+/// T-S8b: exactly the documented keys (a field added later fails here).
+fn assert_guest_frame(v: &serde_json::Value, room: &str) {
+    assert_eq!(
+        sorted_keys(v),
+        ["agentName", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
+        "guest frame keys: {v}"
+    );
+    assert_eq!(v["kind"], "session_activity_changed", "{v}");
+    assert_eq!(v["workspace"], room, "{v}");
+}
+
+/// Agent frames on a room socket until one for `agent` satisfies `pred`.
+/// Every frame on the way must be a well-formed guest frame for `room`.
+fn guest_frame_until(
+    sock: &mut StdTcpStream,
+    room: &str,
+    agent: &str,
+    what: &str,
+    pred: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "no guest frame: {what}");
+        let Some(text) = try_read_ws_text(sock, Duration::from_millis(500)) else { continue };
+        let v = json(&text);
+        assert_guest_frame(&v, room);
+        if v["agentName"] == agent && pred(&v) {
+            return v;
+        }
+    }
+}
+
+/// Open any WebSocket on `port`; returns the stream after 101.
+fn open_socket(port: u16, path_and_query: &str, extra_headers: &str) -> StdTcpStream {
+    let mut sock = StdTcpStream::connect(("127.0.0.1", port)).expect("ws connect");
+    sock.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+    let extra = if extra_headers.is_empty() { String::new() } else { format!("{extra_headers}\r\n") };
+    let req = format!(
+        "GET {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n"
+    );
+    sock.write_all(req.as_bytes()).expect("ws write");
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        sock.read_exact(&mut byte).unwrap_or_else(|e| panic!("upgrade head {path_and_query}: {e}; got {:?}", String::from_utf8_lossy(&head)));
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head).to_string();
+    assert!(head.starts_with("HTTP/1.1 101"), "{path_and_query}: {head}");
+    sock
+}
+
+/// S8 through the official helper (AP1–AP4):
+/// - T-S8a: an app guest never gets an `activity` overlay frame (the owner
+///   on the same conversation does); `/cli/thread/activity` is not an app
+///   door (helper 404, daemon 403); `/cli/chat/transcript` stays refused.
+/// - T-S8b: the guest snapshot and the guest frames carry exactly the
+///   documented keys and nothing from the row (no path, id, reason, tool,
+///   count); `permission`, `unknown`, `since`, change-only sends, and a
+///   removed working session going `idle`.
+/// - T-S8c: `activity:read` in one room never reads another room
+///   (`skin_room`), and a room without the cap is `missing capability`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_activity_guest_projection() {
+    let _g = lock();
+    k2_core::test_isolation::assert_no_prod_env();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let tag = &uuid::Uuid::new_v4().to_string()[..8];
+        let docs = format!("docs{tag}");
+        let anna = format!("anna{tag}");
+        let other = format!("othr{tag}");
+        let (docs_id, _c1, docs_path) = seed_files_workspace(&docs);
+        let (_anna_id, _c2, anna_path) = seed_files_workspace(&anna);
+        let (_other_id, _c3, other_path) = seed_files_workspace(&other);
+        add_user(dport, "watch");
+        set_password(dport, "watch", "s3cret-horse");
+        let created = http(dport, "POST", &format!("/cli/skin/roles?token={OWNER_TOKEN}"), Some(r#"{"name":"watcher"}"#));
+        assert_eq!(created.status, 200, "role; {}", created.body);
+        for (handle, caps) in [
+            (&docs, r#"["thread:read","thread:post","activity:read"]"#),
+            (&anna, r#"["thread:read"]"#),
+        ] {
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+                Some(&format!(r#"{{"name":"watcher","handle":"{handle}","caps":{caps}}}"#)),
+            );
+            assert_eq!(r.status, 200, "room {handle}; {}", r.body);
+        }
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"watch","role":"watcher"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+        let gport = free_port();
+        publish_skin(dport, &docs_path, gport, None);
+        let cookie = gateway_login_cookie(gport, "watch", "s3cret-horse");
+
+        // Live sessions (PTYs running `cat`): two in docs, one in anna.
+        let work = spawn_cat(&docs_path, "tab-docswork");
+        let quiet = spawn_cat(&docs_path, "tab-docsquiet");
+        let elsewhere = spawn_cat(&anna_path, "tab-annawork");
+        let sid = |s: &std::sync::Arc<k2_core::terminal::DaemonPtySession>| s.session_id.to_string();
+        let (work_sid, quiet_sid, anna_sid) = (sid(&work), sid(&quiet), sid(&elsewhere));
+        let started = now_ms();
+        let prompt = |s: &str, at: i64| {
+            activity_hook(s, serde_json::json!({"hook_event_name": "UserPromptSubmit", "prompt_id": "p1"}), at)
+        };
+        prompt(&work_sid, started);
+        prompt(&anna_sid, started);
+
+        // ── T-S8b: the guest snapshot ──
+        let snap = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={docs}"), None, &cookie);
+        assert_eq!(snap.status, 200, "guest snapshot through the helper; {}", snap.body);
+        let v = json(&snap.body);
+        assert_eq!(sorted_keys(&v), ["serverNow", "sessions", "since", "status", "workspace"], "{v}");
+        assert_eq!((v["workspace"].as_str(), v["status"].as_str(), v["since"].as_i64()), (Some(docs.as_str()), Some("working"), Some(started)), "{v}");
+        assert!(v["serverNow"].as_i64().is_some_and(|t| t >= started), "{v}");
+        let sessions = v["sessions"].as_array().expect("sessions");
+        assert_eq!(sessions.len(), 2, "docs sessions only: {v}");
+        for s in sessions {
+            assert_eq!(sorted_keys(s), ["agentName", "paneGroupId", "since", "status"], "{s}");
+        }
+        assert_eq!(
+            sessions,
+            &vec![
+                serde_json::json!({"agentName": "tab-docsquiet", "paneGroupId": "docsquiet", "status": "idle", "since": null}),
+                serde_json::json!({"agentName": "tab-docswork", "paneGroupId": "docswork", "status": "working", "since": started}),
+            ],
+            "{v}"
+        );
+        for secret in [docs_path.as_str(), docs_id.as_str(), work_sid.as_str(), "tab-annawork", "reason", "turnStartedAt", "children", "evidence"] {
+            assert!(!snap.body.contains(secret), "{secret} must not reach an app: {}", snap.body);
+        }
+
+        // ── T-S8c: room isolation and the cap ──
+        let no_cap = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={anna}"), None, &cookie);
+        assert_eq!(no_cap.status, 403, "anna has no activity:read; {}", no_cap.body);
+        assert!(no_cap.body.contains("missing capability activity:read"), "{}", no_cap.body);
+        let not_mine = http_ex(gport, "GET", &format!("/cli/activity/snapshot?workspace={other}"), None, &cookie);
+        assert_eq!(not_mine.status, 403, "room not on the pass; {}", not_mine.body);
+        assert!(not_mine.body.contains("skin_room"), "{}", not_mine.body);
+        assert!(!not_mine.body.contains("tab-"), "{}", not_mine.body);
+        let no_ws = http_ex(gport, "GET", "/cli/activity/snapshot", None, &cookie);
+        assert_eq!(no_ws.status, 400, "an app pass needs workspace=; {}", no_ws.body);
+        let post = http_ex(gport, "POST", &format!("/cli/activity/snapshot?workspace={docs}"), Some("{}"), &cookie);
+        assert_eq!(post.status, 404, "GET only on the helper; {}", post.body);
+        // A platform pass with activity:read in anna only (daemon door).
+        let anna_pass = mint(dport, &format!("act{tag}"), &["activity:read"], &[&anna]);
+        let cross = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={docs}&token={anna_pass}"), None);
+        assert_eq!(cross.status, 403, "activity:read in anna never reads docs; {}", cross.body);
+        assert!(cross.body.contains("skin_room"), "{}", cross.body);
+        let own = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={anna_pass}"), None);
+        assert_eq!(own.status, 200, "{}", own.body);
+        let ov = json(&own.body);
+        assert_eq!(ov["sessions"].as_array().map(Vec::len), Some(1), "{ov}");
+        assert_eq!(ov["sessions"][0]["agentName"], "tab-annawork", "{ov}");
+        let all = http(dport, "GET", &format!("/cli/activity/snapshot?token={anna_pass}"), None);
+        assert_eq!(all.status, 400, "never the host-wide snapshot; {}", all.body);
+        let thread_pass = mint(dport, &format!("thr{tag}"), &["thread:read"], &[&anna]);
+        let cap = http(dport, "GET", &format!("/cli/activity/snapshot?workspace={anna}&token={thread_pass}"), None);
+        assert_eq!(cap.status, 403, "{}", cap.body);
+        assert!(cap.body.contains("missing capability activity:read"), "{}", cap.body);
+
+        // ── T-S8b: guest frames on the room socket ──
+        let mut sock = open_room_socket(gport, &docs, &cookie);
+        std::thread::sleep(Duration::from_millis(200));
+        // A tool step (same app-visible state) and anna's turn: no frame.
+        activity_hook(&work_sid, serde_json::json!({
+            "hook_event_name": "PreToolUse", "prompt_id": "p1", "tool_name": "Bash",
+            "tool_use_id": "toolu_s8", "tool_input": {"command": "cargo test"}
+        }), now_ms());
+        activity_hook(&anna_sid, serde_json::json!({"hook_event_name": "PreToolUse", "prompt_id": "p1", "tool_name": "Read", "tool_use_id": "toolu_a"}), now_ms());
+        assert!(
+            try_read_ws_text(&mut sock, Duration::from_millis(600)).is_none(),
+            "a tool step and another room's change send nothing to the app"
+        );
+        // Waiting → permission (Q17), no since.
+        activity_hook(&work_sid, serde_json::json!({"hook_event_name": "PermissionRequest", "prompt_id": "p1", "tool_name": "Bash"}), now_ms());
+        let f = guest_frame_until(&mut sock, &docs, "tab-docswork", "permission", |v| v["status"] == "permission");
+        assert!(f["since"].is_null(), "{f}");
+        assert_eq!(f["paneGroupId"], "docswork");
+        // Approved → working again, since = the same turn start.
+        activity_hook(&work_sid, serde_json::json!({
+            "hook_event_name": "PostToolUse", "prompt_id": "p1", "tool_name": "Bash",
+            "tool_use_id": "toolu_s8", "tool_response": {"stdout": "synthetic"}
+        }), now_ms());
+        let f = guest_frame_until(&mut sock, &docs, "tab-docswork", "working again", |v| v["status"] == "working");
+        assert_eq!(f["since"], started, "{f}");
+        // Turn done with a background shell → monitoring: still `working`
+        // for apps, but no turn running (since null).
+        activity_hook(&work_sid, serde_json::json!({
+            "hook_event_name": "Stop", "prompt_id": "p1", "session_crons": [],
+            "background_tasks": [{"id": "bash_1", "type": "shell", "status": "running"}]
+        }), now_ms());
+        let f = guest_frame_until(&mut sock, &docs, "tab-docswork", "monitoring", |v| v["since"].is_null());
+        assert_eq!(f["status"], "working", "monitoring is working for apps: {f}");
+        // No evidence for 40 minutes → unverifiable → `unknown` (Q9).
+        prompt(&quiet_sid, now_ms() - 40 * 60 * 1000);
+        k2_daemon::activity_store::tick_all(now_ms());
+        let f = guest_frame_until(&mut sock, &docs, "tab-docsquiet", "unknown", |v| v["status"] == "unknown");
+        assert!(f["since"].is_null(), "{f}");
+        // The working session goes away → one `idle`.
+        k2_daemon::v2_session_map::unregister("tab-docswork");
+        work.kill();
+        let f = guest_frame_until(&mut sock, &docs, "tab-docswork", "removal", |v| v["status"] == "idle");
+        assert!(f["since"].is_null(), "{f}");
+        drop(sock);
+
+        // ── T-S8a (1): activity overlay frames never reach an app guest ──
+        let thread = http_ex(gport, "GET", &format!("/cli/thread?addr={docs}"), None, &cookie);
+        assert_eq!(thread.status, 200, "{}", thread.body);
+        let conv = json(&thread.body)["conversation_id"].as_str().expect("conversation_id").to_string();
+        let mut guest_ov = open_socket(gport, &format!("/cli/overlay/events?conversation={conv}"), &cookie);
+        let mut owner_ov = open_socket(dport, &format!("/cli/overlay/events?conversation={conv}&token={OWNER_TOKEN}"), "");
+        std::thread::sleep(Duration::from_millis(200));
+        let turn = uuid::Uuid::new_v4().to_string();
+        k2_daemon::thread_activity::start_turn(&conv, &docs, &turn, now_ms());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "the owner must see the activity frame");
+            let Some(text) = try_read_ws_text(&mut owner_ov, Duration::from_millis(500)) else { continue };
+            let v = json(&text);
+            if v["collection"] == "activity" {
+                assert_eq!(v["id"], turn.as_str(), "{v}");
+                break;
+            }
+        }
+        let ask = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"addr":"{docs}","prompt":"Ship it?","options":"Go,Stop"}}"#)),
+        );
+        assert_eq!(ask.status, 200, "owner ask; {}", ask.body);
+        let card = json(&ask.body)["id"].as_str().expect("card id").to_string();
+        let mut saw_card = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let Some(text) = try_read_ws_text(&mut guest_ov, Duration::from_millis(500)) else {
+                if saw_card {
+                    break;
+                }
+                continue;
+            };
+            let v = json(&text);
+            assert_ne!(v["collection"], "activity", "an app guest must never get an activity frame: {v}");
+            assert!(v.get("activity").is_none(), "{v}");
+            saw_card |= v["collection"] == "thread" && v["id"] == card.as_str();
+        }
+        assert!(saw_card, "the guest overlay socket was live on this conversation");
+        k2_daemon::thread_activity::clear_for_tests();
+        drop(guest_ov);
+        drop(owner_ov);
+
+        // ── T-S8a (2): the Thread strip catch-up is not an app door ──
+        let gw = http_ex(gport, "GET", &format!("/cli/thread/activity?addr={docs}"), None, &cookie);
+        assert_eq!(gw.status, 404, "never allowlisted; {}", gw.body);
+        let gw_ws = ws_upgrade(gport, &format!("/cli/thread/activity?addr={docs}"), &cookie);
+        assert_eq!(gw_ws.status, 403, "{}", gw_ws.body);
+        assert!(gw_ws.body.contains("not allowed"), "{}", gw_ws.body);
+        let docs_pass = mint(dport, &format!("dcs{tag}"), &["thread:read", "activity:read"], &[&docs]);
+        let direct = http(dport, "GET", &format!("/cli/thread/activity?addr={docs}&token={docs_pass}"), None);
+        assert_eq!(direct.status, 403, "app pass at the daemon; {}", direct.body);
+        assert!(direct.body.contains("app passes cannot use thread/activity"), "{}", direct.body);
+
+        // ── T-S8a (3): the chat transcript stays refused ──
+        let gw = http_ex(gport, "GET", "/cli/chat/transcript?session=x", None, &cookie);
+        assert_eq!(gw.status, 403, "{}", gw.body);
+        assert!(gw.body.contains("not allowed"), "{}", gw.body);
+        let gw_ws = ws_upgrade(gport, "/cli/chat/transcript?session=x", &cookie);
+        assert_eq!(gw_ws.status, 403, "{}", gw_ws.body);
+        assert!(gw_ws.body.contains("not allowed"), "{}", gw_ws.body);
+        let direct = http(dport, "GET", &format!("/cli/chat/transcript?session=x&token={docs_pass}"), None);
+        assert_eq!(direct.status, 403, "{}", direct.body);
+        assert!(direct.body.contains("skin token cannot read host session logs"), "{}", direct.body);
+
+        for key in ["tab-docsquiet", "tab-annawork"] {
+            if let Some(s) = k2_daemon::v2_session_map::unregister(key) {
+                s.kill();
+            }
+        }
+        stop_skin(dport, &docs_path);
+        for p in [&docs_path, &anna_path, &other_path] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    });
+}

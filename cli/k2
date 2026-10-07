@@ -16772,7 +16772,8 @@ ROUTES (project= is the room handle or uuid; never a path)
                 ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
                    "change":"<change>","status":"<status after>",
                    "via":"<via>"|null,"hasBrief":true|false}
-  The same socket carries agent working (activity:read) and heartbeats
+  The same socket carries agent working (activity:read; frames and the
+  snapshot: `k2 study apps`, AGENT WORKING) and heartbeats
   (heartbeats:read). Any one of the three caps opens it; each frame needs
   its own cap in the room. A pass without tickets:read never gets a ticket
   frame.
@@ -17165,6 +17166,45 @@ TICKETS
   Render `brief.html` in `sandbox=""` with a `default-src 'none'; img-src data:` CSP.
   Never inject it into your page DOM. List its links outside the frame.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
+
+AGENT WORKING (activity:read)
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET      /cli/activity/snapshot?workspace=<handle>
+    WS GET   /cli/activity/events?workspace=<handle>
+  Snapshot (the room now):
+    {"workspace":"<handle>","status":"working","since":1781812201000,
+     "serverNow":1781812273000,
+     "sessions":[{"agentName":"tab-…","paneGroupId":"…",
+                  "status":"working","since":1781812201000}]}
+  Frame (one session changed):
+    {"kind":"session_activity_changed","workspace":"<handle>",
+     "agentName":"tab-…","paneGroupId":"…"|null,"status":"working",
+     "since":1781812201000|null,"serverNow":1781812273000}
+  status   working     the agent is on a turn, or watching background tasks
+           permission  the agent waits for a person to approve a step
+           idle        nothing running
+           unknown     no update from the agent for 30 minutes; it may be
+                       stuck or finished silently. Not an error.
+  since    ms epoch when the current turn started, while the agent works a
+           turn; null otherwise (permission, idle, unknown, and background
+           tasks only). Elapsed = serverNow - since; correct your clock by
+           serverNow, never trust the device clock alone.
+  Room status is the busiest session: permission > working > unknown > idle.
+  Since K2 0.45: the daemon's own activity (agent hooks), not terminal
+  titles. permission and unknown are NEW words; older servers send only
+  working and idle, and never since or serverNow. Treat any other word
+  (a newer server) like unknown.
+  A frame goes out only when status or since changes. A session that goes
+  away sends idle once. No tool names, commands, files, thinking text,
+  subagent counts, paths or ids, ever: a pulse and a clock only.
+  WHAT THE APP MUST DO: open the socket, then GET the snapshot and replace
+  your state with it. Pull the snapshot again on every socket (re)open,
+  and when a {"kind":"resync"} frame arrives (the socket fell behind and
+  closes with 4008 right after). Frames sent while you were away are gone.
+  Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
+  403 missing capability activity:read. Never the host-wide snapshot.
+  Never /cli/thread/activity (the desktop's Thread strip; 403 / 404 for
+  apps). Never /cli/chat/transcript.
 
 WIKI
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

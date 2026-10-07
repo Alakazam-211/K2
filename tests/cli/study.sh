@@ -271,6 +271,20 @@ fi
 assert_contains "apps keeps k2skn_" "$apps_out" "k2skn_"
 assert_contains "apps keeps /cli/skin/login" "$apps_out" "/cli/skin/login"
 
+echo "== k2 study apps: agent working (prd-daemon-activity-and-thread-working-v1 AP4) =="
+assert_contains "activity section" "$apps_out" "AGENT WORKING (activity:read)"
+assert_contains "guest snapshot path" "$apps_out" "GET      /cli/activity/snapshot?workspace=<handle>"
+assert_contains "activity socket path" "$apps_out" "WS GET   /cli/activity/events?workspace=<handle>"
+assert_contains "permission word" "$apps_out" "permission  the agent waits for a person to approve a step"
+assert_contains "unknown word" "$apps_out" "unknown     no update from the agent for 30 minutes"
+assert_contains "since documented" "$apps_out" '"since":1781812201000|null'
+assert_contains "serverNow documented" "$apps_out" '"serverNow":1781812273000}'
+assert_contains "new words flagged" "$apps_out" "permission and unknown are NEW words"
+assert_contains "resync re-pull" "$apps_out" '{"kind":"resync"}'
+assert_contains "no tool detail for apps" "$apps_out" "No tool names, commands, files, thinking text"
+assert_contains "never the strip catch-up" "$apps_out" "Never /cli/thread/activity"
+assert_contains "app-tickets points at the section" "$tk_out" "AGENT WORKING"
+
 echo "== k2 study ticket-brief (prd-ticket-html-brief-v1 T13) =="
 tb_out="$("$K2" study ticket-brief)"
 assert_contains "ticket-brief title" "$tb_out" "k2 study ticket-brief"

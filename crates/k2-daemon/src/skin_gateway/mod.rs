@@ -311,6 +311,9 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/heartbeat/rename"),
     ("POST", "/cli/heartbeat/archive"),
     ("POST", "/cli/heartbeat/fire"),
+    // Agent working (prd-daemon-activity-and-thread-working-v1 AP3): the
+    // room's guest snapshot, activity:read. GET only.
+    ("GET", "/cli/activity/snapshot"),
 ];
 
 /// POST routes the helper answers itself (login, logout, password). They
@@ -1672,6 +1675,20 @@ mod tests {
         assert!(allowlisted_http("POST", "/cli/fs/rename"));
         assert!(!allowlisted_http("GET", "/cli/fs/rename"));
         assert!(!allowlisted_http("POST", "/cli/fs/rename/foo"));
+
+        // AP3: the guest snapshot is one exact GET; the Thread strip's
+        // catch-up and the chat transcript never are (AP1).
+        assert!(allowlisted_http("GET", "/cli/activity/snapshot"));
+        assert!(allowlisted_http("GET", "/cli/activity/snapshot?workspace=sales"));
+        assert!(!allowlisted_http("POST", "/cli/activity/snapshot"));
+        assert!(!allowlisted_http("HEAD", "/cli/activity/snapshot"));
+        assert!(!allowlisted_http("GET", "/cli/activity/snapshot/foo"));
+        assert!(!allowlisted_http("GET", "/cli/thread/activity"));
+        assert!(!allowlisted_http("GET", "/cli/thread/activity?addr=sales"));
+        assert!(!allowlisted_ws("/cli/thread/activity"));
+        assert!(!allowlisted_http("GET", "/cli/chat/transcript"));
+        assert!(never_proxy("/cli/chat/transcript"));
+        assert!(never_proxy("/cli/chat/transcript?session=x"));
 
         assert!(allowlisted_ws("/cli/activity/events"));
         assert!(allowlisted_ws("/cli/activity/events?workspace=sales"));

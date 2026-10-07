@@ -1113,8 +1113,9 @@ async fn handle_one_request(
         // prd-daemon-activity-and-thread-working-v1 RL3: every activity
         // row + workspace rollup + `seq`, pulled by a client on socket
         // (re)open, daemon restart and `seq` gap. A plain read: owner
-        // token or a live Connect login (Member). App passes are refused
-        // until their guest projection lands (S8, AP3). GET-only.
+        // token or a live Connect login (Member). An app pass gets the
+        // guest projection of one room with `activity:read` there (S8,
+        // AP3). GET-only.
         "/cli/activity/snapshot" => {
             if is_post {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -1128,7 +1129,23 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let _ = stream.read(&mut buf).await;
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let skin_pass = if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let r = match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token) {
+                    // Session passes defer the cap to the room (handler).
+                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_READ) => Ok(pass),
+                    Some(_) => Err(crate::skin_routes::missing_cap_response(crate::skin_routes::ACTIVITY_READ)),
+                    None => Err(crate::skin_routes::revoked_skin_response()),
+                };
+                match r {
+                    Ok(pass) => Some(pass),
+                    Err(r) => {
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
@@ -1137,9 +1154,9 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let params = super::http::parse_params(&path, &query);
-            let r = tokio::task::spawn_blocking(move || crate::activity_routes::handle_snapshot(&params))
+            let r = tokio::task::spawn_blocking(move || crate::activity_routes::handle_snapshot_gated(&params, skin_pass))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

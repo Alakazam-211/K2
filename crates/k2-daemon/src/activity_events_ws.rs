@@ -1,10 +1,25 @@
 //! `WS /cli/activity/events?workspace=` — agent working for one room.
 //!
-//! Subscribes to the session-event broadcast and forwards only
-//! `SessionActivityChanged`. Every other kind is dropped. The event's
-//! `workspacePath` is `session.cwd`; a frame is sent when that cwd is the
-//! room root, a worktree root from `tree_roots`, or a directory under one
-//! of those, on a path boundary. The guest frame has no absolute path.
+//! Agent frames (prd-daemon-activity-and-thread-working-v1 AP2, A37) are
+//! the guest projection of the daemon's activity rows: each
+//! `activity_changed` on the session-event bus whose row belongs to the
+//! room becomes
+//! `{"kind":"session_activity_changed","workspace":"<handle>","agentName",
+//! "paneGroupId","status","since","serverNow"}`, and only when `status` or
+//! `since` changed for that session (tool calls, child counts and reasons
+//! never reach an app, not even as frame timing). `status` is
+//! `working` (working or monitoring) | `permission` (waiting) | `idle` |
+//! `unknown` (unverifiable: no evidence for 30 min, Q9); `since` is the
+//! turn start while the lead works a turn, else null. A removed row the
+//! socket last called anything but idle goes out once as `idle`. A row
+//! belongs to the room when its project is the room, or (a session
+//! outside every registered project) when its path is the room root, a
+//! worktree root from `tree_roots`, or under one of those, on a path
+//! boundary. No path, id, reason, tool or child count is on the wire. The
+//! old title-only `session_activity_changed` bus event no longer feeds
+//! this socket (RL5 compat stays for older clients of the bus only).
+//! `GET /cli/activity/snapshot?workspace=` is the same projection for the
+//! whole room (AP3, `activity_routes`).
 //!
 //! Skin: pass `Some(SkinPass)`. Room, then `activity:read` OR
 //! `heartbeats:read` (AH20/AH29), both before `accept_async`. Each frame
@@ -37,9 +52,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 
+use k2_core::activity::Display;
 use k2_core::log_debug;
 use k2_core::skin::SkinPass;
 
+use crate::activity_events::RowView;
 use crate::fs_routes::{resolve_owner_workspace, resolve_skin_workspace, SkinWorkspace};
 use crate::session_events::{self, SessionEvent};
 
@@ -210,50 +227,161 @@ pub fn cwd_under_any_root(cwd: &str, roots: &[PathBuf]) -> bool {
     false
 }
 
-fn activity_json(
-    workspace: &str,
-    agent_name: &str,
-    pane_group_id: &Option<String>,
-    status: &str,
-) -> String {
-    serde_json::json!({
-        "kind": "session_activity_changed",
-        "workspace": workspace,
-        "agentName": agent_name,
-        "paneGroupId": pane_group_id,
-        "status": status,
-    })
-    .to_string()
+/// AP2: a display in the app vocabulary. `permission` (Q17) and
+/// `unknown` (Q9) are new for apps in 0.45; `monitoring` stays `working`.
+pub fn guest_status(d: Display) -> &'static str {
+    match d {
+        Display::Working | Display::Monitoring => "working",
+        Display::Waiting => "permission",
+        Display::Idle => "idle",
+        Display::Unverifiable => "unknown",
+    }
 }
 
-/// One guest frame, or nothing. DB errors drop the event.
-fn activity_frame(project_id: &str, wire_workspace: &str, event: &SessionEvent) -> Option<String> {
-    let SessionEvent::SessionActivityChanged {
-        workspace_path,
-        agent_name,
-        pane_group_id,
-        status,
-    } = event
-    else {
-        return None;
-    };
-    let roots = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::workspace_resources::tree_roots(&conn, project_id) {
-            Ok(roots) => roots,
-            Err(_) => return None,
-        }
-    };
-    if !cwd_under_any_root(workspace_path, &roots) {
-        return None;
+/// AP2: the turn start while the lead is working a turn, else `None`
+/// (the RL1 rollup `since` rule, per session).
+pub fn guest_since(view: &RowView) -> Option<i64> {
+    if view.display == Display::Working {
+        view.turn_started_at
+    } else {
+        None
     }
-    Some(activity_json(
-        wire_workspace,
-        agent_name,
-        pane_group_id,
-        status,
-    ))
+}
+
+/// One session as an app sees it (AP2 / AP3). Everything else on the row
+/// stays in the daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestSession {
+    pub agent_name: String,
+    pub pane_group_id: Option<String>,
+    pub status: &'static str,
+    pub since: Option<i64>,
+}
+
+impl GuestSession {
+    pub fn of(view: &RowView) -> Self {
+        Self {
+            agent_name: view.agent_name.clone(),
+            pane_group_id: session_events::pane_group_id_from_agent(&view.agent_name),
+            status: guest_status(view.display),
+            since: guest_since(view),
+        }
+    }
+
+    /// The session went away.
+    fn gone(prev: &GuestSession) -> Self {
+        Self { status: "idle", since: None, ..prev.clone() }
+    }
+
+    /// AP2 frame (§7.7).
+    pub fn frame_json(&self, wire_workspace: &str, server_now: i64) -> String {
+        serde_json::json!({
+            "kind": "session_activity_changed",
+            "workspace": wire_workspace,
+            "agentName": self.agent_name,
+            "paneGroupId": self.pane_group_id,
+            "status": self.status,
+            "since": self.since,
+            "serverNow": server_now,
+        })
+        .to_string()
+    }
+
+    /// AP3 `sessions[]` entry (§7.7).
+    pub fn snapshot_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "agentName": self.agent_name,
+            "paneGroupId": self.pane_group_id,
+            "status": self.status,
+            "since": self.since,
+        })
+    }
+}
+
+/// The room's roots for path-keyed rows: its root and worktree roots.
+/// A DB error is no roots (the row is dropped, fail closed).
+pub fn room_roots(project_id: &str) -> Vec<PathBuf> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace_resources::tree_roots(&conn, project_id).unwrap_or_default()
+}
+
+/// Whether a row belongs to the room `project_id`: its project is the
+/// room, or it has no project and its path is under one of `roots()`
+/// (read only for those rows).
+pub fn row_in_room(view: &RowView, project_id: &str, roots: impl FnOnce() -> Vec<PathBuf>) -> bool {
+    match view.project_id.as_deref() {
+        Some(pid) => !project_id.trim().is_empty() && pid == project_id,
+        None => view
+            .workspace_path
+            .as_deref()
+            .is_some_and(|p| cwd_under_any_root(p, &roots())),
+    }
+}
+
+/// The room's live rows, from the store.
+pub fn room_rows(project_id: &str) -> Vec<RowView> {
+    let views: Vec<RowView> = crate::activity_store::rows_json()
+        .iter()
+        .filter_map(RowView::from_json)
+        .collect();
+    let mut roots: Option<Vec<PathBuf>> = None;
+    views
+        .into_iter()
+        .filter(|v| {
+            row_in_room(v, project_id, || roots.get_or_insert_with(|| room_roots(project_id)).clone())
+        })
+        .collect()
+}
+
+/// What one socket last told its app, per session id, so a frame goes out
+/// only when the app-visible state changed (AP2).
+#[derive(Debug, Default)]
+pub struct GuestActivity {
+    sent: HashMap<String, GuestSession>,
+}
+
+impl GuestActivity {
+    /// Start from the room's live rows, so a session the app already has
+    /// from its snapshot is not re-sent unchanged and its removal is known.
+    pub fn seed(project_id: &str) -> Self {
+        let sent = room_rows(project_id)
+            .iter()
+            .map(|v| (v.session_id.clone(), GuestSession::of(v)))
+            .collect();
+        Self { sent }
+    }
+
+    /// The frame for one bus event, or `None` (other kind, other room, or
+    /// nothing the app can see changed).
+    pub fn on_event(
+        &mut self,
+        project_id: &str,
+        wire_workspace: &str,
+        event: &SessionEvent,
+        server_now: i64,
+    ) -> Option<String> {
+        let SessionEvent::ActivityChanged { row, removed, .. } = event else {
+            return None;
+        };
+        if let Some(row) = row {
+            let view = RowView::from_json(row)?;
+            if !self.sent.contains_key(&view.session_id)
+                && !row_in_room(&view, project_id, || room_roots(project_id))
+            {
+                return None;
+            }
+            let next = GuestSession::of(&view);
+            if self.sent.get(&view.session_id) == Some(&next) {
+                return None;
+            }
+            let frame = next.frame_json(wire_workspace, server_now);
+            self.sent.insert(view.session_id, next);
+            return Some(frame);
+        }
+        let prev = self.sent.remove(removed.as_deref()?)?;
+        (prev.status != "idle").then(|| GuestSession::gone(&prev).frame_json(wire_workspace, server_now))
+    }
 }
 
 async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
@@ -339,6 +467,8 @@ pub async fn serve_activity_events_connection(
     };
     let (mut write, mut read) = ws.split();
     let mut rx = session_events::subscribe();
+    // AP2: seeded after subscribing, so no change falls between the two.
+    let mut guest = GuestActivity::seed(&project_id);
     // AH31: last roster frame sent, and a trailing frame owed.
     let mut last_roster: Option<tokio::time::Instant> = None;
     let mut roster_owed = false;
@@ -422,7 +552,8 @@ pub async fn serve_activity_events_connection(
                         if !want_activity {
                             continue;
                         }
-                        let Some(frame) = activity_frame(&project_id, &wire_workspace, &event) else {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        let Some(frame) = guest.on_event(&project_id, &wire_workspace, &event, now) else {
                             continue;
                         };
                         if write.send(Message::Text(frame)).await.is_err() {
@@ -592,14 +723,48 @@ mod tests {
         ws
     }
 
-    fn emit_activity(cwd: &str, agent: &str, pane: Option<&str>, status: &str) {
-        session_events::emit(SessionEvent::SessionActivityChanged {
-            workspace_path: cwd.to_string(),
-            agent_name: agent.to_string(),
-            pane_group_id: pane.map(|s| s.to_string()),
-            status: status.to_string(),
-        })
-        .expect("activity subscriber is connected");
+    /// One `activity_changed` frame for a synthetic row (§7.2 subset the
+    /// projection reads, plus fields an app must never see).
+    fn row_event(sid: &str, agent: &str, project: Option<&str>, path: &str, display: &str, started: Option<i64>) -> SessionEvent {
+        SessionEvent::ActivityChanged {
+            seq: 1,
+            instance_id: "test-instance".into(),
+            row: Some(serde_json::json!({
+                "sessionId": sid,
+                "agentName": agent,
+                "projectId": project,
+                "workspacePath": path,
+                "harness": "claude",
+                "display": display,
+                "lead": {"state": "working", "outcome": "none", "since": 1, "promptId": "p-secret"},
+                "children": {"subagents": 2, "shells": 1, "monitors": 0, "crons": 0, "owed": 0, "waiting": 0},
+                "turnStartedAt": started,
+                "evidenceAt": 5, "evidenceSource": "hook",
+                "reason": "tool_running",
+                "staleSince": null,
+                "confirmed": true,
+                "rev": 9,
+            })),
+            removed: None,
+            turn_ended: None,
+            workspace: Some(serde_json::json!({"projectId": project, "workspacePath": path, "display": display})),
+        }
+    }
+
+    fn removed_event(sid: &str) -> SessionEvent {
+        SessionEvent::ActivityChanged {
+            seq: 2,
+            instance_id: "test-instance".into(),
+            row: None,
+            removed: Some(sid.to_string()),
+            turn_ended: None,
+            workspace: None,
+        }
+    }
+
+    fn emit_row(sid: &str, agent: &str, project: Option<&str>, path: &str, display: &str, started: Option<i64>) {
+        session_events::emit(row_event(sid, agent, project, path, display, started))
+            .expect("activity subscriber is connected");
     }
 
     async fn take_text(
@@ -620,150 +785,147 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn room_a_hears_cwd_under_a_and_drops_other_kinds_and_room_b() {
-        let root_a = temp_dir("room-a");
-        let sub_a = root_a.join("app");
-        std::fs::create_dir_all(&sub_a).expect("subdir");
-        let wt = temp_dir("wt-a");
-        let sibling = PathBuf::from(format!("{}-other", root_a.display()));
-        std::fs::create_dir_all(&sibling).expect("sibling");
-        let root_b = temp_dir("room-b");
-        let other = temp_dir("other-project");
 
-        let handle_a = format!("aa{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let handle_b = format!("bb{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let id_a = insert_project(&root_a.to_string_lossy(), &handle_a);
-        let id_b = insert_project(&root_b.to_string_lossy(), &handle_b);
-        let _id_other = insert_project(
-            &other.to_string_lossy(),
-            &format!("cc{}", &uuid::Uuid::new_v4().to_string()[..8]),
+    /// T-S8b (frame): exactly the documented keys, so a field added later
+    /// fails here first.
+    fn assert_guest_frame_keys(v: &serde_json::Value) {
+        let mut keys: Vec<&str> = v.as_object().expect("object").keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["agentName", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
+            "guest frame keys: {v}"
         );
+    }
+
+    /// AP2: the state words, `since`, change-only sends, removals, and
+    /// nothing from other kinds (the compat title event included) or
+    /// other rooms.
+    #[test]
+    fn guest_projection_maps_states_and_sends_only_app_visible_changes() {
+        let root = temp_dir("proj");
+        let wt = temp_dir("proj-wt");
+        let handle = format!("gp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = insert_project(&root.to_string_lossy(), &handle);
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             conn.execute(
                 "INSERT INTO workspaces (id, project_id, name, worktree_path) VALUES (?1, ?2, 'wt', ?3)",
-                rusqlite::params![uuid::Uuid::new_v4().to_string(), id_a, wt.to_string_lossy().to_string()],
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), id, wt.to_string_lossy().to_string()],
             )
             .expect("insert worktree");
         }
+        let path = root.to_string_lossy().to_string();
+        let mut g = GuestActivity::default();
+        let mut send = |ev: &SessionEvent| -> Option<serde_json::Value> {
+            g.on_event(&id, &handle, ev, 777).map(|t| serde_json::from_str(&t).expect("json"))
+        };
 
-        let pass_a = session_pass(&id_a, &[CAP_ACTIVITY_READ]);
-        let pass_b = session_pass(&id_b, &[CAP_ACTIVITY_READ]);
-        let mut sock_a = connect_room(Some(pass_a), &handle_a).await;
-        let mut sock_b = connect_room(Some(pass_b), &handle_b).await;
+        let f = send(&row_event("s1", "tab-p1", Some(&id), &path, "working", Some(100))).expect("working");
+        assert_guest_frame_keys(&f);
+        assert_eq!(
+            f,
+            serde_json::json!({"kind": "session_activity_changed", "workspace": handle, "agentName": "tab-p1",
+                               "paneGroupId": "p1", "status": "working", "since": 100, "serverNow": 777})
+        );
+        // A tool step or child change (same app-visible state): nothing.
+        assert!(send(&row_event("s1", "tab-p1", Some(&id), &path, "working", Some(100))).is_none());
+        // A new turn while still working: `since` moves.
+        assert_eq!(send(&row_event("s1", "tab-p1", Some(&id), &path, "working", Some(200))).expect("new turn")["since"], 200);
+        for (display, status) in [("waiting", "permission"), ("unverifiable", "unknown"), ("monitoring", "working"), ("idle", "idle")] {
+            let f = send(&row_event("s1", "tab-p1", Some(&id), &path, display, Some(200))).expect(display);
+            assert_guest_frame_keys(&f);
+            assert_eq!(f["status"], status, "{display}: {f}");
+            assert!(f["since"].is_null(), "since only while the lead works a turn ({display}): {f}");
+        }
+        // Idle → removal sends nothing more; working → removal sends idle once.
+        assert!(send(&removed_event("s1")).is_none(), "already idle");
+        send(&row_event("s2", "agent-chat", Some(&id), &path, "working", Some(300))).expect("pinned chat working");
+        let gone = send(&removed_event("s2")).expect("removal of a working row");
+        assert_guest_frame_keys(&gone);
+        assert_eq!((gone["status"].as_str(), gone["since"].is_null(), gone["paneGroupId"].is_null()), (Some("idle"), true, true));
+        assert!(send(&removed_event("s2")).is_none(), "once");
+        assert!(send(&removed_event("never-seen")).is_none());
+
+        // A session outside every project, under the room's worktree root.
+        let f = send(&row_event("s3", "tab-w", None, &wt.join("src").to_string_lossy(), "working", Some(5))).expect("worktree");
+        assert_eq!(f["status"], "working");
+        // Other rooms, sibling paths, other kinds: nothing.
+        let sibling = format!("{}-other", root.display());
+        assert!(send(&row_event("s4", "tab-x", Some("another-project"), &path, "working", Some(1))).is_none());
+        assert!(send(&row_event("s5", "tab-y", None, &sibling, "working", Some(1))).is_none());
+        assert!(send(&SessionEvent::SessionActivityChanged {
+            workspace_path: path.clone(),
+            agent_name: "tab-compat".into(),
+            pane_group_id: Some("compat".into()),
+            status: "working".into(),
+        })
+        .is_none(), "the compat title event never reaches apps (A37)");
+        assert!(send(&SessionEvent::MailChanged { reason: "x".into() }).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn guest_status_covers_every_display() {
+        use Display::*;
+        let pairs = [(Working, "working"), (Monitoring, "working"), (Waiting, "permission"), (Idle, "idle"), (Unverifiable, "unknown")];
+        for (d, word) in pairs {
+            assert_eq!(guest_status(d), word, "{d:?}");
+        }
+    }
+
+    /// T-S8c (socket) + AP2 on the wire: room A hears only its rows, room B
+    /// only its own; no path, id, reason or count is ever on a frame.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn room_sockets_hear_only_their_rows_from_the_store_events() {
+        let root_a = temp_dir("room-a");
+        let root_b = temp_dir("room-b");
+        let handle_a = format!("aa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let handle_b = format!("bb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id_a = insert_project(&root_a.to_string_lossy(), &handle_a);
+        let id_b = insert_project(&root_b.to_string_lossy(), &handle_b);
+        let path_a = root_a.to_string_lossy().to_string();
+        let path_b = root_b.to_string_lossy().to_string();
+
+        let mut sock_a = connect_room(Some(session_pass(&id_a, &[CAP_ACTIVITY_READ])), &handle_a).await;
+        let mut sock_b = connect_room(Some(session_pass(&id_b, &[CAP_ACTIVITY_READ])), &handle_b).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        emit_activity(
-            &sub_a.to_string_lossy(),
-            "ada-sub",
-            Some("pane-7"),
-            "working",
-        );
-        session_events::emit(SessionEvent::FsChanged {
-            workspace_path: root_a.to_string_lossy().to_string(),
-            paths: vec![root_a.join("notes.md").to_string_lossy().to_string()],
+        let sid_a = uuid::Uuid::new_v4().to_string();
+        let sid_b = uuid::Uuid::new_v4().to_string();
+        emit_row(&sid_b, "tab-bob", Some(&id_b), &path_b, "waiting", Some(10));
+        session_events::emit(SessionEvent::SessionActivityChanged {
+            workspace_path: path_a.clone(),
+            agent_name: "tab-compat".into(),
+            pane_group_id: None,
+            status: "working".into(),
         })
-        .expect("fs emit");
-        session_events::emit(SessionEvent::ActiveChanged {
-            active_project_ids: vec![id_a.clone()],
-            active_window_hours: 1,
-        })
-        .expect("active emit");
-        session_events::emit(SessionEvent::AgentStatusChanged {
-            pane_id: "pane-7".into(),
-            tab_id: "tab-7".into(),
-            status: "start".into(),
-            workspace_path: Some(root_a.to_string_lossy().to_string()),
-        })
-        .expect("agent status emit");
-        session_events::emit(SessionEvent::MailChanged {
-            reason: "server-state-changed".into(),
-        })
-        .expect("mail emit");
-        emit_activity(&root_b.to_string_lossy(), "bob-b", None, "working");
-        emit_activity(&sibling.to_string_lossy(), "sib", None, "working");
-        emit_activity(&root_a.to_string_lossy(), "ada-root", None, "working");
-        emit_activity(&wt.to_string_lossy(), "ada-wt", Some("pane-wt"), "idle");
-        emit_activity(&other.to_string_lossy(), "other-proj", None, "working");
+        .expect("compat emit");
+        emit_row(&sid_a, "tab-ada", Some(&id_a), &path_a, "working", Some(42));
 
-        let mut agents_a = Vec::new();
-        for _ in 0..3 {
-            let text = take_text(&mut sock_a, Duration::from_secs(2))
-                .await
-                .expect("room A frame");
-            let v: serde_json::Value = serde_json::from_str(&text).expect("json");
-            assert!(v.get("workspacePath").is_none(), "no absolute cwd: {v}");
-            assert_eq!(v["kind"], "session_activity_changed", "{v}");
-            assert_eq!(v["workspace"], handle_a, "{v}");
-            let mut keys: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
-            keys.sort();
-            assert_eq!(
-                keys,
-                vec![
-                    "agentName".to_string(),
-                    "kind".to_string(),
-                    "paneGroupId".to_string(),
-                    "status".to_string(),
-                    "workspace".to_string(),
-                ],
-                "{v}"
-            );
-            agents_a.push(v["agentName"].as_str().expect("agent").to_string());
-            match v["agentName"].as_str().expect("agent") {
-                "ada-sub" => {
-                    assert_eq!(v["paneGroupId"], "pane-7");
-                    assert_eq!(v["status"], "working");
-                }
-                "ada-root" => {
-                    assert!(v["paneGroupId"].is_null(), "{v}");
-                    assert_eq!(v["status"], "working");
-                }
-                "ada-wt" => {
-                    assert_eq!(v["status"], "idle");
-                    assert_eq!(v["paneGroupId"], "pane-wt");
-                }
-                other_name => panic!("room A forwarded {other_name}: {v}"),
-            }
+        let text = take_text(&mut sock_a, Duration::from_secs(2)).await.expect("room A frame");
+        let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_guest_frame_keys(&v);
+        assert_eq!((v["workspace"].as_str(), v["agentName"].as_str(), v["status"].as_str(), v["since"].as_i64()),
+                   (Some(handle_a.as_str()), Some("tab-ada"), Some("working"), Some(42)), "{v}");
+        assert_eq!(v["paneGroupId"], "ada");
+        assert!(v["serverNow"].as_i64().is_some_and(|t| t > 0), "{v}");
+        for secret in [path_a.as_str(), id_a.as_str(), sid_a.as_str(), "tool_running", "p-secret", "subagents", "hook"] {
+            assert!(!text.contains(secret), "{secret} must not reach an app: {text}");
         }
-        agents_a.sort();
-        assert_eq!(
-            agents_a,
-            vec![
-                "ada-root".to_string(),
-                "ada-sub".to_string(),
-                "ada-wt".to_string()
-            ]
-        );
-        assert!(
-            take_text(&mut sock_a, Duration::from_millis(300))
-                .await
-                .is_none(),
-            "room A must not see fs_changed, active_changed, mail, or room B"
-        );
+        assert!(take_text(&mut sock_a, Duration::from_millis(300)).await.is_none(), "room A never hears room B or compat");
 
-        let text_b = take_text(&mut sock_b, Duration::from_secs(2))
-            .await
-            .expect("room B frame");
+        let text_b = take_text(&mut sock_b, Duration::from_secs(2)).await.expect("room B frame");
         let vb: serde_json::Value = serde_json::from_str(&text_b).expect("json");
-        assert_eq!(vb["kind"], "session_activity_changed");
-        assert_eq!(vb["agentName"], "bob-b");
-        assert_eq!(vb["workspace"], handle_b);
-        assert_eq!(vb["status"], "working");
-        assert!(vb.get("workspacePath").is_none(), "{vb}");
-        assert!(
-            take_text(&mut sock_b, Duration::from_millis(300))
-                .await
-                .is_none(),
-            "room B must not see room A"
-        );
+        assert_guest_frame_keys(&vb);
+        assert_eq!((vb["agentName"].as_str(), vb["status"].as_str()), (Some("tab-bob"), Some("permission")), "{vb}");
+        assert!(vb["since"].is_null(), "{vb}");
+        assert!(take_text(&mut sock_b, Duration::from_millis(300)).await.is_none(), "room B never hears room A");
 
         let _ = std::fs::remove_dir_all(&root_a);
-        let _ = std::fs::remove_dir_all(&wt);
-        let _ = std::fs::remove_dir_all(&sibling);
         let _ = std::fs::remove_dir_all(&root_b);
-        let _ = std::fs::remove_dir_all(&other);
     }
 
     fn emit_roster(path: &str, project_id: &str) {
@@ -801,7 +963,7 @@ mod tests {
 
         // Room B and agent activity never reach the heartbeats-only pass.
         emit_roster(&root_b.to_string_lossy(), &id_b);
-        emit_activity(&root_a.to_string_lossy(), "ada", None, "working");
+        emit_row(&uuid::Uuid::new_v4().to_string(), "tab-ada", Some(&id_a), &root_a.to_string_lossy(), "working", Some(1));
         // A burst of five roster changes for room A: one frame now, one
         // trailing frame after the 250 ms window (AH31).
         for _ in 0..5 {

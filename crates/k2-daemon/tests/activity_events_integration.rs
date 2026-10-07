@@ -11,7 +11,7 @@
 //!   agree for the same rows; Keep awake holds through a 40-minute
 //!   `unverifiable` and lets a cron-only row go.
 //! - T-S4g: `/v1` busy is `working` or `waiting`, never `monitoring`.
-//! - The snapshot route: GET only, owner or login, app passes refused,
+//! - The snapshot route: GET only, owner or login (app passes: S8),
 //!   `?workspace=` narrows it. Q14: the daemon touches Active on lead →
 //!   working.
 //!
@@ -518,8 +518,11 @@ async fn snapshot_route_is_a_get_for_owner_or_login_and_filters_by_workspace() {
     assert_eq!(st, 405, "POST: {body}");
     let (st, body) = http(d.port, "GET", "/cli/activity/snapshot").await;
     assert_eq!(st, 403, "no token: {body}");
+    // An app pass gets only the guest projection of one room (S8, AP3,
+    // `publish_skin_gateway.rs`); an unknown one is a revoked pass.
     let (st, body) = http(d.port, "GET", "/cli/activity/snapshot?token=k2skn_not-a-login").await;
-    assert_eq!(st, 403, "an app pass gets no owner snapshot: {body}");
+    assert_eq!(st, 401, "an unknown app pass gets no snapshot: {body}");
+    assert!(body.contains("invalid or revoked skin token"), "{body}");
 
     let all = snapshot(d.port, "").await;
     let ids: Vec<&str> = all["rows"].as_array().expect("rows").iter().map(|r| r["sessionId"].as_str().expect("id")).collect();

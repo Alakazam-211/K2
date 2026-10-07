@@ -1481,19 +1481,30 @@ pub fn inject_raw_into_session_with_profile(
 // ─────────────────────────────────────────────────────────────────────
 
 fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup::LiveSession> {
+    lookup_live_for_conversation_where(conversation_key, |_| true)
+}
+
+/// Project-blind live lookup by conversation key, keeping only sessions
+/// `accept` allows. The map scan is `HashMap` order, so with two live
+/// sessions that both reference the key the winner is arbitrary.
+fn lookup_live_for_conversation_where(
+    conversation_key: &str,
+    accept: impl Fn(&session_lookup::LiveSession) -> bool,
+) -> Option<session_lookup::LiveSession> {
     if let Some(sid) = SessionId::parse(conversation_key) {
         if let Some(live) = session_lookup::lookup_by_session_id(&sid) {
-            return Some(live);
+            if accept(&live) {
+                return Some(live);
+            }
         }
     }
     for (agent_name, live) in session_lookup::snapshot_all() {
-        if k2_core::workspace::provider_resume::argv_references_session(
+        let matches = k2_core::workspace::provider_resume::argv_references_session(
             &live.args(),
             conversation_key,
-        ) {
-            return Some(live);
-        }
-        if agent_name == conversation_key || agent_name == format!("tab-{conversation_key}") {
+        ) || agent_name == conversation_key
+            || agent_name == format!("tab-{conversation_key}");
+        if matches && accept(&live) {
             return Some(live);
         }
     }
@@ -1503,29 +1514,88 @@ fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup
         k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, conversation_key)
             .ok()
             .flatten()
-            .or_else(|| {
-                // conversation_key may still be pane_group_id
-                let rows = k2_core::db::schema::WorkspaceTabSession::list_by_project(
-                    &conn, // unknown project — scan is too wide; skip
-                    "",
-                )
-                .ok();
-                let _ = rows;
-                None
-            })
     };
     if let Some(tab) = tab {
+        if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
+            if accept(&live) {
+                return Some(live);
+            }
+        }
+    }
+    None
+}
+
+/// This workspace's tab rows for a sidecar conversation, newest first:
+/// the provider id on the row, or the pane key before one was stamped.
+fn project_tab_rows_for_conversation(
+    project_id: &str,
+    conversation_key: &str,
+) -> Vec<k2_core::db::schema::WorkspaceTabSession> {
+    let key = conversation_key.trim();
+    if key.is_empty() {
+        return Vec::new();
+    }
+    let pane = k2_core::workspace_session_handles::normalize_pane_key(key);
+    let tab_key = format!("tab-{pane}");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceTabSession::list_by_project(&conn, project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| {
+            row.session_id.as_deref().map(str::trim) == Some(key)
+                || row.pane_group_id == pane
+                || row.agent_name == key
+                || row.agent_name == tab_key
+        })
+        .collect()
+}
+
+/// True when the live session's cwd belongs to a different registered
+/// workspace than `project_id` (longest registered path wins, so a
+/// nested workspace is its own owner). Unknown cwd is not foreign.
+fn live_owned_by_other_workspace(live: &session_lookup::LiveSession, project_id: &str) -> bool {
+    match crate::activity_store::project_for_cwd(&live.cwd()) {
+        Some((owner, _)) => owner != project_id,
+        None => false,
+    }
+}
+
+/// Live PTY for a sidecar (`ws/handle`) conversation, scoped to the
+/// sidecar's own workspace.
+///
+/// One provider conversation id can sit in two workspaces: a tab that
+/// continued another workspace's Chat (`--fork-session --resume <id>`)
+/// is registered under the source id, so its tab row and handle carry
+/// the other workspace's pinned conversation. The project-blind lookup
+/// then injected a Thread send for `ws/1` into whichever live session the
+/// map yielded first, often the other workspace's pinned Chat.
+fn lookup_live_for_sidecar(
+    project_id: &str,
+    conversation_key: &str,
+) -> Option<session_lookup::LiveSession> {
+    for tab in project_tab_rows_for_conversation(project_id, conversation_key) {
         if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
             return Some(live);
         }
     }
-    None
+    lookup_live_for_conversation_where(conversation_key, |live| {
+        !live_owned_by_other_workspace(live, project_id)
+    })
 }
 
 fn tab_row_for_conversation(
     project_id: &str,
     conversation_key: &str,
 ) -> Option<k2_core::db::schema::WorkspaceTabSession> {
+    // This workspace's own row first: the global reverse index below
+    // returns the newest row with that provider id in ANY workspace.
+    if let Some(row) = project_tab_rows_for_conversation(project_id, conversation_key)
+        .into_iter()
+        .next()
+    {
+        return Some(row);
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Some(row) =
@@ -1592,14 +1662,8 @@ fn attempt_sidecar_delivery(
         }
     };
 
-    if let Some(live) = lookup_live_for_conversation(conversation_key) {
+    if let Some(live) = lookup_live_for_sidecar(&project_id, conversation_key) {
         return inject_cell(&live, text, from, command, "sidecar_live");
-    }
-    // Also try the tab's agent_name if the reverse index has a row.
-    if let Some(tab) = tab_row_for_conversation(&project_id, conversation_key) {
-        if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
-            return inject_cell(&live, text, from, command, "sidecar_live_tab");
-        }
     }
 
     if !wake {
@@ -1715,7 +1779,7 @@ fn wake_sidecar_and_fire(
     let wake_lock = wake_lock_for(&lock_key);
     let _wake_guard = wake_lock.lock();
 
-    if let Some(live) = lookup_live_for_conversation(conversation_key) {
+    if let Some(live) = lookup_live_for_sidecar(project_id, conversation_key) {
         return inject_cell(&live, text, from, command, "sidecar_wake_coalesced");
     }
 

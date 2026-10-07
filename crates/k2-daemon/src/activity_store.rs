@@ -279,7 +279,7 @@ pub fn harness_for(program: Option<&str>) -> String {
 
 /// The workspace (project id, path) that owns `cwd`: the longest
 /// registered project path that is a path-boundary prefix of it.
-fn project_for_cwd(cwd: &str) -> Option<(String, String)> {
+pub(crate) fn project_for_cwd(cwd: &str) -> Option<(String, String)> {
     if cwd.is_empty() {
         return None;
     }

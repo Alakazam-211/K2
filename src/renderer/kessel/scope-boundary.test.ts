@@ -133,6 +133,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/UserTemplatesSection.tsx',
   'components/Settings/sections/WakeSchedulerSection.tsx',
   'components/Settings/sections/access-audit-api.ts',
+  'components/Settings/shared/AgentAccountsColumn.tsx',
   'components/Settings/sections/data-api.ts',
   'components/Settings/sections/email-api.ts',
   'components/Sidebar/ActiveBar.tsx',

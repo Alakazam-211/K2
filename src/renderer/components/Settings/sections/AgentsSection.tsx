@@ -24,7 +24,7 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
 import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
-import { ClaudeAuthRefreshRow } from '../shared/ClaudeAuthRefreshRow'
+import { AgentAccountsColumn } from '../shared/AgentAccountsColumn'
 import type { SettingEntry } from '../searchManifest'
 
 export const AGENTS_MANIFEST: SettingEntry[] = [
@@ -73,12 +73,20 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return'],
   },
   {
-    id: 'agents.credentials',
+    id: 'agents.accounts',
     section: 'agents',
-    group: 'Credentials',
-    label: 'Auto-refresh credentials',
-    description: 'Keep agent CLI sessions alive (Claude live; others coming soon)',
-    keywords: ['credentials', 'auth', 'token', 'refresh', 'claude', 'login', 'session'],
+    group: 'Logins',
+    label: 'Logins',
+    description: 'Which login each agent CLI uses on this server; switch, add or remove logins',
+    keywords: ['account', 'login', 'logins', 'subscription', 'sign in', 'switch', 'wallet', 'claude', 'codex', 'grok'],
+  },
+  {
+    id: 'agents.add-login',
+    section: 'agents',
+    group: 'Logins',
+    label: 'Add login',
+    description: 'Sign another Claude, Codex or Grok account in on this server',
+    keywords: ['add', 'account', 'login', 'sign in', 'subscription', 'claude', 'codex', 'grok'],
   },
   {
     id: 'agents.cli-claude',
@@ -340,22 +348,6 @@ function SubmitKeysEditor({
   )
 }
 
-/** The “big 7” agent CLIs for credential auto-refresh — Claude is live. */
-const CREDENTIAL_PROVIDERS: Array<{
-  id: string
-  label: string
-  agentIcon: string
-  live: boolean
-}> = [
-  { id: 'claude', label: 'Claude', agentIcon: 'Claude', live: true },
-  { id: 'codex', label: 'Codex', agentIcon: 'Codex', live: false },
-  { id: 'grok', label: 'Grok', agentIcon: 'Grok', live: false },
-  { id: 'gemini', label: 'Gemini', agentIcon: 'Gemini', live: false },
-  { id: 'cursor', label: 'Cursor Agent', agentIcon: 'Cursor Agent', live: false },
-  { id: 'hermes', label: 'Hermes', agentIcon: 'Hermes', live: false },
-  { id: 'pi', label: 'Pi', agentIcon: 'Pi', live: false },
-]
-
 function DefaultAgentPickerInline({
   presets,
 }: {
@@ -379,51 +371,6 @@ function DefaultAgentPickerInline({
         </div>
       </div>
       <SettingDropdown value={selectedId} options={agentOptions} onChange={setDefaultAgent} />
-    </div>
-  )
-}
-
-function AgentCredentialsColumn(): React.JSX.Element {
-  return (
-    <div className="w-full" data-settings-id="agents.credentials">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Credentials</h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed">
-        Auto-refresh keeps agent CLI sessions alive so long runs don’t die mid-task. Claude is
-        available now; the rest of the big seven are next.
-      </p>
-      <div className="border border-[var(--color-border)]">
-        {CREDENTIAL_PROVIDERS.map((p, i) => {
-          const isLast = i === CREDENTIAL_PROVIDERS.length - 1
-          return (
-            <div
-              key={p.id}
-              className={`flex items-center justify-between gap-3 px-3 py-2.5 ${
-                isLast ? '' : 'border-b border-[var(--color-border)]'
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <AgentIcon agent={p.agentIcon} size={14} />
-                <div className="min-w-0">
-                  <div className="text-xs text-[var(--color-text-secondary)] truncate">{p.label}</div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-                    Auto-refresh credentials
-                  </div>
-                </div>
-              </div>
-              {p.live ? (
-                <ClaudeAuthRefreshRow embedded />
-              ) : (
-                <span
-                  className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 flex-shrink-0 border border-[var(--color-border)] text-[var(--color-text-muted)]"
-                  title="Credential auto-refresh for this agent is not available yet"
-                >
-                  Coming soon
-                </span>
-              )}
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }
@@ -810,9 +757,9 @@ export function AgentsSection(): React.JSX.Element {
         <CLIInstallGuide />
       </div>
 
-      {/* Right: credential auto-refresh for the big 7 */}
+      {/* Right: the login wallet (one active login per tool per server) */}
       <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]">
-        <AgentCredentialsColumn />
+        <AgentAccountsColumn />
       </div>
     </div>
   )
@@ -832,14 +779,14 @@ const CLI_INSTALL_ENTRIES: {
     command: 'claude',
     installCommand: CLI_INSTALL_COMMANDS.claude,
     docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes: 'After install, run "claude" to authenticate with your Anthropic account.',
+    notes: 'Then add the login under Logins →',
   },
   {
     name: 'OpenAI Codex',
     command: 'codex',
     installCommand: CLI_INSTALL_COMMANDS.codex,
     docs: 'https://github.com/openai/codex',
-    notes: 'After install, run "codex" to sign in.',
+    notes: 'Then add the login under Logins →',
   },
   {
     name: 'Grok',
@@ -847,7 +794,7 @@ const CLI_INSTALL_ENTRIES: {
     installCommand: CLI_INSTALL_COMMANDS.grok,
     docs: 'https://docs.x.ai/build',
     notes:
-      "xAI's terminal coding agent. On first launch it opens a browser to sign in; for headless use set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
+      "xAI's terminal coding agent. Then add the login under Logins →. For headless use without a login, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
   },
   {
     name: 'Gemini CLI',

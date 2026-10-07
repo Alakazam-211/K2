@@ -422,6 +422,14 @@ export interface TokenUsageChangedEvent {
   kind: 'token_usage_changed'
 }
 
+/** APP-LEVEL — the LLM login wallet changed (add, sign-in state, switch,
+ *  rename, remove, keep-warm refresh). Refetch signal for Settings → LLMs;
+ *  `tool` names the tool when the daemon knows it. */
+export interface LlmAccountsChangedEvent {
+  kind: 'llm_accounts_changed'
+  tool?: string | null
+}
+
 /** APP-LEVEL — files under a workspace changed (multi-writer Files-drawer
  *  live refresh). Agent shell writes on the daemon machine, other clients'
  *  `/cli/fs/*` mutations, and compress/upload completions all land here so
@@ -548,6 +556,7 @@ export type SessionEventMessage =
   | TicketChangedEvent
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
+  | LlmAccountsChangedEvent
   | FsChangedEvent
   | ZenChangedEvent
   | HooksInstallFailedEvent
@@ -1002,6 +1011,7 @@ type ProjectGroupsChangedHandler = (reason: string) => void
 type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
+type LlmAccountsChangedHandler = (tool: string | null) => void
 type ZenChangedHandler = () => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
@@ -1045,6 +1055,7 @@ interface AppBusHandlers {
   feedbackChanged: Set<FeedbackChangedHandler>
   chatHistoryChanged: Set<ChatHistoryChangedHandler>
   tokenUsageChanged: Set<TokenUsageChangedHandler>
+  llmAccountsChanged: Set<LlmAccountsChangedHandler>
   fsChanged: Set<FsChangedHandler>
   mailChanged: Set<MailChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
@@ -1082,6 +1093,7 @@ function createBusState(scopeId: string): BusState {
       feedbackChanged: new Set(),
       chatHistoryChanged: new Set(),
       tokenUsageChanged: new Set(),
+      llmAccountsChanged: new Set(),
       fsChanged: new Set(),
       mailChanged: new Set(),
       activeChanged: new Set(),
@@ -1261,6 +1273,15 @@ export function onTokenUsageChanged(
   return addHandler(busFor(scope).handlers.tokenUsageChanged, fn)
 }
 
+/** Subscribe to APP-LEVEL `llm_accounts_changed` (the LLM login wallet
+ *  changed on that server). Returns an unsub fn. */
+export function onLlmAccountsChanged(
+  scope: ServerScope,
+  fn: LlmAccountsChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.llmAccountsChanged, fn)
+}
+
 /** prd-zen-mode-v1 Z12 — subscribe to APP-LEVEL `zen_changed` (this
  *  computer's `~/.k2/zen/` re-validated to a new resolved page). Payload-free
  *  refetch signal. Zen listens on the LOCAL daemon's bus only
@@ -1426,6 +1447,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   token_usage_changed: (h) => {
     for (const fn of h.tokenUsageChanged) fn()
   },
+  llm_accounts_changed: (h, m) => {
+    for (const fn of h.llmAccountsChanged) fn(m.tool ?? null)
+  },
   fs_changed: (h, m) => {
     for (const fn of h.fsChanged) fn(m)
   },
@@ -1476,6 +1500,7 @@ export interface AppBus {
   onFeedbackChanged(fn: FeedbackChangedHandler): UnsubscribeFn
   onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn
   onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
+  onLlmAccountsChanged(fn: LlmAccountsChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
@@ -1518,6 +1543,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onFeedbackChanged: (fn) => onFeedbackChanged(scope, fn),
     onChatHistoryChanged: (fn) => onChatHistoryChanged(scope, fn),
     onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
+    onLlmAccountsChanged: (fn) => onLlmAccountsChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),

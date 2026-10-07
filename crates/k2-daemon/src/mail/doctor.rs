@@ -496,9 +496,9 @@ const EXTRA_NAMES_LABEL: &str = "Extra mail names have their own certificate";
 /// CAL44: autoconfig / autodiscover / mta-sts / ua-auto-config names
 /// that resolve to this box must present a valid certificate for their
 /// own name (a verified handshake via `https_cert`); a K2-issued one
-/// inside the renewal window is flagged too (nothing renews it
-/// automatically). Pure over the seams. Warn at most — never gates
-/// direct send.
+/// within 14 days of expiry is flagged too (the daemon's renewer starts
+/// at 30 days, so this means it has not managed yet). Pure over the
+/// seams. Warn at most — never gates direct send.
 pub fn extra_name_certs_check(
     resolver: &dyn DnsResolver,
     https_cert: &dyn Fn(&str) -> Result<(), String>,
@@ -506,7 +506,8 @@ pub fn extra_name_certs_check(
     local_expiry: &dyn Fn(&str) -> Option<i64>,
     now: i64,
 ) -> DoctorCheck {
-    use crate::mail::cert_names::{points_here, PointsHere, RENEW_BEFORE_SECS};
+    use crate::domains::renew::WARN_WITHIN_SECS;
+    use crate::mail::cert_names::{points_here, PointsHere};
     let mk = |status: &'static str, detail: String| DoctorCheck {
         id: EXTRA_NAMES_ID.into(),
         label: EXTRA_NAMES_LABEL.into(),
@@ -534,7 +535,7 @@ pub fn extra_name_certs_check(
                         }
                     }
                     Ok(()) => {
-                        if local_expiry(name).is_some_and(|e| e - now < RENEW_BEFORE_SECS) {
+                        if local_expiry(name).is_some_and(|e| e - now < WARN_WITHIN_SECS) {
                             due.push(name.clone());
                         } else {
                             ok.push(name.clone());
@@ -564,7 +565,8 @@ pub fn extra_name_certs_check(
     }
     if !due.is_empty() {
         problems.push(format!(
-            "{} expire within 30 days and nothing renews them automatically — run \
+            "{} expire within 14 days and the daemon's renewer has not replaced them \
+             yet (see k2-cert-renewal for the last error) — retry with \
              `k2 hostmail cert names renew`",
             due.join(", ")
         ));
@@ -2680,7 +2682,12 @@ mod tests {
         let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &far, 1000);
         assert_eq!(c.status, ST_PASS, "{}", c.detail);
         assert!(c.detail.contains("autoconfig.example.com"));
-        // Inside the renewal window → warn with the renew command.
+        // Inside the renewal window but more than 14 days left → the
+        // renewer's job, no warning yet.
+        let window = |_: &str| Some(1000 + 20 * 86_400);
+        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &window, 1000);
+        assert_eq!(c.status, ST_PASS, "{}", c.detail);
+        // Within 14 days → warn with the renew command.
         let soon = |_: &str| Some(1000 + 86_400);
         let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &soon, 1000);
         assert_eq!(c.status, ST_WARN);

@@ -31292,8 +31292,11 @@ LOADING
   hostmail disable/enable.
 
 RENEWAL
-  Nothing renews these automatically: run `renew` (the doctor warns 30
-  days before expiry). Owner/admin only, like cert renew.
+  The daemon renews names it issued before once fewer than 30 days remain
+  (hourly check, DNS re-checked, per-name backoff 1h/6h/24h, skipped under
+  air-gap); the superseded certificate is removed after the reload. `renew`
+  retries by hand; the doctor warns 14 days before expiry or after a failed
+  attempt. Owner/admin only, like cert renew.
 
 FLAGS
   --name <host>          One extra name (issue|renew only)

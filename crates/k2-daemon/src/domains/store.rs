@@ -197,7 +197,7 @@ impl MailTlsOps for LiveMailTls {
         self.client.certificate_plant(chain_pem, key_pem)
     }
     fn reload_tls(&mut self) -> Result<(), String> {
-        self.client.reload_tls_certificates()
+        self.client.action_reload_tls_certificates()
     }
     fn restart_stalwart(&mut self) -> Result<(), String> {
         crate::mail::supervisor::restart_stalwart_to_reload_tls()

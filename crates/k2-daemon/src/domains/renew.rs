@@ -3,9 +3,12 @@
 //! manual issue and the background renewer share, persisted per-name
 //! backoff, and the daemon's background scan.
 //!
-//! Scope: only names in the domain inventory (`k2 domain`) whose PEM in
-//! the box store (`~/.k2/certs/<name>/`) is a Let's Encrypt leaf and was
-//! not uploaded by hand. Never Stalwart's own ACME (tls-alpn boxes renew
+//! Scope: names in the domain inventory (`k2 domain`) whose PEM in the
+//! box store (`~/.k2/certs/<name>/`) is a Let's Encrypt leaf and was not
+//! uploaded by hand, plus the CAL44 extra mail names K2 issued before
+//! (present in `extra-names.json` and still extra names of a hosted
+//! domain; renewed through [`crate::mail::cert_names`], whose run
+//! re-checks DNS). Never a walk of the certs directory. Never Stalwart's own ACME (tls-alpn boxes renew
 //! themselves), never Caddy's certificates (Caddy renews its own), never
 //! the Connect `*.k2.dev` certificate (`tunnel_tls_listener`).
 //!
@@ -223,15 +226,15 @@ pub fn record_attempt(
     rec: &mut RenewRecord,
     trigger: &str,
     now: i64,
-    result: &Result<Issued, IssueError>,
+    result: &Result<bool, IssueError>,
 ) {
     rec.last_attempt = Some(now);
     rec.last_trigger = Some(trigger.to_string());
     rec.skipped = None;
     match result {
-        Ok(issued) => {
+        Ok(ordered) => {
             rec.source = Some("k2".into());
-            rec.last_result = Some(if issued.ordered { "renewed" } else { "planted" }.into());
+            rec.last_result = Some(if *ordered { "renewed" } else { "planted" }.into());
             rec.last_error = None;
             rec.last_success = Some(now);
             rec.failures = 0;
@@ -250,8 +253,12 @@ pub fn record_attempt(
     }
 }
 
+fn ordered(result: &Result<Issued, IssueError>) -> Result<bool, IssueError> {
+    result.as_ref().map(|i| i.ordered).map_err(Clone::clone)
+}
+
 /// `true` when `result` was an attempt (busy / no-longer-qualifies are not).
-fn is_attempt(result: &Result<Issued, IssueError>) -> bool {
+fn is_attempt<T>(result: &Result<T, IssueError>) -> bool {
     !matches!(
         result,
         Err(IssueError::Busy(_)) | Err(IssueError::NotQualified(_))
@@ -266,7 +273,45 @@ pub fn record_manual(name: &str, now: i64, result: &Result<Issued, IssueError>) 
     }
     let name = norm(name);
     update_logged("manual issue", |f| {
-        record_attempt(f.names.entry(name).or_default(), "manual", now, result)
+        record_attempt(f.names.entry(name).or_default(), "manual", now, &ordered(result))
+    });
+}
+
+/// Map one CAL44 per-name outcome to an attempt result (`None` = not an
+/// attempt: DNS moved / unknown, zone unsupported, busy).
+fn extra_outcome(
+    out: &crate::mail::cert_names::NameOutcome,
+    reload: &crate::mail::cert_names::ReloadOutcome,
+) -> Option<Result<bool, IssueError>> {
+    use crate::mail::cert_names as cn;
+    match out.result {
+        cn::R_ISSUED | cn::R_PLANTED if reload.method == "failed" => Some(Err(IssueError::Plant(
+            reload.error.clone().unwrap_or_else(|| "TLS reload failed".into()),
+        ))),
+        cn::R_ISSUED => Some(Ok(true)),
+        cn::R_PLANTED | cn::R_CURRENT => Some(Ok(false)),
+        cn::R_FAILED | cn::R_BLOCKED => Some(Err(IssueError::Order(
+            out.detail.clone().unwrap_or_else(|| out.result.to_string()),
+        ))),
+        _ => None,
+    }
+}
+
+/// Record a CAL44 run (manual POST or background) per name.
+pub fn record_extra_run(report: &crate::mail::cert_names::RunReport, trigger: &str) {
+    let now = chrono::Utc::now().timestamp();
+    let rows: Vec<(String, Result<bool, IssueError>)> = report
+        .names
+        .iter()
+        .filter_map(|o| extra_outcome(o, &report.reload).map(|r| (norm(&o.name), r)))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    update_logged("extra-name run", |f| {
+        for (name, r) in &rows {
+            record_attempt(f.names.entry(name.clone()).or_default(), trigger, now, r);
+        }
     });
 }
 
@@ -312,6 +357,15 @@ pub trait ScanDeps {
     fn mail_busy(&self) -> Option<String>;
     /// The same issuer + per-role install as `k2 cert renew`.
     fn renew_attached(&mut self, hostname: &str) -> Result<Issued, IssueError>;
+    /// CAL44 extra names K2 issued before ([`crate::mail::cert_names::renewable_extra_names`]).
+    fn extras(&self) -> Vec<(String, Option<DomainBinding>)>;
+    /// A fresh per-name certificate that never got planted / loaded.
+    fn extra_needs_plant(&self, name: &str) -> bool;
+    /// One CAL44 run restricted to `names` (DNS gate inside).
+    fn renew_extras(
+        &mut self,
+        names: &BTreeSet<String>,
+    ) -> Result<crate::mail::cert_names::RunReport, crate::mail::cert_names::LiveRunError>;
 }
 
 /// Re-check that a name still qualifies before anything goes to the CA.
@@ -363,9 +417,12 @@ pub fn scan(deps: &mut dyn ScanDeps) -> ScanReport {
     }
     let file = load();
     let mut items: Vec<ScanItem> = Vec::new();
-    let mut due: Vec<(i64, String)> = Vec::new();
+    // (notAfter, name, is_extra)
+    let mut due: Vec<(i64, String, bool)> = Vec::new();
     let mut skips: Vec<(String, String)> = Vec::new();
-    for row in deps.attached() {
+    let rows = deps.attached();
+    let attached_names: BTreeSet<String> = rows.iter().map(|r| norm(&r.hostname)).collect();
+    for row in rows {
         let name = norm(&row.hostname);
         let leaf = deps.leaf(&name);
         let rec = file.names.get(&name);
@@ -397,16 +454,52 @@ pub fn scan(deps: &mut dyn ScanDeps) -> ScanReport {
             items.push(ScanItem { name, result: "skipped", detail: Some(why) });
             continue;
         }
-        due.push((leaf.not_after, name));
+        due.push((leaf.not_after, name, false));
+    }
+    // An extra name that is also attached is renewed on the attached path.
+    for (raw, binding) in deps.extras() {
+        let name = norm(&raw);
+        if attached_names.contains(&name) {
+            continue;
+        }
+        let leaf = deps.leaf(&name);
+        let rec = file.names.get(&name);
+        if !k2_issued(leaf.as_ref(), rec) {
+            continue;
+        }
+        let Some(leaf) = leaf else { continue };
+        if !needs_renewal(leaf.not_after, now) && !deps.extra_needs_plant(&name) {
+            continue;
+        }
+        if let Some(t) = rec.and_then(|r| r.next_attempt).filter(|t| *t > now) {
+            items.push(ScanItem { name, result: "backoff", detail: Some(format!("next attempt at {t}")) });
+            continue;
+        }
+        let why = match binding.as_ref() {
+            None => Some("the domain's zone is no longer attached".to_string()),
+            Some(b) => crate::domains::acme::check_extra_name_issuable(&name, b).err(),
+        }
+        .or_else(|| deps.mail_busy());
+        if let Some(why) = why {
+            skips.push((name.clone(), why.clone()));
+            items.push(ScanItem { name, result: "skipped", detail: Some(why) });
+            continue;
+        }
+        due.push((leaf.not_after, name, true));
     }
     due.sort();
-    for (i, (_, name)) in due.into_iter().enumerate() {
+    let mut extra_due: BTreeSet<String> = BTreeSet::new();
+    for (i, (_, name, is_extra)) in due.into_iter().enumerate() {
         if i >= MAX_ATTEMPTS_PER_SCAN {
             items.push(ScanItem {
                 name,
                 result: "deferred",
                 detail: Some("attempt cap for this scan reached — next scan".into()),
             });
+            continue;
+        }
+        if is_extra {
+            extra_due.insert(name);
             continue;
         }
         let result = deps.renew_attached(&name);
@@ -427,10 +520,13 @@ pub fn scan(deps: &mut dyn ScanDeps) -> ScanReport {
             );
             let n = name.clone();
             update_logged("renewal", |f| {
-                record_attempt(f.names.entry(n).or_default(), "background", now, &result)
+                record_attempt(f.names.entry(n).or_default(), "background", now, &ordered(&result))
             });
         }
         items.push(ScanItem { name, result: label, detail });
+    }
+    if !extra_due.is_empty() {
+        items.extend(scan_extras(deps, &extra_due, now, &mut skips));
     }
     let note = summary(&items);
     update_logged("scan", |f| {
@@ -441,6 +537,68 @@ pub fn scan(deps: &mut dyn ScanDeps) -> ScanReport {
         f.last_scan_note = Some(note);
     });
     ScanReport { airgap: false, items }
+}
+
+/// The CAL44 part of a scan: one run over the due extra names.
+fn scan_extras(
+    deps: &mut dyn ScanDeps,
+    due: &BTreeSet<String>,
+    now: i64,
+    skips: &mut Vec<(String, String)>,
+) -> Vec<ScanItem> {
+    use crate::mail::cert_names::{self as cn, LiveRunError};
+    let mut items = Vec::new();
+    let report = match deps.renew_extras(due) {
+        Ok(r) => r,
+        Err(LiveRunError::Busy) => {
+            return due
+                .iter()
+                .map(|n| ScanItem {
+                    name: n.clone(),
+                    result: "busy",
+                    detail: Some("a per-name certificate run is in progress".into()),
+                })
+                .collect();
+        }
+        Err(LiveRunError::NotReady(e)) | Err(LiveRunError::Dns(e)) => {
+            let err: Result<bool, IssueError> = Err(IssueError::Order(e.clone()));
+            update_logged("extra-name renewal", |f| {
+                for n in due {
+                    record_attempt(f.names.entry(n.clone()).or_default(), "background", now, &err);
+                }
+            });
+            return due
+                .iter()
+                .map(|n| ScanItem { name: n.clone(), result: "failed", detail: Some(e.clone()) })
+                .collect();
+        }
+    };
+    let mut rows: Vec<(String, Result<bool, IssueError>)> = Vec::new();
+    for out in &report.names {
+        let name = norm(&out.name);
+        let (label, detail) = match extra_outcome(out, &report.reload) {
+            Some(Ok(true)) => ("renewed", None),
+            Some(Ok(false)) => ("planted", None),
+            Some(Err(e)) => ("failed", Some(e.to_string())),
+            None if out.result == cn::R_BUSY => ("busy", out.detail.clone()),
+            None => {
+                let why = out.detail.clone().unwrap_or_else(|| out.result.to_string());
+                skips.push((name.clone(), why.clone()));
+                ("skipped", Some(why))
+            }
+        };
+        if let Some(r) = extra_outcome(out, &report.reload) {
+            log_debug!("[domains/renew] {name}: {label}");
+            rows.push((name.clone(), r));
+        }
+        items.push(ScanItem { name, result: label, detail });
+    }
+    update_logged("extra-name renewal", |f| {
+        for (name, r) in &rows {
+            record_attempt(f.names.entry(name.clone()).or_default(), "background", now, r);
+        }
+    });
+    items
 }
 
 fn summary(items: &[ScanItem]) -> String {
@@ -493,11 +651,38 @@ impl ScanDeps for LiveScan {
         if crate::mail::supervisor::enable_running().load(Ordering::SeqCst) {
             return Some("a mail server enable is running".into());
         }
+        if crate::mail::supervisor::upgrade_running().load(Ordering::SeqCst) {
+            return Some("a mail server upgrade is running".into());
+        }
         None
     }
 
     fn renew_attached(&mut self, hostname: &str) -> Result<Issued, IssueError> {
         crate::domains::acme::issue_attached_core(hostname)
+    }
+
+    fn extras(&self) -> Vec<(String, Option<DomainBinding>)> {
+        if !crate::mail::supervisor::mail_supported()
+            || crate::mail::supervisor::current_status().is_none()
+        {
+            return Vec::new();
+        }
+        crate::mail::cert_names::renewable_extra_names()
+    }
+
+    fn extra_needs_plant(&self, name: &str) -> bool {
+        crate::mail::cert_names::needs_plant(name)
+    }
+
+    fn renew_extras(
+        &mut self,
+        names: &BTreeSet<String>,
+    ) -> Result<crate::mail::cert_names::RunReport, crate::mail::cert_names::LiveRunError> {
+        let (report, state_err) = crate::mail::cert_names::live_run(Some(names), None)?;
+        if let Some(e) = state_err {
+            log_debug!("[domains/renew] extra-names.json: {e}");
+        }
+        Ok(report)
     }
 }
 
@@ -590,8 +775,19 @@ pub fn mail_status_json(mail_host: Option<&str>) -> serde_json::Value {
         v["name"] = serde_json::json!(h);
         v
     });
+    let extra: Vec<serde_json::Value> = crate::mail::cert_names::renewable_extra_names()
+        .into_iter()
+        .map(|(n, _)| {
+            let n = norm(&n);
+            let leaf = leaf_from_store(&n);
+            let mut v = view_json(leaf.as_ref(), file.names.get(&n), now);
+            v["name"] = serde_json::json!(n);
+            v
+        })
+        .collect();
     serde_json::json!({
         "mailHost": mail,
+        "extraNames": extra,
         "lastScan": file.last_scan,
         "lastScanNote": file.last_scan_note,
         "windowDays": RENEW_WINDOW_SECS / 86_400,
@@ -679,19 +875,23 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
 /// names under one hosted domain).
 pub fn doctor_check_live(only_apex: Option<&str>) -> crate::mail::doctor::DoctorCheck {
     let file = load();
-    let entries: Vec<DoctorEntry> = LiveScan
+    let mut names: BTreeSet<String> = LiveScan
         .attached()
         .into_iter()
-        .filter(|r| {
-            only_apex.is_none_or(|a| k2_core::domains::hostname_under_apex(&r.hostname, a))
-        })
-        .map(|r| {
-            let name = norm(&r.hostname);
-            DoctorEntry {
-                leaf: leaf_from_store(&name),
-                rec: file.names.get(&name).cloned(),
-                name,
-            }
+        .map(|r| norm(&r.hostname))
+        .collect();
+    names.extend(
+        crate::mail::cert_names::renewable_extra_names()
+            .into_iter()
+            .map(|(n, _)| norm(&n)),
+    );
+    let entries: Vec<DoctorEntry> = names
+        .into_iter()
+        .filter(|n| only_apex.is_none_or(|a| k2_core::domains::hostname_under_apex(n, a)))
+        .map(|name| DoctorEntry {
+            leaf: leaf_from_store(&name),
+            rec: file.names.get(&name).cloned(),
+            name,
         })
         .collect();
     doctor_check(&entries, chrono::Utc::now().timestamp())
@@ -734,6 +934,12 @@ mod tests {
         fail: HashMap<String, IssueError>,
         mail_busy: Option<String>,
         calls: RefCell<Vec<String>>,
+        extras: Vec<(String, Option<DomainBinding>)>,
+        needs_plant: BTreeSet<String>,
+        /// Per extra name: the cert_names result the fake run reports.
+        extra_results: HashMap<String, &'static str>,
+        extra_reload: &'static str,
+        extra_busy: bool,
     }
 
     impl Fake {
@@ -746,6 +952,11 @@ mod tests {
                 fail: HashMap::new(),
                 mail_busy: None,
                 calls: RefCell::new(Vec::new()),
+                extras: Vec::new(),
+                needs_plant: BTreeSet::new(),
+                extra_results: HashMap::new(),
+                extra_reload: "action",
+                extra_busy: false,
             }
         }
         fn leaf(mut self, name: &str, l: LeafInfo) -> Self {
@@ -787,6 +998,44 @@ mod tests {
                 },
                 ordered: true,
             })
+        }
+        fn extras(&self) -> Vec<(String, Option<DomainBinding>)> {
+            self.extras.clone()
+        }
+        fn extra_needs_plant(&self, name: &str) -> bool {
+            self.needs_plant.contains(name)
+        }
+        fn renew_extras(
+            &mut self,
+            names: &BTreeSet<String>,
+        ) -> Result<crate::mail::cert_names::RunReport, crate::mail::cert_names::LiveRunError> {
+            use crate::mail::cert_names as cn;
+            self.calls
+                .borrow_mut()
+                .push(format!("extras {}", names.iter().cloned().collect::<Vec<_>>().join(",")));
+            if self.extra_busy {
+                return Err(cn::LiveRunError::Busy);
+            }
+            let outs = names
+                .iter()
+                .map(|n| {
+                    let result = self.extra_results.get(n).copied().unwrap_or(cn::R_ISSUED);
+                    cn::NameOutcome {
+                        name: n.clone(),
+                        apex: "example.com".into(),
+                        points_here: cn::PointsHere::Yes,
+                        result,
+                        detail: (result != cn::R_ISSUED).then(|| format!("{result} detail")),
+                        cert_id: None,
+                        expires_at: None,
+                    }
+                })
+                .collect();
+            let reload = cn::ReloadOutcome {
+                method: self.extra_reload,
+                error: (self.extra_reload == "failed").then(|| "reload and restart failed".to_string()),
+            };
+            Ok(cn::RunReport { names: outs, reload })
         }
     }
 
@@ -1031,6 +1280,83 @@ mod tests {
             let mode = std::fs::metadata(state_path()).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    fn k2_zone(apex: &str) -> Option<DomainBinding> {
+        Some(binding(apex, true, Some("active")))
+    }
+
+    /// CAL44 names come only from the extra-names state (via `extras`):
+    /// in-window ones go to ONE cert_names run, fresh ones stay out, a
+    /// never-loaded one is finished, BYO zones are skipped, failures back
+    /// off per name, and a DNS skip is not a failure.
+    #[test]
+    fn scan_renews_due_extra_names_in_one_run() {
+        use crate::mail::cert_names as cn;
+        let _home = crate::test_support::TempHome::new();
+        let mut fake = Fake::new(vec![row("mail.example.com", "mail", k2_zone("example.com"))])
+            .leaf("mail.example.com", le(NOW + 80 * DAY))
+            .leaf("autoconfig.example.com", le(NOW + 20 * DAY))
+            .leaf("autodiscover.example.com", le(NOW + 25 * DAY))
+            .leaf("mta-sts.example.com", le(NOW + 80 * DAY))
+            .leaf("ua-auto-config.example.com", le(NOW + 85 * DAY))
+            .leaf("autoconfig.example.net", le(NOW + DAY))
+            .leaf("autoconfig.example.org", le(NOW + 2 * DAY));
+        fake.extras = vec![
+            ("autoconfig.example.com".into(), k2_zone("example.com")),
+            ("autodiscover.example.com".into(), k2_zone("example.com")),
+            ("mta-sts.example.com".into(), k2_zone("example.com")),
+            ("ua-auto-config.example.com".into(), k2_zone("example.com")),
+            ("autoconfig.example.net".into(), Some(binding("example.net", false, None))),
+            ("autoconfig.example.org".into(), k2_zone("example.org")),
+        ];
+        fake.needs_plant.insert("ua-auto-config.example.com".into());
+        fake.extra_results.insert("autodiscover.example.com".into(), cn::R_FAILED);
+        fake.extra_results.insert("autoconfig.example.org".into(), cn::R_SKIPPED_DNS);
+        let r = scan(&mut fake);
+        assert_eq!(
+            fake.calls(),
+            vec!["extras autoconfig.example.com,autoconfig.example.org,autodiscover.example.com,ua-auto-config.example.com"],
+            "one run; fresh mta-sts and the BYO zone stay out; the attached mail host is fresh"
+        );
+        let by: HashMap<&str, &str> = r.items.iter().map(|i| (i.name.as_str(), i.result)).collect();
+        assert_eq!(by["autoconfig.example.com"], "renewed");
+        assert_eq!(by["autodiscover.example.com"], "failed");
+        assert_eq!(by["autoconfig.example.org"], "skipped", "DNS moved: not renewed, not a failure");
+        assert_eq!(by["autoconfig.example.net"], "skipped", "BYO zone");
+        let f = load();
+        assert_eq!(f.names["autodiscover.example.com"].failures, 1);
+        assert_eq!(f.names["autodiscover.example.com"].next_attempt, Some(NOW + 3_600));
+        assert_eq!(f.names["autoconfig.example.com"].last_result.as_deref(), Some("renewed"));
+        assert!(f.names.get("autoconfig.example.org").is_none_or(|r| r.failures == 0));
+        assert!(f.names["autoconfig.example.net"].skipped.as_deref().unwrap().contains("not K2-hosted"));
+
+        // Restart 10 minutes later: the failed name waits out its backoff.
+        let mut fake2 = Fake::new(Vec::new()).leaf("autodiscover.example.com", le(NOW + 25 * DAY));
+        fake2.now = NOW + 600;
+        fake2.extras = vec![("autodiscover.example.com".into(), k2_zone("example.com"))];
+        let r = scan(&mut fake2);
+        assert!(fake2.calls().is_empty(), "{:?}", fake2.calls());
+        assert_eq!(r.items[0].result, "backoff");
+    }
+
+    #[test]
+    fn extra_reload_failure_is_a_plant_failure_and_busy_run_is_not() {
+        let _home = crate::test_support::TempHome::new();
+        let mut fake = Fake::new(Vec::new()).leaf("autoconfig.example.com", le(NOW + DAY));
+        fake.extras = vec![("autoconfig.example.com".into(), k2_zone("example.com"))];
+        fake.extra_reload = "failed";
+        scan(&mut fake);
+        let rec = load().names["autoconfig.example.com"].clone();
+        assert!(rec.plant_pending && rec.failures == 1, "{rec:?}");
+
+        let _ = std::fs::remove_file(state_path());
+        let mut fake = Fake::new(Vec::new()).leaf("autoconfig.example.com", le(NOW + DAY));
+        fake.extras = vec![("autoconfig.example.com".into(), k2_zone("example.com"))];
+        fake.extra_busy = true;
+        let r = scan(&mut fake);
+        assert_eq!(r.items[0].result, "busy");
+        assert!(load().names.get("autoconfig.example.com").is_none_or(|r| r.failures == 0));
     }
 
     #[test]

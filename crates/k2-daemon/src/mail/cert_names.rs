@@ -37,10 +37,12 @@
 //!   destroyed on a DNS answer, so a transient or wrong lookup can never
 //!   take a working name's certificate away.
 //!
-//! There is no background renewer for K2-issued certificates; renewal
-//! is `k2 hostmail cert names renew` (a name inside
-//! [`RENEW_BEFORE_SECS`] of expiry is re-issued), and the doctor warns
-//! when one is due.
+//! Renewal: the daemon's background renewer ([`crate::domains::renew`])
+//! re-runs this same run for names already in the state file whose
+//! certificate is inside [`RENEW_BEFORE_SECS`] of expiry (or never got
+//! loaded), with per-name backoff, under the same per-name lock as
+//! `k2 hostmail cert names renew`. A renewed certificate supersedes the
+//! name's previous one, which is destroyed once the new one is loaded.
 //!
 //! State: `~/.k2/certs/extra-names.json` (0600) next to the PEM store.
 
@@ -57,7 +59,7 @@ use crate::mail::jmap::DefaultCertificate;
 pub const EXTRA_LABELS: [&str; 4] = ["autoconfig", "autodiscover", "mta-sts", "ua-auto-config"];
 
 /// A per-name certificate inside this window of expiry is re-issued.
-pub const RENEW_BEFORE_SECS: i64 = 30 * 86_400;
+pub const RENEW_BEFORE_SECS: i64 = crate::domains::renew::RENEW_WINDOW_SECS;
 
 /// The four extra names under `apex`. Empty for a `*.k2.dev` apex
 /// (Connect names stay on cert.k2.dev). A name equal to the mail host
@@ -210,6 +212,9 @@ pub struct NameRecord {
     pub checked_at: Option<i64>,
     pub last_result: Option<String>,
     pub last_error: Option<String>,
+    /// Earlier Certificates planted for this name, destroyed once the
+    /// current one is loaded (renewal supersedes; an id already gone is Ok).
+    pub stale_cert_ids: Vec<String>,
 }
 
 pub type State = BTreeMap<String, NameRecord>;
@@ -260,6 +265,8 @@ pub trait Deps {
     fn reload_tls(&mut self) -> Result<(), String>;
     /// The existing restart path (`restart_stalwart_to_reload_tls`).
     fn restart_stalwart(&mut self) -> Result<(), String>;
+    /// `x:Certificate/set` destroy of a superseded per-name certificate.
+    fn remove_certificate(&mut self, id: &str) -> Result<(), String>;
 }
 
 /// One hosted apex and its extra names.
@@ -280,6 +287,8 @@ pub const R_SKIPPED_DNS_UNKNOWN: &str = "skipped-dns-unknown";
 pub const R_UNSUPPORTED: &str = "unsupported";
 pub const R_BLOCKED: &str = "blocked";
 pub const R_FAILED: &str = "failed";
+/// Another certificate run holds this name (renewer or manual).
+pub const R_BUSY: &str = "busy";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameOutcome {
@@ -354,12 +363,28 @@ pub fn run(
     let mut pending: Vec<usize> = Vec::new();
     // Lazily checked once, only when something would be planted.
     let mut default_guard: Option<Result<(), String>> = None;
+    // Per-name locks (shared with the attached-name issuer and the
+    // background renewer), held until the reload is done.
+    let mut locks: Vec<crate::domains::renew::NameLock> = Vec::new();
 
     for plan in plans {
         for name in &plan.names {
             if only.as_deref().is_some_and(|o| o != name) {
                 continue;
             }
+            let Some(lock) = crate::domains::renew::NameLock::try_acquire(name) else {
+                outcomes.push(NameOutcome {
+                    name: name.clone(),
+                    apex: plan.apex.clone(),
+                    points_here: PointsHere::Unknown("not checked".into()),
+                    result: R_BUSY,
+                    detail: Some("another certificate run for this name is in progress".into()),
+                    cert_id: None,
+                    expires_at: None,
+                });
+                continue;
+            };
+            locks.push(lock);
             let rec = state.entry(name.clone()).or_default();
             let ph = points_here(resolver, name, &plan.addrs);
             rec.points_here = ph.as_bool();
@@ -465,7 +490,11 @@ pub fn run(
             };
             match deps.add_certificate(&pem.chain_pem, &pem.key_pem) {
                 Ok(id) => {
-                    rec.stalwart_cert_id = Some(id.clone());
+                    if let Some(prev) = rec.stalwart_cert_id.replace(id.clone()) {
+                        if prev != id && !rec.stale_cert_ids.contains(&prev) {
+                            rec.stale_cert_ids.push(prev);
+                        }
+                    }
                     rec.planted_not_after = pem.not_after;
                     rec.planted_at = Some(now);
                     rec.loaded = false;
@@ -513,12 +542,26 @@ pub fn run(
             rec.loaded = loaded;
             if !loaded {
                 rec.last_error = reload.error.clone();
+            } else {
+                // The new certificate is live: drop the ones it superseded.
+                let current = rec.stalwart_cert_id.clone();
+                let mut keep = Vec::new();
+                for old in std::mem::take(&mut rec.stale_cert_ids) {
+                    if Some(&old) == current.as_ref() {
+                        continue;
+                    }
+                    if deps.remove_certificate(&old).is_err() {
+                        keep.push(old);
+                    }
+                }
+                rec.stale_cert_ids = keep;
             }
         }
         if !loaded {
             out.detail = reload.error.clone();
         }
     }
+    drop(locks);
     RunReport { names: outcomes, reload }
 }
 
@@ -803,14 +846,14 @@ pub fn handle_post(body: &[u8]) -> CliResponse {
             )
         }
     }
-    let Some(mail_host) = mail_hostname() else {
+    if mail_hostname().is_none() {
         return err_json(
             "409 Conflict",
             "not_ready",
             "the mail server is not installed — enable it before issuing per-name certificates"
                 .into(),
         );
-    };
+    }
     let apexes = hosted_apexes();
     let only = match parsed.name.as_deref().map(norm).filter(|s| !s.is_empty()) {
         None => None,
@@ -839,45 +882,117 @@ pub fn handle_post(body: &[u8]) -> CliResponse {
     if let Some(resp) = crate::mail::routes_server::upgrade_running_response() {
         return resp;
     }
-    let client = match crate::mail::domains::engine_from_db() {
-        Ok((c, _)) => c,
-        Err(e) => {
-            return err_json(
-                "409 Conflict",
-                "not_ready",
-                format!("cannot plant certificates while the mail server is down: {e}"),
-            )
+    match live_run(None, only.as_deref()) {
+        Ok((report, state_err)) => {
+            crate::domains::renew::record_extra_run(&report, "manual");
+            let mut body = report.to_json();
+            if let Some(e) = state_err {
+                body["stateError"] = serde_json::json!(e);
+            }
+            CliResponse::ok_json(body.to_string())
         }
-    };
-    let resolver = match crate::mail::dns_verify::SystemResolver::new() {
-        Ok(r) => r,
-        Err(e) => return err_json("502 Bad Gateway", "dns", e),
-    };
+        Err(LiveRunError::Busy) => err_json(
+            "409 Conflict",
+            "busy",
+            "a per-name certificate run (the background renewer?) is in progress — try again \
+             in a few minutes"
+                .into(),
+        ),
+        Err(LiveRunError::NotReady(e)) => err_json("409 Conflict", "not_ready", e),
+        Err(LiveRunError::Dns(e)) => err_json("502 Bad Gateway", "dns", e),
+    }
+}
+
+/// Why [`live_run`] did not run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveRunError {
+    /// Another run holds the state file (manual POST vs the renewer).
+    Busy,
+    NotReady(String),
+    Dns(String),
+}
+
+fn run_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
+/// One run against the live box: the POST route (`only` = one name) and
+/// the background renewer (`names` = exactly these names). Plans come
+/// from the hosted domains (never a certs-dir walk); the DNS gate runs
+/// inside [`run`]. Serialised on the state file: a second concurrent run
+/// gets [`LiveRunError::Busy`] instead of waiting. The `Option<String>`
+/// is a state-file save error (the run itself happened).
+pub fn live_run(
+    names: Option<&std::collections::BTreeSet<String>>,
+    only: Option<&str>,
+) -> Result<(RunReport, Option<String>), LiveRunError> {
+    let _g = run_lock().try_lock().map_err(|_| LiveRunError::Busy)?;
+    let mail_host = mail_hostname().ok_or_else(|| {
+        LiveRunError::NotReady("the mail server is not installed".into())
+    })?;
+    let client = crate::mail::domains::engine_from_db().map(|(c, _)| c).map_err(|e| {
+        LiveRunError::NotReady(format!(
+            "cannot plant certificates while the mail server is down: {e}"
+        ))
+    })?;
+    let resolver = crate::mail::dns_verify::SystemResolver::new().map_err(LiveRunError::Dns)?;
     let public_ip = {
         use crate::mail::preflight::PreflightEnv;
         crate::mail::preflight::RealPreflightEnv.public_ip()
     };
-    let plans: Vec<ApexPlan> = apexes
+    let plans: Vec<ApexPlan> = hosted_apexes()
         .into_iter()
-        .map(|(apex, apex_mail, names)| {
+        .map(|(apex, apex_mail, all)| {
             let host = apex_mail.unwrap_or_else(|| mail_host.clone());
             ApexPlan {
                 binding: binding_for(&apex),
                 addrs: box_addrs(public_ip.as_deref(), &resolver, &host),
                 apex,
-                names,
+                names: all
+                    .into_iter()
+                    .filter(|n| names.is_none_or(|set| set.contains(n)))
+                    .collect(),
             }
         })
+        .filter(|p| !p.names.is_empty())
         .collect();
     let mut state = load_state();
     let mut deps = LiveDeps { client };
-    let report = run(&plans, &resolver, &mut deps, &mut state, only.as_deref());
-    if let Err(e) = save_state(&state) {
-        let mut body = report.to_json();
-        body["stateError"] = serde_json::json!(e);
-        return CliResponse::ok_json(body.to_string());
+    let report = run(&plans, &resolver, &mut deps, &mut state, only);
+    Ok((report, save_state(&state).err()))
+}
+
+/// Renewer input: the extra names K2 has issued before (present in the
+/// state file) that are still extra names of a hosted domain, with the
+/// apex binding. Never a certs-dir walk; a name whose domain is no longer
+/// hosted is left alone.
+pub fn renewable_extra_names() -> Vec<(String, Option<DomainBinding>)> {
+    let state = load_state();
+    let mut out = Vec::new();
+    for (apex, _, names) in hosted_apexes() {
+        let binding = binding_for(&apex);
+        for n in names {
+            if state.contains_key(&n) {
+                out.push((n, binding.clone()));
+            }
+        }
     }
-    CliResponse::ok_json(report.to_json().to_string())
+    out
+}
+
+/// A fresh certificate in the box store that never got planted / loaded
+/// (the renewer finishes it without a new order).
+pub fn needs_plant(name: &str) -> bool {
+    let state = load_state();
+    let Some(rec) = state.get(name) else {
+        return false;
+    };
+    let Some(inv) = inventory_from_store(name) else {
+        return false;
+    };
+    inv.reusable
+        && (rec.stalwart_cert_id.is_none() || rec.planted_not_after != inv.not_after || !rec.loaded)
 }
 
 /// Production [`Deps`].
@@ -913,6 +1028,10 @@ impl Deps for LiveDeps {
 
     fn restart_stalwart(&mut self) -> Result<(), String> {
         crate::mail::supervisor::restart_stalwart_to_reload_tls()
+    }
+
+    fn remove_certificate(&mut self, id: &str) -> Result<(), String> {
+        self.client.certificate_destroy(id)
     }
 }
 
@@ -963,6 +1082,13 @@ mod tests {
     const BOX: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 10);
     const OTHER: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 99);
     const NOW: i64 = 1_800_000_000;
+
+    /// `run` takes process-wide per-name locks; tests that run it share
+    /// names, so they take turns.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    }
 
     /// Canned DNS: A / AAAA per name; anything unlisted = NotFound.
     #[derive(Default)]
@@ -1080,6 +1206,10 @@ mod tests {
             self.calls.borrow_mut().push("restart".into());
             self.restart.clone()
         }
+        fn remove_certificate(&mut self, id: &str) -> Result<(), String> {
+            self.calls.borrow_mut().push(format!("remove {id}"));
+            Ok(())
+        }
     }
 
     fn k2_binding(apex: &str) -> DomainBinding {
@@ -1193,6 +1323,7 @@ mod tests {
 
     #[test]
     fn issues_only_names_that_point_here_one_cert_each_then_reloads_once() {
+        let _s = serial();
         let dns = Dns::default()
             .a("autoconfig.example.com", &[BOX])
             .a("autodiscover.example.com", &[BOX])
@@ -1233,6 +1364,7 @@ mod tests {
 
     #[test]
     fn one_name_failing_never_stops_the_others() {
+        let _s = serial();
         let mut fake = Fake {
             issue_fail: vec!["autodiscover.example.com".into()],
             add_fail: vec!["mta-sts.example.com".into()],
@@ -1259,6 +1391,7 @@ mod tests {
 
     #[test]
     fn reload_action_first_then_restart_fallback_then_failed() {
+        let _s = serial();
         // Action fails → restart (the existing path) → loaded.
         let mut fake = Fake { reload: Err("validationFailed".into()), ..Fake::default() };
         let mut state = State::new();
@@ -1301,6 +1434,7 @@ mod tests {
 
     #[test]
     fn renewal_skips_a_name_whose_dns_moved_and_leaves_its_cert() {
+        let _s = serial();
         let mut fake = Fake::default();
         let mut state = State::new();
         let p = [plan("example.com", Some(k2_binding("example.com")))];
@@ -1335,6 +1469,7 @@ mod tests {
 
     #[test]
     fn current_cert_is_left_alone_and_a_planted_unloaded_one_only_reloads() {
+        let _s = serial();
         let mut fake = Fake::default();
         let mut state = State::new();
         let p = [plan("example.com", Some(k2_binding("example.com")))];
@@ -1364,6 +1499,7 @@ mod tests {
 
     #[test]
     fn no_live_default_certificate_blocks_every_plant() {
+        let _s = serial();
         for default in [
             Ok(DefaultCertificate::Unset),
             Ok(DefaultCertificate::Missing("cert-old".into())),
@@ -1380,6 +1516,7 @@ mod tests {
 
     #[test]
     fn zone_not_k2_hosted_is_unsupported_never_issued() {
+        let _s = serial();
         let byo = DomainBinding { dns_write: false, zone_id: None, ..k2_binding("example.com") };
         for b in [None, Some(byo)] {
             let mut fake = Fake::default();
@@ -1391,6 +1528,7 @@ mod tests {
 
     #[test]
     fn only_filter_and_multiple_apexes() {
+        let _s = serial();
         let mut fake = Fake::default();
         let dns = all_here("example.com").a("autoconfig.example.net", &[BOX]);
         let plans = [
@@ -1401,6 +1539,59 @@ mod tests {
         assert_eq!(r.names.len(), 1);
         assert_eq!(r.names[0].name, "autoconfig.example.net");
         assert_eq!(r.names[0].result, R_ISSUED);
+    }
+
+    /// A name another run holds (the background renewer / an attached
+    /// issue) is reported busy and untouched; the others go on.
+    #[test]
+    fn locked_name_is_busy_and_untouched() {
+        let _s = serial();
+        let held = crate::domains::renew::NameLock::try_acquire("autodiscover.example.com").expect("lock");
+        let mut fake = Fake::default();
+        let mut state = State::new();
+        let r = run(&[plan("example.com", Some(k2_binding("example.com")))], &all_here("example.com"), &mut fake, &mut state, None);
+        let res: Vec<&str> = r.names.iter().map(|n| n.result).collect();
+        assert_eq!(res, vec![R_ISSUED, R_BUSY, R_ISSUED, R_ISSUED]);
+        assert!(!calls(&fake).iter().any(|c| c.contains("autodiscover")), "{:?}", calls(&fake));
+        assert!(!state.contains_key("autodiscover.example.com"));
+        drop(held);
+        // The run released its own locks.
+        assert!(crate::domains::renew::NameLock::try_acquire("autoconfig.example.com").is_some());
+    }
+
+    /// Renewal supersedes: the new certificate is added (non-default),
+    /// reloaded, and only then the name's previous certificate is removed.
+    #[test]
+    fn renewal_removes_the_superseded_cert_after_the_reload() {
+        let _s = serial();
+        let mut fake = Fake::default();
+        let mut state = State::new();
+        let p = [plan("example.com", Some(k2_binding("example.com")))];
+        run(&p, &all_here("example.com"), &mut fake, &mut state, Some("autoconfig.example.com"));
+        assert_eq!(state["autoconfig.example.com"].stalwart_cert_id.as_deref(), Some("cert-1"));
+        // 20 days left → inside the window → re-issued.
+        fake.inventory.get_mut("autoconfig.example.com").unwrap().not_after = Some(NOW + 20 * 86_400);
+        state.get_mut("autoconfig.example.com").unwrap().planted_not_after = Some(NOW + 20 * 86_400);
+        fake.calls.borrow_mut().clear();
+        let r = run(&p, &all_here("example.com"), &mut fake, &mut state, Some("autoconfig.example.com"));
+        assert_eq!(r.names[0].result, R_ISSUED);
+        assert_eq!(
+            calls(&fake),
+            vec!["default", "issue autoconfig.example.com @example.com", "add autoconfig.example.com", "reload", "remove cert-1"],
+            "remove only after the reload"
+        );
+        let rec = &state["autoconfig.example.com"];
+        assert_eq!(rec.stalwart_cert_id.as_deref(), Some("cert-2"));
+        assert!(rec.stale_cert_ids.is_empty());
+        // A failed load keeps the old one (both stay; Stalwart serves the
+        // newest per name once it loads).
+        let mut fake = Fake { reload: Err("x".into()), restart: Err("y".into()), ..fake };
+        fake.inventory.get_mut("autoconfig.example.com").unwrap().not_after = Some(NOW + 10 * 86_400);
+        state.get_mut("autoconfig.example.com").unwrap().planted_not_after = Some(NOW + 10 * 86_400);
+        fake.calls.borrow_mut().clear();
+        run(&p, &all_here("example.com"), &mut fake, &mut state, Some("autoconfig.example.com"));
+        assert!(!calls(&fake).iter().any(|c| c.starts_with("remove")), "{:?}", calls(&fake));
+        assert_eq!(state["autoconfig.example.com"].stale_cert_ids, vec!["cert-2".to_string()]);
     }
 
     #[test]

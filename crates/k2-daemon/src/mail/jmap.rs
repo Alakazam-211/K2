@@ -2941,24 +2941,10 @@ pub fn parse_session_upload_url(
     Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
 }
 
-/// Certificate upkeep for K2-issued certificates (domains::renew).
+/// Certificate upkeep for K2-issued certificates (domains::renew). The
+/// hot reload is [`StalwartClient::action_reload_tls_certificates`]
+/// (shared with the CAL44 per-name plant).
 impl StalwartClient {
-    /// `x:Action/set` create `@type: ReloadTlsCertificates`: Stalwart
-    /// re-reads every stored Certificate into the live SNI map in place
-    /// (0.16.10 / 0.16.20 `jmap/src/registry/mapping/action.rs` →
-    /// `cache/reload.rs` Certificate arm) — no restart, no mail helper.
-    /// A `notCreated` reply (the reload hit an error) is an Err; the
-    /// caller then falls back to the restart path.
-    pub fn reload_tls_certificates(&self) -> Result<(), String> {
-        let resp = self.registry_call(
-            "x:Action/set",
-            serde_json::json!({
-                "create": { CREATE_TAG: { "@type": "ReloadTlsCertificates" } }
-            }),
-        )?;
-        parse_set_created_id("x:Action/set", &resp).map(|_| ())
-    }
-
     /// `x:Certificate/set` destroy of one Certificate K2 planted earlier.
     /// Already gone (Stalwart deletes expired certificates itself) is Ok.
     pub fn certificate_destroy(&self, id: &str) -> Result<(), String> {

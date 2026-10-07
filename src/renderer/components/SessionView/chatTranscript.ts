@@ -5,6 +5,9 @@ export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; id: string; name: string; input: string }
   | { type: 'tool_result'; id: string; content: string }
+  /** Thinking / reasoning (TW10). `text` only when the harness wrote it
+   *  in the clear; `duration` is ms since the record before it. */
+  | { type: 'thinking'; text?: string | null; redacted: boolean; duration?: number | null }
 
 export interface ChatTurn {
   id: string

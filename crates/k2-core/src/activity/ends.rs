@@ -10,14 +10,18 @@
 //! | lead working, Ctrl-C/Esc | [`on_key`] + confirmation (DA26, A16) |
 //! | agent process | owner pid gone or reused ([`process_exit`], `agent_exited`) |
 //! | PTY | child exit or the liveness sweep ([`process_exit`], `pty_exited`) |
+//! | lead working, Stop lost | Claude transcript `end_turn` + 5 s with no hook ([`apply_transcript`]) |
+//! | lead working, no hooks | the transcript's turn end / interrupt, or the screen marker gone 3 s |
 
 use crate::agent_hooks::envelope::{HookEnvelope, TaskEntry};
 
-use super::claude::{arm_cancel_latch, lead_end, lead_waiting, lead_working};
+use super::claude::{arm_cancel_latch, arm_turn_latch, lead_end, lead_waiting, lead_working};
 use super::row::{
     Child, ChildKind, ChildOrigin, ChildState, EvidenceSource, LeadState, Outcome, PendingCancel,
     Reason, Row, TitleSignal, KEY_CONFIRM_WINDOW_MS, KEY_SETTLE_MS, OWED_LEASE_MS, ROSTER_CAP,
+    TRANSCRIPT_END_GRACE_MS,
 };
+use super::transcript::TranscriptSignal;
 
 /// A client keystroke the daemon read on its way to the PTY (DA26).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,9 +174,20 @@ const CRON_ID: &str = "session-crons";
 
 // ── Timers ───────────────────────────────────────────────────────────────
 
-/// Fire every timer due at `now`: the key settle and confirm window, and
-/// the owed-notification lease.
+/// Fire every timer due at `now`: the key settle and confirm window, the
+/// transcript `end_turn` grace, and the owed-notification lease.
 pub(crate) fn run_timers(row: &mut Row, now: i64) {
+    if let Some((due, armed_at)) = row.pending_transcript_end {
+        if now >= due {
+            row.pending_transcript_end = None;
+            // DA27: no hook for 5 s after the record → the Stop was lost.
+            let hook_since = row.last_hook_at.is_some_and(|h| h > armed_at);
+            if !hook_since && row.lead.state == LeadState::Working {
+                lead_end(row, Outcome::Success, Reason::TranscriptTurnEnd, due);
+                arm_turn_latch(row);
+            }
+        }
+    }
     if let Some(pc) = row.pending_cancel.clone() {
         if pc.settle_at.is_some_and(|t| now >= t) {
             let unchanged = row.evidence_seq == pc.evidence_seq;
@@ -216,6 +231,9 @@ pub(crate) fn next_timer(row: &Row) -> Option<i64> {
     let mut take = |t: i64| best = Some(best.map_or(t, |b| b.min(t)));
     if let Some(pc) = row.pending_cancel.as_ref() {
         take(pc.settle_at.unwrap_or(pc.expires_at).min(pc.expires_at));
+    }
+    if let Some((due, _)) = row.pending_transcript_end {
+        take(due);
     }
     if row.lead.state == LeadState::Idle {
         let idle_since = row.lead_idle_since.unwrap_or(row.lead.since);
@@ -287,6 +305,82 @@ pub(crate) fn transcript_turn_end(row: &mut Row, now: i64) {
     row.had_transcript = true;
     if row.lead.state != LeadState::Idle {
         lead_end(row, Outcome::Success, Reason::TranscriptTurnEnd, now);
+    }
+}
+
+// ── Transcript, screen (S3) ─────────────────────────────────────────────
+
+/// One transcript record (DA27, A16, A19).
+///
+/// - No hook since registration (Codex, Grok, Claude with broken hooks):
+///   the transcript is the signal both ways. A turn start, input, tool or
+///   thinking record makes the lead working; a turn end makes it idle,
+///   reason `transcript_turn_end`.
+/// - With hooks: every record is evidence (it keeps a long turn from
+///   decaying). An interrupt record cancels (A16). Claude's `end_turn` is
+///   a cross-check: if no hook arrives within 5 s of it the Stop was
+///   lost, and the lead ends `transcript_turn_end`. A record stamped
+///   before the last hook is stale and ignored. Any later working record
+///   cancels the pending check.
+pub(crate) fn apply_transcript(row: &mut Row, signal: &TranscriptSignal, now: i64) {
+    row.note_evidence(EvidenceSource::Transcript, now);
+    row.had_transcript = true;
+    let drives = !row.had_hook;
+    match signal {
+        TranscriptSignal::Interrupt => {
+            row.pending_transcript_end = None;
+            if row.lead.state != LeadState::Idle {
+                commit_cancel(row, Reason::Interrupted, now);
+            }
+        }
+        TranscriptSignal::TurnEnd { record_at, cross_check } => {
+            if row.lead.state == LeadState::Idle {
+                return;
+            }
+            if drives || !cross_check {
+                row.pending_transcript_end = None;
+                lead_end(row, Outcome::Success, Reason::TranscriptTurnEnd, now);
+                arm_turn_latch(row);
+                return;
+            }
+            let stale = matches!((record_at, row.last_hook_at), (Some(r), Some(h)) if *r < h);
+            if !stale && row.lead.state == LeadState::Working {
+                row.pending_transcript_end = Some((now + TRANSCRIPT_END_GRACE_MS, now));
+            }
+        }
+        TranscriptSignal::TurnStart { .. } => {
+            row.pending_transcript_end = None;
+            if drives {
+                row.latch = None;
+                row.pending_cancel = None;
+                row.in_flight.clear();
+                row.turn_started_at = Some(now);
+                lead_working(row, now);
+            }
+        }
+        TranscriptSignal::Queued { .. }
+        | TranscriptSignal::Tool { .. }
+        | TranscriptSignal::ToolDone
+        | TranscriptSignal::Thinking => {
+            row.pending_transcript_end = None;
+            if drives {
+                lead_working(row, now);
+            }
+        }
+    }
+}
+
+/// The screen marker scan (A13): counts only while the row has had no
+/// hook and no transcript evidence, like the title.
+pub(crate) fn apply_screen(row: &mut Row, present: bool, now: i64) {
+    if row.had_hook || row.had_transcript {
+        return;
+    }
+    row.note_evidence(EvidenceSource::Screen, now);
+    if present {
+        lead_working(row, now);
+    } else if row.lead.state != LeadState::Idle {
+        lead_end(row, Outcome::Success, Reason::TurnDone, now);
     }
 }
 

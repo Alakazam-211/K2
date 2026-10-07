@@ -276,7 +276,7 @@ fn latched(row: &mut Row, env: &HookEnvelope, now: i64) -> bool {
     }
 }
 
-fn arm_turn_latch(row: &mut Row) {
+pub(crate) fn arm_turn_latch(row: &mut Row) {
     row.latch = Some(Latch { prompt_id: row.lead.prompt_id.clone(), until: None });
 }
 

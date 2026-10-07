@@ -26,8 +26,10 @@
 //!
 //! Seams: [`subscribe`] carries every row change (S4 builds
 //! `activity_changed` + `seq` and the snapshot route on it; Keep awake
-//! reads it today), [`apply`] takes S3's transcript evidence, and
-//! [`RowEvent::turn_ended`] is S6's turn end.
+//! reads it today), [`apply`] takes S3's transcript and screen evidence
+//! ([`crate::activity_transcript`] follows each session's transcript
+//! from register to unregister), and [`RowEvent::turn_ended`] is S6's
+//! turn end.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -313,6 +315,7 @@ pub fn register(facts: SessionFacts) {
         .filter(|(pid, _)| *pid == facts.agent_name)
         .map(|(pid, _)| pid.clone());
     let workspace_path = project.as_ref().map(|(_, p)| p.clone()).or(facts.cwd.clone());
+    let now = now_ms();
     let row = Row::new(
         RowFacts {
             session_id: facts.session_id.clone(),
@@ -321,7 +324,18 @@ pub fn register(facts: SessionFacts) {
             workspace_path,
             harness: harness_for(facts.program.as_deref()),
         },
-        now_ms(),
+        now,
+    );
+    // S3: follow the session's transcript (or its screen) for evidence.
+    crate::activity_transcript::track(
+        crate::activity_transcript::TrackFacts {
+            session_id: facts.session_id.clone(),
+            agent_name: row.facts.agent_name.clone(),
+            harness: row.facts.harness.clone(),
+            cwd: facts.cwd.clone(),
+            project_id: row.facts.project_id.clone(),
+        },
+        now,
     );
     store().lock().rows.insert(facts.session_id, Entry { row, pinned_project });
 }
@@ -330,6 +344,7 @@ pub fn register(facts: SessionFacts) {
 /// last heard `start`/`permission`, sends the compat `stop` (RL5). The
 /// lock itself is released by [`release_lock_on_unregister`].
 pub fn unregister(session_id: &str) {
+    crate::activity_transcript::untrack(session_id);
     let removed = store().lock().rows.remove(session_id);
     let Some(entry) = removed else { return };
     let row = entry.row;
@@ -370,6 +385,9 @@ pub fn apply(session_id: &str, ev: Evidence<'_>) {
 
 /// The title observer's word for a session (DA28).
 pub fn apply_title(session_id: &str, signal: TitleSignal) {
+    // A title change means the agent is doing something: a parked
+    // transcript follower reads again (S3).
+    crate::activity_transcript::wake(session_id);
     apply(session_id, Evidence::Title(signal));
 }
 
@@ -377,6 +395,8 @@ pub fn apply_title(session_id: &str, signal: TitleSignal) {
 /// `/cli/terminal/write`). Only a lone Esc or Ctrl-C matters; injected
 /// text (msg, Thread, heartbeat) never comes through here.
 pub fn note_client_input(session_id: &str, input: &[u8]) {
+    // Someone typed: a parked transcript follower reads again (S3).
+    crate::activity_transcript::wake(session_id);
     if let Some(key) = KeyInput::classify(input) {
         apply(session_id, Evidence::Key(key));
     }
@@ -428,7 +448,15 @@ pub fn sweep_liveness() {
 /// One ingest event from the hook plane.
 pub fn apply_ingest(ev: &IngestEvent) {
     match ev {
-        IngestEvent::Envelope { envelope, received_at_ms, .. } => {
+        IngestEvent::Envelope { envelope, received_at_ms, claimed_now, conversation_changed } => {
+            // A18: the owner's conversation id is the transcript to follow;
+            // a claim retries an unresolved one at once.
+            if let Some(conv) = conversation_changed.as_deref() {
+                crate::activity_transcript::note_conversation(&envelope.pane, conv);
+            }
+            if *claimed_now {
+                crate::activity_transcript::note_claim(&envelope.pane);
+            }
             apply_at(&envelope.pane, Evidence::Hook(envelope), *received_at_ms);
         }
         IngestEvent::OwnerReleased { pane, at_ms } => apply_at(pane, Evidence::OwnerReleased, *at_ms),
@@ -437,6 +465,36 @@ pub fn apply_ingest(ev: &IngestEvent) {
                 apply_at(pane, Evidence::LegacyHook(bucket), *received_at_ms);
             }
         }
+    }
+}
+
+/// What the transcript follower needs to pick its cadence (S3).
+#[derive(Debug, Clone, Copy)]
+pub struct FollowView {
+    /// Read fast: the lead is mid-turn or a record is awaited.
+    pub hot: bool,
+    pub display_idle: bool,
+    pub had_hook: bool,
+    pub had_transcript: bool,
+}
+
+/// The follower's view of one row, or `None` when it is gone.
+pub fn follow_view(session_id: &str) -> Option<FollowView> {
+    let st = store().lock();
+    let row = &st.rows.get(session_id)?.row;
+    Some(FollowView {
+        hot: row.transcript_hot(),
+        display_idle: row.display == k2_core::activity::Display::Idle,
+        had_hook: row.had_hook(),
+        had_transcript: row.had_transcript(),
+    })
+}
+
+/// S3: a transcript path resolved (or was lost) for this session (A16:
+/// a Ctrl-C then waits for the interrupt record, not the 500 ms settle).
+pub fn set_transcript_resolvable(session_id: &str, yes: bool) {
+    if let Some(entry) = store().lock().rows.get_mut(session_id) {
+        entry.row.set_transcript_resolvable(yes);
     }
 }
 
@@ -469,6 +527,7 @@ pub fn clear_for_tests() {
     let mut st = store().lock();
     st.rows.clear();
     st.touched.clear();
+    crate::activity_transcript::clear_for_tests();
 }
 
 /// Start the store, once per process: the hook-plane consumer and the
@@ -517,6 +576,7 @@ pub fn spawn() {
         if let Err(e) = timer {
             log_debug!("[activity] could not start the timer thread: {e}");
         }
+        crate::activity_transcript::spawn();
     });
 }
 

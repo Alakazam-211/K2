@@ -640,6 +640,180 @@ fn parse_rfc3339_ms(text: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
+/// A transcript a freshly spawned session may have created
+/// (prd-daemon-activity-and-thread-working-v1 A18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptCandidate {
+    /// The provider's conversation id.
+    pub id: String,
+    pub path: PathBuf,
+    /// When the conversation began (header time, else file birth or
+    /// modification time), unix ms.
+    pub created_ms: i64,
+}
+
+/// Transcripts for `cwd` that began at or after `since_ms`: the files a
+/// tab spawned at `since_ms` with no known conversation id may own
+/// (A18). Claude, Codex and Gemini; any other provider has none.
+///
+/// Bounded on purpose: Codex reads only the `sessions/Y/M/D` day folders
+/// from `since_ms` to now (local and UTC dates), never the whole tree;
+/// Claude reads the cwd's own project folder; Gemini its slug's chats.
+/// The cwd match is exact (a worktree tab adopts only its own files).
+pub fn adoptable_transcripts(provider: &str, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let cwd = cwd.trim_end_matches('/');
+    if cwd.is_empty() {
+        return Vec::new();
+    }
+    let mut out = match provider.trim() {
+        "claude" => adopt_claude(&home, cwd, since_ms),
+        "codex" => adopt_codex(&home, cwd, since_ms),
+        "gemini" => adopt_gemini(&home, cwd, since_ms),
+        _ => Vec::new(),
+    };
+    out.sort_by(|a, b| a.created_ms.cmp(&b.created_ms).then_with(|| a.id.cmp(&b.id)));
+    out
+}
+
+fn file_birth_ms(path: &Path) -> i64 {
+    fs::metadata(path)
+        .ok()
+        .and_then(|m| m.created().or_else(|_| m.modified()).ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn adopt_claude(home: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
+    let dir = home
+        .join(".claude")
+        .join("projects")
+        .join(crate::chat_history::claude_project_hash(cwd));
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+                return None;
+            }
+            let created_ms = file_birth_ms(&path);
+            if created_ms < since_ms {
+                return None;
+            }
+            let id = path.file_stem()?.to_string_lossy().into_owned();
+            Some(AdoptCandidate { id, path, created_ms })
+        })
+        .collect()
+}
+
+/// The `sessions/YYYY/MM/DD` folders a rollout begun since `since_ms`
+/// can live in (Codex names them by local date; UTC covers a host whose
+/// clock settings differ).
+fn codex_day_dirs(root: &Path, since_ms: i64) -> Vec<PathBuf> {
+    use chrono::{Duration, Local, TimeZone, Utc};
+    let now = Utc::now();
+    let Some(since) = Utc.timestamp_millis_opt(since_ms).single() else {
+        return Vec::new();
+    };
+    let mut days: Vec<chrono::NaiveDate> = Vec::new();
+    let mut at = since - Duration::days(1);
+    while at <= now + Duration::days(1) {
+        for d in [at.date_naive(), at.with_timezone(&Local).date_naive()] {
+            if !days.contains(&d) {
+                days.push(d);
+            }
+        }
+        at += Duration::days(1);
+        if days.len() > 64 {
+            break;
+        }
+    }
+    days.into_iter()
+        .map(|d| root.join(d.format("%Y").to_string()).join(d.format("%m").to_string()).join(d.format("%d").to_string()))
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+fn adopt_codex(home: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
+    let root = home.join(".codex").join("sessions");
+    let mut out = Vec::new();
+    for day in codex_day_dirs(&root, since_ms) {
+        let Ok(files) = fs::read_dir(&day) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+                continue;
+            }
+            // Older than the spawn: not this tab's (and not worth a read).
+            if file_mtime_ms(&path) < since_ms {
+                continue;
+            }
+            let Some(header) = first_json(&path) else {
+                continue;
+            };
+            if header.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+                continue;
+            }
+            let Some(payload) = header.get("payload") else {
+                continue;
+            };
+            let header_cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+            if header_cwd.trim_end_matches('/') != cwd {
+                continue;
+            }
+            let Some(id) = payload.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let created_ms = payload
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .and_then(parse_rfc3339_ms)
+                .unwrap_or_else(|| file_birth_ms(&path));
+            if created_ms < since_ms {
+                continue;
+            }
+            out.push(AdoptCandidate { id: id.to_string(), path, created_ms });
+        }
+    }
+    out
+}
+
+fn adopt_gemini(home: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
+    let mut out = Vec::new();
+    for slug in gemini_slugs(home, cwd) {
+        let chats = home.join(".gemini").join("tmp").join(slug).join("chats");
+        let Ok(entries) = fs::read_dir(&chats) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let created_ms = file_birth_ms(&path);
+            if created_ms < since_ms {
+                continue;
+            }
+            let Some(header) = first_json(&path) else {
+                continue;
+            };
+            let Some(id) = header.get("sessionId").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            out.push(AdoptCandidate { id: id.to_string(), path, created_ms });
+        }
+    }
+    out
+}
+
 fn claude_turns(text: &str) -> Turns {
     let mut user = None;
     let mut assistant = None;

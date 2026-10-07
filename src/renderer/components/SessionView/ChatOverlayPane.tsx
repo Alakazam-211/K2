@@ -59,7 +59,8 @@ export function ChatOverlayPane({
   )
 }
 
-/** User and assistant text share Thread's ChatMessage. A tool call is its name, not its input. */
+/** User and assistant text share Thread's ChatMessage. A tool call is its name, not its input.
+ *  Thinking is a collapsed "Thought" stub under the message (TW10). */
 export function ChatTurnList({
   turns,
   harnessLabel,
@@ -79,6 +80,7 @@ export function ChatTurnList({
               isOwner={owner}
               timeLabel={chatTimeLabel(turn.time, nowSec)}
               body={chatTurnBody(turn)}
+              footer={<ThoughtStubs blocks={turn.blocks} />}
             />
           </div>
         )
@@ -105,7 +107,43 @@ export function chatTurnBody(turn: ChatTurn): string {
 function blockLine(block: ChatBlock): string {
   if (block.type === 'text') return block.text
   if (block.type === 'tool_call') return block.name
+  if (block.type === 'thinking') return ''
   return block.content
+}
+
+/** "Thought for 8s" (or "Thought"), with the thinking text folded inside
+ *  when the harness wrote it in the clear. Redacted thinking is the label only. */
+export function thoughtLabel(block: Extract<ChatBlock, { type: 'thinking' }>): string {
+  const ms = typeof block.duration === 'number' ? block.duration : null
+  if (ms === null || ms < 1000) return 'Thought'
+  const secs = Math.round(ms / 1000)
+  if (secs < 60) return `Thought for ${secs}s`
+  return `Thought for ${Math.floor(secs / 60)}m ${secs % 60}s`
+}
+
+function ThoughtStubs({ blocks }: { blocks: ChatBlock[] }): JSX.Element | null {
+  const thoughts = blocks.filter(
+    (block): block is Extract<ChatBlock, { type: 'thinking' }> => block.type === 'thinking',
+  )
+  if (thoughts.length === 0) return null
+  return (
+    <div className="flex flex-col gap-0.5">
+      {thoughts.map((block, i) => {
+        const label = thoughtLabel(block)
+        const text = block.text?.trim()
+        return text ? (
+          <details key={i} data-testid="chat-thought" className="text-[10px] text-[var(--color-text-muted)]">
+            <summary className="cursor-pointer select-none">{label}</summary>
+            <div className="whitespace-pre-wrap pl-3 pt-0.5">{text}</div>
+          </details>
+        ) : (
+          <div key={i} data-testid="chat-thought" className="text-[10px] text-[var(--color-text-muted)]">
+            {label}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 function chatTimeLabel(time: string | null | undefined, nowSec: number): string {

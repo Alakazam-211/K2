@@ -7,9 +7,6 @@
 //! watcher.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -18,6 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use k2_core::chat_continue::locate_continue_transcript;
 use k2_core::chat_overlay::{ChatTurn, TranscriptCursor};
 use k2_core::log_debug;
+use k2_core::transcript_follow::{FollowStart, TranscriptFollow};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::Message;
@@ -26,6 +24,11 @@ use tokio_tungstenite::tungstenite::Message;
 pub const CHAT_TRANSCRIPT_WS_PATH: &str = "/cli/chat/transcript";
 
 const TAIL_POLL: Duration = Duration::from_millis(200);
+
+/// A18: a transcript that isn't there yet is looked for again after this,
+/// doubling to [`RESOLVE_BACKOFF_MAX`].
+const RESOLVE_BACKOFF_MIN: Duration = Duration::from_secs(5);
+const RESOLVE_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
 struct SenderSlot {
     id: u64,
@@ -167,11 +170,14 @@ fn turn_frame(turn: &ChatTurn) -> String {
     .to_string()
 }
 
-struct FileFollow {
-    path: Option<PathBuf>,
-    offset: u64,
-    pending: String,
+/// The Chat view's reader: the shared follower (`FromStart`) plus the
+/// decoder cursor. The file is located once and again only after a miss,
+/// with backoff (A18), never per tick.
+struct ChatFollow {
+    follow: Option<TranscriptFollow>,
     cursor: TranscriptCursor,
+    next_resolve_at: std::time::Instant,
+    backoff: Duration,
 }
 
 struct FollowUpdate {
@@ -180,70 +186,66 @@ struct FollowUpdate {
     all: Vec<ChatTurn>,
 }
 
-impl FileFollow {
+impl ChatFollow {
     fn new() -> Self {
         Self {
-            path: None,
-            offset: 0,
-            pending: String::new(),
+            follow: None,
             cursor: TranscriptCursor::default(),
+            next_resolve_at: std::time::Instant::now(),
+            backoff: Duration::ZERO,
         }
     }
 
     fn poll(&mut self, provider: &str, conversation: &str, project: &str) -> FollowUpdate {
-        let next = locate_continue_transcript(provider, conversation, project);
         let mut reset = false;
-        if next != self.path {
-            self.path = next;
-            self.offset = 0;
-            self.pending.clear();
+        if self.follow.is_none() {
+            let now = std::time::Instant::now();
+            if now < self.next_resolve_at {
+                return self.update(false, Vec::new());
+            }
+            match locate_continue_transcript(provider, conversation, project) {
+                Some(path) => {
+                    self.follow = Some(TranscriptFollow::new(path, FollowStart::FromStart));
+                    self.backoff = Duration::ZERO;
+                }
+                None => {
+                    self.backoff = (self.backoff * 2).clamp(RESOLVE_BACKOFF_MIN, RESOLVE_BACKOFF_MAX);
+                    self.next_resolve_at = now + self.backoff;
+                    return self.update(false, Vec::new());
+                }
+            }
+        }
+        let Some(follow) = self.follow.as_mut() else {
+            return self.update(false, Vec::new());
+        };
+        let poll = follow.poll();
+        if poll.missing {
+            // Gone (moved or deleted): drop what was built, find it again.
+            self.follow = None;
+            self.cursor.clear();
+            self.next_resolve_at = std::time::Instant::now() + RESOLVE_BACKOFF_MIN;
+            return self.update(true, Vec::new());
+        }
+        if poll.reset {
+            // First attach, a shrink, or a rewrite: the cursor starts over
+            // and subscribers get a reset frame (A18).
             self.cursor.clear();
             reset = true;
         }
-        let Some(path) = self.path.clone() else {
-            return FollowUpdate {
-                reset,
-                changed: Vec::new(),
-                all: self.cursor.turns().to_vec(),
-            };
-        };
         let mut changed = Vec::new();
-        if let Some(chunk) = read_new(&path, &mut self.offset) {
-            if chunk.is_empty() && reset {
-                return FollowUpdate {
-                    reset,
-                    changed,
-                    all: self.cursor.turns().to_vec(),
-                };
-            }
-            self.pending.push_str(&chunk);
-            while let Some(idx) = self.pending.find('\n') {
-                let line: String = self.pending.drain(..=idx).collect();
-                changed.extend(self.cursor.push_line(provider, line.trim_end_matches('\n')));
-            }
+        for line in &poll.lines {
+            changed.extend(self.cursor.push_line(provider, line));
         }
+        self.update(reset, changed)
+    }
+
+    fn update(&self, reset: bool, changed: Vec<ChatTurn>) -> FollowUpdate {
         FollowUpdate {
             reset,
             changed,
             all: self.cursor.turns().to_vec(),
         }
     }
-}
-
-fn read_new(path: &Path, offset: &mut u64) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    if len < *offset {
-        *offset = 0;
-    }
-    if len == *offset {
-        return Some(String::new());
-    }
-    file.seek(SeekFrom::Start(*offset)).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    *offset += buf.len() as u64;
-    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn publish(key: &str, update: FollowUpdate) {
@@ -279,13 +281,34 @@ async fn run_tail(
     cancel: std::sync::Arc<AtomicBool>,
     notify: std::sync::Arc<Notify>,
 ) {
+    // Counted by a guard, so a task dropped with its runtime still
+    // un-counts itself.
+    struct Counted;
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            TAIL_TASKS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
     TAIL_TASKS.fetch_add(1, Ordering::SeqCst);
-    let mut follow = FileFollow::new();
+    let _counted = Counted;
+    let mut follow = Some(ChatFollow::new());
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
         }
-        let update = follow.poll(&provider, &conversation, &project);
+        // File I/O never runs on a tokio worker (A18).
+        let Some(mut f) = follow.take() else { break };
+        let (p, c, j) = (provider.clone(), conversation.clone(), project.clone());
+        let joined = tokio::task::spawn_blocking(move || {
+            let update = f.poll(&p, &c, &j);
+            (f, update)
+        })
+        .await;
+        let Ok((f, update)) = joined else {
+            log_debug!("[daemon/chat_overlay_ws] tail poll task failed");
+            break;
+        };
+        follow = Some(f);
         if update.reset || !update.changed.is_empty() {
             publish(&key, update);
         }
@@ -297,7 +320,6 @@ async fn run_tail(
             _ = tokio::time::sleep(TAIL_POLL) => {}
         }
     }
-    TAIL_TASKS.fetch_sub(1, Ordering::SeqCst);
 }
 
 fn project_path_for_agent(agent: &str) -> String {
@@ -413,6 +435,10 @@ mod tests {
     use k2_core::chat_history::claude_project_hash;
     use k2_core::chat_overlay::ChatBlock;
 
+    /// The tail tests count live tail tasks process-wide; run them one at
+    /// a time.
+    static TAIL_TESTS: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     fn prod_source() -> &'static str {
         let src = include_str!("chat_overlay_ws.rs");
         src.split("#[cfg(test)]").next().expect("prod source")
@@ -458,6 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn tail_emits_appended_bytes_and_stops_when_the_last_subscriber_leaves() {
+        let _serial = TAIL_TESTS.lock();
         let home = crate::test_support::TempHome::new();
         let project = home.path().join("work");
         std::fs::create_dir_all(&project).expect("project");
@@ -522,6 +549,54 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert_eq!(active_chat_tail_count(), 0);
         assert_eq!(chat_tail_tasks(), 0);
+    }
+
+    /// A18: a shrink (rewrite) clears the cursor and sends a reset frame;
+    /// the rewritten file is then read from its start.
+    #[tokio::test]
+    async fn a_shrunk_transcript_resets_subscribers() {
+        let _serial = TAIL_TESTS.lock();
+        let home = crate::test_support::TempHome::new();
+        let project = home.path().join("work");
+        std::fs::create_dir_all(&project).expect("project");
+        let project_s = project.to_string_lossy().into_owned();
+        let dir = home.path().join(".claude").join("projects").join(claude_project_hash(&project_s));
+        std::fs::create_dir_all(&dir).expect("claude dir");
+        let sid = "sess-tail-shrink";
+        let path = dir.join(format!("{sid}.jsonl"));
+        std::fs::write(
+            &path,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":\"A long first synthetic prompt\"}}\n{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{\"content\":\"Second\"}}\n",
+        )
+        .expect("seed");
+        let mut sub = subscribe_chat_tail("claude", sid, &project_s).expect("subscribe");
+        assert_eq!(next_turn(&mut sub.rx).await.id, "u1");
+        assert_eq!(next_turn(&mut sub.rx).await.id, "u2");
+        std::fs::write(&path, "{\"type\":\"user\",\"uuid\":\"r1\",\"message\":{\"content\":\"Rewritten\"}}\n")
+            .expect("shrink");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut saw_reset = false;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(!left.is_zero(), "no reset + rewritten turn arrived");
+            let msg = tokio::time::timeout(left, sub.rx.recv()).await.expect("frame wait").expect("open");
+            let v: serde_json::Value = serde_json::from_str(&msg).expect("json");
+            if v["kind"] == "reset" {
+                saw_reset = true;
+                continue;
+            }
+            if v["kind"] == "turn" {
+                assert!(saw_reset, "a turn from the rewritten file before the reset: {v}");
+                assert_eq!(v["turn"]["id"], "r1");
+                break;
+            }
+        }
+        drop(sub);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while chat_tail_tasks() != 0 {
+            assert!(tokio::time::Instant::now() < deadline, "tail still running after the last subscriber left");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     async fn next_turn(rx: &mut mpsc::UnboundedReceiver<String>) -> ChatTurn {

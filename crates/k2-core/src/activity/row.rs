@@ -24,6 +24,10 @@ pub const KEY_SETTLE_MS: i64 = 500;
 /// A16: a keystroke cancel must be confirmed within this window.
 pub const KEY_CONFIRM_WINDOW_MS: i64 = 3_000;
 
+/// DA27: Claude's transcript `end_turn` ends the lead only after this long
+/// with no hook (the Stop hook normally lands first).
+pub const TRANSCRIPT_END_GRACE_MS: i64 = 5_000;
+
 /// DA24: the roster never grows past this.
 pub const ROSTER_CAP: usize = 64;
 
@@ -147,6 +151,8 @@ pub enum EvidenceSource {
     Hook,
     Transcript,
     Title,
+    /// The interrupt-marker grid scan (A13).
+    Screen,
     Process,
 }
 
@@ -156,6 +162,7 @@ impl EvidenceSource {
             Self::Hook => "hook",
             Self::Transcript => "transcript",
             Self::Title => "title",
+            Self::Screen => "screen",
             Self::Process => "process",
         }
     }
@@ -324,6 +331,12 @@ pub struct Row {
     pub(crate) had_transcript: bool,
     /// S3 sets this once a transcript path resolves (A16 fallback rule).
     pub(crate) transcript_resolvable: bool,
+    /// The last hook evidence (DA27: a transcript `end_turn` older than
+    /// this is stale).
+    pub(crate) last_hook_at: Option<i64>,
+    /// A Claude transcript `end_turn` waiting out its 5 s grace:
+    /// (due, armed at). A hook after `armed at` cancels it.
+    pub(crate) pending_transcript_end: Option<(i64, i64)>,
     /// DA30: false until the first evidence after registration.
     pub confirmed: bool,
     /// The lead was confirmed working in this registration (DA32).
@@ -376,6 +389,8 @@ impl Row {
             had_hook: false,
             had_transcript: false,
             transcript_resolvable: false,
+            last_hook_at: None,
+            pending_transcript_end: None,
             confirmed: false,
             confirmed_working: false,
             end_reason: None,
@@ -403,6 +418,8 @@ impl Row {
             Evidence::Key(key) => ends::on_key(self, key, now),
             Evidence::TranscriptInterrupt => ends::transcript_interrupt(self, now),
             Evidence::TranscriptTurnEnd => ends::transcript_turn_end(self, now),
+            Evidence::Transcript(signal) => ends::apply_transcript(self, signal, now),
+            Evidence::Screen(present) => ends::apply_screen(self, present, now),
             Evidence::OwnerReleased => ends::process_exit(self, Reason::AgentExited, now),
             Evidence::PtyExited => ends::process_exit(self, Reason::PtyExited, now),
         }
@@ -434,6 +451,25 @@ impl Row {
     /// for the transcript's interrupt record instead of the 500 ms settle.
     pub fn set_transcript_resolvable(&mut self, yes: bool) {
         self.transcript_resolvable = yes;
+    }
+
+    /// A hook has reached this row since registration (hooks work).
+    pub fn had_hook(&self) -> bool {
+        self.had_hook
+    }
+
+    /// Transcript evidence has reached this row since registration.
+    pub fn had_transcript(&self) -> bool {
+        self.had_transcript
+    }
+
+    /// S3: the transcript follower should read this session fast (200 ms):
+    /// the lead is mid-turn, a keystroke cancel waits for its record, or a
+    /// transcript `end_turn` waits out its grace.
+    pub fn transcript_hot(&self) -> bool {
+        self.lead.state != LeadState::Idle
+            || self.pending_cancel.is_some()
+            || self.pending_transcript_end.is_some()
     }
 
     /// The last legacy lifecycle word this row emitted (RL5), so a removal
@@ -505,6 +541,9 @@ impl Row {
 
     /// Evidence arrived (DA29: only receipt of evidence moves `evidenceAt`).
     pub(crate) fn note_evidence(&mut self, source: EvidenceSource, now: i64) {
+        if source == EvidenceSource::Hook {
+            self.last_hook_at = Some(now);
+        }
         self.evidence_at = Some(now);
         self.evidence_source = Some(source);
         self.evidence_seq += 1;

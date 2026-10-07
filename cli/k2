@@ -2580,13 +2580,14 @@ sessions = data.get('sessions') or {}
 if sessions:
     print()
     print('Live sessions:')
-    print(f\"  {'Session':<38} {'Owner':<16} {'Accepted':>8} {'Foreign':>8} {'Unknown':>8} {'Parse':>6}  Last\")
+    print(f\"  {'Session':<38} {'Owner':<16} {'Evidence':<10} {'Accepted':>8} {'Foreign':>8} {'Unknown':>8} {'Parse':>6}  Last\")
     for sid, e in sessions.items():
         o = e.get('owner') or {}
         proc = o.get('proc') or {}
         who = f\"pid {proc['pid']}\" if proc.get('pid') else (o.get('via') or 'none')
         c = e.get('counters') or {}
-        print(f\"  {sid:<38} {who:<16} {c.get('accepted',0):>8} {c.get('foreign',0):>8} {c.get('unknownPane',0):>8} {c.get('parseError',0):>6}  {ago(e.get('lastEnvelopeMs'))}\")
+        ev = e.get('evidence') or '-'
+        print(f\"  {sid:<38} {who:<16} {ev:<10} {c.get('accepted',0):>8} {c.get('foreign',0):>8} {c.get('unknownPane',0):>8} {c.get('parseError',0):>6}  {ago(e.get('lastEnvelopeMs'))}\")
 totals = data.get('totals')
 if totals:
     print(f\"Totals: accepted {totals.get('accepted',0)}, foreign {totals.get('foreign',0)}, unknown pane {totals.get('unknownPane',0)}, parse errors {totals.get('parseError',0)}\")

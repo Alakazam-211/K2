@@ -1,0 +1,5 @@
+{"type":"user","content":[{"type":"text","text":"[from sam] [thread:ws/thread-2] Synthetic request."}],"prompt_index":1}
+{"type":"assistant","content":"","tool_calls":[{"id":"call-g1","name":"read_file","arguments":"{\"target_file\":\"/home/u/ws/src/main.rs\"}"},{"id":"call-g2","name":"run_terminal_cmd","arguments":"{\"command\":\"ls -la\"}"}],"model_id":"grok-test"}
+{"type":"tool_result","tool_call_id":"call-g1","content":"synthetic body"}
+{"type":"tool_result","tool_call_id":"call-g2","content":"synthetic listing"}
+{"type":"assistant","content":"Synthetic answer.","tool_calls":[],"model_id":"grok-test"}

@@ -1,0 +1,6 @@
+{"type":"user","isSidechain":false,"uuid":"u-0201","timestamp":"2026-09-21T14:13:20.000Z","message":{"role":"user","content":"Synthetic prompt."}}
+{"type":"assistant","isSidechain":false,"uuid":"a-0201","timestamp":"2026-09-21T14:13:21.000Z","message":{"id":"msg-0201","role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_0201","name":"Bash","input":{"command":"sleep 100"}}]}}
+{"type":"user","isSidechain":false,"uuid":"u-0202","timestamp":"2026-09-21T14:13:23.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_0201","content":"Interrupted by user","is_error":true}]}}
+{"type":"user","isSidechain":false,"uuid":"u-0203","timestamp":"2026-09-21T14:13:23.100Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+{"type":"user","isSidechain":false,"uuid":"u-0204","timestamp":"2026-09-21T14:13:30.000Z","message":{"role":"user","content":"Synthetic second prompt."}}
+{"type":"user","isSidechain":false,"uuid":"u-0205","timestamp":"2026-09-21T14:13:31.000Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}

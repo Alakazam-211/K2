@@ -340,8 +340,8 @@ pub fn status_json() -> serde_json::Value {
                     "cliVersion": e.cli_version,
                     "source": e.source,
                     // The activity store's last evidence source for this
-                    // session (`hook` | `title` | `process`; S3 adds
-                    // `transcript`).
+                    // session (`hook` | `transcript` | `title` | `screen` |
+                    // `process`).
                     "evidence": crate::activity_store::row_json(pane)
                         .and_then(|r| r["evidenceSource"].as_str().map(str::to_string))
                         .or_else(|| (e.counters.accepted > 0).then(|| "hook".to_string())),
@@ -349,6 +349,26 @@ pub fn status_json() -> serde_json::Value {
             )
         })
         .collect();
+    // DA27 (S3): a live session that never sent a hook (Codex, Grok, a
+    // Claude whose hooks are broken) is listed by its evidence, so
+    // `evidence: transcript` shows where the hook column is empty.
+    let mut sessions = sessions;
+    for row in crate::activity_store::rows_json() {
+        let Some(sid) = row["sessionId"].as_str() else { continue };
+        let Some(evidence) = row["evidenceSource"].as_str() else { continue };
+        if sessions.contains_key(sid) {
+            continue;
+        }
+        sessions.insert(
+            sid.to_string(),
+            serde_json::json!({
+                "owner": null,
+                "conversationId": crate::activity_transcript::conversation_of(sid).map(|(c, _)| c),
+                "counters": null,
+                "evidence": evidence,
+            }),
+        );
+    }
     serde_json::json!({
         "ownerCheck": OwnerCheckMode::for_this_platform().as_str(),
         "totals": st.totals,

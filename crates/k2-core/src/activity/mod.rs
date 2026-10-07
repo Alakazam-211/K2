@@ -14,15 +14,18 @@
 //! - [`ends`]: the explicit ends (§5.4): inventory reconcile, the owed
 //!   lease, interrupt inference, process exits.
 //! - [`lock`]: when the row may touch the session lock (DA32).
+//! - [`transcript`]: transcript records → evidence (S3: DA27, A16, A19).
+//! - [`screen`]: the interrupt-marker scan for titleless CLIs (S3: A13).
 //!
 //! Silence is never "done" (DA3): no timer moves a row to `idle`. Time
 //! only decays a row to `unverifiable` ([`row::STALE_AFTER_MS`]) or ends
 //! a lease that was taken on evidence (the owed notification, the
 //! Ctrl-C settle).
 //!
-//! Seams for later slices: [`Evidence::TranscriptInterrupt`] and
-//! [`Evidence::TranscriptTurnEnd`] (S3 feeds them from the transcript
-//! follower), [`Row::set_transcript_resolvable`] (S3), [`Change`] and
+//! Seams for later slices: [`Evidence::Transcript`] (S3 feeds it from the
+//! transcript follower; [`Evidence::TranscriptInterrupt`] and
+//! [`Evidence::TranscriptTurnEnd`] are the same ends without a record),
+//! [`Row::set_transcript_resolvable`] (S3), [`Change`] and
 //! [`Row::to_json`] (S4's `activity_changed` and snapshot), and
 //! [`Change::turn_ended`] (S6's Thread turn tracker).
 
@@ -31,12 +34,15 @@ pub mod ends;
 pub mod fold;
 pub mod lock;
 pub mod row;
+pub mod screen;
+pub mod transcript;
 
 pub use ends::KeyInput;
 pub use row::{
     Change, ChildKind, Display, EvidenceSource, LeadState, Outcome, Reason, Row, RowFacts,
     TitleSignal, TurnEnded,
 };
+pub use transcript::{TranscriptReader, TranscriptSignal};
 
 use crate::agent_hooks::envelope::HookEnvelope;
 
@@ -60,6 +66,15 @@ pub enum Evidence<'a> {
     /// S3 seam: a transcript turn end (Claude `end_turn` with no hook for
     /// 5 s, Codex `task_complete`, Grok final assistant record).
     TranscriptTurnEnd,
+    /// One record from the session's transcript (DA27). Drives the lead
+    /// both ways only while the row has had no hook since registration;
+    /// with hooks it is evidence, a cancel, or Claude's 5 s `end_turn`
+    /// cross-check.
+    Transcript(&'a TranscriptSignal),
+    /// The screen marker scan (A13): `true` the harness's interrupt
+    /// marker is on screen, `false` it has been gone 3 s. Counts only
+    /// while the row has had no hook and no transcript evidence.
+    Screen(bool),
     /// The pane's owner process exited or its pid was reused (DA14-6).
     OwnerReleased,
     /// The PTY child exited (`ChildExit`, or the 10 s liveness sweep).

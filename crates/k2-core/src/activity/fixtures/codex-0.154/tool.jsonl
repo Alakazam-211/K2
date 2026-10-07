@@ -1,0 +1,9 @@
+{"timestamp":"2026-09-21T14:13:20.000Z","type":"session_meta","payload":{"id":"conv-codex-0002","timestamp":"2026-09-21T14:13:20.000Z","cwd":"/home/u/ws","originator":"codex_cli_rs","cli_version":"0.154.0"}}
+{"timestamp":"2026-09-21T14:13:21.000Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-21T14:13:21.100Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[from sam] [thread:ws/thread-1] Synthetic request."}]}}
+{"timestamp":"2026-09-21T14:13:21.200Z","type":"event_msg","payload":{"type":"user_message","message":"[from sam] [thread:ws/thread-1] Synthetic request."}}
+{"timestamp":"2026-09-21T14:13:22.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cargo test\",\"workdir\":\"/home/u/ws\"}","call_id":"call_0001"}}
+{"timestamp":"2026-09-21T14:13:25.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_0001","output":"synthetic output"}}
+{"timestamp":"2026-09-21T14:13:26.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Update File: src/lib.rs\n-a\n+b\n*** End Patch","call_id":"call_0002"}}
+{"timestamp":"2026-09-21T14:13:26.500Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_0002","output":"Done"}}
+{"timestamp":"2026-09-21T14:13:27.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Synthetic answer."}}

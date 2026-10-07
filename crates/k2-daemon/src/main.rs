@@ -159,6 +159,8 @@ mod hook_ingest;
 mod hook_install;
 // S2: the per-session activity store (rows, ends, decay, status lock).
 mod activity_store;
+// S3: transcript + screen evidence for the store.
+mod activity_transcript;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;

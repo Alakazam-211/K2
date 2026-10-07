@@ -1,0 +1,5 @@
+{"type":"system","content":"Synthetic system prompt."}
+{"type":"user","content":[{"type":"text","text":"Synthetic prompt."}],"prompt_index":0}
+{"type":"user","synthetic_reason":"injected_context","content":"Synthetic context."}
+{"type":"reasoning","id":"r-0001","summary":[{"type":"summary_text","text":"Synthetic reasoning summary."}],"encrypted_content":"c3ludGhldGlj","status":"completed"}
+{"type":"assistant","content":"Synthetic answer.","model_id":"grok-test"}

@@ -34,6 +34,19 @@ pub enum ChatBlock {
         id: String,
         content: String,
     },
+    /// A thinking / reasoning record (TW10). `text` is the thinking or
+    /// its summary when the harness wrote one; `redacted` when it wrote
+    /// only a signature or encrypted content (never read). `duration` is
+    /// milliseconds since the record before it, when both carry a time.
+    /// The Chat view shows a collapsed "Thought" stub. Thread never
+    /// carries this.
+    Thinking {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        redacted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<u64>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -44,6 +57,8 @@ pub struct TranscriptCursor {
     /// Codex event_msg text already shown via response_item (or earlier).
     codex_text: HashSet<(String, String)>,
     codex_calls: HashSet<String>,
+    /// The previous timestamped record (unix ms), for thinking durations.
+    last_time_ms: Option<i64>,
 }
 
 impl TranscriptCursor {
@@ -88,6 +103,7 @@ impl TranscriptCursor {
         let Ok(parsed) = serde_json::from_str::<Value>(line) else {
             return None;
         };
+        let since_last = self.stamp(&parsed);
         if flag_true(&parsed, "isMeta") || flag_true(&parsed, "isCompactSummary") {
             return None;
         }
@@ -102,10 +118,11 @@ impl TranscriptCursor {
         let content = message
             .pointer("/content")
             .or_else(|| parsed.get("content"));
-        let blocks = claude_blocks(content);
+        let mut blocks = claude_blocks(content);
         if blocks.is_empty() {
             return None;
         }
+        set_thinking_duration(&mut blocks, since_last);
         let id = if kind == "assistant" {
             message
                 .get("id")
@@ -136,6 +153,7 @@ impl TranscriptCursor {
         let Ok(parsed) = serde_json::from_str::<Value>(line) else {
             return None;
         };
+        let since_last = self.stamp(&parsed);
         let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let time = parsed
             .get("timestamp")
@@ -144,6 +162,21 @@ impl TranscriptCursor {
         match kind {
             "response_item" => {
                 let payload = parsed.get("payload")?;
+                if payload.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                    // TW10: the summary when present; `encrypted_content`
+                    // is never read.
+                    let id = payload
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("codex-reasoning:{line_no}"));
+                    return self.upsert(ChatTurn {
+                        id,
+                        role: "assistant".into(),
+                        time,
+                        blocks: vec![thinking_block(summary_text(payload.get("summary")), since_last)],
+                    });
+                }
                 self.codex_response_item(line_no, payload, time)
             }
             "event_msg" => {
@@ -429,6 +462,19 @@ impl TranscriptCursor {
                     blocks,
                 })
             }
+            "reasoning" => {
+                let id = parsed
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| format!("grok-reasoning:{id}"))
+                    .unwrap_or_else(|| format!("grok-reasoning:{line_no}"));
+                self.upsert(ChatTurn {
+                    id,
+                    role: "assistant".into(),
+                    time,
+                    blocks: vec![thinking_block(summary_text(parsed.get("summary")), None)],
+                })
+            }
             "tool_result" => {
                 let id = parsed
                     .get("tool_call_id")
@@ -499,6 +545,21 @@ impl TranscriptCursor {
             time,
             blocks,
         })
+    }
+
+    /// Milliseconds since the previous timestamped record, and remember
+    /// this one's time.
+    fn stamp(&mut self, parsed: &Value) -> Option<u64> {
+        let at = parsed
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|d| d.timestamp_millis());
+        let since = at.zip(self.last_time_ms).map(|(a, b)| (a - b).max(0) as u64);
+        if at.is_some() {
+            self.last_time_ms = at;
+        }
+        since
     }
 
     fn upsert(&mut self, turn: ChatTurn) -> Option<ChatTurn> {
@@ -579,6 +640,16 @@ fn claude_blocks(content: Option<&Value>) -> Vec<ChatBlock> {
             blocks.push(ChatBlock::ToolCall { id, name, input });
             continue;
         }
+        if kind == "thinking" {
+            // TW10: a signature-only block (no text) is redacted.
+            let text = part.get("thinking").and_then(|v| v.as_str()).map(str::trim).filter(|t| !t.is_empty());
+            blocks.push(thinking_block(text.map(str::to_string), None));
+            continue;
+        }
+        if kind == "redacted_thinking" {
+            blocks.push(thinking_block(None, None));
+            continue;
+        }
         if kind == "tool_result" {
             let id = part
                 .get("tool_use_id")
@@ -603,6 +674,34 @@ fn claude_blocks(content: Option<&Value>) -> Vec<ChatBlock> {
         }
     }
     blocks
+}
+
+fn thinking_block(text: Option<String>, duration: Option<u64>) -> ChatBlock {
+    ChatBlock::Thinking { redacted: text.is_none(), text, duration }
+}
+
+fn set_thinking_duration(blocks: &mut [ChatBlock], since_last: Option<u64>) {
+    for block in blocks {
+        if let ChatBlock::Thinking { duration, .. } = block {
+            *duration = since_last;
+        }
+    }
+}
+
+/// A reasoning `summary`: a string, or parts with `text`. `None` when empty.
+fn summary_text(summary: Option<&Value>) -> Option<String> {
+    let text = match summary? {
+        Value::String(s) => s.trim().to_string(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p.as_str().or_else(|| p.get("text").and_then(|v| v.as_str())))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        _ => String::new(),
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 fn text_blocks(content: Option<&Value>) -> Vec<ChatBlock> {
@@ -701,6 +800,10 @@ fn same_block(a: &ChatBlock, b: &ChatBlock) -> bool {
         (ChatBlock::ToolResult { id: left, .. }, ChatBlock::ToolResult { id: right, .. }) => {
             left == right
         }
+        (
+            ChatBlock::Thinking { text: left, redacted: lr, .. },
+            ChatBlock::Thinking { text: right, redacted: rr, .. },
+        ) => left == right && lr == rr,
         _ => false,
     }
 }
@@ -924,6 +1027,14 @@ mod tests {
         assert!(!dumped.contains("SYNTHETIC_GROK"), "{dumped}");
         assert!(!dumped.contains("FROM_UPDATES_LEDGER"), "{dumped}");
         assert!(!dumped.contains("SYSTEM_PROMPT"), "{dumped}");
+        // TW10: Grok reasoning is a Thinking block with its summary.
+        assert!(
+            turns.iter().any(|t| t.blocks.iter().any(|b| matches!(
+                b,
+                ChatBlock::Thinking { text: Some(text), redacted: false, duration: None } if text == "hidden"
+            ))),
+            "{dumped}"
+        );
         let updates = fs::read_to_string(dir.join("updates.jsonl")).expect("updates");
         let from_ledger = parse_chat_transcript("grok", &updates);
         assert!(from_ledger.is_empty(), "{from_ledger:?}");
@@ -996,6 +1107,71 @@ mod tests {
         assert_eq!(text_of(&turns[1]), "Hello gem");
         let dumped = serde_json::to_string(&turns).expect("json");
         assert!(!dumped.contains("PREFIX_ONLY"), "{dumped}");
+    }
+
+    /// T-S3e (TW10): thinking is a stub, never dropped. Claude
+    /// signature-only and `redacted_thinking` → redacted; Codex encrypted
+    /// reasoning with an empty summary → redacted, with a summary → text;
+    /// Grok's summary → text. Durations come from record times.
+    #[test]
+    fn thinking_and_reasoning_become_thinking_blocks() {
+        let claude = concat!(
+            r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:08Z","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"c2ln"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:00:09Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Done"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a3","timestamp":"2026-01-01T00:00:12Z","message":{"id":"m2","role":"assistant","content":[{"type":"redacted_thinking","data":"ZW5j"},{"type":"thinking","thinking":"Plan the change."}]}}"#,
+            "\n",
+        );
+        let turns = parse_chat_transcript("claude", claude);
+        let m1 = turns.iter().find(|t| t.id == "m1").expect("m1");
+        assert_eq!(
+            m1.blocks,
+            vec![
+                ChatBlock::Thinking { text: None, redacted: true, duration: Some(8_000) },
+                ChatBlock::Text { text: "Done".into() },
+            ]
+        );
+        let m2 = turns.iter().find(|t| t.id == "m2").expect("m2");
+        assert_eq!(
+            m2.blocks,
+            vec![
+                ChatBlock::Thinking { text: None, redacted: true, duration: Some(3_000) },
+                ChatBlock::Thinking { text: Some("Plan the change.".into()), redacted: false, duration: Some(3_000) },
+            ]
+        );
+
+        let codex = concat!(
+            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"response_item","payload":{"type":"message","id":"mu","role":"user","content":[{"type":"input_text","text":"Go"}]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-01-01T00:00:05Z","type":"response_item","payload":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"ENCRYPTED_NEVER_READ"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-01-01T00:00:06Z","type":"response_item","payload":{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"Check the tests."}],"encrypted_content":"ENCRYPTED_NEVER_READ"}}"#,
+            "\n",
+        );
+        let turns = parse_chat_transcript("codex", codex);
+        let rs1 = turns.iter().find(|t| t.id == "rs_1").expect("rs_1");
+        assert_eq!(rs1.role, "assistant");
+        assert_eq!(rs1.blocks, vec![ChatBlock::Thinking { text: None, redacted: true, duration: Some(5_000) }]);
+        let rs2 = turns.iter().find(|t| t.id == "rs_2").expect("rs_2");
+        assert_eq!(
+            rs2.blocks,
+            vec![ChatBlock::Thinking { text: Some("Check the tests.".into()), redacted: false, duration: Some(1_000) }]
+        );
+        let dumped = serde_json::to_string(&turns).expect("json");
+        assert!(!dumped.contains("ENCRYPTED_NEVER_READ"), "{dumped}");
+
+        let grok = "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Look first.\"}]}\n{\"type\":\"reasoning\",\"summary\":[],\"encrypted_content\":\"x\"}\n";
+        let turns = parse_chat_transcript("grok", grok);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks, vec![ChatBlock::Thinking { text: Some("Look first.".into()), redacted: false, duration: None }]);
+        assert_eq!(turns[1].blocks, vec![ChatBlock::Thinking { text: None, redacted: true, duration: None }]);
+
+        // Wire shape: `type: thinking`, absent optionals omitted.
+        let wire = serde_json::to_value(&turns[1].blocks[0]).expect("wire");
+        assert_eq!(wire, serde_json::json!({"type": "thinking", "redacted": true}));
     }
 
     #[test]

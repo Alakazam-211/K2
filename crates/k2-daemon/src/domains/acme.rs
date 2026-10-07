@@ -165,6 +165,63 @@ pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
     issue_with_challenge(hostname, &binding, &name, kind)
 }
 
+/// CAL44: a certificate for exactly ONE extra mail-family name
+/// (autoconfig / autodiscover / mta-sts / ua-auto-config under a hosted
+/// apex), through DNS-01 on a K2-hosted zone only. The name need not be
+/// attached in `k2 domain`; the apex's binding supplies the zone.
+///
+/// Writes the PEMs to the box store (`~/.k2/certs/<name>/`) and NEVER
+/// plants: the caller adds it to Stalwart as a non-default certificate.
+/// Never Stalwart's ACME, never a SAN on the mail cert, never HTTP-01 /
+/// TLS-ALPN (the box's :443 is Stalwart's or Caddy's).
+pub fn issue_extra_name(hostname: &str, binding: &DomainBinding) -> Result<InstalledPem, String> {
+    check_extra_name_issuable(hostname, binding)?;
+    let kind = select_challenge(binding, hostname)?;
+    if kind != ChallengeKind::Dns01 {
+        return Err(format!(
+            "{hostname}: per-name certificates use DNS-01 only (got {kind:?})"
+        ));
+    }
+    let pem = if fake_enabled() {
+        fake_issue(hostname, binding, kind)?
+    } else {
+        live_issue(hostname, binding, kind)?
+    };
+    store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
+    Ok(pem)
+}
+
+/// The refusals [`issue_extra_name`] makes before any network call.
+pub(crate) fn check_extra_name_issuable(
+    hostname: &str,
+    binding: &DomainBinding,
+) -> Result<(), String> {
+    reject_k2_dev(hostname)?;
+    if hostname.eq_ignore_ascii_case(&binding.apex) || !hostname_under_apex(hostname, &binding.apex)
+    {
+        return Err(format!(
+            "{hostname} is not a name under the apex {} — per-name certificates cover \
+             one sub-name each, never the apex",
+            binding.apex
+        ));
+    }
+    if !binding.dns_write {
+        return Err(format!(
+            "zone {} is not K2-hosted (not attached with DNS write) — K2 issues per-name \
+             certificates through DNS-01 on ns1/ns2.k2.dev only",
+            binding.apex
+        ));
+    }
+    if binding.is_pending_ns() {
+        return Err(format!(
+            "zone {} is not delegated to ns1/ns2.k2.dev yet (pending_ns) — a DNS-01 \
+             record planted there is not visible to the CA",
+            binding.apex
+        ));
+    }
+    Ok(())
+}
+
 fn reusable_inventory(hostname: &str) -> Option<InstalledPem> {
     let installed = store::load(hostname)?;
     if crate::domains::status::is_reusable_lets_encrypt(hostname, &installed.chain_pem) {
@@ -935,6 +992,45 @@ mod tests {
             nameservers: Vec::new(),
             auto_created: false,
         }
+    }
+
+    /// CAL44: the per-name issuer refuses (before any network call) a
+    /// non-K2-hosted zone, a zone still pending NS, the apex itself, a
+    /// name outside the apex, and k2.dev names.
+    #[test]
+    fn extra_name_issuer_refuses_before_any_network() {
+        let k2_hosted = DomainBinding {
+            apex: "example.com".into(),
+            zone_id: Some("z1".into()),
+            dns_write: true,
+            created_at: 0,
+            status: Some("active".into()),
+            nameservers: Vec::new(),
+            auto_created: false,
+        };
+        check_extra_name_issuable("autoconfig.example.com", &k2_hosted).expect("ok");
+        let byo = DomainBinding {
+            apex: "example.com".into(),
+            ..byo_binding()
+        };
+        let err = issue_extra_name("autoconfig.example.com", &byo).expect_err("BYO zone");
+        assert!(err.contains("not K2-hosted"), "{err}");
+        let pending = DomainBinding {
+            status: Some(k2_core::domains::ZONE_STATUS_PENDING_NS.into()),
+            ..k2_hosted.clone()
+        };
+        let err = issue_extra_name("mta-sts.example.com", &pending).expect_err("pending NS");
+        assert!(err.contains("pending_ns"), "{err}");
+        let err = issue_extra_name("example.com", &k2_hosted).expect_err("apex");
+        assert!(err.contains("never the apex"), "{err}");
+        let err = issue_extra_name("autoconfig.example.org", &k2_hosted).expect_err("outside");
+        assert!(err.contains("not a name under"), "{err}");
+        let k2dev = DomainBinding {
+            apex: "rosson.k2.dev".into(),
+            ..k2_hosted
+        };
+        let err = issue_extra_name("autoconfig.rosson.k2.dev", &k2dev).expect_err("k2.dev");
+        assert!(err.contains("cert.k2.dev"), "{err}");
     }
 
     #[test]

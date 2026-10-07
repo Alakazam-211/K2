@@ -111,6 +111,7 @@ pub mod alias;
 pub mod app_password;
 pub mod bans;
 pub mod catchall;
+pub mod cert_names;
 pub mod autoconfig;
 pub mod config;
 pub mod dav;

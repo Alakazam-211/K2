@@ -413,6 +413,7 @@ pub const ROUTES: &[Route] = &[
     both("/cli/mail/bans/migrate", Admin),
     post("/cli/mail/bans/migrate/restore", Admin),
     both("/cli/mail/catchall", Admin),
+    both("/cli/mail/cert/names", Admin),
     post("/cli/mail/cert/renew", Admin),
     get("/cli/mail/config", Member),
     post("/cli/mail/config/set", Admin),

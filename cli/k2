@@ -13930,6 +13930,33 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "hostmail cert names",
+      "usage": "k2 hostmail cert names [list] [--json]",
+      "description": "Per extra mail name (autoconfig, autodiscover, mta-sts, ua-auto-config under each hosted domain): does it point here, and the state of its own certificate. GET /cli/mail/cert/names.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail cert names issue",
+      "usage": "k2 hostmail cert names issue [--name <host>] [--json]",
+      "description": "Order one non-default certificate per extra name that points here (K2 DNS-01 issuer, K2-hosted zones only), add it to Stalwart without changing the default certificate, reload Stalwart's certificates (restart only if the reload fails). POST /cli/mail/cert/names {action: issue}. Exit 1 when a name failed.",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "<host>", "description": "Only this extra name."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail cert names renew",
+      "usage": "k2 hostmail cert names renew [--name <host>] [--json]",
+      "description": "Same run as issue: re-orders a name inside 30 days of expiry, re-checks DNS first and skips a name that no longer points here (its old certificate is left to expire). POST /cli/mail/cert/names {action: renew}.",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "<host>", "description": "Only this extra name."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "hostmail rotate-admin",
       "usage": "k2 hostmail rotate-admin [--json]",
       "description": "Rotate leftover bootstrap recovery principal (admin) and the provisioned admin password. POST /cli/mail/server/rotate-admin. Does not wipe the store. disable is not a wipe; enable no-op is not rotate.",
@@ -24935,6 +24962,7 @@ _mail_py() {
     M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
     M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
     M_DAV_ACTION="${M_DAV_ACTION:-}" M_FILES="${M_FILES:-}" \
+    M_CERT_ACTION="${M_CERT_ACTION:-}" \
     M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
@@ -25618,6 +25646,15 @@ elif verb == "status":
             extra = " self-signed" if cert.get("selfSigned") else ""
             exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
             print("cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp))
+        extra_names = d.get("extraNames")
+        if isinstance(extra_names, list) and extra_names:
+            # CAL44: last DNS answer + per-name cert (k2 hostmail cert names).
+            here = [e for e in extra_names if e.get("pointsHere") is True]
+            bad = [e.get("name") or "?" for e in here
+                   if (e.get("cert") or {}).get("state") != "issued"]
+            print("names    : %d of %d extra names point here%s" % (
+                len(here), len(extra_names),
+                ("; no own cert: " + ", ".join(bad)) if bad else ""))
         cal = d.get("calendar")
         if isinstance(cal, dict):
             # Calendars S2: owner DAV policy + whether clients can reach it.
@@ -26340,6 +26377,52 @@ elif verb == "cert_renew":
         print(dumps(d))
     else:
         print(d.get("hint") or "ACME renewal queued for %s" % (d.get("hostname") or "mail hostname"))
+
+elif verb == "cert_names":
+    # CAL44: per-name certificates for the extra mail-family names.
+    action = env("M_CERT_ACTION") or "list"
+    if action == "list":
+        d = call("GET", "/cli/mail/cert/names", timeout=120)
+    else:
+        body = {"action": action}
+        if env("M_NAME"):
+            body["name"] = env("M_NAME")
+        # Each new name is one DNS-01 order (~2 min with the NS wait).
+        d = call("POST", "/cli/mail/cert/names", body=body, timeout=1800)
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("names") or []
+        if not rows:
+            print("no extra names (no hosted domains)")
+        def _yn(v):
+            return "yes" if v is True else ("no" if v is False else "?")
+        for r in rows:
+            if action == "list":
+                cert = r.get("cert") or {}
+                exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
+                print("%-34s here %-3s  cert %s%s  (%s)" % (
+                    r.get("name") or "?", _yn(r.get("pointsHere")),
+                    cert.get("state") or "?", exp, r.get("issuer") or "?"))
+                if r.get("dns") and r.get("pointsHere") is not True:
+                    print("%-34s   %s" % ("", r["dns"]))
+                if r.get("reason"):
+                    print("%-34s   %s" % ("", r["reason"]))
+                if cert.get("lastError"):
+                    print("%-34s   last error: %s" % ("", cert["lastError"]))
+            else:
+                exp = (" expires %s" % r["expiresAt"]) if r.get("expiresAt") else ""
+                print("%-34s %s%s" % (r.get("name") or "?", r.get("result") or "?", exp))
+                if r.get("detail"):
+                    print("%-34s   %s" % ("", r["detail"]))
+        if action != "list":
+            rel = d.get("reload") or {}
+            line = "reload   : %s" % (rel.get("method") or "?")
+            if rel.get("error"):
+                line += " — %s" % rel["error"]
+            print(line)
+    if action != "list" and d.get("failed"):
+        sys.exit(1)
 
 elif verb == "rotate_admin":
     d = call("POST", "/cli/mail/server/rotate-admin", body={})
@@ -28326,11 +28409,35 @@ cmd_hostmail_cert() {
     local sub="$1"; shift
     case "$sub" in
         renew) cmd_hostmail_cert_renew "$@" ;;
+        names) cmd_hostmail_cert_names "$@" ;;
         --help|-h) cmd_help_hostmail_cert; exit 0 ;;
         *)
-            _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert renew"
+            _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert <renew|names>"
             exit 2 ;;
     esac
+}
+
+# CAL44: one non-default certificate per extra mail-family name
+# (autoconfig/autodiscover/mta-sts/ua-auto-config). list = GET,
+# issue|renew = POST /cli/mail/cert/names.
+cmd_hostmail_cert_names() {
+    if _wants_help "$@"; then cmd_help_hostmail_cert_names; exit 0; fi
+    local action="list" name="" as_json=false
+    case "${1:-}" in
+        list|issue|renew) action="$1"; shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --name)
+                [ "$action" != "list" ] || { _mail_err "usage" "--name goes with issue|renew — usage: k2 hostmail cert names [list|issue|renew] [--name <host>] [--json]"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--name requires a host (e.g. autoconfig.example.com)"; exit 2; }
+                name="$2"; shift 2 ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail cert names [list|issue|renew] [--name <host>] [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="cert_names" M_JSON="$as_json" M_CERT_ACTION="$action" M_NAME="$name"
+    _mail_py
 }
 
 cmd_hostmail_cert_renew() {
@@ -30795,6 +30902,10 @@ COMMANDS
                               If DNS is not ns1/ns2.k2.dev, add mail.<apex>
                               (and autoconfig/autodiscover/mta-sts) on that
                               platform pointing at origin, then renew.
+  cert names [issue|renew]    One certificate per extra name (autoconfig,
+                              autodiscover, mta-sts, ua-auto-config) that
+                              points here. K2-hosted zones only. Never
+                              touches the mail certificate.
   list create|members|delete|show
                               Mailing lists (x:MailingList). Members minted-only.
                               Bare `k2 hostmail list` is usage — not inbox catalog
@@ -31000,6 +31111,11 @@ path; disable is not a retry.
 
 USAGE
   k2 hostmail cert renew [--json]
+  k2 hostmail cert names [issue|renew] [--name <host>] [--json]
+
+  names: one certificate per extra name (autoconfig, autodiscover,
+  mta-sts, ua-auto-config) that points here — see
+  `k2 hostmail cert names --help`.
 
 DNS
   If this zone is on ns1/ns2.k2.dev (K2-hosted), ACME can plant records.
@@ -31008,6 +31124,49 @@ DNS
   (`k2 hostmail ptr show`). Also autoconfig, autodiscover, mta-sts,
   ua-auto-config (A or CNAME to mail.<apex> / origin) — if those stay
   on an apex wildcard the order stays self-signed. Then cert renew.
+EOF
+}
+
+cmd_help_hostmail_cert_names() {
+    cat <<'EOF'
+Per-name certificates for the extra mail names: autoconfig, autodiscover,
+mta-sts and ua-auto-config under each hosted domain (never the apex, never
+www). Each name gets its OWN certificate — never a SAN on the mail
+certificate, never Stalwart's ACME — so one bad name cannot cost mail its
+certificate. The mail host's certificate stays Stalwart's default, so
+clients without SNI keep getting it.
+
+USAGE
+  k2 hostmail cert names [list] [--json]
+  k2 hostmail cert names issue [--name <host>] [--json]
+  k2 hostmail cert names renew [--name <host>] [--json]
+
+  list    GET /cli/mail/cert/names: per name, does it point here (its A
+          records are this box; any AAAA is the mail host's) and the state
+          of its certificate.
+  issue   POST /cli/mail/cert/names: for every name that points here (or
+  renew   just --name), order a certificate when it has none or it expires
+          within 30 days. issue and renew are the same run. Names that do
+          not point here are skipped; a certificate already in Stalwart for
+          a name whose DNS moved is left to expire (never deleted on a DNS
+          answer). One name failing never affects the others.
+
+ISSUER
+  K2's own DNS-01 issuer on a K2-hosted zone (ns1/ns2.k2.dev). A zone on
+  other DNS gets no per-name certificate (the doctor says so).
+
+LOADING
+  Stalwart reloads its certificates in place (ReloadTlsCertificates). Only
+  if that fails does K2 restart Stalwart through the mail helper. Never
+  hostmail disable/enable.
+
+RENEWAL
+  Nothing renews these automatically: run `renew` (the doctor warns 30
+  days before expiry). Owner/admin only, like cert renew.
+
+FLAGS
+  --name <host>          One extra name (issue|renew only)
+  --json                 JSON output
 EOF
 }
 

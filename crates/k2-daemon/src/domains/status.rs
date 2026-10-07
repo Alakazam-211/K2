@@ -367,6 +367,12 @@ pub fn from_pem_file(hostname: &str) -> Option<ProbeResult> {
     }
 }
 
+/// CAL44: the leaf's notAfter (unix seconds) from a PEM chain.
+pub(crate) fn pem_leaf_not_after(chain_pem: &str) -> Option<i64> {
+    let der = pem_first_cert_der(chain_pem)?;
+    parse_leaf(&der).map(|(_, _, not_after, _)| not_after)
+}
+
 fn pem_first_cert_der(pem: &str) -> Option<Vec<u8>> {
     let mut buf = std::io::Cursor::new(pem.as_bytes());
     let items = rustls_pemfile::certs(&mut buf)

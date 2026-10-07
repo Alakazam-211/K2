@@ -170,6 +170,10 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         "enableProgress": enable_progress,
         "lastError": last_error,
         "cert": supervisor::tls_cert_status(hostname.as_deref()),
+        // CAL44: the extra mail-family names (autoconfig, autodiscover,
+        // mta-sts, ua-auto-config per hosted domain) — last DNS answer +
+        // per-name cert state from the box store. No network here.
+        "extraNames": crate::mail::cert_names::status_json(installed),
         // Calendars S2 (CAL26): {enabled, files, policy, reachable, url,
         // reason}. reachable = tls-alpn OR the Caddy mail Host site.
         "calendar": crate::mail::dav::status_block(

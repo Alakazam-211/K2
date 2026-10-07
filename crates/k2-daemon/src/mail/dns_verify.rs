@@ -74,6 +74,12 @@ pub trait DnsResolver: Send + Sync {
     fn ptr(&self, ip: std::net::IpAddr) -> Result<Vec<String>, DnsError>;
     /// SRV answers (calendars S2: `_caldavs._tcp` / `_carddavs._tcp`).
     fn srv(&self, name: &str) -> Result<Vec<SrvAnswer>, DnsError>;
+    /// AAAA answers (CAL44: an extra mail-family name must not send
+    /// IPv6 clients to another host). Default = no AAAA records, so
+    /// canned fakes that never model IPv6 keep compiling.
+    fn aaaa(&self, _name: &str) -> Result<Vec<std::net::Ipv6Addr>, DnsError> {
+        Err(DnsError::NotFound)
+    }
 }
 
 /// One live SRV answer. `target` has no trailing dot.
@@ -233,6 +239,13 @@ impl DnsResolver for SystemResolver {
                     .map(|ptr| ptr.0.to_utf8().trim_end_matches('.').to_string())
                     .collect()
             })
+            .map_err(map_resolve_err)
+    }
+
+    fn aaaa(&self, name: &str) -> Result<Vec<std::net::Ipv6Addr>, DnsError> {
+        self.inner
+            .ipv6_lookup(fqdn(name))
+            .map(|l| l.iter().map(|a| a.0).collect())
             .map_err(map_resolve_err)
     }
 

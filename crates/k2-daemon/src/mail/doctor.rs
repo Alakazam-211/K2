@@ -490,6 +490,101 @@ pub fn run_checks_with_ptr_resolver(
     }
 }
 
+const EXTRA_NAMES_ID: &str = "extra-name-certs";
+const EXTRA_NAMES_LABEL: &str = "Extra mail names have their own certificate";
+
+/// CAL44: autoconfig / autodiscover / mta-sts / ua-auto-config names
+/// that resolve to this box must present a valid certificate for their
+/// own name (a verified handshake via `https_cert`); a K2-issued one
+/// inside the renewal window is flagged too (nothing renews it
+/// automatically). Pure over the seams. Warn at most — never gates
+/// direct send.
+pub fn extra_name_certs_check(
+    resolver: &dyn DnsResolver,
+    https_cert: &dyn Fn(&str) -> Result<(), String>,
+    apexes: &[crate::mail::cert_names::DoctorApex],
+    local_expiry: &dyn Fn(&str) -> Option<i64>,
+    now: i64,
+) -> DoctorCheck {
+    use crate::mail::cert_names::{points_here, PointsHere, RENEW_BEFORE_SECS};
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: EXTRA_NAMES_ID.into(),
+        label: EXTRA_NAMES_LABEL.into(),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    let mut ok: Vec<String> = Vec::new();
+    let mut missing_k2: Vec<String> = Vec::new();
+    let mut missing_byo: Vec<String> = Vec::new();
+    let mut byo_zones: Vec<String> = Vec::new();
+    let mut due: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for apex in apexes {
+        for name in &apex.names {
+            match points_here(resolver, name, &apex.addrs) {
+                PointsHere::No(_) => {}
+                PointsHere::Unknown(d) => unknown.push(format!("{name} ({d})")),
+                PointsHere::Yes => match https_cert(name) {
+                    Err(_) if apex.k2_dns => missing_k2.push(name.clone()),
+                    Err(_) => {
+                        missing_byo.push(name.clone());
+                        if !byo_zones.contains(&apex.apex) {
+                            byo_zones.push(apex.apex.clone());
+                        }
+                    }
+                    Ok(()) => {
+                        if local_expiry(name).is_some_and(|e| e - now < RENEW_BEFORE_SECS) {
+                            due.push(name.clone());
+                        } else {
+                            ok.push(name.clone());
+                        }
+                    }
+                },
+            }
+        }
+    }
+    let mut problems: Vec<String> = Vec::new();
+    if !missing_k2.is_empty() {
+        problems.push(format!(
+            "{} point at this box but present no valid certificate for their own name \
+             (strict TLS fails — they get the mail host's certificate). Run \
+             `k2 hostmail cert names issue`",
+            missing_k2.join(", ")
+        ));
+    }
+    if !missing_byo.is_empty() {
+        problems.push(format!(
+            "{} point at this box but present no valid certificate for their own name, and \
+             the zone ({}) is not K2-hosted, so K2 cannot issue one (DNS-01 on \
+             ns1/ns2.k2.dev only). Point them elsewhere or move the zone to K2 DNS",
+            missing_byo.join(", "),
+            byo_zones.join(", ")
+        ));
+    }
+    if !due.is_empty() {
+        problems.push(format!(
+            "{} expire within 30 days and nothing renews them automatically — run \
+             `k2 hostmail cert names renew`",
+            due.join(", ")
+        ));
+    }
+    if !problems.is_empty() {
+        return mk(ST_WARN, problems.join(". "));
+    }
+    if !unknown.is_empty() {
+        return mk(ST_UNKNOWN, format!("could not check: {}", unknown.join("; ")));
+    }
+    if ok.is_empty() {
+        return mk(
+            ST_INFO,
+            "no autoconfig / autodiscover / mta-sts / ua-auto-config name points at this box"
+                .into(),
+        );
+    }
+    mk(ST_PASS, format!("verified TLS on {}", ok.join(", ")))
+}
+
 const ACME_NAMES_ID: &str = "acme-cert-names";
 const ACME_NAMES_LABEL: &str = "Stalwart ACME orders the mail host only";
 
@@ -1429,6 +1524,22 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
             .checks
             .push(caldav_srv_check(auth_ref, &d.domain, &mail_host));
     }
+    // CAL44: extra mail-family names that point here need their own
+    // certificate (this domain, or every hosted domain at server level).
+    // Soft only — never gates_direct.
+    let extra_apexes = super::cert_names::doctor_apexes(
+        dctx.as_ref().map(|d| d.domain.as_str()),
+        report.ip.as_deref(),
+        &resolver,
+        &ctx.hostname,
+    );
+    report.checks.push(extra_name_certs_check(
+        &resolver,
+        &|name: &str| env.https_cert(name),
+        &extra_apexes,
+        &super::cert_names::local_expiry,
+        now,
+    ));
     let (grade, direct_blockers) = grade_of(&report.checks);
     report.grade = grade;
     report.direct_blockers = direct_blockers;
@@ -2500,5 +2611,85 @@ mod tests {
 
         delete_server_row();
         clear_runs();
+    }
+
+    // ── CAL44: extra-name certificates ──
+
+    fn extra_apex(k2_dns: bool) -> crate::mail::cert_names::DoctorApex {
+        crate::mail::cert_names::DoctorApex {
+            apex: "example.com".into(),
+            names: crate::mail::cert_names::extra_names_for_apex("example.com", Some("mail.example.com")),
+            k2_dns,
+            addrs: crate::mail::cert_names::BoxAddrs {
+                v4: vec![Ipv4Addr::new(192, 0, 2, 10)],
+                v6: Vec::new(),
+                source: "public-ip",
+            },
+        }
+    }
+
+    fn extra_dns(here: &[&str]) -> FakeDns {
+        let mut d = FakeDns::default();
+        for n in here {
+            d.a.insert((*n).to_string(), vec![Ipv4Addr::new(192, 0, 2, 10)]);
+        }
+        // mta-sts sits on another host (e.g. a hosting platform).
+        d.a.insert("mta-sts.example.com".into(), vec![Ipv4Addr::new(192, 0, 2, 99)]);
+        d
+    }
+
+    /// akzm today: autoconfig/autodiscover point here, present the mail
+    /// cert → warn naming exactly those, with the issue command.
+    #[test]
+    fn extra_name_certs_warns_on_names_here_without_their_own_cert() {
+        let dns = extra_dns(&["autoconfig.example.com", "autodiscover.example.com"]);
+        let probed = std::sync::Mutex::new(Vec::new());
+        let https = |n: &str| -> Result<(), String> {
+            probed.lock().unwrap().push(n.to_string());
+            Err("certificate not valid for name".into())
+        };
+        let c = extra_name_certs_check(&dns, &https, &[extra_apex(true)], &|_| None, 1000);
+        assert_eq!(c.id, "extra-name-certs");
+        assert_eq!(c.status, ST_WARN, "{}", c.detail);
+        assert!(!c.gates_direct, "soft only");
+        assert!(c.detail.contains("autoconfig.example.com, autodiscover.example.com"), "{}", c.detail);
+        assert!(!c.detail.contains("mta-sts"), "a name on another host is not ours: {}", c.detail);
+        assert!(c.detail.contains("k2 hostmail cert names issue"), "{}", c.detail);
+        assert_eq!(
+            *probed.lock().unwrap(),
+            vec!["autoconfig.example.com", "autodiscover.example.com"],
+            "only names pointing here are probed"
+        );
+        // Not K2-hosted: K2 cannot issue — says so instead of the command.
+        let c = extra_name_certs_check(&dns, &https, &[extra_apex(false)], &|_| None, 1000);
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("not K2-hosted"), "{}", c.detail);
+        assert!(!c.detail.contains("cert names issue"), "{}", c.detail);
+    }
+
+    #[test]
+    fn extra_name_certs_pass_info_due_and_unknown() {
+        let dns = extra_dns(&["autoconfig.example.com"]);
+        let ok = |_: &str| -> Result<(), String> { Ok(()) };
+        let far = |_: &str| Some(1000 + 60 * 86_400);
+        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &far, 1000);
+        assert_eq!(c.status, ST_PASS, "{}", c.detail);
+        assert!(c.detail.contains("autoconfig.example.com"));
+        // Inside the renewal window → warn with the renew command.
+        let soon = |_: &str| Some(1000 + 86_400);
+        let c = extra_name_certs_check(&dns, &ok, &[extra_apex(true)], &soon, 1000);
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("cert names renew"), "{}", c.detail);
+        // Nothing points here → info.
+        let c = extra_name_certs_check(&extra_dns(&[]), &ok, &[extra_apex(true)], &far, 1000);
+        assert_eq!(c.status, ST_INFO, "{}", c.detail);
+        // A DNS failure → unknown, never pass.
+        let mut broken = extra_dns(&[]);
+        broken.broken.push("autoconfig.example.com".into());
+        let c = extra_name_certs_check(&broken, &ok, &[extra_apex(true)], &far, 1000);
+        assert_eq!(c.status, ST_UNKNOWN, "{}", c.detail);
+        // No hosted domains → info.
+        let c = extra_name_certs_check(&dns, &ok, &[], &far, 1000);
+        assert_eq!(c.status, ST_INFO);
     }
 }

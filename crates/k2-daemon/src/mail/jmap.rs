@@ -464,13 +464,10 @@ impl StalwartClient {
     /// no-SNI) pick it up. Does not SIGTERM, wipe, or hostmail
     /// disable+enable. Errors include the JMAP method body.
     pub fn certificate_plant(&self, chain_pem: &str, key_pem: &str) -> Result<String, String> {
-        let chain = chain_pem.trim();
-        let key = key_pem.trim();
-        if chain.is_empty() || key.is_empty() {
+        if chain_pem.trim().is_empty() || key_pem.trim().is_empty() {
             return Err("certificate_plant: empty chain or private key".to_string());
         }
-        let resp = self.registry_call("x:Certificate/set", certificate_create_args(chain, key))?;
-        let id = parse_set_created_id("x:Certificate/set", &resp)?;
+        let id = self.certificate_add(chain_pem, key_pem)?;
         let resp = self.registry_call(
             "x:SystemSettings/set",
             default_certificate_id_args(&id),
@@ -481,6 +478,65 @@ impl StalwartClient {
             &resp,
         )?;
         Ok(id)
+    }
+
+    /// CAL44: plant a PEM chain + key as one more Stalwart `Certificate`
+    /// and leave `SystemSettings.defaultCertificateId` alone. Stalwart
+    /// picks a certificate per SNI name from every certificate's SANs;
+    /// only the default also answers clients that send no name, so the
+    /// mail host's certificate must stay the default. Not loaded until
+    /// [`Self::action_reload_tls_certificates`] (or a restart).
+    pub fn certificate_add(&self, chain_pem: &str, key_pem: &str) -> Result<String, String> {
+        let chain = chain_pem.trim();
+        let key = key_pem.trim();
+        if chain.is_empty() || key.is_empty() {
+            return Err("certificate_add: empty chain or private key".to_string());
+        }
+        let resp = self.registry_call("x:Certificate/set", certificate_create_args(chain, key))?;
+        parse_set_created_id("x:Certificate/set", &resp)
+    }
+
+    /// S0.10 / CAL46: `x:Action/set` create `@type: ReloadTlsCertificates`.
+    /// Stalwart re-reads every stored Certificate into the live SNI map
+    /// (`cache/reload.rs` `ObjectType::Certificate` arm, the same reload
+    /// its own ACME renewal runs) — no restart. A `notCreated` reply
+    /// means the reload hit an error (for example one certificate that
+    /// does not parse); the caller then falls back to a restart.
+    pub fn action_reload_tls_certificates(&self) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Action/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "@type": "ReloadTlsCertificates" } }
+            }),
+        )?;
+        parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    /// CAL44 guard: which Certificate answers clients that send no SNI
+    /// name. Stalwart gives the default certificate the `*` key; with no
+    /// default (or a default whose Certificate is gone) and more than
+    /// one certificate it serves an ARBITRARY one, so a per-name
+    /// certificate must never be added unless this is `Present`.
+    pub fn default_certificate_state(&self) -> Result<DefaultCertificate, String> {
+        let resp = self.registry_call(
+            "x:SystemSettings/get",
+            serde_json::json!({
+                "ids": [SYSTEM_SETTINGS_SINGLETON_ID],
+                "properties": ["defaultCertificateId"],
+            }),
+        )?;
+        let Some(id) = parse_default_certificate_id(&resp)? else {
+            return Ok(DefaultCertificate::Unset);
+        };
+        let resp = self.registry_call(
+            "x:Certificate/get",
+            serde_json::json!({ "ids": [id], "properties": ["notValidAfter"] }),
+        )?;
+        if parse_get_has_id("x:Certificate/get", &id, &resp)? {
+            Ok(DefaultCertificate::Present(id))
+        } else {
+            Ok(DefaultCertificate::Missing(id))
+        }
     }
 
     /// The Stalwart Domain that carries the mail hostname's ACME config:
@@ -3037,6 +3093,60 @@ fn parse_domain_get_cert_management(
     }
 }
 
+/// Outcome of [`StalwartClient::default_certificate_state`] (CAL44).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefaultCertificate {
+    /// `defaultCertificateId` names a Certificate that exists.
+    Present(String),
+    /// `defaultCertificateId` is unset.
+    Unset,
+    /// `defaultCertificateId` names a Certificate that is gone (Stalwart
+    /// deletes expired certificates; the id is then dangling).
+    Missing(String),
+}
+
+/// Pure `x:SystemSettings/get` parser: the singleton's
+/// `defaultCertificateId` (null / absent / empty = `None`).
+fn parse_default_certificate_id(args: &serde_json::Value) -> Result<Option<String>, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(SYSTEM_SETTINGS_SINGLETON_ID))
+                .or_else(|| a.first())
+        })
+        .ok_or_else(|| "x:SystemSettings/get: no singleton in the reply list".to_string())?;
+    match entry.get("defaultCertificateId") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s.trim().to_string())),
+        Some(other) => Err(format!(
+            "x:SystemSettings/get: defaultCertificateId is not a string id: {other}"
+        )),
+    }
+}
+
+/// Pure `*/get` parser: `true` when `id` is in `list`, `false` when it
+/// is in `notFound`; anything else is a loud Err.
+fn parse_get_has_id(method: &str, id: &str, args: &serde_json::Value) -> Result<bool, String> {
+    let listed = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    if listed {
+        return Ok(true);
+    }
+    let not_found = args
+        .get("notFound")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(id)));
+    if not_found {
+        return Ok(false);
+    }
+    Err(format!("{method}: '{id}' is in neither list nor notFound"))
+}
+
 /// Point the SystemSettings singleton at a planted Certificate id.
 fn default_certificate_id_args(cert_id: &str) -> serde_json::Value {
     serde_json::json!({
@@ -5362,6 +5472,159 @@ pub(crate) mod tests {
             .expect_err("must fail loud");
         assert!(err.contains("invalidPatch"), "{err}");
         assert!(err.contains("defaultCertificateId"), "{err}");
+    }
+
+    /// CAL44: a per-name certificate is ONE `x:Certificate/set` create —
+    /// the client sends no `x:SystemSettings/set`, so
+    /// `defaultCertificateId` (the mail host's cert) never moves.
+    #[test]
+    fn certificate_add_never_touches_default_certificate_id() {
+        let cert_reply = serde_json::json!({
+            "methodResponses": [["x:Certificate/set", {
+                "accountId": "b",
+                "created": { "k2": { "id": "cert-aux-1" } },
+            }, "0"]],
+        })
+        .to_string();
+        // A second reply is queued so a stray SystemSettings/set would be
+        // answered (and recorded) instead of hanging.
+        let stray = serde_json::json!({
+            "methodResponses": [["x:SystemSettings/set", {
+                "updated": { "singleton": null },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) =
+            spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), cert_reply, stray]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let id = client
+            .certificate_add(
+                "-----BEGIN CERTIFICATE-----\nAUX\n-----END CERTIFICATE-----\n",
+                "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
+            )
+            .expect("add");
+        assert_eq!(id, "cert-aux-1");
+        let _sess = rx.recv().expect("session");
+        let c = body_json(&rx.recv().expect("certificate/set"));
+        assert_eq!(c["methodCalls"].as_array().map(Vec::len), Some(1), "{c}");
+        assert_eq!(c["methodCalls"][0][0], "x:Certificate/set");
+        let create = &c["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["certificate"]["@type"], "Text");
+        assert_eq!(create["privateKey"]["@type"], "Text");
+        assert!(
+            !c.to_string().contains("defaultCertificateId"),
+            "a per-name cert must not carry defaultCertificateId: {c}"
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(),
+            "certificate_add must not send a second request (SystemSettings/set)"
+        );
+        assert!(client.certificate_add("  ", "k").is_err(), "empty chain fails loud");
+    }
+
+    /// S0.10: the reload is `x:Action/set` create
+    /// `{"@type":"ReloadTlsCertificates"}`; a `notCreated` reply is an Err
+    /// (the caller then restarts).
+    #[test]
+    fn action_reload_tls_certificates_envelope_and_failure() {
+        let ok = serde_json::json!({
+            "methodResponses": [["x:Action/set", {
+                "created": { "k2": { "id": "1760000000" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), ok]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        client.action_reload_tls_certificates().expect("reload");
+        let _sess = rx.recv().expect("session");
+        let a = body_json(&rx.recv().expect("action/set"));
+        assert_eq!(a["methodCalls"][0][0], "x:Action/set");
+        assert_eq!(
+            a["methodCalls"][0][1]["create"]["k2"],
+            serde_json::json!({ "@type": "ReloadTlsCertificates" })
+        );
+
+        let bad = serde_json::json!({
+            "methodResponses": [["x:Action/set", {
+                "notCreated": { "k2": {
+                    "type": "validationFailed",
+                    "description": "Invalid certificate: No private keys found.",
+                } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), bad]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client.action_reload_tls_certificates().expect_err("notCreated must fail");
+        assert!(err.contains("validationFailed") || err.contains("No private keys"), "{err}");
+    }
+
+    #[test]
+    fn default_certificate_state_present_unset_missing() {
+        // Present: settings name cert-9 and Certificate/get lists it.
+        let settings = |v: serde_json::Value| {
+            serde_json::json!({
+                "methodResponses": [["x:SystemSettings/get", {
+                    "list": [{ "id": "singleton", "defaultCertificateId": v }],
+                    "notFound": [],
+                }, "0"]],
+            })
+            .to_string()
+        };
+        let listed = serde_json::json!({
+            "methodResponses": [["x:Certificate/get", {
+                "list": [{ "id": "cert-9", "notValidAfter": "2027-01-03T00:00:00Z" }],
+                "notFound": [],
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            settings(serde_json::json!("cert-9")),
+            listed,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(
+            client.default_certificate_state().expect("present"),
+            DefaultCertificate::Present("cert-9".into())
+        );
+        let _sess = rx.recv().expect("session");
+        let s = body_json(&rx.recv().expect("settings get"));
+        assert_eq!(s["methodCalls"][0][0], "x:SystemSettings/get");
+        assert_eq!(s["methodCalls"][0][1]["ids"], serde_json::json!(["singleton"]));
+        let c = body_json(&rx.recv().expect("certificate get"));
+        assert_eq!(c["methodCalls"][0][0], "x:Certificate/get");
+        assert_eq!(c["methodCalls"][0][1]["ids"], serde_json::json!(["cert-9"]));
+
+        // Unset: no second request.
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            settings(serde_json::Value::Null),
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(client.default_certificate_state().expect("unset"), DefaultCertificate::Unset);
+
+        // Missing: the id dangles (Stalwart deleted the expired cert).
+        let gone = serde_json::json!({
+            "methodResponses": [["x:Certificate/get", {
+                "list": [], "notFound": ["cert-old"],
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            settings(serde_json::json!("cert-old")),
+            gone,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(
+            client.default_certificate_state().expect("missing"),
+            DefaultCertificate::Missing("cert-old".into())
+        );
+
+        // Garbage: neither list nor notFound → loud.
+        let err = parse_get_has_id("x:Certificate/get", "x", &serde_json::json!({})).expect_err("loud");
+        assert!(err.contains("neither"), "{err}");
     }
 
     /// Cert renew: `x:Task/set` create AcmeRenewal for the mail

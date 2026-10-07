@@ -213,6 +213,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Calendars S2: owner DAV policy status (GET) — enable/disable
         // are the POST on the same path. Owner-only (is_owner_level_mutation).
         "/cli/mail/dav" => crate::mail::dav::handle_dav_get(params),
+        // CAL44: per-name certificates for the extra mail-family names
+        // (GET = state; POST = issue/renew). Same gate as cert/renew.
+        "/cli/mail/cert/names" => crate::mail::cert_names::handle_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -365,6 +368,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
             crate::mail::app_password::handle_app_password_revoke(body)
         }
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
+        "/cli/mail/cert/names" => crate::mail::cert_names::handle_post(body),
         "/cli/mail/list" => crate::mail::lists::handle_list_create(body),
         "/cli/mail/list/members" => crate::mail::lists::handle_members_post(body),
         "/cli/mail/list/delete" => crate::mail::lists::handle_list_delete(body),
@@ -459,6 +463,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail-manage"
         || path == "/cli/mail/import"
         || path == "/cli/mail/cert/renew"
+        || path == "/cli/mail/cert/names"
         || path == "/cli/mail/server/rotate-admin"
 }
 
@@ -532,6 +537,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/footer"
             | "/cli/mail/footer/unset"
             | "/cli/mail/cert/renew"
+            | "/cli/mail/cert/names"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
             | "/cli/mail/list"
@@ -956,6 +962,44 @@ mod tests {
         let get = dispatch(p, &HashMap::new()).expect("mail route");
         assert_eq!(get.status, "405 Method Not Allowed", "{}", get.body);
         let post = dispatch_post(p, br#"{"bogus":true}"#);
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// CAL44: `/cli/mail/cert/names` is gated exactly like
+    /// `/cli/mail/cert/renew` (owner/admin, or a scoped agent only with
+    /// the manage-hosted-mail toggle; Admin floor for logins), serves GET
+    /// as a read and POST as the mutation; other methods 405.
+    #[test]
+    fn cert_names_route_is_gated_like_cert_renew() {
+        let p = "/cli/mail/cert/names";
+        let renew = "/cli/mail/cert/renew";
+        assert_eq!(is_mail_manage_surface(p), is_mail_manage_surface(renew));
+        assert_eq!(is_mail_owner_surface(p), is_mail_owner_surface(renew));
+        assert_eq!(is_owner_level_mutation(p), is_owner_level_mutation(renew));
+        assert!(is_mail_manage_surface(p) && is_mail_owner_surface(p));
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let agent = mail_manage_authorized(p, false, Some(&principal));
+        let body = agent.err().expect("toggle off → refused").body;
+        assert!(body.contains("owner_only"), "{body}");
+        let row = crate::routes::route_policy::lookup(p).expect("classified");
+        let renew_row = crate::routes::route_policy::lookup(renew).expect("classified");
+        assert_eq!(row.post, renew_row.post, "same POST floor as cert/renew");
+        assert_eq!(row.get, renew_row.post, "GET floor = the same Admin floor");
+        assert!(crate::routes::route_policy::post_allowed(p));
+        assert!(
+            !crate::routes::route_policy::get_refused(p, ""),
+            "GET is a read, not refused"
+        );
+        // GET dispatches to the read; POST validates the body first.
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_ne!(get.status, "404 Not Found");
+        assert_ne!(get.status, "405 Method Not Allowed");
+        let post = dispatch_post(p, br#"{"action":"wipe"}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
     }
 

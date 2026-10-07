@@ -64,7 +64,7 @@ pub fn install(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<PathBuf
     Ok(dir)
 }
 
-fn write_tmp_rename(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+pub(crate) fn write_tmp_rename(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
     let tmp = path.with_extension(format!(
         "tmp.{}",
         std::process::id()

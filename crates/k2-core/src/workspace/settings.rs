@@ -1048,6 +1048,40 @@ pub fn set_agents_can_manage_skin(project_path: &str, enable: bool) -> Result<()
     Ok(())
 }
 
+/// k2 sidecar v1 — "Allow hiring and managing agents"
+/// (`projects.agents_can_manage_agents`, migration 0132). Column only, no
+/// global master. Unknown project → `false` (fail-closed). Keyed on the
+/// passport's workspace UUID, never a client `project=`.
+pub fn agents_can_manage_agents(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_agents FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_manage_agents` (0/1). Dedicated writer for
+/// `POST /cli/agent-access/set` (Admin) — **not** on
+/// [`allowed_project_setting_fields`] (`workspace/set` must 400).
+pub fn set_agents_can_manage_agents(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_manage_agents = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
 /// EFFECTIVE agents-may-manage-hosted-mail gate for `project_path`.
 /// Column only: no global master (unlike DNS / connections). Unknown /
 /// unregistered path → `false` (fail-closed).

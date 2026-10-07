@@ -91,6 +91,17 @@ pub enum SessionEvent {
         /// so older clients ignore it and the default path emits no new key.
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_backend: Option<String>,
+        /// k2 sidecar SC33 — the session's display label when the daemon
+        /// seeded one (a sidecar's Chats name, the workspace agent name).
+        /// The renderer titles an adopted tab with it. Absent = no seed
+        /// (renderers fall back to the command), so an unseeded
+        /// `SessionAdded` is byte-identical to before.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// SC33 — `true` when `label` is locked (PTY titles must not
+        /// replace it). Omitted when false.
+        #[serde(rename = "labelLocked", skip_serializing_if = "std::ops::Not::not", default)]
+        label_locked: bool,
     },
     /// A session has been removed from the v2 map. Emitted from
     /// `v2_session_map::unregister` (which is the single chokepoint
@@ -1560,6 +1571,8 @@ mod tests {
             session_id: probe_id.clone(),
             is_v2: true,
             sandbox_backend: None,
+            label: None,
+            label_locked: false,
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         loop {
@@ -1775,6 +1788,8 @@ mod tests {
             session_id: "sess-1".into(),
             is_v2: true,
             sandbox_backend: Some("microvm".into()),
+            label: None,
+            label_locked: false,
         });
         assert_eq!(sandboxed["kind"], "session_added");
         assert_eq!(sandboxed["sandbox_backend"], "microvm");
@@ -1791,6 +1806,8 @@ mod tests {
             session_id: "sess-2".into(),
             is_v2: true,
             sandbox_backend: None,
+            label: None,
+            label_locked: false,
         });
         assert!(
             plain.get("sandbox_backend").is_none(),

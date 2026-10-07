@@ -145,6 +145,8 @@ pub mod workspace;
 pub mod workspace_compose_history;
 /// Durable sidecar handles (`sales/1`, `sales/reviewer`).
 pub mod workspace_session_handles;
+/// k2 sidecar v1 — names, brief, per-harness resume, layout, discovery.
+pub mod sidecar;
 /// Overlay threads + chatter (prd-overlay-threads-v1 S1).
 pub mod overlay;
 pub mod hook_config;

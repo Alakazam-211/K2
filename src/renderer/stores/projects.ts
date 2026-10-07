@@ -268,6 +268,10 @@ interface Project {
   // Per-workspace agents-may-manage-hosted-mail (0/1, default 0).
   // No global master. Written via POST /cli/mail-manage (not workspace/set).
   mailManageEnabled?: number
+  // k2 sidecar v1 — "Allow hiring and managing agents" (0/1, default 0).
+  // Lets the main agent open and stop sidecars. Written via POST
+  // /cli/agent-access/set (Admin; not workspace/set).
+  agentsCanManageAgents?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

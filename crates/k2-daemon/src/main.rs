@@ -160,6 +160,7 @@ mod sessions_bytes_ws;
 mod sessions_grid_ws;
 mod sessions_ws;
 mod settings_routes;
+mod sidecar_routes;
 mod remote_session_routes;
 mod remote_session_sessions;
 mod signal_format;

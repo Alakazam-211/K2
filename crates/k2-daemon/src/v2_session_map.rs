@@ -115,6 +115,13 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
     // orange-tab pattern), `"host"` vs the cells' `"microvm"`.
     let sandbox_backend = sandbox_backend_label(session.sandbox)
         .or_else(|| key.starts_with("api-").then(|| "host".to_string()));
+    // k2 sidecar SC33: carry the daemon-seeded label so every client titles
+    // an adopted sidecar tab with its name, not the command.
+    let label = Some(session.label())
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty());
+    let label_locked = label.is_some()
+        && matches!(session.label_source(), k2_core::terminal::LabelSource::Locked);
     let _ = crate::session_events::emit(
         crate::session_events::SessionEvent::SessionAdded {
             workspace_path: cwd.clone(),
@@ -125,6 +132,8 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
             session_id: session.session_id.to_string(),
             is_v2: true,
             sandbox_backend,
+            label,
+            label_locked,
         },
     );
 

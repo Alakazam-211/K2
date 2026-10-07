@@ -319,6 +319,7 @@ fn ensure_pinned_chat_inner(
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
         launch_prompt: None,
+        label: None,
     };
     let spawn_outcome =
         spawn_agent_session_v2_blocking_inner(req).map_err(|e| format!("spawn failed: {e}"))?;

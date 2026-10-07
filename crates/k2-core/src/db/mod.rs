@@ -1062,6 +1062,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0131_mail_bcc",
             include_str!("../../drizzle_sql/0131_mail_bcc.sql"),
         ),
+        // 0132 — k2 sidecar v1 (prd-k2-sidecar-cli-v1 SC20/SC38):
+        // projects.agents_can_manage_agents (+ NT11 backfill) and the
+        // tab-row columns created_by / brief_path / adopt_since. 0130 is
+        // reserved (hostmail backup, later).
+        (
+            "0132_sidecar_cli",
+            include_str!("../../drizzle_sql/0132_sidecar_cli.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1722,9 +1730,48 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0131_mail_bcc",
+            last_name, "0132_sidecar_cli",
             "unexpected last migration name: {last_name}"
         );
+    }
+
+    /// 0132 (k2 sidecar v1): the switch backfills ON only for
+    /// manager / coordinator / pod workspaces (NT11); `off` and `custom`
+    /// stay off. Re-running the migration over an existing column is a
+    /// no-op ALTER (duplicate column) plus the same backfill.
+    #[test]
+    fn sidecar_cli_migration_backfills_manage_switch_for_manager_modes_only() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        for (id, mode) in [
+            ("p-0132-mgr", "manager"),
+            ("p-0132-coord", "coordinator"),
+            ("p-0132-pod", "pod"),
+            ("p-0132-off", "off"),
+            ("p-0132-custom", "custom"),
+        ] {
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_mode) VALUES (?1, ?1, ?2, ?3)",
+                params![id, format!("/tmp/{id}"), mode],
+            )
+            .unwrap();
+        }
+        conn.execute("DELETE FROM _migrations WHERE name = '0132_sidecar_cli'", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+        let on = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT agents_can_manage_agents FROM projects WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(on("p-0132-mgr"), 1);
+        assert_eq!(on("p-0132-coord"), 1);
+        assert_eq!(on("p-0132-pod"), 1);
+        assert_eq!(on("p-0132-off"), 0, "the k2 workspace case (SC37): off stays off");
+        assert_eq!(on("p-0132-custom"), 0);
     }
 
     #[test]

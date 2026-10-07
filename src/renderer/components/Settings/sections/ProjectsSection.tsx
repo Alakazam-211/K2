@@ -88,6 +88,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
+  { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1577,6 +1578,9 @@ function ProjectDetail({
             <SettingsGroup title="Apps">
               <AgentsManageSkinToggle project={project} />
             </SettingsGroup>
+            <SettingsGroup title="Agents">
+              <AgentsManageAgentsToggle project={project} />
+            </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
               <button
@@ -2061,6 +2065,87 @@ function DnsManageToggle({
               overriding this toggle.
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// k2 sidecar v1 — "Allow hiring and managing agents". DEFAULTS OFF.
+// Lets this workspace's main agent open and stop sidecars (later also
+// hire and retire agents). Writes POST /cli/agent-access/set
+// `{workspace, toggle: 'agents_manage', value}` (Owner/Admin). Optimistic
+// store patch; do not fetchProjects() on this path.
+export function AgentsManageAgentsToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const enabled = (project.agentsCanManageAgents ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanManageAgents
+    setBusy(true)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanManageAgents: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await daemonCliPost(primaryScope(), 'agent-access/set', {
+        workspace: project.path,
+        toggle: 'agents_manage',
+        value: next,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanManageAgents: before } : p,
+        ),
+      }))
+      console.error('[agent-access] write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          disabled={busy}
+          data-settings-id="projects.agents-can-manage-agents"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            enabled
+              ? 'This workspace\'s main agent may open and stop sidecars'
+              : 'This workspace\'s agent cannot open or stop sidecars'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow hiring and managing agents
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Lets this workspace&rsquo;s main agent open and stop sidecars (k2 sidecar). Later it also
+            covers hiring and retiring agents. Sidecars themselves never can. You (the owner) always can.
+          </div>
         </div>
       </div>
     </div>

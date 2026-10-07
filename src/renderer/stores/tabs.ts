@@ -1712,6 +1712,9 @@ interface DaemonSessionRow {
   kind?: string
   handle?: string
   conversationId?: string
+  /** k2 sidecar SC33 — the daemon-seeded label (sidecar Chats name). */
+  label?: string
+  labelLocked?: boolean
 }
 
 /** Shallow array equality, treating `undefined` and `[]` as equivalent. */
@@ -5338,6 +5341,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
                 session.conversationId,
                 session.sessionId,
               ),
+              label: session.label,
+              labelLocked: session.labelLocked,
             }),
           )
         }
@@ -5655,6 +5660,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
               args: string[]
               cwd: string
               isV2: boolean
+              label?: string
+              labelLocked?: boolean
             }>
           >(scope, 'sessions/list-for-workspace', { path: cwd })
 
@@ -5679,11 +5686,14 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
                   : undefined,
               )
               tabCounter++
+              // k2 sidecar SC33: a daemon-labelled session keeps its name.
+              const label = s.label?.trim()
               return {
                 id: tabId,
-                title: s.command ?? `Terminal ${tabCounter}`,
+                title: label || (s.command ?? `Terminal ${tabCounter}`),
                 mosaicTree: paneGroupId,
                 paneGroups: new Map([[paneGroupId, pg]]),
+                ...(label && s.labelLocked ? { locked: true } : {}),
               }
             })
             set({ tabs: adoptedTabs, activeTabId: adoptedTabs[0].id })
@@ -6049,6 +6059,11 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
      *  stamped immediately so TabBar.tsx lights the D9 orange marker on adoption
      *  rather than waiting for the spawn-response echo. */
     sandboxBackend?: string
+    /** k2 sidecar SC33 — the daemon's label for this session (a sidecar's
+     *  Chats name). Titles the tab instead of the command. */
+    label?: string
+    /** SC33 — lock the title so PTY titles cannot replace it. */
+    labelLocked?: boolean
   }): Tab {
     const pg = makeTerminalPaneGroup(
       args.paneGroupId,
@@ -6078,13 +6093,16 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       if (args.attachAgentName?.startsWith('api-')) d.fromApi = true
     }
     tabCounter++
+    const label = args.label?.trim()
     return {
       // V22 — a stable id, so two windows adopting the same daemon session
-      // make the same tab and the layout merge collapses them.
+      // make the same tab and the layout merge collapses them. The daemon
+      // writes the same id into the saved layout for a CLI sidecar (SC34).
       id: `adopted-${args.paneGroupId}`,
-      title: args.command ?? `Terminal ${tabCounter}`,
+      title: label || (args.command ?? `Terminal ${tabCounter}`),
       mosaicTree: args.paneGroupId,
       paneGroups: new Map([[args.paneGroupId, pg]]),
+      ...(label && args.labelLocked ? { locked: true } : {}),
     }
   }
 
@@ -6295,6 +6313,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
             command: event.command ?? undefined,
             args: event.args.length > 0 ? event.args : undefined,
             sessionId: event.session_id,
+            label: event.label,
+            labelLocked: event.labelLocked,
           })
           console.warn(`[tabs] session_added push — adopting paneGroup=${pgId} for ${key}`)
           store.setState((s) => ({ tabs: [...s.tabs, tab] }))
@@ -6349,6 +6369,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
                 args: s.args.length > 0 ? s.args : undefined,
                 sessionId: s.sessionId,
                 conversationId: pickConversationId(undefined, s.conversationId, s.sessionId),
+                label: s.label,
+                labelLocked: s.labelLocked,
               }),
             )
           }

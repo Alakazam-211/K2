@@ -145,7 +145,8 @@ pub const SKILL_VERSION_ZEN: u32 = 10;
 /// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
 /// Bumped to 30 (0.43.2, assignee policy): "Ask a human" teaches
 /// `--assign <user>` and `k2 tickets assign`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 30;
+/// Bumped to 31 (k2 sidecar v1): the k2-cli skill gains a Sidecars block.
+pub const SKILL_VERSION_WORKSPACE: u32 = 31;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

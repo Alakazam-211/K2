@@ -545,6 +545,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
+        // k2 sidecar v1 (SC36): new / list / stop. The handler classifies
+        // the validated session (canonical harness, sidecar, shell tab,
+        // api cell) and applies the agent gate. `/cli/agent-access/set`
+        // (the switch itself) is deliberately NOT here.
+        "/cli/sidecar/new",
+        "/cli/sidecar/list",
+        "/cli/sidecar/stop",
         // Skin roster GET + manage mutations (`k2 skin` / `k2 skin-token`).
         // Exact paths only — never prefix `/cli/skin/` (front-door / hydra
         // stay owner even when the Agent-tab toggle is ON). POST mutate is

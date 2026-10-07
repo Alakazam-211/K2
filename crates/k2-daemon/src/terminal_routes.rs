@@ -822,6 +822,7 @@ fn spawn_terminal_impl(
         // resolution) — no preset env to merge.
         env: Default::default(),
         launch_prompt: None,
+        label: None,
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),

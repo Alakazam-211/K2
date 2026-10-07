@@ -191,6 +191,7 @@ pub fn spawn_wake_headless(
         // test override / metadata-less presets). Values never logged.
         env: resolved.env_map(),
         launch_prompt: None,
+        label: None,
     })?;
 
     let terminal_id = outcome.session_id.to_string();

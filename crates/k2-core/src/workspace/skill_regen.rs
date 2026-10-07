@@ -363,6 +363,11 @@ the recipient isn't running — use `--inbox-wake` / `--inbox-silent` to
 land a durable tray package the recipient opens with `k2 inbox read <id>`
 on their own schedule. Not `k2 mail`.
 
+## Sidecars
+`k2 sidecar new <name> --harness <preset> --brief <file>` opens `<workspace>/<name>` and prints it; `k2 sidecar list`, `k2 sidecar stop <name>` (stop is sleep; `new` on a stopped name resumes).
+Only the main session may open or stop sidecars, and only when "Allow hiring and managing agents" is on (`k2 sidecar access status`).
+Put the handback in the brief: "when done, `k2 msg <primary>` with a summary". No secrets in a brief. `k2 study sidecars`.
+
 ## Overlay thread (side channel with the human)
 Not PTY inject — that is `k2 msg`. Write and read the user-agent overlay
 for this conversation. Same first-arg grammar as `k2 msg`.

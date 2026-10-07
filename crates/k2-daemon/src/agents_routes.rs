@@ -135,6 +135,7 @@ pub fn spawn_wake_via_session_stream(
         // W2: the resolved preset's migration-0070 env.
         env: resolved.env_map(),
         launch_prompt: None,
+        label: None,
     })?;
 
     let _ = k2_core::workspace::session::k2so_agents_lock(
@@ -333,6 +334,7 @@ pub fn handle_agents_launch(
         canonical_key: None,
         env: spawn_env,
         launch_prompt: None,
+        label: None,
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),
@@ -458,6 +460,7 @@ pub fn handle_agents_delegate(
         canonical_key: None,
         env: spawn_env,
         launch_prompt: None,
+        label: None,
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),

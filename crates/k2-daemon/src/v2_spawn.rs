@@ -333,6 +333,20 @@ pub fn can_sandbox() -> bool {
 /// Returns `None` for an unregistered cwd or when nothing is recoverable
 /// (spawn falls through to a bare shell, as before).
 pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, Vec<String>)> {
+    recovered_launch_ex(agent_name, cwd).map(|r| (r.command, r.args))
+}
+
+/// [`recovered_launch`] plus an optional fire-once first turn (k2 sidecar:
+/// a codex / hermes sidecar whose conversation id was never discovered
+/// comes back as a fresh session of its harness that re-reads BRIEF.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecoveredLaunch {
+    pub command: String,
+    pub args: Vec<String>,
+    pub launch_prompt: Option<String>,
+}
+
+pub(crate) fn recovered_launch_ex(agent_name: &str, cwd: &str) -> Option<RecoveredLaunch> {
     use k2_core::workspace::provider_resume::provider_resume_for_command;
     use k2_core::workspace_session_handles::{
         is_api_agent_name, is_harness_command, is_tab_agent_name,
@@ -347,7 +361,7 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
 
     // Scoped lock: the resolver below takes its own DB lock, so every
     // read happens in this block and the lock is dropped before it runs.
-    let (project_id, tab_cmd, tab_args_json, tab_session_id) = {
+    let (project_id, tab_pg, tab_cmd, tab_args_json, tab_session_id, cli_sidecar) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let project_id = k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)?;
@@ -358,11 +372,18 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
         )
         .ok()
         .flatten();
+        // k2 sidecar: CLI-made sidecars carry `created_by` (migration 0132).
+        let cli_sidecar = tab_row
+            .as_ref()
+            .and_then(|r| k2_core::sidecar::meta(&conn, &project_id, &r.pane_group_id))
+            .is_some_and(|m| m.created_by.is_some());
         (
             project_id,
+            tab_row.as_ref().map(|r| r.pane_group_id.clone()),
             tab_row.as_ref().and_then(|r| r.command.clone()),
             tab_row.as_ref().and_then(|r| r.args_json.clone()),
             tab_row.as_ref().and_then(|r| r.session_id.clone()),
+            cli_sidecar,
         )
     };
     // Canonical chat stays dead until a need (deliver_live / heartbeat
@@ -378,45 +399,67 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
     // Extra `tab-*` visit: only splice resume when the row is a known
     // harness with a provider session id. Cmd+T (no row / shell /
     // unknown / empty session id) still falls through to a login shell.
+    let sid = tab_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if is_tab_agent_name(agent_name) {
-        let sid = tab_session_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        if sid.is_none() || !is_harness_command(tab_cmd.as_deref()) {
+        if !is_harness_command(tab_cmd.as_deref()) {
             return None;
+        }
+        if sid.is_none() {
+            // k2 sidecar (Big 7): a CLI sidecar of a harness that mints
+            // its own id (codex / hermes) may still be waiting for it.
+            // It comes back as its own harness (discovered and resumed,
+            // or fresh and re-reading BRIEF.md) — never as a shell. App
+            // tabs with no id keep today's rule (a login shell).
+            let (Some(pg), Some(cmd)) = (tab_pg.as_deref(), tab_cmd.as_deref()) else {
+                return None;
+            };
+            let saved: Vec<String> = tab_args_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default();
+            let plan = crate::sidecar_routes::relaunch_plan(&project_id, pg, cwd, cmd, &saved, None)?;
+            log_debug!(
+                "[v2-spawn] restart-recovery: sidecar without conversation id agent={} command={} args={:?} prompt={}",
+                agent_name,
+                cmd,
+                plan.args,
+                plan.launch_prompt.is_some()
+            );
+            return Some(RecoveredLaunch {
+                command: cmd.to_string(),
+                args: plan.args,
+                launch_prompt: plan.launch_prompt,
+            });
         }
     }
 
     // Tab-row path for leftover non-canonical, non-api keys (named
     // sidecars, and `tab-*` that passed the harness+session-id gate).
-    // Replay the saved command, splice the session id in the command's
-    // own grammar.
+    // Replay the saved command; the session id is spliced in the
+    // command's own grammar by the ONE shared helper
+    // (`k2_core::sidecar::resume_argv`, SC48) — it drops a stored
+    // `--session-id` premint and resumes instead.
     if let Some(saved_cmd) = tab_cmd {
         let mut saved_args: Vec<String> = tab_args_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_else(|| vec!["--dangerously-skip-permissions".to_string()]);
-        if let Some(sid) = tab_session_id.as_deref() {
+        if let Some(sid) = sid {
             match provider_resume_for_command(&saved_cmd) {
-                Some(adapter) => {
-                    // Drop any persisted premint pair (`--session-id <v>`
-                    // for claude/grok) — it is replaced by an unambiguous
-                    // resume of the same conversation.
-                    if let Some(flag) = adapter.premint_flag() {
-                        let mut i = 0;
-                        while i + 1 < saved_args.len() {
-                            if saved_args[i] == flag {
-                                saved_args.remove(i); // flag
-                                saved_args.remove(i); // value
-                            } else {
-                                i += 1;
-                            }
-                        }
-                    }
-                    if !adapter.argv_carries_session_identity(&saved_args) {
-                        saved_args = adapter.resume_args(&saved_args, sid);
-                    }
+                Some(_) => {
+                    // A CLI sidecar checks the harness's disk (a sidecar
+                    // stopped before its first turn re-mints its id); app
+                    // tabs keep the always-resume contract.
+                    saved_args = k2_core::sidecar::resume_argv_with(
+                        &saved_cmd,
+                        &saved_args,
+                        sid,
+                        cwd,
+                        cli_sidecar,
+                    );
                 }
                 None => {
                     log_debug!(
@@ -434,7 +477,11 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
             saved_cmd,
             saved_args
         );
-        return Some((saved_cmd, saved_args));
+        return Some(RecoveredLaunch {
+            command: saved_cmd,
+            args: saved_args,
+            launch_prompt: None,
+        });
     }
     None
 }
@@ -664,6 +711,19 @@ impl ClosedTabs {
 static CLOSED_TABS: std::sync::LazyLock<parking_lot::Mutex<ClosedTabs>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(ClosedTabs::default()));
 
+/// k2 sidecar SC41: `stop` puts the sidecar's `tab-*` name on the V23
+/// closed list, so a stale window cannot respawn it as a shell.
+pub(crate) fn record_closed_tab(agent_name: &str) {
+    if agent_name.starts_with("tab-") {
+        CLOSED_TABS.lock().record(agent_name, std::time::Instant::now());
+    }
+}
+
+/// k2 sidecar: `new` on a stopped name brings the tab back on purpose.
+pub(crate) fn clear_closed_tab(agent_name: &str) {
+    CLOSED_TABS.lock().clear(agent_name);
+}
+
 /// The V23 refusal rule, pure: a `tab-*` name, an empty requested command,
 /// no live child, and a live entry on the closed list.
 pub fn closed_tab_refuses(
@@ -809,6 +869,8 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // via `req.exec_args` (host-session launch-param prompt).
     let mut args = req.args.clone().unwrap_or_default();
     let mut canonical_resolved: Option<ResumeChatArgs> = None;
+    // k2 sidecar: fire-once first turn for a fresh restart (never durable).
+    let mut recovered_prompt: Option<String> = None;
     if command.is_none() && is_canonical {
         match resolve_resume_chat_args_ex(&req.cwd, false) {
             Ok(resolved) => {
@@ -842,9 +904,10 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             }
         }
     } else if command.is_none() {
-        if let Some((saved_cmd, saved_args)) = recovered_launch(&req.agent_name, &req.cwd) {
-            command = Some(saved_cmd);
-            args = saved_args;
+        if let Some(recovered) = recovered_launch_ex(&req.agent_name, &req.cwd) {
+            command = Some(recovered.command);
+            args = recovered.args;
+            recovered_prompt = recovered.launch_prompt;
         }
     }
 
@@ -1010,7 +1073,15 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // them only if the caller supplied a command (host-sessions always do).
     // If recovery ran (command was None), force exec = recovered identity.
     let exec_args = if req.command.is_none() {
-        args.clone()
+        // k2 sidecar fresh restart: the brief pointer rides the exec argv
+        // only (durable `args` stay identity-only).
+        match (recovered_prompt.as_deref(), command.as_deref()) {
+            (Some(prompt), Some(cmd)) => {
+                k2_core::workspace::provider_launch_prompt::append_interactive_prompt(cmd, &args, prompt)
+                    .unwrap_or_else(|| args.clone())
+            }
+            _ => args.clone(),
+        }
     } else {
         exec_args
     };

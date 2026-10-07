@@ -585,6 +585,19 @@ mod unix_impl {
                 k2_core::agent_hooks::handle_hook_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // k2 sidecar v1: new / list / stop for THIS cell's session
+            // (SC36). The handler applies the agent gate from the bound
+            // session. Same body caps as TCP (413).
+            p if p.starts_with("/cli/sidecar/") && crate::sidecar_routes::is_route(p) => {
+                if crate::sidecar_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::sidecar_routes::body_cap(p) {
+                    return from_cli(crate::sidecar_routes::too_large(p));
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::sidecar_routes::handle(p, caller, body, params, "cell"))
+            }
             "/cli/thread" => from_cli(crate::cli::dispatch(path, params)),
             path if is_post && path.starts_with("/cli/thread/") => {
                 from_cli(crate::overlay_routes::dispatch_post(path, params, body))

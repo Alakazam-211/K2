@@ -3804,6 +3804,242 @@ fn string_to_hex(s: &str) -> String {
     s.bytes().map(|b| format!("{:02x}", b)).collect()
 }
 
+// ── k2 sidecar v1: per-harness conversation discovery ───────────────
+//
+// Codex and Hermes mint their own conversation ids, so a sidecar that
+// runs them only learns its id after the harness writes it to disk.
+// These readers list conversations a harness STARTED in a workspace at
+// or after a time, and say whether the transcript carries the sidecar's
+// pointer line (`marked`). `crate::sidecar::discover_conversation` picks
+// one of them. Gemini gets an exists check that does not depend on
+// `~/.gemini/projects.json`.
+
+/// One conversation a self-minting harness started (k2 sidecar discovery).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedConversation {
+    pub id: String,
+    /// Unix seconds.
+    pub started_at: i64,
+    /// The transcript carries the sidecar marker line.
+    pub marked: bool,
+}
+
+fn cwd_matches_exact(cwd: &str, project_path: &str) -> bool {
+    if cwd == project_path {
+        return true;
+    }
+    let canon = |p: &str| {
+        std::fs::canonicalize(p)
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_string())
+    };
+    canon(cwd) == canon(project_path)
+}
+
+fn transcript_has_marker(path: &Path, marker: &str) -> bool {
+    const MAX_SCAN: u64 = 1024 * 1024;
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let mut buf = Vec::new();
+    if file.take(MAX_SCAN).read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    text.contains(marker) || text.contains(&marker.replace('/', "\\/"))
+}
+
+/// Codex rollouts (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) whose
+/// `session_meta` cwd is `project_path` and that started at or after
+/// `since_secs` (10 s slack). Only date folders from the day before
+/// `since_secs` onward are read.
+pub fn codex_conversations_started_since(
+    project_path: &str,
+    since_secs: i64,
+    marker: Option<&str>,
+) -> Vec<StartedConversation> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    codex_conversations_started_since_in(
+        &home.join(".codex").join("sessions"),
+        project_path,
+        since_secs,
+        marker,
+    )
+}
+
+fn codex_conversations_started_since_in(
+    sessions_root: &Path,
+    project_path: &str,
+    since_secs: i64,
+    marker: Option<&str>,
+) -> Vec<StartedConversation> {
+    use std::io::BufRead;
+    let mut out = Vec::new();
+    let floor_day: u32 = chrono::DateTime::from_timestamp(since_secs - 86_400, 0)
+        .and_then(|d| d.format("%Y%m%d").to_string().parse::<u32>().ok())
+        .unwrap_or(0);
+    let read_sorted = |p: &Path| -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = fs::read_dir(p)
+            .map(|rd| rd.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    for year in read_sorted(sessions_root) {
+        for month in read_sorted(&year) {
+            for day in read_sorted(&month) {
+                let stamp = format!(
+                    "{}{}{}",
+                    year.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                    month.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                    day.file_name().and_then(|s| s.to_str()).unwrap_or("")
+                );
+                match stamp.parse::<u32>() {
+                    Ok(d) if d >= floor_day => {}
+                    _ => continue,
+                }
+                for file in read_sorted(&day) {
+                    if file.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+                    let Ok(f) = File::open(&file) else { continue };
+                    let mut first = String::new();
+                    if std::io::BufReader::new(f).read_line(&mut first).is_err() {
+                        continue;
+                    }
+                    let Ok(header) = serde_json::from_str::<serde_json::Value>(first.trim()) else {
+                        continue;
+                    };
+                    let payload = header.get("payload");
+                    let Some(id) = payload.and_then(|p| p.get("id")).and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let Some(cwd) = payload.and_then(|p| p.get("cwd")).and_then(|v| v.as_str())
+                    else {
+                        continue;
+                    };
+                    if !cwd_matches_exact(cwd, project_path) {
+                        continue;
+                    }
+                    let started_at = payload
+                        .and_then(|p| p.get("timestamp"))
+                        .and_then(|v| v.as_str())
+                        .and_then(parse_rfc3339_to_ms)
+                        .map(|ms| ms / 1000)
+                        .or_else(|| {
+                            fs::metadata(&file)
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs() as i64)
+                        })
+                        .unwrap_or(0);
+                    if started_at + 10 < since_secs {
+                        continue;
+                    }
+                    out.push(StartedConversation {
+                        id: id.to_string(),
+                        started_at,
+                        marked: marker.is_some_and(|m| transcript_has_marker(&file, m)),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Hermes CLI sessions (`~/.hermes/state.db`) in `project_path` that
+/// started at or after `since_secs` (10 s slack). `marked` reads the
+/// title and the first user message.
+pub fn hermes_conversations_started_since(
+    project_path: &str,
+    since_secs: i64,
+    marker: Option<&str>,
+) -> Vec<StartedConversation> {
+    let Some(db_path) = hermes_state_db_path() else {
+        return Vec::new();
+    };
+    let Some(conn) = open_hermes_db_ro(&db_path) else {
+        return Vec::new();
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT s.id, s.started_at, COALESCE(s.cwd, ''), COALESCE(s.title, ''), \
+                COALESCE((SELECT m.content FROM messages m \
+                          WHERE m.session_id = s.id AND m.role = 'user' \
+                          ORDER BY m.timestamp ASC, m.id ASC LIMIT 1), '') \
+         FROM sessions s \
+         WHERE s.source = 'cli' AND s.archived = 0 AND s.started_at >= ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(rusqlite::params![(since_secs - 10) as f64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, f64>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+        ))
+    });
+    let Ok(rows) = rows else {
+        return Vec::new();
+    };
+    rows.flatten()
+        .filter(|(_, _, cwd, _, _)| cwd_matches_exact(cwd, project_path))
+        .map(|(id, started, _, title, first_user)| StartedConversation {
+            id,
+            started_at: started as i64,
+            marked: marker.is_some_and(|m| title.contains(m) || first_user.contains(m)),
+        })
+        .collect()
+}
+
+/// Does any Gemini chat file carry `session_id` as its `sessionId`?
+/// Walks `~/.gemini/tmp/*/chats/` and reads only files whose name holds
+/// the id's first 8 characters (Gemini names them
+/// `session-<ts>-<id8>.jsonl`). Independent of `projects.json`.
+pub fn gemini_session_id_exists(session_id: &str) -> bool {
+    use std::io::BufRead;
+    let id = session_id.trim();
+    if id.len() < 8 || !id.is_char_boundary(8) {
+        return false;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let short = &id[..8];
+    let Ok(slugs) = fs::read_dir(home.join(".gemini").join("tmp")) else {
+        return false;
+    };
+    for slug in slugs.flatten() {
+        let Ok(chats) = fs::read_dir(slug.path().join("chats")) else {
+            continue;
+        };
+        for entry in chats.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.contains(short) {
+                continue;
+            }
+            let Ok(f) = File::open(entry.path()) else { continue };
+            let mut first = String::new();
+            if std::io::BufReader::new(f).read_line(&mut first).is_err() {
+                continue;
+            }
+            let found = serde_json::from_str::<serde_json::Value>(first.trim())
+                .ok()
+                .and_then(|v| v.get("sessionId").and_then(|s| s.as_str()).map(str::to_string));
+            if found.as_deref() == Some(id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

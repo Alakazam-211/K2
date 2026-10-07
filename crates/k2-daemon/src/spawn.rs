@@ -123,6 +123,10 @@ pub struct SpawnWorkspaceSessionRequest {
     /// grammar as host-session launch-param). Applied AFTER identity splice
     /// onto ephemeral exec argv only. Never logged. None = today's spawn.
     pub launch_prompt: Option<String>,
+    /// k2 sidecar SC30: the locked tab label. `None` = the workspace's
+    /// agent display name (the canonical / heartbeat lanes). Sidecar
+    /// spawns and sidecar wakes pass the chat's display name.
+    pub label: Option<String>,
 }
 
 /// Output shape returned by the spawn helper. The caller needs the
@@ -288,7 +292,14 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     // resolver — falls back to the agent name when no project
     // row exists (legacy bare-name path) so the label still has
     // SOMETHING readable.
-    let label_seed = if let Some(pid) = req.project_id.as_deref() {
+    let label_seed = if let Some(label) = req
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        label.to_string()
+    } else if let Some(pid) = req.project_id.as_deref() {
         if !pid.is_empty() {
             project_path_for_id(pid)
                 .map(|p| k2_core::workspace::display::agent_display_name(&p))

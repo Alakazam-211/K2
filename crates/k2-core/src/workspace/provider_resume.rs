@@ -166,6 +166,12 @@ pub fn provider_resume_for_provider(provider: &str) -> Option<&'static ProviderR
     PROVIDERS.iter().find(|p| p.provider == provider)
 }
 
+/// Gemini CLI's "start a new session with this UUID" flag. Not in the
+/// adapter's premint column (older gemini builds lack it, so app tabs are
+/// never auto-preminted); `k2 sidecar` passes it explicitly and the tab-row
+/// stamp must read it back (`k2_core::sidecar`).
+pub const GEMINI_SESSION_ID_FLAG: &str = "--session-id";
+
 /// The union of flag tokens that carry a session id in SOME supported
 /// provider's grammar: `--session-id` (claude/grok premint),
 /// `--resume` / `-r` (claude/grok/gemini/cursor/hermes resume + shared
@@ -239,7 +245,11 @@ pub fn session_id_from_spawn_argv(command: &str, args: &[String]) -> Option<Stri
         Some(adapter) => match adapter.grammar {
             ResumeGrammar::Subcommand(sub) => subcommand_session_id(args, sub),
             ResumeGrammar::Flag(flag) => flag_value(args, |a| {
-                a == flag || a == "--resume" || a == "-r" || Some(a) == adapter.premint_flag()
+                a == flag
+                    || a == "--resume"
+                    || a == "-r"
+                    || Some(a) == adapter.premint_flag()
+                    || (adapter.provider == "gemini" && a == GEMINI_SESSION_ID_FLAG)
             }),
         },
         None => flag_value(args, |a| a == "--session-id" || a == "--resume"),
@@ -268,6 +278,9 @@ impl ProviderResume {
             if args.iter().any(|a| a == flag) {
                 return true;
             }
+        }
+        if self.provider == "gemini" && args.iter().any(|a| a == GEMINI_SESSION_ID_FLAG) {
+            return true;
         }
         match self.grammar {
             ResumeGrammar::Flag(flag) => args
@@ -856,6 +869,21 @@ mod tests {
     }
 
     // ── session_id_from_spawn_argv (registration stamping, Slice W3) ─
+
+    #[test]
+    fn gemini_session_id_flag_is_read_back_but_never_auto_preminted() {
+        let sid = "aaaaaaaa-0000-4000-8000-0000000000aa";
+        let gemini = provider_resume_for_provider("gemini").unwrap();
+        assert_eq!(
+            session_id_from_spawn_argv("gemini", &args(&["--yolo", "--session-id", sid])).as_deref(),
+            Some(sid),
+            "k2 sidecar passes gemini --session-id; the tab-row stamp must read it"
+        );
+        assert!(gemini.argv_carries_session_identity(&args(&["--session-id", sid])));
+        assert_eq!(gemini.premint_flag(), None, "app tabs are not auto-preminted");
+        // Only gemini: codex has no such flag.
+        assert_eq!(session_id_from_spawn_argv("codex", &args(&["--session-id", sid])), None);
+    }
 
     #[test]
     fn spawn_argv_extraction_covers_every_premint_grammar() {

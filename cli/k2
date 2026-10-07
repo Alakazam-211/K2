@@ -230,6 +230,9 @@ _cli_tool_id_for_verb() {
         wiki) echo "wiki" ;;
         respond) echo "respond" ;;
         connections|reserve|release|roster|who) echo "connections" ;;
+        # k2 sidecar v1 (SC35): an `id` tool, so inside a K2 terminal the
+        # daemon sees the session's passport, never the owner token.
+        sidecar) echo "sidecar" ;;
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         db) echo "db" ;;
@@ -263,7 +266,7 @@ _cli_tool_id_for_verb() {
 _cli_tool_default_mode() {
     case "${1:-}" in
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
-        msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
+        msg|inbox|respond|awareness|connections|heartbeat|sidecar) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
         browser-open|settings) echo "id" ;;
         *) echo "open" ;;
@@ -410,6 +413,19 @@ if [ "${1:-}" = "zen" ]; then
             ;;
     esac
 fi
+# `k2 sidecar` / `k2 sidecar --help` print help; `k2 sessions spawn` is
+# retired and only prints where it moved. Neither talks to the daemon.
+if [ "${1:-}" = "sidecar" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *)
+            for _a in "${@:2}"; do
+                case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
+            done
+            ;;
+    esac
+fi
+[ "${1:-}" = "sessions" ] && [ "${2:-}" = "spawn" ] && _skip_conn_gate=1
 # `k2 tickets template` prints the static brief skeleton (H42).
 case "${1:-}" in
     tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;
@@ -8130,49 +8146,11 @@ PY
     echo
 }
 
-# Spawn a Session Stream session in the daemon. After spawn, the
-# session's agent_name is registered in the daemon's session_map,
-# which means `k2 signal <agent>` now reaches that session's
-# live PTY via the InjectProvider.
-#
-# Usage:
-#   k2 sessions spawn --agent foo [--cwd <path>] [--command <cmd>] [--cols N] [--rows N]
+# `k2 sessions spawn` posted to /cli/sessions/spawn, a route removed in
+# 0.39.0 (prd-k2-sidecar-cli-v1 SC28). It now only says where it moved.
 cmd_sessions_spawn() {
-    local agent="" cwd="$(pwd)" command="" cols="80" rows="24"
-    local args_json="null"
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --agent)   agent="$2"; shift 2 ;;
-            --cwd)     cwd="$2"; shift 2 ;;
-            --command) command="$2"; shift 2 ;;
-            --cols)    cols="$2"; shift 2 ;;
-            --rows)    rows="$2"; shift 2 ;;
-            --) shift; break ;;
-            *) shift ;;
-        esac
-    done
-    [[ -z "$agent" ]] && { echo "Usage: k2 sessions spawn --agent <name> [--command <cmd>]" >&2; exit 1; }
-
-    local cmd_json="null"
-    [[ -n "$command" ]] && cmd_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")
-
-    local body
-    body=$(python3 <<PY
-import json
-body = {
-    "agent_name": "$agent",
-    "cwd": "$cwd",
-    "cols": int("$cols"),
-    "rows": int("$rows"),
-}
-cmd = $cmd_json
-if cmd is not None:
-    body["command"] = cmd
-print(json.dumps(body))
-PY
-)
-    cli_post_json "/cli/sessions/spawn" "$body"
-    echo
+    echo "k2 sessions spawn moved to: k2 sidecar new <name> --harness <preset> (see k2 sidecar --help)" >&2
+    exit 2
 }
 
 # List every session this project's filesystem knows about, by
@@ -8450,12 +8428,356 @@ cmd_sessions() {
         set-label) cmd_sessions_set_label "$@" ;;
         *)
             echo "Usage:" >&2
-            echo "  k2 sessions spawn --agent <name> [...]" >&2
             echo "  k2 sessions list [--json]                     # on-disk archives" >&2
             echo "  k2 sessions live <workspace> [--json|--count] # live daemon sessions" >&2
             echo "  k2 sessions compact <session-id>" >&2
             echo "  k2 sessions set-label <session-id> <label> [--no-lock]" >&2
             exit 1
+            ;;
+    esac
+}
+
+# ── k2 sidecar v1 (prd-k2-sidecar-cli-v1) ────────────────────────────
+# The daemon owns the job (SC2): POST /cli/sidecar/new|stop, GET
+# /cli/sidecar/list, POST /cli/agent-access/set. `sidecar` is an `id`
+# tool (SC35): inside a K2 terminal the request carries this session's
+# passport (per-cell socket first, else TCP with the scoped token), never
+# the owner token.
+
+_sidecar_usage() {
+    cat <<'EOF'
+k2 sidecar — open extra AI sessions (sidecars) in a workspace
+
+  k2 sidecar new <name> --harness <preset> [--brief <file>|-] [--brief-text "…"]
+                 [--workspace <ws>] [--model <model>] [--json]
+  k2 sidecar list [--workspace <ws>] [--json]
+  k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]
+  k2 sidecar access on|off|status [--workspace <ws>]      owner/admin
+
+A sidecar shares this workspace's role, skills and inbox. Its address is
+<workspace>/<name>. Message it with k2 msg <address>; it replies the same way.
+new on a stopped name resumes the same conversation.
+Harnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).
+Agents: only the main session, only with "Allow hiring and managing agents" on.
+Do not put secrets in a brief.
+More: k2 study sidecars
+EOF
+}
+
+# _sidecar_send <GET|POST> <path> <json-body|query> — prints the body, then
+# a last line with the HTTP status. Per-cell socket first (scoped Bearer),
+# else TCP ($TOKEN, already the scoped token inside a cell for id tools).
+_sidecar_send() {
+    local method="$1" path="$2" payload="${3:-}"
+    local sock out=""
+    sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
+        if [ "$method" = "GET" ]; then
+            out="$(curl -s -G --unix-socket "$sock" "http://localhost${path}" \
+                --connect-timeout 5 --max-time 120 \
+                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+                ${payload:+--data "$payload"} -w $'\n%{http_code}' 2>/dev/null)" || out=""
+        else
+            out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$sock" "http://localhost${path}" \
+                --connect-timeout 5 --max-time 120 \
+                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data-binary @- -w $'\n%{http_code}' 2>/dev/null)" || out=""
+        fi
+        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+            printf '%s' "$out"
+            return 0
+        fi
+    fi
+    if [ "$method" = "GET" ]; then
+        curl -s -G "${BASE_URL}${path}" \
+            --connect-timeout 5 --max-time 120 \
+            --data-urlencode "token=${TOKEN}" \
+            ${payload:+--data "$payload"} -w $'\n%{http_code}' 2>/dev/null || true
+    else
+        printf '%s' "$payload" | curl -s -X POST "${BASE_URL}${path}?token=$(urlencode "$TOKEN")" \
+            --connect-timeout 5 --max-time 120 \
+            -H "Content-Type: application/json" \
+            --data-binary @- -w $'\n%{http_code}' 2>/dev/null || true
+    fi
+}
+
+# Exit code for an HTTP status (k2 study errors; PRD §5.6).
+_sidecar_exit_for() {
+    case "$1" in
+        200) echo 0 ;;
+        400|413) echo 2 ;;
+        403) echo 3 ;;
+        404) echo 4 ;;
+        *) echo 1 ;;
+    esac
+}
+
+# `<body>\n<status>` → _SC_BODY / _SC_STATUS.
+_sidecar_split() {
+    local raw="${1:-}"
+    _SC_STATUS="${raw##*$'\n'}"
+    _SC_BODY="${raw%$'\n'*}"
+    if [ "$_SC_STATUS" = "$raw" ]; then
+        _SC_BODY=""
+    fi
+    [ -z "$_SC_STATUS" ] && _SC_STATUS="000"
+    return 0
+}
+
+# Print a refusal (`code: hint`) to stderr and exit with its code.
+_sidecar_fail() {
+    local status="$1" body="$2"
+    local line=""
+    if [ -n "$body" ]; then
+        line="$(printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+except Exception:
+    print("daemon_error: " + raw[:200]); sys.exit(0)
+e = v.get("error") if isinstance(v, dict) else None
+if isinstance(e, dict):
+    print("%s: %s" % (e.get("code", "error"), e.get("hint", "")))
+elif e:
+    print("error: %s" % e)
+else:
+    print("error: unexpected response")
+' 2>/dev/null)"
+    fi
+    [ -z "$line" ] && line="daemon_unreachable: no answer from the K2 daemon (status ${status:-none})"
+    echo "$line" >&2
+    exit "$(_sidecar_exit_for "$status")"
+}
+
+# Render one verb's `<body>\n<status>` answer, then exit.
+_sidecar_render() {
+    local verb="$1" as_json="${2:-0}"
+    _sidecar_split "${3:-}"
+    if [ "$_SC_STATUS" != "200" ]; then
+        _sidecar_fail "$_SC_STATUS" "$_SC_BODY"
+    fi
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$_SC_BODY"
+        exit 0
+    fi
+    case "$verb" in
+        new)
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print(v["address"])
+what = "resumed" if v.get("resumed") else "opened"
+brief = v.get("brief") or {}
+extra = (" with brief %s (%d bytes)" % (brief.get("path"), brief.get("bytes", 0))) if brief else ""
+sys.stderr.write("%s %s (%s)%s. Message it: k2 msg %s \"...\"\n" % (what, v["address"], v.get("harness"), extra, v["address"]))
+'
+            ;;
+        stop)
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print(("stopped %s" % v["address"]) if v.get("stopped") else ("%s was already asleep" % v["address"]))
+'
+            ;;
+        list)
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("sidecars", [])
+print("%s: %d live of %d (cap %d); agents may manage: %s" % (v.get("workspace"), v.get("live", 0), len(rows), v.get("cap", 0), "on" if v.get("agentsCanManage") else "off"))
+if not rows:
+    print("(no sidecars)"); sys.exit(0)
+fmt = "%-28s %-20s %-8s %-7s %-14s %s"
+print(fmt % ("ADDRESS", "NAME", "HARNESS", "STATE", "BY", "SINCE"))
+for r in rows:
+    since = r.get("lastSeenAt") or 0
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(since)) if since else "-"
+    print(fmt % (r.get("address") or "-", (r.get("name") or "-")[:20], r.get("harness") or "-",
+                 r.get("state") or "-", (r.get("createdBy") or "app")[:14], when))
+'
+            ;;
+        access)
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Allow hiring and managing agents: %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
+'
+            ;;
+    esac
+    exit 0
+}
+
+cmd_sidecar_new() {
+    local name="" harness="" brief_file="" brief_text="" have_text=0 workspace="" model="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --harness) harness="${2:-}"; shift 2 ;;
+            --brief) brief_file="${2:-}"; shift 2 ;;
+            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --model) model="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            --) shift; break ;;
+            -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"
+                else
+                    echo "usage: one name only; quote names with spaces (k2 sidecar --help)" >&2
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ] || [ -z "$harness" ]; then
+        echo "usage: k2 sidecar new <name> --harness <preset> [--brief <file>|-] [--brief-text \"…\"]" >&2
+        exit 2
+    fi
+    if [ -n "$brief_file" ] && [ "$have_text" = "1" ]; then
+        echo "usage: pass --brief or --brief-text, not both" >&2
+        exit 2
+    fi
+    local brief_src=""
+    if [ -n "$brief_file" ]; then
+        if [ "$brief_file" = "-" ]; then
+            brief_src="$(mktemp -t k2-sidecar-brief-XXXXXX)"
+            cat > "$brief_src"
+        elif [ -f "$brief_file" ]; then
+            brief_src="$brief_file"
+        else
+            echo "usage: brief file not found: $brief_file" >&2
+            exit 2
+        fi
+    fi
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local body rc=0
+    body="$(K2_SC_NAME="$name" K2_SC_HARNESS="$harness" K2_SC_WS="$workspace" K2_SC_MODEL="$model" \
+        K2_SC_BRIEF_FILE="$brief_src" K2_SC_BRIEF_TEXT="$brief_text" K2_SC_HAVE_TEXT="$have_text" python3 -c '
+import json, os, sys
+b = {"workspace": os.environ["K2_SC_WS"], "name": os.environ["K2_SC_NAME"],
+     "harness": os.environ["K2_SC_HARNESS"]}
+if os.environ.get("K2_SC_MODEL"):
+    b["model"] = os.environ["K2_SC_MODEL"]
+path = os.environ.get("K2_SC_BRIEF_FILE")
+if path:
+    raw = open(path, "rb").read()
+    try:
+        b["brief"] = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        sys.stderr.write("brief_not_text: the brief is not UTF-8 text\n"); sys.exit(2)
+elif os.environ.get("K2_SC_HAVE_TEXT") == "1":
+    b["brief"] = os.environ.get("K2_SC_BRIEF_TEXT", "")
+print(json.dumps(b))
+')" || rc=$?
+    [ "$brief_file" = "-" ] && rm -f "$brief_src"
+    [ "$rc" -ne 0 ] && exit 2
+    local raw
+    raw="$(_sidecar_send POST /cli/sidecar/new "$body")" || true
+    _sidecar_render new "$as_json" "$raw"
+}
+
+cmd_sidecar_list() {
+    local workspace="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 sidecar list [--workspace <ws>] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local raw
+    raw="$(_sidecar_send GET /cli/sidecar/list "workspace=$(urlencode "$workspace")")" || true
+    _sidecar_render list "$as_json" "$raw"
+}
+
+cmd_sidecar_stop() {
+    local name="" workspace="" force=0 as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --force) force=1; shift ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"
+                else
+                    echo "usage: k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]" >&2
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        echo "usage: k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]" >&2
+        exit 2
+    fi
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local body
+    body="$(K2_SC_NAME="$name" K2_SC_WS="$workspace" K2_SC_FORCE="$force" python3 -c '
+import json, os
+print(json.dumps({"workspace": os.environ["K2_SC_WS"], "name": os.environ["K2_SC_NAME"],
+                  "force": os.environ["K2_SC_FORCE"] == "1"}))
+')"
+    local raw
+    raw="$(_sidecar_send POST /cli/sidecar/stop "$body")" || true
+    _sidecar_render stop "$as_json" "$raw"
+}
+
+cmd_sidecar_access() {
+    local action="${1:-}" workspace=""
+    shift 2>/dev/null || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            *) echo "usage: k2 sidecar access on|off|status [--workspace <ws>]" >&2; exit 2 ;;
+        esac
+    done
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local raw
+    case "$action" in
+        on|off)
+            local body
+            body="$(K2_SC_WS="$workspace" K2_SC_ON="$action" python3 -c '
+import json, os
+print(json.dumps({"workspace": os.environ["K2_SC_WS"], "toggle": "agents_manage",
+                  "value": os.environ["K2_SC_ON"] == "on"}))
+')"
+            raw="$(_sidecar_send POST /cli/agent-access/set "$body")" || true
+            _sidecar_render access 0 "$raw"
+            ;;
+        status)
+            raw="$(_sidecar_send GET /cli/sidecar/list "workspace=$(urlencode "$workspace")")" || true
+            _sidecar_render access 0 "$raw"
+            ;;
+        *)
+            echo "usage: k2 sidecar access on|off|status [--workspace <ws>]" >&2
+            exit 2
+            ;;
+    esac
+}
+
+cmd_sidecar() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|help|--help|-h) _sidecar_usage; return 0 ;;
+    esac
+    shift
+    if _wants_help "$@"; then
+        _sidecar_usage
+        return 0
+    fi
+    case "$sub" in
+        new) cmd_sidecar_new "$@" ;;
+        list|ls) cmd_sidecar_list "$@" ;;
+        stop) cmd_sidecar_stop "$@" ;;
+        access) cmd_sidecar_access "$@" ;;
+        *)
+            echo "usage: unknown sidecar verb '$sub' (new|list|stop|access — k2 sidecar --help)" >&2
+            exit 2
             ;;
     esac
 }
@@ -12667,6 +12989,7 @@ cmd_help() {
         inbox)                    cmd_help_inbox ;;
         agent)                    cmd_help_agent ;;
         preset)                   cmd_help_preset ;;
+        sidecar)                  _sidecar_usage ;;
         feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
         db)                       cmd_help_db ;;
@@ -13204,11 +13527,46 @@ cmd_schema() {
       ]
     },
     {
-      "name": "sessions spawn",
-      "usage": "k2 sessions spawn --agent <name> [...]",
-      "description": "Spawn a v2 session for an agent (daemon-side).",
+      "name": "sidecar new",
+      "usage": "k2 sidecar new <name> --harness <preset> [--brief <file>|-] [--brief-text \"...\"] [--workspace <ws>] [--model <m>] [--json]",
+      "description": "Open a named sidecar (<workspace>/<name>) running a preset's harness, hand it a brief; prints the address. A stopped name resumes.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--harness", "arg": "preset", "description": "Preset id, label or command (claude, grok, codex, gemini, cursor-agent, pi, hermes)."},
+        {"name": "--brief", "arg": "file", "description": "Brief file, or - for stdin. Saved to .k2/sidecars/<name>/BRIEF.md (max 64 KiB)."},
+        {"name": "--brief-text", "arg": "text", "description": "Brief text inline."},
+        {"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."},
+        {"name": "--model", "arg": "model", "description": "Model for the harness."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "sidecar list",
+      "usage": "k2 sidecar list [--workspace <ws>] [--json]",
+      "description": "The workspace's sidecars, live and asleep.",
       "args": [],
-      "flags": [{"name": "--agent", "arg": "name", "description": "Agent name."}]
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "sidecar stop",
+      "usage": "k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]",
+      "description": "Stop a sidecar's process. Keeps its address, name, history and brief.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."},
+        {"name": "--force", "arg": null, "description": "Stop even while someone views it (not for agents)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "sidecar access",
+      "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
+      "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",
+      "args": [{"name": "on|off|status", "required": true}],
+      "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
     {
       "name": "connections",
@@ -15429,7 +15787,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars"
 
 _study_usage() {
     cat <<'EOF'
@@ -15472,6 +15830,7 @@ _study_title() {
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
         zen) echo "Zen Gardens" ;;
+        sidecars) echo "Sidecars" ;;
         *) echo "" ;;
     esac
 }
@@ -15510,6 +15869,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
   zen                 Zen Gardens: the one rule; the guide is k2 zen guide
+  sidecars            Open, list and stop sidecars; the brief; who may
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -15541,6 +15901,7 @@ _study_page() {
         feedback-loop) _study_page_feedback_loop ;;
         ticket-brief) _study_page_ticket_brief ;;
         zen) _study_page_zen ;;
+        sidecars) _study_page_sidecars ;;
         *) return 1 ;;
     esac
 }
@@ -16946,6 +17307,43 @@ THE FULL GUIDE
   k2 zen guide gardens               start here
   k2 zen guide example --list        whole files you can pipe
   The k2-zen skill has every widget prop and theme token.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_sidecars() {
+    cat <<'EOF'
+k2 study sidecars — extra AI sessions in a workspace
+
+WHAT
+  A sidecar is an extra AI session in a workspace. It shares the
+  workspace's role, skills and inbox; it is not a second agent (see
+  k2 study identity). Its address is <workspace>/<name>.
+
+VERBS
+  k2 sidecar new <name> --harness <preset> --brief <file>   prints the address
+  k2 sidecar list                                           live and asleep
+  k2 sidecar stop <name>                                    stop is sleep
+  k2 sidecar access on|off|status --workspace <ws>          owner/admin
+
+RULES
+  Names: lowercase letters, digits, single hyphens; not all digits; 40 max.
+  new on a stopped name resumes the same conversation and address.
+  stop keeps the address, name, history and brief. k2 msg wakes it.
+  The brief is saved to .k2/sidecars/<name>/BRIEF.md (0600, 64 KiB max);
+  the sidecar gets one line pointing at it. No secrets in a brief.
+  At most 8 live sidecars per workspace.
+
+WHO
+  Agents: only the main session, only with "Allow hiring and managing
+  agents" on, only its own workspace, only presets, never more power
+  than itself; it stops only sidecars an agent opened. Sidecars cannot
+  open sidecars. Where agents run as the owner's user, these are
+  guardrails, not locks.
+
+HANDBACK
+  Write in the brief: "when done, k2 msg <primary> with a summary".
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -21097,7 +21495,6 @@ TERMINAL (raw PTY I/O)
   terminal read <id> [--lines N]                Last N lines from buffer
 
 SESSIONS (low-level session lifecycle)
-  sessions spawn --agent <n>                    Session Stream spawn
   sessions list [--json]                        Raw session map
   sessions live                                 Subscribe to session events
   sessions compact                              Compact archive ring
@@ -21449,6 +21846,8 @@ AGENTS
                                         list/retire/context — see `k2 agent --help`)
   preset                                Agent PRESETS: the launchable agent roster + custom
                                         agents (list/show/add/set/remove — `k2 preset --help`)
+  sidecar new <name> --harness <preset> Open a named sidecar (<workspace>/<name>) with a brief;
+                                        list / stop / access — see `k2 sidecar --help`
 
 ASK A HUMAN
   feedback ask "<title>"                File a durable ask for human input (survives
@@ -36857,8 +37256,12 @@ EOF
         cmd_help_internal
         ;;
     sessions)
-        # 0.34.0 Phase 3.1 — k2 sessions spawn --agent foo
+        # `k2 sessions spawn` is retired (moved to `k2 sidecar new`).
         shift; cmd_sessions "$@"
+        ;;
+    sidecar)
+        # k2 sidecar v1 (prd-k2-sidecar-cli-v1).
+        shift; cmd_sidecar "$@"
         ;;
     reserve)
         shift; cmd_reserve "$@"

@@ -164,6 +164,12 @@ pub struct Project {
     /// access stay owner-only even when this is ON.
     #[serde(default)]
     pub mail_manage_enabled: i64,
+    /// k2 sidecar v1 (migration 0132) — "Allow hiring and managing
+    /// agents". 1 = this workspace's main agent may open and stop
+    /// sidecars (`k2 sidecar new|stop`); 0 (default) = deny. Written
+    /// only by `POST /cli/agent-access/set` (Admin). Fail-closed.
+    #[serde(default)]
+    pub agents_can_manage_agents: i64,
 }
 
 impl Project {
@@ -179,7 +185,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -224,6 +230,7 @@ impl Project {
                 },
                 agents_can_manage_skin: row.get(30).unwrap_or(0),
                 mail_manage_enabled: row.get(31).unwrap_or(0),
+                agents_can_manage_agents: row.get(32).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -234,7 +241,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -279,6 +286,7 @@ impl Project {
                     },
                     agents_can_manage_skin: row.get(30).unwrap_or(0),
                     mail_manage_enabled: row.get(31).unwrap_or(0),
+                    agents_can_manage_agents: row.get(32).unwrap_or(0),
                 })
             },
         )
@@ -4807,6 +4815,32 @@ mod unit_tests {
             serde_json::to_value(&written).unwrap()["mailManageEnabled"],
             1
         );
+    }
+
+    #[test]
+    fn project_agents_can_manage_agents_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-manage");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_agents, 0, "0132 default is off");
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!(listed_p.agents_can_manage_agents, 0);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["agentsCanManageAgents"], 0, "{json}");
+        conn.execute(
+            "UPDATE projects SET agents_can_manage_agents = 1 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        assert_eq!(Project::get(&conn, &id).unwrap().agents_can_manage_agents, 1);
+        // Sidecar tab-row columns exist (0132).
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, created_by, brief_path, adopt_since) \
+             VALUES (?1, 'pg-0132', 'tab-pg-0132', 'owner', '.k2/sidecars/x/BRIEF.md', 5)",
+            params![id],
+        )
+        .expect("0132 tab-row columns");
     }
 
     #[test]

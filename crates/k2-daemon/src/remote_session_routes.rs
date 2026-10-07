@@ -340,6 +340,7 @@ fn spawn_remote_shell(grant_id: &str, principal_label: &str, body: &[u8]) -> Cli
         canonical_key: Some(canonical_key),
         env: Default::default(),
         launch_prompt: None,
+        label: None,
     }) {
         Ok(o) => o,
         Err(e) => {

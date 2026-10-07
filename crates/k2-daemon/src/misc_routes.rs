@@ -1119,6 +1119,18 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     if let Some(id) = conversation_id {
                         row["conversationId"] = serde_json::Value::String(id);
                     }
+                    // k2 sidecar SC33: the daemon-seeded label, so reconcile
+                    // and reconnect adopt paths title a sidecar by its name.
+                    let label = session.0.label();
+                    if !label.trim().is_empty() {
+                        row["label"] = serde_json::Value::String(label.trim().to_string());
+                        if matches!(
+                            session.0.label_source(),
+                            k2_core::terminal::LabelSource::Locked
+                        ) {
+                            row["labelLocked"] = serde_json::Value::Bool(true);
+                        }
+                    }
                     out.push(row);
                 }
                 CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()))

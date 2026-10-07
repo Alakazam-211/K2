@@ -59,6 +59,12 @@ export interface SessionAddedEvent {
    *  forward-compatible: older daemons omit it and the renderer treats the
    *  absence as "not sandboxed". */
   sandbox_backend?: string
+  /** k2 sidecar SC33 — the daemon-seeded label (a sidecar's Chats name).
+   *  Absent when the daemon seeded none; adopt paths fall back to the
+   *  command. */
+  label?: string
+  /** SC33 — the label is locked (PTY titles must not replace it). */
+  labelLocked?: boolean
   /** Client-only: Chat history explicit open bypasses hide-sessions. */
   forceAdopt?: boolean
 }

@@ -296,6 +296,7 @@ fn launch_request_for(
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
         launch_prompt: None,
+        label: None,
     }
 }
 

@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -296,6 +296,15 @@ tb_json="$("$K2" study ticket-brief --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="ticket-brief" and "k2-need" in d["body"], d["id"]' "$tb_json"
 echo "  PASS: ticket-brief --json id+body"
 pass=$((pass + 1))
+
+echo "== k2 study sidecars =="
+sc_out="$("$K2" study sidecars)"
+assert_contains "sidecar verbs" "$sc_out" "k2 sidecar new <name> --harness <preset>"
+assert_contains "stop is sleep" "$sc_out" "stop is sleep"
+assert_contains "brief file" "$sc_out" ".k2/sidecars/<name>/BRIEF.md"
+assert_contains "switch named" "$sc_out" "Allow hiring and managing"
+assert_contains "guardrail sentence" "$sc_out" "guardrails, not locks"
+assert_contains "handback" "$sc_out" "k2 msg <primary>"
 
 echo "== k2 study people =="
 people_out="$("$K2" study people)"

@@ -110,6 +110,8 @@ use Floor::{Admin, Member, NoLogin, Owner, Public};
 /// a binary search; a unit test pins the order and uniqueness).
 pub const ROUTES: &[Route] = &[
     get("/cli/activity/events", Member),
+    // k2 sidecar v1: the "Allow hiring and managing agents" switch.
+    post("/cli/agent-access/set", Admin),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
     get("/cli/agent/list", Member),
@@ -626,6 +628,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/settings/get", Member),
     post("/cli/settings/reset", Member),
     post("/cli/settings/update", Member),
+    // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
+    get("/cli/sidecar/list", Member),
+    post("/cli/sidecar/new", Admin),
+    post("/cli/sidecar/stop", Admin),
     post("/cli/skill-layers/create", Member),
     post("/cli/skill-layers/delete", Member),
     get("/cli/skill-layers/get-content", Member),

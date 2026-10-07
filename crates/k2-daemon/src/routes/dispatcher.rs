@@ -4606,6 +4606,57 @@ async fn handle_one_request(
         // (keep-alive ratchet); bodies over 64 KB get 413 and close. Only
         // the LOCAL owner token passes: a Connect login of any role, an app
         // pass or an agent passport gets 403 `zen_local_only` (Z15a).
+        // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1): new / list / stop
+        // and the agent-access switch. POST rows refuse a GET with 405
+        // (require_post; also refused centrally). Bodies go through the
+        // capped reader: over the cap → 413 and the socket closes, so the
+        // unread rest is never parsed as the next request (SC42). Every
+        // refusal consumes the request first. Auth lives in the handler:
+        // owner token, a Connect login (floors in route_policy), or a
+        // passport whose VALIDATED session decides agent vs shell (SC36).
+        p if crate::sidecar_routes::is_route(p) => {
+            let post_row = crate::sidecar_routes::is_post_route(p);
+            if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::sidecar_routes::body_cap(p),
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::sidecar_routes::too_large(p);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::sidecar_routes::handle(&p_owned, caller, &body_bytes, &params, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p.starts_with("/cli/zen/") => {
             let is_post_row = crate::zen_routes::POST_ROUTES.contains(&p);
             if is_post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

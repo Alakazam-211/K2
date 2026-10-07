@@ -1730,22 +1730,43 @@ fn wake_sidecar_and_fire(
     let Some(spawn_command) = saved_cmd else {
         return MsgResponse::fail(MsgReason::NoAgentMode);
     };
-    let mut spawn_args: Vec<String> = tab
+    let saved_args: Vec<String> = tab
         .args_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
-    if let Some(sid) = tab.session_id.as_deref().filter(|s| !s.is_empty()) {
-        if let Some(adapter) =
-            k2_core::workspace::provider_resume::provider_resume_for_command(&spawn_command)
-        {
-            if !adapter.argv_carries_session_identity(&spawn_args) {
-                spawn_args = adapter.resume_args(&spawn_args, sid);
-            }
-        }
-    }
+    let wake_cwd = tab
+        .cwd
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| project_path.to_string());
+    // SC48: the ONE resume helper restart recovery uses. A fresh CLI
+    // sidecar's tab row stores `--session-id <cid>`; replaying it would
+    // start a new conversation (or be refused) — drop it and resume.
+    let relaunch = crate::sidecar_routes::relaunch_plan(
+        project_id,
+        &tab.pane_group_id,
+        &wake_cwd,
+        &spawn_command,
+        &saved_args,
+        tab.session_id.as_deref(),
+    );
+    let (spawn_args, restart_prompt) = match relaunch {
+        Some(r) => (r.args, r.launch_prompt),
+        None => (saved_args, None),
+    };
+    // SC30: a woken sidecar keeps its own label (its Chats name), not the
+    // workspace's agent name.
+    let wake_label =
+        crate::sidecar_routes::sidecar_display_name(&tab.pane_group_id, tab.session_id.as_deref());
 
     let payload = format_message(from, text, command);
+    // A fresh restart (codex / hermes before discovery) re-points the brief
+    // in the same first turn as the message.
+    let first_turn = match restart_prompt {
+        Some(p) => format!("{p}\n\n{payload}"),
+        None => payload.clone(),
+    };
     let (spawn_command, spawn_args, wake_timeout, inject_profile, launch_prompt) =
         match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
             Ok(c) if !c.is_empty() => (
@@ -1766,7 +1787,7 @@ fn wake_sidecar_and_fire(
                     spawn_args,
                     wake_timeout,
                     k2_core::workspace::provider_resume::injection_profile_for_provider(provider),
-                    Some(payload.clone()),
+                    Some(first_turn.clone()),
                 )
             }
         };
@@ -1789,6 +1810,7 @@ fn wake_sidecar_and_fire(
         canonical_key: Some(tab.agent_name.clone()),
         env: HashMap::new(),
         launch_prompt,
+        label: wake_label,
     }) {
         Ok(o) => o,
         Err(e) => {
@@ -1813,7 +1835,7 @@ fn wake_sidecar_and_fire(
             wake_start.elapsed().as_millis() as u64,
         );
     }
-    match deliver_post_wake(&live, &payload, wake_timeout, &inject_profile) {
+    match deliver_post_wake(&live, &first_turn, wake_timeout, &inject_profile) {
         InjectOutcome::Delivered => MsgResponse::ok_woke(
             target_id,
             "sidecar_wake",
@@ -2189,6 +2211,7 @@ fn wake_and_fire(
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
         launch_prompt,
+        label: None,
     }) {
         Ok(o) => o,
         Err(e) => {

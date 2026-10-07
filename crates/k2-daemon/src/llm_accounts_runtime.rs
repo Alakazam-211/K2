@@ -693,12 +693,6 @@ pub fn slot_in_use(account_id: &str) -> bool {
     }
 }
 
-/// Which logins have running pinned sessions (for the LLMs page).
-pub fn in_use_ids() -> Vec<String> {
-    let keys: Vec<String> = in_use_map().lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
-    keys.into_iter().filter(|k| slot_in_use(k)).collect()
-}
-
 /// Holds the slot lock across a pinned spawn; [`SpawnGuard::spawned`]
 /// marks the slot in use by the child.
 pub struct SpawnGuard {

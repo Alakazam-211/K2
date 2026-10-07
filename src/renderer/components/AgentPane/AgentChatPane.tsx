@@ -42,6 +42,7 @@ import {
   type ResolveMemo,
 } from '@/lib/chat-spawn-breaker'
 import type { ServerScope } from '@/kessel/server-scope'
+import { SessionLoginPicker } from '@/components/Settings/shared/LlmLoginPicker'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -198,6 +199,8 @@ interface ChatHeaderProps {
   pinnedProvider: string | null
   /** Opens the shared continue dialog. Does not switch sessions. */
   onContinueNewChat: (source: ContinueNewChatSource) => void
+  /** Workspace id = the pinned chat's session key (LLM login pin). */
+  projectId?: string
 }
 
 interface HistorySession {
@@ -227,6 +230,7 @@ function ChatHeader({
   harnessReady,
   pinnedProvider,
   onContinueNewChat,
+  projectId,
 }: ChatHeaderProps): React.JSX.Element {
   const room = useRoom()
   useEffect(() => {
@@ -330,6 +334,13 @@ function ChatHeader({
         {displayName}
       </span>
       <div className="flex min-w-0 items-center justify-end gap-1">
+      {projectId && (
+        <SessionLoginPicker
+          scope={room.scope}
+          projectId={projectId}
+          provider={currentSession?.provider || pinnedProvider}
+        />
+      )}
       {/* 0.37.12 — chat-history dropdown. Lets the user switch the
           pinned chat to a different past session (escape hatch for
           orphaned/deleted sessions or just to revisit). */}
@@ -1072,6 +1083,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       harnessReady={harnessReady}
       pinnedProvider={liveProvider}
       onContinueNewChat={setContinueSource}
+      projectId={projectId}
     />
   )
 
@@ -1625,6 +1637,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       harnessReady={launchConfig != null}
       pinnedProvider={providerKeyForCommand(launchConfig?.command)}
       onContinueNewChat={setContinueSource}
+      projectId={projectId}
     />
   )
 

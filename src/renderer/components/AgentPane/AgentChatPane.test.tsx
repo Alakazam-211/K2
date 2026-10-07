@@ -119,6 +119,8 @@ vi.mock('@/stores/session-events', async () => {
       return h.unsubscribe
     },
     onChatHistoryChanged: () => () => {},
+    // The chat header's LLM login picker refetches on this event.
+    onLlmAccountsChanged: () => () => {},
   }
 })
 

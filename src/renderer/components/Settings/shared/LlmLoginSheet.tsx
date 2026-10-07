@@ -278,7 +278,7 @@ export function LlmLoginSheet({
               <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
                 <div className="text-xs text-[var(--color-text-secondary)]">Make the new login active?</div>
                 <div className="text-[10px] text-[var(--color-text-muted)]">
-                  Switching affects every session on this server.
+                  Switching affects every unpinned session on this server.
                 </div>
                 <div className="flex gap-2">
                   <button

@@ -1,10 +1,13 @@
 // Settings → LLMs, right column: "Logins" — the LLM login wallet.
 //
-// One login per tool is active on the server (the tool's normal store), so
-// every session uses it and conversations never split. The other logins
-// wait in the daemon's wallet. Switching affects every session on the
-// server; running sessions pick up the new login. K2 never switches on its
-// own: "Switch to next login" is a click.
+// The pool: one login per tool is active on the server (the tool's normal
+// store), so every unpinned session uses it and conversations never split.
+// The other logins wait in the daemon's wallet. Switching the pool affects
+// every unpinned session on the server; running sessions pick up the new
+// login. A workspace or session can be pinned to its own login (workspace
+// settings → Agent → LLM logins, or the chat header); pinned sessions keep
+// their login. API-key logins are billed per token. K2 never switches on
+// its own: "Switch to next login" is a click.
 
 import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
@@ -12,7 +15,10 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
+  addApiKey,
   errorText,
+  isPinned,
+  PINNED_SWITCH_REASON,
   removeLogin,
   renameLogin,
   STATE_LABELS,
@@ -23,6 +29,7 @@ import {
   type LlmAccount,
   type LlmTool,
 } from '@/stores/llm-accounts'
+import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
 
 /** The big 7 rows, in the page's order, with their icon names. */
@@ -37,7 +44,9 @@ export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: stri
 ]
 
 export const SWITCH_NOTE =
-  'One login per tool is active on this server. Switching affects every session on this server; running sessions pick up the new login.'
+  'One login per tool is active on this server (the pool). Switching affects every unpinned session on this server; running sessions pick up the new login. Pinned workspaces and sessions keep their own login.'
+
+export const BILLED_PER_TOKEN = 'Billed per token'
 
 const STATE_COLORS: Record<string, string> = {
   signed_in: '#22c55e',
@@ -49,7 +58,16 @@ const STATE_COLORS: Record<string, string> = {
 
 function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | null {
   const windows = account.usage?.windows ?? []
-  if (windows.length === 0) return null
+  if (windows.length === 0) {
+    if (account.kind === 'api_key') {
+      return (
+        <div className="text-[9px] text-[var(--color-text-muted)] mt-1" data-testid={`llm-usage-${account.id}`}>
+          billed per token
+        </div>
+      )
+    }
+    return null
+  }
   return (
     <div className="flex gap-3 mt-1" data-testid={`llm-usage-${account.id}`}>
       {windows.slice(0, 2).map((w) => {
@@ -72,6 +90,12 @@ function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | n
   )
 }
 
+function pinLabel(a: LlmAccount): string {
+  return (a.pinnedTo ?? [])
+    .map((p) => (p.scopeKind === 'workspace' ? p.label : `session ${p.label}`))
+    .join(', ')
+}
+
 function AccountRow({
   account,
   tool,
@@ -87,9 +111,14 @@ function AccountRow({
   const confirm = useConfirmDialogStore((s) => s.confirm)
   const [renaming, setRenaming] = useState(false)
   const [newLabel, setNewLabel] = useState(account.label)
+  const apiKey = account.kind === 'api_key'
   const signedIn = account.state === 'signed_in'
-  const needsLogin = account.state === 'needs_login' || account.state === 'not_set_up'
+  const needsLogin = !apiKey && (account.state === 'needs_login' || account.state === 'not_set_up')
+  // A pinned sign-in can't be live in two places (rotating tokens): no
+  // pool switch, no remove, no new sign-in until it is unpinned.
+  const pinnedBlock = !apiKey && isPinned(account)
   const who = [account.email, account.org].filter(Boolean).join(' · ')
+  const pinnedTo = pinLabel(account)
 
   const run = useCallback(
     (p: Promise<unknown>) => {
@@ -101,12 +130,16 @@ function AccountRow({
   const remove = useCallback(async () => {
     const ok = await confirm({
       title: `Remove ${account.label}?`,
-      message: `K2 moves this ${tool.display} login to the wallet's trash on the server. Log it in again later to use it.`,
+      message: apiKey
+        ? `K2 moves this ${tool.display} API key to the wallet's trash on the server.`
+        : `K2 moves this ${tool.display} login to the wallet's trash on the server. Log it in again later to use it.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
     if (ok) run(removeLogin(scope, account.id))
-  }, [confirm, account, tool.display, run, scope])
+  }, [confirm, account, apiKey, tool.display, run, scope])
+
+  const removeBlocked = account.active ? 'Switch to another login first' : pinnedBlock ? PINNED_SWITCH_REASON : undefined
 
   return (
     <div className="px-3 py-2 border-t border-[var(--color-border)]" data-testid={`llm-account-${account.id}`}>
@@ -141,18 +174,38 @@ function AccountRow({
               Active
             </span>
           )}
+          {apiKey && (
+            <span
+              className="text-[8px] uppercase tracking-wider px-1 py-px border border-[var(--color-border)] text-[var(--color-text-muted)]"
+              data-testid={`llm-billed-${account.id}`}
+            >
+              {BILLED_PER_TOKEN}
+            </span>
+          )}
           <span className="text-[10px] text-[var(--color-text-muted)]">
             {STATE_LABELS[account.state] ?? account.state}
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
           {!account.active && signedIn && (
-            <button type="button" className="text-[var(--color-accent)]" onClick={() => run(switchLogin(scope, account.id))}>
+            <button
+              type="button"
+              className="text-[var(--color-accent)] disabled:opacity-40"
+              disabled={pinnedBlock}
+              title={pinnedBlock ? PINNED_SWITCH_REASON : undefined}
+              onClick={() => run(switchLogin(scope, account.id))}
+            >
               Make active
             </button>
           )}
           {!account.active && needsLogin && (
-            <button type="button" className="text-[var(--color-accent)]" onClick={() => onLoginAgain(account)}>
+            <button
+              type="button"
+              className="text-[var(--color-accent)] disabled:opacity-40"
+              disabled={pinnedBlock}
+              title={pinnedBlock ? PINNED_SWITCH_REASON : undefined}
+              onClick={() => onLoginAgain(account)}
+            >
               Log in again
             </button>
           )}
@@ -162,8 +215,8 @@ function AccountRow({
           <button
             type="button"
             className="text-[var(--color-text-muted)] disabled:opacity-40"
-            disabled={account.active}
-            title={account.active ? 'Switch to another login first' : undefined}
+            disabled={removeBlocked !== undefined}
+            title={removeBlocked}
             onClick={() => void remove()}
           >
             Remove
@@ -175,6 +228,16 @@ function AccountRow({
           {[who, account.plan].filter(Boolean).join(' · ')}
         </div>
       )}
+      {pinnedTo && (
+        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate" data-testid={`llm-pinned-${account.id}`}>
+          Pinned to: {pinnedTo}
+        </div>
+      )}
+      {account.inUse && (
+        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-inuse-${account.id}`}>
+          In use by a pinned session
+        </div>
+      )}
       {account.detail && account.state !== 'signed_in' && (
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{account.detail}</div>
       )}
@@ -183,10 +246,97 @@ function AccountRow({
   )
 }
 
+/** "+ Add API key": label + key (password field). The key is sent once
+ *  and cleared from state right after; the daemon never returns it. */
+function ApiKeyDialog({
+  scope,
+  tool,
+  toolLabel,
+  onClose,
+}: {
+  scope: ServerScope
+  tool: string
+  toolLabel: string
+  onClose: () => void
+}): React.JSX.Element {
+  const [label, setLabel] = useState('')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = useCallback(async () => {
+    const sentKey = key.trim()
+    setKey('')
+    setBusy(true)
+    setError(null)
+    try {
+      await addApiKey(scope, tool, label.trim(), sentKey)
+      onClose()
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [scope, tool, label, key, onClose])
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
+      role="dialog"
+      aria-label={`Add ${toolLabel} API key`}
+      data-testid="llm-apikey-dialog"
+    >
+      <div className="w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
+        <h3 className="text-sm text-[var(--color-text-primary)]">Add {toolLabel} API key</h3>
+        <label className="block text-[10px] text-[var(--color-text-muted)]">
+          Label
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            aria-label="API key label"
+            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none"
+          />
+        </label>
+        <label className="block text-[10px] text-[var(--color-text-muted)]">
+          Key
+          <input
+            type="password"
+            autoComplete="off"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            aria-label="API key"
+            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none"
+          />
+        </label>
+        <p className="text-[10px] text-[var(--color-text-muted)]">
+          Billed per token by the provider. The key stays on the server and is never shown again.
+        </p>
+        {error && (
+          <p className="text-[10px] text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2 text-xs">
+          <button type="button" className="text-[var(--color-text-muted)]" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="text-[var(--color-accent)] disabled:opacity-40"
+            disabled={busy || !label.trim() || !key.trim()}
+            onClick={() => void submit()}
+          >
+            Add key
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function AgentAccountsColumn(): React.JSX.Element {
   const scope = primaryScope()
   const entry = useLlmAccountsStore((s) => s.entries[scope.id])
   const [sheet, setSheet] = useState<LoginSheetStart | null>(null)
+  const [keyDialog, setKeyDialog] = useState<{ tool: string; toolLabel: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => watchLlmAccounts(scope), [scope])
@@ -219,7 +369,17 @@ export function AgentAccountsColumn(): React.JSX.Element {
         {LOGIN_TOOL_ROWS.map((row, i) => {
           const tool = byTool.get(row.id)
           const supported = tool?.supported === true
-          const signedIn = (tool?.accounts ?? []).filter((a) => a.state === 'signed_in')
+          const canSignIn = supported && tool?.subscription === true
+          const canKey = supported && tool?.apiKeys === true
+          // "Next" cycles the pool's sign-ins only: no API keys, nothing pinned.
+          const cyclable = (tool?.accounts ?? []).filter(
+            (a) => a.state === 'signed_in' && a.kind !== 'api_key' && !isPinned(a),
+          )
+          const activeAcc = tool?.accounts.find((a) => a.id === tool.activeId)
+          const keptLive =
+            activeAcc?.kind === 'api_key' && tool?.liveAccountId
+              ? tool.accounts.find((a) => a.id === tool.liveAccountId)
+              : undefined
           return (
             <div
               key={row.id}
@@ -232,21 +392,39 @@ export function AgentAccountsColumn(): React.JSX.Element {
                   <div className="text-xs text-[var(--color-text-secondary)] truncate">{row.label}</div>
                 </div>
                 {supported ? (
-                  <button
-                    type="button"
-                    className="text-[10px] text-[var(--color-accent)] disabled:opacity-40"
-                    disabled={doc?.airgap === true}
-                    onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
-                  >
-                    + Add login
-                  </button>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    {canSignIn && (
+                      <button
+                        type="button"
+                        className="text-[10px] text-[var(--color-accent)] disabled:opacity-40"
+                        disabled={doc?.airgap === true}
+                        onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
+                      >
+                        + Add login
+                      </button>
+                    )}
+                    {canKey && (
+                      <button
+                        type="button"
+                        className="text-[10px] text-[var(--color-accent)]"
+                        onClick={() => setKeyDialog({ tool: row.id, toolLabel: row.label })}
+                      >
+                        + Add API key
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <span className="text-[10px] text-[var(--color-text-muted)]">Not available yet</span>
                 )}
               </div>
               {supported && tool && tool.accounts.length === 0 && (
                 <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]">
-                  Not signed in on this server.
+                  {canSignIn ? 'Not signed in on this server.' : 'No API key on this server.'}
+                </div>
+              )}
+              {keptLive && (
+                <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
+                  Sign-in kept in {row.label}: {keptLive.label}
                 </div>
               )}
               {supported &&
@@ -261,10 +439,10 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     }
                   />
                 ))}
-              {supported && tool && signedIn.length >= 2 && (
+              {supported && tool && cyclable.length >= 2 && (
                 <div className="px-3 py-2 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
                   <span className="text-[10px] text-[var(--color-text-muted)]">
-                    Use this when a session hits its limit. K2 never switches on its own.
+                    Use this when a session hits its limit. Applies to unpinned sessions. K2 never switches on its own.
                   </span>
                   <button
                     type="button"
@@ -282,6 +460,14 @@ export function AgentAccountsColumn(): React.JSX.Element {
         })}
       </div>
       {sheet && <LlmLoginSheet scope={scope} start={sheet} onClose={() => setSheet(null)} />}
+      {keyDialog && (
+        <ApiKeyDialog
+          scope={scope}
+          tool={keyDialog.tool}
+          toolLabel={keyDialog.toolLabel}
+          onClose={() => setKeyDialog(null)}
+        />
+      )}
     </div>
   )
 }

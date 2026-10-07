@@ -69,22 +69,35 @@ const WORK = account({
 })
 const HOME = account({ id: 'acc_home', label: 'home' })
 const STALE = account({ id: 'acc_stale', label: 'old', state: 'needs_login' })
+const PINNED = account({
+  id: 'acc_pinned',
+  label: 'team',
+  kind: 'subscription',
+  inUse: true,
+  pinnedTo: [{ scopeKind: 'workspace', scopeId: 'proj-1', tool: 'claude', accountId: 'acc_pinned', label: 'research' }],
+})
+const KEY = account({ id: 'acc_key', label: 'metered', kind: 'api_key', billedPerToken: true, plan: 'API key' })
 
 function doc(): Record<string, unknown> {
-  const notYet = (tool: string, display: string) => ({ tool, display, supported: false, activeId: null, loginMethod: null, accounts: [] })
+  const notYet = (tool: string, display: string) => ({
+    tool, display, supported: false, subscription: false, apiKeys: false, activeId: null, liveAccountId: null, loginMethod: null, accounts: [], pins: [],
+  })
+  const sub = (tool: string, display: string, accounts: unknown[], activeId: string | null) => ({
+    tool, display, supported: true, subscription: true, apiKeys: true, activeId, liveAccountId: activeId, loginMethod: 'temp_home', accounts, pins: [],
+  })
   return {
     tools: [
-      { tool: 'claude', display: 'Claude', supported: true, activeId: 'acc_work', loginMethod: 'temp_home', accounts: [WORK, HOME, STALE] },
-      { tool: 'codex', display: 'Codex', supported: true, activeId: null, loginMethod: 'temp_home', accounts: [] },
-      { tool: 'grok', display: 'Grok', supported: true, activeId: null, loginMethod: 'temp_home', accounts: [] },
-      notYet('gemini', 'Gemini'),
+      sub('claude', 'Claude', [WORK, HOME, STALE, PINNED, KEY], 'acc_work'),
+      sub('codex', 'Codex', [], null),
+      sub('grok', 'Grok', [], null),
+      { tool: 'gemini', display: 'Gemini', supported: true, subscription: false, apiKeys: true, activeId: null, liveAccountId: null, loginMethod: null, accounts: [], pins: [] },
       notYet('cursor', 'Cursor Agent'),
       notYet('pi', 'Pi'),
       notYet('hermes', 'Hermes'),
     ],
     logins: [],
     airgap: false,
-    switchNote: 'Switching a login affects every session on this server.',
+    switchNote: 'Switching a login affects every unpinned session on this server.',
   }
 }
 
@@ -146,11 +159,12 @@ describe('Logins column', () => {
     expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
     expect(screen.getByTestId('llm-account-acc_home').textContent).not.toContain('Active')
     expect(screen.getByTestId('llm-account-acc_stale').textContent).toContain('Needs login')
-    for (const t of ['gemini', 'cursor', 'pi', 'hermes']) {
+    for (const t of ['cursor', 'pi', 'hermes']) {
       expect(screen.getByTestId(`llm-tool-${t}`).textContent).toContain('Not available yet')
     }
     expect(document.body.textContent).not.toContain('Coming soon')
     expect(screen.getAllByRole('button', { name: '+ Add login' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '+ Add API key' })).toHaveLength(4)
     expect(h.daemonCliGet).toHaveBeenCalledWith('llm/accounts/list')
   })
 
@@ -211,6 +225,78 @@ describe('Logins column', () => {
     expect(ids).not.toContain('agents.credentials')
     const acc = AGENTS_MANIFEST.find((e) => e.id === 'agents.accounts')!
     expect(acc.keywords).toEqual(expect.arrayContaining(['account', 'login', 'wallet', 'switch']))
+  })
+})
+
+describe('Pins and API keys', () => {
+  it('Gemini offers only an API key', async () => {
+    await renderColumn()
+    const gem = screen.getByTestId('llm-tool-gemini')
+    expect(within(gem).queryByRole('button', { name: '+ Add login' })).toBeNull()
+    expect(within(gem).getByRole('button', { name: '+ Add API key' })).toBeTruthy()
+    expect(gem.textContent).toContain('No API key on this server.')
+  })
+
+  it('Add API key posts tool, label and key; the key is never rendered after submit', async () => {
+    await renderColumn()
+    const claude = screen.getByTestId('llm-tool-claude')
+    fireEvent.click(within(claude).getByRole('button', { name: '+ Add API key' }))
+    const dialog = screen.getByTestId('llm-apikey-dialog')
+    expect(dialog.textContent).toContain('Billed per token by the provider.')
+    const keyInput = screen.getByLabelText('API key') as HTMLInputElement
+    expect(keyInput.type).toBe('password')
+    fireEvent.change(screen.getByLabelText('API key label'), { target: { value: 'metered' } })
+    fireEvent.change(keyInput, { target: { value: 'sk-test-SECRET-123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add key' }))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/add-key', {
+        tool: 'claude',
+        label: 'metered',
+        key: 'sk-test-SECRET-123456',
+      }),
+    )
+    await waitFor(() => expect(screen.queryByTestId('llm-apikey-dialog')).toBeNull())
+    expect(document.body.innerHTML).not.toContain('sk-test-SECRET-123456')
+  })
+
+  it('a key refusal keeps the dialog open with the hint and the key cleared', async () => {
+    h.daemonCliPost.mockImplementation(async () => {
+      throw new Error(JSON.stringify({ error: { code: 'invalid_label', hint: 'invalid label: the API key must be 8–512 characters with no spaces' } }))
+    })
+    await renderColumn()
+    fireEvent.click(within(screen.getByTestId('llm-tool-codex')).getByRole('button', { name: '+ Add API key' }))
+    fireEvent.change(screen.getByLabelText('API key label'), { target: { value: 'k' } })
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'short key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add key' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('8–512 characters')
+    expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+  })
+
+  it('API-key rows say billed per token', async () => {
+    await renderColumn()
+    expect(screen.getByTestId('llm-billed-acc_key').textContent).toBe('Billed per token')
+    expect(screen.getByTestId('llm-usage-acc_key').textContent).toBe('billed per token')
+  })
+
+  it('a pinned login shows where, is in use, and refuses pool actions with the reason', async () => {
+    await renderColumn()
+    expect(screen.getByTestId('llm-pinned-acc_pinned').textContent).toBe('Pinned to: research')
+    expect(screen.getByTestId('llm-inuse-acc_pinned').textContent).toBe('In use by a pinned session')
+    const row = screen.getByTestId('llm-account-acc_pinned')
+    const make = within(row).getByRole('button', { name: 'Make active' }) as HTMLButtonElement
+    expect(make.disabled).toBe(true)
+    expect(make.title).toContain("can't be the pool's active login")
+    const remove = within(row).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
+    expect(remove.disabled).toBe(true)
+    expect(remove.title).toContain('Unpin it first')
+    fireEvent.click(make)
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_pinned' })
+  })
+
+  it('the switch note says pinned sessions keep their login', async () => {
+    await renderColumn()
+    expect(SWITCH_NOTE).toContain('every unpinned session')
+    expect(SWITCH_NOTE).toContain('Pinned workspaces and sessions keep their own login')
   })
 })
 

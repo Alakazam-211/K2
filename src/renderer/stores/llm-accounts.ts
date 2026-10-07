@@ -15,10 +15,29 @@ import type { HarnessUsage } from '@/lib/subscription-usage'
 
 export type AccountState = 'not_set_up' | 'signing_in' | 'signed_in' | 'needs_login' | 'unknown'
 
+/** A pin: a workspace (all its agents) or one session runs on a login. */
+export interface LlmPin {
+  scopeKind: 'workspace' | 'session'
+  scopeId: string
+  tool: string
+  accountId: string
+  /** Workspace name/handle, or the session key. */
+  label: string
+}
+
+export type LoginKind = 'subscription' | 'api_key'
+
 export interface LlmAccount {
   id: string
   tool: string
   label: string
+  /** `subscription` (a CLI sign-in) or `api_key` (billed per token). */
+  kind?: LoginKind | string
+  billedPerToken?: boolean
+  /** Where this login is pinned (empty = only the pool may use it). */
+  pinnedTo?: LlmPin[]
+  /** A running pinned session uses this login's slot. */
+  inUse?: boolean
   active: boolean
   state: AccountState | string
   detail: string | null
@@ -38,7 +57,15 @@ export interface LlmTool {
   tool: string
   display: string
   supported: boolean
+  /** Sign-in (subscription) logins supported; false for API-key-only tools. */
+  subscription: boolean
+  /** API-key logins supported. */
+  apiKeys: boolean
   activeId: string | null
+  /** The subscription login in the tool's live store (differs from
+   *  activeId while an API key is the pool's active login). */
+  liveAccountId: string | null
+  pins: LlmPin[]
   loginMethod: 'temp_home' | 'live_swap' | null
   accounts: LlmAccount[]
 }
@@ -85,8 +112,8 @@ export interface AccountsEntry {
   error: string | null
 }
 
-/** Tools with a wallet in this version. */
-export const WALLET_TOOLS = ['claude', 'codex', 'grok'] as const
+/** Tools with a wallet in this version (Gemini: API keys only). */
+export const WALLET_TOOLS = ['claude', 'codex', 'grok', 'gemini'] as const
 
 export const STATE_LABELS: Record<string, string> = {
   signed_in: 'Signed in',
@@ -131,14 +158,22 @@ function asArray<T>(v: unknown): T[] {
  *  404; a malformed body becomes an empty doc, never a crash). */
 export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  const tools = asArray<Record<string, unknown>>(o.tools).map((t) => ({
-    tool: String(t.tool ?? ''),
-    display: String(t.display ?? t.tool ?? ''),
-    supported: t.supported === true,
-    activeId: typeof t.activeId === 'string' ? t.activeId : null,
-    loginMethod: (t.loginMethod === 'live_swap' || t.loginMethod === 'temp_home' ? t.loginMethod : null) as LlmTool['loginMethod'],
-    accounts: asArray<LlmAccount>(t.accounts),
-  }))
+  const tools = asArray<Record<string, unknown>>(o.tools).map((t) => {
+    const supported = t.supported === true
+    return {
+      tool: String(t.tool ?? ''),
+      display: String(t.display ?? t.tool ?? ''),
+      supported,
+      // Older daemons (before API keys) sent neither flag: supported meant sign-in.
+      subscription: typeof t.subscription === 'boolean' ? t.subscription : supported,
+      apiKeys: t.apiKeys === true,
+      activeId: typeof t.activeId === 'string' ? t.activeId : null,
+      liveAccountId: typeof t.liveAccountId === 'string' ? t.liveAccountId : null,
+      pins: asArray<LlmPin>(t.pins),
+      loginMethod: (t.loginMethod === 'live_swap' || t.loginMethod === 'temp_home' ? t.loginMethod : null) as LlmTool['loginMethod'],
+      accounts: asArray<LlmAccount>(t.accounts),
+    }
+  })
   return {
     tools,
     logins: asArray<LlmLogin>(o.logins),
@@ -241,6 +276,67 @@ export function removeLogin(scope: ServerScope, id: string): Promise<unknown> {
 export function refreshLogins(scope: ServerScope, usage: boolean): Promise<unknown> {
   return mutate(scope, 'refresh', { usage })
 }
+
+/** Add an API-key login. The key goes to the daemon once and is never
+ *  returned; callers must drop it from their state right after. */
+export function addApiKey(
+  scope: ServerScope,
+  tool: string,
+  label: string,
+  key: string,
+): Promise<{ account: LlmAccount }> {
+  return mutate(scope, 'add-key', { tool, label, key })
+}
+
+export type PinScope = 'workspace' | 'session'
+
+/** Pin a workspace (scopeId = projects.id) or one session (scopeId = its
+ *  session key; the pinned chat's key is the workspace id) to a login. */
+export function pinLogin(
+  scope: ServerScope,
+  pinScope: PinScope,
+  scopeId: string,
+  tool: string,
+  id: string,
+): Promise<{ pin: LlmPin; note?: string }> {
+  return mutate(scope, 'pin', { scope: pinScope, scopeId, tool, id })
+}
+
+/** Back to the pool for that scope + tool. */
+export function unpinLogin(
+  scope: ServerScope,
+  pinScope: PinScope,
+  scopeId: string,
+  tool: string,
+): Promise<{ unpinned: boolean }> {
+  return mutate(scope, 'unpin', { scope: pinScope, scopeId, tool })
+}
+
+/** The pin for one scope + tool in a loaded doc, if any. */
+export function pinFor(doc: LlmAccountsDoc | null, pinScope: PinScope, scopeId: string, tool: string): LlmPin | null {
+  const t = doc?.tools.find((x) => x.tool === tool)
+  return t?.pins.find((p) => p.scopeKind === pinScope && p.scopeId === scopeId) ?? null
+}
+
+/** Is this login pinned anywhere? */
+export function isPinned(a: LlmAccount): boolean {
+  return (a.pinnedTo?.length ?? 0) > 0
+}
+
+/** Can `a` be picked for a pin? A subscription login that is in the live
+ *  store (the pool's login) can't: it would be live in two places. */
+export function pinBlockReason(tool: LlmTool, a: LlmAccount): string | null {
+  if (a.kind === 'api_key') return null
+  if (a.state !== 'signed_in') return 'Not signed in'
+  const live = tool.liveAccountId ?? (tool.accounts.find((x) => x.id === tool.activeId)?.kind === 'api_key' ? null : tool.activeId)
+  if (live === a.id) return "This is the pool's active login; switch the pool to another login first"
+  return null
+}
+
+export const PINNED_SWITCH_REASON =
+  "Pinned logins can't be the pool's active login (a login can't be live in two places). Unpin it first."
+
+export const CLAUDE_PIN_NOTE = "This agent's Claude history will live with this login."
 
 /** How often an open login sheet re-reads `login/status`. */
 export const LOGIN_POLL_MS = 1500

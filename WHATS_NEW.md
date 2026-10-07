@@ -3,6 +3,13 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.44.4 — Security update
+
+- **Important security fixes.** K2 now checks where every browser request comes from before it acts on it, for the web client, apps and live connections. Please update the app and your servers.
+- **Actions use the right method.** Every action that changes something now needs a POST request. Reading still works as before. Update the desktop app along with your servers: an older app connected to a 0.44.4 server can read but can't make changes until it's updated.
+- **Apps.** An app's guest sign-in now expires after 7 days, and app requests from other sites are refused. Apps calling their own address keep working as before.
+- **Agent switches.** Only Admins and Owners can turn agent permissions on or off (DNS, connections, mail sending, database access). An agent can't grant itself database access.
+
 ## 0.44.3 — Gardens your way
 
 - **Put the controls anywhere.** A Garden file can now place the Garden switcher, the Zen toggle, usage and the theme picker wherever you like: the top band, a new bottom band, the top or bottom edge of a column, or inside a menu. Leave one out (usage, for example) and it's hidden. A Garden can drop the top band entirely; a thin strip stays so you can still drag the window.

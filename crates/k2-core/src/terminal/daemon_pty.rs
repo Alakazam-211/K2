@@ -647,6 +647,19 @@ impl DaemonPtySession {
             let enriched = login_path::augmented_path(&inherited);
             child_env.insert("PATH".to_string(), enriched);
         }
+        // Whatever the PATH's source (enrichment or caller), never hand a
+        // child an entry that is multi-line, has control characters, or is
+        // longer than any real directory: macOS execvp writes such an entry
+        // to the PTY before exec and blocks there forever (0.45.0 smoke).
+        let dropped = drop_unsafe_path_entries(&mut child_env);
+        if dropped > 0 {
+            log_debug!(
+                "[daemon_pty] dropped {} unusable PATH entr{} for session={}",
+                dropped,
+                if dropped == 1 { "y" } else { "ies" },
+                cfg.session_id
+            );
+        }
 
         // Windows: CreateProcess does not apply PATHEXT. Resolve
         // `claude` → `%APPDATA%\npm\claude.cmd` and wrap .cmd/.bat
@@ -1879,6 +1892,22 @@ impl Drop for ViewerRegistration {
     }
 }
 
+/// Remove PATH entries that fail [`crate::terminal::path_env::is_safe_entry`] from a
+/// child env (whichever key carries PATH). PURE. Returns how many were
+/// dropped; a clean PATH is left byte-identical.
+fn drop_unsafe_path_entries(child_env: &mut HashMap<String, String>) -> usize {
+    let Some((key, value)) = login_path::env_path_entry(child_env)
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+    else {
+        return 0;
+    };
+    let (clean, dropped) = crate::terminal::path_env::drop_unsafe_entries(&value);
+    if dropped > 0 {
+        child_env.insert(key, clean);
+    }
+    dropped
+}
+
 /// 0.40.34 — wire the staged browser-open shim into a child env map.
 /// PURE (no disk, no globals) so the injection rule is unit-testable:
 ///   - PATH: the shim's directory (`~/.k2/bin`) is PREPENDED via
@@ -1944,6 +1973,67 @@ mod tests {
         let cfg = DaemonPtyConfig::default();
         assert_eq!(cfg.label, "");
         assert_eq!(cfg.label_source, LabelSource::Pty);
+    }
+
+    // ── 0.45.0 smoke: unusable PATH entries never reach a child ─────
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_unsafe_path_entries_cleans_a_caller_path() {
+        let mut env = HashMap::new();
+        env.insert(
+            "PATH".to_string(),
+            "/u/.k2/bin:compinit () {\n\ttypeset -g x\n}:/usr/bin:/bin".to_string(),
+        );
+        assert_eq!(drop_unsafe_path_entries(&mut env), 1);
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/u/.k2/bin:/usr/bin:/bin"));
+    }
+
+    #[test]
+    fn drop_unsafe_path_entries_without_path_is_a_no_op() {
+        let mut env = HashMap::new();
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        assert_eq!(drop_unsafe_path_entries(&mut env), 0);
+        assert_eq!(env.len(), 1);
+    }
+
+    /// The 0.45.0 wedge, end to end: a bare program name plus a PATH whose
+    /// first entry is ~4 KB of multi-line text. On macOS, execvp wrote
+    /// "execvP: <entry>: path too long" into the PTY before exec and the
+    /// fork blocked there, so `spawn` never returned. It must return.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_with_an_overlong_multiline_path_entry_returns() {
+        use std::path::PathBuf;
+        let junk = format!("compdump () {{\n\t# undefined\n}}\n{}", "x".repeat(4096));
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), format!("{junk}:/usr/bin:/bin"));
+        let cfg = DaemonPtyConfig {
+            session_id: SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
+            overlay: None,
+            program: Some("cat".to_string()),
+            args: vec![],
+            durable_args: None,
+            env,
+            drain_on_exit: true,
+            label: "path-junk".to_string(),
+            label_source: LabelSource::Locked,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = DaemonPtySession::spawn(cfg).map(|s| s.kill()).map_err(|e| e.to_string());
+            let _ = tx.send(r);
+        });
+        match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => panic!("spawn failed: {e}"),
+            Err(_) => panic!("spawn did not return in 15 s: the child is stuck before exec"),
+        }
     }
 
     // ── 0.40.34 browser-open shim env injection ─────────────────────

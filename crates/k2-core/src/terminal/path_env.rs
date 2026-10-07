@@ -30,6 +30,48 @@ where
     }
 }
 
+/// Longest PATH entry a spawned child is given.
+///
+/// macOS `execvp` copies `<entry>/<name>` into a `MAXPATHLEN` (1024)
+/// buffer and, for an entry that does not fit, writes
+/// `execvP: <entry>: path too long` to the child's stderr BEFORE exec.
+/// For a PTY child that stderr is the PTY, which nobody reads until the
+/// spawn returns — so a long write blocks the forked child forever and
+/// the spawning thread with it (0.45.0 smoke, 2026-10-07: a login-PATH
+/// capture full of zsh function source wedged every agent spawn). No
+/// real directory is this long; 900 leaves room for the program name.
+pub const MAX_PATH_ENTRY_LEN: usize = 900;
+
+/// A PATH entry a child may safely receive: non-empty, at most
+/// [`MAX_PATH_ENTRY_LEN`] bytes, and free of control characters
+/// (newline, tab, NUL, ESC …) — no real directory has those, and a
+/// shell that re-quotes PATH (macOS `path_helper -s` under `eval`)
+/// breaks on them.
+pub fn is_safe_entry(entry: &Path) -> bool {
+    let s = entry.to_string_lossy();
+    !s.is_empty() && s.len() <= MAX_PATH_ENTRY_LEN && !s.chars().any(char::is_control)
+}
+
+/// Drop every PATH entry that fails [`is_safe_entry`], keeping order.
+/// Returns the cleaned PATH and how many entries were dropped.
+pub fn drop_unsafe_entries(path: &str) -> (String, usize) {
+    let mut dropped = 0usize;
+    let kept: Vec<PathBuf> = split(path)
+        .into_iter()
+        .filter(|p| {
+            if p.as_os_str().is_empty() {
+                return false;
+            }
+            let ok = is_safe_entry(p);
+            if !ok {
+                dropped += 1;
+            }
+            ok
+        })
+        .collect();
+    (join(kept), dropped)
+}
+
 /// Count non-empty PATH entries (for spawn-failure diagnostics).
 pub fn entry_count(path: &str) -> usize {
     split(path)
@@ -229,5 +271,36 @@ mod tests {
         // panicking.
         let bad = join([PathBuf::from(r"C:\Users\u\.local\bin")]);
         assert_eq!(bad, "", "drive-letter path embeds ':' on Unix");
+    }
+
+    /// 0.45.0 smoke: the PTY PATH carried zsh function source (newlines,
+    /// tabs, a 1055-byte entry). Those entries go; real ones stay in order.
+    #[cfg(unix)]
+    #[test]
+    fn drop_unsafe_entries_removes_multiline_and_overlong_entries() {
+        let long = format!("/{}", "a".repeat(MAX_PATH_ENTRY_LEN));
+        let path = format!(
+            "/Users/u/.k2/bin:compdump () {{\n\t# undefined\n}}:{long}:/opt/homebrew/bin:/usr/bin::/bin"
+        );
+        let (clean, dropped) = drop_unsafe_entries(&path);
+        assert_eq!(clean, "/Users/u/.k2/bin:/opt/homebrew/bin:/usr/bin:/bin");
+        assert_eq!(dropped, 2, "the multi-line entry and the overlong entry");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_unsafe_entries_keeps_a_clean_path_byte_identical() {
+        let path = "/Users/u/.local/bin:./node_modules/.bin:/usr/bin:/bin";
+        assert_eq!(drop_unsafe_entries(path), (path.to_string(), 0));
+    }
+
+    #[test]
+    fn safe_entry_length_limit_is_inclusive() {
+        let at_limit = PathBuf::from(format!("/{}", "b".repeat(MAX_PATH_ENTRY_LEN - 1)));
+        let over = PathBuf::from(format!("/{}", "b".repeat(MAX_PATH_ENTRY_LEN)));
+        assert!(is_safe_entry(&at_limit));
+        assert!(!is_safe_entry(&over));
+        assert!(!is_safe_entry(Path::new("/usr/bin\n")));
+        assert!(!is_safe_entry(Path::new("")));
     }
 }

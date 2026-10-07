@@ -267,8 +267,9 @@ pub mod term;
 /// from the captured PATH — exactly the bug 0.35.1 shipped. We use
 /// `-ilc` to source the full chain (zshenv → zprofile → zshrc → zlogin
 /// for zsh). Stderr is dropped so noisy `.zshrc` plugins don't pollute
-/// our capture, and we take only the last line of stdout in case the
-/// rc files emit anything before our `printf`.
+/// our capture, and the PATH is read from between the
+/// [`terminal::login_path::LOGIN_PATH_PROBE`] markers so anything the rc
+/// files print to stdout is ignored.
 ///
 /// Call this at the top of `main()` / `run()` in every binary that
 /// might `posix_spawn` user-installed tools (the daemon spawns them
@@ -280,28 +281,19 @@ pub fn enrich_path_from_login_shell() {
     use std::process::Stdio;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let output = std::process::Command::new(&shell)
-        .args(["-ilc", "printf %s \"$PATH\""])
+        .args(["-ilc", terminal::login_path::LOGIN_PATH_PROBE])
         .stderr(Stdio::null())
         .output();
     if let Ok(out) = output {
         if out.status.success() {
-            // Take the last non-empty line of stdout. If the user's
-            // rc files print anything before us, our `printf %s` (no
-            // newline) lands at the end — split-rsplit-find-non-empty
-            // recovers our payload regardless of preamble noise.
+            // The PATH between the probe's markers, absolute + safe
+            // entries only — whatever the rc files print around it is
+            // ignored (0.45.0: zsh printed completion-function source).
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let captured = stdout
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !captured.is_empty()
-                && captured.contains('/')
-                && captured != std::env::var("PATH").unwrap_or_default()
-            {
-                std::env::set_var("PATH", captured);
+            if let Some(captured) = terminal::login_path::extract_login_path(&stdout) {
+                if captured != std::env::var("PATH").unwrap_or_default() {
+                    std::env::set_var("PATH", captured);
+                }
             }
         }
     }

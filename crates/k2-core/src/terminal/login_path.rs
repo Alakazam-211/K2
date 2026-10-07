@@ -84,7 +84,7 @@ fn capture_login_shell_path() -> Option<String> {
         // typically only fire for login + interactive shells). `printf %s`
         // emits the PATH with no trailing-newline noise of its own.
         let out = Command::new(&shell)
-            .args(["-l", "-i", "-c", "printf %s \"$PATH\""])
+            .args(["-l", "-i", "-c", LOGIN_PATH_PROBE])
             .stdin(Stdio::null())
             .output();
         let _ = tx.send(out);
@@ -100,11 +100,55 @@ fn capture_login_shell_path() -> Option<String> {
         return None;
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = extract_login_path(&stdout);
+    if path.is_none() && !stdout.trim().is_empty() {
+        crate::log_debug!(
+            "[login-path] login shell printed {} byte(s) but no marked PATH; using known dirs + inherited PATH",
+            stdout.len()
+        );
+    }
+    path
+}
+
+/// Start / end markers around the PATH a login shell prints for us.
+pub const LOGIN_PATH_BEGIN: &str = "__K2_LOGIN_PATH_BEGIN__";
+pub const LOGIN_PATH_END: &str = "__K2_LOGIN_PATH_END__";
+
+/// The `-c` command for every login-shell PATH capture. The markers let
+/// [`extract_login_path`] ignore anything the user's rc files print to
+/// stdout before or after it.
+pub const LOGIN_PATH_PROBE: &str =
+    "printf '__K2_LOGIN_PATH_BEGIN__%s__K2_LOGIN_PATH_END__' \"$PATH\"";
+
+/// The PATH from a login shell's stdout: the text between the LAST
+/// begin/end marker pair, keeping only absolute entries that pass
+/// [`path_env::is_safe_entry`]. `None` when the markers are missing or
+/// nothing usable is left.
+///
+/// Why: an interactive login shell may print to stdout during startup.
+/// On the 0.45.0 smoke Mac, zsh printed ~11 KB of completion-function
+/// source (`compdump () { … }`, `compinit () { … }`) ahead of the PATH.
+/// The old capture took ALL of stdout as the PATH, so every PTY got
+/// that text as PATH entries: shells broke in `eval $(path_helper -s)`
+/// ("parse error near `<'") and agent spawns hung in execvp's
+/// "path too long" write (see [`path_env::MAX_PATH_ENTRY_LEN`]).
+pub fn extract_login_path(stdout: &str) -> Option<String> {
+    let start = stdout.rfind(LOGIN_PATH_BEGIN)? + LOGIN_PATH_BEGIN.len();
+    let len = stdout[start..].find(LOGIN_PATH_END)?;
+    let raw = &stdout[start..start + len];
+    let kept: Vec<PathBuf> = path_env::split(raw)
+        .into_iter()
+        .filter(|p| p.is_absolute() && path_env::is_safe_entry(p))
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    let joined = path_env::join(kept);
+    if joined.is_empty() {
         None
     } else {
-        Some(path)
+        Some(joined)
     }
 }
 
@@ -309,6 +353,64 @@ pub fn process_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shape captured on the 0.45.0 smoke Mac: zsh function source on
+    /// stdout before the PATH. Only the marked PATH comes back.
+    #[cfg(unix)]
+    #[test]
+    fn extract_login_path_ignores_shell_startup_output() {
+        let noise = "compdump () {\n\t# undefined\n\tbuiltin autoload -XUz /usr/share/zsh/5.9/functions\n}\n\
+                     compinit () {\n\ttypeset -g _comp_dumpfile=\"${ZDOTDIR:-$HOME}/.zcompdump\"\n\
+                     \tprint -u2 \"$0: compdef -K requires <widget> <comp-widget> <key>\"\n}\n";
+        let stdout = format!(
+            "{noise}{LOGIN_PATH_BEGIN}/Users/u/.grok/bin:/opt/homebrew/bin:/usr/bin:/bin{LOGIN_PATH_END}"
+        );
+        assert_eq!(
+            extract_login_path(&stdout).as_deref(),
+            Some("/Users/u/.grok/bin:/opt/homebrew/bin:/usr/bin:/bin")
+        );
+    }
+
+    #[test]
+    fn extract_login_path_without_markers_is_none() {
+        // The pre-fix capture would have returned this whole string.
+        assert_eq!(extract_login_path("compinit () {\n}\n/usr/bin:/bin"), None);
+        assert_eq!(extract_login_path(""), None);
+        assert_eq!(extract_login_path(&format!("{LOGIN_PATH_BEGIN}/usr/bin")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_login_path_drops_relative_and_unsafe_entries() {
+        let stdout = format!(
+            "{LOGIN_PATH_BEGIN}/usr/bin:junk {{:\n/x:relative/bin:/bin{LOGIN_PATH_END}"
+        );
+        assert_eq!(extract_login_path(&stdout).as_deref(), Some("/usr/bin:/bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_login_path_takes_the_last_marked_pair() {
+        let stdout = format!(
+            "{LOGIN_PATH_BEGIN}/old{LOGIN_PATH_END}\n{LOGIN_PATH_BEGIN}/new/bin{LOGIN_PATH_END}\ntrailing"
+        );
+        assert_eq!(extract_login_path(&stdout).as_deref(), Some("/new/bin"));
+    }
+
+    /// The probe command really prints the markers around `$PATH`
+    /// (runs `/bin/sh -c`, no rc files, no agent CLI).
+    #[cfg(unix)]
+    #[test]
+    fn login_path_probe_command_round_trips_through_sh() {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", LOGIN_PATH_PROBE])
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("run /bin/sh");
+        assert!(out.status.success(), "sh exited {:?}", out.status);
+        let stdout = String::from_utf8(out.stdout).expect("utf8");
+        assert_eq!(extract_login_path(&stdout).as_deref(), Some("/usr/bin:/bin"));
+    }
 
     #[test]
     fn login_present_dedups_vs_inherited() {

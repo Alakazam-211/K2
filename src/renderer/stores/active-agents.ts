@@ -28,6 +28,7 @@ import {
   onSessionAddedApp,
   onSessionRemovedApp,
   onSessionActivityChanged,
+  onHooksInstallFailed,
 } from '@/stores/session-events'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -1340,6 +1341,7 @@ let agentHelloUnsub: (() => void) | null = null
 let sessionAddedUnsub: (() => void) | null = null
 let sessionRemovedUnsub: (() => void) | null = null
 let sessionActivityUnsub: (() => void) | null = null
+let hooksInstallFailedUnsub: (() => void) | null = null
 
 // #688 — map a session's canonical key (`agent_name`, the v2_session_map
 // key, stable across its add/remove pair) → the cwd it reported. Lets a
@@ -1421,6 +1423,19 @@ export function startAgentPolling(): void {
     })
     agentHelloUnsub = onAppHello(primaryScope(), () => {
       useActiveAgentsStore.getState().pollOnce()
+    })
+    // prd-daemon-activity-and-thread-working-v1 A11 — the daemon installs
+    // the agent CLI hooks now; when it can't (e.g. a malformed
+    // ~/.claude/settings.json it refuses to overwrite), say so once.
+    hooksInstallFailedUnsub = onHooksInstallFailed(primaryScope(), (e) => {
+      const failures = e.failures ?? []
+      if (failures.length === 0) return
+      const clis = failures.map((f) => f.cli).join(', ')
+      useToastStore.getState().addToast(
+        `K2 couldn't install its hooks for ${clis}. Run \`k2 hooks status\` for details.`,
+        'warning',
+        10000,
+      )
     })
     // #688 — keep the Active-bar live-session dot fresh push-style. The
     // retired 2.5s poll was the ONLY thing updating `liveSessionCwds`, so a
@@ -1507,21 +1522,6 @@ export function startAgentPolling(): void {
       useActiveAgentsStore.getState().handleLifecycleEvent(paneId, tabId, eventType)
     }).then((fn) => {
       hookUnlisten = fn
-    })
-
-    // Surface hook-injection failures — previously these were debug-only
-    // log lines, so users never learned that e.g. a malformed
-    // ~/.claude/settings.json had silently broken their spinner pipeline.
-    // One toast per startup, listing which CLIs failed.
-    listen<{ failures: Array<{ cli: string; error: string }> }>('hook-injection-failed', (event) => {
-      const failures = event.payload?.failures ?? []
-      if (failures.length === 0) return
-      const clis = failures.map((f) => f.cli).join(', ')
-      useToastStore.getState().addToast(
-        `Hook injection failed for ${clis} — run \`k2so hooks status\` for details`,
-        'warning',
-        10000,
-      )
     })
 
     // Listen for CLI-triggered agent launch requests
@@ -2015,6 +2015,10 @@ export function stopAgentPolling(): void {
   if (agentHelloUnsub) {
     agentHelloUnsub()
     agentHelloUnsub = null
+  }
+  if (hooksInstallFailedUnsub) {
+    hooksInstallFailedUnsub()
+    hooksInstallFailedUnsub = null
   }
   if (sessionAddedUnsub) {
     sessionAddedUnsub()

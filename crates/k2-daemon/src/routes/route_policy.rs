@@ -365,6 +365,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/home/avatars", NoLogin),
     post("/cli/home/avatars/prune", NoLogin),
     post("/cli/home/avatars/put", NoLogin),
+    // prd-daemon-activity-and-thread-working-v1 DA17: re-run (or, with
+    // `remove`, undo) the hook installer. Writes the daemon user's CLI
+    // configs, so Admin; the handler also checks owner-or-admin.
+    post("/cli/hooks/install", Admin),
     get("/cli/hooks/status", Member),
     get("/cli/host-sessions/list", Member),
     get("/cli/inbox", Member),
@@ -825,6 +829,11 @@ pub const ROUTES: &[Route] = &[
 /// own; it is outside this table's role check.
 pub const V1_POST_EXACT: &[&str] = &["/v1/sandboxes"];
 
+/// Non-`/cli` hook ingest (prd-daemon-activity-and-thread-working-v1 DA12,
+/// A4). Authenticated by the owner token or a scoped token pinned to the
+/// `X-K2-Pane` session; outside the login role table.
+pub const HOOK_POST_EXACT: &[&str] = &["/hook/event"];
+
 /// Look up the classified row for an exact `/cli/*` path.
 pub fn lookup(path: &str) -> Option<&'static Route> {
     ROUTES
@@ -840,6 +849,7 @@ pub fn lookup(path: &str) -> Option<&'static Route> {
 pub fn post_allowed(path: &str) -> bool {
     lookup(path).is_some_and(|r| r.post.is_some())
         || V1_POST_EXACT.contains(&path)
+        || HOOK_POST_EXACT.contains(&path)
         || path == "/v1/w"
         || path.starts_with("/v1/w/")
 }
@@ -1143,6 +1153,10 @@ mod tests {
         assert!(!post_allowed("/cli/not-a-route"));
         assert!(post_allowed("/cli/sessions/v2/spawn"));
         assert!(post_allowed("/cli/users/set-role"));
+        // T-S4f (S1 half): the hook installer and the hook ingest.
+        assert!(post_allowed("/cli/hooks/install"));
+        assert!(post_allowed("/hook/event"));
+        assert!(!post_allowed("/hook/complete"), "the legacy hook stays GET-only");
     }
 
     // ── source walk: every /cli route literal is classified ───────────

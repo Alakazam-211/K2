@@ -424,11 +424,32 @@ mod unix_impl {
         // validation against the process registry. Computed ONCE for every
         // verb, before any handler runs.
         let validated = crate::session_token::require_hook(&presented, path);
-        let req_pane = params.get("paneId").cloned().unwrap_or_default();
+        // `/hook/event` names its pane in `X-K2-Pane` (the body is the raw
+        // hook JSON); `/hook/complete` in `paneId`.
+        let hook_event = path == "/hook/event";
+        let req_pane = if hook_event {
+            crate::routes::http::extract_header(&head, "x-k2-pane")
+                .unwrap_or("")
+                .to_string()
+        } else {
+            params.get("paneId").cloned().unwrap_or_default()
+        };
+        // DA12 (A4): the cell server checks no method, so the hook ingest
+        // does: POST only, before anything else.
+        if hook_event && !is_post {
+            write_response(
+                &mut stream,
+                "405 Method Not Allowed",
+                "application/json",
+                r#"{"error":"POST required"}"#,
+            )
+            .await;
+            return;
+        }
 
-        // Authorization: `/hook/complete` additionally pins the paneId; every
+        // Authorization: the hook routes additionally pin the pane; every
         // other verb is a normal CLI call gated on uid + session binding.
-        let authorized = if path == "/hook/complete" {
+        let authorized = if path == "/hook/complete" || hook_event {
             cell_request_authorized(
                 validated.as_ref(),
                 &this_session_id,
@@ -448,6 +469,27 @@ mod unix_impl {
                 r#"{"error":"Invalid or missing auth token"}"#,
             )
             .await;
+            return;
+        }
+
+        // DA12: the full-payload hook ingest. Same parser + owner check as
+        // the TCP route; 204 unless the body is over 1 MiB (413).
+        if hook_event {
+            if body.len() > k2_core::agent_hooks::envelope::MAX_BODY_BYTES {
+                write_response(
+                    &mut stream,
+                    "413 Payload Too Large",
+                    "application/json",
+                    r#"{"error":"hook body over 1 MiB"}"#,
+                )
+                .await;
+                return;
+            }
+            let hook_headers = k2_core::agent_hooks::envelope::HookHeaders::from_lookup(|n| {
+                crate::routes::http::extract_header(&head, n)
+            });
+            let _ = tokio::task::spawn_blocking(move || crate::hook_ingest::ingest(&hook_headers, &body)).await;
+            write_response(&mut stream, "204 No Content", "application/json", "").await;
             return;
         }
 
@@ -582,7 +624,7 @@ mod unix_impl {
             "/hook/complete" => (
                 "200 OK".to_string(),
                 "application/json",
-                k2_core::agent_hooks::handle_hook_complete(params).to_string(),
+                crate::hook_ingest::legacy_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
             // k2 sidecar v1: new / list / stop for THIS cell's session

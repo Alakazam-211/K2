@@ -17,6 +17,9 @@
 //! 3. Agent permission switches need Admin: a Member login can't flip
 //!    them through `workspace/set` or the toggle routes; an Admin can.
 //! 4. An agent passport can't self-grant database access.
+//! 5. The activity routes (prd-daemon-activity-and-thread-working-v1)
+//!    sit behind the same gates: a foreign-origin browser cookie is
+//!    refused before any handler; token callers ignore Origin.
 //!
 //! Every test here fails on the pre-0.44.4 tree.
 
@@ -655,5 +658,49 @@ async fn agent_passport_cannot_self_grant_db_access() {
         let r = req(d.port, "POST", &format!("/cli/workspace/set?token={OWNER_TOKEN}"), "127.0.0.1", &[], Some(&off));
         assert_eq!(r.status, 200, "Owner revoke: {}", r.body);
         assert_eq!(db_access(&id), "off");
+    });
+}
+
+// ── 5. the activity routes behind the same gates ────────────────────
+
+/// prd-daemon-activity-and-thread-working-v1 S1: `POST /hook/event` and
+/// `POST /cli/hooks/install`. A foreign-origin cookie never reaches either
+/// handler; the hook's own credential (owner token or scoped pass, never a
+/// cookie) ignores Origin; a same-origin Admin login may run the installer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activity_hook_routes_refuse_foreign_origin_cookies() {
+    let _g = lock();
+    with_temp_home(|_| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let admin = provision(d.port, &format!("ha{}", &uuid::Uuid::new_v4().to_string()[..6]), "admin");
+        let cookie = format!("Cookie: k2_session={admin}");
+        let evil = format!("Origin: {EVIL}");
+        let host = "rosson.k2.dev";
+        let remove = r#"{"remove":true}"#;
+
+        for path in ["/hook/event", "/cli/hooks/install"] {
+            for bad in [evil.as_str(), "Origin: https://mallory.app.k2.dev", "Sec-Fetch-Site: cross-site"] {
+                let r = req(d.port, "POST", path, host, &[&cookie, "X-K2-Client: web", bad], Some(remove));
+                assert_origin_refused(&r, &format!("{path} {bad}"));
+            }
+        }
+
+        // The hook ingest's credential is a token; Origin does not matter.
+        let r = req(d.port, "POST", &format!("/hook/event?token={OWNER_TOKEN}"), host, &[&evil], Some("{}"));
+        assert_eq!(r.status, 204, "owner-token hook with foreign Origin: {}", r.body);
+        // A same-origin login passes the gate but is not a hook credential.
+        let lo_host = format!("127.0.0.1:{}", d.port);
+        let lo_origin = format!("Origin: http://127.0.0.1:{}", d.port);
+        let r = req(d.port, "POST", "/hook/event", &lo_host, &[&cookie, "X-K2-Client: web", &lo_origin], Some("{}"));
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert_eq!(json(&r.body)["error"], "Invalid or missing auth token", "{}", r.body);
+
+        // The installer (remove: no `claude --version` probe; temp HOME):
+        // same-origin Admin cookie and a Bearer Admin with a foreign Origin.
+        let r = req(d.port, "POST", "/cli/hooks/install", &lo_host, &[&cookie, "X-K2-Client: web", &lo_origin], Some(remove));
+        assert_eq!(r.status, 200, "same-origin Admin cookie: {}", r.body);
+        let bearer = format!("Authorization: Bearer {admin}");
+        let r = req(d.port, "POST", "/cli/hooks/install", host, &[&bearer, &evil], Some(remove));
+        assert_eq!(r.status, 200, "Bearer Admin with foreign Origin: {}", r.body);
     });
 }

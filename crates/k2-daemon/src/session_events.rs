@@ -450,6 +450,15 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "token_usage_changed" }`.
     TokenUsageChanged {},
 
+    /// prd-daemon-activity-and-thread-working-v1 A11 — the daemon's hook
+    /// installer found an agent CLI config it could not update (it did not
+    /// parse, so it was left untouched) or hit a write error. APP-LEVEL,
+    /// emitted at most once per boot. Replaces the Tauri-only
+    /// `hook-injection-failed` event now that the daemon installs hooks.
+    /// Wire: `{ "kind": "hooks_install_failed", "failures": [ { "cli":
+    /// string, "error": string, "path"?: string } ] }`.
+    HooksInstallFailed { failures: Vec<serde_json::Value> },
+
     /// Zen Mode v1 (prd-zen-mode-v1 Z12) — this computer's `~/.k2/zen/`
     /// changed effectively (a theme or page now resolves differently, or
     /// its errors changed). APP-LEVEL refetch signal, deliberately
@@ -642,6 +651,7 @@ impl SessionEvent {
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
+            SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",

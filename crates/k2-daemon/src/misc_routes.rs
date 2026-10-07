@@ -797,6 +797,40 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             let mut events: Vec<_> = k2_core::agent_hooks::get_recent_events();
             events.reverse();
             events.truncate(limit);
+            let injections = k2_core::agent_hooks::check_hook_injections();
+            // DA17: per CLI — installed events, the version the last install
+            // pass detected, config_unreadable, last accepted event time.
+            let last_report = crate::hook_install::last_report();
+            let clis: serde_json::Map<String, serde_json::Value> = ["claude", "cursor", "gemini"]
+                .iter()
+                .map(|cli| {
+                    let disk = &injections[*cli];
+                    let pass = last_report
+                        .as_ref()
+                        .and_then(|r| r.clis.iter().find(|c| c.cli == *cli));
+                    (
+                        cli.to_string(),
+                        serde_json::json!({
+                            "path": disk["path"],
+                            "installedEvents": disk["events"],
+                            "detectedVersion": if *cli == "claude" {
+                                last_report.as_ref().and_then(|r| r.claude_version.clone())
+                            } else {
+                                None
+                            },
+                            "eventSet": if *cli == "claude" {
+                                last_report.as_ref().map(|r| r.claude_event_set)
+                            } else {
+                                None
+                            },
+                            "configUnreadable": disk["configUnreadable"],
+                            "lastInstallState": pass.map(|c| &c.state),
+                            "lastEventMs": crate::hook_ingest::last_event_ms(cli),
+                        }),
+                    )
+                })
+                .collect();
+            let ingest = crate::hook_ingest::status_json();
             CliResponse::ok_json(
                 serde_json::json!({
                     "port": k2_core::hook_config::get_port(),
@@ -804,10 +838,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         .map(|h| h.join(".k2/hooks/notify.sh").to_string_lossy().to_string())
                         .unwrap_or_default(),
                     // H7.1: scan per-CLI config files for notify.sh
-                    // injection so `k2so hooks status` reports the
-                    // full pipeline state (claude/cursor/gemini). Core
-                    // helper moved from src-tauri as part of H7.
-                    "injections": k2_core::agent_hooks::check_hook_injections(),
+                    // injection so `k2 hooks status` reports the
+                    // full pipeline state (claude/cursor/gemini).
+                    "injections": injections,
+                    "clis": clis,
+                    // DA14/A6: `ancestry` (macOS/Linux) or `conversation`
+                    // (Windows: no pid walk, conversation id only).
+                    "ownerCheck": ingest["ownerCheck"],
+                    "totals": ingest["totals"],
+                    "legacyPosts": ingest["legacyPosts"],
+                    "sessions": ingest["sessions"],
+                    "lastInstall": crate::hook_install::last_run_json(),
                     "recent_events": events,
                     "recent_events_cap": 50,
                 })

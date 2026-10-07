@@ -434,6 +434,15 @@ export interface ZenChangedEvent {
   kind: 'zen_changed'
 }
 
+/** APP-LEVEL — the daemon's hook installer could not update an agent CLI
+ *  config (it did not parse, so it was left untouched) or hit a write
+ *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
+ *  daemon boot. Replaces the Tauri-only `hook-injection-failed` event. */
+export interface HooksInstallFailedEvent {
+  kind: 'hooks_install_failed'
+  failures: Array<{ cli: string; error: string; path?: string }>
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -461,6 +470,7 @@ export type SessionEventMessage =
   | TokenUsageChangedEvent
   | FsChangedEvent
   | ZenChangedEvent
+  | HooksInstallFailedEvent
   | ReviewQueueChangedEvent
   | ReviewChangedEvent
   | MailChangedEvent
@@ -907,6 +917,7 @@ type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type ZenChangedHandler = () => void
+type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
@@ -950,6 +961,7 @@ interface AppBusHandlers {
   mailChanged: Set<MailChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
+  hooksInstallFailed: Set<HooksInstallFailedHandler>
 }
 
 interface BusState {
@@ -984,6 +996,7 @@ function createBusState(scopeId: string): BusState {
       mailChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
+      hooksInstallFailed: new Set(),
     },
   }
 }
@@ -1152,6 +1165,12 @@ export function onZenChanged(scope: ServerScope, fn: ZenChangedHandler): Unsubsc
   return addHandler(busFor(scope).handlers.zenChanged, fn)
 }
 
+/** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
+ *  not install K2's hooks into an agent CLI config). */
+export function onHooksInstallFailed(scope: ServerScope, fn: HooksInstallFailedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.hooksInstallFailed, fn)
+}
+
 /** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
  *  `fs_changed` (paths under a workspace mutated on the host by agents,
  *  other clients, or `/cli/fs/*`). The primary bus survives host-switch
@@ -1302,6 +1321,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()
   },
+  hooks_install_failed: (h, m) => {
+    for (const fn of h.hooksInstallFailed) fn(m)
+  },
 }
 
 /** Dispatch one app-level frame on `bus`. `socket` names the caller for
@@ -1340,6 +1362,7 @@ export interface AppBus {
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
+  onHooksInstallFailed(fn: HooksInstallFailedHandler): UnsubscribeFn
 }
 
 const _facades = new Map<string, AppBus>()
@@ -1380,6 +1403,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
+    onHooksInstallFailed: (fn) => onHooksInstallFailed(scope, fn),
   }
   _facades.set(scope.id, facade)
   return facade

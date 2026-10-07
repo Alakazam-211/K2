@@ -22,6 +22,15 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
 
+// prd-daemon-activity-and-thread-working-v1 S1: the daemon installs the
+// hooks itself (`install`), parses the full hook payload into a typed
+// envelope (`envelope`, redacted tool line in `tool_line`), and runs the
+// owner check (`owner`) before anything may change a session's activity.
+pub mod envelope;
+pub mod install;
+pub mod owner;
+pub mod tool_line;
+
 // ── Host event sink ─────────────────────────────────────────────────────
 //
 // Agent hooks fire 7 distinct host-facing events; enumerated here so a
@@ -43,7 +52,6 @@ pub enum HookEvent {
     CliTerminalSpawn,
     CliTerminalSpawnBackground,
     CliAiCommit,
-    HookInjectionFailed,
     /// Fires when an existing PTY is being surfaced into a tab — i.e.,
     /// the renderer should attach to the given `terminalId` rather
     /// than spawn a new PTY. Differs from `CliTerminalSpawnBackground`
@@ -175,7 +183,6 @@ impl HookEvent {
             Self::CliTerminalSpawn => "cli:terminal-spawn",
             Self::CliTerminalSpawnBackground => "cli:terminal-spawn-background",
             Self::CliAiCommit => "cli:ai-commit",
-            Self::HookInjectionFailed => "hook-injection-failed",
             Self::SessionSurfaced => "session:surfaced",
             Self::SessionUnsurfaced => "session:unsurfaced",
             Self::ChatRefreshed => "chat:refreshed",
@@ -233,6 +240,8 @@ const RECENT_EVENTS_CAP: usize = 50;
 /// Keyed by insertion order; newest at the back.
 static RECENT_EVENTS: OnceLock<Mutex<VecDeque<RecentEvent>>> = OnceLock::new();
 
+/// One ring-buffer row. DA5: event name, tool name, verdict and time only
+/// (plus the pane ids), never payload content.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RecentEvent {
     pub timestamp: String,
@@ -241,6 +250,13 @@ pub struct RecentEvent {
     pub pane_id: String,
     pub tab_id: String,
     pub matched: bool,
+    /// `POST /hook/event` only: the tool the event is about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// `POST /hook/event` only: the owner-check verdict (`accepted`,
+    /// `foreign`, `unknown_pane`, `parse_error`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
 }
 
 fn recent_events() -> &'static Mutex<VecDeque<RecentEvent>> {
@@ -255,6 +271,19 @@ pub fn record_recent_event(
     pane_id: &str,
     tab_id: &str,
 ) {
+    record_recent_hook_event(raw, canonical, pane_id, tab_id, None, None);
+}
+
+/// [`record_recent_event`] with the `/hook/event` extras (tool name and
+/// owner-check verdict).
+pub fn record_recent_hook_event(
+    raw: &str,
+    canonical: Option<&str>,
+    pane_id: &str,
+    tab_id: &str,
+    tool_name: Option<&str>,
+    verdict: Option<&str>,
+) {
     let event = RecentEvent {
         timestamp: chrono::Utc::now().to_rfc3339(),
         raw_event: raw.to_string(),
@@ -262,6 +291,8 @@ pub fn record_recent_event(
         pane_id: pane_id.to_string(),
         tab_id: tab_id.to_string(),
         matched: canonical.is_some(),
+        tool_name: tool_name.map(String::from),
+        verdict: verdict.map(String::from),
     };
     let mut buf = recent_events().lock();
     if buf.len() >= RECENT_EVENTS_CAP {
@@ -405,133 +436,92 @@ pub fn handle_hook_complete(params: &HashMap<String, String>) -> &'static str {
     record_recent_event(&raw_event, canonical_opt, &pane_id, &tab_id);
 
     if let Some(canonical) = canonical_opt {
-        // Daemon-authoritative workspace path for remote-safe attribution.
-        // Prefer the registered project path for this terminal; fall back
-        // to the hook's PWD when the session row is missing (tab PTYs).
-        let workspace_path = resolve_workspace_path_for_pane(&pane_id, hook_cwd.as_deref());
-
-        let event = AgentLifecycleEvent {
-            pane_id: pane_id.clone(),
-            tab_id: tab_id.clone(),
-            event_type: canonical.to_string(),
-            workspace_path: workspace_path.clone(),
-        };
-
-        crate::log_debug!(
-            "[agent-hooks] {} → {} (pane={}, tab={}, path={:?})",
-            raw_event,
-            canonical,
-            pane_id,
-            tab_id,
-            workspace_path
-        );
-        emit(
-            HookEvent::AgentLifecycle,
-            serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
-        );
-
-        // Sync WorkspaceSession.status so the scheduler's is_agent_locked
-        // check reflects reality. Without this, a single wake leaves
-        // status='running' forever and every subsequent heartbeat
-        // silently skips the agent. Pane_id is the K2SO_PANE_ID env
-        // var we set at PTY creation.
-        let new_status: Option<&str> = match canonical {
-            "start" => Some("running"),
-            "stop" => Some("sleeping"),
-            "permission" => Some("permission"),
-            _ => None,
-        };
-        if let Some(new_status) = new_status {
-            let db = crate::db::shared();
-            let conn = db.lock();
-            if let Ok(Some(s)) =
-                crate::db::schema::WorkspaceSession::get_by_terminal_id(&conn, &pane_id)
-            {
-                if s.status != new_status {
-                    let _ = crate::db::schema::WorkspaceSession::update_status(
-                        &conn,
-                        &s.project_id,
-                        new_status,
-                    );
-                }
-            }
-        }
+        apply_lifecycle(&pane_id, &tab_id, &raw_event, canonical, hook_cwd.as_deref());
     }
 
     r#"{"success":true}"#
 }
 
-/// Scan common CLI LLM config files for our notify.sh injection and
-/// return the shape `{cli_name: {path, exists, injected}}` for each.
-/// Used by `/cli/hooks/status` so `k2so hooks status` can surface
-/// "hook is wired in for claude/cursor/gemini / not wired in" to the
-/// user without interactive inspection.
-///
-/// An entry is `injected: true` when the config file exists AND
-/// contains at least one reference to `.k2so/hooks/notify.sh`. Partial
-/// injection (one event hooked, others not) still reports `true` so
-/// users see events flow in `recent_events` while being able to spot
-/// a mismatch against their expected hook set.
-///
-/// Moved to core in Phase 4 H7.1 — the same daemon handler Tauri
-/// formerly served at `/cli/hooks/status` now lives in k2so-daemon
-/// and needs this helper. Keeping it src-tauri-only would leave the
-/// daemon returning an empty injections list, failing tier2 tests.
-pub fn check_hook_injections() -> serde_json::Value {
-    let home = dirs::home_dir();
-    let notify_fragment = ".k2/hooks/notify.sh";
-    // Legacy fragment accepted read-only: configs not yet rewritten by the
-    // app-side registration migration (0.40.37 §3.4) still resolve through
-    // the ~/.k2so compat symlink — they ARE injected.
-    let legacy_fragment = ".k2so/hooks/notify.sh";
+/// Fire the lifecycle outputs for one canonical bucket: the
+/// `agent:lifecycle` emit (→ bus `agent_status_changed`) and the
+/// `workspace_sessions.status` sync. Shared by the legacy
+/// `/hook/complete` route and the `/hook/event` compat bridge until the
+/// S2 activity store becomes the only writer (DA13, DA30).
+pub fn apply_lifecycle(
+    pane_id: &str,
+    tab_id: &str,
+    raw_event: &str,
+    canonical: &str,
+    hook_cwd: Option<&str>,
+) {
+    // Daemon-authoritative workspace path for remote-safe attribution.
+    // Prefer the registered project path for this terminal; fall back
+    // to the hook's PWD when the session row is missing (tab PTYs).
+    let workspace_path = resolve_workspace_path_for_pane(pane_id, hook_cwd);
 
-    let check = |relative: &str| -> serde_json::Value {
-        let path = match &home {
-            Some(h) => h.join(relative),
-            None => {
-                return serde_json::json!({
-                    "path": null,
-                    "exists": false,
-                    "injected": false,
-                })
-            }
-        };
-        let path_str = path.to_string_lossy().to_string();
-        if !path.exists() {
-            return serde_json::json!({
-                "path": path_str,
-                "exists": false,
-                "injected": false,
-            });
-        }
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let injected =
-            content.contains(notify_fragment) || content.contains(legacy_fragment);
-        serde_json::json!({
-            "path": path_str,
-            "exists": true,
-            "injected": injected,
-        })
+    let event = AgentLifecycleEvent {
+        pane_id: pane_id.to_string(),
+        tab_id: tab_id.to_string(),
+        event_type: canonical.to_string(),
+        workspace_path: workspace_path.clone(),
     };
 
-    let script_path = home
-        .as_ref()
-        .map(|h| h.join(notify_fragment))
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+    crate::log_debug!(
+        "[agent-hooks] {} → {} (pane={}, tab={}, path={:?})",
+        raw_event,
+        canonical,
+        pane_id,
+        tab_id,
+        workspace_path
+    );
+    emit(
+        HookEvent::AgentLifecycle,
+        serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
+    );
 
-    serde_json::json!({
-        "notify_script": {
-            "path": script_path,
-            "exists": home
-                .as_ref()
-                .map(|h| h.join(notify_fragment).exists())
-                .unwrap_or(false),
-        },
-        "claude": check(".claude/settings.json"),
-        "cursor": check(".cursor/hooks.json"),
-        "gemini": check(".config/gemini/hooks.json"),
-    })
+    // Sync WorkspaceSession.status so the scheduler's is_agent_locked
+    // check reflects reality. Without this, a single wake leaves
+    // status='running' forever and every subsequent heartbeat
+    // silently skips the agent. Pane_id is the K2SO_PANE_ID env
+    // var we set at PTY creation.
+    let new_status: Option<&str> = match canonical {
+        "start" => Some("running"),
+        "stop" => Some("sleeping"),
+        "permission" => Some("permission"),
+        _ => None,
+    };
+    if let Some(new_status) = new_status {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        if let Ok(Some(s)) =
+            crate::db::schema::WorkspaceSession::get_by_terminal_id(&conn, pane_id)
+        {
+            if s.status != new_status {
+                let _ = crate::db::schema::WorkspaceSession::update_status(
+                    &conn,
+                    &s.project_id,
+                    new_status,
+                );
+            }
+        }
+    }
+}
+
+/// The `/cli/hooks/status` injection report for the daemon user's home:
+/// per CLI `{path, exists, injected, events, configUnreadable}` plus the
+/// script's path, presence and version stamp. `injected` means at least
+/// one event holds a K2 entry; `events` lists which. See
+/// [`install::check_hook_injections`] (DA17, DA18).
+pub fn check_hook_injections() -> serde_json::Value {
+    match dirs::home_dir() {
+        Some(home) => install::check_hook_injections(&home),
+        None => serde_json::json!({
+            "notify_script": { "path": "", "exists": false, "version": null },
+            "claude": { "path": null, "exists": false, "injected": false, "events": [], "configUnreadable": false },
+            "cursor": { "path": null, "exists": false, "injected": false, "events": [], "configUnreadable": false },
+            "gemini": { "path": null, "exists": false, "injected": false, "events": [], "configUnreadable": false },
+        }),
+    }
 }
 
 /// Percent-decode a URL-encoded string. Handles multi-byte UTF-8 sequences

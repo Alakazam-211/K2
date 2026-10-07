@@ -53,6 +53,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // 0.44.4 (noun-tiers A3): the global agent mail-send default is an
     // agent permission switch like DNS/connections above — Admin floor.
     "mailAgentSend",
+    // prd-daemon-activity-and-thread-working-v1 Q2 — keep K2's hooks in
+    // the daemon user's agent CLI configs. Same floor as
+    // `POST /cli/hooks/install` (Admin): it rewrites those files.
+    "agentHooks",
 ];
 
 /// Handler for `GET /cli/settings/get`.
@@ -118,6 +122,7 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
     // TODO grant announce — if partial flips dnsManageEnabled false→true,
     // best-effort append a one-line DNS-manage capability note (daemon
     // agent follow-up). Same hook as per-workspace `/cli/dns-manage`.
+    let agent_hooks_touched = partial.get("agentHooks").is_some();
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -131,6 +136,11 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
             k2_core::app_settings::set_api_enabled(merged.api_enabled);
             k2_core::airgap::set_setting_enabled(merged.airgap);
             k2_core::listen::set_setting_lan(merged.listen_lan);
+            // Q2: an `agentHooks` flip installs or removes K2's hook entries
+            // now, not at the next 10-minute self-heal pass.
+            if agent_hooks_touched {
+                crate::hook_install::request_run(crate::hook_install::Trigger::Setting);
+            }
             // Local-window live-sync (v1): renderer listens on `sync:settings`.
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncSettings,

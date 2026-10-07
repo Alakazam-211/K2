@@ -185,6 +185,18 @@ fn airgap_response() -> CliResponse {
     CliResponse::ok_json(airgap_doc().to_string())
 }
 
+/// prd-daemon-activity-and-thread-working-v1 A9: the usage probes start
+/// real agent CLIs, so they resolve the program through the same spawn
+/// guard every PTY spawn uses. Under `K2_TEST_AGENT_SHIM_DIR` only a shim
+/// runs; under a temp HOME a real `codex` / `grok` is never started.
+fn guarded_program(name: &str) -> Result<String, String> {
+    let search = k2_core::terminal::login_path::augmented_path(
+        &k2_core::terminal::login_path::process_path(),
+    );
+    let guard = k2_core::terminal::agent_spawn_guard::GuardEnv::from_process();
+    k2_core::terminal::agent_spawn_guard::resolve_program(name, &search, &guard)
+}
+
 fn probe_denied() -> bool {
     std::env::var_os("K2_SUBSCRIPTION_PROBE").as_deref() == Some(std::ffi::OsStr::new("deny"))
 }
@@ -1490,7 +1502,14 @@ impl UsageIo for LiveIo {
         if probe_denied() {
             return CodexOutcome::Failed;
         }
-        match run_codex_process("codex") {
+        let program = match guarded_program("codex") {
+            Ok(p) => p,
+            Err(msg) => {
+                k2_core::log_debug!("[usage] codex probe refused: {msg}");
+                return CodexOutcome::Failed;
+            }
+        };
+        match run_codex_process(&program) {
             Ok(parsed) => CodexOutcome::Ready {
                 plan: parsed.plan,
                 windows: parsed.windows,
@@ -1507,7 +1526,14 @@ impl UsageIo for LiveIo {
         if probe_denied() {
             return GrokOutcome::Failed;
         }
-        match run_grok_process("grok") {
+        let program = match guarded_program("grok") {
+            Ok(p) => p,
+            Err(msg) => {
+                k2_core::log_debug!("[usage] grok probe refused: {msg}");
+                return GrokOutcome::Failed;
+            }
+        };
+        match run_grok_process(&program) {
             Ok(parsed) => GrokOutcome::Ready {
                 plan: parsed.plan,
                 windows: parsed.windows,
@@ -2146,6 +2172,27 @@ mod tests {
         assert!((weekly.used - 0.18).abs() < 1e-9);
         let session = parsed.windows.iter().find(|w| w.label == "5h").expect("5h");
         assert_eq!((session.used * 100.0).round() as i64, 4);
+    }
+
+    /// A9: under a temp HOME the usage probes never resolve to a real
+    /// CLI; only a test shim (when a shim dir is set) may run.
+    #[test]
+    fn probes_resolve_through_the_spawn_guard() {
+        crate::test_support::with_temp_home(|| {
+            for name in ["codex", "grok"] {
+                match guarded_program(name) {
+                    Err(msg) => assert!(msg.contains("refusing") || msg.contains("not found"), "{msg}"),
+                    Ok(p) => {
+                        let shims = std::env::var_os(k2_core::terminal::agent_spawn_guard::SHIM_DIR_ENV)
+                            .unwrap_or_else(|| panic!("{name} resolved to {p} with no shim dir under a temp HOME"));
+                        assert!(
+                            std::env::split_paths(&shims).any(|d| std::path::Path::new(&p).starts_with(&d)),
+                            "{name} resolved outside the shim dirs: {p}"
+                        );
+                    }
+                }
+            }
+        });
     }
 
     #[test]

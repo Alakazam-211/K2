@@ -101,6 +101,10 @@ export const SESSION_EVENT_ROUTES = {
   // LOCAL daemon's bus matters (Zen config is local); not carried, a room's
   // socket never stands in for it.
   zen_changed: { class: 'app', app: true },
+  // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
+  // installer could not update an agent CLI config. Carried, so a room's
+  // server can say so too.
+  hooks_install_failed: { class: 'app', app: true, carried: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

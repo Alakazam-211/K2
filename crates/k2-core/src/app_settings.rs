@@ -400,6 +400,15 @@ pub struct AppSettings {
     /// Wire name `webClientEnabled` (serde camelCase).
     #[serde(default = "default_true")]
     pub web_client_enabled: bool,
+    /// prd-daemon-activity-and-thread-working-v1 Q2 — whether the daemon
+    /// keeps K2's lifecycle hooks registered in the agent CLIs' configs
+    /// (`~/.claude/settings.json`, Cursor, Gemini). **Default ON.** Off →
+    /// the installer removes K2's entries (and only K2's) on its next pass,
+    /// the same as `k2 hooks uninstall`. No UI; set it with
+    /// `k2 settings` / `POST /cli/settings/update {"agentHooks": false}`.
+    /// Wire name `agentHooks`.
+    #[serde(default = "default_true")]
+    pub agent_hooks: bool,
     /// PRD connect-login-edge-only S1 — who may password-login over the
     /// PUBLIC tunnel ingress: `"edge"` (default: only requests carrying a
     /// valid K2 edge attestation), `"any"` (pre-PRD behaviour; for
@@ -860,6 +869,7 @@ impl Default for AppSettings {
             listen_lan: false,
             remote_sessions_enabled: false,
             web_client_enabled: true,
+            agent_hooks: true,
             connect_login_ingress: default_connect_login_ingress(),
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
@@ -1303,6 +1313,20 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.remote_sessions_enabled);
+    }
+
+    /// Q2 — `agentHooks` defaults ON and round-trips like any field.
+    #[test]
+    fn agent_hooks_defaults_on_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(load().agent_hooks);
+        assert!(AppSettings::default().agent_hooks);
+        let merged = update(serde_json::json!({ "agentHooks": false })).expect("update");
+        assert!(!merged.agent_hooks);
+        assert!(!load().agent_hooks);
+        let after = reset().expect("reset");
+        assert!(after.agent_hooks);
     }
 
     /// Hosted web client Layer 0 — the web-client master switch must

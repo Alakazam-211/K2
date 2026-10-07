@@ -512,6 +512,9 @@ pub fn is_agent_verb(path: &str) -> bool {
     // Allowlist — agent verbs only.
     const ALLOW_EXACT: &[&str] = &[
         "/hook/complete",
+        // prd-daemon-activity-and-thread-working-v1 DA12 (A4): the full-
+        // payload hook ingest. The cell server pins the pane to the token.
+        "/hook/event",
         "/cli/workspace/msg",
         // C2: workspace-addressed live terminal peek (`k2 read <ws>`).
         // Peer gate runs in the handler when principal is scoped.
@@ -661,6 +664,19 @@ pub fn require_hook(bearer: &str, path: &str) -> Option<ValidatedHook> {
         return None;
     }
     validate_hook(bearer)
+}
+
+/// The scoped arm shared by `/hook/complete` and `/hook/event` (TCP): a
+/// per-session token authorizes a hook ONLY for its own pane. Same token,
+/// another pane → `false` (→ 403). Inert when scoped hooks are opted out.
+pub fn scoped_hook_authorizes(presented: &str, path: &str, pane: &str) -> bool {
+    if !scoped_hooks_enabled() || presented.is_empty() || pane.is_empty() {
+        return false;
+    }
+    match require_hook(presented, path) {
+        Some(v) => v.pane_id == pane,
+        None => false,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -908,6 +924,15 @@ pub fn cell_env_pairs(
     ))
 }
 
+/// The pane/tab identity pairs (`K2_PANE_ID`, `K2SO_PANE_ID`, `K2_TAB_ID`,
+/// `K2SO_TAB_ID`), all = the v2 session id.
+pub fn pane_id_env_pairs(pane_id: &str) -> Vec<(String, String)> {
+    ["K2_PANE_ID", "K2SO_PANE_ID", "K2_TAB_ID", "K2SO_TAB_ID"]
+        .iter()
+        .map(|k| (k.to_string(), pane_id.to_string()))
+        .collect()
+}
+
 /// Env keys that must never carry the daemon owner token into an agent
 /// child. Dual-emitted (K2 + K2SO) for the 0.40 rebrand.
 const HOOK_TOKEN_ENV_KEYS: &[&str] = &["K2_HOOK_TOKEN", "K2SO_HOOK_TOKEN"];
@@ -961,6 +986,12 @@ pub fn prepare_agent_spawn_env(
     api_key: Option<&str>,
     owner_token: &str,
 ) -> bool {
+    // A8 (prd-daemon-activity-and-thread-working-v1): the pane id is how
+    // `notify.sh` names its session, so it rides every v2 spawn whatever
+    // `K2_HOOK_SCOPED` says. Only the token and socket are flag-gated.
+    for (k, v) in pane_id_env_pairs(pane_id) {
+        env.insert(k, v);
+    }
     let minted = if let Some(pairs) =
         cell_env_pairs(session_id, pane_id, principal, cred_mode, provider, api_key)
     {
@@ -1771,6 +1802,39 @@ mod tests {
                 Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
                 None => std::env::remove_var("K2_HOOK_SCOPED"),
             }
+        });
+    }
+
+    /// T-S1i (A8): with `K2_HOOK_SCOPED=0` a v2 spawn still carries the
+    /// pane id, so `notify.sh` can name its session; no token, no socket.
+    #[test]
+    fn t_s1i_pane_id_rides_the_spawn_with_scoped_hooks_off() {
+        with_temp_home(|| {
+            let prev = std::env::var("K2_HOOK_SCOPED").ok();
+            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let sid = SessionId::new();
+            let pane = sid.to_string();
+            let mut env = std::collections::HashMap::new();
+            let minted = prepare_agent_spawn_env(
+                &mut env,
+                &sid,
+                &pane,
+                principal(),
+                CredMode::ApiKey,
+                Provider::Anthropic,
+                None,
+                "owner-secret",
+            );
+            match prev {
+                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+                None => std::env::remove_var("K2_HOOK_SCOPED"),
+            }
+            assert!(!minted);
+            for k in ["K2_PANE_ID", "K2SO_PANE_ID", "K2_TAB_ID", "K2SO_TAB_ID"] {
+                assert_eq!(env.get(k), Some(&pane), "{k} missing with scoped hooks off");
+            }
+            assert!(!env.contains_key("K2_HOOK_TOKEN"));
+            assert!(!env.contains_key("K2_HOOK_SOCK"));
         });
     }
 

@@ -973,11 +973,10 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
         "/hook/complete" => {
-            // Agent-lifecycle hook endpoint. URL-encoded query params
-            // carry paneId / tabId / eventType / token. Business logic
-            // (ring buffer, emit, WorkspaceSession.status sync) lives in
-            // k2_core so src-tauri's existing server hits the same
-            // code path.
+            // LEGACY agent-lifecycle hook (pre-S1 `notify.sh`; DA13). URL-
+            // encoded query params carry paneId / tabId / eventType / token.
+            // Kept for one release as evidence only; the current script
+            // posts the full payload to `/hook/event` below.
             let _ = stream.read(&mut buf).await;
             let params = super::http::parse_params(&path, &query);
             let req_token = params.get("token").cloned().unwrap_or_default();
@@ -987,26 +986,17 @@ async fn handle_one_request(
             // a hook for ANY pane (it is the daemon-wide credential).
             let owner_ok = super::http::ct_eq_token(&req_token, &state.token);
 
-            // #58 Phase 1 SCOPED arm — dual-accept with owner (Phase 2 is
-            // owner REJECTION, not this PR). A per-session scoped token
-            // authorizes ONLY its own paneId: Bearer preferred (kept out of
-            // logs/transcripts), falling back to `?token=`. Flag default ON;
-            // with explicit OFF nothing mints → this arm is inert.
-            let scoped_ok = if !owner_ok && crate::session_token::scoped_hooks_enabled() {
+            // #58 Phase 1 SCOPED arm — dual-accept with owner. A per-session
+            // scoped token authorizes ONLY its own paneId: Bearer preferred
+            // (kept out of logs/transcripts), falling back to `?token=`.
+            // Same token, a different paneId → 403 (PRD §5 smoke #4).
+            let scoped_ok = !owner_ok && {
                 let presented = bearer_token
                     .as_deref()
                     .filter(|s| !s.is_empty())
                     .unwrap_or(req_token.as_str());
                 let req_pane = params.get("paneId").map(String::as_str).unwrap_or("");
-                match crate::session_token::require_hook(presented, &path) {
-                    // Scope enforcement: the token must be bound to the
-                    // exact pane the hook is completing. Same token, a
-                    // different paneId → no match → 403 (PRD §5 smoke #4).
-                    Some(v) => !req_pane.is_empty() && v.pane_id == req_pane,
-                    None => false,
-                }
-            } else {
-                false
+                crate::session_token::scoped_hook_authorizes(presented, &path, req_pane)
             };
 
             if !owner_ok && !scoped_ok {
@@ -1019,8 +1009,106 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            let body = k2_core::agent_hooks::handle_hook_complete(&params);
+            // DA13: only a live pane gets through (the whole owner check
+            // a pid-less, payload-less hook allows).
+            let body = crate::hook_ingest::legacy_complete(&params);
             super::http::send_response(&mut *stream, "200 OK", "application/json", body).await;
+        }
+        "/hook/event" => {
+            // prd-daemon-activity-and-thread-working-v1 DA12: the full hook
+            // payload from `notify.sh` (headers `X-K2-Pane`,
+            // `X-K2-Agent-Pid`, `X-K2-Hook-Source`, …). POST only; body
+            // ≤ 1 MiB. Every outcome but an auth failure is 204, so a hook
+            // never blocks the agent; the owner check runs in `hook_ingest`.
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let hook_headers = k2_core::agent_hooks::envelope::HookHeaders::from_lookup(|n| {
+                super::http::extract_header(&headers_blob, n)
+            });
+            let params = super::http::parse_params(&path, &query);
+            let req_token = params.get("token").cloned().unwrap_or_default();
+            let owner_ok = super::http::ct_eq_token(&req_token, &state.token);
+            let scoped_ok = !owner_ok && {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(req_token.as_str());
+                crate::session_token::scoped_hook_authorizes(presented, &path, &hook_headers.pane)
+            };
+            if !owner_ok && !scoped_ok {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"Invalid or missing auth token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                k2_core::agent_hooks::envelope::MAX_BODY_BYTES,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(_) => {
+                    super::http::send_response(
+                        &mut *stream,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"error":"hook body over 1 MiB"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::hook_ingest::ingest(&hook_headers, &body)
+            })
+            .await;
+            super::http::send_response(&mut *stream, "204 No Content", "application/json", "").await;
+        }
+        // prd-daemon-activity-and-thread-working-v1 DA17: re-run the hook
+        // installer now (`k2 hooks install`), or remove K2's entries with
+        // `{"remove":true}` / `remove=1` (`k2 hooks uninstall`). Returns the
+        // pass (`skipped` when the install gate refuses). Owner or Admin.
+        "/cli/hooks/install" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let truthy = |v: &str| matches!(v.trim(), "1" | "true" | "yes");
+            let remove = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("remove").and_then(serde_json::Value::as_bool))
+                .unwrap_or_else(|| {
+                    let mut params = super::http::parse_params(&path, &query);
+                    params.extend(super::http::parse_form_body(&body));
+                    params.get("remove").is_some_and(|v| truthy(v))
+                });
+            let run = tokio::task::spawn_blocking(move || {
+                crate::hook_install::run_once(crate::hook_install::Trigger::Route, remove)
+            })
+            .await;
+            match run {
+                Ok(run) => {
+                    let body = serde_json::to_string(&run).unwrap_or_else(|e| {
+                        serde_json::json!({ "error": format!("serialize: {e}") }).to_string()
+                    });
+                    super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+                }
+                Err(e) => {
+                    let body = serde_json::json!({ "error": format!("installer worker: {e}") }).to_string();
+                    super::http::send_response(&mut *stream, "500 Internal Server Error", "application/json", &body).await;
+                }
+            }
         }
         // Session Stream WS subscribe endpoint (0.34.0 Phase 2).
         // Lives on a /cli/ path but routes to the WS handler rather

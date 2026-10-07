@@ -154,6 +154,10 @@ pub mod v1_capabilities;
 // surface (default OFF) + the scoped /cli/respond cell verb.
 pub mod sandbox_responses;
 pub mod session_activity;
+// prd-daemon-activity-and-thread-working-v1 S1: `POST /hook/event` ingest +
+// owner check, and the daemon-owned hook installer.
+pub mod hook_ingest;
+pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
 pub mod session_lookup;

@@ -170,6 +170,9 @@ pub mod airgap;
 pub mod listen;
 // Phase 2.5 follow-up — daemon port stability (sub-fix A of finding #547).
 pub mod port_claim;
+// prd-daemon-activity-and-thread-working-v1 DA14: live process lookup for
+// the hook owner check (macOS proc_pidinfo, Linux /proc).
+pub mod proc_ancestry;
 pub mod project_config;
 // Projects V1 P1 (prd-projects-v1) — named GROUPS of workspaces
 // (`project_groups`, NOT the legacy `projects` workspace registry):

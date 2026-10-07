@@ -88,7 +88,7 @@ mod window;
 #[cfg(target_os = "macos")]
 mod event_faults;
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 /// H7: sync `k2_core::hook_config` with the daemon's port + token so
 /// in-process Alacritty children emit `/hook/complete` requests at the
@@ -1528,44 +1528,19 @@ pub fn run() {
             }
             // Phase 4 H7: Tauri no longer runs its own HTTP listener.
             // The k2so-daemon (launchd-managed) is the sole server for
-            // every /cli/* route + /hook/complete + /events WS, and
-            // writes heartbeat.port + heartbeat.token itself on startup.
+            // every /cli/* route + /hook/* + /events WS, and writes
+            // heartbeat.port + heartbeat.token itself on startup.
             //
-            // What Tauri still does here:
-            //   1. Write the notify.sh hook script to disk. The script
-            //      reads heartbeat.port at exec time, so it doesn't
-            //      need Tauri's port — just needs to exist on disk for
-            //      `register_all_hooks` to point ~/.claude/settings.json
-            //      at it.
-            //   2. Register those hooks with claude/cursor/etc so their
-            //      lifecycle events curl into the daemon's /hook/complete.
-            //   3. Sync hook_config so in-process Alacritty children
-            //      inject the daemon's port + token into child envs —
-            //      handled by `prime_hook_config_from_daemon` below.
+            // Hook installation (notify.sh + the claude/cursor/gemini
+            // configs) is the DAEMON's job too since
+            // prd-daemon-activity-and-thread-working-v1 DA7: it runs after
+            // boot and every 10 minutes, so a headless daemon has hooks
+            // and this app never rewrites the script. Install problems
+            // reach the renderer as the daemon's `hooks_install_failed`.
             //
-            // What Tauri no longer does (moved to daemon):
-            //   - Bind a TCP listener. The old `agent_hooks::start_server`
-            //     call is gone; its 60+ /cli/* routes are all served by
-            //     k2so-daemon now.
-            //   - Write heartbeat.port / heartbeat.token. Daemon does
-            //     it eagerly on startup.
-            //   - Clean up stale heartbeat.port files. Same reasoning:
-            //     daemon is the owner, not us.
-            match agent_hooks::write_hook_script(0) {
-                Ok(script_path) => {
-                    agent_hooks::register_all_hooks(&app.handle().clone(), &script_path);
-                    log_debug!("[agent-hooks] Hook scripts registered at {}", script_path);
-                }
-                Err(e) => {
-                    log_debug!("[agent-hooks] Failed to write hook script: {}", e);
-                    let _ = app.handle().emit(
-                        "hook-injection-failed",
-                        serde_json::json!({
-                            "failures": [{"cli": "notify-script", "error": e}]
-                        }),
-                    );
-                }
-            }
+            // What Tauri still does here: sync hook_config so in-process
+            // children inject the daemon's port + token into child envs
+            // (`prime_hook_config_from_daemon` below).
             prime_hook_config_from_daemon();
             check_daemon_version_and_restart();
             // Phase 2 Unit 7b: the per-workspace legacy migrations

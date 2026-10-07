@@ -153,6 +153,10 @@ mod v1_capabilities;
 // F2 (sandbox): per-session agent response log + ownership map (GET .../messages).
 mod sandbox_responses;
 mod session_activity;
+// prd-daemon-activity-and-thread-working-v1 S1: `POST /hook/event` ingest +
+// owner check, and the daemon-owned hook installer.
+mod hook_ingest;
+mod hook_install;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;
@@ -1229,6 +1233,11 @@ async fn async_main() {
     // correctly-paired daemon, and stops showing "Applying updates…".
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
+
+    // prd-daemon-activity-and-thread-working-v1 DA7: the daemon installs
+    // the agent CLI hooks itself (headless boxes too): one pass on the
+    // blocking pool now that boot is ready, then every 10 minutes.
+    let _hook_install_handle = hook_install::spawn();
 
     // Token ledger: full transcript scan on a 15-minute timer, plus a
     // per-workspace idle scan. Headless — the renderer does not read

@@ -355,6 +355,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::TokenUsageChanged {} => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
         SessionEvent::ZenChanged {} => None,
+        // A11 — hook install problems: daemon-global, every client may toast.
+        SessionEvent::HooksInstallFailed { .. } => None,
         // 0.40.39 — daemon-side activity: app-level (the store maps
         // agent/pane keys itself; spinners exist on every host's UI).
         SessionEvent::SessionActivityChanged { .. } => None,
@@ -720,6 +722,7 @@ mod tests {
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::ZenChanged {},
+            SessionEvent::HooksInstallFailed { failures: vec![] },
             SessionEvent::PresenceChanged { roster: vec![] },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },

@@ -2535,18 +2535,61 @@ cmd_hooks_status() {
         return 0
     fi
     echo "$raw" | python3 -c "
-import json, sys
+import json, sys, time
 data = json.loads(sys.stdin.read())
 inj = data.get('injections', {})
 script = inj.get('notify_script', {})
+clis = data.get('clis', {})
+def ago(ms):
+    if not ms:
+        return 'never'
+    s = max(0, int(time.time() - ms / 1000))
+    return f'{s}s ago' if s < 120 else (f'{s // 60}m ago' if s < 7200 else f'{s // 3600}h ago')
 print(f\"K2 hook server port: {data.get('port')}\")
-print(f\"Notify script: {script.get('path','?')}  exists={script.get('exists',False)}\")
+print(f\"Notify script: {script.get('path','?')}  exists={script.get('exists',False)}  version={script.get('version') or '?'}\")
+owner = data.get('ownerCheck')
+if owner:
+    note = '  (Windows: conversation id only, no process check)' if owner == 'conversation' else ''
+    print(f'Owner check: {owner}{note}')
+last = data.get('lastInstall') or {}
+if last.get('skipped'):
+    print(f\"Last install pass: skipped ({last['skipped']})\")
+elif last.get('report'):
+    r = last['report']
+    print(f\"Last install pass: {r.get('action')} ({last.get('trigger')}), agentHooks setting {'on' if last.get('agentHooksSetting') else 'off'}\")
 print()
 print('Config injections:')
 for key in ('claude', 'cursor', 'gemini'):
     c = inj.get(key, {})
-    tag = 'OK ' if c.get('injected') else ('NO ' if c.get('exists') else '-- ')
-    print(f\"  [{tag}] {key:<8} {c.get('path','?')}\")
+    d = clis.get(key, {})
+    if c.get('configUnreadable'):
+        tag = '!! '
+    else:
+        tag = 'OK ' if c.get('injected') else ('NO ' if c.get('exists') else '-- ')
+    extra = []
+    if key == 'claude' and d.get('detectedVersion'):
+        extra.append(f\"claude {d['detectedVersion']} ({d.get('eventSet') or '?'} set)\")
+    if c.get('configUnreadable'):
+        extra.append('config_unreadable: left untouched')
+    events = d.get('installedEvents') or c.get('events') or []
+    if events:
+        extra.append(f'{len(events)} events')
+    extra.append(f\"last event {ago(d.get('lastEventMs'))}\")
+    print(f\"  [{tag}] {key:<8} {c.get('path','?')}  {'; '.join(extra)}\")
+sessions = data.get('sessions') or {}
+if sessions:
+    print()
+    print('Live sessions:')
+    print(f\"  {'Session':<38} {'Owner':<16} {'Accepted':>8} {'Foreign':>8} {'Unknown':>8} {'Parse':>6}  Last\")
+    for sid, e in sessions.items():
+        o = e.get('owner') or {}
+        proc = o.get('proc') or {}
+        who = f\"pid {proc['pid']}\" if proc.get('pid') else (o.get('via') or 'none')
+        c = e.get('counters') or {}
+        print(f\"  {sid:<38} {who:<16} {c.get('accepted',0):>8} {c.get('foreign',0):>8} {c.get('unknownPane',0):>8} {c.get('parseError',0):>6}  {ago(e.get('lastEnvelopeMs'))}\")
+totals = data.get('totals')
+if totals:
+    print(f\"Totals: accepted {totals.get('accepted',0)}, foreign {totals.get('foreign',0)}, unknown pane {totals.get('unknownPane',0)}, parse errors {totals.get('parseError',0)}\")
 print()
 events = data.get('recent_events', [])
 cap = data.get('recent_events_cap', 50)
@@ -2554,15 +2597,63 @@ if not events:
     print(f'Recent events (0 of last {cap}): none received yet — launch a Claude session and run a prompt.')
 else:
     print(f'Recent events (showing last {len(events)} of {cap}):')
-    print(f\"{'Time':<20} {'Canonical':<12} {'Raw':<28} {'Pane':<18} Tab\")
+    print(f\"{'Time':<20} {'Verdict':<13} {'Raw':<22} {'Tool':<14} Pane\")
     print('-' * 100)
     for e in events:
         ts = (e.get('timestamp') or '')[:19].replace('T',' ')
-        canon = e.get('canonical') or '(unmatched)'
+        verdict = e.get('verdict') or e.get('canonical') or '(unmatched)'
         raw = e.get('raw_event') or ''
-        pane = (e.get('pane_id') or '')[:17]
-        tab = (e.get('tab_id') or '')
-        print(f'{ts:<20} {canon:<12} {raw:<28} {pane:<18} {tab}')
+        tool = e.get('tool_name') or ''
+        pane = (e.get('pane_id') or '')
+        print(f'{ts:<20} {verdict:<13} {raw:<22} {tool:<14} {pane}')
+" 2>/dev/null || echo "$raw"
+}
+
+# `k2 hooks install` / `k2 hooks uninstall` (prd-daemon-activity-and-
+# thread-working-v1 DA17, A2): re-run the daemon's hook installer now, or
+# remove K2's entries (and only K2's) from the agent CLI configs.
+cmd_hooks_install() {
+    local remove="${1:-0}"
+    shift || true
+    local as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    local body='{}'
+    [ "$remove" = "1" ] && body='{"remove":true}'
+    local raw
+    raw=$(cli_post_json "/cli/hooks/install" "$body")
+    if [ "$as_json" = "1" ]; then
+        echo "$raw"
+        return 0
+    fi
+    echo "$raw" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+if 'error' in data:
+    print(f\"Error: {data['error']}\", file=sys.stderr)
+    sys.exit(1)
+if data.get('skipped'):
+    print(f\"Hooks not changed: {data['skipped']}.\")
+    sys.exit(0)
+r = data.get('report') or {}
+action = r.get('action', '?')
+s = r.get('script') or {}
+print(f\"Hook {action}: notify.sh {s.get('state','?')} ({s.get('path','?')})\")
+if action == 'install':
+    print(f\"Claude {r.get('claudeVersion') or 'version unknown'}: {r.get('claudeEventSet','?')} event set\")
+if not data.get('agentHooksSetting', True) and action == 'remove':
+    print('The agentHooks setting is off, so K2 hooks were removed.')
+for c in r.get('clis', []):
+    note = ''
+    if c.get('state') == 'config_unreadable':
+        note = '  (did not parse; left untouched)'
+    elif c.get('error'):
+        note = f\"  ({c['error']})\"
+    print(f\"  {c.get('cli','?'):<8} {c.get('state','?'):<18} {c.get('path','?')}{note}\")
 " 2>/dev/null || echo "$raw"
 }
 
@@ -21504,9 +21595,11 @@ AGENT (single-item ops on the workspace's primary agent)
   agent update --field <f> --value <v>          Equivalent to `workspace update`
   agent complete --file <f>                     Mark work item complete
 
-HOOKS (Claude Code / Cursor integration state)
+HOOKS (Claude Code / Cursor / Gemini integration state)
   hooks status [--limit N] [--json]             Hook pipeline state
                                                 (same as `daemon hooks status`)
+  hooks install [--json]                        Re-run the daemon's hook installer
+  hooks uninstall [--json]                      Remove K2's hook entries (others kept)
 
 For "what's running" use `workspace list --running` (daily tier).
 For workspace-scoped ops use the `workspace` verb (daily tier).
@@ -37116,12 +37209,17 @@ EOF
         esac
         ;;
     hooks)
-        if [ "${2:-}" = "status" ]; then
-            shift 2; cmd_hooks_status "$@"
-        else
-            echo "Usage: k2 hooks status [--limit N] [--json]" >&2
-            exit 1
-        fi
+        case "${2:-}" in
+            status)    shift 2; cmd_hooks_status "$@" ;;
+            install)   shift 2; cmd_hooks_install 0 "$@" ;;
+            uninstall) shift 2; cmd_hooks_install 1 "$@" ;;
+            *)
+                echo "Usage: k2 hooks status [--limit N] [--json]" >&2
+                echo "       k2 hooks install [--json]     re-run the daemon's hook installer now" >&2
+                echo "       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs" >&2
+                exit 1
+                ;;
+        esac
         ;;
     daemon)
         case "${2:-status}" in

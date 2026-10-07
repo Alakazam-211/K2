@@ -98,6 +98,11 @@ vi.mock('@/stores/session-events', async () => {
       ev.reg.sessionActivity.push(fn)
       return () => void (ev.reg.sessionActivity = ev.reg.sessionActivity.filter((f) => f !== fn))
     }),
+    // A11: the daemon's hook-install failure toast (not exercised here).
+    onHooksInstallFailed: vi.fn((scope: unknown) => {
+      expectPrimaryScope(scope)
+      return () => {}
+    }),
     subscribeToWorkspaceTabEvents: vi.fn(
       (scope: unknown, path: string, handlers: Record<string, (...a: unknown[]) => void>) => {
       expectPrimaryScope(scope)

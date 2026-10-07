@@ -38,6 +38,8 @@
 //! | GET  /cli/mail/approvals/list     | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/approve  | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
+//! | POST /cli/mail/credentials/keep   | mail/agent_creds.rs     |
+//! | POST /cli/mail/address/person     | mail/agent_creds.rs     |
 //! | POST /cli/mail/external/add       | mail/routes_external.rs |
 //! | POST /cli/mail/external/remove    | mail/routes_external.rs |
 //! | POST /cli/mail/link/oauth/start   | mail/routes_link_oauth.rs |
@@ -279,6 +281,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/queue/drop"
         | "/cli/mail/acl/revoke"
         | "/cli/mail/app-password/revoke"
+        | "/cli/mail/credentials/keep"
+        | "/cli/mail/address/person"
         | "/cli/mail/dkim/rotate"
         | "/cli/mail/dkim/retire"
         | "/cli/mail/dmarc/report-to"
@@ -371,6 +375,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/app-password/revoke" => {
             crate::mail::app_password::handle_app_password_revoke(body)
         }
+        "/cli/mail/credentials/keep" => crate::mail::agent_creds::handle_credentials_keep(body),
+        "/cli/mail/address/person" => crate::mail::agent_creds::handle_address_person(body),
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         "/cli/mail/cert/names" => crate::mail::cert_names::handle_post(body),
         "/cli/mail/cert/owner" => crate::mail::cert_owner::handle_post(body),
@@ -570,6 +576,10 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/autoconfig"
             | "/cli/mail/app-password"
             | "/cli/mail/app-password/revoke"
+            // 0.45.0: IT-agent credential verbs (self-elevation refused in
+            // the handlers, see mail::agent_creds).
+            | "/cli/mail/credentials/keep"
+            | "/cli/mail/address/person"
             | "/cli/mail/dkim"
             | "/cli/mail/dkim/rotate"
             | "/cli/mail/dkim/retire"
@@ -1078,6 +1088,102 @@ mod tests {
             hint.contains("Allow agents to manage hosted mail on this host"),
             "flag-off hint must name the Settings row: {hint}"
         );
+    }
+
+    #[test]
+    fn credential_and_policy_verbs_open_to_it_agents_only_and_never_for_their_own_mailbox() {
+        // Two workspaces: an IT agent's (mail-manage on) and a plain one.
+        let it_id = uuid::Uuid::new_v4().to_string();
+        let plain_id = uuid::Uuid::new_v4().to_string();
+        let short = &it_id[..12];
+        let domain = format!("gate-{short}.example");
+        let own_addr = format!("it-bot@{domain}");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, mm) in [(&it_id, 1), (&plain_id, 0)] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, mail_manage_enabled) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        id,
+                        format!("gate-{}", &id[..12]),
+                        format!("/tmp/mail-gate-{}-{}", std::process::id(), &id[..12]),
+                        mm
+                    ],
+                )
+                .expect("insert project");
+            }
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+                 owner_project_id, status, created_at) VALUES (?1, ?2, 'dom-gate', 'acc-gate', \
+                 ?3, 'active', 100)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), own_addr, it_id],
+            )
+            .expect("seed own mailbox");
+        }
+        let principal = |id: &str| crate::session_token::HookPrincipal {
+            workspace_uuid: id.to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let it = principal(&it_id);
+        let plain = principal(&plain_id);
+
+        let verbs = [
+            "/cli/mail/app-password",
+            "/cli/mail/address/password",
+            "/cli/mail/credentials/keep",
+            "/cli/mail/address/person",
+            "/cli/mail/approvals/approve",
+            "/cli/mail/approvals/deny",
+            "/cli/mail/config/set",
+        ];
+        for path in verbs {
+            assert!(is_mail_manage_surface(path), "M5: {path}");
+            assert!(
+                mail_manage_authorized(path, false, Some(&it)).is_ok(),
+                "IT agent passes the gate on {path}"
+            );
+            let refused = mail_manage_authorized(path, false, Some(&plain))
+                .err()
+                .unwrap_or_else(|| panic!("non-IT agent must be refused on {path}"));
+            assert!(refused.body.contains("owner_only"), "{path}: {}", refused.body);
+            assert!(mail_manage_authorized(path, true, None).is_ok(), "owner: {path}");
+        }
+
+        // Through the dispatcher, the IT agent's OWN mailbox is refused
+        // with the self-elevation hint.
+        for (path, body) in [
+            ("/cli/mail/app-password", format!(r#"{{"address":"{own_addr}"}}"#)),
+            ("/cli/mail/address/password", format!(r#"{{"address":"{own_addr}"}}"#)),
+            ("/cli/mail/credentials/keep", format!(r#"{{"address":"{own_addr}"}}"#)),
+            ("/cli/mail/address/person", format!(r#"{{"address":"{own_addr}","person":true}}"#)),
+        ] {
+            let r = crate::caller_workspace::with_request_principal(Some(it.clone()), || {
+                dispatch_post(path, body.as_bytes())
+            });
+            assert_eq!(r.status, "403 Forbidden", "{path}: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(v["error"]["code"], "owner_only", "{path}: {}", r.body);
+            assert!(
+                v["error"]["hint"].as_str().unwrap().contains("can't loosen mail rules on its own sends"),
+                "{path}: {}",
+                r.body
+            );
+        }
+        for path in ["/cli/mail/credentials/keep", "/cli/mail/address/person"] {
+            let get = dispatch(path, &HashMap::new()).expect("mail path");
+            assert_eq!(get.status, "405 Method Not Allowed", "{path}: {}", get.body);
+        }
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM mail_addresses WHERE address = ?1", rusqlite::params![own_addr])
+            .expect("cleanup address");
+        for id in [&it_id, &plain_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
+                .expect("cleanup project");
+        }
     }
 
     #[test]

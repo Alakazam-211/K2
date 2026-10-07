@@ -14163,12 +14163,13 @@ cmd_schema() {
     },
     {
       "name": "hostmail create",
-      "usage": "k2 hostmail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--json]",
-      "description": "Mint a HOSTED email address on a hosted domain (verified, or pending receive-only before NS cut; send/direct stay locked until DNS verifies). Default: the workspace default. Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
+      "usage": "k2 hostmail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--person] [--json]",
+      "description": "Mint a HOSTED email address on a hosted domain (verified, or pending receive-only before NS cut; send/direct stay locked until DNS verifies). Default: the workspace default. Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. The once password is shown to the owner, and to an IT agent (mail_manage) minting with --person; an agent's own mailbox gets passwordWithheld (it sends with k2 mail send). Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
       "args": [{"name": "localpart", "required": true}],
       "flags": [
         {"name": "--domain", "arg": "d", "description": "Mint on a specific hosted domain (verified, or pending receive-only)."},
         {"name": "--id", "arg": "client-id", "description": "Idempotency key — same --id returns the existing address (retry-safe)."},
+        {"name": "--person", "arg": null, "description": "A person's mailbox (not this agent's own): owner or IT agent (mail_manage) only; the password is shown."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -14385,8 +14386,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate|keep (IMAP/SMTP once secret; owner, or an IT agent (mail_manage) for any mailbox but its own workspace's — agents without mail_manage never get a mail password; mailbox-password sessions die, app passwords do not), app-password add|list|revoke|keep (extra labeled secrets; mail_manage, same own-mailbox rule for add/keep; secret once), person <addr> on|off (a person's mailbox: an IT agent may set its passwords even in its own workspace; only the owner turns it on for the IT agent's own workspace), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -14476,9 +14477,19 @@ cmd_schema() {
     {
       "name": "hostmail password rotate",
       "usage": "k2 hostmail password rotate <addr> [--json]",
-      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. mail_manage or owner/admin. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret. Not rotate-admin. No 993. Cannot GET the old secret.",
+      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends). Agents without mail_manage never get a mail password. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret. Not rotate-admin. No 993. Cannot GET the old secret.",
       "args": [{"name": "addr", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (once password + client block)."}]
+    },
+    {
+      "name": "hostmail password keep",
+      "usage": "k2 hostmail password keep <addr>|--all-existing [--json]",
+      "description": "Mark a mailbox password as reviewed so k2 hostmail doctor stops flagging it under 'Mail passwords an agent may hold'. POST /cli/mail/credentials/keep {address}. --all-existing marks every mailbox password whose mailbox existed before the 0.45.0 update ({allExisting: true, kind: mailbox}); newer ones are never covered. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only); agents without mail_manage exit 3. Shows and changes no secret; rotate instead if you don't know who has it.",
+      "args": [{"name": "addr", "required": false}],
+      "flags": [
+        {"name": "--all-existing", "arg": null, "description": "Every mailbox password from before the 0.45.0 update (no <addr>)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "hostmail quota get",
@@ -14580,7 +14591,7 @@ cmd_schema() {
     {
       "name": "hostmail app-password add",
       "usage": "k2 hostmail app-password add <addr> [--label <s>] [--json]",
-      "description": "Create an extra labeled secret on a hosted mailbox (Stalwart AppPassword). POST /cli/mail/app-password {address, label?}. mail_manage. Secret shown once. Default label k2. Not nested under password. Not k2 mail link.",
+      "description": "Create an extra labeled secret on a hosted mailbox (Stalwart AppPassword). POST /cli/mail/app-password {address, label?}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends); agents without mail_manage never get a mail password. Secret shown once. Default label k2. Not nested under password. Not k2 mail link.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
         {"name": "--label", "arg": "s", "description": "Description (default k2)."},
@@ -14600,6 +14611,27 @@ cmd_schema() {
       "description": "Revoke one app password on a hosted mailbox. POST /cli/mail/app-password/revoke {address, id}. mail_manage. Unknown id is 404. GET is 405.",
       "args": [{"name": "addr", "required": true}, {"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail app-password keep",
+      "usage": "k2 hostmail app-password keep <addr> <id>|--all-existing [--json]",
+      "description": "Mark an app password as one you handed out so k2 hostmail doctor stops flagging it under 'Mail passwords an agent may hold'. POST /cli/mail/credentials/keep {address, appPasswordId}. --all-existing marks every app password created before the 0.45.0 update ({allExisting: true, kind: app_password}); newer or undated ones are never covered. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only); agents without mail_manage exit 3. Unknown id is 404. Shows and changes no secret; revoke instead if you don't know who has it.",
+      "args": [{"name": "addr", "required": false}, {"name": "id", "required": false}],
+      "flags": [
+        {"name": "--all-existing", "arg": null, "description": "Every app password from before the 0.45.0 update (no <addr> <id>)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail person",
+      "usage": "k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json]",
+      "description": "Mark a hosted mailbox as a person's (on) or an agent's (off). An IT agent (mail_manage) may set a person's mailbox passwords even when it is bound to its own workspace; its own agent mailboxes stay the owner's call. --all --workspace <ws> marks every mailbox in the workspace at once, never its send identities (addresses its agent sent from, mailboxes its agent minted for itself) — run once by the owner for an IT workspace of imported staff mailboxes. POST /cli/mail/address/person {address|all+workspace, person}. Owner, or an IT agent — except turning it on in its own workspace (exit 3 owner_only). Agents without mail_manage exit 3.",
+      "args": [{"name": "addr", "required": false}, {"name": "state", "required": true}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Every mailbox in --workspace except its send identities."},
+        {"name": "--workspace", "arg": "ws", "description": "The workspace for --all (name | path | UUID)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "hostmail dkim show",
@@ -25605,6 +25637,7 @@ _mail_py() {
     M_MAILDIR="${M_MAILDIR:-}" M_IMAPSYNC_HOST="${M_IMAPSYNC_HOST:-}" \
     M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" M_IMAPSYNC_PASS="${M_IMAPSYNC_PASS:-}" \
     M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" M_SKIP_INBOX="${M_SKIP_INBOX:-false}" \
+    M_PERSON="${M_PERSON:-}" \
     M_MEMBERS="${M_MEMBERS:-}" M_LIST_OP="${M_LIST_OP:-}" \
     M_SENDER="${M_SENDER:-}" M_CLASS="${M_CLASS:-}" \
     M_MAILBOX="${M_MAILBOX:-}" M_RIGHTS="${M_RIGHTS:-}" \
@@ -25650,7 +25683,9 @@ def die(err, exit_code=None):
         # wait/--wait sites) · 1 = everything else.
         # GH #34: daemon returns code owner_only on hostmail/access/…
         # owner surfaces for valid agent passports (not "invalid token").
-        exit_code = 3 if code in ("gated", "forbidden", "owner_only") else 2 if code == "usage" else 1
+        # 0.45.0: agent_send_path_only = an agent asked for an IMAP/SMTP
+        # secret; the hint already names `k2 mail send` + the owner verb.
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only") else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
 def _is_socket_timeout(exc):
@@ -25959,6 +25994,8 @@ if verb == "create":
         body["domain"] = env("M_DOMAIN")
     if env("M_CLIENT_ID"):
         body["clientId"] = env("M_CLIENT_ID")
+    if env("M_PERSON") == "true":
+        body["person"] = True
     d = call("POST", "/cli/mail/address/create", body=body)
     if as_json:
         print(dumps(d))
@@ -25972,6 +26009,9 @@ if verb == "create":
         else:
             if d.get("password"):
                 print("password : %s  (shown once — save it for Mail.app / IMAP)" % d["password"])
+            elif d.get("passwordWithheld"):
+                print("password : withheld — %s" % (d.get("passwordHint") or
+                      "agents send with `k2 mail send`; only the owner can set an IMAP/SMTP password"))
             print("username : %s" % (d.get("username") or d.get("address") or "?"))
             def _ep(label, key, default_port):
                 ep = d.get(key) or {}
@@ -27271,6 +27311,72 @@ elif verb == "app_password_revoke":
     else:
         print("revoked %s on %s" % (d.get("id") or env("M_ID") or "?", d.get("address") or env("M_ADDRESS") or "?"))
 
+elif verb == "credentials_keep":
+    # Owner only. M_ID set = an app password; empty = the mailbox password.
+    body = {"address": env("M_ADDRESS")}
+    if env("M_ID"):
+        body["appPasswordId"] = env("M_ID")
+    d = call("POST", "/cli/mail/credentials/keep", body=body)
+    if as_json:
+        print(dumps(d))
+    elif d.get("appPasswordId"):
+        print("kept app password %s on %s — the doctor will stop flagging it" % (
+            d["appPasswordId"], d.get("address") or env("M_ADDRESS") or "?"))
+    else:
+        print("kept the mailbox password of %s — the doctor will stop flagging it" % (
+            d.get("address") or env("M_ADDRESS") or "?"))
+
+elif verb == "person_set" and env("M_ALL") == "true":
+    on = env("M_PERSON") == "on"
+    d = call("POST", "/cli/mail/address/person",
+             body={"all": True, "workspace": env("M_WORKSPACE"), "person": on})
+    if as_json:
+        print(dumps(d))
+    else:
+        changed = d.get("changed") or []
+        word = "people's" if on else "agents'"
+        print("marked %d mailbox(es) in %s as %s mailboxes" % (len(changed), env("M_WORKSPACE"), word))
+        for a in changed:
+            print("  %s" % a)
+        excluded = d.get("excludedSendIdentities") or []
+        if excluded:
+            print("left as the agent's own (its send identities): %s" % ", ".join(excluded))
+
+elif verb == "person_set":
+    on = env("M_PERSON") == "on"
+    d = call("POST", "/cli/mail/address/person",
+             body={"address": env("M_ADDRESS"), "person": on})
+    if as_json:
+        print(dumps(d))
+    elif on:
+        print("%s is now a person's mailbox — the owner and IT agents can set its passwords"
+              % (d.get("address") or env("M_ADDRESS") or "?"))
+    else:
+        print("%s is now an agent's mailbox" % (d.get("address") or env("M_ADDRESS") or "?"))
+
+elif verb in ("credentials_keep_all_mailbox", "credentials_keep_all_app_password"):
+    # Owner only. Bulk review: only credentials created before the
+    # 0.45.0 update (the 0133 cutoff); newer ones stay flagged.
+    kind = "mailbox" if verb == "credentials_keep_all_mailbox" else "app_password"
+    d = call("POST", "/cli/mail/credentials/keep",
+             body={"allExisting": True, "kind": kind}, timeout=120)
+    if as_json:
+        print(dumps(d))
+    else:
+        kept = d.get("kept") or {}
+        left = d.get("leftFlagged") or {}
+        n = kept.get("mailboxPasswords") if kind == "mailbox" else kept.get("appPasswords")
+        what = "mailbox password(s)" if kind == "mailbox" else "app password(s)"
+        print("kept %s %s that existed before this update — the doctor will stop flagging them"
+              % (n if n is not None else 0, what))
+        newer = int(left.get("createdAfterCutoff") or 0)
+        undated = int(left.get("noCreationTime") or 0)
+        if newer or undated:
+            print("still flagged: %d created after the update, %d with no creation time — "
+                  "review those one by one (k2 hostmail doctor)" % (newer, undated))
+        for e in d.get("listErrors") or []:
+            print("could not list app passwords: %s" % e)
+
 elif verb == "dkim_show":
     d = call("GET", "/cli/mail/dkim", params={"domain": env("M_DOMAIN")})
     if as_json:
@@ -27725,7 +27831,7 @@ _mail_check_timeout() {
 
 cmd_mail_create() {
     if _wants_help "$@"; then cmd_help_mail_create; exit 0; fi
-    local local_part="" domain="" client_id="" as_json=false
+    local local_part="" domain="" client_id="" as_json=false person=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --domain)
@@ -27734,9 +27840,10 @@ cmd_mail_create() {
             --id)
                 [ $# -ge 2 ] || { _mail_err "usage" "--id requires a value (the idempotency key)"; exit 2; }
                 client_id="$2"; shift 2 ;;
+            --person) person=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--person] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$local_part" ]; then local_part="$1"; else
@@ -27751,7 +27858,7 @@ cmd_mail_create() {
         exit 2
     fi
     local M_VERB="create" M_JSON="$as_json" M_LOCAL="$local_part" \
-          M_DOMAIN="$domain" M_CLIENT_ID="$client_id"
+          M_DOMAIN="$domain" M_CLIENT_ID="$client_id" M_PERSON="$person"
     _mail_py
 }
 
@@ -28950,6 +29057,7 @@ cmd_hostmail() {
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
         password) cmd_hostmail_password "$@" ;;
         app-password) cmd_hostmail_app_password "$@" ;;
+        person) cmd_hostmail_person "$@" ;;
         domain)  cmd_mail_domain "$@" ;;
         create)  cmd_mail_create "$@" ;;
         delete)  cmd_hostmail_delete "$@" ;;
@@ -28978,7 +29086,7 @@ cmd_hostmail() {
         profile) cmd_hostmail_profile "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
             exit 2 ;;
     esac
 }
@@ -29071,11 +29179,49 @@ cmd_hostmail_password() {
     local sub="$1"; shift
     case "$sub" in
         rotate) cmd_hostmail_password_rotate "$@" ;;
+        keep) cmd_hostmail_password_keep "$@" ;;
         --help|-h) cmd_help_hostmail_password; exit 0 ;;
         *)
-            _mail_err "usage" "unknown password command '$sub' — usage: k2 hostmail password rotate <addr> [--json]"
+            _mail_err "usage" "unknown password command '$sub' — usage: k2 hostmail password <rotate|keep> <addr> [--json]"
             exit 2 ;;
     esac
+}
+
+# Owner only: mark a mailbox password as reviewed (you know who has it),
+# so `k2 hostmail doctor` stops flagging it. Never shows a secret.
+cmd_hostmail_password_keep() {
+    if _wants_help "$@"; then cmd_help_hostmail_password_keep; exit 0; fi
+    local address="" as_json=false all_existing=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all-existing) all_existing=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail password keep <addr>|--all-existing [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <addr> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ "$all_existing" = true ]; then
+        if [ -n "$address" ]; then
+            _mail_err "usage" "--all-existing covers every mailbox — drop '$address'"
+            exit 2
+        fi
+        local M_VERB="credentials_keep_all_mailbox" M_JSON="$as_json"
+        _mail_py
+        return
+    fi
+    if [ -z "$address" ]; then
+        _mail_err "usage" "k2 hostmail password keep <addr>|--all-existing (hosted address)"
+        exit 2
+    fi
+    local M_VERB="credentials_keep" M_JSON="$as_json" M_ADDRESS="$address" M_ID=""
+    _mail_py
 }
 
 cmd_hostmail_password_rotate() {
@@ -29110,9 +29256,10 @@ cmd_hostmail_app_password() {
         add) cmd_hostmail_app_password_add "$@" ;;
         list) cmd_hostmail_app_password_list "$@" ;;
         revoke) cmd_hostmail_app_password_revoke "$@" ;;
+        keep) cmd_hostmail_app_password_keep "$@" ;;
         --help|-h) cmd_help_hostmail_app_password; exit 0 ;;
         *)
-            _mail_err "usage" "unknown app-password command '$sub' — usage: k2 hostmail app-password <add|list|revoke>"
+            _mail_err "usage" "unknown app-password command '$sub' — usage: k2 hostmail app-password <add|list|revoke|keep>"
             exit 2 ;;
     esac
 }
@@ -29188,6 +29335,95 @@ cmd_hostmail_app_password_revoke() {
         exit 2
     fi
     local M_VERB="app_password_revoke" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$id"
+    _mail_py
+}
+
+# Owner only: mark an older app password as one you handed out, so
+# `k2 hostmail doctor` stops flagging it. Never creates or shows a secret.
+cmd_hostmail_app_password_keep() {
+    if _wants_help "$@"; then cmd_help_hostmail_app_password_keep; exit 0; fi
+    local address="" id="" as_json=false all_existing=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all-existing) all_existing=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail app-password keep <addr> <id>|--all-existing [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"
+                elif [ -z "$id" ]; then id="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1' — <addr> <id> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ "$all_existing" = true ]; then
+        if [ -n "$address" ]; then
+            _mail_err "usage" "--all-existing covers every mailbox — drop '$address'"
+            exit 2
+        fi
+        local M_VERB="credentials_keep_all_app_password" M_JSON="$as_json"
+        _mail_py
+        return
+    fi
+    if [ -z "$address" ] || [ -z "$id" ]; then
+        _mail_err "usage" "k2 hostmail app-password keep <addr> <id> [--json]"
+        exit 2
+    fi
+    local M_VERB="credentials_keep" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$id"
+    _mail_py
+}
+
+# Mark a hosted mailbox as a person's (on) or an agent's (off). Owner or
+# an IT agent (mail-manage); an IT agent can't turn it on for its own
+# workspace's mailbox.
+cmd_hostmail_person() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_hostmail_person; exit 0; fi
+    local address="" state="" as_json=false all=false workspace=""
+    local usage="k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all) all=true; shift ;;
+            --workspace)
+                [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a value"; exit 2; }
+                workspace="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
+                exit 2 ;;
+            *)
+                # With --all the only positional is on|off.
+                if [ "$all" = true ] && [ -z "$state" ] && { [ "$1" = on ] || [ "$1" = off ]; }; then
+                    state="$1"
+                elif [ -z "$address" ] && [ "$all" = false ]; then address="$1"
+                elif [ -z "$state" ]; then state="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1' — usage: $usage"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    case "$state" in
+        on|off) ;;
+        *)
+            _mail_err "usage" "$usage"
+            exit 2 ;;
+    esac
+    if [ "$all" = true ]; then
+        if [ -n "$address" ] || [ -z "$workspace" ]; then
+            _mail_err "usage" "--all needs --workspace <ws> and no <addr> — usage: $usage"
+            exit 2
+        fi
+    elif [ -z "$address" ] || [ -n "$workspace" ]; then
+        _mail_err "usage" "$usage"
+        exit 2
+    fi
+    local M_VERB="person_set" M_JSON="$as_json" M_ADDRESS="$address" M_PERSON="$state" \
+          M_ALL="$all" M_WORKSPACE="$workspace"
     _mail_py
 }
 
@@ -31061,7 +31297,12 @@ verifies). Without a domain, the workspace default is used (see
 
 Prints a once password plus IMAP/submission/JMAP host and port so the
 inbox can be added to Mail.app. An existing --id match does not re-print
-the password.
+the password. When an agent mints its own mailbox, the password is
+withheld: agents send with `k2 mail send` and read with `k2 mail
+messages`, so they never need it; the owner can set one with `k2 hostmail
+password rotate <addr>`. --person mints a PERSON's mailbox: the owner or
+an IT agent (a workspace allowed to manage hosted mail) sees the password
+once, to hand to that person; agents without mail-manage can't use it.
 
 USAGE
   k2 mail create <localpart>[@<domain>] [flags]
@@ -31077,6 +31318,8 @@ FLAGS
   --id <client-id>       Idempotency key — retrying with the same --id returns
                          the existing address instead of erroring. Use it
                          whenever a retry is possible (crash-safe minting).
+  --person               A person's mailbox, not this agent's own (owner or
+                         IT agent only); the password is shown once
   --json                 JSON output
 
 CAP
@@ -31435,9 +31678,12 @@ EOF
 
 cmd_help_mail_config() {
     cat <<'EOF'
-Read or change mail configuration. Global defaults stay owner. mail_manage
-agents may set --address-cap / --agent-send / --quota-bytes / --quota-gb /
---quota-messages with --workspace. With no setting flags it prints the
+Read or change mail configuration. Global defaults and relay stay owner.
+mail_manage (IT) agents may set --address-cap / --quota-bytes /
+--quota-gb / --quota-messages / --agent-send / --always-bcc with
+--workspace for any workspace — except --agent-send / --always-bcc on
+their OWN workspace (exit 3 owner_only: an agent can't loosen mail rules
+on its own sends). With no setting flags it prints the
 current config; with flags it applies them. 0 = unlimited. New mints
 default unlimited; mail-manage sets a cap per inbox. Existing boxes
 need `k2 hostmail quota set` (mint constants do not retrofit).
@@ -31490,8 +31736,11 @@ EOF
 
 cmd_help_mail_approvals() {
     cat <<'EOF'
-The pending-outbound approvals queue (OWNER — agents get exit 3: approving
-your own mail is refused server-side). Approve submits the message via the
+The pending-outbound approvals queue. approve/deny: the owner, or a
+mail_manage (IT) agent for OTHER workspaces' sends — never its own (exit 3
+owner_only: an agent can't loosen mail rules on its own sends). Agents
+without mail_manage exit 3. Any agent can cancel its own queued sends
+(`k2 mail outbox cancel <id>`). Approve submits the message via the
 mail server; deny requires a --note, which lands in the agent's outbox.
 Pending items auto-deny after 7 days.
 
@@ -31750,13 +31999,19 @@ COMMANDS
   rotate-admin                Rotate leftover recovery principal `admin` and
                               the provisioned admin password. Does not wipe
                               the store. enable no-op is not rotate.
-  password rotate <addr>      Rotate IMAP/SMTP password (one secret, shown
-                              once). mail_manage. Invalidates the mint-time
-                              secret. Not rotate-admin.
-  app-password add|list|revoke <addr>
+  password rotate|keep <addr> Rotate IMAP/SMTP password (one secret, shown
+                              once), or mark it reviewed for the doctor.
+                              mail_manage; an IT agent never for its own
+                              workspace's mailbox. Not rotate-admin.
+  app-password add|list|revoke|keep <addr>
                               Extra labeled secrets on a minted mailbox
-                              (secret shown once). mail_manage. Survive
+                              (secret shown once). mail_manage; add/keep
+                              never on an IT agent's own mailbox. Survive
                               password rotate. Not `k2 mail link`.
+  person <addr>|--all --workspace <ws> on|off
+                              Mark a person's mailbox (an IT agent may set
+                              its passwords). mail_manage; only the owner
+                              turns it on in the IT agent's own workspace.
   domain add|list|show|check|remove
                               Host a domain: DNS record table + live verify
   create <local>[@<domain>]   Mint a hosted address (bound to this workspace)
@@ -31972,10 +32227,42 @@ cmd_help_hostmail_password() {
     cat <<'EOF'
 Rotate the IMAP/SMTP password for a hosted address. One secret for
 IMAP and SMTP. Shown once. Invalidates the mint-time secret.
-mail_manage or owner/admin. Not `k2 hostmail rotate-admin`.
+The owner, or an IT agent (a workspace allowed to manage hosted mail) for
+any mailbox but its own workspace's — an agent can't loosen mail rules
+on its own sends (exit 3, owner_only). Agents without mail-manage send
+with `k2 mail send` and never get a mail password. Not `k2 hostmail
+rotate-admin`.
+
+`keep` marks a password you already know about as reviewed, so
+`k2 hostmail doctor` stops flagging it (same rule; shows no secret).
+`keep --all-existing` does that for every mailbox password that existed
+before the 0.45.0 update.
 
 USAGE
   k2 hostmail password rotate <addr> [--json]
+  k2 hostmail password keep <addr> [--json]
+  k2 hostmail password keep --all-existing [--json]
+EOF
+}
+
+cmd_help_hostmail_password_keep() {
+    cat <<'EOF'
+Mark a mailbox password as reviewed: you know who has it, so
+`k2 hostmail doctor` stops listing it under "Mail passwords an agent may
+hold". The owner, or an IT agent for any mailbox but its own workspace's
+(exit 3 owner_only); agents without mail-manage exit 3. Shows and changes
+no secret. If you don't know who has it, rotate it instead (`k2 hostmail
+password rotate <addr>`). POST /cli/mail/credentials/keep {address}.
+
+--all-existing marks every mailbox password whose mailbox existed before
+the 0.45.0 update. Mailboxes created after that are never covered —
+review them one by one. Already marked ones are left as they are. An IT
+agent's run skips its own workspace's mailboxes (left for the owner).
+POST /cli/mail/credentials/keep {allExisting: true, kind: "mailbox"}.
+
+USAGE
+  k2 hostmail password keep <addr> [--json]
+  k2 hostmail password keep --all-existing [--json]
 EOF
 }
 
@@ -31987,6 +32274,13 @@ printed once with the Mail.app client block (IMAP host:443 ALPN,
 submission :465). This invalidates the mint-time secret — existing
 mailbox-password sessions die, app passwords do not (`k2 hostmail
 app-password`). Cannot GET the old secret. No port 993.
+
+Who: the owner, or an IT agent (a workspace allowed to manage hosted
+mail) for any mailbox but its own workspace's (a person's mailbox in its
+workspace is fine — `k2 hostmail person`). An IT agent asking for its own
+mailbox gets exit 3, owner_only: an agent can't loosen mail rules on its
+own sends. Agents without mail-manage send with `k2 mail send`, where the
+owner's rules apply, and never get a mail password (exit 3).
 
 USAGE
   k2 hostmail password rotate <addr> [--json]
@@ -32198,14 +32492,71 @@ EOF
 cmd_help_hostmail_app_password() {
     cat <<'EOF'
 Extra labeled secrets on a minted inbox (Stalwart AppPassword).
-mail_manage or owner/admin. Secret shown once; list never returns it.
-Rotating the mailbox password does not kill app-password sessions.
+mail_manage or owner/admin. add and keep: the owner, or an IT agent for
+any mailbox but its own workspace's (exit 3 owner_only — an agent can't
+loosen mail rules on its own sends). Agents without mail-manage never get
+a mail password. Secret shown once; list never returns it. Rotating the
+mailbox password does not kill app-password sessions. `k2 hostmail
+doctor` flags app passwords whose creator K2 doesn't know (from before
+0.45.0) or that an agent made for its own mailbox; revoke them, or keep
+the ones you handed out.
 Not nested under `k2 hostmail password`. Not `k2 mail link`.
 
 USAGE
   k2 hostmail app-password add <addr> [--label <s>] [--json]
   k2 hostmail app-password list <addr> [--json]
   k2 hostmail app-password revoke <addr> <id> [--json]
+  k2 hostmail app-password keep <addr> <id> [--json]
+  k2 hostmail app-password keep --all-existing [--json]
+EOF
+}
+
+cmd_help_hostmail_person() {
+    cat <<'EOF'
+Mark a hosted mailbox as a PERSON's mailbox (on) or an agent's (off).
+An IT agent (a workspace allowed to manage hosted mail) may create,
+rotate and see the passwords of a person's mailbox even when it is bound
+to the IT agent's own workspace; that workspace's own agent mailboxes
+stay the owner's call. The owner, or an IT agent — except turning it ON
+for its own workspace's mailbox (exit 3, owner_only: an agent can't
+loosen mail rules on its own sends). Agents without mail-manage exit 3.
+New person mailboxes: `k2 hostmail create <name> --person`.
+POST /cli/mail/address/person {address, person}.
+
+--all --workspace <ws> on marks every mailbox in that workspace at once
+(run it once, as the owner, for an IT agent's workspace full of imported
+or provisioned staff mailboxes). It never marks the workspace's send
+identities: addresses its agent has sent from, and mailboxes its agent
+minted for itself. Existing mailboxes default to the agent's own, because
+nothing recorded tells them apart; `k2 hostmail doctor` names this
+command when it applies. POST /cli/mail/address/person {all: true,
+workspace, person}.
+
+USAGE
+  k2 hostmail person <addr> on|off [--json]
+  k2 hostmail person --all --workspace <ws> on|off [--json]
+EOF
+}
+
+cmd_help_hostmail_app_password_keep() {
+    cat <<'EOF'
+Mark an app password as one you handed out, so `k2 hostmail doctor`
+stops listing it under "Mail passwords an agent may hold". The owner, or
+an IT agent for any mailbox but its own workspace's (exit 3 owner_only);
+agents without mail-manage exit 3. Shows and changes no secret. If you
+don't know who has it, revoke it instead (`k2 hostmail app-password
+revoke <addr> <id>`). POST /cli/mail/credentials/keep {address,
+appPasswordId}.
+
+--all-existing marks every app password created before the 0.45.0 update
+(by its creation time on the mail server). Newer ones, and any with no
+creation time, are never covered — review them one by one. Already
+marked ones are left as they are. An IT agent's run skips its own
+workspace's mailboxes (left for the owner).
+
+USAGE
+  k2 hostmail app-password keep <addr> <id> [--json]
+  k2 hostmail app-password keep --all-existing [--json]
 EOF
 }
 
@@ -32213,6 +32564,10 @@ cmd_help_hostmail_app_password_add() {
     cat <<'EOF'
 Create an app password on a hosted mailbox. Secret is server-set and
 printed once. Default --label is k2. POST /cli/mail/app-password.
+The owner, or an IT agent (a workspace allowed to manage hosted mail) for
+any mailbox but its own workspace's — an IT agent asking for its own gets
+exit 3, owner_only (an agent can't loosen mail rules on its own sends).
+Agents without mail-manage send with `k2 mail send` and get exit 3.
 
 USAGE
   k2 hostmail app-password add <addr> [--label <s>] [--json]
@@ -36983,7 +37338,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

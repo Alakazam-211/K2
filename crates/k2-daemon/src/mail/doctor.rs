@@ -1630,6 +1630,17 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
         &extra_apexes,
         now,
     ));
+    // 0.45.0: mail passwords K2 can't vouch for (an agent may hold one
+    // from before agents lost credential access). Server-level runs
+    // only; soft, never gates_direct, never revokes.
+    if domain_id.is_none() {
+        report
+            .checks
+            .extend(super::agent_creds::doctor_credential_checks());
+        report
+            .checks
+            .extend(super::agent_creds::doctor_person_checks());
+    }
     let (grade, direct_blockers) = grade_of(&report.checks);
     report.grade = grade;
     report.direct_blockers = direct_blockers;

@@ -809,11 +809,26 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         &post_json("/cli/mail/app-password", &token, "{}"),
     )
     .await;
-    assert_ne!(ap_post_status, 403, "UDS flag ON app-password POST; {ap_post_body}");
+    // 0.45.0: with the toggle ON this cell is an IT agent: the credential
+    // verbs pass the gate ({} is a usage error; an unknown mailbox is a
+    // plain 404, never a refusal). Self-elevation is unit-tested.
+    assert_eq!(ap_post_status, 400, "UDS IT agent app-password add {{}}; {ap_post_body}");
     assert!(
         !ap_post_body.contains("owner_only"),
-        "C5b UDS app-password POST: {ap_post_body}"
+        "C5b UDS app-password POST passes the gate: {ap_post_body}"
     );
+    for path in [
+        "/cli/mail/address/password",
+        "/cli/mail/credentials/keep",
+        "/cli/mail/address/person",
+    ] {
+        let (st, b) = uds(
+            &sock,
+            &post_json(path, &token, r#"{"address":"any@example.test","person":true}"#),
+        )
+        .await;
+        assert_eq!(st, 404, "UDS IT agent {path}; {b}");
+    }
     let (ap_rev_status, ap_rev_body) =
         uds(&sock, &get("/cli/mail/app-password/revoke", Some(&token))).await;
     assert_eq!(ap_rev_status, 405, "UDS GET app-password/revoke 405; {ap_rev_body}");

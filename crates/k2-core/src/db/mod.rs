@@ -1070,6 +1070,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0132_sidecar_cli",
             include_str!("../../drizzle_sql/0132_sidecar_cli.sql"),
         ),
+        // 0133 — mail_credential_marks: hosted-mail secrets K2 knows are
+        // not in an agent's hands (owner minted/rotated/kept, or withheld
+        // at an agent's mint). `k2 hostmail doctor` flags the rest. New
+        // table only. 0130 is reserved (hostmail backup).
+        (
+            "0133_mail_credential_marks",
+            include_str!("../../drizzle_sql/0133_mail_credential_marks.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1730,7 +1738,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0132_sidecar_cli",
+            last_name, "0133_mail_credential_marks",
             "unexpected last migration name: {last_name}"
         );
     }

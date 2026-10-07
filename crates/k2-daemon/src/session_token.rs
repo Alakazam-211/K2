@@ -1554,6 +1554,11 @@ mod tests {
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }
+        // 0.45.0: the IT-agent credential verbs ride the M5 extra gate
+        // (mail-manage), with the self-elevation check in the handlers.
+        for p in ["/cli/mail/credentials/keep", "/cli/mail/address/person"] {
+            assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
+        }
         assert!(is_agent_verb("/cli/db/create"));
         assert!(is_agent_verb("/cli/db/list"));
         assert!(is_agent_verb("/cli/db/grant"));

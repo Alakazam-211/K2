@@ -40,6 +40,7 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::addresses::{self, AddrError, AddressEngine};
+use crate::mail::agent_creds;
 use crate::mail::domains;
 use crate::mail::secrets::FileSecretStore;
 
@@ -95,6 +96,9 @@ struct CreateBody {
     local_part: String,
     domain: Option<String>,
     client_id: Option<String>,
+    /// 0.45.0: a person's mailbox (`k2 hostmail create --person`) — the
+    /// owner or an IT agent may see its password. See `mail::agent_creds`.
+    person: bool,
 }
 
 /// POST `/cli/mail/address/create` — S3: mint on a hosted domain
@@ -124,6 +128,12 @@ pub fn handle_address_create(body: &[u8]) -> CliResponse {
             "missing 'localPart' — e.g. research-bot or research-bot@acme.dev",
         );
     }
+    let caller = agent_creds::mail_caller();
+    if b.person {
+        if let agent_creds::MailCaller::Agent { .. } = caller {
+            return agent_creds::refuse_needs_mail_manage("create a person's mailbox");
+        }
+    }
     let (path, project_id) = match resolve_caller(&b.project) {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -145,9 +155,47 @@ pub fn handle_address_create(body: &[u8]) -> CliResponse {
         b.domain.as_deref(),
         b.client_id.as_deref(),
     ) {
-        Ok(v) => ok_json(v),
+        Ok(v) => ok_json(finish_mint_response(v, &caller, b.person)),
         Err(e) => addr_error_response(e),
     }
+}
+
+/// 0.45.0 (see `mail::agent_creds`): the once password is shown to the
+/// owner, and to an IT agent minting a PERSON's mailbox (`person`). An
+/// agent's mint lands in its own workspace, so otherwise it is an agent's
+/// own mailbox and the password is withheld (it stays in the daemon's
+/// vault; nobody is shown it → mark `withheld`). A fresh `person` mint
+/// sets `person_mailbox`. An idempotent `--id` hit carries no password and
+/// changes nothing.
+pub(crate) fn finish_mint_response(
+    mut v: serde_json::Value,
+    caller: &agent_creds::MailCaller,
+    person: bool,
+) -> serde_json::Value {
+    let row_id = v["id"].as_str().map(str::to_string);
+    let fresh = v.get("password").is_some_and(|p| p.is_string());
+    let (Some(id), true) = (row_id, fresh) else {
+        return v;
+    };
+    if person {
+        if let Err(e) = agent_creds::set_person_flag(&id, true) {
+            k2_core::log_debug!("[mail] {e}");
+        }
+        v["person"] = serde_json::Value::Bool(true);
+    }
+    let show = match caller {
+        agent_creds::MailCaller::Owner => true,
+        agent_creds::MailCaller::ItAgent { .. } => person,
+        agent_creds::MailCaller::Agent { .. } => false,
+    };
+    let origin = if show {
+        agent_creds::ORIGIN_MINTED
+    } else {
+        agent_creds::withhold_mint_password(&mut v);
+        agent_creds::ORIGIN_WITHHELD
+    };
+    agent_creds::mark_or_log(&id, agent_creds::KIND_MAILBOX, "", origin, caller.creator());
+    v
 }
 
 /// `POST /cli/mail/address/delete` body (`k2 mail delete <address>`).
@@ -203,8 +251,10 @@ pub fn handle_address_delete(body: &[u8]) -> CliResponse {
 }
 
 /// `POST /cli/mail/address/password` body (`k2 hostmail password rotate <addr>`).
-/// Exact `{ "address" }` — no project, no secret. Auth is the dispatcher
-/// mail_manage gate (owner/admin OR mail_manage). Not canManage, not
+/// Exact `{ "address" }` — no project, no secret. Auth: the dispatcher
+/// mail_manage gate admits owner/admin OR mail_manage; the handler then
+/// applies `agent_creds::credential_gate` (0.45.0): an IT agent may rotate
+/// any mailbox but its own workspace's (`owner_only`). Not canManage, not
 /// minting-workspace `authorize_address`.
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
@@ -216,6 +266,12 @@ struct PasswordBody {
 /// an active hosted row (pending domains included). Once JSON copies
 /// the mint client block; GET is 405 via the shim.
 pub fn handle_address_password(body: &[u8]) -> CliResponse {
+    // 0.45.0: an agent without mail-manage never gets an IMAP/SMTP
+    // secret — refused before any lookup (no existence oracle).
+    let caller = agent_creds::mail_caller();
+    if let agent_creds::MailCaller::Agent { .. } = caller {
+        return agent_creds::refuse_needs_mail_manage("set a new IMAP/SMTP password");
+    }
     let b: PasswordBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => {
@@ -250,13 +306,45 @@ pub fn handle_address_password(body: &[u8]) -> CliResponse {
             "no hosted address '{address}'"
         )));
     }
+    // Self-elevation is refused before the engine is touched.
+    if let Err(resp) =
+        agent_creds::credential_gate(&caller, &row, "set a new IMAP/SMTP password")
+    {
+        return resp;
+    }
     let (engine, _hostname) = match domains::engine_from_db() {
         Ok(e) => e,
         Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
     };
     let secrets_store = FileSecretStore::default();
-    match addresses::rotate_address_password(&engine, &secrets_store, &b.address) {
-        Ok(v) => ok_json(v),
+    gated_rotate_on(&caller, &engine, &secrets_store, &row)
+}
+
+/// Gated rotate ([`agent_creds::credential_gate`]): the new secret is
+/// shown to the caller, so the mailbox password is marked `rotated` with
+/// its creator (the doctor stops flagging it).
+pub(crate) fn gated_rotate_on(
+    caller: &agent_creds::MailCaller,
+    engine: &dyn AddressEngine,
+    secrets_store: &dyn crate::mail::secrets::SecretStore,
+    row: &k2_core::db::schema::MailAddress,
+) -> CliResponse {
+    let creator = match agent_creds::credential_gate(caller, row, "set a new IMAP/SMTP password")
+    {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match addresses::rotate_address_password(engine, secrets_store, &row.address) {
+        Ok(v) => {
+            agent_creds::mark_or_log(
+                &row.id,
+                agent_creds::KIND_MAILBOX,
+                "",
+                agent_creds::ORIGIN_ROTATED,
+                creator.as_deref(),
+            );
+            ok_json(v)
+        }
         Err(e) => addr_error_response(e),
     }
 }

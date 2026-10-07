@@ -1412,6 +1412,13 @@ fn project_name(project_id: &str) -> Option<String> {
 /// time). Body: `{id, note?, decidedBy?}`. Already-decided/unknown ids
 /// refuse WITHOUT submitting (pre-mortem #11).
 pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
+    // 0.45.0: an agent without mail-manage never decides a queued send.
+    let caller = crate::mail::agent_creds::mail_caller();
+    if let crate::mail::agent_creds::MailCaller::Agent { .. } = caller {
+        return crate::mail::agent_creds::refuse_needs_mail_manage(
+            "approve or reject agent mail",
+        );
+    }
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -1423,6 +1430,12 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
             "missing 'id' — an outbound id from the approvals list (out_…)",
         );
     };
+    // An IT agent decides other workspaces' sends, never its own.
+    if let Err(resp) =
+        crate::mail::agent_creds::approval_gate(&caller, outbound_sender(id).as_deref())
+    {
+        return resp;
+    }
     let note = v["note"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let decided_by = v["decidedBy"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let now = now_secs();
@@ -1509,10 +1522,30 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
 
 // ── POST /cli/mail/approvals/deny ───────────────────────────────────────
 
+/// The sending workspace (`mail_outbound.owner_project_id`) of a queued
+/// item; `None` for an unknown id (the decision then 404s as before).
+fn outbound_sender(id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT owner_project_id FROM mail_outbound WHERE id = ?1",
+        rusqlite::params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
 /// S5: owner-or-admin deny with a REQUIRED note that flows back to the
 /// agent's outbox (§8.4/§11: `deny <id> --note …`). Body:
 /// `{id, note, decidedBy?}`.
 pub fn handle_approvals_deny(body: &[u8]) -> CliResponse {
+    // 0.45.0: same gate as approve (see mail::agent_creds).
+    let caller = crate::mail::agent_creds::mail_caller();
+    if let crate::mail::agent_creds::MailCaller::Agent { .. } = caller {
+        return crate::mail::agent_creds::refuse_needs_mail_manage(
+            "approve or reject agent mail",
+        );
+    }
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -1524,6 +1557,11 @@ pub fn handle_approvals_deny(body: &[u8]) -> CliResponse {
             "missing 'id' — an outbound id from the approvals list (out_…)",
         );
     };
+    if let Err(resp) =
+        crate::mail::agent_creds::approval_gate(&caller, outbound_sender(id).as_deref())
+    {
+        return resp;
+    }
     let Some(note) = v["note"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
         return error_response(
             "400 Bad Request",
@@ -1899,6 +1937,104 @@ mod tests {
         assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("rejected"));
 
         cleanup(&project_id, Some(&domain));
+    }
+
+    /// 0.45.0 approvals: an IT agent (mail-manage) decides OTHER
+    /// workspaces' queued sends, like the owner, but never its own
+    /// (`owner_only`); an agent without mail-manage never
+    /// (`agent_send_path_only`); the owner always. Listing stays open.
+    #[test]
+    fn approvals_it_agent_for_others_only_owner_always() {
+        let mm_on = |id: &str| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_manage_enabled = 1 WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .expect("mail-manage on");
+        };
+        // The SENDER is itself an IT agent's workspace.
+        let (name, path) = unique("apprag");
+        let sender_id = insert_project(&name, &path);
+        mm_on(&sender_id);
+        let (it_name, it_path) = unique("apprit");
+        let other_it_id = insert_project(&it_name, &it_path);
+        mm_on(&other_it_id);
+        let (plain_name, plain_path) = unique("apprpl");
+        let plain_id = insert_project(&plain_name, &plain_path);
+
+        let domain = format!("{name}.example");
+        seed_domain(&domain, "direct");
+        seed_address(&sender_id, &format!("bot@{domain}"), Some("acc-1"));
+        set_gating(&path, "approval");
+        let queue = || {
+            let resp = handle_send(&send_body(&path, serde_json::json!({})));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            body_json(&resp)["id"].as_str().expect("id").to_string()
+        };
+        let (id1, id2) = (queue(), queue());
+
+        let as_agent = |ws: &str, f: &dyn Fn() -> CliResponse| {
+            let p = crate::session_token::HookPrincipal {
+                workspace_uuid: ws.to_string(),
+                agent_address: "agent".to_string(),
+            };
+            crate::caller_workspace::with_request_principal(Some(p), f)
+        };
+        let approve = format!(r#"{{"id":"{id1}"}}"#);
+        let deny = format!(r#"{{"id":"{id1}","note":"agent says no"}}"#);
+        let status_of = |id: &str| {
+            let resp = handle_outbox(&params(&[("project", &path), ("id", id)]));
+            body_json(&resp)["outbound"]["status"].as_str().unwrap_or("").to_string()
+        };
+
+        // The sender's own IT agent: refused (self-elevation).
+        for resp in [
+            as_agent(&sender_id, &|| handle_approvals_approve(approve.as_bytes())),
+            as_agent(&sender_id, &|| handle_approvals_deny(deny.as_bytes())),
+        ] {
+            assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+            let v = body_json(&resp);
+            assert_eq!(v["error"]["code"], "owner_only", "{v}");
+            assert!(
+                v["error"]["hint"]
+                    .as_str()
+                    .unwrap()
+                    .contains("can't loosen mail rules on its own sends"),
+                "{v}"
+            );
+        }
+        // An agent without mail-manage: refused.
+        for resp in [
+            as_agent(&plain_id, &|| handle_approvals_approve(approve.as_bytes())),
+            as_agent(&plain_id, &|| handle_approvals_deny(deny.as_bytes())),
+        ] {
+            assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+            assert_eq!(body_json(&resp)["error"]["code"], "agent_send_path_only");
+        }
+        assert_eq!(status_of(&id1), "pending_approval", "refused decisions must not land");
+
+        // Listing stays open to an IT agent.
+        let resp = as_agent(&sender_id, &|| handle_approvals_list(&HashMap::new()));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+
+        // ANOTHER workspace's IT agent decides it.
+        let resp = as_agent(&other_it_id, &|| handle_approvals_deny(deny.as_bytes()));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(body_json(&resp)["status"], "rejected");
+        assert_eq!(status_of(&id1), "rejected");
+
+        // The owner decides the other one.
+        let resp = handle_approvals_deny(
+            format!(r#"{{"id":"{id2}","note":"owner says no"}}"#).as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(status_of(&id2), "rejected");
+
+        cleanup(&sender_id, Some(&domain));
+        cleanup(&other_it_id, None);
+        cleanup(&plain_id, None);
     }
 
     /// #31.5: a SUCCESSFUL linked SMTP send records an outbox row (no

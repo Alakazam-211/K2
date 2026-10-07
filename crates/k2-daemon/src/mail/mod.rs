@@ -107,6 +107,7 @@
 pub mod access;
 pub mod acl;
 pub mod addresses;
+pub mod agent_creds;
 pub mod alias;
 pub mod app_password;
 pub mod bans;

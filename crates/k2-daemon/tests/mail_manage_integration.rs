@@ -235,6 +235,26 @@ fn assert_classic_forbidden(r: &Resp, label: &str) {
     );
 }
 
+/// 0.45.0: an IT agent (mail-manage on) tried to loosen the rules on its
+/// OWN sends — its own mailbox's secret, its own queued send, its own
+/// agentSend/always-BCC. The gate let it through; the handler refuses
+/// with the owner-only self-elevation hint.
+fn assert_self_elevation(r: &Resp, label: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    let v = json(&r.body);
+    assert_eq!(v["error"]["code"], "owner_only", "{label}: {}", r.body);
+    assert!(
+        v["error"]["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("can't loosen mail rules on its own sends"),
+        "{label}: {}",
+        r.body
+    );
+    assert!(!r.body.contains("\"secret\""), "{label}: {}", r.body);
+    assert!(!r.body.contains("\"password\""), "{label}: {}", r.body);
+}
+
 fn assert_not_owner_only(r: &Resp, label: &str) {
     assert!(
         !r.body.contains("owner_only"),
@@ -592,7 +612,8 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/doctor", Some("{}")),
             ("GET", "/cli/mail/doctor", None),
             ("GET", "/cli/mail/approvals/list", None),
-            ("POST", "/cli/mail/approvals/approve", Some("{}")),
+            // approvals approve/deny + config/set agentSend are asserted
+            // below: the gate opens, the handler refuses agents (0.45.0).
             ("POST", "/cli/mail/config/set", Some("{}")),
             ("POST", "/cli/mail/import", Some("{}")),
             ("POST", "/cli/mail/quota", Some("{}")),
@@ -611,7 +632,8 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/footer", Some("{}")),
             ("GET", "/cli/mail/footer", None),
             ("POST", "/cli/mail/footer/unset", Some("{}")),
-            ("POST", "/cli/mail/app-password", Some("{}")),
+            // POST /cli/mail/app-password (add) is asserted below: the
+            // gate opens, the handler refuses agents (0.45.0).
             ("GET", "/cli/mail/app-password", None),
             ("POST", "/cli/mail/app-password/revoke", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
@@ -629,6 +651,56 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
+        }
+        // 0.45.0: with the toggle ON this is an IT agent, as capable as
+        // the owner for mail. The credential verbs pass the gate (an
+        // unknown mailbox is a plain 404, never a refusal)…
+        for path in [
+            "/cli/mail/app-password",
+            "/cli/mail/address/password",
+            "/cli/mail/credentials/keep",
+            "/cli/mail/address/person",
+        ] {
+            let r = http(
+                port,
+                "POST",
+                &format!("{path}?token={hook_a}"),
+                Some(r#"{"address":"any@example.test","person":true}"#),
+            );
+            assert_eq!(r.status, 404, "flag ON IT agent {path}; {}", r.body);
+        }
+        // …it may decide queued mail (an unknown id passes the gate)…
+        for (path, body) in [
+            ("/cli/mail/approvals/approve", r#"{"id":"out_any000000001"}"#),
+            ("/cli/mail/approvals/deny", r#"{"id":"out_any000000001","note":"no"}"#),
+        ] {
+            let r = http(port, "POST", &format!("{path}?token={hook_a}"), Some(body));
+            assert_ne!(r.status, 403, "flag ON IT agent {path}; {}", r.body);
+        }
+        // …and set agent mail policy for ANOTHER workspace…
+        let other_handle = format!("oth{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_other_id, other_path) = seed_ws(&other_handle);
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/mail/config/set?token={hook_a}"),
+            Some(&format!(
+                r#"{{"workspace":"{other_path}","alwaysBcc":"audit@example.test"}}"#
+            )),
+        );
+        assert_eq!(r.status, 200, "IT agent sets another workspace's always-BCC; {}", r.body);
+        // …but never loosens the rules on its OWN sends.
+        for body in [
+            format!(r#"{{"workspace":"{a_path}","agentSend":"on"}}"#),
+            format!(r#"{{"workspace":"{a_path}","alwaysBcc":""}}"#),
+        ] {
+            let r = http(
+                port,
+                "POST",
+                &format!("/cli/mail/config/set?token={hook_a}"),
+                Some(&body),
+            );
+            assert_self_elevation(&r, &format!("own config/set {body}"));
         }
         let retire_get = http(
             port,
@@ -919,21 +991,42 @@ async fn mail_address_password_rotate_auth_and_pending_row() {
         let on = set_mail_manage(port, &a_id, 1);
         assert_eq!(on.status, 200, "{}", on.body);
 
+        // 0.45.0: the toggle makes this an IT agent. Its OWN workspace's
+        // mailbox stays the owner's call…
         let manage = http(
             port,
             "POST",
             &format!("/cli/mail/address/password?token={hook_a}"),
             Some(&format!(r#"{{"address":"{addr}"}}"#)),
         );
-        assert_not_owner_only(&manage, "mail_manage + pending active row");
-        // No live Stalwart in this harness — handler must still accept
-        // the pending active row (not 403 / not verified-only).
-        assert_ne!(manage.status, 403, "{}", manage.body);
-        assert_ne!(
-            manage.status, 404,
-            "pending active row is hosted: {}",
-            manage.body
+        assert_self_elevation(&manage, "IT agent rotates its own workspace's mailbox");
+        // …another workspace's mailbox is not (no live Stalwart here, so
+        // the handler gets past every gate and answers not_ready).
+        let other_addr = format!("other@{a_handle}.example");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+                 owner_project_id, status, created_at) \
+                 VALUES (?1, ?2, 'dom-x', 'acc-o', ?3, 'active', 100)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    other_addr,
+                    uuid::Uuid::new_v4().to_string()
+                ],
+            )
+            .expect("seed another workspace's mailbox");
+        }
+        let for_other = http(
+            port,
+            "POST",
+            &format!("/cli/mail/address/password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{other_addr}"}}"#)),
         );
+        assert_not_owner_only(&for_other, "IT agent rotates another workspace's mailbox");
+        assert!(!for_other.body.contains("agent_send_path_only"), "{}", for_other.body);
+        assert_ne!(for_other.status, 404, "{}", for_other.body);
 
         let owner = http(
             port,
@@ -1132,14 +1225,63 @@ async fn mail_app_password_auth_lookup_and_methods() {
         );
         assert_eq!(ghost.status, 404, "{}", ghost.body);
 
+        // 0.45.0: an IT agent can't add an app password to its OWN
+        // workspace's mailbox.
         let add_on = http(
             port,
             "POST",
             &format!("/cli/mail/app-password?token={hook_a}"),
             Some(&format!(r#"{{"address":"{addr}"}}"#)),
         );
-        assert_not_owner_only(&add_on, "mail_manage POST add");
-        assert_ne!(add_on.status, 404, "{}", add_on.body);
+        assert_self_elevation(&add_on, "IT agent app-password add on its own mailbox");
+
+        // The owner passes the refusal (no live Stalwart here → not 403).
+        let owner_add = http(
+            port,
+            "POST",
+            &format!("/cli/mail/app-password?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_not_owner_only(&owner_add, "owner app-password add");
+        assert!(
+            !owner_add.body.contains("agent_send_path_only"),
+            "owner must never get the agent refusal: {}",
+            owner_add.body
+        );
+
+        // keep: the IT agent can't clear the flag on its own mailbox; the
+        // owner marks the mailbox password reviewed (no engine needed for
+        // the mailbox kind).
+        let agent_keep = http(
+            port,
+            "POST",
+            &format!("/cli/mail/credentials/keep?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_self_elevation(&agent_keep, "IT agent keep on its own mailbox");
+        let keep_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/credentials/keep?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(keep_get.status, 405, "GET keep 405; {}", keep_get.body);
+        let owner_keep = http(
+            port,
+            "POST",
+            &format!("/cli/mail/credentials/keep?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_eq!(owner_keep.status, 200, "owner keep; {}", owner_keep.body);
+        assert_eq!(json(&owner_keep.body)["kind"], "mailbox", "{}", owner_keep.body);
+        let member = provision_role(port, &format!("mem{a_handle}"), "hunter2-strong-9", "member");
+        let member_keep = http(
+            port,
+            "POST",
+            &format!("/cli/mail/credentials/keep?token={member}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_login_role_refused(&member_keep, "member credentials/keep", "admin");
 
         let owner_list = http(
             port,

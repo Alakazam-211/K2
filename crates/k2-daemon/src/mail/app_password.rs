@@ -4,11 +4,20 @@
 //! Inner lookup is password-rotate: any active hosted row, not quota
 //! `can_manage`. Missing `stalwart_account_id` → 502 `engine`.
 //! Dual GET+POST on `/cli/mail/app-password` (list vs add). GET revoke → 405.
+//!
+//! 0.45.0 (see [`crate::mail::agent_creds`]): ADD is for the owner and for
+//! an IT agent (mail-manage) on any mailbox that isn't its own workspace's
+//! (a person's mailbox in its workspace is fine). An IT agent asking for
+//! its own mailbox gets 403 `owner_only`; an agent without mail-manage
+//! never reaches it. Each add is recorded in `mail_credential_marks` with
+//! its creator; revoke drops the mark. List and revoke stay open to
+//! mail-manage agents (no secret shown; revoking only takes access away).
 
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::addresses::{self, AddrError};
+use crate::mail::agent_creds;
 use crate::mail::domains;
 use crate::mail::jmap::{AppPasswordInfo, CreatedAppPassword, StalwartClient};
 use k2_core::db::schema::MailAddress;
@@ -75,7 +84,7 @@ fn map_engine_err(e: String) -> CliResponse {
 
 /// Password-rotate lookup: any active hosted row. Missing account id
 /// is 502 `engine`, not quota's 409 `not_ready`.
-fn lookup_active_hosted(raw: &str) -> Result<(MailAddress, String), CliResponse> {
+pub(crate) fn lookup_active_hosted(raw: &str) -> Result<(MailAddress, String), CliResponse> {
     let address = match addresses::normalize_address(raw) {
         Ok(a) => a,
         Err(e) => return Err(addr_error_response(e)),
@@ -165,6 +174,53 @@ pub(crate) fn add_on(
     }
 }
 
+/// Gated add: the caller must pass [`agent_creds::credential_gate`]
+/// (owner; IT agent for a mailbox that isn't its own), then [`add_on`],
+/// then the new id is recorded with its creator so the doctor never flags
+/// it.
+pub(crate) fn gated_add_on(
+    caller: &agent_creds::MailCaller,
+    engine: &dyn AppPasswordEngine,
+    row: &MailAddress,
+    account_id: &str,
+    label: &str,
+) -> CliResponse {
+    let creator = match agent_creds::credential_gate(caller, row, "create an app password") {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let resp = add_on(engine, &row.address, account_id, label);
+    if resp.status == "200 OK" {
+        let id = serde_json::from_str::<serde_json::Value>(&resp.body)
+            .ok()
+            .and_then(|v| v["id"].as_str().map(str::to_string));
+        if let Some(id) = id {
+            agent_creds::mark_or_log(
+                &row.id,
+                agent_creds::KIND_APP_PASSWORD,
+                &id,
+                agent_creds::ORIGIN_MINTED,
+                creator.as_deref(),
+            );
+        }
+    }
+    resp
+}
+
+/// [`revoke_on`], then drop the mark for that id.
+pub(crate) fn revoke_and_unmark(
+    engine: &dyn AppPasswordEngine,
+    row: &MailAddress,
+    account_id: &str,
+    id: &str,
+) -> CliResponse {
+    let resp = revoke_on(engine, &row.address, account_id, id);
+    if resp.status == "200 OK" {
+        agent_creds::unmark(&row.id, agent_creds::KIND_APP_PASSWORD, id);
+    }
+    resp
+}
+
 pub(crate) fn revoke_on(
     engine: &dyn AppPasswordEngine,
     address: &str,
@@ -225,7 +281,13 @@ struct AddBody {
 }
 
 /// POST `/cli/mail/app-password` `{address, label?}` — add; secret once.
+/// Owner, or an IT agent for a mailbox that isn't its own. An agent
+/// without mail-manage is refused before any lookup (no existence oracle).
 pub fn handle_app_password_add(body: &[u8]) -> CliResponse {
+    let caller = agent_creds::mail_caller();
+    if let agent_creds::MailCaller::Agent { .. } = caller {
+        return agent_creds::refuse_needs_mail_manage("create an app password");
+    }
     let b: AddBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -242,11 +304,15 @@ pub fn handle_app_password_add(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // Self-elevation is refused before the engine is touched.
+    if let Err(resp) = agent_creds::credential_gate(&caller, &row, "create an app password") {
+        return resp;
+    }
     let (engine, _) = match domains::engine_from_db() {
         Ok(e) => e,
         Err(hint) => return err_json("503 Service Unavailable", "not_ready", hint),
     };
-    add_on(&engine, &row.address, &account_id, &label)
+    gated_add_on(&caller, &engine, &row, &account_id, &label)
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -285,7 +351,7 @@ pub fn handle_app_password_revoke(body: &[u8]) -> CliResponse {
         Ok(e) => e,
         Err(hint) => return err_json("503 Service Unavailable", "not_ready", hint),
     };
-    revoke_on(&engine, &row.address, &account_id, b.id.trim())
+    revoke_and_unmark(&engine, &row, &account_id, b.id.trim())
 }
 
 #[cfg(test)]

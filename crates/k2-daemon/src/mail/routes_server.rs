@@ -826,11 +826,6 @@ fn parse_always_bcc(v: &serde_json::Value) -> Result<Vec<String>, CliResponse> {
         .collect())
 }
 
-const ALWAYS_BCC_OWNER_ONLY_HINT: &str =
-    "the always-BCC policy is the owner's oversight control — only the owner or an admin can \
-     set or clear it (k2 hostmail config --workspace <ws> --always-bcc …). Agents, including \
-     mail-manage agents, can't change it for any workspace";
-
 /// POST `/cli/mail/config/set` — S6 (owner-or-admin, dispatcher-
 /// enforced). Validation first (the Mac example page exercises real
 /// error text), then the D3 platform gate, then the actions apply in
@@ -921,33 +916,32 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         }
     };
 
-    // C27: mail_manage may set sendMode (domain) and agentSend (workspace
-    // they admin). Global defaults / relay stay owner-or-admin. The
-    // always-BCC policy is the owner's oversight of the agent itself, so
-    // NO scoped passport may touch it — not even for its own workspace.
-    if let Some(p) = crate::caller_workspace::request_principal() {
-        if always_bcc.is_some() {
-            return err_json(
-                "403 Forbidden",
-                "owner_only",
-                ALWAYS_BCC_OWNER_ONLY_HINT.to_string(),
-            );
+    // 0.45.0 (see mail::agent_creds): an IT agent (mail-manage) is as
+    // capable as the owner here — sendMode (domain), addressCap/quota and
+    // agent mail POLICY (agentSend, always-BCC) for any workspace — EXCEPT
+    // agentSend/always-BCC on its OWN workspace (`owner_only`: an agent
+    // can't loosen the rules on its own sends). Global defaults and relay
+    // config stay owner-or-admin: a default can loosen its own workspace.
+    let caller = crate::mail::agent_creds::mail_caller();
+    if caller.is_agent() {
+        if let crate::mail::agent_creds::MailCaller::Agent { .. } = caller {
+            return crate::mail::agent_creds::refuse_needs_mail_manage("change mail config");
         }
         if b.defaults.is_some() || b.relay.is_some() || b.delete_relay_config.is_some() {
             return err_json(
                 "403 Forbidden",
                 "owner_only",
-                "global defaults and relay config stay owner-or-admin — mail-manage may set sendMode (domain) and agentSend/addressCap/quota (workspace)".to_string(),
+                "global defaults and relay config stay owner-or-admin — mail-manage may set \
+                 sendMode (domain) and agentSend/alwaysBcc/addressCap/quota (workspace). Ask \
+                 your human."
+                    .to_string(),
             );
         }
-        if let Some(ref path) = workspace_path {
-            let allowed = crate::workspace_msg::resolve_workspace(&p.workspace_uuid);
-            if allowed.as_deref() != Some(path.as_str()) {
-                return err_json(
-                    "403 Forbidden",
-                    "owner_only",
-                    "mail-manage may set agentSend/addressCap/quota only for the workspace they admin".to_string(),
-                );
+        if always_bcc.is_some() || b.agent_send.is_some() {
+            if let Some(ref path) = workspace_path {
+                if let Err(resp) = crate::mail::agent_creds::policy_gate(&caller, path) {
+                    return resp;
+                }
             }
         }
     }
@@ -1784,7 +1778,11 @@ mod tests {
         });
         assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
         assert!(resp.body.contains("owner_only"), "{}", resp.body);
-        assert!(resp.body.contains("oversight"), "{}", resp.body);
+        assert!(
+            resp.body.contains("can't loosen mail rules on its own sends"),
+            "{}",
+            resp.body
+        );
         assert!(policy().is_empty(), "agent write must not land");
 
         // Owner sets it (comma-separated string; normalized).
@@ -1848,6 +1846,125 @@ mod tests {
             let db = k2_core::db::shared();
             let conn = db.lock();
             let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
+        }
+    }
+
+    /// 0.45.0 agent mail POLICY (agentSend, always-BCC): an IT agent
+    /// (mail-manage) may change it for OTHER workspaces, like the owner,
+    /// but never for its own (`owner_only` — it can't loosen the rules on
+    /// its own sends); an agent without mail-manage never; the owner always.
+    #[test]
+    fn agent_mail_policy_it_agent_for_others_only_owner_always() {
+        let mk = |tag: &str, mm: i64| {
+            let id = uuid::Uuid::new_v4().to_string();
+            let path = format!("/tmp/mail-policy-{tag}-{}-{}", std::process::id(), &id[..12]);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_manage_enabled, mail_agent_send) \
+                 VALUES (?1, ?2, ?3, ?4, 'approval')",
+                rusqlite::params![id, format!("pol-{tag}-{}", &id[..12]), path, mm],
+            )
+            .expect("insert project");
+            (id, path)
+        };
+        let (it_id, it_path) = mk("it", 1);
+        let (other_id, other_path) = mk("other", 0);
+        let (plain_id, _) = mk("plain", 0);
+        let stored = |id: &str| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT mail_agent_send FROM projects WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .expect("row")
+        };
+        let bcc =
+            |path: &str| k2_core::workspace::settings::mail_always_bcc_for_path(path).unwrap();
+        let body = |v: serde_json::Value| serde_json::to_vec(&v).unwrap();
+        let as_agent = |id: &str, b: serde_json::Value| {
+            let p = crate::session_token::HookPrincipal {
+                workspace_uuid: id.to_string(),
+                agent_address: "agent".to_string(),
+            };
+            crate::caller_workspace::with_request_principal(Some(p), || {
+                handle_config_set(&body(b))
+            })
+        };
+        let code = |r: &CliResponse| {
+            serde_json::from_str::<serde_json::Value>(&r.body).unwrap()["error"]["code"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+
+        // IT agent, OWN workspace: refused, alone or bundled.
+        for b in [
+            serde_json::json!({ "workspace": it_path, "agentSend": "on" }),
+            serde_json::json!({ "workspace": it_path, "agentSend": "on", "addressCap": 3 }),
+            serde_json::json!({ "workspace": it_path, "alwaysBcc": "" }),
+        ] {
+            let r = as_agent(&it_id, b.clone());
+            assert_eq!(r.status, "403 Forbidden", "{b}: {}", r.body);
+            assert_eq!(code(&r), "owner_only", "{}", r.body);
+            assert!(
+                r.body.contains("can't loosen mail rules on its own sends"),
+                "{}",
+                r.body
+            );
+        }
+        assert_eq!(stored(&it_id).as_deref(), Some("approval"), "own write must not land");
+
+        // Agent WITHOUT mail-manage: refused for any workspace.
+        for b in [
+            serde_json::json!({ "workspace": other_path, "agentSend": "on" }),
+            serde_json::json!({ "workspace": other_path, "alwaysBcc": "x@shop.example" }),
+        ] {
+            let r = as_agent(&plain_id, b.clone());
+            assert_eq!(r.status, "403 Forbidden", "{b}: {}", r.body);
+            assert_eq!(code(&r), "agent_send_path_only", "{}", r.body);
+        }
+        assert!(bcc(&other_path).is_empty());
+
+        // IT agent, OTHER workspace: always-BCC lands (a DB write, every
+        // platform); agentSend passes the gate (applied on Linux; the D3
+        // off-Linux gate answers elsewhere — never a refusal).
+        let r = as_agent(
+            &it_id,
+            serde_json::json!({ "workspace": other_path, "alwaysBcc": "audit@shop.example" }),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(bcc(&other_path), vec!["audit@shop.example".to_string()]);
+        let r = as_agent(
+            &it_id,
+            serde_json::json!({ "workspace": other_path, "agentSend": "on" }),
+        );
+        assert_ne!(r.status, "403 Forbidden", "{}", r.body);
+        if super::mail_supported() {
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(stored(&other_id).as_deref(), Some("on"));
+        } else {
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        }
+
+        // Owner: any workspace, the IT agent's own included.
+        let r = handle_config_set(&body(
+            serde_json::json!({ "workspace": it_path, "alwaysBcc": "owner@shop.example" }),
+        ));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(bcc(&it_path), vec!["owner@shop.example".to_string()]);
+        let r = handle_config_set(&body(
+            serde_json::json!({ "workspace": it_path, "agentSend": "on" }),
+        ));
+        assert_ne!(r.status, "403 Forbidden", "{}", r.body);
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&it_id, &other_id, &plain_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
+                .expect("cleanup project");
         }
     }
 

@@ -4,6 +4,7 @@
 
 pub mod acme;
 pub mod bind;
+pub mod renew;
 pub mod routes;
 pub mod status;
 pub mod store;

@@ -195,6 +195,9 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     if let Some(health) = health {
         body["health"] = health;
     }
+    // K2-issued certificate renewal (domains::renew): the mail host's
+    // renewal state + the background renewer's last scan. Local reads.
+    body["certRenewal"] = crate::domains::renew::mail_status_json(hostname.as_deref());
     // Linux only: the root door enable / cert restart / boot reconcile
     // need. Cached 30 s (each probe is a `sudo -n -l`).
     if mail_supported() {
@@ -535,14 +538,10 @@ pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
             .is_some()
     };
     if attached {
-        // The custom-domain issuer plants the cert, then restarts
-        // Stalwart through the mail helper. Stop before ordering a cert
-        // the box cannot load.
-        if mail_supported() {
-            if let Some(resp) = helper_unavailable_response(supervisor::mail_helper_state()) {
-                return resp;
-            }
-        }
+        // The custom-domain issuer plants the cert and loads it with
+        // ReloadTlsCertificates (no mail helper needed); only if that
+        // fails does it restart Stalwart through the helper, and then
+        // the error names the helper. A box without the helper renews.
         let mut params = std::collections::HashMap::new();
         params.insert("hostname".into(), hostname);
         return crate::domains::routes::handle_renew(&params);

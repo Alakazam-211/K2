@@ -1507,6 +1507,11 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
     report
         .checks
         .extend(super::bans::doctor_ban_checks());
+    // K2-issued certificates (domains::renew): warn when one is within
+    // 14 days of expiry or its last renewal failed. Never gates_direct.
+    report.checks.push(crate::domains::renew::doctor_check_live(
+        dctx.as_ref().map(|d| d.domain.as_str()),
+    ));
     // Calendars S2 (CAL27/CAL28): WebDAV-files posture (server level)
     // and, per domain, the DAV SRV rows on the zone's own nameservers.
     // Soft only — never gates_direct.

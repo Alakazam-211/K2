@@ -25660,6 +25660,15 @@ elif verb == "status":
             extra = " self-signed" if cert.get("selfSigned") else ""
             exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
             print("cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp))
+        ren = d.get("certRenewal")
+        mh = ren.get("mailHost") if isinstance(ren, dict) else None
+        if isinstance(mh, dict) and mh.get("k2Issued"):
+            # K2-issued mail cert: the daemon renews it 30 days before expiry.
+            line = "renewal  : %s" % (mh.get("state") or "?")
+            if mh.get("failures"):
+                line += " — last attempt failed (%s): %s; next %s" % (
+                    mh.get("failures"), mh.get("lastError") or "?", mh.get("nextAttempt") or "?")
+            print(line)
         extra_names = d.get("extraNames")
         if isinstance(extra_names, list) and extra_names:
             # CAL44: last DNS answer + per-name cert (k2 hostmail cert names).
@@ -32805,6 +32814,16 @@ def pending_lines(row, indent="  "):
         print("%sAuto-added to your k2.dev account" % indent)
     print("%sthen: k2 domain refresh %s" % (indent, row.get("apex") or "<apex>"))
 
+def renew_suffix(row):
+    # K2-issued certificate renewal (daemon renews 30 days before expiry).
+    r = row.get("renewal") if isinstance(row, dict) else None
+    if not isinstance(r, dict) or not r.get("k2Issued"):
+        return ""
+    s = "  renew %s" % (r.get("state") or "?")
+    if r.get("failures"):
+        s += " (%s failed; next %s)" % (r.get("failures"), r.get("nextAttempt") or "?")
+    return s
+
 def state_words(row):
     if is_pending(row):
         return "pending nameservers"
@@ -32848,7 +32867,7 @@ if verb == "list":
             if not isinstance(n, dict):
                 continue
             cert = (n.get("cert") or {}).get("state") or "missing"
-            print("  %-26s  %-8s  cert %s" % (n.get("hostname") or "?", n.get("role") or "other", cert))
+            print("  %-26s  %-8s  cert %s%s" % (n.get("hostname") or "?", n.get("role") or "other", cert, renew_suffix(n)))
     sys.exit(0)
 
 if verb == "certs":
@@ -32862,7 +32881,7 @@ if verb == "certs":
             print(str(c))
             continue
         cert = (c.get("cert") or {}).get("state") or "missing"
-        print("%-32s  %-8s  %s" % (c.get("hostname") or "?", c.get("role") or "other", cert))
+        print("%-32s  %-8s  %s%s" % (c.get("hostname") or "?", c.get("role") or "other", cert, renew_suffix(c)))
     sys.exit(0)
 
 # remove / name — compact success
@@ -33264,6 +33283,13 @@ USAGE
   k2 cert list [--json]
   k2 cert issue <hostname> [--json]
   k2 cert renew <hostname> [--json]
+
+RENEWAL
+  The daemon renews certificates K2 issued once fewer than 30 days remain
+  (hourly check, per-name backoff 1h/6h/24h, skipped under air-gap).
+  issue/renew by hand re-order only inside that window; outside it they
+  re-plant the stored certificate. Uploaded certificates are never renewed.
+  `k2 cert list` shows the renewal state per hostname.
 EOF
 }
 

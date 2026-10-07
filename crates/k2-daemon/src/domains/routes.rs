@@ -108,6 +108,7 @@ fn name_json(n: &DomainName) -> serde_json::Value {
         "hostname": n.hostname,
         "role": n.role,
         "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
+        "renewal": crate::domains::renew::name_json(&n.hostname),
     })
 }
 
@@ -504,6 +505,7 @@ pub fn handle_certs_list(_params: &HashMap<String, String>) -> CliResponse {
                 "apex": n.apex,
                 "role": n.role,
                 "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
+                "renewal": crate::domains::renew::name_json(&n.hostname),
             })
         })
         .collect();
@@ -545,19 +547,29 @@ pub fn handle_issue(params: &HashMap<String, String>) -> CliResponse {
                     "ok": true,
                     "hostname": pem.hostname,
                     "cert": cert,
+                    "renewal": crate::domains::renew::name_json(&hostname),
                 })
                 .to_string(),
             )
         }
         Err(e) => {
             let not_attached = e.contains("not attached");
+            let busy = e.contains("already in progress");
             error_response(
                 if not_attached {
                     "404 Not Found"
+                } else if busy {
+                    "409 Conflict"
                 } else {
                     "400 Bad Request"
                 },
-                if not_attached { "not_found" } else { "acme" },
+                if not_attached {
+                    "not_found"
+                } else if busy {
+                    "busy"
+                } else {
+                    "acme"
+                },
                 &e,
             )
         }
@@ -591,6 +603,8 @@ pub fn handle_upload(params: &HashMap<String, String>) -> CliResponse {
     let key_pem = body_str(params, &["keyPem", "key", "privateKey"]).unwrap_or("");
     match crate::domains::store::install(&hostname, cert_pem, key_pem) {
         Ok(_) => {
+            // A hand-supplied certificate: the K2 renewer leaves it alone.
+            crate::domains::renew::mark_uploaded(&hostname);
             if name.role == k2_core::domains::ROLE_MAIL {
                 if let Err(e) = crate::domains::store::plant_mail_pem(&hostname, cert_pem, key_pem) {
                     return error_response("400 Bad Request", "plant", &e);

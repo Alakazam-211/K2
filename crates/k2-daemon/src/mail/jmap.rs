@@ -2941,6 +2941,70 @@ pub fn parse_session_upload_url(
     Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
 }
 
+/// Certificate upkeep for K2-issued certificates (domains::renew).
+impl StalwartClient {
+    /// `x:Action/set` create `@type: ReloadTlsCertificates`: Stalwart
+    /// re-reads every stored Certificate into the live SNI map in place
+    /// (0.16.10 / 0.16.20 `jmap/src/registry/mapping/action.rs` →
+    /// `cache/reload.rs` Certificate arm) — no restart, no mail helper.
+    /// A `notCreated` reply (the reload hit an error) is an Err; the
+    /// caller then falls back to the restart path.
+    pub fn reload_tls_certificates(&self) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Action/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "@type": "ReloadTlsCertificates" } }
+            }),
+        )?;
+        parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    /// `x:Certificate/set` destroy of one Certificate K2 planted earlier.
+    /// Already gone (Stalwart deletes expired certificates itself) is Ok.
+    pub fn certificate_destroy(&self, id: &str) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Certificate/set",
+            serde_json::json!({ "destroy": [id] }),
+        )?;
+        parse_certificate_destroyed(id, &resp)
+    }
+}
+
+/// [`StalwartClient::certificate_destroy`] reply: destroyed, or
+/// `notDestroyed` `notFound` (already gone) → Ok; anything else is loud.
+fn parse_certificate_destroyed(id: &str, args: &serde_json::Value) -> Result<(), String> {
+    let gone = args
+        .get("notDestroyed")
+        .and_then(|v| v.get(id))
+        .and_then(|e| e.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("notFound");
+    if gone {
+        return Ok(());
+    }
+    parse_set_destroyed("x:Certificate/set", id, args)
+}
+
+#[cfg(test)]
+mod certificate_upkeep_tests {
+    use super::*;
+
+    #[test]
+    fn certificate_destroy_reply_gone_is_ok_refusal_is_loud() {
+        let ok = serde_json::json!({ "destroyed": ["c1"] });
+        parse_certificate_destroyed("c1", &ok).expect("destroyed");
+        let gone = serde_json::json!({ "notDestroyed": { "c1": { "type": "notFound" } } });
+        parse_certificate_destroyed("c1", &gone).expect("already gone");
+        let refused = serde_json::json!({
+            "notDestroyed": { "c1": { "type": "forbidden", "description": "in use" } }
+        });
+        let err = parse_certificate_destroyed("c1", &refused).expect_err("refused");
+        assert!(err.contains("forbidden") && err.contains("in use"), "{err}");
+        let err = parse_certificate_destroyed("c1", &serde_json::json!({})).expect_err("silent");
+        assert!(err.contains("not in the destroyed list"), "{err}");
+    }
+}
+
 // ── Registry wire layer (envelope + pure parsers) ───────────────────────
 
 /// ✔ LIVE-VERIFIED: the Bootstrap object is a singleton whose JMAP id

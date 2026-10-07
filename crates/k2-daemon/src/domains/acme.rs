@@ -18,6 +18,7 @@ use k2_core::domains::{get_name, hostname_under_apex, DomainBinding, DomainName}
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 
 use crate::dns::proxy::proxy_request;
+use crate::domains::renew;
 use crate::domains::store::{self, AcmeConfig, InstalledPem};
 
 const PROD_DIR: &str = "https://acme-v02.api.letsencrypt.org/directory";
@@ -154,14 +155,30 @@ fn port_seems_free(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
+/// Manual issue / renew (`k2 cert issue|renew`, `k2 hostmail cert renew`).
+/// Recorded in `renewal.json` like a background attempt.
 pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
-    reject_k2_dev(hostname)?;
-    let (binding, name) = lookup_attached(hostname)?;
-    if let Some(pem) = reusable_inventory(hostname) {
-        plant_mail_if_needed(hostname, &name, &pem)?;
-        return Ok(pem);
+    let result = issue_attached_core(hostname);
+    renew::record_manual(hostname, chrono::Utc::now().timestamp(), &result);
+    result.map(|i| i.pem).map_err(|e| e.to_string())
+}
+
+/// The one issuer path for an attached name (manual and background).
+/// Holds the name's [`renew::NameLock`] for the whole run. The box
+/// store's certificate is reused (re-planted for mail) only while more
+/// than [`renew::RENEW_WINDOW_SECS`] remain; inside the window a new
+/// certificate is ordered.
+pub(crate) fn issue_attached_core(hostname: &str) -> Result<renew::Issued, renew::IssueError> {
+    use renew::IssueError;
+    reject_k2_dev(hostname).map_err(IssueError::NotQualified)?;
+    let (binding, name) = lookup_attached(hostname).map_err(IssueError::NotQualified)?;
+    let _lock = renew::NameLock::try_acquire(hostname)
+        .ok_or_else(|| IssueError::Busy(hostname.to_string()))?;
+    if let Some(pem) = reusable_inventory(hostname, chrono::Utc::now().timestamp()) {
+        plant_mail_if_needed(hostname, &name, &pem).map_err(IssueError::Plant)?;
+        return Ok(renew::Issued { pem, ordered: false });
     }
-    let kind = select_challenge(&binding, hostname)?;
+    let kind = select_challenge(&binding, hostname).map_err(IssueError::Order)?;
     issue_with_challenge(hostname, &binding, &name, kind)
 }
 
@@ -222,13 +239,18 @@ pub(crate) fn check_extra_name_issuable(
     Ok(())
 }
 
-fn reusable_inventory(hostname: &str) -> Option<InstalledPem> {
+/// The box store's certificate when it is a live Let's Encrypt leaf for
+/// `hostname` with at least [`renew::RENEW_WINDOW_SECS`] left.
+fn reusable_inventory(hostname: &str, now: i64) -> Option<InstalledPem> {
     let installed = store::load(hostname)?;
-    if crate::domains::status::is_reusable_lets_encrypt(hostname, &installed.chain_pem) {
-        Some(installed)
-    } else {
-        None
+    if !crate::domains::status::is_reusable_lets_encrypt(hostname, &installed.chain_pem) {
+        return None;
     }
+    let leaf = crate::domains::status::pem_leaf_info(&installed.chain_pem)?;
+    if renew::needs_renewal(leaf.not_after, now) {
+        return None;
+    }
+    Some(installed)
 }
 
 fn plant_mail_if_needed(
@@ -266,17 +288,17 @@ fn issue_with_challenge(
     binding: &DomainBinding,
     name: &DomainName,
     kind: ChallengeKind,
-) -> Result<InstalledPem, String> {
-    if fake_enabled() {
-        let pem = fake_issue(hostname, binding, kind)?;
-        store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
-        plant_mail_if_needed(hostname, name, &pem)?;
-        return Ok(pem);
+) -> Result<renew::Issued, renew::IssueError> {
+    use renew::IssueError;
+    let pem = if fake_enabled() {
+        fake_issue(hostname, binding, kind)
+    } else {
+        live_issue(hostname, binding, kind)
     }
-    let pem = live_issue(hostname, binding, kind)?;
-    store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
-    plant_mail_if_needed(hostname, name, &pem)?;
-    Ok(pem)
+    .map_err(IssueError::Order)?;
+    store::install(hostname, &pem.chain_pem, &pem.key_pem).map_err(IssueError::Order)?;
+    plant_mail_if_needed(hostname, name, &pem).map_err(IssueError::Plant)?;
+    Ok(renew::Issued { pem, ordered: true })
 }
 
 fn fake_enabled() -> bool {
@@ -910,6 +932,120 @@ mod tests {
         let _ = k2_core::domains::remove_binding(&conn, "skip-acme.test");
     }
 
+    /// LE-like leaf valid from 90 days before `not_after_unix` (day
+    /// granularity: rcgen dates are midnight UTC).
+    fn mint_le_like_until(hostname: &str, not_after_unix: i64) -> InstalledPem {
+        let mut ca_params =
+            CertificateParams::new(vec!["Let's Encrypt R11".to_string()]).expect("ca params");
+        let mut ca_dn = DistinguishedName::new();
+        ca_dn.push(DnType::OrganizationName, "Let's Encrypt");
+        ca_dn.push(DnType::CommonName, "R11");
+        ca_params.distinguished_name = ca_dn;
+        ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca_key = KeyPair::generate().expect("ca key");
+        let ca = ca_params.self_signed(&ca_key).expect("ca");
+        let ymd = |t: i64| {
+            use chrono::Datelike;
+            let d = chrono::DateTime::from_timestamp(t, 0).expect("ts").date_naive();
+            rcgen::date_time_ymd(d.year(), d.month() as u8, d.day() as u8)
+        };
+        let mut leaf = CertificateParams::new(vec![hostname.to_string()]).expect("leaf params");
+        leaf.not_before = ymd(not_after_unix - 90 * 86_400);
+        leaf.not_after = ymd(not_after_unix);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, hostname.to_string());
+        leaf.distinguished_name = dn;
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let cert = leaf.signed_by(&leaf_key, &ca, &ca_key).expect("sign");
+        InstalledPem {
+            hostname: hostname.to_string(),
+            chain_pem: format!("{}{}", cert.pem(), ca.pem()),
+            key_pem: leaf_key.serialize_pem(),
+        }
+    }
+
+    fn attach_other(apex: &str, hostname: &str) {
+        let _ = k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, apex, None, false).unwrap();
+        k2_core::domains::upsert_name(&conn, hostname, apex, k2_core::domains::ROLE_OTHER).unwrap();
+    }
+
+    fn detach(apex: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, apex);
+    }
+
+    /// The renewal window: the box store's certificate is reused with 31
+    /// days left, re-ordered with 29 days left or after expiry. Manual
+    /// runs are recorded in renewal.json.
+    #[test]
+    fn manual_issue_reuses_outside_window_and_renews_inside_it() {
+        let _home = crate::test_support::TempHome::new();
+        std::env::set_var("K2_ACME_FAKE", "1");
+        std::env::set_var("K2_ACME_HTTP01", "1");
+        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let now = chrono::Utc::now().timestamp();
+        let day = 86_400;
+        for (host, not_after, want_reuse) in [
+            ("w31.window.test", now + 32 * day, true),
+            ("w29.window.test", now + 29 * day, false),
+            ("expired.window.test", now - 2 * day, false),
+        ] {
+            attach_other("window.test", host);
+            let installed = mint_le_like_until(host, not_after);
+            store::install(host, &installed.chain_pem, &installed.key_pem).expect("install");
+            let pem = issue_attached(host).expect("issue");
+            if want_reuse {
+                assert_eq!(pem.chain_pem, installed.chain_pem, "{host}: reused, no new order");
+            } else {
+                assert_ne!(pem.chain_pem, installed.chain_pem, "{host}: must re-order");
+                assert!(pem.chain_pem.contains("BEGIN CERTIFICATE"));
+                assert_eq!(
+                    store::load(host).expect("store").chain_pem,
+                    pem.chain_pem,
+                    "{host}: the new certificate replaces the old one in the box store"
+                );
+            }
+            let rec = renew::load().names[host].clone();
+            assert_eq!(rec.last_trigger.as_deref(), Some("manual"));
+            assert_eq!(
+                rec.last_result.as_deref(),
+                Some(if want_reuse { "planted" } else { "renewed" }),
+                "{host}"
+            );
+            assert_eq!(rec.failures, 0);
+        }
+        detach("window.test");
+        std::env::remove_var("K2_ACME_HTTP01");
+    }
+
+    /// A manual issue never runs while another run (the background
+    /// renewer) holds the name, and that is not a recorded attempt.
+    #[test]
+    fn manual_issue_refuses_while_the_name_is_locked() {
+        let _home = crate::test_support::TempHome::new();
+        std::env::set_var("K2_ACME_FAKE", "1");
+        std::env::set_var("K2_ACME_HTTP01", "1");
+        attach_other("lock.test", "app.lock.test");
+        let held = renew::NameLock::try_acquire("app.lock.test").expect("lock");
+        let err = issue_attached("app.lock.test").expect_err("busy");
+        assert!(err.contains("already in progress"), "{err}");
+        assert!(store::load("app.lock.test").is_none(), "nothing ordered while locked");
+        assert!(!renew::load().names.contains_key("app.lock.test"), "busy is not an attempt");
+        let mut params = std::collections::HashMap::new();
+        params.insert("hostname".to_string(), "app.lock.test".to_string());
+        let resp = crate::domains::routes::handle_issue(&params);
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert!(resp.body.contains("\"busy\""), "{}", resp.body);
+        drop(held);
+        issue_attached("app.lock.test").expect("free again");
+        detach("lock.test");
+        std::env::remove_var("K2_ACME_HTTP01");
+    }
+
     #[test]
     fn mail_issue_fails_loud_if_jmap_plant_fails() {
         let _home = crate::test_support::TempHome::new();
@@ -925,6 +1061,12 @@ mod tests {
             err.contains("invalidProperties") || err.contains("x:Certificate/set") || err.contains("bad PEM"),
             "{err}"
         );
+        // Recorded: the certificate is in the box store but not in
+        // Stalwart, so the renewer retries the plant (after backoff).
+        let rec = renew::load().names["mail.plant-fail.test"].clone();
+        assert!(rec.plant_pending);
+        assert_eq!(rec.failures, 1);
+        assert!(rec.next_attempt.is_some());
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = k2_core::domains::remove_binding(&conn, "plant-fail.test");

@@ -157,6 +157,30 @@ pub(crate) fn is_reusable_lets_encrypt(hostname: &str, chain_pem: &str) -> bool 
     sans.iter().any(|n| n.eq_ignore_ascii_case(hostname))
 }
 
+/// The leaf of a PEM chain, as the K2 renewer reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafInfo {
+    pub not_after: i64,
+    pub issuer: String,
+    /// Issued by Let's Encrypt (K2's issuer), not rcgen. Fake/staging
+    /// Let's Encrypt CAs count: they came from the same issuer.
+    pub lets_encrypt: bool,
+}
+
+/// Leaf notAfter + issuer from a PEM chain (`None` = no parseable cert).
+pub(crate) fn pem_leaf_info(chain_pem: &str) -> Option<LeafInfo> {
+    let der = pem_first_cert_der(chain_pem)?;
+    let (issuer, subject, not_after, _) = parse_leaf(&der)?;
+    let hay = issuer.to_ascii_lowercase();
+    let lets_encrypt = !looks_rcgen(&issuer, &subject)
+        && (hay.contains("let's encrypt") || hay.contains("letsencrypt"));
+    Some(LeafInfo {
+        not_after,
+        issuer,
+        lets_encrypt,
+    })
+}
+
 /// After planting into Stalwart, 443/465 must not still look rcgen.
 pub fn reject_if_self_signed(probe: &ProbeResult) -> Result<(), String> {
     if probe.self_signed || probe.state == "self-signed" {

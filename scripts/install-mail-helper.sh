@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # install-mail-helper.sh — install the hosted-mail root helper on a K2 Linux
 # box. Run ONCE per box, AS ROOT, by ops. Never by the agent.
+# provision-k2-server.sh (step 7a) already runs it on every new box at the
+# daemon's version and fails provisioning if it fails; run it by hand on
+# older boxes and before a box's first `k2 hostmail upgrade`.
 #
 #   curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh \
 #     | sudo bash -s -- --version <version>

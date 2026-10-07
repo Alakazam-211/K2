@@ -60,7 +60,7 @@ Done — your server is live at **`https://<your-subdomain>.k2.dev`**.
 
 | Command | What it does |
 |---|---|
-| `provision-k2-server.sh` | Installs + starts the daemon and the `k2` CLI. Idempotent. |
+| `provision-k2-server.sh` | Installs + starts the daemon and the `k2` CLI, plus the hosted-mail root helper for the same K2 version so your agents can set up mail later (mail itself stays off; provisioning stops if the helper install fails). Idempotent. |
 | `k2 users add <name> --role owner\|admin\|member` | Create a login on the server. `--password-stdin` for scripts. There is no viewer role; use an app pass for limited access. |
 | `k2 connect login` | Pair a purchased subdomain: account sign-in → pick → live. |
 | `k2 connect status` | Show the paired subdomain and plan. |

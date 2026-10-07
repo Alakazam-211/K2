@@ -7,9 +7,10 @@
 // renderer (`ChatMessageBody`), the choice card and the secret card. The
 // user's messages sit right, the agent's left; cards are inline and
 // tappable (`thread.answer`, `thread.void`). While the agent works, a typing
-// indicator shows under the last message. When it waits for a permission
-// prompt Zen can't show, a banner offers "Open in Agents". Older messages
-// load on scroll. The message box is `ZenCompose`.
+// indicator shows under the last message. When it waits on a permission
+// prompt, a status line says so (a fact, no button: K2 never steers people
+// to answer in the terminal). Older messages load on scroll. The message
+// box is `ZenCompose`.
 //
 // prd-zen-gardens-v1 G38 (Rosson's answer 5): it follows an Agents widget
 // (`agents` prop, else the page's first), or, with `agent` (and `home`),
@@ -269,40 +270,28 @@ export function ZenConversation({
       </div>
 
       {row.needsYou && ready && (
+        // States the fact only. K2 never steers people to answer prompts in
+        // a terminal (no human-in-the-loop flows), so there is no button.
         <div
           role="status"
           data-zen-permission=""
-          className="flex flex-shrink-0 items-center gap-3"
+          className="flex flex-shrink-0 items-center gap-2"
           style={{
             margin: '10px var(--zen-gap) 0',
-            padding: '8px 12px',
+            padding: '7px 12px',
             borderRadius: 'var(--zen-radius)',
-            border: '1px solid var(--zen-needs-you)',
+            background: 'var(--zen-surface-raised)',
+            borderLeft: '3px solid var(--zen-needs-you)',
             color: 'var(--zen-text)',
-            fontSize: '0.88em',
+            fontSize: '0.85em',
           }}
         >
-          <span className="min-w-0 flex-1">{zenPermissionText(row.label)}</span>
-          <button
-            type="button"
-            data-zen-open-in-agents=""
-            data-zen-soft-button=""
-            onClick={() => {
-              void (bridge.call('conversation.open', row.address, { where: 'agents' }) as Promise<unknown>).catch(
-                (err: unknown) => console.warn('[zen] open in Agents failed:', err),
-              )
-            }}
-            className="flex-shrink-0 cursor-pointer disabled:cursor-default"
-            style={{
-              padding: '4px 12px',
-              borderRadius: 999,
-              border: '1px solid var(--zen-border)',
-              color: 'var(--zen-text)',
-              fontWeight: 600,
-            }}
-          >
-            Open in Agents
-          </button>
+          <span
+            aria-hidden="true"
+            className="flex-shrink-0"
+            style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--zen-needs-you)' }}
+          />
+          <span className="min-w-0 flex-1 truncate">{zenPermissionText(row.label)}</span>
         </div>
       )}
 

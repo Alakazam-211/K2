@@ -20,7 +20,8 @@
 //     own server, at the Thread address the Agents page resolves;
 //   - attachments go through the existing attach path (local paths, or an
 //     upload to the agent's server);
-//   - "Open in Agents" shows for a permission prompt;
+//   - a permission prompt shows a status line with no button (no HITL
+//     steering); `conversation.open` with `where: 'agents'` still works;
 //   - the template's own controls pass the required-controls check, all in
 //     the top band: Garden switcher top left, then the theme control
 //     immediately left of the Zen toggle in the top-right corner;
@@ -1891,7 +1892,30 @@ describe('Conversation widget', () => {
     })
   })
 
-  it('“Open in Agents” shows for a permission prompt, and opens the agent without switching the window', async () => {
+  // Rosson 2026-10-07: K2 never steers people to human-in-the-loop flows,
+  // so the banner states the fact and offers no button. The
+  // `conversation.open(address, {where: 'agents'})` verb stays for
+  // user-built Gardens; it is driven through a bridge below.
+  const gardenBridge = () =>
+    createZenBridge(
+      {
+        gardens: () => [{ id: 'g-default', name: 'Garden 1', index: 1 }],
+        currentGardenId: () => 'g-default',
+        switchGarden: () => {},
+        createGarden: async () => {
+          throw new Error('unused')
+        },
+        renameGarden: async () => {},
+        deleteGarden: async () => {},
+        homes: () => [],
+        exit: () => {},
+        controls: { bind: () => () => {}, bindings: () => [], wiringFailure: () => null, menuWiringFailure: () => null, dispose: () => {} },
+        page: () => BUILTIN_TEXTING_PAGE,
+      } as never,
+      { id: 'agents', caps: ['agents:read'] },
+    )
+
+  it('a permission prompt shows a status line with no button', async () => {
     await mountZen()
     await select(ROWS.cortana.address)
     await threadReady(ROWS.cortana.address)
@@ -1900,9 +1924,22 @@ describe('Conversation widget', () => {
       windowWorkspace('waiting'),
     )
     const banner = document.querySelector('[data-zen-permission]')
-    expect(banner?.textContent).toContain(zenPermissionText('cortana'))
+    if (!(banner instanceof HTMLElement)) throw new Error('no permission banner')
+    expect(banner.textContent).toBe(zenPermissionText('cortana'))
+    expect(banner.getAttribute('role')).toBe('status')
+    expect(banner.querySelector('button')).toBeNull()
+    expect(banner.querySelector('[data-zen-open-in-agents]')).toBeNull()
+    expect(document.querySelector('[data-zen-open-in-agents]')).toBeNull()
+    // Nothing left Zen.
+    expect(useZenWindowStore.getState().on).toBe(true)
+  })
+
+  it('conversation.open with where agents opens the agent without switching the window', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
     await act(async () => {
-      fireEvent.click(banner?.querySelector('[data-zen-open-in-agents]') as HTMLElement)
+      await gardenBridge().call('conversation.open', ROWS.cortana.address, { where: 'agents' })
     })
     // The window's own server: Zen turns off FIRST (G32/G54), then the
     // Agents page shows that workspace, live.
@@ -1913,15 +1950,14 @@ describe('Conversation widget', () => {
     expect(h.switched).toEqual([])
   })
 
-  it('“Open in Agents” for a remote agent shows its room on Home, in place', async () => {
+  it('conversation.open with where agents for a remote agent shows its room on Home, in place', async () => {
     await mountZen()
     await select(ROWS.sales.address)
     await threadReady(ROWS.sales.address)
     act(() => roomRow(0, 'waiting'))
-    const button = document.querySelector('[data-zen-permission] [data-zen-open-in-agents]')
-    if (!(button instanceof HTMLElement)) throw new Error('no Open in Agents')
+    expect(document.querySelector('[data-zen-permission] button')).toBeNull()
     await act(async () => {
-      fireEvent.click(button)
+      await gardenBridge().call('conversation.open', ROWS.sales.address, { where: 'agents' })
     })
     await waitFor(() => expect(useZenWindowStore.getState().on).toBe(false))
     expect(usePageViewStore.getState().page).toBe('home')

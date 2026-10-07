@@ -819,6 +819,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/workspace/set-chat-session", Member),
     post("/cli/workspace/set-handle", Member),
     post("/cli/workspace/set-tab-title", Member),
+    post("/cli/workspace/swap-canonical", Member),
     get("/cli/workspace/tab-titles", Member),
     post("/cli/workspaces/create", Member),
     post("/cli/workspaces/delete", Member),

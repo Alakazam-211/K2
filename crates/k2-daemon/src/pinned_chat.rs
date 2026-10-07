@@ -684,6 +684,120 @@ fn handle_skin_ensure_pinned_chat_find_only(
     crate::cli_response::CliResponse::ok_json(out.to_json().to_string())
 }
 
+/// Handler for `POST /cli/workspace/swap-canonical`.
+///
+/// Starts a never-chatted pinned session of `provider` and sends the
+/// handoff into that PTY. Does not resume the saved session. A handoff
+/// file is written even when the spawn fails, so the text is not lost.
+pub fn handle_swap_canonical(body: &[u8]) -> crate::cli_response::CliResponse {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Req {
+        project: String,
+        #[serde(default)]
+        provider: String,
+        #[serde(default)]
+        mode: String,
+        #[serde(default)]
+        notes: String,
+    }
+
+    let req: Req = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(err) => {
+            return crate::cli_response::CliResponse::bad_request(format!(
+                "parse swap-canonical request: {}",
+                err.to_string().replace('"', "'")
+            ));
+        }
+    };
+    if req.project.trim().is_empty() {
+        return crate::cli_response::CliResponse::bad_request("project required");
+    }
+    let prep = match k2_core::workspace::canonical_swap::prepare_canonical_swap(
+        req.project.trim(),
+        req.provider.trim(),
+        if req.mode.trim().is_empty() {
+            "recent"
+        } else {
+            req.mode.trim()
+        },
+        &req.notes,
+    ) {
+        Ok(prep) => prep,
+        Err(err) => return crate::cli_response::CliResponse::bad_request(err),
+    };
+
+    let ensured = match ensure_pinned_chat_fresh(&prep.project_path, &prep.target_provider) {
+        Ok(out) => out,
+        Err(err) => return swap_failed(&prep.handoff_path, err),
+    };
+    if ensured.reused || !ensured.fresh_spawn {
+        return swap_failed(
+            &prep.handoff_path,
+            "canonical chat was reused instead of swapped",
+        );
+    }
+    if argv_still_resumes(&ensured.args, &prep.from_session_id) {
+        return swap_failed(
+            &prep.handoff_path,
+            "fresh spawn still names the previous session",
+        );
+    }
+
+    let sent =
+        crate::workspace_msg::send_message_to_session(&ensured.session_id, "owner", &prep.message);
+    log_debug!(
+        "[daemon/pinned-chat] swap-canonical provider={} from={} session={} delivered={} handoff={}",
+        prep.target_provider,
+        prep.from_provider,
+        ensured.session_id,
+        sent.success,
+        prep.handoff_path,
+    );
+    crate::cli_response::CliResponse::ok_json(
+        serde_json::json!({
+            "swapped": true,
+            "provider": prep.target_provider,
+            "fromProvider": prep.from_provider,
+            "fromSessionId": prep.from_session_id,
+            "sessionId": ensured.session_id,
+            "claudeSessionId": ensured.claude_session_id,
+            "freshSpawn": ensured.fresh_spawn,
+            "reused": ensured.reused,
+            "pendingSessionDiscovery": ensured.pending_session_discovery,
+            "handoffPath": prep.handoff_path,
+            "seedError": prep.seed_error,
+            "messageDelivered": sent.success,
+            "messageReason": sent.reason,
+            "messageHint": sent.hint,
+        })
+        .to_string(),
+    )
+}
+
+fn swap_failed(handoff_path: &str, err: impl std::fmt::Display) -> crate::cli_response::CliResponse {
+    crate::cli_response::CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": err.to_string(),
+            "swapped": false,
+            "handoffPath": handoff_path,
+        })
+        .to_string(),
+    }
+}
+
+/// True when the fresh argv would continue the chat we just left.
+fn argv_still_resumes(args: &[String], source_session_id: &str) -> bool {
+    if !source_session_id.is_empty() && args.iter().any(|arg| arg == source_session_id) {
+        return true;
+    }
+    args.iter()
+        .any(|arg| arg == "--resume" || arg == "-r" || arg == "--fork-session" || arg == "resume")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,5 +860,81 @@ mod tests {
             "expected a registration error, got: {}",
             result.body
         );
+    }
+
+    #[test]
+    fn swap_canonical_rejects_bad_json() {
+        let result = handle_swap_canonical(b"not json");
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(result.body.contains("parse swap-canonical request"));
+        assert!(!result.body.contains("\"swapped\":true"));
+    }
+
+    #[test]
+    fn swap_canonical_rejects_empty_project() {
+        let result = handle_swap_canonical(br#"{"project":"  ","provider":"claude"}"#);
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(result.body.contains("project required"));
+        assert!(!result.body.contains("\"swapped\":true"));
+    }
+
+    #[test]
+    fn swap_canonical_unknown_harness_does_not_spawn() {
+        let result = handle_swap_canonical(
+            br#"{"project":"/tmp/k2-swap-unknown","provider":"aider","mode":"recent"}"#,
+        );
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(result.body.contains("unknown harness"), "got: {}", result.body);
+        assert!(!result.body.contains("\"swapped\":true"), "got: {}", result.body);
+        assert!(!result.body.contains("--resume"), "got: {}", result.body);
+    }
+
+    #[test]
+    fn swap_canonical_unregistered_project_is_not_a_resume() {
+        let result = handle_swap_canonical(
+            br#"{"project":"/nonexistent/k2-swap-canonical","provider":"claude"}"#,
+        );
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(
+            result.body.contains("project not registered"),
+            "got: {}",
+            result.body
+        );
+        assert!(!result.body.contains("\"swapped\":true"), "got: {}", result.body);
+        assert!(!result.body.contains("--resume"), "got: {}", result.body);
+    }
+
+    #[test]
+    fn argv_still_resumes_catches_the_old_session() {
+        let old = "01920000-eeee-7000-8000-0000000000aa";
+        assert!(argv_still_resumes(
+            &["--resume".into(), old.into()],
+            old
+        ));
+        assert!(argv_still_resumes(&["-r".into(), old.into()], old));
+        assert!(argv_still_resumes(
+            &["--fork-session".into(), old.into()],
+            old
+        ));
+        assert!(argv_still_resumes(
+            &["--yolo".into(), "resume".into(), old.into()],
+            old
+        ));
+        assert!(argv_still_resumes(
+            &["--session-id".into(), old.into()],
+            old
+        ));
+        assert!(!argv_still_resumes(
+            &[
+                "--dangerously-skip-permissions".into(),
+                "--session-id".into(),
+                "01920000-ffff-7000-8000-0000000000bb".into(),
+            ],
+            old
+        ));
+        assert!(!argv_still_resumes(
+            &["--dangerously-skip-permissions".into()],
+            ""
+        ));
     }
 }

@@ -63,20 +63,24 @@ pub fn count_md_files(dir: &Path) -> usize {
 
 // ── Lock check ─────────────────────────────────────────────────────────
 
-/// Check whether the workspace currently has an active session. Tries
-/// the `workspace_sessions` DB row first (authoritative); falls back to
-/// the legacy `.lock` file so pre-migration workspaces keep working.
-/// `agent_name` is retained for back-compat with the legacy `.lock`
-/// path; post-0.37.0 it's only consulted as a fallback.
+/// Check whether the workspace currently has an active session. The
+/// `workspace_sessions` DB row is authoritative whenever it exists; the
+/// legacy `.lock` file is read only for a workspace with no row
+/// (pre-migration or unregistered paths). `agent_name` is retained for
+/// back-compat with the legacy `.lock` path.
+///
+/// prd-daemon-activity-and-thread-working-v1 DA32: the daemon activity
+/// store releases the row (`sleeping`) on turn-end evidence, but only
+/// `k2so_agents_unlock` deletes the file `k2so_agents_lock` writes. While
+/// the file was consulted after a `sleeping` row, a workspace locked that
+/// way once stayed locked for good and its heartbeats never fired.
 pub fn is_agent_locked(project_path: &str, agent_name: &str) -> bool {
     {
         let db = crate::db::shared();
         let conn = db.lock();
         if let Some(project_id) = resolve_project_id(&conn, project_path) {
             if let Ok(Some(session)) = WorkspaceSession::get(&conn, &project_id) {
-                if session.status == "running" {
-                    return true;
-                }
+                return session.status == "running";
             }
         }
     }

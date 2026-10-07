@@ -13,6 +13,12 @@
 #      then asks for a pasted code; the code is read from stdin, reaches the
 #      stub's login/input, never appears in the CLI's output; signed_in →
 #      exit 0 with the "make it active" offer.
+#   4. Pins + API keys: pin / unpin bodies (scope, scopeId, tool, id), the
+#      pins listing, list shows "pinned to" and "billed per token";
+#      add-key reads the key from stdin only — it reaches the stub in the
+#      JSON body and never appears in the CLI's output or any child's argv;
+#      a key given as an argument is refused before anything is sent;
+#      a K2 terminal gets 403 owner_only → exit 3; 409 pinned_active → 1.
 # Fake values only (example.test, made-up ids).
 
 set -euo pipefail
@@ -124,7 +130,8 @@ import json, os, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 work, scoped = sys.argv[1], sys.argv[2]
-POST_ONLY = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh"}
+POST_ONLY = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
+             "pin", "unpin", "add-key"}
 state = {"polls": 0, "input": None}
 
 def acct(i, label, active, st="signed_in", tool="claude"):
@@ -141,8 +148,17 @@ LIST = {"tools": [
      "accounts": [acct("acc_work", "work", True), acct("acc_personal", "personal", False)]},
     {"tool": "codex", "display": "Codex", "supported": True, "activeId": None, "loginMethod": "temp_home", "accounts": []},
     {"tool": "grok", "display": "Grok", "supported": True, "activeId": None, "loginMethod": "temp_home", "accounts": []},
-    {"tool": "gemini", "display": "Gemini", "supported": False, "activeId": None, "loginMethod": None, "accounts": []},
-], "logins": [], "airgap": False, "switchNote": "Switching a login affects every session on this server."}
+    {"tool": "gemini", "display": "Gemini", "supported": True, "subscription": False, "apiKeys": True, "activeId": None,
+     "loginMethod": None, "accounts": []},
+    {"tool": "cursor", "display": "Cursor Agent", "supported": False, "subscription": False, "apiKeys": False,
+     "activeId": None, "loginMethod": None, "accounts": []},
+], "logins": [], "airgap": False, "switchNote": "Switching a login affects every unpinned session on this server."}
+KEY_ACCT = dict(acct("acc_key", "metered", False), kind="api_key", billedPerToken=True, usage=None)
+PIN_WS = {"scopeKind": "workspace", "scopeId": "proj-1", "tool": "claude", "accountId": "acc_personal", "label": "builder"}
+LIST["tools"][0]["accounts"][1]["pinnedTo"] = [PIN_WS]
+LIST["tools"][0]["accounts"][1]["inUse"] = True
+LIST["tools"][0]["accounts"].append(KEY_ACCT)
+LIST["tools"][0]["pins"] = [PIN_WS]
 
 def login(st, **kw):
     base = {"loginId": "login_1", "accountId": "acc_new", "tool": "claude", "label": "fresh", "mode": "other_device",
@@ -218,6 +234,19 @@ class H(BaseHTTPRequestHandler):
             out = {"ok": True}
         elif verb == "login/cancel":
             out = login("cancelled", done=True)
+        elif verb == "pins":
+            out = {"pins": [PIN_WS]}
+        elif verb == "pin":
+            if b.get("id") == "acc_work":
+                status, out = 409, {"error": {"code": "pinned_active", "hint": "work is the pool's active claude login; switch the pool first"}}
+            else:
+                out = {"pin": {"scopeKind": b.get("scope"), "scopeId": b.get("scopeId"), "tool": b.get("tool"),
+                               "accountId": b.get("id"), "label": b.get("scopeId")},
+                       "note": "This agent's Claude history will live with this login."}
+        elif verb == "unpin":
+            out = {"unpinned": b.get("scopeId") != "nothing-here"}
+        elif verb == "add-key":
+            out = {"account": dict(KEY_ACCT, tool=b.get("tool"), label=b.get("label"))}
         else:
             status, out = 404, {"error": {"code": "not_found", "hint": "no route"}}
         data = json.dumps(out).encode()
@@ -262,8 +291,11 @@ assert_contains "list: active mark" "$out" "* work"
 assert_contains "list: usage summary" "$out" "Session 42% · Weekly 10%"
 assert_contains "list: idle login" "$out" "personal"
 assert_contains "list: empty tool" "$out" "Codex: no logins"
-assert_contains "list: unsupported tool" "$out" "Gemini: no login wallet yet"
-assert_contains "list: every session note" "$out" "Switching a login affects every session on this server."
+assert_contains "list: api-key-only tool" "$out" "Gemini: no API keys (add one: k2 llm accounts add-key gemini <label>)"
+assert_contains "list: unsupported tool" "$out" "Cursor Agent: no login wallet yet"
+assert_contains "list: pinned to" "$out" "pinned to: workspace builder (in use)"
+assert_contains "list: api key marker" "$out" "api key · billed per token"
+assert_contains "list: every session note" "$out" "Switching a login affects every unpinned session on this server."
 assert_eq "list is a GET" "$(last method)" "GET"
 assert_eq "list path" "$(last path)" "/cli/llm/accounts/list"
 assert_eq "owner sends the disk owner token" "$(last token)" "$OWNER"
@@ -289,7 +321,7 @@ assert_contains "usage row" "$out" "Session 42%"
 
 out="$(owner llm accounts switch claude personal)"
 assert_contains "switch says now using" "$out" "claude: now using personal"
-assert_contains "switch says every session" "$out" "every session on this server"
+assert_contains "switch says every session" "$out" "every unpinned session on this server"
 assert_eq "switch is a POST" "$(last method)" "POST"
 assert_eq "switch path" "$(last path)" "/cli/llm/accounts/switch"
 assert_eq "switch body is the resolved id" "$(last_body)" '{"id": "acc_personal"}'
@@ -326,7 +358,8 @@ assert_eq "refresh body" "$(last_body)" '{"usage": true}'
 # is POST-only.
 python3 - "$WORK/reqs.jsonl" <<'PY' && ok "no POST-only route was ever a GET" || bad "a POST-only route was sent as GET"
 import json, sys
-post_only = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh"}
+post_only = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
+             "pin", "unpin", "add-key"}
 for line in open(sys.argv[1]):
     r = json.loads(line)
     verb = r["path"][len("/cli/llm/accounts/"):]
@@ -385,6 +418,112 @@ assert_contains "says cancelled" "$(cat "$WORK/err")" "cancelled"
 assert_eq "cancel was posted" "$(last path)" "/cli/llm/accounts/login/cancel"
 assert_eq "add without --device asks for this computer" \
     "$(grep '/cli/llm/accounts/add' "$WORK/reqs.jsonl" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(json.load(sys.stdin)["body"])["mode"])')" "this_computer"
+
+# ── 4. pins + API keys ───────────────────────────────────────────────
+echo "== pins =="
+capture_nod llm accounts pin claude personal
+assert_eq "pin without a scope exit 2" "$rc" "2"
+capture_nod llm accounts pin --workspace a --session b claude personal
+assert_eq "pin with both scopes exit 2" "$rc" "2"
+capture_nod llm accounts pin --workspace a claude
+assert_eq "pin without a label exit 2" "$rc" "2"
+capture_nod llm accounts unpin --session x
+assert_eq "unpin without a tool exit 2" "$rc" "2"
+capture_nod llm accounts pin --workspace a cursor x
+assert_eq "pin on a tool without a wallet exit 2" "$rc" "2"
+
+out="$(owner llm accounts pin --workspace builder claude personal)"
+assert_eq "pin is a POST" "$(last method)" "POST"
+assert_eq "pin path" "$(last path)" "/cli/llm/accounts/pin"
+assert_eq "pin body (workspace)" "$(last_body)" '{"id": "acc_personal", "scope": "workspace", "scopeId": "builder", "tool": "claude"}'
+assert_contains "pin prints the result" "$out" "pinned workspace builder claude to personal"
+assert_contains "pin prints the note" "$out" "Claude history will live with this login"
+owner llm accounts pin --session tab-42 claude personal >/dev/null
+assert_eq "pin body (session)" "$(last_body)" '{"id": "acc_personal", "scope": "session", "scopeId": "tab-42", "tool": "claude"}'
+set +e
+owner llm accounts pin --workspace builder claude work >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "pin the pool's live login → exit 1 (409)" "$rc" "1"
+assert_contains "pinned_active hint" "$(cat "$WORK/err")" "pinned_active: work is the pool's active claude login"
+
+out="$(owner llm accounts unpin --workspace builder claude)"
+assert_eq "unpin path" "$(last path)" "/cli/llm/accounts/unpin"
+assert_eq "unpin body" "$(last_body)" '{"scope": "workspace", "scopeId": "builder", "tool": "claude"}'
+assert_contains "unpin says pool" "$out" "uses the pool's active login again"
+out="$(owner llm accounts unpin --session nothing-here claude)"
+assert_contains "unpin with no pin" "$out" "no claude pin on session nothing-here"
+
+out="$(owner llm accounts pins)"
+assert_eq "pins is a GET" "$(last method)" "GET"
+assert_contains "pins row" "$out" "workspace"
+assert_contains "pins row label → login label" "$out" "builder"
+assert_contains "pins row login" "$out" "-> personal"
+json_out="$(owner llm accounts pins --json)"
+python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["pins"][0]["accountId"]=="acc_personal", v' "$json_out" \
+    && ok "pins --json passes the body through" || bad "pins --json passthrough"
+out="$(cell llm accounts pins)"
+assert_contains "pins works from a K2 terminal" "$out" "-> personal"
+assert_eq "passport pins sends the scoped token" "$(grep '/cli/llm/accounts/pins' "$WORK/reqs.jsonl" | tail -n 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" "$SCOPED"
+set +e
+cell llm accounts pin --workspace builder claude personal >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "passport pin → exit 3" "$rc" "3"
+assert_contains "passport pin owner_only" "$(cat "$WORK/err")" "owner_only:"
+
+echo "== add-key =="
+API_KEY="sk-fake-K2TEST-0123456789abcdef"
+# Log every curl / python3 argv the CLI starts.
+WRAP="$WORK/wrap"
+mkdir -p "$WRAP"
+for prog in curl python3; do
+    real="$(command -v "$prog")"
+    printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "%s/argv.log"\nexec "%s" "$@"\n' "$prog" "$WORK" "$real" > "$WRAP/$prog"
+    chmod 755 "$WRAP/$prog"
+done
+: > "$WORK/argv.log"
+nreq_before="$(wc -l < "$WORK/reqs.jsonl")"
+set +e
+out="$(printf '%s\n' "$API_KEY" | env PATH="$WRAP:$PATH" HOME="$HOME2" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" "$K2_CLI" llm accounts add-key gemini metered 2>"$WORK/err")"; rc=$?
+set -e
+err_text="$(cat "$WORK/err")"
+assert_eq "add-key exit 0" "$rc" "0"
+assert_contains "add-key says billed per token" "$out" "billed per token"
+assert_absent "key never in stdout" "$out" "$API_KEY"
+assert_absent "key never in stderr" "$err_text" "$API_KEY"
+[ -s "$WORK/argv.log" ] && ok "argv wrappers saw the children" || bad "argv wrappers saw nothing"
+assert_absent "key never on any child's argv" "$(cat "$WORK/argv.log")" "$API_KEY"
+assert_eq "add-key is a POST" "$(last method)" "POST"
+assert_eq "add-key path" "$(last path)" "/cli/llm/accounts/add-key"
+assert_eq "add-key body carries the key" "$(last_body)" "{\"key\": \"$API_KEY\", \"label\": \"metered\", \"tool\": \"gemini\"}"
+python3 - "$WORK/reqs.jsonl" "$API_KEY" <<'PY' && ok "key only ever in the add-key JSON body" || bad "key leaked outside the add-key body"
+import json, sys
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    if sys.argv[2] in line:
+        assert r["path"] == "/cli/llm/accounts/add-key" and r["method"] == "POST", r
+        assert sys.argv[2] not in r["path"] and sys.argv[2] not in json.dumps(r["query"]) and sys.argv[2] not in r["token"], r
+PY
+
+set +e
+printf '%s\n' "$API_KEY" | owner llm accounts add-key claude k2 "$API_KEY" >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "key as an argument → exit 2" "$rc" "2"
+assert_contains "says stdin" "$(cat "$WORK/err")" "read from stdin, never an argument"
+set +e
+owner llm accounts add-key claude k2 </dev/null >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "no key on stdin → exit 2" "$rc" "2"
+nreq_after="$(grep -c 'add-key' "$WORK/reqs.jsonl")"
+assert_eq "refused add-keys sent nothing" "$nreq_after" "1"
+capture_nod llm accounts add-key cursor x
+assert_eq "add-key on a tool without keys exit 2" "$rc" "2"
+set +e
+printf '%s\n' "$API_KEY" | cell llm accounts add-key claude k3 >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "passport add-key → exit 3" "$rc" "3"
+assert_contains "passport add-key owner_only" "$(cat "$WORK/err")" "owner_only:"
+assert_absent "owner_only error never echoes the key" "$(cat "$WORK/err")" "$API_KEY"
+: "$nreq_before"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

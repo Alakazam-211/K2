@@ -100,7 +100,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// widgets; `slot` `bottom`/`menu`, `align`, `edge`, `menu`; the `menu` kind.
 /// v10 = `k2 zen guide` (prd-zen-freeform-chrome FC33–FC35): the user guide's
 /// pages and pipeable example files.
-pub const SKILL_VERSION_ZEN: u32 = 10;
+/// v11 = `agents.list()` / `agents.subscribe(cb)` rows carry the daemon's
+/// `activity` (prd-daemon-activity-and-thread-working-v1 S5).
+pub const SKILL_VERSION_ZEN: u32 = 11;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

@@ -1755,9 +1755,16 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
     assert_eq!(
         k2_core::skills::version::SKILL_VERSION_ZEN,
-        10,
-        "k2-zen skill v10 (the `k2 zen guide` user guide; v9 made Zen controls widgets; v8 was `slot = \"top\"` for the nav rail)"
+        11,
+        "k2-zen skill v11 (agents rows carry the daemon's `activity`; v10 was the `k2 zen guide` user guide; v9 made Zen controls widgets; v8 was `slot = \"top\"` for the nav rail)"
     );
+    // v11: the Agents rows' `activity` comes from the daemon.
+    for must in [
+        "Each `agents.list()` / `agents.subscribe(cb)` row has `activity`",
+        "`unverifiable` (nothing heard for 30 minutes while the session is open; never",
+    ] {
+        assert!(body.contains(must), "skill v11 must mention {must:?}");
+    }
     // v10: agents learn the guide and how to pipe an example.
     for must in [
         "`k2 zen guide` is the user guide, and it needs no daemon",

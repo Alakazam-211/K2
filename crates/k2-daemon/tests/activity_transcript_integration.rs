@@ -309,6 +309,45 @@ fn two_fresh_codex_tabs_adopt_distinct_rollouts_without_relocating() {
     }
 }
 
+/// 0.45.0 integration (k2 sidecar × A18): a sidecar tab still waiting for
+/// its conversation (`adopt_since` set) is adopted by the sidecar's own
+/// watch, which also moves the pane-keyed Chats name. The follower may
+/// follow the rollout for activity, but it never stamps that row.
+#[test]
+fn follower_leaves_a_pending_sidecar_row_to_the_sidecar_adoption() {
+    let env = Env::new("s");
+    let ws = tmp_dir("ws-s");
+    let pid = format!("act3-s-{}", uuid::Uuid::new_v4());
+    seed_project(&pid, &ws);
+    seed_tab_row(&pid, "codex-s", &ws);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::sidecar::stamp_meta(&conn, &pid, "codex-s", Some("owner"), None, Some(1))
+            .expect("stamp sidecar meta");
+    }
+    let sid = uuid::Uuid::new_v4().to_string();
+    register(&sid, "tab-codex-s", "codex", &ws);
+
+    let day = codex_day_dir(&env.home);
+    codex_rollout(&day, "conv-codex-s", &ws, now_ms());
+    activity_transcript::poll_all_once(now_ms());
+
+    assert_eq!(
+        activity_transcript::conversation_of(&sid),
+        Some(("conv-codex-s".to_string(), ConversationSource::Adopted)),
+        "the follower still follows the rollout for activity"
+    );
+    assert_eq!(tab_session_id(&pid, "codex-s"), None, "a pending sidecar row is not stamped by the follower");
+    let meta = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::sidecar::meta(&conn, &pid, "codex-s").expect("sidecar meta")
+    };
+    assert_eq!(meta.adopt_since, Some(1), "the sidecar's adoption is still pending");
+    activity_store::unregister(&sid);
+}
+
 /// T-S3f: the Chat view tail and the activity follower share the file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_view_and_activity_follower_both_see_every_turn() {

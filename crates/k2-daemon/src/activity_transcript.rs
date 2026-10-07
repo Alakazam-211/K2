@@ -432,6 +432,19 @@ fn stamp_tab_session(facts: &TrackFacts, conversation: &str) {
         .unwrap_or_else(|| facts.agent_name.clone());
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // A `k2 sidecar` tab still waiting for its conversation (`adopt_since`
+    // set, migration 0132) is adopted by the sidecar's own watch: it
+    // matches the brief marker, moves the pane-keyed Chats name onto the
+    // id and clears `adopt_since`. Stamping here first would end that
+    // watch early and strand the name on the pane id, so the follower
+    // keeps its file for activity and leaves the row alone.
+    if k2_core::sidecar::meta(&conn, project_id, &pane_group_id)
+        .and_then(|m| m.adopt_since)
+        .is_some()
+    {
+        log_debug!("[activity/transcript] {pane_group_id}: sidecar adoption pending; not stamping");
+        return;
+    }
     if let Err(e) = k2_core::db::schema::WorkspaceTabSession::stamp_session_id(&conn, project_id, &pane_group_id, conversation) {
         log_debug!("[activity/transcript] stamp {pane_group_id} failed: {e}");
     }

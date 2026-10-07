@@ -500,6 +500,22 @@ impl Row {
         c
     }
 
+    /// TW7, the Thread strip's counts: (subagents still holding the turn,
+    /// i.e. running, waiting or owed subagent children; background shells
+    /// and monitors still running or waiting). Counts only, no labels.
+    pub fn thread_counts(&self) -> (usize, usize) {
+        let mut subagents = 0;
+        let mut background = 0;
+        for child in self.children.values() {
+            match child.kind {
+                ChildKind::Subagent => subagents += 1,
+                ChildKind::Shell | ChildKind::Monitor if child.state != ChildState::Owed => background += 1,
+                _ => {}
+            }
+        }
+        (subagents, background)
+    }
+
     fn visible(&self) -> Visible {
         Visible {
             display: self.display,
@@ -610,6 +626,29 @@ mod tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), want.len(), "duplicate reason strings");
+    }
+
+    /// TW7: subagents count while running, waiting or owed; background
+    /// work (shells, monitors) only while it still runs.
+    #[test]
+    fn thread_counts_follow_tw7() {
+        let mut row = Row::new(RowFacts { session_id: "s".into(), ..Default::default() }, 1_000);
+        let child = |kind, state| Child {
+            kind,
+            state,
+            origin: ChildOrigin::Hook,
+            since: 1_000,
+            owed_at: None,
+            background: false,
+        };
+        row.children.insert("a".into(), child(ChildKind::Subagent, ChildState::Running));
+        row.children.insert("b".into(), child(ChildKind::Subagent, ChildState::Owed));
+        row.children.insert("c".into(), child(ChildKind::Subagent, ChildState::Waiting));
+        row.children.insert("d".into(), child(ChildKind::Shell, ChildState::Running));
+        row.children.insert("e".into(), child(ChildKind::Shell, ChildState::Owed));
+        row.children.insert("f".into(), child(ChildKind::Monitor, ChildState::Running));
+        row.children.insert("g".into(), child(ChildKind::Cron, ChildState::Running));
+        assert_eq!(row.thread_counts(), (3, 2));
     }
 
     #[test]

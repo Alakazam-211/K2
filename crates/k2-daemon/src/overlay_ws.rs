@@ -13,6 +13,14 @@
 //!   web edge's idle cut) and a dead peer is found by the failed write;
 //! - a subscriber that lags the bus is CLOSED, never silently skipped, so
 //!   the client reconnects and catches up with `GET /cli/thread?since_seq=`.
+//!
+//! Thread working strip (prd-daemon-activity-and-thread-working-v1 TW5,
+//! A25): `collection: "activity"` frames are ephemeral (never stored, no
+//! seq) and ride a SECOND broadcast ([`publish_activity`]), merged into
+//! each socket's `select!` after the Thread bus. A lag on that bus is
+//! skipped, not closed: `GET /cli/thread/activity` is the catch-up, and
+//! strip traffic must never force a Thread resync. App guests never see
+//! them ([`skin_may_see_frame`] passes only `thread`).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -32,6 +40,10 @@ pub const OVERLAY_WS_PATH: &str = "/cli/overlay/events";
 
 const BUS_CAP: usize = 1024;
 
+/// The activity bus (A25). Strip frames are at most 2/s per turn; a
+/// subscriber that falls this far behind skips.
+const ACTIVITY_BUS_CAP: usize = 256;
+
 /// Keepalive ping cadence: 20 s by default. `K2_OVERLAY_WS_PING_MS`
 /// overrides it (the headless test uses a short one).
 pub fn ping_interval() -> std::time::Duration {
@@ -50,6 +62,10 @@ pub struct OverlayFrame {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<OverlayDoc>,
+    /// TW5 / §7.6: the Thread working strip's turn (`collection:
+    /// "activity"` only). Never stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<serde_json::Value>,
     /// Internal filter key; omitted from the wire shape in [`wire_json`].
     #[serde(skip)]
     pub conversation_id: Option<String>,
@@ -71,13 +87,37 @@ pub fn subscribe() -> broadcast::Receiver<OverlayFrame> {
     bus().subscribe()
 }
 
+fn activity_bus() -> &'static broadcast::Sender<OverlayFrame> {
+    static TX: OnceLock<broadcast::Sender<OverlayFrame>> = OnceLock::new();
+    TX.get_or_init(|| broadcast::channel(ACTIVITY_BUS_CAP).0)
+}
+
+/// TW5 / A25: publish an ephemeral `activity` frame. Never stored, no
+/// seq, its own bus (a lag there skips instead of closing the socket).
+pub fn publish_activity(frame: OverlayFrame) {
+    let _ = activity_bus().send(frame);
+}
+
+pub fn subscribe_activity() -> broadcast::Receiver<OverlayFrame> {
+    activity_bus().subscribe()
+}
+
 fn wire_json(frame: &OverlayFrame) -> String {
-    serde_json::json!({
-        "collection": frame.collection,
-        "seq": frame.seq,
-        "id": frame.id,
-        "doc": frame.doc,
-    })
+    match &frame.activity {
+        // §7.6: an activity frame has no `doc`.
+        Some(activity) => serde_json::json!({
+            "collection": frame.collection,
+            "seq": frame.seq,
+            "id": frame.id,
+            "activity": activity,
+        }),
+        None => serde_json::json!({
+            "collection": frame.collection,
+            "seq": frame.seq,
+            "id": frame.id,
+            "doc": frame.doc,
+        }),
+    }
     .to_string()
 }
 
@@ -175,11 +215,15 @@ pub async fn serve_overlay_events_connection(
     };
     let (mut write, mut read) = ws.split();
     let mut rx = subscribe();
+    let mut activity_rx = subscribe_activity();
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
 
     loop {
         tokio::select! {
+            // A Thread message goes out before a strip frame that is ready
+            // at the same time (a compose post publishes both).
+            biased;
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
@@ -224,6 +268,30 @@ pub async fn serve_overlay_events_connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
+            event = activity_rx.recv() => {
+                match event {
+                    Ok(frame) => {
+                        if !skin_may_see_frame(&frame, &conversation, skin) {
+                            continue;
+                        }
+                        if write
+                            .send(Message::Text(wire_json(&frame)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        // A25: strip frames are ephemeral and the client
+                        // re-reads the current turn with GET
+                        // /cli/thread/activity; skipping is safe, closing
+                        // would force a Thread resync for nothing.
+                        log_debug!("[daemon/overlay_ws] activity subscriber lagged {n} frames; skipped");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
         }
     }
 }
@@ -235,6 +303,7 @@ pub fn emit_links(links: &[k2_core::overlay::OverlayLink], doc: &OverlayDoc) {
             seq: link.seq,
             id: link.id.clone(),
             doc: Some(doc.clone()),
+            activity: None,
             conversation_id: link.conversation_id.clone(),
         });
     }
@@ -279,6 +348,7 @@ mod tests {
             seq: 1,
             id: id.clone(),
             doc: Some(doc),
+            activity: None,
             conversation_id: Some(conv),
         });
 
@@ -311,6 +381,7 @@ mod tests {
             seq: 1,
             id: "t1".into(),
             doc: None,
+            activity: None,
             conversation_id: Some(conv.into()),
         };
         let chatterlog = OverlayFrame {
@@ -318,6 +389,7 @@ mod tests {
             seq: 2,
             id: "c1".into(),
             doc: None,
+            activity: None,
             conversation_id: None,
         };
         let other = OverlayFrame {
@@ -325,6 +397,7 @@ mod tests {
             seq: 3,
             id: "t2".into(),
             doc: None,
+            activity: None,
             conversation_id: Some("other".into()),
         };
         let chatter_same = OverlayFrame {
@@ -332,6 +405,7 @@ mod tests {
             seq: 4,
             id: "ch1".into(),
             doc: None,
+            activity: None,
             conversation_id: Some(conv.into()),
         };
         assert!(skin_may_see_frame(&thread, conv, true));
@@ -352,5 +426,48 @@ mod tests {
             skin_may_see_frame(&chatter_same, conv, false),
             "owner overlay still receives per-conversation chatter"
         );
+    }
+
+    /// TW5 / AP1: the Thread working strip's `activity` frames (tool
+    /// lines, thinking) never reach an app guest; owners on the same
+    /// conversation get them, owners elsewhere don't.
+    #[test]
+    fn skin_ws_drops_activity_frames() {
+        let conv = "conv-activity-filter";
+        let activity = OverlayFrame {
+            collection: "activity".into(),
+            seq: 0,
+            id: "turn-1".into(),
+            doc: None,
+            activity: Some(serde_json::json!({ "turnId": "turn-1", "line": "Running `cargo test`" })),
+            conversation_id: Some(conv.into()),
+        };
+        assert!(!skin_may_see_frame(&activity, conv, true), "an app guest must never see an activity frame");
+        assert!(skin_may_see_frame(&activity, conv, false));
+        assert!(!skin_may_see_frame(&activity, "another-conv", false));
+    }
+
+    /// §7.6: an activity frame carries `activity`, no `doc`, seq 0.
+    #[test]
+    fn activity_wire_shape_has_no_doc() {
+        let frame = OverlayFrame {
+            collection: "activity".into(),
+            seq: 0,
+            id: "turn-2".into(),
+            doc: None,
+            activity: Some(serde_json::json!({ "turnId": "turn-2" })),
+            conversation_id: Some("c".into()),
+        };
+        let v: serde_json::Value = serde_json::from_str(&wire_json(&frame)).expect("json");
+        assert_eq!(v["collection"], "activity");
+        assert_eq!(v["seq"], 0);
+        assert_eq!(v["id"], "turn-2");
+        assert_eq!(v["activity"]["turnId"], "turn-2");
+        assert!(v.get("doc").is_none(), "{v}");
+        assert!(v.get("conversation_id").is_none(), "internal key leaked: {v}");
+        let thread = OverlayFrame { collection: "thread".into(), activity: None, ..frame };
+        let v: serde_json::Value = serde_json::from_str(&wire_json(&thread)).expect("json");
+        assert!(v.get("activity").is_none(), "{v}");
+        assert!(v.get("doc").is_some(), "thread frames keep `doc` (null): {v}");
     }
 }

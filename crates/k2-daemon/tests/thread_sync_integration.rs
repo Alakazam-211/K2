@@ -218,7 +218,16 @@ async fn next_frame(ws: &mut Ws, what: &str) -> J {
             .unwrap_or_else(|| panic!("overlay WS closed while waiting for: {what}"))
             .unwrap_or_else(|e| panic!("overlay WS error while waiting for {what}: {e}"));
         match msg {
-            Message::Text(t) => return serde_json::from_str(&t).unwrap_or_else(|e| panic!("frame JSON ({e}): {t}")),
+            Message::Text(t) => {
+                let f: J = serde_json::from_str(&t).unwrap_or_else(|e| panic!("frame JSON ({e}): {t}"));
+                // The Thread working strip's ephemeral `activity` frames
+                // (prd-daemon-activity-and-thread-working-v1 S6) ride the
+                // same socket; this test is about stored Thread writes.
+                if f["collection"] == "activity" {
+                    continue;
+                }
+                return f;
+            }
             Message::Ping(_) | Message::Pong(_) => continue,
             other => panic!("unexpected overlay message while waiting for {what}: {other:?}"),
         }
@@ -248,6 +257,7 @@ async fn assert_no_frame(ws: &mut Ws, ms: u64, what: &str) {
         match timeout(left, ws.next()).await {
             Err(_) => return,
             Ok(Some(Ok(Message::Ping(_)))) | Ok(Some(Ok(Message::Pong(_)))) => continue,
+            Ok(Some(Ok(Message::Text(t)))) if t.contains(r#""collection":"activity""#) => continue,
             Ok(Some(Ok(Message::Text(t)))) => panic!("{what}: must not receive {t}"),
             Ok(other) => panic!("{what}: unexpected {other:?}"),
         }

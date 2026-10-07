@@ -162,6 +162,8 @@ pub mod activity_transcript;
 // prd-daemon-activity-and-thread-working-v1 S4: activity_changed + snapshot.
 pub mod activity_events;
 pub mod activity_routes;
+// S6: the Thread working strip (turns, ephemeral `activity` frames).
+pub mod thread_activity;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
@@ -312,6 +314,7 @@ pub mod test_harness {
         // here too so `/hook/*` reaches rows and the compat events.
         crate::activity_store::spawn();
         crate::activity_events::spawn();
+        crate::thread_activity::spawn();
 
         // The dispatcher 503s every real route until boot-status is
         // `ready`; flip it so auth tests see real status codes.

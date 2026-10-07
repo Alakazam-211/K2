@@ -755,3 +755,82 @@ async fn activity_snapshot_get_refuses_foreign_origin_cookies() {
         is_snapshot(&r, "owner token with foreign Origin");
     });
 }
+
+/// prd-daemon-activity-and-thread-working-v1 S6: `GET /cli/thread/activity`
+/// (the Thread strip's catch-up, which carries tool lines) under the
+/// 0.44.4 cookie Origin gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_activity_get_refuses_foreign_origin_cookies() {
+    let _g = lock();
+    with_temp_home(|home| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let member = provision(d.port, &format!("ta{}", &uuid::Uuid::new_v4().to_string()[..6]), "member");
+        let cookie = format!("Cookie: k2_session={member}");
+        let evil = format!("Origin: {EVIL}");
+        let host = "rosson.k2.dev";
+
+        // A room with a pinned Chat conversation, so the read resolves.
+        let handle = format!("ta{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let ws = home.join("ws").join(&handle);
+        std::fs::create_dir_all(&ws).expect("workspace dir");
+        let conv = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+                params![id, handle, ws.to_string_lossy()],
+            )
+            .expect("seed project");
+            k2_core::db::schema::WorkspaceSession::upsert(
+                &conn,
+                &format!("ws-{conv}"),
+                &id,
+                None,
+                Some(&conv),
+                "claude",
+                "system",
+                "running",
+            )
+            .expect("pin");
+        }
+        let path = format!("/cli/thread/activity?addr={handle}");
+
+        for bad in [
+            evil.as_str(),
+            "Origin: https://mallory.app.k2.dev",
+            "Sec-Fetch-Site: cross-site",
+            "Sec-Fetch-Site: same-site",
+        ] {
+            let r = req(d.port, "GET", &path, host, &[&cookie, bad], None);
+            assert_origin_refused(&r, &format!("thread/activity {bad}"));
+        }
+
+        let is_catch_up = |r: &Resp, label: &str| {
+            assert_eq!(r.status, 200, "{label}: {}", r.body);
+            let v = json(&r.body);
+            assert_eq!(v["conversation_id"], conv.as_str(), "{label}: {}", r.body);
+            assert!(v.get("turn").is_some(), "{label}: {}", r.body);
+        };
+        let r = req(d.port, "GET", &path, host, &[&cookie, "Sec-Fetch-Site: same-origin"], None);
+        is_catch_up(&r, "same-origin cookie");
+        let r = req(
+            d.port,
+            "GET",
+            &path,
+            host,
+            &[&cookie, "Origin: https://rosson.app.k2.dev", "X-Forwarded-Proto: https"],
+            None,
+        );
+        is_catch_up(&r, "own app origin cookie");
+        let lo_host = format!("127.0.0.1:{}", d.port);
+        let r = req(d.port, "GET", &path, &lo_host, &[&cookie, "Origin: tauri://localhost"], None);
+        is_catch_up(&r, "Tauri origin cookie");
+        let bearer = format!("Authorization: Bearer {member}");
+        let r = req(d.port, "GET", &path, host, &[&bearer, &evil], None);
+        is_catch_up(&r, "Bearer login with foreign Origin");
+        let r = req(d.port, "GET", &format!("{path}&token={OWNER_TOKEN}"), host, &[&evil], None);
+        is_catch_up(&r, "owner token with foreign Origin");
+    });
+}

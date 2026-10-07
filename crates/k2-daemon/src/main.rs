@@ -163,6 +163,8 @@ mod activity_store;
 mod activity_transcript;
 mod activity_events;
 mod activity_routes;
+// S6: the Thread working strip (turns, ephemeral `activity` frames).
+mod thread_activity;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;
@@ -1256,6 +1258,8 @@ async fn async_main() {
     activity_store::spawn();
     // S4: rows go out as `activity_changed` (+ seq) and the compat events.
     activity_events::spawn();
+    // S6: Thread turns follow the store and the transcripts.
+    thread_activity::spawn();
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");

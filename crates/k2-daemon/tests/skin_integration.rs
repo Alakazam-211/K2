@@ -1019,6 +1019,7 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
                 seq: 1,
                 id: "clog".into(),
                 doc: None,
+                activity: None,
                 conversation_id: None,
             });
             overlay_ws::publish(OverlayFrame {
@@ -1032,6 +1033,7 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
                     "hi".into(),
                     "thread",
                 )),
+                activity: None,
                 conversation_id: Some(conv.clone()),
             });
 

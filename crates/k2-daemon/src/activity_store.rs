@@ -29,7 +29,8 @@
 //! reads it today), [`apply`] takes S3's transcript and screen evidence
 //! ([`crate::activity_transcript`] follows each session's transcript
 //! from register to unregister), and [`RowEvent::turn_ended`] is S6's
-//! turn end.
+//! turn end. S6 (`thread_activity`) reads rows with [`with_row`] and is
+//! handed every owner envelope after the row has applied it.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -458,6 +459,10 @@ pub fn apply_ingest(ev: &IngestEvent) {
                 crate::activity_transcript::note_claim(&envelope.pane);
             }
             apply_at(&envelope.pane, Evidence::Hook(envelope), *received_at_ms);
+            // S6: the Thread turn tracker reads the step (tool line,
+            // stamp binding) after the row has taken the envelope, so the
+            // row it reads already reflects it.
+            crate::thread_activity::on_envelope(envelope, *received_at_ms);
         }
         IngestEvent::OwnerReleased { pane, at_ms } => apply_at(pane, Evidence::OwnerReleased, *at_ms),
         IngestEvent::Legacy { pane, raw_event, received_at_ms } => {
@@ -501,6 +506,11 @@ pub fn set_transcript_resolvable(session_id: &str, yes: bool) {
 /// The §7.2 JSON of one row (tests; S4's snapshot).
 pub fn row_json(session_id: &str) -> Option<serde_json::Value> {
     store().lock().rows.get(session_id).map(|e| e.row.to_json())
+}
+
+/// Read one live row (S6: the Thread turn tracker's view of its session).
+pub fn with_row<T>(session_id: &str, f: impl FnOnce(&Row) -> T) -> Option<T> {
+    store().lock().rows.get(session_id).map(|e| f(&e.row))
 }
 
 /// Every row's §7.2 JSON (S4's snapshot).

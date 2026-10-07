@@ -8686,6 +8686,7 @@ async fn handle_one_request(
             || p.starts_with("/cli/inbox/")
             || p == "/cli/thread"
             || p == "/cli/thread/latest"
+            || p == "/cli/thread/activity"
             || p == "/cli/chatter"
             || p == "/cli/chatterlog" =>
         {
@@ -8702,6 +8703,19 @@ async fn handle_one_request(
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"app passes cannot use thread/latest"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // prd-daemon-activity-and-thread-working-v1 TW9 / AP1: the
+            // Thread strip's catch-up carries tool lines; app guests never
+            // read it (not in the gateway allowlist either).
+            if skin_presented && p == "/cli/thread/activity" {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"app passes cannot use thread/activity"}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

@@ -567,6 +567,8 @@ fn overlay_sender_from(params: &HashMap<String, String>, resolved: &ResolvedOver
 }
 
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
+    // A23: a Thread turn's `startedAt` is the daemon's ms receipt time.
+    let received_at = chrono::Utc::now().timestamp_millis();
     let addr = str_param(params, "addr");
     let text = str_param(params, "text");
     if addr.is_empty() {
@@ -645,14 +647,19 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     &resolved.addr,
                     &text,
                 );
-                inject_thread_compose(&resolved, &from, &text, &command);
+                let turn = ThreadTurn::new(&resolved, &item.id, received_at);
+                inject_thread_compose(&resolved, &from, &text, &command, turn);
                 let _ = k2_core::workspace_compose_history::record_compose_send(
                     &resolved.project_id,
                     &text,
                     &from,
                 );
             } else if request_skin().is_some() {
-                inject_skin_thread(&resolved, &from, &text);
+                inject_skin_thread(&resolved, &from, &text, ThreadTurn::new(&resolved, &item.id, received_at));
+            } else {
+                // TW4 (a): the agent answered in Thread (not the compose
+                // bar, not an app guest): the strip ends with the reply.
+                crate::thread_activity::note_reply(&resolved.conversation_id);
             }
             CliResponse::ok_json(
                 serde_json::json!({
@@ -742,6 +749,9 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
+            drop(conn);
+            // TW4 (a): an agent's card is its Thread reply.
+            crate::thread_activity::note_reply(&resolved.conversation_id);
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -806,6 +816,8 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
+            drop(conn);
+            crate::thread_activity::note_reply(&resolved.conversation_id);
             let secret = item.doc.secret.as_ref();
             CliResponse::ok_json(
                 serde_json::json!({
@@ -866,7 +878,9 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
         secret_bytes,
     ) {
         Ok(cb) => {
-            fire_card_callbacks(&resolved.addr, vec![cb.clone()]);
+            // TW1: a person answering a card starts a Thread turn (an
+            // agent's own answer does not).
+            fire_card_callbacks(&resolved.addr, vec![cb.clone()], !principal_is_bound(params));
             let mut body = serde_json::json!({
                 "ok": true,
                 "id": cb.doc_id,
@@ -913,7 +927,7 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
     }
     match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id) {
         Ok(cb) => {
-            fire_card_callbacks(&resolved.addr, vec![cb.clone()]);
+            fire_card_callbacks(&resolved.addr, vec![cb.clone()], !principal_is_bound(params));
             let status = cb
                 .doc
                 .choice
@@ -960,20 +974,35 @@ fn format_thread_compose_pty_line_with_command(
     )
 }
 
-fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str, command: &str) {
+/// TW1: the Thread turn a human inject starts: the triggering doc's id
+/// and the post's ms receipt time (A23), on that doc's conversation.
+#[derive(Debug, Clone, Copy)]
+struct ThreadTurn<'a> {
+    conversation_id: &'a str,
+    turn_id: &'a str,
+    started_at: i64,
+}
+
+impl<'a> ThreadTurn<'a> {
+    fn new(resolved: &'a ResolvedOverlay, turn_id: &'a str, started_at: i64) -> Self {
+        Self { conversation_id: &resolved.conversation_id, turn_id, started_at }
+    }
+}
+
+fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str, command: &str, turn: ThreadTurn<'_>) {
     let payload = format!("[thread:{}] {text}", resolved.addr);
     let line = format_thread_compose_pty_line_with_command(from, &resolved.addr, text, command)
         .unwrap_or_else(|_| format_thread_compose_pty_line(from, &resolved.addr, text));
     record_test_inject(&line);
     // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
     // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
-    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", command);
+    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", command, Some(turn));
 }
 
 /// Skin Thread post (default `via=thread`): same `[from user] [thread:addr]`
 /// line as compose, delivered as `via=thread` so it is not compose-bar
 /// (no slash-command, no compose-history). Skin `via=compose` stays 403.
-fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str) {
+fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: ThreadTurn<'_>) {
     let line = format_thread_compose_pty_line(from, &resolved.addr, text);
     record_test_inject(&line);
     deliver_thread_to_pty(
@@ -982,30 +1011,54 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str) {
         from,
         "thread",
         "",
+        Some(turn),
     );
 }
 
-fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
+/// `start_turns`: a person answered or dismissed the card (TW1). Cards a
+/// compose post's prose resolves ride that post's own turn.
+fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>, start_turns: bool) {
+    let started_at = chrono::Utc::now().timestamp_millis();
     for cb in cbs {
         crate::overlay_ws::publish(OverlayFrame {
             collection: "thread".to_string(),
             seq: cb.seq,
             id: cb.doc_id.clone(),
             doc: Some(cb.doc.clone()),
+            activity: None,
             conversation_id: Some(cb.conversation_id.clone()),
         });
         let payload = format!("[thread:{addr}] {}", cb.inject_line);
         record_test_inject(&payload);
         let from = crate::workspace_msg::resolve_owner_from();
-        deliver_thread_to_pty(addr, &payload, &from, "thread", "");
+        let turn = start_turns.then_some(ThreadTurn {
+            conversation_id: &cb.conversation_id,
+            turn_id: &cb.doc_id,
+            started_at,
+        });
+        deliver_thread_to_pty(addr, &payload, &from, "thread", "", turn);
     }
 }
 
 /// Feedback / Projects Chat / `k2 talk`: `deliver_live(..., wake=true)`.
 /// Overlay unit tests have no Tokio reactor; skip the live wake there.
-fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str, command: &str) {
+///
+/// With `turn`, the inject starts a Thread turn (TW1): `delivering` until
+/// delivery returns, then it follows the v2 session that took the inject
+/// (`target_session_id`), or ends `delivery_failed`.
+fn deliver_thread_to_pty(
+    addr: &str,
+    payload: &str,
+    from: &str,
+    via: &str,
+    command: &str,
+    turn: Option<ThreadTurn<'_>>,
+) {
     if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
         return;
+    }
+    if let Some(t) = turn {
+        crate::thread_activity::start_turn(t.conversation_id, addr, t.turn_id, t.started_at);
     }
     let resp = crate::workspace_msg::deliver_live_with_via(
         addr,
@@ -1022,11 +1075,18 @@ fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str, comma
             resp.reason
         );
     }
+    if let Some(t) = turn {
+        let target = resp.target_session_id.as_deref().filter(|_| resp.success);
+        // A wake can re-pin the agent's Chat to a new conversation; the
+        // strip follows the Thread the clients now read.
+        let now_conversation = resolve_addr(addr).ok().map(|r| r.conversation_id);
+        crate::thread_activity::delivered(t.conversation_id, t.turn_id, target, now_conversation.as_deref());
+    }
 }
 
 fn apply_human_prose(conversation_id: &str, project_id: &str, addr: &str, text: &str) {
     match overlay::apply_prose(conversation_id, project_id, text) {
-        Ok(cbs) if !cbs.is_empty() => fire_card_callbacks(addr, cbs),
+        Ok(cbs) if !cbs.is_empty() => fire_card_callbacks(addr, cbs, false),
         Ok(_) => {}
         Err(e) => k2_core::log_debug!("[overlay] apply_prose failed: {e}"),
     }
@@ -1088,10 +1148,44 @@ fn display_addr_for(
     }
 }
 
+/// `GET /cli/thread/activity?addr=` (TW9, A26): the conversation's live
+/// Thread turn as its latest `activity` frame body, or `null`. A client
+/// calls it on every overlay socket (re)open, because `since_seq` never
+/// replays ephemeral frames. A Member read; app passes are refused by the
+/// dispatcher (AP1) and again here.
+fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
+    if request_skin().is_some() {
+        return forbidden("app passes cannot read thread activity");
+    }
+    let addr = str_param(params, "addr");
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    let resolved = match resolve_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
+        return e;
+    }
+    let turn = crate::thread_activity::current_turn(&resolved.conversation_id);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "addr": resolved.addr,
+            "conversation_id": resolved.conversation_id,
+            "turn": turn,
+        })
+        .to_string(),
+    )
+}
+
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     let resp = match path {
         "/cli/thread" => handle_get_thread(params),
         "/cli/thread/latest" => handle_get_thread_latest(params),
+        "/cli/thread/activity" => handle_get_thread_activity(params),
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"

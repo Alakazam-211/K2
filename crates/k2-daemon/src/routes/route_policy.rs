@@ -716,6 +716,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/themes/get-dir", Member),
     get("/cli/themes/list", Member),
     get("/cli/thread", Member),
+    get("/cli/thread/activity", Member),
     both("/cli/thread/answer", Member),
     post("/cli/thread/ask", Member),
     // Zen Z41: latest Thread item per addr, for previews. GET only.
@@ -1162,6 +1163,9 @@ mod tests {
         // S4: the activity snapshot is a plain read.
         assert!(!post_allowed("/cli/activity/snapshot"));
         assert_eq!(lookup("/cli/activity/snapshot").and_then(|r| r.get), Some(Member));
+        // S6 (TW9, A26): the Thread strip's catch-up is a plain read.
+        assert!(!post_allowed("/cli/thread/activity"));
+        assert_eq!(lookup("/cli/thread/activity").and_then(|r| r.get), Some(Member));
     }
 
     // ── source walk: every /cli route literal is classified ───────────

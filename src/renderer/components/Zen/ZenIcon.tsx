@@ -56,7 +56,7 @@ function ensoPoint(t: number, offset: number): [number, number] {
 
 /** The brush stroke as a filled outline: thick at the entry, tapering. */
 function ensoBrush(maxW: number, minW: number): string {
-  const width = (t: number): number => minW + (maxW - minW) * (1 - t) ** 0.9 * (t < 0.06 ? 0.75 + 0.25 * (t / 0.06) : 1)
+  const width = (t: number): number => minW + (maxW - minW) * (1 - t) ** 0.9 * (t < 0.06 ? 0.9 + 0.1 * (t / 0.06) : 1)
   const outer: Array<[number, number]> = []
   const inner: Array<[number, number]> = []
   for (let i = 0; i <= ENSO_STEPS; i++) {
@@ -82,8 +82,10 @@ function ensoSpine(): string {
   return d
 }
 
-const ENSO_OFF_D = ensoBrush(2.5, 0.6)
-const ENSO_ON_D = ensoBrush(3.5, 0.9)
+// Rosson 2026-10-07: a fatter entry, so the stroke starts with more body
+// before it tapers (was 2.5 / 3.5 at the start).
+const ENSO_OFF_D = ensoBrush(3.2, 0.6)
+const ENSO_ON_D = ensoBrush(4.4, 0.9)
 const ENSO_SPINE_D = ensoSpine()
 
 // ── bonsai ─────────────────────────────────────────────────────────────

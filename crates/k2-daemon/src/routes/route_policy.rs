@@ -461,6 +461,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/mail/outbox", Member),
     post("/cli/mail/outbox/cancel", Member),
     get("/cli/mail/preflight", Member),
+    post("/cli/mail/profile", Admin),
     both("/cli/mail/ptr", Admin),
     post("/cli/mail/ptr/set", Admin),
     get("/cli/mail/queue", Admin),

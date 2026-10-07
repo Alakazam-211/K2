@@ -473,6 +473,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/mail/domain/remove",
         // Calendars S2: host-wide DAV policy (owner/admin only, CAL22).
         "/cli/mail/dav",
+        // Calendars S6: Apple profile mints a mailbox credential (owner/admin).
+        "/cli/mail/profile",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/oauth-config",
@@ -1506,6 +1508,7 @@ mod tests {
             "/cli/mail/server/upgrade",
             "/cli/mail/domain/remove",
             "/cli/mail/dav",
+            "/cli/mail/profile",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/oauth-config",

@@ -13885,8 +13885,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -14234,6 +14234,18 @@ cmd_schema() {
       "flags": [
         {"name": "--files", "arg": "on|off", "description": "WebDAV file storage (default off on the first run, then the stored choice)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail profile",
+      "usage": "k2 hostmail profile <addr> --apple [--out <file> [--force]] [--json]",
+      "description": "Unsigned Apple setup profile (.mobileconfig) for one ACTIVE hosted address: Mail (IMAP 993 + SMTP 465, TLS) and, when calendars are on and reachable, Calendar (CalDAV) + Contacts (CardDAV) on https://<mail host>/dav/cal|card. Server = the domain's mail host (the cert name), never *.k2.dev. Every run mints a FRESH app password k2-profile-<YYYY-MM-DD> (never a stored secret); revoke with k2 hostmail app-password revoke. The secret is only inside the profile. Refuses linked or retired addresses and a stopped server. POST /cli/mail/profile {address, apple:true}. Owner/admin only (not mail_manage).",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--apple", "arg": null, "description": "Apple .mobileconfig (required; the only format)."},
+        {"name": "--out", "arg": "<file>", "description": "Write the profile here, mode 0600 (refuses an existing file unless --force). Without it the XML goes to stdout."},
+        {"name": "--force", "arg": null, "description": "With --out: overwrite an existing file."},
+        {"name": "--json", "arg": null, "description": "JSON: {address, mailHost, includes, appPasswordId, description, revoke, notes, profile (XML; omitted with --out), out}."}
       ]
     },
     {
@@ -16137,7 +16149,8 @@ OWNER VERBS — EXIT 3 (leftover M6)
   uninstall, domain remove, oauth/link admin, mail-manage toggle,
   `k2 hostmail calendar` (CalDAV/CardDAV/WebDAV-files policy for every
   hosted address; the toggle never opens it), `k2 hostmail upgrade`
-  (replaces the Stalwart binary; never automatic).
+  (replaces the Stalwart binary; never automatic), `k2 hostmail profile`
+  (Apple setup profile; mints a mailbox app password).
   Approving your own mail is futile. Ask your human.
 
 MAIL_MANAGE AGENTS
@@ -24962,6 +24975,7 @@ _mail_py() {
     M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
     M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
     M_DAV_ACTION="${M_DAV_ACTION:-}" M_FILES="${M_FILES:-}" \
+    M_FORCE="${M_FORCE:-false}" \
     M_CERT_ACTION="${M_CERT_ACTION:-}" \
     M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
     python3 - <<'PYEOF'
@@ -26933,6 +26947,54 @@ elif verb == "dav":
         print("note      : a calendar app retrying a wrong password gets its IP banned —"
               " k2 hostmail bans list / k2 hostmail allowlist")
 
+elif verb == "profile":
+    # Calendars S6: Apple .mobileconfig with a FRESH app password. The
+    # secret is only inside the profile: never echoed in human output,
+    # never in an error.
+    out = env("M_OUT")
+    force = env("M_FORCE") == "true"
+    if out and os.path.lexists(out) and not force:
+        die({"code": "usage", "hint": "%s already exists — pass --force to overwrite (nothing was minted)" % out})
+    d = call("POST", "/cli/mail/profile", body={"address": env("M_ADDRESS"), "apple": True}, timeout=60)
+    xml = d.get("profile") or ""
+    if not xml:
+        die({"code": "error", "hint": "daemon returned no profile"})
+    revoke = d.get("revoke") or "k2 hostmail app-password revoke %s %s" % (env("M_ADDRESS"), d.get("appPasswordId") or "<id>")
+    if out:
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+        try:
+            fd = os.open(out, flags, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                os.write(fd, xml.encode("utf-8"))
+            finally:
+                os.close(fd)
+        except OSError as e:
+            die({"code": "error", "hint": "could not write %s (%s) — an app password was minted anyway; revoke it: %s" % (out, e.strerror or e, revoke)})
+    if as_json:
+        if out:
+            d = dict(d)
+            d.pop("profile", None)
+            d["out"] = out
+        print(dumps(d))
+    elif out:
+        print("wrote    : %s  (mode 0600, unsigned — iOS/macOS show \"Unverified\")" % out)
+        print("address  : %s" % (d.get("address") or env("M_ADDRESS")))
+        print("server   : %s" % (d.get("mailHost") or "?"))
+        print("includes : %s" % ", ".join(d.get("includes") or ["mail"]))
+        print("password : app password %s (%s) — inside the file only" % (d.get("appPasswordId") or "?", d.get("description") or "?"))
+        print("revoke   : %s" % revoke)
+        for n in d.get("notes") or []:
+            print("note     : %s" % n)
+        print("next     : AirDrop or email the file to the Mac/iPhone, then Settings → Profile Downloaded → Install. Delete the file afterwards.")
+    else:
+        # Profile XML alone on stdout (pipe-safe); the summary on stderr.
+        sys.stdout.write(xml)
+        sys.stdout.flush()
+        sys.stderr.write("app password %s (%s) is inside this profile; revoke: %s\n" % (d.get("appPasswordId") or "?", d.get("description") or "?", revoke))
+        for n in d.get("notes") or []:
+            sys.stderr.write("note: %s\n" % n)
+
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
 PYEOF
@@ -28189,9 +28251,10 @@ cmd_hostmail() {
         bans)    cmd_hostmail_bans "$@" ;;
         allowlist) cmd_hostmail_allowlist "$@" ;;
         calendar) cmd_hostmail_calendar "$@" ;;
+        profile) cmd_hostmail_profile "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
             exit 2 ;;
     esac
 }
@@ -29725,6 +29788,60 @@ cmd_hostmail_dmarc() {
 }
 
 
+cmd_hostmail_profile() {
+    if _wants_help "$@"; then cmd_help_hostmail_profile; exit 0; fi
+    local address="" apple=false out="" force=false as_json=false
+    local usage="k2 hostmail profile <addr> --apple [--out <file> [--force]] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --apple) apple=true; shift ;;
+            --json) as_json=true; shift ;;
+            --force) force=true; shift ;;
+            --out)
+                [ $# -ge 2 ] && [ -n "$2" ] || { _mail_err "usage" "--out requires a file path — usage: $usage"; exit 2; }
+                out="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <addr> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "$usage"; exit 2; }
+    if [ "$apple" != true ]; then
+        _mail_err "usage" "pass --apple (the Apple .mobileconfig is the only profile format) — usage: $usage"
+        exit 2
+    fi
+    if [ "$force" = true ] && [ -z "$out" ]; then
+        _mail_err "usage" "--force only goes with --out <file>"
+        exit 2
+    fi
+    if [ -n "$out" ]; then
+        # Refuse BEFORE the daemon mints an app password.
+        if [ -d "$out" ]; then
+            _mail_err "usage" "--out $out is a directory — pass a file path (e.g. $out/$address.mobileconfig)"
+            exit 2
+        fi
+        if { [ -e "$out" ] || [ -L "$out" ]; } && [ "$force" != true ]; then
+            _mail_err "usage" "$out already exists — pass --force to overwrite (nothing was minted)"
+            exit 2
+        fi
+        local out_dir
+        out_dir="$(dirname -- "$out")"
+        if [ ! -d "$out_dir" ]; then
+            _mail_err "usage" "--out directory $out_dir does not exist"
+            exit 2
+        fi
+    fi
+    local M_VERB="profile" M_JSON="$as_json" M_ADDRESS="$address" M_OUT="$out" M_FORCE="$force"
+    _mail_py
+}
+
+
 cmd_hostmail_calendar() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_calendar; exit 0; fi
     local sub="$1"; shift
@@ -30937,6 +31054,11 @@ COMMANDS
                               mail_manage). First enable|disable turns
                               WebDAV files off unless --files on. Never
                               restarts Stalwart.
+  profile <addr> --apple [--out <file>]
+                              Unsigned Apple .mobileconfig (Mail, plus
+                              Calendar + Contacts when calendars are on and
+                              reachable) with a fresh app password.
+                              Owner/admin only.
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -31845,6 +31967,58 @@ caldav-srv check says so).
 USAGE
   k2 hostmail autoconfig show <domain> [--json]
   k2 hostmail autoconfig apply <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_profile() {
+    cat <<'EOF'
+Make an Apple setup profile (.mobileconfig) for one hosted address, so a
+Mac or iPhone gets Mail, Calendar and Contacts in one install.
+Owner/admin only — it mints a credential for a person's mailbox; the
+"agents manage hosted mail" toggle does not open it. POST /cli/mail/profile.
+
+What's inside
+  Mail      IMAP <mail host>:993 and SMTP <mail host>:465, both TLS.
+  Calendar  CalDAV https://<mail host>/dav/cal       } only when calendars
+  Contacts  CardDAV https://<mail host>/dav/card     } are on and reachable
+            (k2 hostmail calendar status); otherwise mail only, with a note.
+  <mail host> is the domain's mail host — the name on the mail certificate.
+  Never a *.k2.dev name (refused: that's the control plane, not this box).
+
+The password
+  Every run mints a FRESH app password named k2-profile-<YYYY-MM-DD> on
+  the mailbox. A stored mailbox password is never read back or reused.
+  The password is only inside the profile file; treat the file like the
+  password. It can do what the mailbox password can (not scoped yet).
+  Revoke it any time:
+    k2 hostmail app-password list <addr>
+    k2 hostmail app-password revoke <addr> <id>
+  Making a new profile for the same address replaces the old one on the
+  device when installed; revoke the old app password afterwards.
+
+Installing
+  AirDrop or email the file to the Mac/iPhone. iPhone: Settings →
+  Profile Downloaded → Install. Mac: System Settings → Privacy & Security
+  → Profiles (or General → Device Management) → Install. The profile is
+  unsigned, so the device shows it as "Unverified" — that is expected.
+  Delete the file once it's installed.
+
+Auth bans
+  A device signing in with a stale or wrong password gets its network's
+  IP banned for everyone behind it. During rollout, allowlist office and
+  home IPs first (k2 hostmail allowlist add <ip>); see bans with
+  k2 hostmail bans list, clear one with k2 hostmail bans clear <ip>.
+  If a device keeps failing: revoke its app password, make a new
+  profile, reinstall.
+
+Refuses: linked inboxes (another provider's account), retired addresses,
+a mail server that is not running, a mail host that is only *.k2.dev.
+
+USAGE
+  k2 hostmail profile <addr> --apple                  XML to stdout
+  k2 hostmail profile <addr> --apple --out <file>     write it (mode 0600)
+  k2 hostmail profile <addr> --apple --out <file> --force   overwrite
+  k2 hostmail profile <addr> --apple --json           JSON (profile = XML)
 EOF
 }
 

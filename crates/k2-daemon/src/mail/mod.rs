@@ -136,6 +136,7 @@ pub mod oauth;
 pub mod oauth_config;
 pub mod ooo;
 pub mod preflight;
+pub mod profile;
 pub mod queue;
 pub mod quota;
 pub mod ptr;

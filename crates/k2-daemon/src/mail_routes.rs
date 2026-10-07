@@ -280,6 +280,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/dkim/retire"
         | "/cli/mail/dmarc/report-to"
         | "/cli/mail/ptr/set"
+        | "/cli/mail/profile"
         | "/cli/mail/bans/clear"
         | "/cli/mail/allowlist/add"
         | "/cli/mail/allowlist/remove"
@@ -399,6 +400,9 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/bans/migrate/restore" => crate::mail::bans::handle_migrate_restore(body),
         // Calendars S2: {action: status|enable|disable, files?: on|off}.
         "/cli/mail/dav" => crate::mail::dav::handle_dav_post(body),
+        // Calendars S6: Apple setup profile — mints a fresh app password
+        // into an unsigned .mobileconfig. Owner/admin (is_owner_level_mutation).
+        "/cli/mail/profile" => crate::mail::profile::handle_profile(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -442,6 +446,9 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // NOT in is_mail_manage_surface: the per-workspace "agents manage
         // hosted mail" toggle must never open it.
         || path == "/cli/mail/dav"
+        // Calendars S6 (CAL6): an Apple setup profile mints a credential
+        // for a person's mailbox — owner/admin only, never the M5 toggle.
+        || path == "/cli/mail/profile"
 }
 
 /// Owner/admin hostmail surfaces (POST + GET) that a valid scoped agent
@@ -596,6 +603,8 @@ fn leftover_m6_hint(path: &str) -> String {
         "POST /cli/mail-manage"
     } else if path == "/cli/mail/dav" {
         "k2 hostmail calendar"
+    } else if path == "/cli/mail/profile" {
+        "k2 hostmail profile"
     } else {
         path
     };
@@ -932,6 +941,48 @@ mod tests {
         assert_ne!(get.status, "405 Method Not Allowed");
         let post = dispatch_post(p, br#"{"action":"bogus"}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// Calendars S6 (CAL6): the Apple profile mints a credential for a
+    /// person's mailbox — owner/admin only, POST only, never the M5 toggle,
+    /// never an agent verb.
+    #[test]
+    fn profile_route_is_owner_only_post_only_never_m5() {
+        let p = "/cli/mail/profile";
+        assert!(is_owner_level_mutation(p));
+        assert!(is_mail_owner_surface(p));
+        assert!(!is_mail_manage_surface(p), "the M5 toggle must not open {p}");
+        assert!(
+            !crate::session_token::is_agent_verb(p),
+            "a scoped agent token must not reach {p}"
+        );
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let body = mail_manage_authorized(p, false, Some(&principal))
+            .err()
+            .expect("scoped agent must be refused")
+            .body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(body.contains("k2 hostmail profile"), "names the verb: {body}");
+        assert!(
+            !body.contains("Allow agents to manage hosted mail"),
+            "must not promise the toggle: {body}"
+        );
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+        // GET → 405 (POST only); POST reaches the handler (usage, not 404).
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_eq!(get.status, "405 Method Not Allowed", "{}", get.body);
+        let post = dispatch_post(p, br#"{"apple":true}"#);
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+        let route = crate::routes::route_policy::ROUTES
+            .iter()
+            .find(|r| r.path == p)
+            .expect("ROUTES entry");
+        assert_eq!(route.post, Some(crate::routes::route_policy::Floor::Admin));
+        assert_eq!(route.get, None, "POST only");
     }
 
     /// Calendars S1 (CAL6): the Stalwart upgrade is owner/admin only,

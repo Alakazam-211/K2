@@ -64,7 +64,7 @@ export function AgentSessionChrome({
     splitRight,
     setSplitLeft,
     setSplitRight,
-  } = useSessionViewTab(sessionKey)
+  } = useSessionViewTab(sessionKey, room.scope)
   const chatProvider = chatHarnessName({ command, commandHint, provider })
   const harnessKnown = harnessFieldsKnown({ command, commandHint, provider })
   useEffect(() => {

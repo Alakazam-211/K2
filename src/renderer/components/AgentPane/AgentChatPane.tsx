@@ -693,7 +693,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     splitRight,
     setSplitLeft,
     setSplitRight,
-  } = useSessionViewTab(overlayConv)
+  } = useSessionViewTab(overlayConv, room.scope)
   const [chatProvider, setChatProvider] = useState<string | null>(null)
   const [harnessReady, setHarnessReady] = useState(false)
   const [chatConversationId, setChatConversationId] = useState<string | null>(null)
@@ -1331,7 +1331,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     splitRight,
     setSplitLeft,
     setSplitRight,
-  } = useSessionViewTab(overlayConv)
+  } = useSessionViewTab(overlayConv, room.scope)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false

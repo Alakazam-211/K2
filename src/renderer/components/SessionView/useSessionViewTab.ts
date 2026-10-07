@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
+import type { ServerScope } from '@/kessel/server-scope'
 import {
   DEFAULT_SPLIT_SIDES,
   SESSION_VIEW_TAB_DEFAULT,
@@ -24,10 +25,27 @@ export interface SessionViewChoice {
   setSplitRight: (view: SplitPaneView) => void
 }
 
-/** Remembered view for this window + named conversation, including both split sides. */
-export function useSessionViewTab(sessionKey: string | null): SessionViewChoice {
-  // The primary server's host key (Home M1): follows a server switch.
-  const hostKey = useConnectHostStore((s) => homeHostKey(s.activeHost))
+/** Which server's view memory a room reads and writes: the ROOM's server.
+ *  The primary room follows the window's server (`windowHostKey`, so a
+ *  server switch re-reads); a room pinned from Home uses its own server's
+ *  host key. Agent A on server X therefore shares one entry whether it was
+ *  opened from the server switcher or from Home. */
+export function sessionViewHostKey(
+  scope: Pick<ServerScope, 'isPrimary' | 'hostKey'>,
+  windowHostKey: string,
+): string {
+  return scope.isPrimary ? windowHostKey : scope.hostKey
+}
+
+/** Remembered view for this client + the room's server + named conversation,
+ *  including both split sides. `scope` is the room's scope (`useRoom().scope`). */
+export function useSessionViewTab(
+  sessionKey: string | null,
+  scope: Pick<ServerScope, 'isPrimary' | 'hostKey'>,
+): SessionViewChoice {
+  // Subscribed so the primary room re-reads after a server switch (Home M1).
+  const windowHostKey = useConnectHostStore((s) => homeHostKey(s.activeHost))
+  const hostKey = sessionViewHostKey(scope, windowHostKey)
   const storageKey = sessionKey ? sessionViewTabStorageKey(hostKey, sessionKey) : null
   const splitKey = sessionKey ? sessionViewSplitStorageKey(hostKey, sessionKey) : null
   const [viewTab, setViewTabState] = useState<SessionViewTab>(() =>

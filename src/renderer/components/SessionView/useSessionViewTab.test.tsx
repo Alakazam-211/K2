@@ -10,6 +10,8 @@ vi.mock('@/stores/connect-host', () => ({
 
 import { useSessionViewTab } from './useSessionViewTab'
 
+const PRIMARY = { isPrimary: true, hostKey: 'local' }
+
 describe('useSessionViewTab', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -17,7 +19,7 @@ describe('useSessionViewTab', () => {
 
   it('remembers the view and both split sides per session', () => {
     localStorage.setItem('local|k2:session-view-tab:conv-2', 'split')
-    const first = renderHook(() => useSessionViewTab('conv-2'))
+    const first = renderHook(() => useSessionViewTab('conv-2', PRIMARY))
     expect(first.result.current.viewTab).toBe('split')
     expect(first.result.current.splitLeft).toBe('terminal')
     expect(first.result.current.splitRight).toBe('thread')
@@ -35,10 +37,10 @@ describe('useSessionViewTab', () => {
     expect(first.result.current.splitRight).toBe('chat')
 
     first.unmount()
-    const again = renderHook(() => useSessionViewTab('conv-2'))
+    const again = renderHook(() => useSessionViewTab('conv-2', PRIMARY))
     expect(again.result.current.viewTab).toBe('split')
     expect(again.result.current.splitLeft).toBe('chat')
     expect(again.result.current.splitRight).toBe('chat')
-    expect(renderHook(() => useSessionViewTab('conv-other')).result.current.viewTab).toBe('terminal')
+    expect(renderHook(() => useSessionViewTab('conv-other', PRIMARY)).result.current.viewTab).toBe('terminal')
   })
 })

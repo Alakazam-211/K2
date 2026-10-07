@@ -95,11 +95,13 @@ import { resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { composeAttachPayload } from '@/lib/compose-attach'
 import {
   OVERLAY_PAGE_SIZE,
+  isTurnLive,
   isVoidedHitl,
   postThreadCompose,
   threadItemsFromSnapshot,
   type OverlayDoc,
   type OverlayThreadItem,
+  type ThreadTurn,
 } from '@/components/SessionView/overlayThread'
 import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
 import { exitZen } from './zen-view'
@@ -182,6 +184,14 @@ export interface ZenAgentRow {
 
 export type ZenConversationPhase = 'opening' | 'ready' | 'unavailable' | 'failed'
 
+/** The agent's live Thread turn (prd-daemon-activity-and-thread-working-v1
+ *  TW14, Q13): the daemon's state for the message it is working on. */
+export interface ZenThreadTurn {
+  state: 'working' | 'monitoring' | 'needs-you' | 'unverifiable'
+  /** When the user's message was sent, on this computer's clock (ms). */
+  since: number
+}
+
 /** The live Thread a conversation shows (`thread.subscribe`). */
 export interface ZenThreadView {
   address: string
@@ -194,6 +204,10 @@ export interface ZenThreadView {
   hasMore: boolean
   loadingOlder: boolean
   error: string | null
+  /** The live Thread turn, or null when none runs. Absent when the server
+   *  doesn't report Thread turns (no `daemon-activity`): read the row's
+   *  `working` instead (TW14). */
+  turn?: ZenThreadTurn | null
 }
 
 /** `thread.post` options: files on this computer, or browser files. */
@@ -233,6 +247,17 @@ export interface ZenFeedView {
   hasMore: boolean
   loadingOlder: boolean
   error: string | null
+  /** `useOverlayThread`'s turn, and whether the server reports turns. */
+  turn?: ThreadTurn | null
+  turnsReported?: boolean
+}
+
+/** A widget's view of the feed's turn (TW14): live turns only. */
+export function zenTurn(f: ZenFeedView | undefined): ZenThreadTurn | null | undefined {
+  if (!f?.turnsReported) return undefined
+  const t = f.turn
+  if (!isTurnLive(t) || t.state === 'stopped' || t.state === 'idle') return null
+  return { state: t.state, since: t.startedAt - t.skewMs }
 }
 
 export interface ZenFeedHandlers {
@@ -1164,6 +1189,7 @@ function threadView(address: string): ZenThreadView {
     hasMore: f?.hasMore ?? false,
     loadingOlder: f?.loadingOlder ?? false,
     error: f?.error ?? null,
+    turn: zenTurn(f),
   }
 }
 

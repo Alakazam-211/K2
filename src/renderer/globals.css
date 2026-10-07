@@ -1107,6 +1107,43 @@ a,
   animation: braille-spin 0.8s steps(1) infinite;
 }
 
+/* ── Thread working strip (prd-daemon-activity-and-thread-working-v1 S7) ── */
+
+@keyframes thread-strip-pulse {
+  50% { opacity: 0.35; }
+}
+
+@keyframes thread-strip-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.thread-strip-pulse {
+  animation: thread-strip-pulse 1.4s ease-in-out infinite;
+}
+
+/* "Thinking… 8s": the text is a timer, so it shimmers instead of spinning. */
+.thread-strip-shimmer {
+  background: linear-gradient(90deg, var(--color-text-secondary) 0%, var(--color-text-primary) 45%, var(--color-text-secondary) 90%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thread-strip-shimmer 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-strip-pulse,
+  .thread-strip .braille-spinner::after {
+    animation: none;
+  }
+  .thread-strip-shimmer {
+    animation: none;
+    background: none;
+    color: var(--color-text-primary);
+  }
+}
+
 /* ── Diff view ─────────────────────────────────────────────────────────── */
 
 .diff-line-add {

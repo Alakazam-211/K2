@@ -19,6 +19,7 @@ export function ThreadOverlayColumn({
   composeBar,
   split,
   agentName,
+  onStop,
 }: {
   addr: string
   conversationId: string | null
@@ -27,6 +28,8 @@ export function ThreadOverlayColumn({
   split?: boolean
   /** Shown in the empty state ("Send a message to <name>…"). */
   agentName?: string
+  /** The working strip's Stop: Esc to this session's PTY. */
+  onStop?: () => void
 }): React.JSX.Element {
   const composeRef = useRef<HTMLDivElement>(null)
   const [bottom, setBottom] = useState(0)
@@ -69,6 +72,7 @@ export function ThreadOverlayColumn({
             conversationId={conversationId}
             active={active}
             agentName={agentName}
+            onStop={onStop}
           />
         </SelectableRegion>
       </div>

@@ -6,6 +6,7 @@ import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import { useRoom } from '@/components/Room/RoomContext'
+import { ThreadWorkingStrip } from './ThreadWorkingStrip'
 import {
   isVoidedHitl,
   type OverlayDoc,
@@ -19,6 +20,8 @@ interface ThreadOverlayPaneProps {
   active?: boolean
   /** Agent display name for the empty state. Falls back to "the agent". */
   agentName?: string
+  /** The working strip's Stop (Esc to the agent's PTY). Absent: no Stop. */
+  onStop?: () => void
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
@@ -27,8 +30,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   conversationId,
   active = true,
   agentName,
+  onStop,
 }: ThreadOverlayPaneProps): JSX.Element {
-  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded } = useOverlayThread({
+  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: useRoom().scope,
     addr,
@@ -51,6 +55,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // Do not latch the initial pin against a 0-height list; hidden/layout
   // scrollTop===0 is not load-older and does not leave the bottom.
   const listRef = useRef<HTMLDivElement>(null)
+  /** The messages + the working strip: a strip that grows or goes keeps a
+   *  pinned list at the bottom (prd-daemon-activity-and-thread-working-v1 S7). */
+  const contentRef = useRef<HTMLDivElement>(null)
   const didInitialScroll = useRef(false)
   const prevHeightRef = useRef<number | null>(null)
   const pinBottomRef = useRef(true)
@@ -100,7 +107,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     const el = listRef.current
     if (!el) return
     syncListScrollRef.current(el)
-  }, [items, isTabVisible])
+  }, [items, turn, isTabVisible])
 
   useEffect(() => {
     if (!isTabVisible) return
@@ -125,6 +132,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     })
     ro.observe(list)
     if (pane) ro.observe(pane)
+    if (contentRef.current) ro.observe(contentRef.current)
     return () => ro.disconnect()
   }, [])
 
@@ -201,7 +209,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             </div>
           </div>
         )}
-        <div className="flex flex-col gap-2.5">
+        <div ref={contentRef} className="flex flex-col gap-2.5">
           {visible.map((it) => (
             <ThreadItemRow
               key={it.id}
@@ -212,6 +220,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
               onVoid={() => void voidCard(it.id)}
             />
           ))}
+          {/* TW12: live only, under the last message; never stored (TW13). */}
+          {turn && <ThreadWorkingStrip key={turn.turnId} turn={turn} onStop={onStop} />}
         </div>
       </div>
     </div>

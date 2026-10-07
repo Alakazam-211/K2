@@ -9,7 +9,7 @@ import {
   ThreadOverlayPane,
 } from './ThreadOverlayPane'
 import { overlayViewer } from './sessionViewTab'
-import type { OverlayThreadItem } from './overlayThread'
+import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 
@@ -28,6 +28,8 @@ const threadHook = vi.hoisted(() => ({
   loadingOlder: false,
   loaded: true,
   loadOlder: async () => {},
+  turn: null as ThreadTurn | null,
+  turnsReported: true,
 }))
 
 vi.mock('./useOverlayThread', () => ({
@@ -599,5 +601,265 @@ describe('Thread overlay list scroll restore', () => {
     stubListBox(list, box)
     fireEvent.scroll(list)
     expect(loadOlder).not.toHaveBeenCalled()
+  })
+})
+
+// prd-daemon-activity-and-thread-working-v1 S7 (T-S7a, T-S7b): the working
+// strip under the last message, drawn from the hook's `turn`.
+describe('Thread working strip (S7)', () => {
+  /** This client's clock; the server's runs 2 s ahead of it. */
+  const CLIENT_NOW = 1_000_070_000
+  const SERVER_NOW = CLIENT_NOW + 2_000
+  const STARTED = SERVER_NOW - 72_000
+
+  /** A turn as one §7.6 frame received at CLIENT_NOW makes it. */
+  function turnOf(over: Record<string, unknown> = {}): ThreadTurn {
+    const t = coerceThreadTurn(
+      {
+        turnId: 'turn-1',
+        state: 'working',
+        phase: 'tool',
+        phaseSince: SERVER_NOW - 12_000,
+        line: 'Running `cargo test`',
+        startedAt: STARTED,
+        since: STARTED,
+        subagents: 2,
+        subagentsDone: 1,
+        background: 1,
+        tally: { read: 3, search: 0, cmd: 2, edit: 0 },
+        end: null,
+        serverNow: SERVER_NOW,
+        rev: 3,
+        ...over,
+      },
+      CLIENT_NOW,
+    )
+    if (!t) throw new Error('fixture is not a turn')
+    return t
+  }
+
+  // The pane is memoized and the mocked hook is one mutable object: a fresh
+  // prop per render stands in for the hook's state change.
+  let renders = 0
+  function pane(props: { onStop?: () => void } = {}) {
+    renders += 1
+    return createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c', agentName: `k2-${renders}`, ...props })
+  }
+
+  const strip = () => screen.queryByTestId('thread-working-strip')
+  const text = (id: string) => {
+    const el = screen.getByTestId(id)
+    return (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: CLIENT_NOW })
+    threadHook.items = [textItem('t1', 1)]
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    threadHook.items = []
+    threadHook.turn = null
+    threadHook.turnsReported = true
+  })
+
+  it('T-S7a: a tool frame reads state, time since your message on the server clock, the line, the tally', () => {
+    threadHook.turn = turnOf()
+    renderInRoom(overlayRoom, pane())
+    expect(strip()?.getAttribute('data-tone')).toBe('working')
+    expect(text('thread-strip-state')).toBe('Working')
+    // 72 s on the server's clock; this client's own clock would say 70 s.
+    expect(text('thread-strip-since')).toBe('· 1m 12s since your message')
+    expect(text('thread-strip-step-text')).toBe('Running cargo test')
+    expect(screen.getByTestId('thread-strip-step-text').querySelector('code')?.textContent).toBe('cargo test')
+    expect(text('thread-strip-step')).toContain('12s')
+    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands · 2 subagents working, 1 done · 1 background task')
+    // The strip sits under the last message.
+    const content = screen.getByTestId('thread-item').parentElement
+    expect(content?.lastElementChild).toBe(strip())
+  })
+
+  it('T-S7a: the clock counts on locally at 1 Hz without a new frame', () => {
+    threadHook.turn = turnOf()
+    renderInRoom(overlayRoom, pane())
+    act(() => {
+      vi.advanceTimersByTime(8_000)
+    })
+    expect(text('thread-strip-since')).toBe('· 1m 20s since your message')
+    expect(text('thread-strip-step')).toContain('20s')
+  })
+
+  it('T-S7a: thinking reads "Thinking… 8s" and shimmers', () => {
+    threadHook.turn = turnOf({ phase: 'thinking', line: null, phaseSince: SERVER_NOW - 8_000 })
+    renderInRoom(overlayRoom, pane())
+    expect(text('thread-strip-step-text')).toBe('Thinking… 8s')
+    expect(screen.getByTestId('thread-strip-step-text').className).toContain('thread-strip-shimmer')
+  })
+
+  it('T-S7a: delivering and plain working read their own lines', () => {
+    threadHook.turn = turnOf({ phase: 'delivering', line: null, subagents: 0, subagentsDone: 0, background: 0, tally: {} })
+    const view = renderInRoom(overlayRoom, pane())
+    expect(text('thread-strip-step-text')).toBe('Delivering…')
+    expect(screen.queryByTestId('thread-strip-tally')).toBeNull()
+    threadHook.turn = turnOf({ phase: 'working', line: null, rev: 4 })
+    view.rerender(pane())
+    expect(text('thread-strip-step-text')).toBe('Working…')
+  })
+
+  it('T-S7a: an end removes the strip (no stored row, no trace; Q8)', () => {
+    threadHook.turn = turnOf()
+    const view = renderInRoom(overlayRoom, pane())
+    expect(strip()).not.toBeNull()
+    for (const reason of ['reply', 'done', 'session_gone', 'superseded']) {
+      threadHook.turn = turnOf({ state: reason === 'reply' || reason === 'done' ? 'idle' : 'stopped', rev: 9, end: { reason, detail: null, at: SERVER_NOW } })
+      view.rerender(pane())
+      expect(strip(), reason).toBeNull()
+    }
+    // The message keeps its own row; nothing was added.
+    expect(screen.getAllByTestId('thread-item')).toHaveLength(1)
+  })
+
+  it('an interrupt reads "Stopped" (muted) for a moment, then goes', () => {
+    threadHook.turn = turnOf({ state: 'stopped', rev: 9, end: { reason: 'interrupted', detail: null, at: SERVER_NOW } })
+    renderInRoom(overlayRoom, pane({ onStop: () => {} }))
+    expect(strip()?.getAttribute('data-tone')).toBe('stopped')
+    expect(text('thread-strip-state')).toBe('Stopped')
+    expect(text('thread-strip-since')).toBe('· you stopped it after 1m 12s')
+    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+    expect(screen.queryByTestId('thread-strip-tally')).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(3_100)
+    })
+    expect(strip()).toBeNull()
+  })
+
+  it('needs-you is amber with no Stop; monitoring is blue', () => {
+    threadHook.turn = turnOf({ state: 'needs-you', phase: 'waiting', line: null })
+    const view = renderInRoom(overlayRoom, pane({ onStop: () => {} }))
+    expect(strip()?.getAttribute('data-tone')).toBe('needs-you')
+    expect(strip()?.className).toContain('--color-status-warn-amber')
+    expect(text('thread-strip-state')).toBe('Needs you')
+    expect(text('thread-strip-step-text')).toBe('Waiting for you')
+    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+
+    threadHook.turn = turnOf({ state: 'monitoring', rev: 5 })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(strip()?.getAttribute('data-tone')).toBe('monitoring')
+    expect(strip()?.className).toContain('--color-accent')
+    expect(screen.getByTestId('thread-strip-stop')).not.toBeNull()
+  })
+
+  it('"No update in Nm" uses a dashed rule and no step line', () => {
+    // A24: phase `stale` starts at the row's staleSince (30 min after the
+    // last evidence); 4 more minutes have passed since.
+    threadHook.turn = turnOf({ state: 'unverifiable', phase: 'stale', line: null, phaseSince: SERVER_NOW - 4 * 60_000 })
+    renderInRoom(overlayRoom, pane())
+    expect(strip()?.getAttribute('data-tone')).toBe('unverifiable')
+    expect(strip()?.className).toContain('border-dashed')
+    expect(text('thread-strip-state')).toBe('No update in 34m')
+    expect(text('thread-strip-since')).toBe('· the session is still open')
+    expect(screen.queryByTestId('thread-strip-step')).toBeNull()
+  })
+
+  it('Stop sends the pane\'s Esc; without a way to type there is no Stop', () => {
+    threadHook.turn = turnOf()
+    const onStop = vi.fn()
+    const view = renderInRoom(overlayRoom, pane({ onStop }))
+    fireEvent.click(screen.getByTestId('thread-strip-stop'))
+    expect(onStop).toHaveBeenCalledTimes(1)
+    view.rerender(pane())
+    expect(strip()).not.toBeNull()
+    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+  })
+
+  it('T-S7b: no turn (an older server reports none) draws no strip', () => {
+    threadHook.turn = null
+    threadHook.turnsReported = false
+    renderInRoom(overlayRoom, pane())
+    expect(screen.getAllByTestId('thread-item')).toHaveLength(1)
+    expect(strip()).toBeNull()
+  })
+})
+
+describe('Thread working strip keeps the scroll pin (S7)', () => {
+  beforeEach(() => {
+    FakeResizeObserver.instances = []
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    threadHook.items = [textItem('t1', 1), textItem('t2', 2)]
+  })
+
+  afterEach(() => {
+    cleanup()
+    threadHook.items = []
+    threadHook.turn = null
+    vi.unstubAllGlobals()
+  })
+
+  const turnAt = (rev: number, over: Record<string, unknown> = {}): ThreadTurn => {
+    const now = Date.now()
+    const t = coerceThreadTurn(
+      { turnId: 'turn-1', state: 'working', phase: 'delivering', phaseSince: now, line: null, startedAt: now, subagents: 0, background: 0, tally: {}, end: null, serverNow: now, rev, ...over },
+      now,
+    )
+    if (!t) throw new Error('fixture is not a turn')
+    return t
+  }
+
+  function rerenderPane(view: ReturnType<typeof renderOverlay>): void {
+    view.rerender(
+      createElement(
+        TabVisibilityContext.Provider,
+        { value: true },
+        // A fresh prop: the pane is memoized over a mutable hook mock.
+        createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c', agentName: `k2-${Date.now()}-${Math.random()}` }),
+      ),
+    )
+  }
+
+  it('a pinned list stays at the bottom as the strip appears and grows', () => {
+    const view = renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+
+    // The strip shows up under the last message (a render, no new item).
+    threadHook.turn = turnAt(1)
+    box.scrollHeight = 850
+    rerenderPane(view)
+    expect(screen.getByTestId('thread-working-strip')).not.toBeNull()
+    expect(box.scrollTop).toBe(850)
+
+    // It grows a tally line on a later frame.
+    threadHook.turn = turnAt(2, { phase: 'tool', line: 'Reading `a.rs`', tally: { read: 1 } })
+    box.scrollHeight = 870
+    rerenderPane(view)
+    expect(box.scrollTop).toBe(870)
+
+    // A height change the renders don't see (the strip's own 1 Hz text, a
+    // wrap) re-pins through the content's ResizeObserver.
+    const content = screen.getByTestId('thread-working-strip').parentElement
+    if (!content) throw new Error('no content wrapper')
+    box.scrollHeight = 900
+    act(() => observerOf(content).fire())
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('a list the user scrolled up stays put when the strip changes', () => {
+    const view = renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    box.scrollTop = 120
+    fireEvent.scroll(list)
+
+    threadHook.turn = turnAt(1)
+    box.scrollHeight = 850
+    rerenderPane(view)
+    expect(box.scrollTop).toBe(120)
   })
 })

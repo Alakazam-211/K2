@@ -5312,6 +5312,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       />
     )
   }
+  // The Thread working strip's Stop (prd-daemon-activity-and-thread-working-
+  // v1 S7): the same Esc the Thread compose bar sends, into this PTY. A
+  // view-only room never types, so it gets no Stop.
+  const stopThreadTurn = readOnlyRoom ? undefined : (): void => sendInput('\x1b')
   const grid = (
     <div
       ref={containerRef}
@@ -5698,6 +5702,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               active
               composeBar={composeThread()}
               agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
+              onStop={stopThreadTurn}
             />
           )
         }
@@ -5737,6 +5742,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               active={showThreadOverlay}
               composeBar={composeThread()}
               agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
+              onStop={stopThreadTurn}
             />
           )}
           {sessionChrome && showChat && (

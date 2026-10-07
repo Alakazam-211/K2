@@ -21,12 +21,21 @@
 //      re-sync too (a socket can sit half-open after sleep).
 //   5. If the address now resolves to another conversation (the pinned
 //      Chat changed), the hook starts over on the new one.
+//   6. The working strip (prd-daemon-activity-and-thread-working-v1 S7,
+//      TW11): `activity` frames on the same socket feed `turn`, never
+//      `items`. They are ephemeral (`since_seq` never replays them), so
+//      every socket (re)open and every re-sync also reads the live turn,
+//      `GET /cli/thread/activity?addr=` (TW9). A server without the
+//      `daemon-activity` reported feature has no such route and sends no
+//      such frames: `turn` stays null and nothing is asked (Q5).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { getDaemonWs, daemonWsBase } from '@/kessel/daemon-ws'
 import { jittered } from '@/lib/backoff'
 import {
+  applyActivityCatchUp,
+  applyActivityFrame,
   applyOverlayFrame,
   mergeOlderOverlayItems,
   mergeThreadItems,
@@ -37,6 +46,7 @@ import {
   threadWindowFloor,
   type OverlayThreadItem,
   type OverlayWsFrame,
+  type ThreadTurn,
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
@@ -83,6 +93,11 @@ export function useOverlayThread(opts: {
   loadingOlder: boolean
   /** True once the first snapshot for this addr has landed (or failed). */
   loaded: boolean
+  /** The agent's Thread turn, live or just ended (TW11); null when none. */
+  turn: ThreadTurn | null
+  /** The server reports Thread turns (`daemon-activity`). False: `turn` is
+   *  always null, and a surface falls back to the row's activity (TW14). */
+  turnsReported: boolean
 } {
   const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
@@ -92,6 +107,7 @@ export function useOverlayThread(opts: {
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [turn, setTurn] = useState<ThreadTurn | null>(null)
   /** Bumped when the address moved to another conversation: start over. */
   const [epoch, setEpoch] = useState(0)
   const itemsRef = useRef(items)
@@ -110,9 +126,11 @@ export function useOverlayThread(opts: {
       setHasMore(false)
       setLoadingOlder(false)
       setLoaded(false)
+      setTurn(null)
       return
     }
     setLoaded(false)
+    setTurn(null)
     let cancelled = false
     let ws: WebSocket | null = null
     let connecting = false
@@ -121,6 +139,8 @@ export function useOverlayThread(opts: {
     let backoffMs = reconnectBaseMs
     let lastResyncAt = 0
     let catchUpChain: Promise<void> = Promise.resolve()
+    /** `activity` frames received; a catch-up answer older than one is dropped. */
+    let activityFrames = 0
 
     /** `GET thread?since_seq=` merged by id. Serialized; never throws. */
     function catchUp(since: number): Promise<void> {
@@ -143,6 +163,23 @@ export function useOverlayThread(opts: {
         }
       })
       return catchUpChain
+    }
+
+    /** TW9: the live turn, `GET thread/activity?addr=`. Only on a server
+     *  that reports `daemon-activity` (asked each time: the features of a
+     *  remote server can land after the first open). Never throws. */
+    async function catchUpTurn(): Promise<void> {
+      if (cancelled || !scope.serverSupports('daemon-activity')) return
+      const framesBefore = activityFrames
+      try {
+        const raw = await daemonCliGet<unknown>(scope, 'thread/activity', { addr })
+        // A frame that arrived meanwhile is newer than this answer.
+        if (cancelled || activityFrames !== framesBefore) return
+        setTurn((prev) => applyActivityCatchUp(prev, raw, Date.now()))
+      } catch (e) {
+        // The next socket open or re-sync asks again.
+        console.warn('[thread] activity catch-up failed:', e)
+      }
     }
 
     function scheduleReconnect(): void {
@@ -179,6 +216,12 @@ export function useOverlayThread(opts: {
           } catch {
             return
           }
+          if (frame.collection === 'activity') {
+            activityFrames += 1
+            const receivedAt = Date.now()
+            setTurn((prev) => applyActivityFrame(prev, frame, receivedAt))
+            return
+          }
           setItems((prev) => applyOverlayFrame(prev, frame, threadWindowFloor(prev, hasMoreRef.current)))
         }
         const lost = (): void => {
@@ -197,6 +240,7 @@ export function useOverlayThread(opts: {
           backoffMs = reconnectBaseMs
           lastResyncAt = Date.now()
           void catchUp(sinceOnOpen())
+          void catchUpTurn()
         }
         if (sock.readyState === 1) opened()
         else sock.onopen = opened
@@ -228,6 +272,7 @@ export function useOverlayThread(opts: {
       if (now - lastResyncAt < RESYNC_MIN_GAP_MS) return
       lastResyncAt = now
       void catchUp(resyncSince(itemsRef.current))
+      void catchUpTurn()
     }
     const onVisibility = (): void => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') wake()
@@ -442,5 +487,7 @@ export function useOverlayThread(opts: {
     loadOlder,
     loadingOlder,
     loaded,
+    turn,
+    turnsReported: scope.serverSupports('daemon-activity'),
   }
 }

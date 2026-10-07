@@ -167,6 +167,10 @@ export function ZenConversation({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const items = view?.items ?? []
   const ready = view?.phase === 'ready'
+  // TW14: the dots follow the Thread turn when the server reports turns,
+  // else the row's rollup (an older server).
+  const typing =
+    view?.turn !== undefined ? view.turn !== null && (view.turn.state === 'working' || view.turn.state === 'monitoring') : row.working
 
   const answer = useCallback(
     (id: string, payload: { answer?: string; secret?: string }) => {
@@ -199,7 +203,7 @@ export function ZenConversation({
   }, [bridge, row.address, view, items, options.loadOlder])
 
   const stick = useStickToBottom<HTMLDivElement>({
-    deps: [items, row.working, ready, view?.note, view?.hasMore, view?.error],
+    deps: [items, typing, ready, view?.note, view?.hasMore, view?.error],
     extraTargets: () => [rootRef.current?.querySelector('[data-zen-compose]')],
     onNearTop: loadOlder,
   })
@@ -355,7 +359,7 @@ export function ZenConversation({
               onVoid={() => dismiss(it.id)}
             />
           ))}
-        {ready && row.working && <TypingIndicator />}
+        {ready && typing && <TypingIndicator />}
       </div>
 
       {options.compose && (

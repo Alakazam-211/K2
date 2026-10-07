@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyActivityCatchUp,
+  applyActivityFrame,
   applyChatterFrame,
   applyOverlayFrame,
+  coerceThreadTurn,
+  isTurnLive,
   chatterItemsFromSnapshot,
   ingestOverlayThreadItem,
   isChatterSurfaceItem,
@@ -413,5 +417,96 @@ describe('Thread sync: merge by id (every source, no duplicates)', () => {
       'p26',
       'p27',
     ])
+  })
+})
+
+// prd-daemon-activity-and-thread-working-v1 S7 (TW11): `activity` frames feed
+// the Thread turn, never the items list.
+describe('Thread turn: activity frames (S7)', () => {
+  /** A §7.6 body as thread_activity.rs sends it. */
+  function activity(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      turnId: 'turn-1',
+      state: 'working',
+      phase: 'tool',
+      phaseSince: 1_000_060_000,
+      line: 'Running `cargo test`',
+      startedAt: 1_000_000_000,
+      since: 1_000_000_000,
+      subagents: 2,
+      subagentsDone: 1,
+      background: 0,
+      tally: { read: 3, search: 0, cmd: 2, edit: 0 },
+      end: null,
+      serverNow: 1_000_072_000,
+      rev: 4,
+      ...over,
+    }
+  }
+  const frameOf = (a: Record<string, unknown>) => ({ collection: 'activity', seq: 0, id: String(a.turnId), activity: a })
+
+  it('T-S7c: applyOverlayFrame ignores an activity frame (items unchanged, same array)', () => {
+    const items: OverlayThreadItem[] = [{ collection: 'thread', seq: 1, id: 'a', doc: textDoc }]
+    expect(applyOverlayFrame(items, frameOf(activity()), 0)).toBe(items)
+    expect(applyOverlayFrame([], frameOf(activity()), 0)).toEqual([])
+    // Even one that (wrongly) carried a doc stays out of the list.
+    expect(applyOverlayFrame(items, { ...frameOf(activity()), doc: textDoc }, 0)).toBe(items)
+  })
+
+  it('applyActivityFrame reads the §7.6 body and the serverNow skew', () => {
+    const t = applyActivityFrame(null, frameOf(activity()), 1_000_070_000)
+    expect(t).not.toBeNull()
+    expect(t).toMatchObject({
+      turnId: 'turn-1',
+      state: 'working',
+      phase: 'tool',
+      line: 'Running `cargo test`',
+      subagents: 2,
+      subagentsDone: 1,
+      tally: { read: 3, search: 0, cmd: 2, edit: 0 },
+      end: null,
+      rev: 4,
+      skewMs: 2_000,
+    })
+    expect(isTurnLive(t)).toBe(true)
+  })
+
+  it('a thread frame leaves the turn as it is', () => {
+    const t = applyActivityFrame(null, frameOf(activity()), 1_000_070_000)
+    expect(applyActivityFrame(t, { collection: 'thread', seq: 2, id: 'x', doc: textDoc }, 1)).toBe(t)
+  })
+
+  it('the same turn moves only forward by rev; another turn replaces it', () => {
+    const t4 = applyActivityFrame(null, frameOf(activity()), 0)
+    const t3 = applyActivityFrame(t4, frameOf(activity({ rev: 3, phase: 'thinking', line: null })), 0)
+    expect(t3).toBe(t4)
+    const t5 = applyActivityFrame(t4, frameOf(activity({ rev: 5, phase: 'thinking', line: null })), 0)
+    expect(t5?.phase).toBe('thinking')
+    const other = applyActivityFrame(t5, frameOf(activity({ turnId: 'turn-2', rev: 1, phase: 'delivering' })), 0)
+    expect(other?.turnId).toBe('turn-2')
+  })
+
+  it('an end frame ends the turn; a later rev of the same turn (Q7 resume) brings it back', () => {
+    const live = applyActivityFrame(null, frameOf(activity()), 0)
+    const ended = applyActivityFrame(live, frameOf(activity({ rev: 5, state: 'idle', end: { reason: 'reply', detail: null, at: 1_000_080_000 } })), 0)
+    expect(isTurnLive(ended)).toBe(false)
+    expect(ended?.end).toEqual({ reason: 'reply', detail: null, at: 1_000_080_000 })
+    const resumed = applyActivityFrame(ended, frameOf(activity({ rev: 6 })), 0)
+    expect(isTurnLive(resumed)).toBe(true)
+  })
+
+  it('a malformed body changes nothing', () => {
+    const t = applyActivityFrame(null, frameOf(activity()), 0)
+    expect(applyActivityFrame(t, { collection: 'activity', id: 'x', activity: { turnId: 'x' } }, 0)).toBe(t)
+    expect(applyActivityFrame(t, { collection: 'activity', id: 'x' }, 0)).toBe(t)
+    expect(coerceThreadTurn(activity({ state: 'bogus' }), 0)).toBeNull()
+  })
+
+  it('catch-up: {turn: null} clears, a body applies, a body without turn changes nothing', () => {
+    const t = applyActivityFrame(null, frameOf(activity()), 0)
+    expect(applyActivityCatchUp(t, { ok: true, turn: null }, 0)).toBeNull()
+    expect(applyActivityCatchUp(null, { ok: true, turn: activity({ rev: 9 }) }, 1_000_072_000)?.rev).toBe(9)
+    expect(applyActivityCatchUp(t, { ok: true }, 0)).toBe(t)
+    expect(applyActivityCatchUp(t, null, 0)).toBe(t)
   })
 })

@@ -19,7 +19,8 @@ import { act } from 'react'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
-import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { coerceThreadTurn, type OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { zenTurn } from '@/lib/zen/zen-data'
 import { ZenConversation } from './ZenConversationWidget'
 import { __resetZenDraftsForTests } from './ZenCompose'
 
@@ -430,5 +431,45 @@ describe('Zen conversation: stick to the bottom', () => {
     // Ten messages and the "Earlier messages" button: the same message is
     // at the top of the box as before.
     expect(lay().top).toBe(10 * MESSAGE - OLDER_BUTTON)
+  })
+})
+
+// prd-daemon-activity-and-thread-working-v1 TW14 (Q13): the typing dots follow
+// the Thread turn when the server reports turns, else the row's rollup.
+describe('Zen conversation: typing dots follow the Thread turn', () => {
+  const dots = (): Element | null => document.querySelector('[data-zen-typing]')
+
+  it('a live turn shows the dots even when the row reads idle', () => {
+    mount(false, many(3), { turn: { state: 'working', since: 1 } })
+    expect(dots()).not.toBeNull()
+  })
+
+  it('no live turn hides the dots even when the row reads working', () => {
+    mount(true, many(3), { turn: null })
+    expect(dots()).toBeNull()
+  })
+
+  it('needs-you shows no dots (the banner speaks for it)', () => {
+    mount(false, many(3), { turn: { state: 'needs-you', since: 1 } })
+    expect(dots()).toBeNull()
+  })
+
+  it('an older server (no turn field) keeps the row rollup', () => {
+    mount(true, many(3))
+    expect(dots()).not.toBeNull()
+  })
+
+  it('zenTurn: live turns only, on this computer\'s clock; undefined when the server reports none', () => {
+    const t = coerceThreadTurn(
+      { turnId: 't', state: 'working', phase: 'tool', startedAt: 10_000, serverNow: 15_000, end: null, rev: 1 },
+      14_000,
+    )
+    if (!t) throw new Error('fixture is not a turn')
+    const feed = { items: [], conversationId: 'c', loaded: true, hasMore: false, loadingOlder: false, error: null }
+    expect(zenTurn({ ...feed, turn: t, turnsReported: true })).toEqual({ state: 'working', since: 9_000 })
+    expect(zenTurn({ ...feed, turn: { ...t, end: { reason: 'reply', detail: null, at: 16_000 } }, turnsReported: true })).toBeNull()
+    expect(zenTurn({ ...feed, turn: null, turnsReported: true })).toBeNull()
+    expect(zenTurn({ ...feed, turn: null, turnsReported: false })).toBeUndefined()
+    expect(zenTurn(undefined)).toBeUndefined()
   })
 })

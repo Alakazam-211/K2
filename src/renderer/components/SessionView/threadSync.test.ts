@@ -52,6 +52,12 @@ const server = {
   seq: 0,
   /** GETs with `since_seq` (catch-ups) the hook made. */
   catchUps: [] as number[],
+  /** The live Thread turn `GET thread/activity` answers (S7, TW9). */
+  turn: null as Record<string, unknown> | null,
+  /** `GET thread/activity` calls, by addr. */
+  turnAsks: [] as string[],
+  /** When set, `GET thread/activity` waits for it (a slow answer). */
+  turnGate: null as Promise<void> | null,
 }
 
 function write(id: string, from: string, body: string, via = 'thread'): Row {
@@ -82,6 +88,10 @@ class FakeSocket {
   frame(row: Row): void {
     this.onmessage?.({ data: JSON.stringify({ collection: row.collection, seq: row.seq, id: row.id, doc: row.doc }) })
   }
+  /** The daemon pushes an ephemeral activity frame (§7.6). */
+  activity(body: Record<string, unknown>): void {
+    this.onmessage?.({ data: JSON.stringify({ collection: 'activity', seq: 0, id: body.turnId, activity: body }) })
+  }
   /** The connection drops (daemon restart, network flap, edge idle cut). */
   drop(): void {
     this.readyState = 3
@@ -111,10 +121,19 @@ beforeEach(() => {
   server.rows = []
   server.seq = 0
   server.catchUps = []
+  server.turn = null
+  server.turnAsks = []
+  server.turnGate = null
   FakeSocket.all = []
   resetGridDialQueueForTests()
   vi.stubGlobal('WebSocket', FakeSocket)
   daemonCliGet.mockImplementation(async (route: string, p: Record<string, unknown>) => {
+    if (route === 'thread/activity') {
+      server.turnAsks.push(String(p.addr))
+      const answer = server.turn
+      if (server.turnGate) await server.turnGate
+      return { ok: true, addr: p.addr, conversation_id: server.conv, turn: answer }
+    }
     if (route !== 'thread') throw new Error(`unexpected GET ${route}`)
     if (p.since_seq !== undefined) {
       const since = Number(p.since_seq)
@@ -310,5 +329,103 @@ describe('Thread sync: every view converges on the daemon’s Thread', () => {
       })
     })
     expect(ids(view.result.current.items)).toEqual(['a1'])
+  })
+})
+
+// prd-daemon-activity-and-thread-working-v1 S7 (TW9, TW11, T-S7b, T-S7c):
+// the working strip's turn rides the same socket and never touches items.
+describe('Thread sync: the working strip turn (S7)', () => {
+  function body(over: Record<string, unknown> = {}): Record<string, unknown> {
+    const now = Date.now()
+    return {
+      turnId: 'turn-1',
+      state: 'working',
+      phase: 'tool',
+      phaseSince: now - 5_000,
+      line: 'Running `cargo test`',
+      startedAt: now - 60_000,
+      subagents: 0,
+      subagentsDone: 0,
+      background: 0,
+      tally: { read: 0, search: 0, cmd: 1, edit: 0 },
+      end: null,
+      serverNow: now,
+      rev: 2,
+      ...over,
+    }
+  }
+
+  it('every socket open reads the live turn (since_seq never replays activity)', async () => {
+    setOverlayReconnectBaseForTests(5)
+    write('a1', 'rosson', 'run the tests', 'compose')
+    server.turn = body()
+    const { view, sock } = await mountLive('conv-1')
+    await waitFor(() => expect(view.result.current.turn?.turnId).toBe('turn-1'))
+    expect(server.turnAsks).toEqual(['sales'])
+    expect(view.result.current.turnsReported).toBe(true)
+
+    // Reconnect mid-turn: the turn moved on while the socket was down.
+    act(() => sock.drop())
+    server.turn = body({ phase: 'thinking', line: null, rev: 5 })
+    await waitFor(() => expect(live().length).toBe(1))
+    act(() => live()[0].open())
+    await waitFor(() => expect(view.result.current.turn?.phase).toBe('thinking'))
+    expect(server.turnAsks).toEqual(['sales', 'sales'])
+  })
+
+  it('activity frames move the turn and never the items (T-S7c); an end ends it', async () => {
+    write('a1', 'rosson', 'run the tests', 'compose')
+    const { view, sock } = await mountLive('conv-1')
+    await waitFor(() => expect(server.turnAsks).toHaveLength(1))
+    const items = view.result.current.items
+    act(() => sock.activity(body({ rev: 1, phase: 'delivering', line: null })))
+    expect(view.result.current.turn?.phase).toBe('delivering')
+    act(() => sock.activity(body({ rev: 2 })))
+    expect(view.result.current.turn?.line).toBe('Running `cargo test`')
+    expect(view.result.current.items).toBe(items)
+
+    const reply = write('a2', 'sales', 'all green')
+    broadcast(reply)
+    act(() => sock.activity(body({ rev: 3, state: 'idle', end: { reason: 'reply', detail: null, at: Date.now() } })))
+    expect(view.result.current.turn?.end?.reason).toBe('reply')
+    expect(ids(view.result.current.items)).toEqual(['a1', 'a2'])
+  })
+
+  it('a catch-up answer older than a frame that arrived meanwhile is dropped', async () => {
+    write('a1', 'rosson', 'run the tests', 'compose')
+    let release!: () => void
+    server.turnGate = new Promise((r) => {
+      release = r
+    })
+    server.turn = null
+    const { view, sock } = await mountLive('conv-1')
+    await waitFor(() => expect(server.turnAsks).toHaveLength(1))
+    // The turn starts while the GET (answered "no turn") is in flight.
+    act(() => sock.activity(body({ rev: 1, phase: 'delivering', line: null })))
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(view.result.current.turn?.phase).toBe('delivering'))
+  })
+
+  it('T-S7b: a server without daemon-activity is never asked, and the turn stays null', async () => {
+    const supports = vi.spyOn(primaryScope(), 'serverSupports').mockImplementation((f) => f !== 'daemon-activity')
+    const warn = vi.spyOn(console, 'warn')
+    const error = vi.spyOn(console, 'error')
+    try {
+      write('a1', 'sales', 'hello')
+      const { view } = await mountLive('conv-1')
+      expect(ids(view.result.current.items)).toEqual(['a1'])
+      expect(server.turnAsks).toEqual([])
+      expect(view.result.current.turn).toBeNull()
+      expect(view.result.current.turnsReported).toBe(false)
+      expect(warn).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      supports.mockRestore()
+      warn.mockRestore()
+      error.mockRestore()
+    }
   })
 })

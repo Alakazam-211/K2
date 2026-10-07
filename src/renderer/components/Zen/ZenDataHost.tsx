@@ -33,14 +33,14 @@ function ZenHomeAvatars({ rows }: { rows: HomeRow[] }): null {
 
 function ZenThreadFeed({ spec }: { spec: ZenFeedSpec }): null {
   const t = useOverlayThread({ scope: spec.scope, addr: spec.threadAddr, conversationId: null, enabled: true })
-  const { items, conversationId, loaded, hasMore, loadingOlder, error, loadOlder, answer, voidCard } = t
+  const { items, conversationId, loaded, hasMore, loadingOlder, error, loadOlder, answer, voidCard, turn, turnsReported } = t
   useEffect(() => {
     publishZenFeed(
       spec.address,
-      { items, conversationId, loaded, hasMore, loadingOlder, error },
+      { items, conversationId, loaded, hasMore, loadingOlder, error, turn, turnsReported },
       { loadOlder, answer, voidCard },
     )
-  }, [spec.address, items, conversationId, loaded, hasMore, loadingOlder, error, loadOlder, answer, voidCard])
+  }, [spec.address, items, conversationId, loaded, hasMore, loadingOlder, error, turn, turnsReported, loadOlder, answer, voidCard])
   useEffect(() => () => clearZenFeed(spec.address), [spec.address])
   return null
 }

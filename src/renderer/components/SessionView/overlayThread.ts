@@ -50,6 +50,8 @@ export interface OverlayWsFrame {
   seq?: number
   id?: string
   doc?: OverlayDoc | null
+  /** `collection: "activity"` only: the Thread turn (§7.6). Never an item. */
+  activity?: unknown
 }
 
 export function isChatterDoc(doc: OverlayDoc | null | undefined): boolean {
@@ -260,6 +262,147 @@ export function applyOverlayFrame(
   return mergeThreadItems(items, [
     { collection: 'thread', seq: Number.isFinite(seq) ? seq : newest + 1, id, doc },
   ])
+}
+
+// ── The Thread turn (prd-daemon-activity-and-thread-working-v1 S7) ─────────
+//
+// While the agent works on a Thread message, the daemon sends ephemeral
+// `collection: "activity"` frames on the same overlay socket (thread_
+// activity.rs, §7.6): never stored, no seq, never replayed by `since_seq`.
+// They feed a separate `turn` (TW11), never `items`: `applyOverlayFrame`
+// keeps its `thread` gate. On every socket (re)open the client reads the
+// live turn from `GET /cli/thread/activity?addr=` (TW9).
+
+/** The frame's coarse state. Live: working | needs-you | unverifiable.
+ *  An end: idle | monitoring (a clean end) or stopped (anything else). */
+export type ThreadTurnState = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'stopped' | 'idle'
+
+/** What the agent is doing inside the turn (TW6; `stale` is A24). */
+export type ThreadTurnPhase = 'delivering' | 'working' | 'tool' | 'thinking' | 'waiting' | 'stale'
+
+export interface ThreadTurnTally {
+  read: number
+  search: number
+  cmd: number
+  edit: number
+}
+
+export interface ThreadTurnEnd {
+  /** reply | done | interrupted | failed | session_gone | delivery_failed | superseded | stale */
+  reason: string
+  detail: string | null
+  /** Server ms. */
+  at: number
+}
+
+export interface ThreadTurn {
+  turnId: string
+  state: ThreadTurnState
+  phase: ThreadTurnPhase
+  /** Server ms: the user's message. */
+  startedAt: number
+  /** Server ms: the current phase. */
+  phaseSince: number
+  /** The redacted tool line (TW8) while `phase` is `tool`, else null. */
+  line: string | null
+  subagents: number
+  subagentsDone: number
+  background: number
+  tally: ThreadTurnTally
+  end: ThreadTurnEnd | null
+  rev: number
+  /** `serverNow − Date.now()` when this frame arrived. Server times read
+   *  on this client's clock as `Date.now() + skewMs`. */
+  skewMs: number
+}
+
+const TURN_STATES: readonly ThreadTurnState[] = ['working', 'monitoring', 'needs-you', 'unverifiable', 'stopped', 'idle']
+const TURN_PHASES: readonly ThreadTurnPhase[] = ['delivering', 'working', 'tool', 'thinking', 'waiting', 'stale']
+
+function finite(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+function count(v: unknown): number {
+  const n = finite(v)
+  return n !== null && n > 0 ? Math.floor(n) : 0
+}
+
+/** One §7.6 activity body, or null when it isn't one. `receivedAt` is this
+ *  client's clock when it arrived (for the `serverNow` skew). */
+export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn | null {
+  if (!raw || typeof raw !== 'object') return null
+  const a = raw as Record<string, unknown>
+  const turnId = typeof a.turnId === 'string' ? a.turnId : ''
+  const startedAt = finite(a.startedAt)
+  const serverNow = finite(a.serverNow)
+  if (!turnId || startedAt === null || serverNow === null) return null
+  const state = TURN_STATES.find((s) => s === a.state)
+  const phase = TURN_PHASES.find((p) => p === a.phase)
+  if (!state || !phase) return null
+  const t = a.tally && typeof a.tally === 'object' ? (a.tally as Record<string, unknown>) : {}
+  let end: ThreadTurnEnd | null = null
+  if (a.end && typeof a.end === 'object') {
+    const e = a.end as Record<string, unknown>
+    end = {
+      reason: typeof e.reason === 'string' ? e.reason : 'done',
+      detail: typeof e.detail === 'string' ? e.detail : null,
+      at: finite(e.at) ?? serverNow,
+    }
+  }
+  return {
+    turnId,
+    state,
+    phase,
+    startedAt,
+    phaseSince: finite(a.phaseSince) ?? startedAt,
+    line: typeof a.line === 'string' && a.line.trim() ? a.line : null,
+    subagents: count(a.subagents),
+    subagentsDone: count(a.subagentsDone),
+    background: count(a.background),
+    tally: { read: count(t.read), search: count(t.search), cmd: count(t.cmd), edit: count(t.edit) },
+    end,
+    rev: finite(a.rev) ?? 0,
+    skewMs: serverNow - receivedAt,
+  }
+}
+
+/** A newer state of the turn wins: another turn replaces it (a new message
+ *  supersedes the old turn), the same turn moves only forward by `rev`. */
+function nextTurn(current: ThreadTurn | null, incoming: ThreadTurn): ThreadTurn {
+  if (current && current.turnId === incoming.turnId && incoming.rev < current.rev) return current
+  return incoming
+}
+
+/** Apply one overlay socket frame to the Thread turn. Anything but an
+ *  `activity` frame leaves it as it is (returns `turn` itself). */
+export function applyActivityFrame(
+  turn: ThreadTurn | null,
+  frame: OverlayWsFrame,
+  receivedAt: number,
+): ThreadTurn | null {
+  if (frame.collection !== 'activity') return turn
+  const incoming = coerceThreadTurn(frame.activity, receivedAt)
+  return incoming ? nextTurn(turn, incoming) : turn
+}
+
+/** Apply the catch-up `GET /cli/thread/activity` body: `{turn: null}` means
+ *  no turn is running; a body without `turn` changes nothing. */
+export function applyActivityCatchUp(
+  turn: ThreadTurn | null,
+  body: unknown,
+  receivedAt: number,
+): ThreadTurn | null {
+  if (!body || typeof body !== 'object' || !('turn' in body)) return turn
+  const raw = (body as { turn: unknown }).turn
+  if (raw === null) return null
+  const incoming = coerceThreadTurn(raw, receivedAt)
+  return incoming ? nextTurn(turn, incoming) : turn
+}
+
+/** The turn is running (not ended). */
+export function isTurnLive(turn: ThreadTurn | null | undefined): turn is ThreadTurn {
+  return !!turn && turn.end === null
 }
 
 /** Chatter tab walks the Chatter collection only. Never mix in Thread. */

@@ -469,6 +469,10 @@ describe('Zen conversation: typing dots follow the Thread turn', () => {
     expect(zenTurn({ ...feed, turn: t, turnsReported: true })).toEqual({ state: 'working', since: 9_000 })
     expect(zenTurn({ ...feed, turn: { ...t, end: { reason: 'reply', detail: null, at: 16_000 } }, turnsReported: true })).toBeNull()
     expect(zenTurn({ ...feed, turn: null, turnsReported: true })).toBeNull()
+    // After a reply, live subagents / background tasks keep the dots.
+    const children = { ...t, phase: 'children' as const, rev: 2 }
+    expect(zenTurn({ ...feed, turn: children, turnsReported: true })).toEqual({ state: 'working', since: 9_000 })
+    expect(zenTurn({ ...feed, turn: { ...children, state: 'monitoring' }, turnsReported: true })).toEqual({ state: 'monitoring', since: 9_000 })
     expect(zenTurn({ ...feed, turn: null, turnsReported: false })).toBeUndefined()
     expect(zenTurn(undefined)).toBeUndefined()
   })

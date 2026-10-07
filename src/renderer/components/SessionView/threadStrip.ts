@@ -16,6 +16,12 @@
 // strip never tells anyone to go to the terminal: a wait is stated as a
 // fact, with no call to action.
 //
+// After the agent replies, a turn whose subagents or background tasks are
+// still running stays on the strip in phase `children` (Rosson
+// 2026-10-07: a reply must not hide live work): the header is the children
+// ("2 subagents running, 1 done · 4m 10s"), the tally the tools so far, and
+// there is no step line and no Stop (Esc reaches only the lead).
+//
 // Every clock is the daemon's: server times read as `Date.now() + skewMs`
 // (the frame's `serverNow`). An ended turn shows nothing (Decision 2, Q8),
 // except a turn you stopped, which reads "Stopped" for a moment so the
@@ -115,6 +121,7 @@ function stepOf(turn: ThreadTurn, serverNow: number): ThreadStripStep | null {
       return { kind: 'plain', text: 'Delivering…', elapsed: null }
     case 'working':
     case 'stale':
+    case 'children':
       return null
   }
 }
@@ -146,6 +153,20 @@ export function threadStripView(turn: ThreadTurn, now: number): ThreadStripView 
   const sinceMessage = `${clock} since your message`
   const tally = [...tallyBits(turn.tally), ...childBits(turn)]
   const step = stepOf(turn, serverNow)
+  if (turn.phase === 'children' && (turn.state === 'working' || turn.state === 'monitoring')) {
+    const children = childBits(turn)
+    const label = children.length ? children.join(' · ') : 'Background work'
+    return {
+      tone: turn.state,
+      label,
+      since: clock,
+      sinceTitle: 'since your message',
+      ariaLabel: `Agent replied; ${label.charAt(0).toLowerCase()}${label.slice(1)}, ${sinceMessage}`,
+      step: null,
+      tally: tallyBits(turn.tally),
+      stoppable: false,
+    }
+  }
   switch (turn.state) {
     case 'working':
     case 'monitoring': {

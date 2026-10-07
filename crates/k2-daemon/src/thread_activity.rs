@@ -35,6 +35,17 @@
 //!   After a reply, if the lead is still working 3 s later the strip comes
 //!   back with the same `startedAt` (Q7). A turn that ends with no reply
 //!   leaves no trace (Q8): its end frame, then nothing.
+//! - **After a reply, children (Rosson 2026-10-07).** A reply never hides
+//!   live work: if the session still has live children (subagents, and
+//!   background shells or monitors) when the agent replies, or when a
+//!   replied turn's lead goes idle, the turn stays open in phase
+//!   `children` instead of ending. Its frames carry the counts, the tally
+//!   so far and the clock from the user's message; state `working` while
+//!   a subagent runs, `monitoring` when only background tasks remain; no
+//!   Stop (Esc reaches only the lead). It ends `reply` (the end frame,
+//!   then nothing, Q8) when the children are all done; a new compose
+//!   supersedes it; the lead taking up work again (a task notification)
+//!   brings the normal strip back through the Q7 rule.
 //! - **Frames (TW5, A25).** On the overlay socket's second broadcast
 //!   ([`overlay_ws::publish_activity`]), at most 2 per second per turn
 //!   with the last state always sent; an end goes out at once. No 1 Hz
@@ -73,8 +84,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 
-use k2_core::activity::row::STALE_AFTER_MS;
-use k2_core::activity::{Display, LeadState, Reason, Row, TranscriptSignal};
+use k2_core::activity::row::{ChildState, STALE_AFTER_MS};
+use k2_core::activity::{ChildKind, Display, LeadState, Reason, Row, TranscriptSignal};
 use k2_core::agent_hooks::envelope::HookEnvelope;
 use k2_core::log_debug;
 
@@ -119,15 +130,32 @@ pub struct RowSnap {
     /// The row waits on a question (AskUserQuestion), not a permission
     /// prompt: the strip names which.
     pub waiting_question: bool,
-    /// TW7: running, waiting or owed subagents.
+    /// TW7: running or waiting subagents.
     pub subagents: usize,
+    /// Subagents that finished after their lead turn and whose
+    /// notification the lead hasn't taken yet. Their `SubagentStop` counts
+    /// them in `subagentsDone`, so the strip doesn't call them running,
+    /// but they still hold a replied turn open.
+    pub owed_subagents: usize,
     /// TW7: running background shells and monitors.
     pub background: usize,
 }
 
 impl RowSnap {
+    /// Subagents or background tasks are still live.
+    fn has_children(&self) -> bool {
+        self.subagents > 0 || self.owed_subagents > 0 || self.background > 0
+    }
+}
+
+impl RowSnap {
     pub fn of(row: &Row) -> Self {
         let (subagents, background) = row.thread_counts();
+        let owed_subagents = row
+            .children
+            .values()
+            .filter(|c| c.kind == ChildKind::Subagent && c.state == ChildState::Owed)
+            .count();
         Self {
             lead: row.lead.state,
             lead_since: row.lead.since,
@@ -137,7 +165,8 @@ impl RowSnap {
             evidence_at: row.evidence_at,
             stale_since: row.stale_since,
             waiting_question: row.reason == Reason::WaitingQuestion,
-            subagents,
+            subagents: subagents - owed_subagents,
+            owed_subagents,
             background,
         }
     }
@@ -234,6 +263,10 @@ enum Stage {
     Live,
     /// The agent replied in Thread at `at` (Q7 checks 3 s later).
     AfterReply { at: i64 },
+    /// Replied, and children are still live: the strip shows them until
+    /// they drain. `at` (the reply, or the lead's idle after it) is what
+    /// Q7 counts from.
+    Children { at: i64 },
 }
 
 /// Tools the turn has called, by the kind its line names.
@@ -286,6 +319,8 @@ struct Turn {
     addr: String,
     started_at: i64,
     stage: Stage,
+    /// The agent has replied in Thread during this turn.
+    replied: bool,
     session: Option<String>,
     bound: Option<Bound>,
     /// Stamped records seen while the turn was still delivering.
@@ -311,6 +346,7 @@ impl Turn {
             addr: addr.to_string(),
             started_at,
             stage: Stage::Delivering,
+            replied: false,
             session: None,
             bound: None,
             pending_binds: Vec::new(),
@@ -429,10 +465,29 @@ impl Tracker {
     pub fn reply(&mut self, conversation_id: &str, snaps: Snaps, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         let Some(mut turn) = self.turns.remove(conversation_id) else { return out };
+        turn.replied = true;
+        let snap = turn.session.as_deref().and_then(snaps);
         match turn.stage {
+            Stage::Delivering | Stage::Live if snap.as_ref().is_some_and(RowSnap::has_children) => {
+                // A reply never hides live work: the strip stays on the
+                // children until they drain.
+                turn.stage = Stage::Children { at: now };
+                let body = self.body(&mut turn, snap.as_ref(), now);
+                send(&mut turn, body, now, &mut out);
+                turn.wake_at = None;
+                turn.wake(now + RESUME_AFTER_REPLY_MS);
+                self.turns.insert(conversation_id.to_string(), turn);
+                return out;
+            }
             Stage::Delivering | Stage::Live => {
-                let snap = turn.session.as_deref().and_then(snaps);
                 out.push(self.end(&mut turn, EndReason::Reply, None, snap.as_ref(), now));
+            }
+            Stage::Children { .. } => {
+                // Another reply: Q7 counts from it; the children stay.
+                turn.stage = Stage::Children { at: now };
+                self.turns.insert(conversation_id.to_string(), turn);
+                self.eval(conversation_id, snaps, now, &mut out);
+                return out;
             }
             Stage::AfterReply { .. } => {}
         }
@@ -571,7 +626,8 @@ impl Tracker {
     }
 
     /// TW9: the conversation's live turn as a frame body (fresh), or
-    /// `None` when there is none (ended, or hidden after a reply).
+    /// `None` when there is none (ended, or hidden after a reply). A
+    /// replied turn still showing its children is live.
     pub fn current(&mut self, conversation_id: &str, snaps: Snaps, now: i64) -> Option<Value> {
         let mut out = Vec::new();
         // An overdue deadline (a stale end, a resume) is settled first.
@@ -606,7 +662,7 @@ impl Tracker {
                         turn.pending_binds.push((sid.to_string(), kind));
                     }
                 }
-                Stage::Live | Stage::AfterReply { .. } => {
+                Stage::Live | Stage::AfterReply { .. } | Stage::Children { .. } => {
                     if turn.session.as_deref() != Some(sid) {
                         continue;
                     }
@@ -644,6 +700,7 @@ impl Tracker {
                 true
             }
             Stage::AfterReply { at } => self.eval_after_reply(&mut turn, at, snaps, now, out),
+            Stage::Children { at } => self.eval_children(&mut turn, at, snaps, now, out),
             Stage::Live => self.eval_live(&mut turn, snaps, now, out),
         };
         if keep {
@@ -660,14 +717,64 @@ impl Tracker {
             return true;
         }
         let snap = turn.session.as_deref().and_then(snaps);
-        let Some(snap) = snap.filter(|s| s.lead == LeadState::Working) else {
+        let Some(snap) = snap else { return false };
+        if snap.lead == LeadState::Working {
+            turn.stage = Stage::Live;
+            turn.unbound_end_at = None;
+            let body = self.body(turn, Some(&snap), now);
+            send(turn, body, now, out);
+            return self.eval_live(turn, snaps, now, out);
+        }
+        if snap.has_children() {
+            // Work the agent started after its reply is still running.
+            turn.stage = Stage::Children { at };
+            let body = self.body(turn, Some(&snap), now);
+            send(turn, body, now, out);
+            return self.eval_children(turn, at, snaps, now, out);
+        }
+        false
+    }
+
+    /// After a reply, the children's strip: back to the normal strip if
+    /// the lead takes up work again (Q7), over when the children drain.
+    fn eval_children(&mut self, turn: &mut Turn, at: i64, snaps: Snaps, now: i64, out: &mut Vec<Out>) -> bool {
+        let Some(sid) = turn.session.clone() else { return false };
+        let Some(snap) = snaps(&sid) else {
+            out.push(self.end(turn, EndReason::SessionGone, None, None, now));
             return false;
         };
-        turn.stage = Stage::Live;
-        turn.unbound_end_at = None;
+        let due = at + RESUME_AFTER_REPLY_MS;
+        if snap.lead == LeadState::Working {
+            if now >= due {
+                turn.stage = Stage::Live;
+                turn.unbound_end_at = None;
+                let body = self.body(turn, Some(&snap), now);
+                send(turn, body, now, out);
+                return self.eval_live(turn, snaps, now, out);
+            }
+            turn.wake(due);
+        }
+        if !snap.has_children() {
+            // The children drained: the reply's end, then nothing (Q8).
+            // Inside the Q7 window the lead may still resume it.
+            out.push(self.end(turn, EndReason::Reply, None, Some(&snap), now));
+            if now >= due {
+                return false;
+            }
+            turn.stage = Stage::AfterReply { at };
+            turn.wake(due);
+            return true;
+        }
+        // A24, as for a live turn.
+        let last = snap.evidence_at.unwrap_or(turn.started_at).max(turn.started_at);
+        if now >= last + STALE_END_MS {
+            out.push(self.end(turn, EndReason::Stale, None, Some(&snap), now));
+            return false;
+        }
+        turn.wake(last + STALE_END_MS);
         let body = self.body(turn, Some(&snap), now);
-        send(turn, body, now, out);
-        self.eval_live(turn, snaps, now, out)
+        maybe_send(turn, body, now, out);
+        true
     }
 
     fn eval_live(&mut self, turn: &mut Turn, snaps: Snaps, now: i64, out: &mut Vec<Out>) -> bool {
@@ -691,6 +798,12 @@ impl Tracker {
             if let Some(reason) = explicit {
                 out.push(self.end(turn, reason, None, Some(&snap), now));
                 return false;
+            }
+            if turn.replied && snap.has_children() {
+                // Q7 brought the strip back and the lead is done again,
+                // but its children aren't: show them, not "done".
+                turn.stage = Stage::Children { at: now };
+                return self.eval_children(turn, now, snaps, now, out);
             }
             if matches!(snap.display, Display::Idle | Display::Monitoring) {
                 if turn.bound.is_some() {
@@ -743,6 +856,10 @@ impl Tracker {
             (_, None) => ("working", "working", None, None),
             (_, Some(s)) if s.display == Display::Waiting => ("needs-you", "waiting", Some(s.lead_since), None),
             (_, Some(s)) if s.display == Display::Unverifiable => ("unverifiable", "stale", s.stale_since, None),
+            (Stage::Children { .. }, Some(s)) => {
+                let state = if s.subagents > 0 { "working" } else { "monitoring" };
+                (state, "children", None, None)
+            }
             (_, Some(s)) => {
                 let working = s.lead == LeadState::Working;
                 match steps.filter(|_| working) {
@@ -1006,6 +1123,7 @@ mod tests {
             stale_since: None,
             waiting_question: false,
             subagents: 0,
+            owed_subagents: 0,
             background: 0,
         }
     }
@@ -1389,6 +1507,150 @@ mod tests {
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/reviewer".into()) }, 1_200, &row.lookup(), 1_200);
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 900, &row.lookup(), 1_200);
         assert!(t.turns[CONV].bound.is_none(), "wrong session, wrong addr, or older than the turn");
+    }
+
+    /// A bound turn whose lead runs with `subagents` / `background` live.
+    fn busy(subagents: usize, background: usize) -> RowSnap {
+        RowSnap { subagents, background, ..snap(LeadState::Working, Display::Working, 1_050) }
+    }
+
+    /// Rosson 2026-10-07: a reply while subagents run keeps the strip on
+    /// them (no end, no Stop), and it ends `reply` when they finish.
+    #[test]
+    fn a_reply_while_subagents_run_keeps_the_strip_until_they_finish() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(2, 1));
+        live(&mut t, &row);
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200);
+        t.envelope(
+            &hook(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}}"#),
+            1_300,
+            &row.lookup(),
+            1_900,
+        );
+        let out = t.reply(CONV, &row.lookup(), 2_000);
+        let b = only(&out);
+        assert_eq!(b["end"], Value::Null, "the reply does not hide the children: {b}");
+        assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("children"), Some("working")));
+        assert_eq!((b["subagents"].as_u64(), b["background"].as_u64()), (Some(2), Some(1)));
+        assert_eq!(b["startedAt"], 1_000, "the clock runs from the user's message");
+        assert_eq!(b["tally"]["cmd"], 1, "the tally so far");
+        assert_eq!(b["line"], Value::Null);
+        // The lead finishes its turn; the children keep the strip.
+        row.set(RowSnap { lead_since: 2_100, ..RowSnap { subagents: 2, background: 1, ..snap(LeadState::Idle, Display::Working, 1_050) } });
+        assert!(t.row_changed(SID, &row.lookup(), 2_100).iter().all(|o| o.body["end"].is_null()));
+        t.envelope(&hook(r#"{"hook_event_name":"SubagentStop","agent_id":"a1","agent_type":"general"}"#), 4_000, &row.lookup(), 4_000);
+        row.set(RowSnap { lead_since: 2_100, ..RowSnap { subagents: 1, background: 1, ..snap(LeadState::Idle, Display::Working, 1_050) } });
+        t.row_changed(SID, &row.lookup(), 6_000);
+        let b = t.current(CONV, &row.lookup(), 6_100).expect("the children keep the turn live");
+        assert_eq!((b["phase"].as_str(), b["subagents"].as_u64(), b["subagentsDone"].as_u64()), (Some("children"), Some(1), Some(1)));
+        // Only the background task is left: monitoring.
+        row.set(RowSnap { lead_since: 2_100, ..RowSnap { background: 1, ..snap(LeadState::Idle, Display::Monitoring, 1_050) } });
+        let b = only(&t.row_changed(SID, &row.lookup(), 7_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("children"), Some("monitoring")));
+        // All done: the reply's end, then nothing.
+        row.set(RowSnap { lead_since: 2_100, ..snap(LeadState::Idle, Display::Idle, 1_050) });
+        let out = t.row_changed(SID, &row.lookup(), 8_000);
+        assert_eq!(end_of(&out), ("reply".to_string(), None));
+        assert_eq!(only(&out)["state"], "idle");
+        assert!(t.turns.is_empty());
+        assert!(t.current(CONV, &row.lookup(), 8_100).is_none());
+        assert!(t.tick(&row.lookup(), 20_000).is_empty());
+    }
+
+    /// Subagents that finished after the lead's turn but whose notification
+    /// the lead hasn't taken yet still hold the strip, as done, not running.
+    #[test]
+    fn owed_subagents_hold_the_strip_as_done() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(1, 0));
+        live(&mut t, &row);
+        t.reply(CONV, &row.lookup(), 2_000);
+        t.envelope(&hook(r#"{"hook_event_name":"SubagentStop","agent_id":"a1","agent_type":"general"}"#), 2_500, &row.lookup(), 2_500);
+        row.set(RowSnap { owed_subagents: 1, lead_since: 2_200, ..snap(LeadState::Idle, Display::Working, 1_050) });
+        t.row_changed(SID, &row.lookup(), 2_600);
+        let b = t.current(CONV, &row.lookup(), 2_700).expect("held open");
+        assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("children"), Some("monitoring")), "{b}");
+        assert_eq!((b["subagents"].as_u64(), b["subagentsDone"].as_u64()), (Some(0), Some(1)));
+        // The lead takes the notification (owed cleared) and works on it.
+        row.set(RowSnap { lead_since: 6_000, ..snap(LeadState::Working, Display::Working, 6_000) });
+        let b = only(&t.row_changed(SID, &row.lookup(), 6_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["end"].is_null()), (Some("working"), true), "{b}");
+    }
+
+    /// A reply with only a background task left reads `monitoring`.
+    #[test]
+    fn a_reply_with_only_a_background_task_is_monitoring() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(0, 1));
+        live(&mut t, &row);
+        let b = only(&t.reply(CONV, &row.lookup(), 2_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["state"].as_str(), b["end"].is_null()), (Some("children"), Some("monitoring"), true));
+    }
+
+    /// A new compose supersedes the children's strip.
+    #[test]
+    fn a_new_compose_supersedes_the_childrens_strip() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(1, 0));
+        live(&mut t, &row);
+        t.reply(CONV, &row.lookup(), 2_000);
+        let out = t.start(CONV, ADDR, "turn-2", 3_000);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!((out[0].turn_id.as_str(), out[0].body["end"]["reason"].as_str()), ("turn-1", Some("superseded")));
+        assert_eq!((out[1].turn_id.as_str(), out[1].body["phase"].as_str()), ("turn-2", Some("delivering")));
+    }
+
+    /// The lead takes up work again (a task notification): after the Q7
+    /// window the normal strip is back; when the lead is done again with a
+    /// child still live, the children's strip; then the reply's end.
+    #[test]
+    fn the_lead_resuming_brings_the_working_strip_back() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(1, 0));
+        live(&mut t, &row);
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200);
+        t.reply(CONV, &row.lookup(), 2_000);
+        // Still working inside the window: the children's strip stays.
+        assert!(t.tick(&row.lookup(), 4_000).iter().all(|o| o.body["phase"] == "children"));
+        let out = t.tick(&row.lookup(), 5_000);
+        let b = only(&out);
+        assert_eq!((b["phase"].as_str(), b["end"].is_null()), (Some("working"), true), "{b}");
+        row.set(RowSnap { lead_since: 9_000, ..RowSnap { subagents: 1, ..snap(LeadState::Idle, Display::Working, 1_050) } });
+        let b = only(&t.row_changed(SID, &row.lookup(), 9_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["end"].is_null()), (Some("children"), true));
+        row.set(RowSnap { lead_since: 9_000, ..snap(LeadState::Idle, Display::Idle, 1_050) });
+        assert_eq!(end_of(&t.row_changed(SID, &row.lookup(), 20_000)), ("reply".to_string(), None));
+        assert!(t.turns.is_empty());
+    }
+
+    /// Children that drain inside the Q7 window while the lead still works
+    /// end the strip, and Q7 can still bring it back.
+    #[test]
+    fn children_draining_inside_the_window_leave_q7_in_place() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(1, 0));
+        live(&mut t, &row);
+        t.reply(CONV, &row.lookup(), 2_000);
+        row.set(busy(0, 0));
+        assert_eq!(end_of(&t.row_changed(SID, &row.lookup(), 3_000)).0, "reply");
+        assert!(t.current(CONV, &row.lookup(), 3_100).is_none(), "hidden after the end");
+        let b = only(&t.tick(&row.lookup(), 5_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["end"].is_null()), (Some("working"), true), "Q7: {b}");
+    }
+
+    /// Work started after the reply (none live at the reply) still shows
+    /// once the Q7 window closes with the lead idle.
+    #[test]
+    fn children_started_after_the_reply_show_after_the_window() {
+        let mut t = Tracker::default();
+        let row = Fake::new(busy(0, 0));
+        live(&mut t, &row);
+        assert_eq!(end_of(&t.reply(CONV, &row.lookup(), 2_000)).0, "reply");
+        row.set(RowSnap { lead_since: 3_000, ..RowSnap { background: 1, ..snap(LeadState::Idle, Display::Monitoring, 1_050) } });
+        assert!(t.row_changed(SID, &row.lookup(), 3_000).is_empty());
+        let b = only(&t.tick(&row.lookup(), 5_000)).clone();
+        assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("children"), Some("monitoring")));
     }
 
     #[test]

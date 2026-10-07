@@ -495,6 +495,18 @@ describe('Thread turn: activity frames (S7)', () => {
     expect(isTurnLive(resumed)).toBe(true)
   })
 
+  it('after a reply, a children frame keeps the turn live (catch-up too); waitingOn is read', () => {
+    const children = activity({ phase: 'children', line: null, subagents: 2, rev: 6 })
+    const t = applyActivityFrame(null, frameOf(children), 0)
+    expect(t?.phase).toBe('children')
+    expect(isTurnLive(t)).toBe(true)
+    const caught = applyActivityCatchUp(null, { ok: true, turn: children }, 0)
+    expect(caught?.phase).toBe('children')
+    expect(isTurnLive(caught)).toBe(true)
+    expect(coerceThreadTurn(activity({ state: 'needs-you', phase: 'waiting', waitingOn: 'question' }), 0)?.waitingOn).toBe('question')
+    expect(coerceThreadTurn(activity({ waitingOn: 'bogus' }), 0)?.waitingOn).toBeNull()
+  })
+
   it('a malformed body changes nothing', () => {
     const t = applyActivityFrame(null, frameOf(activity()), 0)
     expect(applyActivityFrame(t, { collection: 'activity', id: 'x', activity: { turnId: 'x' } }, 0)).toBe(t)

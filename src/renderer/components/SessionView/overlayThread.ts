@@ -277,8 +277,11 @@ export function applyOverlayFrame(
  *  An end: idle | monitoring (a clean end) or stopped (anything else). */
 export type ThreadTurnState = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'stopped' | 'idle'
 
-/** What the agent is doing inside the turn (TW6; `stale` is A24). */
-export type ThreadTurnPhase = 'delivering' | 'working' | 'tool' | 'thinking' | 'waiting' | 'stale'
+/** What the agent is doing inside the turn (TW6; `stale` is A24).
+ *  `children`: the agent replied, and its subagents or background tasks
+ *  are still running (state `working`, or `monitoring` when only
+ *  background tasks remain); the turn ends when they finish. */
+export type ThreadTurnPhase = 'delivering' | 'working' | 'tool' | 'thinking' | 'waiting' | 'stale' | 'children'
 
 export interface ThreadTurnTally {
   read: number
@@ -320,7 +323,7 @@ export interface ThreadTurn {
 }
 
 const TURN_STATES: readonly ThreadTurnState[] = ['working', 'monitoring', 'needs-you', 'unverifiable', 'stopped', 'idle']
-const TURN_PHASES: readonly ThreadTurnPhase[] = ['delivering', 'working', 'tool', 'thinking', 'waiting', 'stale']
+const TURN_PHASES: readonly ThreadTurnPhase[] = ['delivering', 'working', 'tool', 'thinking', 'waiting', 'stale', 'children']
 
 function finite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null

@@ -19,6 +19,11 @@
 //!   trace.
 //! - T-S6j: 1,500 activity frames on one conversation close no Thread
 //!   subscriber.
+//! - After a reply, children (Rosson 2026-10-07): a reply while subagents
+//!   run keeps the strip on them (phase `children`, no end), the catch-up
+//!   returns it, and it ends `reply` when they are done; a reply with only
+//!   a background task left reads `monitoring`; a new compose supersedes
+//!   it; a reply with no children ends the turn at once.
 //!
 //! ISOLATION: temp HOME, an `exec cat` shim as `claude` (no agent CLI ever
 //! starts), synthetic transcript lines and hook payloads only.
@@ -578,6 +583,177 @@ async fn early_replies_supersedes_silent_ends_and_foreign_stamps() {
             assert_eq!(end["end"]["reason"], "done", "{end}");
             assert_eq!(end["end"]["detail"], "unbound_turn_end", "a foreign stamp must not bind: {end}");
             assert!(now_ms() - stopped_at >= 1_300, "the unbound end waits out its grace");
+        });
+    });
+}
+
+/// The first activity frame for `turn` that satisfies `want`; every frame
+/// before it must still be open (no `end`).
+async fn open_until(ws: &mut Ws, turn: &str, what: &str, want: impl Fn(&J) -> bool) -> J {
+    activity_until(ws, turn, what, |a| {
+        assert!(a["end"].is_null(), "{what}: the turn ended early: {a}");
+        want(a)
+    })
+    .await
+}
+
+/// After a reply, children: subagents running at the reply keep the strip
+/// (phase `children`, counts, no end) through the lead's own Stop, the
+/// catch-up returns it, and it ends `reply` once they are all done.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_keeps_the_strip_while_subagents_run() {
+    with_temp_home(|home| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let tag = &uuid::Uuid::new_v4().to_string()[..8];
+        let room = seed_room(home, &format!("tkids{tag}"));
+        let agent = warm_up(port, &room);
+        let file = transcript(home, &room, &agent);
+        owner_prompt(port, &agent, "c0");
+
+        futures_block(async {
+            let mut a = open_ws(port, &agent.conv, OWNER_TOKEN).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let turn = post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                "addr": room.handle, "text": "review both modules", "via": "compose"
+            }))["id"]
+                .as_str()
+                .expect("id")
+                .to_string();
+            let first = activity_until(&mut a, &turn, "the turn", |_| true).await;
+            let started = first["startedAt"].as_i64().expect("startedAt");
+            append(&file, &[&queued_line(&room.handle, "review both modules")]);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            for id in ["agent-c1", "agent-c2"] {
+                hook(port, &agent.sid, agent.pid, serde_json::json!({
+                    "hook_event_name": "SubagentStart", "session_id": agent.conv, "prompt_id": "c0",
+                    "agent_id": id, "agent_type": "general-purpose"
+                }));
+            }
+            open_until(&mut a, &turn, "two running subagents", |a| a["subagents"] == 2).await;
+
+            // The agent replies while both run: the strip stays on them.
+            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                "addr": room.handle, "text": "Two reviewers are on it.", "from": room.handle
+            }));
+            let kept = open_until(&mut a, &turn, "the children's strip", |a| a["phase"] == "children").await;
+            assert_eq!(kept["state"], "working", "{kept}");
+            assert_eq!(kept["subagents"], 2, "{kept}");
+            assert_eq!(kept["startedAt"], started, "the clock runs from the user's message: {kept}");
+            assert_eq!(kept["line"], J::Null, "{kept}");
+            let caught = catch_up(port, OWNER_TOKEN, &room.handle).json();
+            assert_eq!(caught["turn"]["turnId"], turn.as_str(), "the catch-up returns it: {caught}");
+            assert_eq!(caught["turn"]["phase"], "children", "{caught}");
+            assert_eq!(caught["turn"]["subagents"], 2, "{caught}");
+            assert_eq!(caught["turn"]["end"], J::Null, "{caught}");
+
+            // The lead finishes its turn; the subagents outlive it.
+            hook(port, &agent.sid, agent.pid, serde_json::json!({
+                "hook_event_name": "Stop", "session_id": agent.conv, "prompt_id": "c0", "stop_hook_active": false,
+                "background_tasks": [
+                    {"id": "agent-c1", "type": "subagent", "status": "running"},
+                    {"id": "agent-c2", "type": "subagent", "status": "running"}
+                ],
+                "session_crons": []
+            }));
+            for (id, done) in [("agent-c1", 1), ("agent-c2", 2)] {
+                hook(port, &agent.sid, agent.pid, serde_json::json!({
+                    "hook_event_name": "SubagentStop", "session_id": agent.conv, "prompt_id": "c0",
+                    "agent_id": id, "agent_type": "general-purpose", "background_tasks": []
+                }));
+                let f = open_until(&mut a, &turn, "a subagent done", |a| a["subagentsDone"] == done).await;
+                assert_eq!(f["phase"], "children", "{f}");
+                assert_eq!(f["subagents"], 2 - done, "finished ones are done, not running: {f}");
+            }
+            assert_eq!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"]["phase"], "children");
+
+            // Their reports are taken (the inventory no longer lists them):
+            // the reply's end, then nothing (Q8).
+            owner_stop(port, &agent, "c0");
+            let end = activity_until(&mut a, &turn, "the reply end", |a| !a["end"].is_null()).await;
+            assert_eq!(end["end"]["reason"], "reply", "{end}");
+            assert_eq!(end["state"], "idle", "{end}");
+            assert!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"].is_null());
+            no_activity(&mut a, &turn, 3_500, "after the children finished").await;
+        });
+    });
+}
+
+/// After a reply, children: only a background task left reads
+/// `monitoring`; a new compose supersedes it; a reply with no children
+/// ends the turn at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_with_a_background_task_monitors_until_superseded() {
+    with_temp_home(|home| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let tag = &uuid::Uuid::new_v4().to_string()[..8];
+        let room = seed_room(home, &format!("tbg{tag}"));
+        let agent = warm_up(port, &room);
+        let file = transcript(home, &room, &agent);
+        owner_prompt(port, &agent, "g0");
+
+        futures_block(async {
+            let mut a = open_ws(port, &agent.conv, OWNER_TOKEN).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let compose = |text: &str| -> String {
+                post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                    "addr": room.handle, "text": text, "via": "compose"
+                }))["id"]
+                    .as_str()
+                    .expect("id")
+                    .to_string()
+            };
+            let turn = compose("start the dev server");
+            activity_until(&mut a, &turn, "the turn", |_| true).await;
+            append(&file, &[&queued_line(&room.handle, "start the dev server")]);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            hook(port, &agent.sid, agent.pid, serde_json::json!({
+                "hook_event_name": "PreToolUse", "session_id": agent.conv, "prompt_id": "g0",
+                "tool_name": "Bash", "tool_use_id": "toolu_bg1", "tool_input": {"command": "make serve", "run_in_background": true}
+            }));
+            hook(port, &agent.sid, agent.pid, serde_json::json!({
+                "hook_event_name": "PostToolUse", "session_id": agent.conv, "prompt_id": "g0",
+                "tool_name": "Bash", "tool_use_id": "toolu_bg1", "tool_response": {"backgroundTaskId": "bash_1"}
+            }));
+            open_until(&mut a, &turn, "a background task", |a| a["background"] == 1).await;
+
+            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                "addr": room.handle, "text": "Dev server is up.", "from": room.handle
+            }));
+            let kept = open_until(&mut a, &turn, "the children's strip", |a| a["phase"] == "children").await;
+            assert_eq!(kept["state"], "monitoring", "only a background task: {kept}");
+            assert_eq!((kept["subagents"].as_u64(), kept["background"].as_u64()), (Some(0), Some(1)), "{kept}");
+            assert_eq!(kept["tally"]["cmd"], 1, "the tally so far: {kept}");
+            assert_eq!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"]["state"], "monitoring");
+
+            // A new compose supersedes the children's strip.
+            let next = compose("now run the linter");
+            let gone = activity_until(&mut a, &turn, "the superseded end", |a| !a["end"].is_null()).await;
+            assert_eq!(gone["end"]["reason"], "superseded", "{gone}");
+            let fresh = activity_until(&mut a, &next, "the new turn", |_| true).await;
+            assert_eq!(fresh["phase"], "delivering", "{fresh}");
+
+            // With the background task stopped, a reply ends the turn at once.
+            append(&file, &[&queued_line(&room.handle, "now run the linter")]);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            hook(port, &agent.sid, agent.pid, serde_json::json!({
+                "hook_event_name": "PostToolUse", "session_id": agent.conv, "prompt_id": "g0",
+                "tool_name": "KillShell", "tool_use_id": "toolu_k1", "tool_input": {"shell_id": "bash_1"}, "tool_response": {}
+            }));
+            open_until(&mut a, &next, "the task stopped", |a| a["background"] == 0).await;
+            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                "addr": room.handle, "text": "Linter is clean.", "from": room.handle
+            }));
+            let end = activity_until(&mut a, &next, "the reply end", |a| {
+                assert_ne!(a["phase"], "children", "no children, no children's strip: {a}");
+                !a["end"].is_null()
+            })
+            .await;
+            assert_eq!(end["end"]["reason"], "reply", "{end}");
+            assert!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"].is_null());
+            owner_stop(port, &agent, "g0");
+            no_activity(&mut a, &next, 3_500, "after a reply with no children").await;
         });
     });
 }

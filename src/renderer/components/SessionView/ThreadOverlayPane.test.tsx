@@ -773,6 +773,37 @@ describe('Thread working strip (S7)', () => {
     expect(screen.getByTestId('thread-strip-stop')).not.toBeNull()
   })
 
+  it('after a reply, live subagents keep the strip: counts and clock in the header, the tally, no step, no Stop', () => {
+    threadHook.items = [textItem('t1', 1), textItem('t2', 2)]
+    threadHook.turn = turnOf({ phase: 'children', line: null, subagents: 2, subagentsDone: 1, background: 0, phaseSince: SERVER_NOW - 5_000 })
+    const view = renderInRoom(overlayRoom, pane({ onStop: () => {} }))
+    expect(strip()?.getAttribute('data-tone')).toBe('working')
+    expect(strip()?.getAttribute('data-phase')).toBe('children')
+    expect(text('thread-strip-state')).toBe('2 subagents running, 1 done')
+    expect(text('thread-strip-since')).toBe('· 1m 12s')
+    expect(screen.getByTestId('thread-strip-since').getAttribute('title')).toBe('since your message')
+    expect(screen.queryByTestId('thread-strip-step')).toBeNull()
+    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands')
+    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+    expect(strip()?.textContent).not.toMatch(/working/i)
+    expect(strip()?.getAttribute('aria-label')).toBe('Agent replied; 2 subagents running, 1 done, 1m 12s since your message')
+    // It sits under the reply.
+    const content = screen.getAllByTestId('thread-item')[1].parentElement
+    expect(content?.lastElementChild).toBe(strip())
+
+    // Only a background task left: monitoring.
+    threadHook.turn = turnOf({ state: 'monitoring', phase: 'children', line: null, subagents: 0, subagentsDone: 2, background: 1, rev: 5 })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(strip()?.getAttribute('data-tone')).toBe('monitoring')
+    expect(text('thread-strip-state')).toBe('2 subagents done · 1 background task')
+    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+
+    // The children finish: the reply's end takes the strip away.
+    threadHook.turn = turnOf({ state: 'idle', phase: 'children', line: null, subagents: 0, background: 0, rev: 6, end: { reason: 'reply', detail: null, at: SERVER_NOW } })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(strip()).toBeNull()
+  })
+
   it('"No update in Nm" uses a dashed rule and no step line', () => {
     // A24: phase `stale` starts at the row's staleSince (30 min after the
     // last evidence); 4 more minutes have passed since.

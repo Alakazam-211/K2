@@ -26,14 +26,16 @@ export function showLaunchBarStorageKey(hostKey: string): string {
   return hostScopedKey(hostKey, SHOW_LAUNCH_BAR_STORAGE_PREFIX.slice(0, -1))
 }
 
+/** Rosson 2026-10-07 (0.45.0): the launch bar starts hidden. Only an
+ *  explicit "shown" choice (`1`) shows it; a missing key means hidden. */
 export function readShowLaunchBar(hostKey: string): boolean {
   try {
-    if (typeof localStorage === 'undefined') return true
+    if (typeof localStorage === 'undefined') return false
     const raw = localStorage.getItem(showLaunchBarStorageKey(hostKey))
-    if (raw == null) return true
+    if (raw == null) return false
     return raw !== '0' && raw !== 'false'
   } catch {
-    return true
+    return false
   }
 }
 

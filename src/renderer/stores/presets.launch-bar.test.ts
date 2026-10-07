@@ -72,19 +72,24 @@ describe('show launch bar persistence', () => {
     expect(usePresetsStore.getState().showPresetsBar).toBe(false)
   })
 
-  it('a missing key means shown, including after a host switch', () => {
-    usePresetsStore.getState().setShowLaunchBar(false)
+  it('a missing key means hidden, including after a host switch', () => {
+    usePresetsStore.getState().setShowLaunchBar(true)
     useConnectHostStore.getState().selectHost(REMOTE)
     const remoteKey = homeHostKey(REMOTE)
     expect(localStorage.getItem(showLaunchBarStorageKey(remoteKey))).toBeNull()
-    expect(readShowLaunchBar(remoteKey)).toBe(true)
-    expect(usePresetsStore.getState().showPresetsBar).toBe(true)
-
-    usePresetsStore.getState().setShowLaunchBar(false)
-    expect(localStorage.getItem(showLaunchBarStorageKey(remoteKey))).toBe('0')
-    useConnectHostStore.getState().selectHost('local')
+    expect(readShowLaunchBar(remoteKey)).toBe(false)
     expect(usePresetsStore.getState().showPresetsBar).toBe(false)
-    expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('0')
+
+    usePresetsStore.getState().setShowLaunchBar(true)
+    expect(localStorage.getItem(showLaunchBarStorageKey(remoteKey))).toBe('1')
+    useConnectHostStore.getState().selectHost('local')
+    expect(usePresetsStore.getState().showPresetsBar).toBe(true)
+    expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('1')
+  })
+
+  it('with no stored choice the launch bar starts hidden', () => {
+    expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBeNull()
+    expect(readShowLaunchBar('local')).toBe(false)
   })
 
   it('fetchPresets does not write or reset the flag', async () => {
@@ -143,17 +148,17 @@ describe('show launch bar persistence', () => {
     }
   })
 
-  it('a new store load with this host key stays off, and another host with no key stays on', async () => {
-    localStorage.setItem(showLaunchBarStorageKey('local'), '0')
+  it('a new store load with this host key stays on, and another host with no key starts hidden', async () => {
+    localStorage.setItem(showLaunchBarStorageKey('local'), '1')
     vi.resetModules()
     const localMod = await import('@/stores/presets')
-    expect(localMod.usePresetsStore.getState().showPresetsBar).toBe(false)
+    expect(localMod.usePresetsStore.getState().showPresetsBar).toBe(true)
 
     vi.resetModules()
     const hostMod = await import('@/stores/connect-host')
     hostMod.useConnectHostStore.getState().selectHost(REMOTE)
     const remoteMod = await import('@/stores/presets')
     expect(localStorage.getItem(remoteMod.showLaunchBarStorageKey(homeHostKey(REMOTE)))).toBeNull()
-    expect(remoteMod.usePresetsStore.getState().showPresetsBar).toBe(true)
+    expect(remoteMod.usePresetsStore.getState().showPresetsBar).toBe(false)
   })
 })

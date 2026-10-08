@@ -151,6 +151,18 @@ mod tests {
     }
 
     #[test]
+    fn literal_vector_matches_an_independent_implementation() {
+        // Computed with Python's hashlib (the CLI test's stand-in peer uses
+        // the same formulas), so both sides are pinned to one value.
+        let (fa, fb) = ("aa".repeat(32), "bb".repeat(32));
+        assert_eq!(sas_v2(&fa, &fb, &NA, &NB), "632758");
+        assert_eq!(
+            to_hex(&commitment(&fa, &NA)),
+            "2d6e7a972a208c69e0ed6c881379b0b1a2b215d49cbee9b17fc4a5653cb2b569"
+        );
+    }
+
+    #[test]
     fn a_wrong_reveal_or_another_initiator_does_not_open_the_commitment() {
         let fa = "aa".repeat(32);
         let c = commitment(&fa, &NA);

@@ -5,8 +5,9 @@
 #
 # One sandbox daemon (temp HOME, worktree build, air-gapped, federation on)
 # plus a loopback stand-in peer (python) that serves a roster and accepts
-# inbound envelopes. The peer is paired for real (pair/request + owner
-# confirm with the SAS). Loud: every check must pass; nothing is skipped.
+# inbound envelopes. The peer is paired for real (pairing v2 respond/verify
+# + owner confirm with the code). Loud: every check must pass; nothing is
+# skipped.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -86,18 +87,50 @@ for _ in $(seq 1 50); do [ -s "$PEER_DIR/port" ] && break; sleep 0.1; done
 PEER_PORT="$(cat "$PEER_DIR/port")"
 PHOST="127.0.0.1:${PEER_PORT}"
 
-# Pair it: the peer's key asks, the owner confirms with the SAS.
+# Pair it with pairing v2 (0.45.2; the v1 pair/request refuses a new key).
+# The stand-in peer is the initiator: it commits to Na, the daemon answers
+# with Nb, the peer reveals Na, and both codes must match before the owner
+# confirm. No signing is involved, so python computes the peer's side.
 openssl ecparam -name prime256v1 -genkey -noout -out "$PEER_DIR/key.pem" 2>/dev/null
 openssl ec -in "$PEER_DIR/key.pem" -pubout -out "$PEER_DIR/pub.pem" 2>/dev/null
-req="$(python3 -c "import json,sys; print(json.dumps({'label':'quillify','subdomain':'quillify','base_url':sys.argv[1],'public_key_pem':open(sys.argv[2]).read()}))" \
-    "http://${PHOST}" "$PEER_DIR/pub.pem")"
-pr="$(curl -sf -X POST -H 'Content-Type: application/json' -d "$req" "$BASE/cli/federation/pair/request")" \
-    || fail "pair/request failed"
-fp="$(jq -r .fingerprint <<<"$pr")"; sas="$(jq -r .sas <<<"$pr")"
+openssl ec -pubin -in "$PEER_DIR/pub.pem" -outform DER -out "$PEER_DIR/pub.der" 2>/dev/null
+cat >"$PEER_DIR/sas.py" <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+fp = hashlib.sha256(open(os.path.join(d, "pub.der"), "rb").read()).hexdigest()
+step = sys.argv[2]
+if step == "offer":
+    na = os.urandom(32)
+    open(os.path.join(d, "na"), "wb").write(na)
+    c = hashlib.sha256(b"k2-sas-commit-v2" + fp.encode() + na).hexdigest()
+    print(json.dumps({"offer": {"v": 2, "session": "a7-session", "fingerprint": fp,
+        "public_key_pem": open(os.path.join(d, "pub.pem")).read(), "label": "quillify",
+        "subdomain": "quillify", "base_url": sys.argv[3], "commitment": c}}))
+elif step == "reveal":
+    na = open(os.path.join(d, "na"), "rb").read()
+    print(json.dumps({"reveal": {"v": 2, "session": "a7-session", "fingerprint": fp, "nonce": na.hex()}}))
+elif step == "code":
+    ans = json.loads(sys.argv[3])["answer"]
+    na = open(os.path.join(d, "na"), "rb").read()
+    h = hashlib.sha256(b"k2-sas-v2" + fp.encode() + ans["fingerprint"].encode() + na + bytes.fromhex(ans["nonce"])).digest()
+    print("%06d" % (int.from_bytes(h[:4], "big") % 1000000))
+elif step == "fp":
+    print(fp)
+PY
+offer="$(python3 "$PEER_DIR/sas.py" "$PEER_DIR" offer "http://${PHOST}")"
+answer="$(curl -sf -X POST -H 'Content-Type: application/json' -d "$offer" \
+    "$BASE/cli/federation/pair/v2/respond?token=${K2SO_TOKEN}")" || fail "pair/v2/respond failed"
+reveal="$(python3 "$PEER_DIR/sas.py" "$PEER_DIR" reveal)"
+ver="$(curl -sf -X POST -H 'Content-Type: application/json' -d "$reveal" \
+    "$BASE/cli/federation/pair/v2/verify?token=${K2SO_TOKEN}")" || fail "pair/v2/verify failed"
+sas="$(jq -r .sas <<<"$ver")"
+peer_code="$(python3 "$PEER_DIR/sas.py" "$PEER_DIR" code "$answer")"
+[ "$sas" = "$peer_code" ] || fail "pairing codes differ: daemon $sas, peer $peer_code"
+fp="$(python3 "$PEER_DIR/sas.py" "$PEER_DIR" fp)"
 curl -sf -X POST -H 'Content-Type: application/json' \
     -d "{\"fingerprint\":\"$fp\",\"sas\":\"$sas\"}" \
     "$BASE/cli/federation/pair/confirm?token=${K2SO_TOKEN}" >/dev/null || fail "pair/confirm failed"
-ok "stand-in peer paired at $PHOST"
+ok "stand-in peer paired at $PHOST (pairing v2, codes match)"
 
 # ── the source workspace ─────────────────────────────────────────────
 SRC="$SANDBOX_HOME/work/news-desk"

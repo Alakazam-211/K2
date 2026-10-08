@@ -52,6 +52,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "zen-chrome-v1",
     "zen-widgets-v1",
     "zen-lib-v1",
+    "zen-sync-v1",
     "thread-latest",
     "thread-widget-origin",
     "daemon-activity",

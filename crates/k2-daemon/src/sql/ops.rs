@@ -1996,6 +1996,65 @@ fn sync_grant_secret_refs_for_role(role: &str, sref: &str) -> Result<(), OpsErro
     Ok(())
 }
 
+/// K2 vault (VS9, Q23): after the role passwords moved from
+/// `~/.k2/db-secrets.json` into the vault, give every database role a new
+/// password so copies of the old file in backups and snapshots are dead.
+/// Each role: new password → `ALTER ROLE` → only then the vault entry
+/// (same reference) gets the new value. Returns one line per role.
+pub fn rotate_db_role_passwords(ops: &dyn SystemOps) -> Vec<String> {
+    let mut out = vec![];
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => return vec![format!("vault closed: {}", e.code)],
+    };
+    let store = crate::vault::refstore::VaultRefStore::new(vault, "postgres", "db");
+    let rows: Vec<(String, Option<String>, Option<String>)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let st = conn.prepare("SELECT name, agent_secret_ref, migrator_secret_ref FROM sql_databases WHERE status != 'dropped'");
+        match st {
+            Ok(mut s) => match s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))) {
+                Ok(i) => i.flatten().collect(),
+                Err(_) => vec![],
+            },
+            Err(_) => vec![],
+        }
+    };
+    for (name, agent_ref, mig_ref) in rows {
+        for (role, sref) in [(format!("{name}_agent"), agent_ref), (format!("{name}_migrator"), mig_ref)] {
+            let Some(sref) = sref.filter(|s| !s.is_empty()) else { continue };
+            match pg_role_exists(ops, &role) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    out.push(format!("{role}: {e:?}"));
+                    continue;
+                }
+            }
+            let pw = match generate_secret() {
+                Ok(p) => p,
+                Err(e) => {
+                    out.push(format!("{role}: {e}"));
+                    continue;
+                }
+            };
+            let sql = alter_role_password_sql(&role, &pw);
+            if let Err(e) = refuse_dangerous_role_sql(&sql) {
+                out.push(format!("{role}: {e:?}"));
+                continue;
+            }
+            match ops.run_helper(&["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes())) {
+                Ok(_) => match store.put_exact(&sref, &pw) {
+                    Ok(()) => out.push(format!("{role}: rotated")),
+                    Err(e) => out.push(format!("{role}: ROLE CHANGED BUT NOT SAVED ({e}); run k2 db grant again")),
+                },
+                Err(e) => out.push(format!("{role}: kept ({e:?})")),
+            }
+        }
+    }
+    out
+}
+
 fn pg_role_exists(ops: &dyn SystemOps, role: &str) -> Result<bool, OpsError> {
     let sql = format!(
         "SELECT rolname FROM pg_roles WHERE rolname = {lit};",

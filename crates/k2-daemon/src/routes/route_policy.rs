@@ -855,6 +855,10 @@ pub const ROUTES: &[Route] = &[
     // rows through is_agent_verb and are checked in the handler; confirm,
     // reveal, recovery and key operations are never agent verbs.
     get("/cli/vault/audit", Admin),
+    post("/cli/vault/backup", Owner),
+    post("/cli/vault/backup/recipient", Owner),
+    post("/cli/vault/carry/export", Admin),
+    post("/cli/vault/carry/import", Admin),
     post("/cli/vault/confirm-password/set", Owner),
     post("/cli/vault/confirm/finish", Admin),
     post("/cli/vault/confirm/start", Admin),
@@ -871,6 +875,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/vault/list", Member),
     post("/cli/vault/policy", Member),
     get("/cli/vault/presets", Member),
+    get("/cli/vault/recipient", Admin),
     post("/cli/vault/recovery/confirm", Owner),
     post("/cli/vault/recovery/rotate", Owner),
     post("/cli/vault/recovery/show-once", Owner),

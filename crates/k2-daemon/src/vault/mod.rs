@@ -88,6 +88,8 @@ pub fn boot(home: &Path) {
     let dir = vault_dir(home);
     let ks = select_key_store(home);
     let r = open_with_upgrade(&dir, home, ks);
+    // Publish it first: the adoption steps below go through `get()`.
+    *cell().write() = r.clone();
     match &r {
         Ok(v) => {
             let a = adopt::thread_secrets(v, &k2_core::overlay::vault::vault_root());
@@ -103,6 +105,11 @@ pub fn boot(home: &Path) {
                 if !a.moved.is_empty() || !a.errors.is_empty() {
                     k2_core::log_debug!("[vault] {}: moved {} errors {:?}", a.store, a.moved.len(), a.errors);
                 }
+                // Q23 / VS9: credentials K2 generated get new values once
+                // they're in the vault, so old plaintext copies go dead.
+                if !a.moved.is_empty() && a.errors.is_empty() {
+                    rotate_generated_after_move(subsystem);
+                }
                 record_adoption(a);
             }
             match tunnel::adopt(v) {
@@ -117,7 +124,7 @@ pub fn boot(home: &Path) {
                     ..Default::default()
                 }),
             }
-            let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder(v.clone())));
+            let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder));
             let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
             record_adoption(mainrefs::adopt(v));
             spawn::sweep_at_boot();
@@ -133,7 +140,30 @@ pub fn boot(home: &Path) {
         }
         Err(e) => k2_core::log_debug!("[vault] NOT open: {e}"),
     }
-    *cell().write() = r;
+}
+
+fn rotate_generated_after_move(subsystem: &'static str) {
+    let _ = std::thread::Builder::new().name(format!("vault-rotate-{subsystem}")).spawn(move || {
+        // Let the engines come up first.
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        match subsystem {
+            "db" if crate::sql::sql_supported() => {
+                for line in crate::sql::routes::rotate_after_vault_adoption() {
+                    k2_core::log_debug!("[vault] db rotate: {line}");
+                }
+            }
+            "mail" if crate::mail::supervisor::mail_supported() => match crate::mail::supervisor::rotate_leftover_admins_live() {
+                Ok(r) => k2_core::log_debug!("[vault] mail admin rotate: {r:?}"),
+                Err(e) => k2_core::log_debug!("[vault] mail admin rotate skipped: {e}"),
+            },
+            _ => {}
+        }
+    });
+}
+
+/// A restore swapped the vault file: serve the new one.
+pub fn replace(v: Arc<LocalVault>) {
+    *cell().write() = Ok(v);
 }
 
 /// Every minute: flush audit roll-ups, expire chat secrets and old card

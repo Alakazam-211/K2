@@ -12,17 +12,22 @@ use super::refstore::VaultRefStore;
 
 pub const NAME: &str = "tunnel.token";
 
-struct Holder(VaultRefStore);
+/// Uses whichever vault is open (a restore swaps it).
+struct Holder;
+
+fn store() -> Result<VaultRefStore, String> {
+    super::get().map(|v| VaultRefStore::new(v, "frpc", "tunnel")).map_err(|e| format!("vault: {}", e.code))
+}
 
 impl k2_core::tunnel::config::TokenVault for Holder {
     fn get(&self) -> Option<String> {
-        self.0.resolve(NAME).ok().flatten()
+        store().ok()?.resolve(NAME).ok().flatten()
     }
     fn set(&self, token: &str) -> Result<(), String> {
-        self.0.put_exact(NAME, token)
+        store()?.put_exact(NAME, token)
     }
     fn clear(&self) -> Result<(), String> {
-        self.0.delete(NAME)
+        store()?.delete(NAME)
     }
 }
 
@@ -38,7 +43,7 @@ pub fn adopt(vault: &Arc<LocalVault>) -> Result<bool, VaultError> {
             return Err(VaultError::internal("tunnel token read-back differs; tunnel.json kept"));
         }
     }
-    let installed = k2_core::tunnel::config::install_token_vault(Box::new(Holder(VaultRefStore::new(vault.clone(), "frpc", "tunnel"))));
+    let installed = k2_core::tunnel::config::install_token_vault(Box::new(Holder));
     if moved && installed {
         k2_core::tunnel::config::update(|_| {}).map_err(|e| VaultError::internal(format!("tunnel.json rewrite: {e}")))?;
     }

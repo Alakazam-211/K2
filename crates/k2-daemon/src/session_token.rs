@@ -513,7 +513,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/rekey",
         "/cli/vault/rollback",
         "/cli/vault/restore",
-        "/cli/vault/recipient",
+        "/cli/vault/backup",
         "/cli/vault/legacy-export",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
@@ -592,6 +592,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/env-file",
         "/cli/vault/import",
         "/cli/vault/service",
+        // Migrations (VS2): an IT agent with "Allow managing server-wide
+        // secrets" may run the carry; the handler checks the switch.
+        "/cli/vault/recipient",
+        "/cli/vault/carry/export",
+        "/cli/vault/carry/import",
         "/cli/llm/accounts/login/status",
         "/cli/llm/accounts/add",
         "/cli/llm/accounts/login",

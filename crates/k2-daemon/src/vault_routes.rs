@@ -395,7 +395,7 @@ pub fn handle_on(
         RECOVERY_CONFIRM => recovery_confirm(vault, &c, body, ingress, not_person),
         KEK_ROTATE | REKEY => key_op(vault, &c, path, body, ingress),
         ROLLBACK => rollback(vault, &c, body, ingress),
-        RESTORE => restore(vault, &c, body, ingress),
+        RESTORE => restore(vault, &c, body, ingress, not_person),
         _ => Err(VaultError::not_found("no such vault route")),
     };
     match r {
@@ -1243,16 +1243,85 @@ struct RestoreBody {
     #[serde(default)]
     acknowledge_rollback: bool,
     confirm_token: Option<String>,
+    /// Restore from a backup folder holding `vault.db`.
+    from_dir: Option<String>,
+    /// `recovery` (24 words) or `backup` (`AGE-SECRET-KEY-1…`).
+    holder: Option<String>,
+    phrase: Option<String>,
+    identity: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    /// Replace a vault that already holds secrets (needs a confirm).
+    #[serde(default)]
+    replace: bool,
 }
 
-fn restore(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
+/// Restore on a new box (§13.2): person only (VS2), checked before
+/// anything is overwritten.
+fn restore_from(vault: &LocalVault, c: &VaultCaller, b: &RestoreBody, ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
+    require_person(c, not_person)?;
+    let holder = b.holder.as_deref().unwrap_or("recovery");
+    let identity = match holder {
+        "recovery" => k2_vault::recovery::RecoverySeed::from_phrase(b.phrase.as_deref().unwrap_or(""))?.identity(),
+        "backup" => k2_vault::agefmt::Identity::parse(b.identity.as_deref().unwrap_or(""))?,
+        _ => return Err(err("bad_holder", 400, "holder is recovery or backup")),
+    };
+    let from = std::path::PathBuf::from(b.from_dir.clone().unwrap_or_default());
+    let (vid, n) = LocalVault::check_identity(&from, &identity, holder)?;
+    if b.dry_run {
+        return Ok(json!({ "ok": true, "dryRun": true, "vaultId": vid, "secrets": n }));
+    }
+    if vault.user_secret_count() > 0 {
+        if !b.replace {
+            return Err(err("vault_not_empty", 409, "this box's vault already holds secrets; restoring replaces it (add --replace; it needs a confirm)"));
+        }
+        take_proof(vault, c, "restore", None, b.confirm_token.as_deref())?;
+    }
+    let dir = vault.dir().to_path_buf();
+    let ks = vault.key_store().clone();
+    let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let aside = dir.join(format!("replaced-{stamp}"));
+    k2_vault::fsutil::ensure_private_dir(&aside)?;
+    for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+        let p = dir.join(f);
+        if p.exists() {
+            std::fs::rename(&p, aside.join(f)).map_err(|e| err("restore_failed", 500, format!("move aside: {}", e.kind())))?;
+        }
+    }
+    let put_back = || {
+        for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+            let _ = std::fs::rename(aside.join(f), dir.join(f));
+        }
+    };
+    if let Err(e) = std::fs::copy(from.join("vault.db"), dir.join("vault.db")) {
+        put_back();
+        return Err(err("restore_failed", 500, format!("copy: {}", e.kind())));
+    }
+    match LocalVault::adopt_with_identity(&dir, ks, &identity, holder, k2_vault::OpenOptions::default()) {
+        Ok(v) => {
+            crate::vault::replace(std::sync::Arc::new(v));
+            crate::vault::auth_audit("vault-restore", &c.actor.stamp(), &format!("ok from {holder} ({n} secrets)"), ingress);
+            Ok(json!({ "ok": true, "vaultId": vid, "secrets": n, "previous": aside.display().to_string() }))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(dir.join("vault.db"));
+            put_back();
+            Err(e)
+        }
+    }
+}
+
+fn restore(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
     human_admin(c)?;
     let b: RestoreBody = parse(body)?;
+    if b.from_dir.is_some() {
+        return restore_from(vault, c, &b, ingress, not_person);
+    }
     if !b.acknowledge_rollback {
         return Err(err(
             "restore_from_backup",
             400,
-            "to restore a vault from a backup on a new box, use: k2 vault restore --from <dir> (with the recovery phrase)",
+            "to restore a vault from a backup: k2 vault restore --from <dir> (with the recovery phrase), from a terminal outside K2",
         ));
     }
     let proof = take_proof(vault, c, "restore", None, b.confirm_token.as_deref())?;

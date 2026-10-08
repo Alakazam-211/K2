@@ -298,3 +298,104 @@ fn local_auth_confirm_uses_the_fake_in_tests() {
     let (s, v) = call(&t, REKEY, &owner(), json!({ "confirmToken": tok }));
     assert_eq!(s, 200, "{v}");
 }
+
+#[test]
+fn moving_secrets_needs_an_admin_or_an_agent_allowed_to_manage() {
+    let t = vault();
+    use crate::vault_use_routes::RECIPIENT;
+    let (s, v) = call(&t, RECIPIENT, &agent("ws1", false), Value::Null);
+    assert_eq!(s, 403, "{v}");
+    let (s, v) = call(&t, RECIPIENT, &shell("ws1"), Value::Null);
+    assert_eq!(s, 403, "{v}");
+    let (s, v) = call(&t, RECIPIENT, &login(Role::Member), Value::Null);
+    assert_eq!(s, 403, "{v}");
+    let (s, v) = call(&t, RECIPIENT, &agent("ws1", true), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    assert!(v["recipient"].as_str().expect("recipient").starts_with("age1"));
+    let (s, v) = call(&t, RECIPIENT, &login(Role::Admin), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["vaultId"].as_str().expect("vaultId"), t.v.vault_id());
+}
+
+#[test]
+fn a_carry_opens_only_in_the_target_vault_and_lists_before_applying() {
+    use crate::vault_use_routes::{CARRY_EXPORT, CARRY_IMPORT, RECIPIENT};
+    let src = vault();
+    let dst = vault();
+    let other = vault();
+    set_server(&src, "STRIPE_KEY", SENTINEL);
+    let (s, r) = call(&dst, RECIPIENT, &owner(), Value::Null);
+    assert_eq!(s, 200, "{r}");
+    let body = json!({ "targetRecipient": r["recipient"], "targetVaultId": r["vaultId"], "server": ["STRIPE_KEY"] });
+    let (s, ex) = call(&src, CARRY_EXPORT, &owner(), body);
+    assert_eq!(s, 200, "{ex}");
+    assert_eq!(ex["count"], 1);
+    assert!(!ex.to_string().contains(SENTINEL), "export response carries ciphertext only");
+    let carry = ex["carryB64"].clone();
+    // Another vault can't open it.
+    let (s, v) = call(&other, CARRY_IMPORT, &owner(), json!({ "carryB64": carry }));
+    assert_ne!(s, 200, "{v}");
+    // Dry run first: names only, nothing written.
+    let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["dryRun"], true);
+    assert_eq!(v["secrets"][0]["name"], "STRIPE_KEY");
+    assert!(!v.to_string().contains(SENTINEL));
+    assert_eq!(dst.v.user_secret_count(), 0);
+    let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "apply": true }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["imported"][0], "STRIPE_KEY");
+    assert_eq!(dst.v.user_secret_count(), 1);
+    // A second apply keeps what's there.
+    let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "apply": true }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["imported"].as_array().expect("imported").len(), 0);
+    // An agent without the switch can't import.
+    let (s, v) = call(&dst, CARRY_IMPORT, &agent("ws1", false), json!({ "carryB64": carry }));
+    assert_eq!(s, 403, "{v}");
+}
+
+#[test]
+fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
+    use crate::vault_use_routes::BACKUP;
+    let src = vault();
+    set_server(&src, "STRIPE_KEY", SENTINEL);
+    let (s, v) = call(&src, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
+    assert_eq!(s, 200, "{v}");
+    let phrase = v["phrase"].as_str().expect("phrase").to_string();
+    let words: Vec<&str> = phrase.split(' ').collect();
+    let (s, v) = call(&src, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
+    assert_eq!(s, 200, "{v}");
+    let out = TestDir::new("backup-out");
+    let (s, v) = call(&src, BACKUP, &agent("ws1", true), json!({ "destDir": out.path() }));
+    assert_eq!(s, 403, "agents don't take backups over the routes: {v}");
+    let (s, v) = call(&src, BACKUP, &owner(), json!({ "destDir": out.path() }));
+    assert_eq!(s, 200, "{v}");
+    let snap = std::fs::read(out.path().join("vault.db")).expect("snapshot");
+    assert!(!snap.windows(SENTINEL.len()).any(|w| w == SENTINEL.as_bytes()));
+
+    let dst = vault();
+    let restore = |c: &VaultCaller, body: Value| call(&dst, RESTORE, c, body);
+    let base = json!({ "fromDir": out.path(), "holder": "recovery", "phrase": phrase, "dryRun": true });
+    let (s, v) = restore(&agent("ws1", true), base.clone());
+    assert_eq!(s, 403, "{v}");
+    let (s, v) = restore(&owner(), base.clone());
+    assert_eq!(s, 403, "a person at a terminal only: {v}");
+    let (s, v) = restore(&owner_tty(), base.clone());
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["vaultId"].as_str().expect("vaultId"), src.v.vault_id());
+    assert_eq!(v["secrets"], 1);
+    let mut wrong = base.clone();
+    let mut w2: Vec<&str> = words.clone();
+    w2.swap(0, 1);
+    wrong["phrase"] = json!(w2.join(" "));
+    let (s, v) = restore(&owner_tty(), wrong);
+    assert_ne!(s, 200, "{v}");
+    // This box already holds a secret: no silent replace.
+    set_server(&dst, "OTHER", "x");
+    let mut apply = base.clone();
+    apply["dryRun"] = json!(false);
+    let (s, v) = restore(&owner_tty(), apply);
+    assert_eq!(s, 409, "{v}");
+    assert_eq!(code(&v), "vault_not_empty");
+}

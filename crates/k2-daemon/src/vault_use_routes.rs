@@ -30,11 +30,19 @@ pub const ENV_FILE: &str = "/cli/vault/env-file";
 pub const IMPORT: &str = "/cli/vault/import";
 /// GET: a published service's env mode and bindings; POST: change them.
 pub const SERVICE: &str = "/cli/vault/service";
+/// This vault's public carry recipient (clones/migrations, §13.3).
+pub const RECIPIENT: &str = "/cli/vault/recipient";
+pub const CARRY_EXPORT: &str = "/cli/vault/carry/export";
+pub const CARRY_IMPORT: &str = "/cli/vault/carry/import";
+/// A ciphertext snapshot of vault.db for a backup (§13.1).
+pub const BACKUP: &str = "/cli/vault/backup";
+/// Wrap the data key to a backup's age recipient.
+pub const BACKUP_RECIPIENT: &str = "/cli/vault/backup/recipient";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE];
+pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT];
 /// POST-only routes among them (`service` serves both).
-pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT];
+pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT];
 
 pub fn is_route(path: &str) -> bool {
     ROUTES.contains(&path)
@@ -58,6 +66,11 @@ pub fn handle(
         IMPORT => import(vault, c, body),
         SERVICE if body.is_empty() => service_get(vault, c, params),
         SERVICE => service_set(c, body),
+        RECIPIENT => recipient(vault, c),
+        CARRY_EXPORT => carry_export(vault, c, body),
+        CARRY_IMPORT => carry_import(vault, c, body),
+        BACKUP => backup(vault, c, body),
+        BACKUP_RECIPIENT => backup_recipient(vault, c, body),
         _ => Err(VaultError::not_found("no such vault route")),
     };
     match r {
@@ -398,6 +411,182 @@ fn service_set(c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     }
     let se = crate::vault::publish_env::set(&id, b.mode.as_deref(), b.env_file.clone().map(Some)).map_err(|e| VaultError::bad_request("bad_mode", e))?;
     Ok(json!({ "ok": true, "service": label, "mode": se.mode, "envFile": se.env_file, "restart": "restart the service to apply" }))
+}
+
+// ── carries and backups (§13, KV31, VS2, VS20) ─────────────────────
+
+/// Migrations: the owner, an Admin, or an IT agent ("Allow managing
+/// server-wide secrets") may run the carry (Rosson on VS2). The recovery
+/// key is never involved.
+fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
+    match c.actor.agent() {
+        Some(a) if a.vault_manage => Ok(()),
+        Some(_) => Err(VaultError::owner_confirm_required("moving secrets between boxes needs \"Allow managing server-wide secrets\"")),
+        None if c.actor.is_admin_human() => Ok(()),
+        None => Err(VaultError::forbidden("vault_admin_required", "this needs an Owner or Admin")),
+    }
+}
+
+fn recipient(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {
+    may_carry(c)?;
+    let r = vault.carry_recipient()?;
+    Ok(json!({ "recipient": r.encode(), "fingerprint": r.fingerprint(), "vaultId": vault.vault_id() }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CarryExportBody {
+    target_recipient: Option<String>,
+    target_vault_id: Option<String>,
+    #[serde(default)]
+    workspaces: Vec<String>,
+    /// Server-scope secrets to carry, by name (only when ticked, §13.3).
+    #[serde(default)]
+    server: Vec<String>,
+    #[serde(default)]
+    own_box_move: bool,
+}
+
+fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    may_carry(c)?;
+    let b: CarryExportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let target = k2_vault::agefmt::Recipient::parse(b.target_recipient.as_deref().unwrap_or(""))?;
+    let target_id = b.target_vault_id.clone().ok_or_else(|| VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"))?;
+    let mut ws_ids: HashMap<String, String> = HashMap::new();
+    for w in &b.workspaces {
+        let id = crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?;
+        ws_ids.insert(id, crate::vault::workspace_label(w));
+    }
+    let all = vault.list(&k2_vault::ListFilter::default(), &k2_vault::Actor::System("carry".into()))?;
+    let mut items = vec![];
+    for m in all {
+        if m.namespace != k2_vault::Namespace::User {
+            continue;
+        }
+        let label = match m.scope.kind {
+            k2_vault::ScopeKind::Workspace => match ws_ids.get(&m.scope.id) {
+                Some(l) => l.clone(),
+                None => continue,
+            },
+            k2_vault::ScopeKind::Server if b.server.contains(&m.name) => String::new(),
+            _ => continue,
+        };
+        let v = vault.resolve(&k2_vault::Selector::Id(m.id.clone()), Use::System, &Requester::System("carry".into()))?;
+        items.push(k2_vault::carry::CarryItem {
+            scope_kind: m.scope.kind.as_str().into(),
+            scope_label: label,
+            name: m.name.clone(),
+            kind: m.kind.as_str().into(),
+            hosts: m.hosts.clone(),
+            inject: m.inject.clone(),
+            default_delivery: m.default_delivery.as_str().into(),
+            delivery_ceiling: m.delivery_ceiling.as_str().into(),
+            description: m.description.clone(),
+            human_given: m.human_given,
+            value_b64: k2_vault::carry::CarryItem::encode_value(v.value.expose()),
+        });
+    }
+    let n = items.len();
+    let names: Vec<String> = items.iter().map(|i| format!("{}:{}", if i.scope_label.is_empty() { "server" } else { &i.scope_label }, i.name)).collect();
+    let file = vault.carry_seal(&target, &target_id, b.own_box_move, items)?;
+    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok export {n} to {}", target.fingerprint()), "-");
+    Ok(json!({
+        "ok": true,
+        "count": n,
+        "secrets": names,
+        "carryB64": base64::engine::general_purpose::STANDARD.encode(&file),
+        "targetFingerprint": target.fingerprint(),
+    }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CarryImportBody {
+    carry_b64: Option<String>,
+    #[serde(default)]
+    apply: bool,
+}
+
+fn carry_import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    may_carry(c)?;
+    let b: CarryImportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let file = base64::engine::general_purpose::STANDARD
+        .decode(b.carry_b64.as_deref().unwrap_or("").trim())
+        .map_err(|_| VaultError::bad_request("bad_carry", "carryB64 isn't base64"))?;
+    let p = vault.carry_open(&file)?;
+    let source_fp = k2_vault::crypto::hex(&k2_vault::crypto::sha256(p.source_public_key.as_bytes())[..8]);
+    let listing: Vec<Value> = p
+        .items
+        .iter()
+        .map(|i| json!({ "scope": if i.scope_label.is_empty() { "server".to_string() } else { format!("ws:{}", i.scope_label) }, "name": i.name, "hosts": i.hosts, "delivery": i.default_delivery }))
+        .collect();
+    if !b.apply {
+        return Ok(json!({ "ok": true, "dryRun": true, "sourceVaultId": p.source_vault_id, "sourceKeyFingerprint": source_fp, "ownBoxMove": p.own_box_move, "secrets": listing }));
+    }
+    let mut imported = vec![];
+    let mut skipped = vec![];
+    for i in &p.items {
+        let scope = if i.scope_kind == "server" {
+            k2_vault::Scope::server()
+        } else {
+            match crate::vault::workspace_id(&i.scope_label) {
+                Some(id) => k2_vault::Scope::workspace(id),
+                None => {
+                    skipped.push(format!("{}: no workspace {} here", i.name, i.scope_label));
+                    continue;
+                }
+            }
+        };
+        let mut req = k2_vault::PutRequest::new(k2_vault::Namespace::User, scope, i.name.clone(), k2_vault::Kind::parse(&i.kind)?);
+        req.hosts = i.hosts.clone();
+        req.inject = i.inject.clone();
+        req.default_delivery = Some(k2_vault::Delivery::parse(&i.default_delivery)?);
+        req.delivery_ceiling = Some(k2_vault::Delivery::parse(&i.delivery_ceiling)?);
+        req.description = i.description.clone();
+        req.origin = format!("import:clone:{}", p.source_vault_id);
+        req.mode = k2_vault::PutMode::Create;
+        // VS20: person-given only survives the owner's own move.
+        req.human_given_override = Some(i.human_given && p.own_box_move);
+        match vault.put(req, i.value()?, &k2_vault::Actor::System("carry".into())) {
+            Ok(_) => imported.push(i.name.clone()),
+            Err(e) if e.code == "secret_exists" => skipped.push(format!("{}: already here (kept this box's)", i.name)),
+            Err(e) => skipped.push(format!("{}: {}", i.name, e.code)),
+        }
+    }
+    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok import {} from {}", imported.len(), p.source_vault_id), "-");
+    Ok(json!({ "ok": true, "imported": imported, "skipped": skipped }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupBody {
+    dest_dir: Option<String>,
+    recipient: Option<String>,
+}
+
+fn backup(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    if c.is_passport() || !c.actor.is_admin_human() {
+        return Err(VaultError::forbidden("owner_only", "backups are made by the owner or K2's backup job"));
+    }
+    let b: BackupBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let d = PathBuf::from(b.dest_dir.ok_or_else(|| VaultError::bad_request("dest_required", "where should the snapshot go?"))?);
+    if !d.is_dir() {
+        return Err(VaultError::not_found("that folder doesn't exist"));
+    }
+    let dest = d.join("vault.db");
+    vault.snapshot_to(&dest)?;
+    Ok(json!({ "ok": true, "path": dest.display().to_string(), "note": "ciphertext only; restoring it on a new box needs the recovery key or the backup key" }))
+}
+
+fn backup_recipient(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    if c.is_passport() || !c.actor.is_admin_human() {
+        return Err(VaultError::forbidden("owner_only", "the backup key is set by the owner"));
+    }
+    let b: BackupBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let r = k2_vault::agefmt::Recipient::parse(b.recipient.as_deref().unwrap_or(""))?;
+    vault.add_wrap("backup", &r, &c.actor)?;
+    crate::vault::auth_audit("vault-backup-key", &c.actor.stamp(), &format!("ok {}", r.fingerprint()), "-");
+    Ok(json!({ "ok": true, "fingerprint": r.fingerprint() }))
 }
 
 /// A published service's id from its label (`name`) or id. Agents see

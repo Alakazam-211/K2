@@ -68,7 +68,10 @@ on any thread count.
     perf gate) gets a per-thread or guarded test override
     (`spawn_queue::test_override`, `perf`'s gate override); tests never flip the
     env var under other tests.
-12. **Assert exactly.** Prefer an exact expected value over "different and longer"
+12. **Write scripts you exec with `test_env::write_executable`.** `fs::write` +
+    `chmod` + exec flakes with ETXTBSY ("Text file busy") on Linux: another test
+    thread's `fork` can hold your write fd open at the moment you exec.
+13. **Assert exactly.** Prefer an exact expected value over "different and longer"
     (`path_enrichment_tests` asserts the exact PATH from a fake login shell).
 
 ## Running locally

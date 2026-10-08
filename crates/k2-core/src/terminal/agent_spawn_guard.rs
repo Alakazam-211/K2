@@ -302,12 +302,7 @@ mod tests {
 
     fn write_exec(dir: &Path, name: &str) -> PathBuf {
         let p = dir.join(name);
-        std::fs::write(&p, "#!/bin/sh\nexec cat\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        crate::test_env::write_executable(&p, "#!/bin/sh\nexec cat\n");
         p
     }
 

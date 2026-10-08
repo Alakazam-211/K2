@@ -187,6 +187,45 @@ impl Drop for TempHome {
     }
 }
 
+/// Write an executable script (mode 0755) that a test will exec.
+///
+/// Never `fs::write` + `chmod` + exec from a multi-threaded test binary on
+/// Linux: while this thread holds the file open for writing, another test
+/// thread may `fork`, and the child keeps a copy of that write fd until it
+/// `exec`s. An `exec` of the script inside that window fails with ETXTBSY
+/// ("Text file busy"), which surfaced as a 3/200 flake. The bytes are
+/// written by a short-lived `/bin/sh` child instead, so the write fd only
+/// ever exists in that child, never in this process.
+pub fn write_executable(path: &Path, contents: &str) {
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+            .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+    }
+    #[cfg(unix)]
+    write_executable_unix(path, contents);
+}
+
+#[cfg(unix)]
+fn write_executable_unix(path: &Path, contents: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn /bin/sh to write {}: {e}", path.display()));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(contents.as_bytes())
+        .unwrap_or_else(|e| panic!("pipe script for {}: {e}", path.display()));
+    let status = child.wait().expect("wait for script writer");
+    assert!(status.success(), "writing {} failed: {status}", path.display());
+}
+
 /// RAII agent-CLI shims: a temp dir holding a `#!/bin/sh\nexec cat`
 /// executable for every [`crate::terminal::agent_spawn_guard::AGENT_CLIS`]
 /// name, registered as `K2_TEST_AGENT_SHIM_DIR` (prepended to any existing
@@ -209,15 +248,11 @@ impl AgentShim {
 
     /// Install shims whose script body (after `#!/bin/sh`) is `body`.
     pub fn with_body(body: &str) -> Self {
-        use std::os::unix::fs::PermissionsExt;
         use crate::terminal::agent_spawn_guard::{AGENT_CLIS, SHIM_DIR_ENV};
         let dir = unique_temp_path("agent-shim");
         std::fs::create_dir_all(&dir).expect("create agent shim dir");
         for name in AGENT_CLIS {
-            let p = dir.join(name);
-            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).expect("write agent shim");
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod agent shim");
+            write_executable(&dir.join(name), &format!("#!/bin/sh\n{body}\n"));
         }
         let list = match std::env::var_os(SHIM_DIR_ENV).filter(|v| !v.is_empty()) {
             Some(prev) => {

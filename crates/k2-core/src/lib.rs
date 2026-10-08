@@ -406,13 +406,11 @@ mod path_enrichment_tests {
 
     impl FakeShell {
         fn new(body: &str) -> Self {
-            use std::os::unix::fs::PermissionsExt;
             let dir = crate::test_env::unique_temp_path("fake-shell");
             std::fs::create_dir_all(&dir).expect("create fake shell dir");
-            let script = dir.join("login-shell");
-            std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write fake shell");
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod fake shell");
+            // Not fs::write + exec: ETXTBSY under parallel forks (see
+            // test_env::write_executable).
+            crate::test_env::write_executable(&dir.join("login-shell"), &format!("#!/bin/sh\n{body}\n"));
             Self { dir }
         }
 

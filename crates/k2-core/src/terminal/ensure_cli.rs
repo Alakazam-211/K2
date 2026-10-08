@@ -427,9 +427,7 @@ mod tests {
         let bin = home.join(".grok/bin");
         fs::create_dir_all(&bin).unwrap();
         let grok = bin.join("grok");
-        fs::write(&grok, "#!/bin/sh\nexit 0\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&grok, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_env::write_executable(&grok, "#!/bin/sh\nexit 0\n");
         let marker = home.join("ran");
         let script = format!("printf x > {}", shell_quote(&marker.to_string_lossy()));
         let result =

@@ -84,12 +84,8 @@ fn write_codex_stub(supports: bool) -> PathBuf {
          exec cat\n"
     );
     let path = dir.join("codex");
-    std::fs::write(&path, script).expect("stub script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    // Not fs::write + exec: ETXTBSY under parallel forks.
+    k2_core::test_env::write_executable(&path, &script);
     path
 }
 

@@ -1771,13 +1771,7 @@ mod tests {
             let bin_dir = crate::test_env::unique_temp_path("frpc-bin");
             std::fs::create_dir_all(&bin_dir).expect("mk bin dir");
             let fake = bin_dir.join("frpc");
-            std::fs::write(&fake, "#!/bin/sh\nexit 0\n").expect("write fake frpc");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod fake frpc");
-            }
+            crate::test_env::write_executable(&fake, "#!/bin/sh\nexit 0\n");
             let res = crate::terminal::path_env::with_lookup_path(&bin_dir, || {
                 resolve_frpc(&FrpcBinary::Auto)
             });
@@ -2010,22 +2004,12 @@ mod tests {
             let dir = crate::test_env::unique_temp_path("fake-frpc");
             std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
             let script = dir.join("frpc-stuck.sh");
-            std::fs::write(
-                &script,
-                "#!/bin/sh\n\
+            crate::test_env::write_executable(&script, "#!/bin/sh\n\
                  echo '[I] [service.go:299] login to server success, get run id [test]'\n\
                  while true; do\n\
                  \techo '[W] [service.go:132] connect to server error: dial tcp 10.0.0.1:7000: i/o timeout'\n\
                  \tsleep 0.1\n\
-                 done\n",
-            )
-            .expect("write fake frpc");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod fake frpc");
-            }
+                 done\n");
 
             config::save(&TunnelConfig {
                 relays: vec![
@@ -2424,12 +2408,7 @@ mod tests {
             let dir = crate::test_env::unique_temp_path("orphan-frpc");
             std::fs::create_dir_all(&dir).expect("mk orphan-frpc dir");
             let frpc = dir.join("frpc");
-            std::fs::write(&frpc, "#!/bin/sh\nsleep 300\n").expect("write sleep-frpc");
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&frpc, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod sleep-frpc");
-            }
+            crate::test_env::write_executable(&frpc, "#!/bin/sh\nsleep 300\n");
 
             let mut child = Command::new(&frpc)
                 .arg("-c")
@@ -2492,12 +2471,7 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("mk solo-stop dir");
             // Named `frpc` so stop()'s pattern reap is a second line of defense.
             let script = dir.join("frpc");
-            std::fs::write(&script, "#!/bin/sh\nsleep 300\n").expect("write long-lived frpc");
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod long-lived frpc");
-            }
+            crate::test_env::write_executable(&script, "#!/bin/sh\nsleep 300\n");
 
             config::save(&TunnelConfig {
                 token: "tok".to_string(),

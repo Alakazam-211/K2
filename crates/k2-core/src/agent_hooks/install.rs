@@ -1189,9 +1189,7 @@ mod tests {
 
     #[cfg(unix)]
     fn write_exe(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, body).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_env::write_executable(path, body);
     }
 
     /// T-S1g (A9): a real-looking `claude` on PATH under a temp HOME is

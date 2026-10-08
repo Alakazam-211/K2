@@ -383,9 +383,7 @@ mod tests {
 
     #[cfg(unix)]
     fn write_exec(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, body).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_env::write_executable(path, body);
     }
 
     /// Fake Codex whose `--help` lists the flag (like 0.155+); any other

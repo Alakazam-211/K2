@@ -3156,12 +3156,8 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("stub dir");
         let path = dir.join(basename);
-        std::fs::write(&path, "#!/bin/sh\nexec cat\n").expect("stub script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
+        // Not fs::write + exec: ETXTBSY under parallel forks.
+        k2_core::test_env::write_executable(&path, "#!/bin/sh\nexec cat\n");
         path
     }
 

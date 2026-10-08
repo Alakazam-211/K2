@@ -39816,7 +39816,8 @@ elif verb == "sync-preview":
     page = d.get("page") or {}
     theme = d.get("theme") or {}
     s = d.get("sync") or {}
-    print("preview of %s (%s) with K2\x27s default for the %s (nothing written)" % (g.get("name"), g.get("id"), s.get("preview")))
+    parts = {"page": "page", "theme": "theme", "both": "page and theme"}.get(s.get("preview"), s.get("preview"))
+    print("preview of %s (%s) with K2\x27s default for its %s (nothing written)" % (g.get("name"), g.get("id"), parts))
     print("  template %s, layout %s, %d widget(s)" % (page.get("template"), (page.get("layout") or {}).get("split"), len(page.get("widgets") or [])))
     print("  theme %s, accent %s / %s" % (theme.get("name"), ((theme.get("tokens") or {}).get("colors") or {}).get("light", {}).get("accent"), ((theme.get("tokens") or {}).get("colors") or {}).get("dark", {}).get("accent")))
     print("  page now: %s; theme now: %s" % ((s.get("page") or {}).get("mode"), (s.get("theme") or {}).get("mode")))

@@ -346,19 +346,12 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let (s, v) = call(port, "POST", &format!("/cli/zen/widget/grant?token={session}"), Some("{}"));
         assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{role}: {v}");
     }
-    // 65 KB body → 413. The daemon refuses on the declared length as soon
-    // as the head ends and closes; send only the head, so the test never
-    // races that close with a 65 KB write (on Linux the unread body turns
-    // the close into a reset and write_all fails before the 413 is read).
-    let big_len = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024)).len();
-    let mut c = Conn::try_open(port).expect("connect");
-    let head = format!(
-        "POST /cli/zen/widget/new?token={tok} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {big_len}\r\n\r\n"
-    );
-    c.reader.get_mut().write_all(head.as_bytes()).expect("write head");
-    let mut status_line = String::new();
-    c.reader.read_line(&mut status_line).expect("read 413 status line");
-    assert!(status_line.starts_with("HTTP/1.1 413"), "65 KB declared body: {status_line:?}");
+    // 65 KB body, sent in full → 413. The daemon answers from the declared
+    // length, then drains the rest of the body before closing, so the whole
+    // write succeeds and the 413 is read (no reset).
+    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024));
+    let (s, _) = Conn::try_open(port).expect("connect").request("POST", &format!("/cli/zen/widget/new?token={tok}"), Some(&big));
+    assert_eq!(s, 413);
     task.abort();
 }
 
@@ -623,5 +616,52 @@ async fn uwb15_lib_routes_refuse_downloads_air_gapped_and_serve_the_cache() {
         assert_eq!((s, v["error"].as_str()), (409, Some("hash_mismatch")), "{v}");
         assert!(!cached.exists(), "a file that no longer matches its pin is deleted");
         std::env::remove_var("K2_AIRGAP");
+    });
+}
+
+/// A client that sends an oversized body IN FULL reads the 413, never a
+/// connection reset: the daemon answers from the declared length, then
+/// reads and discards the rest of the body before it closes. 20 rounds per
+/// route, a fresh connection each, so a race shows up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_full_body_reads_413_not_a_reset() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_temp_home(|_home| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let zen = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024));
+        let brief = format!("{{\"title\":\"t\",\"briefHtml\":\"{}\"}}", "y".repeat(3 * 1024 * 1024));
+        for (path, body) in [
+            (format!("/cli/zen/widget/new?token={OWNER_TOKEN}"), &zen),
+            (format!("/cli/feedback/create?token={OWNER_TOKEN}"), &brief),
+        ] {
+            for round in 1..=20 {
+                let mut c = Conn::try_open(d.port).expect("connect");
+                let head = format!(
+                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let stream = c.reader.get_mut();
+                stream.write_all(head.as_bytes()).unwrap_or_else(|e| panic!("{path} round {round}: head: {e:?}"));
+                stream
+                    .write_all(body.as_bytes())
+                    .unwrap_or_else(|e| panic!("{path} round {round}: the full body must be accepted, got {e:?}"));
+                let mut status_line = String::new();
+                c.reader
+                    .read_line(&mut status_line)
+                    .unwrap_or_else(|e| panic!("{path} round {round}: read the answer: {e:?}"));
+                assert!(
+                    status_line.starts_with("HTTP/1.1 413"),
+                    "{path} round {round}: {} byte body: {status_line:?}",
+                    body.len()
+                );
+                // The rest of the answer, then a clean EOF (not a reset).
+                let mut rest = Vec::new();
+                c.reader
+                    .read_to_end(&mut rest)
+                    .unwrap_or_else(|e| panic!("{path} round {round}: after the 413: {e:?}"));
+                let rest = String::from_utf8_lossy(&rest);
+                assert!(rest.contains("too_large"), "{path} round {round}: 413 body: {rest}");
+            }
+        }
     });
 }

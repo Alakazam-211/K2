@@ -429,6 +429,33 @@ async fn case10_oversized_content_length_is_413() {
     assert_eq!(status, 413, "an oversized declared body must be refused with 413");
 }
 
+/// The same refusal with the oversized body sent IN FULL: the client's
+/// write succeeds and it reads the 413, never a reset — the server drains
+/// the rest of the body before it closes. 20 rounds, a fresh socket each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn case10b_oversized_full_body_reads_413_not_a_reset() {
+    let _g = lock();
+    let _home = set_short_home();
+    let (_sid, token, sock) = mint_bind_serve("pane-1");
+    settle().await;
+    let body = "x".repeat(4 * 1024 * 1024 + 1024);
+    let raw = post_form("/cli/inbox/compose", &token, &body);
+    for round in 1..=20 {
+        let mut stream = UnixStream::connect(&sock).await.expect("connect cell socket");
+        stream
+            .write_all(raw.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: the full body must be accepted, got {e:?}"));
+        let mut out = Vec::new();
+        stream
+            .read_to_end(&mut out)
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: read the answer: {e:?}"));
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("HTTP/1.1 413"), "round {round}: {text:?}");
+    }
+}
+
 /// Inbox `project=` is the compose TARGET, not the operand Finding 1 forces.
 ///
 /// Sandbox P1 (a4b13281) forced every `project=` to the principal's own

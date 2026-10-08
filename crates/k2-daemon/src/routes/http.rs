@@ -1715,14 +1715,71 @@ pub(crate) struct BodyTooLarge {
     /// Bytes actually read off the socket (head + any body bytes that
     /// arrived with it). Never more than `max` + one read past the head.
     pub read: usize,
+    /// Declared body bytes the client has yet to send (`Content-Length`
+    /// minus what was already read past the head). `None` when there was
+    /// no `Content-Length`. [`drain_refused_body`] reads this much.
+    pub remaining: Option<usize>,
+}
+
+/// Most bytes [`drain_refused_body`] reads and throws away.
+pub(crate) const REFUSED_BODY_DRAIN_MAX: usize = 8 * 1024 * 1024;
+/// How long [`drain_refused_body`] waits, in total, for the rest of a
+/// refused body.
+pub(crate) const REFUSED_BODY_DRAIN_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5);
+
+/// After a refusal was written (413), read and discard the rest of the
+/// body the client is still sending — `remaining` bytes (or, with no
+/// `Content-Length`, until EOF), at most [`REFUSED_BODY_DRAIN_MAX`] and
+/// [`REFUSED_BODY_DRAIN_TIMEOUT`] — so the socket closes cleanly. Closing
+/// with unread bytes in the receive buffer makes the kernel (Linux) answer
+/// with a reset, and a client still writing its body then sees
+/// "connection reset" instead of the 413. Never buffers: one small
+/// scratch buffer, reused. Returns the bytes drained.
+pub(crate) async fn drain_refused_body<R>(stream: &mut R, remaining: Option<usize>) -> usize
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let want = remaining.unwrap_or(REFUSED_BODY_DRAIN_MAX).min(REFUSED_BODY_DRAIN_MAX);
+    let deadline = tokio::time::Instant::now() + REFUSED_BODY_DRAIN_TIMEOUT;
+    let mut scratch = [0u8; 16 * 1024];
+    let mut drained = 0usize;
+    while drained < want {
+        let take = (want - drained).min(scratch.len());
+        match tokio::time::timeout_at(deadline, stream.read(&mut scratch[..take])).await {
+            Ok(Ok(n)) if n > 0 => drained += n,
+            // EOF, a read error, or out of time: stop.
+            _ => break,
+        }
+    }
+    drained
+}
+
+/// Answer a body refused by [`read_post_body_capped`]: write the response,
+/// half-close our side (the client sees the whole answer and EOF), then
+/// drain what the client is still sending (see [`drain_refused_body`]).
+/// The caller then closes the connection (`DispatchOutcome::Done`): the
+/// unread rest must never be parsed as the next keep-alive request.
+pub(crate) async fn refuse_body_too_large(
+    stream: &mut TcpStream,
+    refused: &BodyTooLarge,
+    status: &str,
+    ct: &str,
+    body: &str,
+) {
+    send_response(stream, status, ct, body).await;
+    let _ = stream.flush().await;
+    let _ = stream.shutdown().await;
+    drain_refused_body(stream, refused.remaining).await;
 }
 
 /// Like [`read_post_body`], but refuses a body over `max` bytes WITHOUT
 /// buffering it (prd-ticket-html-brief-v1 H30). Checks `Content-Length`
 /// as soon as the head ends; with no `Content-Length` it stops once the
-/// bytes past the head exceed `max`. The caller answers 413 and closes
-/// the socket (`DispatchOutcome::Done`): the unread rest of the body
-/// must never be parsed as the next keep-alive request.
+/// bytes past the head exceed `max`. The caller answers with
+/// [`refuse_body_too_large`] (413, then drain what the client is still
+/// sending) and closes the socket (`DispatchOutcome::Done`): the unread
+/// rest of the body must never be parsed as the next keep-alive request.
 pub(crate) async fn read_post_body_capped<R>(
     stream: &mut R,
     buf: &mut [u8],
@@ -1755,11 +1812,16 @@ where
                 });
                 if let Some(clen) = content_length {
                     if clen > max {
-                        return Err(BodyTooLarge { declared: Some(clen), read: accumulated.len() });
+                        let body_read = accumulated.len() - (pos + 4);
+                        return Err(BodyTooLarge {
+                            declared: Some(clen),
+                            read: accumulated.len(),
+                            remaining: Some(clen.saturating_sub(body_read)),
+                        });
                     }
                 }
             } else if accumulated.len() > HEAD_SLACK + max {
-                return Err(BodyTooLarge { declared: None, read: accumulated.len() });
+                return Err(BodyTooLarge { declared: None, read: accumulated.len(), remaining: None });
             }
         }
         if let Some(body_start) = header_end {
@@ -1770,7 +1832,7 @@ where
                 Some(_) => {}
                 None => {
                     if accumulated.len() - body_start > max {
-                        return Err(BodyTooLarge { declared: None, read: accumulated.len() });
+                        return Err(BodyTooLarge { declared: None, read: accumulated.len(), remaining: None });
                     }
                     return Ok(accumulated[body_start..].to_vec());
                 }
@@ -1840,6 +1902,44 @@ mod tests {
         assert_eq!(err.declared, Some(3 * 1024 * 1024));
         assert!(err.read <= 4096, "read {} bytes; must stop at the head", err.read);
         assert!(reader.pos <= 4096, "reader handed out {} bytes", reader.pos);
+    }
+
+    /// After a refusal, the drain reads exactly the declared rest of the
+    /// body — nothing of what follows — in small reads, never buffering it.
+    #[tokio::test]
+    async fn refused_body_is_drained_to_its_declared_end() {
+        let body = vec![b'x'; 3 * 1024 * 1024];
+        let mut data = request_with_body(body.len(), &body);
+        data.extend_from_slice(b"NEXT");
+        let mut reader = CountingReader { data, pos: 0, chunk: 4096 };
+        let mut buf = [0u8; 4096];
+        let err = read_post_body_capped(&mut reader, &mut buf, 1024)
+            .await
+            .expect_err("over the cap");
+        let body_read = err.read - (reader.data.len() - 4 - body.len());
+        assert_eq!(err.remaining, Some(body.len() - body_read), "remaining = declared - body bytes read");
+        let drained = drain_refused_body(&mut reader, err.remaining).await;
+        assert_eq!(drained, body.len() - body_read);
+        assert_eq!(reader.pos, reader.data.len() - 4, "the whole body and nothing after it");
+    }
+
+    /// The drain stops at its cap, and at EOF when no length was declared.
+    #[tokio::test]
+    async fn drain_is_capped_and_stops_at_eof() {
+        let mut huge = CountingReader { data: vec![0u8; REFUSED_BODY_DRAIN_MAX + 4096], pos: 0, chunk: 1 << 16 };
+        assert_eq!(drain_refused_body(&mut huge, Some(usize::MAX)).await, REFUSED_BODY_DRAIN_MAX);
+        assert_eq!(huge.pos, REFUSED_BODY_DRAIN_MAX, "never reads past the cap");
+        let mut short = CountingReader { data: vec![0u8; 1000], pos: 0, chunk: 64 };
+        assert_eq!(drain_refused_body(&mut short, None).await, 1000, "no length: read to EOF");
+    }
+
+    /// A client that stops sending does not hold the drain past its timeout.
+    #[tokio::test(start_paused = true)]
+    async fn drain_gives_up_after_its_timeout() {
+        let (mut quiet, _keep_open) = tokio::io::duplex(64);
+        let started = tokio::time::Instant::now();
+        assert_eq!(drain_refused_body(&mut quiet, Some(1_000_000)).await, 0);
+        assert!(started.elapsed() >= REFUSED_BODY_DRAIN_TIMEOUT, "waited {:?}", started.elapsed());
     }
 
     #[tokio::test]

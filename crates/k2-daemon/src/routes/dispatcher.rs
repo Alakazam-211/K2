@@ -1598,9 +1598,10 @@ async fn handle_one_request(
             .await
             {
                 Ok(b) => b,
-                Err(_) => {
-                    super::http::send_response(
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
                         &mut *stream,
+                        &refused,
                         "413 Payload Too Large",
                         "application/json",
                         r#"{"error":"hook body over 1 MiB"}"#,
@@ -2305,9 +2306,10 @@ async fn handle_one_request(
             .await
             {
                 Ok(b) => b,
-                Err(_) => {
-                    super::http::send_response(
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
                         &mut *stream,
+                        &refused,
                         "413 Payload Too Large",
                         "application/json",
                         r#"{"error":{"code":"body_too_large","hint":"swap-canonical bodies are at most 256 KiB"},"swapped":false}"#,
@@ -5448,9 +5450,9 @@ async fn handle_one_request(
                 .await
                 {
                     Ok(b) => b,
-                    Err(_) => {
+                    Err(refused) => {
                         let r = crate::llm_accounts_routes::too_large();
-                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
                             .await;
                         return DispatchOutcome::Done;
                     }
@@ -5491,9 +5493,9 @@ async fn handle_one_request(
                 .await
                 {
                     Ok(b) => b,
-                    Err(_) => {
+                    Err(refused) => {
                         let r = crate::sidecar_routes::too_large(p);
-                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
                             .await;
                         return DispatchOutcome::Done;
                     }
@@ -5528,9 +5530,9 @@ async fn handle_one_request(
             let body_bytes = if is_post {
                 match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_routes::MAX_BODY).await {
                     Ok(b) => b,
-                    Err(_) => {
+                    Err(refused) => {
                         let r = crate::zen_routes::too_large();
-                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
                         return DispatchOutcome::Done;
                     }
                 }
@@ -5571,9 +5573,9 @@ async fn handle_one_request(
                 let cap = crate::home_avatar_routes::max_body(p);
                 match super::http::read_post_body_capped(&mut *stream, &mut buf, cap).await {
                     Ok(b) => b,
-                    Err(_) => {
+                    Err(refused) => {
                         let r = crate::home_avatar_routes::too_large(p);
-                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
                         return DispatchOutcome::Done;
                     }
                 }
@@ -5947,9 +5949,9 @@ async fn handle_one_request(
                 .await
                 {
                     Ok(b) => b,
-                    Err(too_large) => {
-                        let r = crate::feedback_routes::create_body_too_large(too_large.declared);
-                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    Err(refused) => {
+                        let r = crate::feedback_routes::create_body_too_large(refused.declared);
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
                             .await;
                         return DispatchOutcome::Done;
                     }

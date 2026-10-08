@@ -291,7 +291,7 @@ mod unix_impl {
     /// we never decode chunked framing, so a chunked body would desync). One
     /// connection serves one request. Returns `(head, body)` or an error
     /// status string to write back.
-    async fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), &'static str> {
+    async fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), RequestRefused> {
         let mut buf: Vec<u8> = Vec::with_capacity(2048);
         let mut chunk = [0u8; 4096];
         // Accumulate until the header/body delimiter is present.
@@ -300,12 +300,12 @@ mod unix_impl {
                 break pos;
             }
             if buf.len() > MAX_HEAD {
-                return Err("414 URI Too Long");
+                return Err(RequestRefused::status("414 URI Too Long"));
             }
             match stream.read(&mut chunk).await {
-                Ok(0) => return Err("400 Bad Request"), // EOF before head complete
+                Ok(0) => return Err(RequestRefused::status("400 Bad Request")), // EOF before head complete
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(_) => return Err("400 Bad Request"),
+                Err(_) => return Err(RequestRefused::status("400 Bad Request")),
             }
         };
 
@@ -313,7 +313,7 @@ mod unix_impl {
 
         // Refuse chunked framing — we only frame by Content-Length.
         if crate::routes::http::request_is_chunked(&head) {
-            return Err("400 Bad Request");
+            return Err(RequestRefused::status("400 Bad Request"));
         }
 
         // Read exactly Content-Length more bytes for the body (default 0).
@@ -329,12 +329,19 @@ mod unix_impl {
             })
             .unwrap_or(0);
 
+        let body_start = head_end + 4; // skip the \r\n\r\n
+
         // Refuse an oversized declared body BEFORE allocating toward it.
+        // The caller drains what the client is still sending after the
+        // 413, so the close is clean instead of a reset.
         if content_len > MAX_BODY {
-            return Err("413 Payload Too Large");
+            let body_read = buf.len().saturating_sub(body_start);
+            return Err(RequestRefused {
+                status: "413 Payload Too Large",
+                drain: Some(content_len.saturating_sub(body_read)),
+            });
         }
 
-        let body_start = head_end + 4; // skip the \r\n\r\n
         let mut body: Vec<u8> = buf.get(body_start..).map(|s| s.to_vec()).unwrap_or_default();
         while body.len() < content_len {
             if body.len() > MAX_HEAD + content_len {
@@ -348,6 +355,20 @@ mod unix_impl {
         }
         body.truncate(content_len);
         Ok((head, body))
+    }
+
+    /// Why [`read_request`] refused a request: the status to answer and,
+    /// for a 413, how many declared body bytes the client has yet to send
+    /// (drained after the answer; see `routes::http::drain_refused_body`).
+    struct RequestRefused {
+        status: &'static str,
+        drain: Option<usize>,
+    }
+
+    impl RequestRefused {
+        fn status(status: &'static str) -> Self {
+            Self { status, drain: None }
+        }
     }
 
     /// Find the byte offset of the `\r\n\r\n` header/body delimiter.
@@ -373,14 +394,17 @@ mod unix_impl {
 
         let (head, body) = match read_request(&mut stream).await {
             Ok(pair) => pair,
-            Err(status) => {
+            Err(refused) => {
                 write_response(
                     &mut stream,
-                    status,
+                    refused.status,
                     "application/json",
                     r#"{"error":"bad request on cell socket"}"#,
                 )
                 .await;
+                if refused.drain.is_some() {
+                    crate::routes::http::drain_refused_body(&mut stream, refused.drain).await;
+                }
                 return;
             }
         };

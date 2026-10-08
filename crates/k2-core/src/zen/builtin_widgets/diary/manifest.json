@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "Diary",
+  "description": "Write to one agent at a time on a parchment page; the reply appears in handwriting.",
+  "entry": "index.html",
+  "caps": ["agents:read", "thread:read", "thread:post"],
+  "reasons": {
+    "agents:read": "to list your agents on the contents page and show who is working",
+    "thread:read": "to show your conversation with each agent on the diary's pages",
+    "thread:post": "so what you write on the page is sent to that agent"
+  },
+  "requires": {
+    "libs": ["perfect-freehand@1", "font-caveat@5"]
+  }
+}

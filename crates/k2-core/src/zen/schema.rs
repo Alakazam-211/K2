@@ -143,8 +143,22 @@ pub const BACKGROUND_TYPES: &[(&str, &str)] = &[
 pub const MAX_BACKGROUND_BYTES: u64 = 2 * 1024 * 1024;
 /// `[chrome] corners` (Z51: only the two values K2 has ever sent).
 pub const CORNERS: &[&str] = &["system", "square"];
-/// `[chrome] stoplights` (Z50: macOS does not let K2 hide them).
-pub const STOPLIGHTS: &[&str] = &["round", "square"];
+/// `[layout] canvas` (Rosson 2026-10-08, the Diary): `framed` (the default)
+/// draws the top band as its own row and each column in its glass box;
+/// `full` gives the page the whole window: the top band floats over the
+/// columns at the top edge (still a drag area), the columns lose their
+/// outer margin and their box, and the theme's background shows behind
+/// everything. A page with `full` draws its own surface.
+pub const CANVASES: &[&str] = &["framed", "full"];
+/// The `[layout] canvas` a page gets when it names none.
+pub const DEFAULT_CANVAS: &str = "framed";
+
+/// `[chrome] stoplights`. `hidden` (Rosson 2026-10-08, the Diary): the
+/// window's own buttons hide while that theme shows in Zen (macOS through
+/// AppKit, Linux/Windows K2's drawn ones); ⌃⌘Z or the Zen toggle leaves Zen,
+/// and the OS still closes and minimizes the window (⌘W / ⌘M, the menu
+/// bar). It replaces Z50's refusal.
+pub const STOPLIGHTS: &[&str] = &["round", "square", "hidden"];
 /// `[chrome] stoplight-offset = [x, y]`, each 0..=this many px.
 pub const STOPLIGHT_OFFSET_MAX: f64 = 24.0;
 
@@ -1028,14 +1042,7 @@ fn check_chrome(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
         let pos = key_pos(ctx, t, k, item, at);
         match k {
             "corners" => check_scalar_enum(ctx, "chrome.corners".into(), item, pos, CORNERS, "corners"),
-            "stoplights" => {
-                if item.as_value().and_then(Value::as_str) == Some("hidden") {
-                    let p = item_pos(ctx, item, pos);
-                    ctx.error(p, "stoplights can't be 'hidden': macOS doesn't let K2 hide the window buttons; use round or square");
-                } else {
-                    check_scalar_enum(ctx, "chrome.stoplights".into(), item, pos, STOPLIGHTS, "stoplights");
-                }
-            }
+            "stoplights" => check_scalar_enum(ctx, "chrome.stoplights".into(), item, pos, STOPLIGHTS, "stoplights"),
             "stoplight-offset" => {
                 let arr = item.as_value().and_then(Value::as_array);
                 let nums: Option<Vec<f64>> = arr.map(|a| a.iter().filter_map(as_number).collect());
@@ -1356,6 +1363,7 @@ fn table_pos(ctx: &Ctx, t: &dyn TableLike, fallback: (usize, usize)) -> (usize, 
 fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let Some(t) = require_table(ctx, item, at, "layout") else { return };
     let mut kind: Option<String> = None;
+    let mut canvas: &'static str = DEFAULT_CANVAS;
     let mut columns: Vec<J> = Vec::new();
     let mut ok = true;
     let mut saw_columns = false;
@@ -1451,8 +1459,16 @@ fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                     ok = false;
                 }
             }
+            "canvas" => match v.as_value().and_then(Value::as_str).and_then(|s| CANVASES.iter().find(|c| **c == s)) {
+                Some(c) => canvas = c,
+                None => {
+                    let p = item_pos(ctx, v, pos);
+                    ctx.error(p, format!("layout canvas must be one of: {}", CANVASES.join(", ")));
+                    ok = false;
+                }
+            },
             other => {
-                ctx.error(pos, unknown_key(other, "[layout]", &["kind", "column"]));
+                ctx.error(pos, unknown_key(other, "[layout]", &["kind", "canvas", "column"]));
                 ok = false;
             }
         }
@@ -1467,7 +1483,7 @@ fn check_layout(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     }
     if ok {
         ctx.pos.insert("page.layout".into(), at);
-        ctx.set("page.layout".into(), json!({ "kind": kind, "columns": columns }), at);
+        ctx.set("page.layout".into(), json!({ "kind": kind, "canvas": canvas, "columns": columns }), at);
     }
 }
 

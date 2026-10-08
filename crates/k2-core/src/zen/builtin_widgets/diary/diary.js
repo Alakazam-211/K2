@@ -8,9 +8,10 @@
 // and the corner toward its page smoulders. Whispers only when you turn
 // them on. Reduced motion stills every effect.
 //
-// Only this computer's agents: K2 binds the Diary to `{server: "local"}`,
-// and the page list keeps only `<handle>::local` rows as well, so a remote
-// server's agent never gets a page.
+// The widget is the journal only (Rosson 2026-10-08): the room around it is
+// the Garden's theme (`haunted`). Only this computer's agents get a page:
+// the list keeps `<handle>::local` rows, so a remote agent on one of your
+// Homes never gets one.
 //
 // Rules this file keeps (the k2-zen skill's): agent text only ever goes
 // through textContent; no inline handlers; no network or storage.
@@ -26,7 +27,6 @@
   var TURN_MS = 700
   var TURN_COMMIT = 0.33
   var DRAG_START_PX = 6
-  var GHOST_WORDS = ['remember…', 'who goes there?', 'write to me', 'I am still here', 'turn the page…', 'the ink remembers']
 
   var $ = function (id) {
     var el = document.getElementById(id)
@@ -57,7 +57,6 @@
     folio: $('folio'),
     prev: $('prev'),
     next: $('next'),
-    ghost: $('ghost'),
   }
 
   var k2 = window.k2
@@ -188,8 +187,8 @@
   function inWorld(err) {
     var code = err && err.code ? err.code : 'failed'
     var msg = err && err.message ? err.message : String(err)
-    if (code === 'cap_not_granted') return 'The diary isn’t allowed to do that yet.'
-    if (code === 'sending_off') return 'The ink will not take: sending is turned off for this Diary.'
+    if (code === 'cap_not_granted') return 'The diary can’t do that.'
+    if (code === 'sending_off') return 'The ink will not take: too many words, too fast. Resume the diary to write again.'
     if (code === 'not_bound') return 'That spirit isn’t bound to this diary.'
     if (code === 'rate_limited') return 'Too fast. Let the ink dry a moment.'
     if (code === 'too_large') return 'Too many words for one page.'
@@ -242,22 +241,6 @@
     dom.whispers.setAttribute('aria-pressed', on ? 'true' : 'false')
     text(dom.whispers, on ? 'whispers: on' : 'whispers: off')
     if (on) breathe('whisper')
-  }
-
-  // ── a ghost word drifts past, now and then ───────────────────────────
-
-  function haunt() {
-    var wait = 45000 + Math.random() * 45000
-    setTimeout(function () {
-      if (!reduced() && !document.hidden) {
-        text(dom.ghost, GHOST_WORDS[Math.floor(Math.random() * GHOST_WORDS.length)])
-        dom.ghost.style.top = 20 + Math.random() * 60 + '%'
-        dom.ghost.classList.remove('on')
-        void dom.ghost.offsetWidth
-        dom.ghost.classList.add('on')
-      }
-      haunt()
-    }, wait)
   }
 
   // ── the page's writing ───────────────────────────────────────────────
@@ -745,7 +728,6 @@
       dom.soak.classList.remove('on')
       dom.soak.textContent = ''
     })
-    dom.ghost.addEventListener('animationend', function () { dom.ghost.classList.remove('on') })
     dom.sheet.addEventListener('click', function (e) {
       // A tap anywhere on the page shows the whole reply.
       if (state.revealing && !dom.pen.contains(e.target)) stopReveal(true)
@@ -764,7 +746,6 @@
         turn(-1)
       }
     })
-    haunt()
 
     if (!can('agents.subscribe')) {
       drawBlank('the diary is sealed', 'Allow this Diary in K2 to see the agents on this computer.')

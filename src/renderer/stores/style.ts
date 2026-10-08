@@ -166,7 +166,8 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 
 export type ZenChromeSource = {
   corners: 'system' | 'square'
-  stoplights: 'round' | 'square'
+  /** `hidden` (the haunted Diary's theme): no window buttons while Zen shows. */
+  stoplights: 'round' | 'square' | 'hidden'
   /** `[chrome] stoplight-offset`, px right and down, 0–24 each. */
   offset: [number, number]
 }
@@ -213,10 +214,10 @@ function notifyChromeApplied(): void {
   for (const fn of [...chromeAppliedListeners]) fn()
 }
 
-function zenTrafficLights(): { square: boolean; x: number; y: number } | null {
+function zenTrafficLights(): { square: boolean; x: number; y: number; hidden: boolean } | null {
   if (chromeSource === 'style') return null
   const z = chromeSource.zen
-  return { square: z.stoplights === 'square', x: z.offset[0], y: z.offset[1] }
+  return { square: z.stoplights === 'square', x: z.offset[0], y: z.offset[1], hidden: z.stoplights === 'hidden' }
 }
 
 const trafficLights = createTrafficLightController({

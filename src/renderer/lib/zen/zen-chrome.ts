@@ -1,8 +1,10 @@
 // prd-zen-mode-v1 Z23, Z24, Z25, Z49–Z51 — the window's own chrome while
 // Zen owns the whole window (no K2 top bar).
 //
-// macOS: the system stoplights stay (they can't be hidden, Z24/Z50). Zen's
-// `[chrome]` table picks their shape (`round` / `square`), nudges them
+// macOS: the system stoplights. Zen's `[chrome]` table picks their shape
+// (`round` / `square`) or hides them (`hidden`, Rosson 2026-10-08: the
+// haunted Diary; ⌃⌘Z and the page's Zen toggle leave Zen, ⌘W / ⌘M and the
+// menu bar still close and minimize the window), nudges them
 // (`stoplight-offset = [x, y]`, 0–24 px) and picks the window corners
 // (`system` / `square`, Z51). Those values reach AppKit through the same
 // native hooks the Styles use, via the one chrome owner in `stores/style.ts`
@@ -18,7 +20,8 @@
 //
 // Linux / Windows: no native chrome; K2 draws its own cluster in Zen
 // (`ZenChromeCluster`) and measures it; its rect is published the same way.
-// The `[chrome]` table changes nothing there.
+// Only `hidden` reaches there: no cluster at all (the window manager's keys
+// still close the window).
 
 import { TRAFFIC_LIGHT_Y_NUDGE_PX, ZEN_STOPLIGHT_INSET_PX, trafficLightZoom } from '@/lib/traffic-lights'
 import { TRAFFIC_LIGHT_CLUSTER_GAP_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
@@ -40,14 +43,15 @@ export const ZEN_DEFAULT_CHROME: ZenChromeSource = Object.freeze({
 
 /**
  * The `chrome` block of `/cli/zen/get` → the chrome owner's input. Only the
- * known keys and values are read; anything else (an unknown corner style,
- * `hidden` stoplights, an offset out of range) keeps the last good value for
+ * known keys and values are read; anything else (an unknown corner style or
+ * stoplight shape, an offset out of range) keeps the last good value for
  * that key, else K2's default. The daemon reports the error.
  */
 export function parseZenChrome(raw: unknown, lastGood: ZenChromeSource = ZEN_DEFAULT_CHROME): ZenChromeSource {
   const o = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   const corners = o.corners === 'system' || o.corners === 'square' ? o.corners : lastGood.corners
-  const stoplights = o.stoplights === 'round' || o.stoplights === 'square' ? o.stoplights : lastGood.stoplights
+  const stoplights =
+    o.stoplights === 'round' || o.stoplights === 'square' || o.stoplights === 'hidden' ? o.stoplights : lastGood.stoplights
   const off = o['stoplight-offset']
   const okNum = (n: unknown): n is number =>
     typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= ZEN_STOPLIGHT_OFFSET_MAX
@@ -89,6 +93,20 @@ export function macStoplightArea(
       '--zen-stoplight-rect': `0px 0px ${round(width)}px ${round(safeTop)}px`,
     },
     rect: { left: 0, top: 0, width: round(width), height: round(safeTop) },
+  }
+}
+
+/** `stoplights = "hidden"`: no window buttons, so nothing is reserved and the
+ *  page may use the whole window, edge to edge. */
+export function hiddenStoplightArea(): ZenStoplightArea {
+  return {
+    vars: {
+      '--zen-stoplight-safe-left': '0px',
+      '--zen-stoplight-safe-top': '0px',
+      '--zen-stoplight-safe-right': '0px',
+      '--zen-stoplight-rect': '0px 0px 0px 0px',
+    },
+    rect: { left: 0, top: 0, width: 0, height: 0 },
   }
 }
 

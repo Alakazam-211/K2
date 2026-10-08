@@ -93,17 +93,17 @@ describe('traffic light re-apply', () => {
     lights.onResize()
     expect(scheduled).toHaveLength(1)
     scheduled[0]()
-    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1 }])
+    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1, hidden: false }])
 
     lights.onFullscreen()
     expect(scheduled).toHaveLength(2)
     scheduled[1]()
-    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1 })
+    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1, hidden: false })
 
     lights.onFullscreen()
     expect(scheduled).toHaveLength(3)
     scheduled[2]()
-    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1 })
+    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1, hidden: false })
 
     // A burst before the frame runs schedules once.
     const before = scheduled.length
@@ -114,11 +114,11 @@ describe('traffic light re-apply', () => {
     styleId = 'glass'
     inset = 10
     lights.syncIfChanged()
-    expect(applied.at(-1)).toEqual({ x: 10, y: 13, square: false, zoom: 1 })
+    expect(applied.at(-1)).toEqual({ x: 10, y: 13, square: false, zoom: 1, hidden: false })
 
     const glassAt = applied.length
     scheduled.at(-1)!()
-    expect(applied[glassAt]).toEqual({ x: 10, y: 13, square: false, zoom: 1 })
+    expect(applied[glassAt]).toEqual({ x: 10, y: 13, square: false, zoom: 1, hidden: false })
   })
 
   it('sends the app zoom and re-sends when only the zoom changes', () => {
@@ -134,7 +134,7 @@ describe('traffic light re-apply', () => {
     })
 
     lights.syncIfChanged()
-    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1 }])
+    expect(applied).toEqual([{ x: 0, y: 3, square: true, zoom: 1, hidden: false }])
 
     lights.syncIfChanged()
     expect(applied).toHaveLength(1)
@@ -142,14 +142,14 @@ describe('traffic light re-apply', () => {
     zoom = 1.2
     lights.syncIfChanged()
     expect(applied).toHaveLength(2)
-    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2 })
+    expect(applied[1]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2, hidden: false })
 
     zoom = 1.2
     lights.syncIfChanged()
     expect(applied).toHaveLength(2)
 
     lights.reapply()
-    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2 })
+    expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2, hidden: false })
   })
 
   it('falls back to zoom 1 for a missing or bad zoom', () => {
@@ -165,7 +165,25 @@ describe('traffic light re-apply', () => {
       y: 13,
       square: false,
       zoom: 2,
+      hidden: false,
     })
+  })
+})
+
+describe('Zen hidden stoplights (Rosson 2026-10-08, the Diary)', () => {
+  it('a Zen hidden light is a hidden command; the Style never hides them', () => {
+    expect(trafficLightCommand({ styleId: 'glass', inset: 10, zoom: 1, zen: { square: false, x: 0, y: 0, hidden: true } })).toMatchObject({
+      hidden: true,
+    })
+    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1, zen: { square: true, x: 0, y: 0 } }).hidden).toBe(false)
+    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1 }).hidden).toBe(false)
+  })
+
+  it('the native command takes hidden and keeps it on every re-apply', () => {
+    const rust = readFileSync(resolve(root, 'src-tauri/src/commands/traffic_lights.rs'), 'utf8')
+    expect(rust).toContain('hidden: Option<bool>')
+    expect(rust).toContain('setHidden:')
+    expect(rust).toContain('saved.hidden')
   })
 })
 
@@ -280,7 +298,7 @@ describe('stoplight spacer under app zoom', () => {
     for (const [z, want] of expected) {
       zoom = z
       lights.onZoomChange()
-      expect(applied.at(-1)).toEqual({ x: 0, y: 3, square: true, zoom: z })
+      expect(applied.at(-1)).toEqual({ x: 0, y: 3, square: true, zoom: z, hidden: false })
       expect(spacers.at(-1)).toBeCloseTo(want, 9)
     }
     expect(applied).toHaveLength(expected.length)
@@ -376,10 +394,10 @@ describe('Zen stoplights (Rosson 2026-10-04: down and right in Zen)', () => {
   it('Zen adds its own 8px inset right and down on top of the theme offset; the Style never does', () => {
     expect(ZEN_STOPLIGHT_INSET_PX).toBe(8)
     const zen = trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25, zen: { square: false, x: 0, y: 0 } })
-    expect(zen).toEqual({ x: 8, y: 8 + TRAFFIC_LIGHT_Y_NUDGE_PX, square: false, zoom: 1.25 })
+    expect(zen).toEqual({ x: 8, y: 8 + TRAFFIC_LIGHT_Y_NUDGE_PX, square: false, zoom: 1.25, hidden: false })
     const nudged = trafficLightCommand({ styleId: null, inset: 0, zen: { square: true, x: 6, y: 4 } })
-    expect(nudged).toEqual({ x: 14, y: 15, square: true, zoom: 1 })
+    expect(nudged).toEqual({ x: 14, y: 15, square: true, zoom: 1, hidden: false })
     // Leaving Zen (no `zen`): the Style's own command, no Zen inset.
-    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25 })).toEqual({ x: 0, y: 3, square: true, zoom: 1.25 })
+    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25 })).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
   })
 })

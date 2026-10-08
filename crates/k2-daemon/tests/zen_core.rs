@@ -315,8 +315,11 @@ fn t1_5_page_tables_schema_2_errors_and_more() {
     assert_one_error(&c, 1, "missing `schema = 1`", "missing schema");
     let c = check_zen("schema = 1\n[theme]\nscheme = \"sepia\"\n");
     assert_one_error(&c, 3, "is not one of", "bad scheme");
+    // Rosson 2026-10-08 (the Diary): `hidden` is a stoplight choice now.
     let c = check_zen("schema = 1\n[chrome]\nstoplights = \"hidden\"\n");
-    assert_one_error(&c, 3, "doesn't let K2 hide", "hidden stoplights");
+    assert!(c.is_clean(), "hidden stoplights are allowed: {}", diag_list(&c));
+    let c = check_zen("schema = 1\n[chrome]\nstoplights = \"triangle\"\n");
+    assert_one_error(&c, 3, "is not one of", "unknown stoplights");
     let c = check_zen("schema = 1\n[chrome]\ncorners = \"rounded\"\n");
     assert_one_error(&c, 3, "is not one of", "corners");
     let c = check_zen("schema = 1\n[chrome]\nstoplight-offset = [4, 30]\n");
@@ -2044,10 +2047,10 @@ fn every_builtin_theme_is_clean_complete_and_distinct() {
     assert_eq!(zen::DEFAULT_THEME, "basic");
     assert_eq!(zen::BUILTIN_THEMES[0].name, zen::DEFAULT_THEME, "basic comes first");
     let names: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.name).collect();
-    assert_eq!(names, vec!["basic", "paper", "midnight"], "no built-in is called default any more");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted"], "no built-in is called default any more");
     // Rosson 2026-10-04: ids stay lower case; people see capitalized names.
     let labels: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.label).collect();
-    assert_eq!(labels, vec!["Basic", "Paper", "Midnight"]);
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted"]);
     assert_eq!(zen::theme_label("basic"), "Basic");
     assert_eq!(zen::theme_label("sunset"), "Sunset", "a user theme shows its id with a capital");
     assert_eq!(zen::theme_label("k2-light"), "K2-light");
@@ -2163,14 +2166,14 @@ fn cycling_order_wraps_and_a_garden_pick_beats_the_global_one() {
     f.new_theme("zeta", None).expect("zeta");
     f.new_theme("alpha", None).expect("alpha");
     let names: Vec<String> = f.themes().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, vec!["basic", "paper", "midnight", "alpha", "zeta"], "built-ins first, then the user's by name");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted", "alpha", "zeta"], "built-ins first, then the user's by name");
     let labels: Vec<String> = f.themes().into_iter().map(|t| t.label).collect();
-    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Alpha", "Zeta"], "lists show capitalized names");
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted", "Alpha", "Zeta"], "lists show capitalized names");
     let mut seen = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         seen.push(f.cycle_theme(1, None).expect("next").theme);
     }
-    assert_eq!(seen, vec!["paper", "midnight", "alpha", "zeta", "basic"], "next walks the list and wraps");
+    assert_eq!(seen, vec!["paper", "midnight", "haunted", "alpha", "zeta", "basic"], "next walks the list and wraps");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "zeta", "prev wraps backwards");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "alpha");
 
@@ -2208,7 +2211,7 @@ fn unknown_theme_names_are_refused_and_change_nothing() {
     match f.set_theme(Some("neon"), None) {
         Err(ZenError::UnknownTheme { name, known }) => {
             assert_eq!(name, "neon");
-            assert_eq!(known, vec!["basic", "paper", "midnight"]);
+            assert_eq!(known, vec!["basic", "paper", "midnight", "haunted"]);
         }
         other => panic!("an unknown theme must be UnknownTheme, got {other:?}"),
     }
@@ -2498,4 +2501,59 @@ fn background_image_is_capped_typed_and_keeps_its_last_good_copy() {
     let out = f.new_theme("dusk", Some("sunset")).expect("dusk");
     assert_eq!(out.copied_image.as_deref(), Some("wall.png"));
     assert_eq!(std::fs::read(f.theme_dir("dusk").join("wall.png")).expect("copied"), ok);
+}
+
+/// Rosson 2026-10-08: the Diary uses the whole window. Its scene is the
+/// built-in `haunted` theme (a full-window background, compiled in), which is
+/// the Diary template's default theme; its stoplights hide and its page is a
+/// full canvas. Other Gardens are untouched, a person's own pick for the
+/// Diary wins, and the study can sit behind any Garden.
+#[test]
+fn the_diary_garden_shows_the_haunted_study_full_bleed_and_others_stay_as_they_were() {
+    let (_t, f) = set_up("haunted");
+    let one = gid(&f, 0);
+    let diary = f.new_garden("Diary", Some("diary"), None, None).expect("diary").id;
+    let r = f.resolve(Some(&diary)).expect("resolve the Diary");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["theme"]["name"], "haunted", "{}", r["theme"]);
+    assert_eq!(r["theme"]["scope"], "garden", "a theme switch there becomes the Diary's own pick");
+    let bg = &r["theme"]["background"];
+    assert_eq!((bg["mime"].as_str(), bg["fit"].as_str()), (Some("image/webp"), Some("cover")), "{bg}");
+    assert_eq!(bg["opacity"], 1, "{bg}");
+    assert!(bg["dataUrl"].as_str().is_some_and(|u| u.starts_with("data:image/webp;base64,")), "a data: URL");
+    let bytes = bg["bytes"].as_u64().expect("bytes");
+    assert!(bytes > 4_000 && bytes < 300 * 1024, "the study is small: {bytes} bytes");
+    assert_eq!(r["chrome"]["stoplights"], "hidden", "{}", r["chrome"]);
+    assert_eq!(r["page"]["layout"]["canvas"], "full", "{}", r["page"]["layout"]);
+
+    // Garden 1 is as it was.
+    let g1 = f.resolve(Some(&one)).expect("Garden 1");
+    assert_eq!(g1["theme"]["name"], "basic");
+    assert!(g1["theme"].get("background").is_none(), "{}", g1["theme"]);
+    assert_eq!(g1["chrome"]["stoplights"], "round");
+    assert_eq!(g1["page"]["layout"]["canvas"], "framed");
+
+    // The person's own pick for the Diary wins; clearing it brings the study back.
+    f.set_theme(Some("paper"), Some(&diary)).expect("pick paper");
+    assert_eq!(f.resolve(Some(&diary)).expect("r")["theme"]["name"], "paper");
+    f.set_theme(None, Some(&diary)).expect("clear");
+    assert_eq!(f.resolve(Some(&diary)).expect("r")["theme"]["name"], "haunted");
+    // A global pick doesn't reach the Diary's own default.
+    f.set_theme(Some("midnight"), None).expect("global");
+    assert_eq!(f.resolve(Some(&diary)).expect("r")["theme"]["name"], "haunted");
+    assert_eq!(f.resolve(Some(&one)).expect("r")["theme"]["name"], "midnight");
+
+    // The study behind any Garden: the background comes with the theme.
+    f.set_theme(Some("haunted"), Some(&one)).expect("haunted for Garden 1");
+    let g1 = f.resolve(Some(&one)).expect("Garden 1 haunted");
+    assert!(g1["theme"]["background"]["dataUrl"].as_str().is_some_and(|u| u.starts_with("data:image/webp")));
+    assert_eq!(g1["page"]["layout"]["canvas"], "framed", "the canvas is the page's, not the theme's");
+}
+
+#[test]
+fn layout_canvas_is_framed_or_full() {
+    let ok = check_blank("schema = 1\n[layout]\nkind = \"columns\"\ncanvas = \"full\"\n[[layout.column]]\nsize = 100\n");
+    assert!(ok.is_clean(), "{}", diag_list(&ok));
+    let bad = check_blank("schema = 1\n[layout]\nkind = \"columns\"\ncanvas = \"wide\"\n[[layout.column]]\nsize = 100\n");
+    assert_one_error(&bad, 4, "layout canvas must be one of: framed, full", "bad canvas");
 }

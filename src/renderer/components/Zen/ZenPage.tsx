@@ -314,32 +314,36 @@ export function ZenPage({
     bridge: controlsBridge,
   }
   const bodyWidgets = page.widgets.filter((w) => !rowIds.has(w.id) && !zenWidgetInBand(w))
+  // `[layout] canvas = "full"` (the Diary): the page is the whole window.
+  const full = layout.canvas === 'full'
   return (
     <div
       ref={rootRef}
-      className="flex h-full min-h-0 w-full flex-col"
+      className="relative flex h-full min-h-0 w-full flex-col"
       data-zen-page={page.template}
       data-zen-view={view}
       data-zen-chrome-from={placement.from}
+      data-zen-canvas={full ? 'full' : undefined}
     >
       <ZenWidgetStyles />
       <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
-      <ZenTopBand groups={placement.bands.top} src={src} />
+      <ZenTopBand groups={placement.bands.top} src={src} float={full} />
       {banner}
       <div
         className="flex min-h-0 min-w-0 flex-1"
         data-zen-layout={layout.kind}
         style={{
-          gap: 'var(--zen-gap)',
-          padding: placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
+          gap: full ? 0 : 'var(--zen-gap)',
+          padding: full ? 0 : placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
         }}
       >
         {layout.split.map((pct, col) => {
           const inCol = bodyWidgets.filter((w) => w.column === col)
           const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
           const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
-          // K2 views that draw their own panels (Tickets' glass) get no box.
-          const bare = boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind))
+          // K2 views that draw their own panels (Tickets' glass) get no box;
+          // nor does anything on a full canvas (it draws its own surface).
+          const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
           // FC9: a column's edges (a row rail, a Zen control) run across its
           // top and bottom, outside its box.
           const top = placement.edges.find((e) => e.column === col && e.edge === 'top')

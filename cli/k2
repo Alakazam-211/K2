@@ -38864,7 +38864,7 @@ COMMANDS
             per Garden (--garden). list shows K2's themes and yours (* =
             active); next/prev cycle them; set picks one; new copies a theme
             into ~/.k2/zen/themes/<name>/ for you to edit. K2's themes are
-            basic, paper and midnight. An unknown name exits 1.
+            basic, paper, midnight and haunted. An unknown name exits 1.
   widget    Custom widgets: your own sealed HTML, CSS and JS in
             ~/.k2/zen/widgets/<name>/. new copies a working example
             (--from k2:diary, hello or arcade) and prints the folder; list
@@ -39335,7 +39335,8 @@ _zen_guide_page_themes() {
 k2 zen guide themes — colours, font, shape, motion
 
 One theme is active for this computer, and each Garden may pick its own.
-K2's themes are built in and read-only: basic, paper, midnight.
+K2's themes are built in and read-only: basic, paper, midnight, haunted
+(the Diary's candlelit study, a full-window background).
 
   k2 zen theme list [--garden <g>]
   k2 zen theme next | prev [--garden <g>]

@@ -103,7 +103,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
 
     // Enter Zen.
     style.setChromeSource(ZEN_SQUARE)
-    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1 })
+    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1, hidden: false })
     expect(lastRadius()).toBe(0.5)
     // The Styles spacer keeps describing the Style.
     expect(spacer()).toBe(glassSpacer)
@@ -136,7 +136,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     invoke.mockClear()
     ;(window as ZoomWindow).__k2soZoom = 1.25
     style.onAppZoomChange()
-    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1.25 })
+    expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1.25, hidden: false })
     expect(spacer()).toBe(glassSpacer)
 
     // setTitle parks the lights: App re-applies both.
@@ -158,7 +158,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     // spacer for the (zoomed) Style.
     invoke.mockClear()
     style.setChromeSource('style')
-    expect(lastInset()).toEqual({ x: 8, y: 11, square: false, zoom: 1.25 })
+    expect(lastInset()).toEqual({ x: 8, y: 11, square: false, zoom: 1.25, hidden: false })
     expect(lastRadius()).toBe(0)
     expect(spacer()).not.toBe(glassSpacer)
 
@@ -179,7 +179,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
 
     style.setChromeSource({ zen: { corners: 'system', stoplights: 'round', offset: [0, 0] } })
     // Zen's own inset: 8 right, 8 down (plus the 3px title-bar nudge).
-    expect(lastInset()).toEqual({ x: 8, y: 11, square: false, zoom: 1 })
+    expect(lastInset()).toEqual({ x: 8, y: 11, square: false, zoom: 1, hidden: false })
     expect(lastRadius()).toBe(0)
     invoke.mockClear()
     window.dispatchEvent(new Event('resize'))
@@ -200,7 +200,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     ;(window as ZoomWindow).__k2soZoom = 1.25
     applyStyle(() => document.documentElement.setAttribute('data-style', 'square'))
     const squareCmd = lastInset()
-    expect(squareCmd).toEqual({ x: 0, y: 3, square: true, zoom: 1.25 })
+    expect(squareCmd).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
     const squareSpacer = spacer()
     expect(squareSpacer).not.toBe('')
     invoke.mockClear()

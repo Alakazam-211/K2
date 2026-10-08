@@ -276,17 +276,30 @@ function RowBody({
   )
 }
 
-/** The top band, or (FC10) the title strip when it holds nothing. */
-export function ZenTopBand({ groups, src }: { groups: ZenRowGroups | null; src: ZenRowSource }): React.JSX.Element {
+/** The top band, or (FC10) the title strip when it holds nothing. With
+ *  `float` (`[layout] canvas = "full"`) it floats over the page at the
+ *  window's top edge: transparent, still a drag area, its items over the
+ *  content below. */
+export function ZenTopBand({
+  groups,
+  src,
+  float = false,
+}: {
+  groups: ZenRowGroups | null
+  src: ZenRowSource
+  float?: boolean
+}): React.JSX.Element {
   const drag = useZenBind(src.bridge, 'drag-region')
+  const floating: React.CSSProperties = float ? { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 3 } : {}
   if (!groups) {
     return (
       <div
         ref={drag}
         data-zen-title-strip=""
+        data-zen-band-float={float ? '' : undefined}
         aria-hidden
         className="flex-shrink-0"
-        style={{ height: 'var(--zen-stoplight-safe-top, 28px)' }}
+        style={{ height: float ? 28 : 'var(--zen-stoplight-safe-top, 28px)', ...floating }}
       />
     )
   }
@@ -294,12 +307,14 @@ export function ZenTopBand({ groups, src }: { groups: ZenRowGroups | null; src: 
     <div
       ref={drag}
       data-zen-band-row="top"
+      data-zen-band-float={float ? '' : undefined}
       data-zen-template-bar=""
       className="flex flex-shrink-0 items-center"
       style={{
         height: `max(${TEXTING_BAR_HEIGHT_PX + 8}px, var(--zen-stoplight-safe-top, 0px))`,
-        paddingLeft: 'var(--zen-stoplight-safe-left, 14px)',
+        paddingLeft: float ? 'max(var(--zen-stoplight-safe-left, 14px), 14px)' : 'var(--zen-stoplight-safe-left, 14px)',
         paddingRight: 'calc(var(--zen-stoplight-safe-right, 0px) + 14px)',
+        ...floating,
       }}
     >
       <RowBody groups={groups} row="top" opens="down" slot="top" src={src} dragMin={ZEN_DRAG_MIN_WIDTH_PX} top />

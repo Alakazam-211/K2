@@ -319,7 +319,7 @@ describe('k2:diary@1, the haunted Diary', () => {
     await flush()
     await flush()
     expect(ink.value).toBe('kept')
-    expect(h.$('note').textContent).toBe('The ink will not take: sending is turned off for this Diary.')
+    expect(h.$('note').textContent).toBe('The ink will not take: too many words, too fast. Resume the diary to write again.')
   })
 
   it('working stirs the ink; needs-you lifts the bookmark, and the corner toward a calling page smoulders', () => {

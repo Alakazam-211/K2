@@ -88,6 +88,17 @@ pub struct BuiltinTheme {
     pub label: &'static str,
     pub summary: &'static str,
     pub toml: &'static str,
+    /// The image its `[background] image` names, compiled in (a built-in
+    /// has no folder). `None` for a theme with no background.
+    pub background: Option<BuiltinBackground>,
+}
+
+/// A built-in theme's background image: the file name its TOML names and
+/// the bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct BuiltinBackground {
+    pub file: &'static str,
+    pub bytes: &'static [u8],
 }
 
 /// Built-in themes, in cycle order (`k2 zen theme next`). `basic` is
@@ -98,18 +109,34 @@ pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
         label: "Basic",
         summary: "clean, smooth, simple: warm light, soft dark, follows the computer",
         toml: include_str!("themes/basic.toml"),
+        background: None,
     },
     BuiltinTheme {
         name: "paper",
         label: "Paper",
         summary: "always light, serif type, ink-blue accent",
         toml: include_str!("themes/paper.toml"),
+        background: None,
     },
     BuiltinTheme {
         name: "midnight",
         label: "Midnight",
         summary: "always dark, cool blue, JetBrains Mono everywhere",
         toml: include_str!("themes/midnight.toml"),
+        background: None,
+    },
+    // The Diary's scene (Rosson 2026-10-08): the Diary template's default
+    // theme, and anyone's to use. The image is drawn by
+    // scripts/zen-themes/haunted-background.py.
+    BuiltinTheme {
+        name: "haunted",
+        label: "Haunted",
+        summary: "always dark: a candlelit desk in a misty study, behind the whole Garden",
+        toml: include_str!("themes/haunted.toml"),
+        background: Some(BuiltinBackground {
+            file: "haunted-background.webp",
+            bytes: include_bytes!("themes/haunted-background.webp"),
+        }),
     },
 ];
 
@@ -230,9 +257,11 @@ pub fn chrome_caps(kind: &str) -> &'static [&'static str] {
 
 /// The renderer's layout shape (docs/zen-contract.md): `split` and
 /// `minWidths` per column; `columns` keeps the per-column detail.
-pub fn layout_json(kind: &J, columns: &[J]) -> J {
+pub fn layout_json(kind: &J, canvas: &J, columns: &[J]) -> J {
+    let canvas = canvas.as_str().filter(|c| schema::CANVASES.contains(c)).unwrap_or(schema::DEFAULT_CANVAS);
     json!({
         "kind": kind,
+        "canvas": canvas,
         "split": columns.iter().map(|c| c["size"].clone()).collect::<Vec<_>>(),
         "minWidths": columns.iter().map(|c| c["min-width"].clone()).collect::<Vec<_>>(),
         "columns": columns,
@@ -546,7 +575,7 @@ pub(crate) fn build_template_page_in(d: &Defaults, tid: &str, toml_src: &str) ->
     let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(|w| chrome_item_in(d, w)).collect();
     let mut page = json!({
         "template": tid,
-        "layout": layout_json(&t["layout"]["kind"], &columns),
+        "layout": layout_json(&t["layout"]["kind"], &t["layout"]["canvas"], &columns),
         "widgets": widgets,
         "controls": t["control"].clone(),
     });
@@ -647,9 +676,11 @@ pub fn garden_page_in(d: &Defaults, layer: &Layer, default_template: &str) -> J 
         None => page["layout"]["columns"].as_array().cloned().unwrap_or_default(),
     };
     let kind = layout.map(|l| l["kind"].clone()).unwrap_or_else(|| page["layout"]["kind"].clone());
+    // A file's own [layout] says its canvas; otherwise the template's holds.
+    let canvas = layout.map(|l| l["canvas"].clone()).unwrap_or_else(|| page["layout"]["canvas"].clone());
     let ws = page["widgets"].as_array().cloned().unwrap_or_default();
     name_columns(&mut columns, &ws);
-    page["layout"] = layout_json(&kind, &columns);
+    page["layout"] = layout_json(&kind, &canvas, &columns);
     page
 }
 

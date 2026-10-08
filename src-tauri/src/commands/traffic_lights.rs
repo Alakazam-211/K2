@@ -163,6 +163,9 @@ mod imp {
         y: f64,
         zoom: f64,
         square: bool,
+        /// Zen `[chrome] stoplights = "hidden"` (the haunted Diary): kept so
+        /// every re-apply (resize, fullscreen, key changes) hides them again.
+        hidden: bool,
     }
 
     #[derive(Clone, Copy)]
@@ -366,17 +369,18 @@ mod imp {
         extra_y: f64,
         zoom: f64,
         square: bool,
+        hidden: bool,
     ) {
         let Ok(handle) = window.ns_window() else {
             return;
         };
-        position_ns(handle as id, extra_x, extra_y, zoom, square);
+        position_ns(handle as id, extra_x, extra_y, zoom, square, hidden);
         schedule_next_turn();
     }
 
     /// The one absolute positioning function. The renderer command, every
     /// observer and the next-turn re-apply all go through here.
-    unsafe fn position_ns(ns_window: id, extra_x: f64, extra_y: f64, zoom: f64, square: bool) {
+    unsafe fn position_ns(ns_window: id, extra_x: f64, extra_y: f64, zoom: f64, square: bool, hidden: bool) {
         if ns_window == nil {
             return;
         }
@@ -442,10 +446,28 @@ mod imp {
                 y: extra_y,
                 zoom,
                 square,
+                hidden,
             },
         );
         apply_paint(ns_window, square);
+        apply_hidden(ns_window, hidden);
         ensure_observers();
+    }
+
+    /// Show or hide the three window buttons (Zen `stoplights = "hidden"`).
+    /// The window keeps its close and minimize (⌘W, ⌘M, the Window menu).
+    fn apply_hidden(window: id, hidden: bool) {
+        for kind in [
+            NSWindowButton::NSWindowCloseButton,
+            NSWindowButton::NSWindowMiniaturizeButton,
+            NSWindowButton::NSWindowZoomButton,
+        ] {
+            let btn = standard_button(window, kind);
+            if btn == nil {
+                continue;
+            }
+            let _: () = unsafe { msg_send![btn, setHidden: if hidden { YES } else { NO }] };
+        }
     }
 
     fn standard_button(window: id, kind: NSWindowButton) -> id {
@@ -1027,7 +1049,7 @@ mod imp {
         }
         let saved = insets().get(&(window as usize)).copied();
         if let Some(saved) = saved {
-            unsafe { position_ns(window, saved.x, saved.y, saved.zoom, saved.square) };
+            unsafe { position_ns(window, saved.x, saved.y, saved.zoom, saved.square, saved.hidden) };
         }
     }
 
@@ -1504,22 +1526,24 @@ pub fn set_traffic_light_inset(
     y: f64,
     square: bool,
     zoom: Option<f64>,
+    hidden: Option<bool>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let zoom = geometry::sane_zoom(zoom.unwrap_or(1.0));
+        let hidden = hidden.unwrap_or(false);
         let w = window.clone();
         window
             .run_on_main_thread(move || {
                 imp::guarded("set_traffic_light_inset", || unsafe {
-                    imp::position(&w, x, y, zoom, square)
+                    imp::position(&w, x, y, zoom, square, hidden)
                 })
             })
             .map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, x, y, square, zoom);
+        let _ = (window, x, y, square, zoom, hidden);
         Ok(())
     }
 }

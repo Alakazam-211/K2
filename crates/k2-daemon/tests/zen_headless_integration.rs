@@ -828,9 +828,9 @@ async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
     assert_eq!(t0["font"]["terminal"]["family"], "meslo", "a proportional font pairs with meslo in terminals: {t0}");
     assert_eq!(t0["terminal"]["palette"]["dark"]["blue"], "#7aa7d8", "{t0}");
     let names: Vec<&str> = g0["themes"].as_array().expect("themes").iter().filter_map(|t| t["name"].as_str()).collect();
-    assert_eq!(names, vec!["basic", "paper", "midnight"], "{g0}");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted"], "{g0}");
     let labels: Vec<&str> = g0["themes"].as_array().expect("themes").iter().filter_map(|t| t["label"].as_str()).collect();
-    assert_eq!(labels, vec!["Basic", "Paper", "Midnight"], "{g0}");
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted"], "{g0}");
     assert!(g0["themes"].as_array().expect("themes").iter().all(|t| t["builtin"].is_boolean()), "{g0}");
 
     // Events socket.
@@ -894,13 +894,17 @@ async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
         let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"nmae":"paper"}"#));
         assert_eq!(s, 400, "unknown body fields are refused: {v}");
 
-        // Cycle: paper -> midnight -> basic (wraps) -> prev -> midnight.
+        // Cycle: paper -> midnight -> haunted -> basic (wraps) -> prev -> haunted -> prev -> midnight.
         let (_, v) = call(port, "POST", &format!("/cli/zen/theme/next?token={tok}"), Some("{}"));
         assert_eq!(v["theme"], "midnight", "{v}");
         let (_, v) = call(port, "POST", &format!("/cli/zen/theme/next?token={tok}"), Some(""));
+        assert_eq!(v["theme"], "haunted", "{v}");
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/next?token={tok}"), Some(""));
         assert_eq!(v["theme"], "basic", "next wraps: {v}");
         let (_, v) = call(port, "POST", &format!("/cli/zen/theme/prev?token={tok}"), Some("{}"));
-        assert_eq!(v["theme"], "midnight", "prev wraps back: {v}");
+        assert_eq!(v["theme"], "haunted", "prev wraps back: {v}");
+        let (_, v) = call(port, "POST", &format!("/cli/zen/theme/prev?token={tok}"), Some("{}"));
+        assert_eq!(v["theme"], "midnight", "{v}");
 
         // Per Garden: the Garden's pick beats the global one; clear drops it.
         let (s, v) = call(port, "POST", &format!("/cli/zen/theme/set?token={tok}"), Some(r#"{"name":"paper","garden":"Garden 1"}"#));
@@ -940,7 +944,7 @@ async fn omarchy_theme_switch_headless_cycle_unknown_and_bundle() {
             l["themes"].as_array().is_some_and(|t| t.iter().any(|x| x["name"] == "sunset")).then_some(l)
         });
         let names: Vec<&str> = l["themes"].as_array().expect("themes").iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names, vec!["basic", "paper", "midnight", "sunset"], "user themes follow the built-ins: {l}");
+        assert_eq!(names, vec!["basic", "paper", "midnight", "haunted", "sunset"], "user themes follow the built-ins: {l}");
         // theme/list doesn't re-read; only the watcher can announce this.
         wait_for("the watcher to announce the new bundle", Duration::from_secs(5), || {
             (events() > before).then_some(())

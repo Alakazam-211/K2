@@ -22,6 +22,7 @@
 //! description = "Write to one agent at a time; replies appear in handwriting."
 //! order = 10                      # place in New Garden's catalog list
 //! new_users = false               # true = setup also seeds it on a new computer
+//! theme = "haunted"               # optional: a built-in theme it shows by default
 //!
 //! [layout]
 //! kind = "columns"
@@ -69,6 +70,16 @@ pub struct CatalogMeta {
     pub order: u32,
     #[serde(default)]
     pub new_users: bool,
+    /// The built-in theme a Garden made from this template shows until the
+    /// person picks one for it (Rosson 2026-10-08: the Diary's haunted
+    /// study). Metadata: not part of the page or its hash.
+    #[serde(default)]
+    pub theme: Option<String>,
+}
+
+/// The default theme of a template (a catalog entry's `theme`), if any.
+pub fn template_theme(template_id: &str) -> Option<&'static str> {
+    garden_catalog().iter().find(|e| e.template_id == template_id).and_then(|e| e.meta.theme.as_deref())
 }
 
 /// One catalog entry: a template version plus its metadata.
@@ -105,6 +116,11 @@ pub fn parse_entry(file: &'static str, src: &'static str) -> Result<GardenCatalo
     let meta: CatalogMeta = meta.try_into().map_err(|e| format!("{file}: [catalog]: {e}"))?;
     if meta.short != short {
         return Err(format!("{file}: [catalog] short is '{}', the file name says '{short}'", meta.short));
+    }
+    if let Some(t) = &meta.theme {
+        if super::builtin_theme(t).is_none() {
+            return Err(format!("{file}: [catalog] theme '{t}' isn't a built-in theme"));
+        }
     }
     Ok(GardenCatalogEntry { file, template_id: want, version, meta, toml: src })
 }
@@ -257,6 +273,20 @@ kind = "columns"
                 .into_boxed_str(),
         );
         assert!(parse_entry("diary-1.toml", granted).is_err(), "[catalog.grant] is gone");
+    }
+
+    /// Rosson 2026-10-08: a catalog Garden may name a built-in default theme
+    /// (the Diary's haunted study); anything else is refused.
+    #[test]
+    fn a_catalog_theme_is_a_built_in() {
+        let themed: &'static str =
+            Box::leak(DIARY_FIXTURE.replace("order = 10", "order = 10\ntheme = \"haunted\"").into_boxed_str());
+        assert_eq!(parse_entry("diary-1.toml", themed).expect("parses").meta.theme.as_deref(), Some("haunted"));
+        let unknown: &'static str =
+            Box::leak(DIARY_FIXTURE.replace("order = 10", "order = 10\ntheme = \"neon\"").into_boxed_str());
+        assert!(parse_entry("diary-1.toml", unknown).expect_err("refused").contains("isn't a built-in theme"));
+        assert_eq!(template_theme(DIARY_TEMPLATE_ID), Some("haunted"), "the shipped Diary shows the study");
+        assert_eq!(template_theme("k2.texting@1"), None);
     }
 
     /// Rosson 2026-10-08: the Diary works the moment it's created; New

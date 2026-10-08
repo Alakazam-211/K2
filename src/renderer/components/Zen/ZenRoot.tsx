@@ -37,6 +37,7 @@ import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
   clusterArea,
   currentMacStoplightArea,
+  hiddenStoplightArea,
   parseZenChrome,
   ZEN_DEFAULT_CHROME,
   type ZenStoplightArea,
@@ -258,7 +259,9 @@ function useStoplightArea(chrome: ZenChromeSource): {
     }
   }, [os])
   const area =
-    os === 'mac'
+    chrome.stoplights === 'hidden'
+      ? hiddenStoplightArea()
+      : os === 'mac'
       ? currentMacStoplightArea(chrome)
       : side
         ? clusterArea(cluster, side, typeof window === 'undefined' ? 0 : window.innerWidth)
@@ -448,7 +451,7 @@ export function ZenRoot(): React.JSX.Element {
           }}
         />
       )}
-      <ZenChromeCluster os={os} onRect={onClusterRect} />
+      {chrome.stoplights !== 'hidden' && <ZenChromeCluster os={os} onRect={onClusterRect} />}
       <ZenK2ChromeContext.Provider value={k2Chrome}>
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {page ? (

@@ -1,13 +1,17 @@
 /* k2:diary@1 — the haunted Diary (Rosson 2026-10-08). One aged page per
-   agent on this computer, lit by a candle. Grab a corner to turn it. Your
-   ink sinks into the paper; the reply bleeds back in handwriting.
-   Spooky, never gory. Reduced motion stills every effect. */
+   agent on this computer. Grab a corner to turn it. Your ink sinks into the
+   paper; the reply bleeds back in handwriting. Spooky, never gory. Reduced
+   motion stills every effect.
+
+   The widget is the journal only: the book, its pages, the writing and the
+   page turns. The room around it (desk, candle, mist, cobwebs, dust) is the
+   Garden's theme background (`haunted`), so the journal sits on any theme
+   and the study sits behind any widget. The frame is transparent. */
 
 :root {
   /* Caveat (OFL) comes from K2's library (`font-caveat` in requires.libs). */
   --hand: Caveat, "Bradley Hand", "Segoe Print", "Snell Roundhand", "Apple Chancery", "URW Chancery L", cursive;
   --night: #0c0908;
-  --desk: #17110d;
   --paper: #d8c49a;
   --paper-deep: #bba071;
   --paper-edge: #8c6f43;
@@ -19,7 +23,6 @@
   --ink-faint: rgba(52, 30, 18, 0.58);
   --candle: rgba(255, 176, 84, 0.34);
   --ember: #c4471f;
-  --ghost: rgba(220, 232, 255, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +31,7 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--night);
+  background: transparent;
   color: var(--ink);
   font-family: var(--hand);
 }
@@ -42,86 +45,32 @@ html, body {
   white-space: nowrap;
 }
 
-/* ── the desk: night, fog and a cobweb ─────────────────────────────── */
+/* ── where the book lies: centred, sized to the window ─────────────── */
 
+/* The book sits in the middle of whatever is behind it (the theme's scene),
+   as big as the window allows: a page about 4:5, never wider than 880px or
+   taller than 1120px. The top keeps clear of the Garden's floating ⋯ menu. */
 .desk {
   position: relative;
   height: 100%;
-  padding: 18px 22px;
+  padding: max(52px, 7vh) max(14px, 4vw) max(18px, 5vh);
   display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 22% 8%, rgba(255, 150, 70, 0.16), transparent 46%),
-    radial-gradient(ellipse at 50% 120%, rgba(60, 20, 70, 0.32), transparent 60%),
-    linear-gradient(180deg, var(--desk), var(--night));
-}
-
-/* A mist that drifts over the desk and the page alike. */
-.fog {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  pointer-events: none;
-  mix-blend-mode: screen;
-}
-
-.fog span {
-  position: absolute;
-  inset: -20% -40%;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse at 30% 60%, var(--ghost), transparent 42%),
-    radial-gradient(ellipse at 70% 30%, var(--ghost), transparent 38%);
-  filter: blur(18px);
-  animation: drift 38s ease-in-out infinite alternate;
-}
-
-.fog span:nth-child(2) { animation-duration: 55s; animation-delay: -20s; opacity: 0.7; }
-
-@keyframes drift {
-  from { transform: translateX(-8%) translateY(2%); }
-  to { transform: translateX(8%) translateY(-3%); }
-}
-
-.web {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 90px;
-  height: 90px;
-  pointer-events: none;
-  opacity: 0.22;
-}
-
-.web path { fill: none; stroke: #d9d2c4; stroke-width: 0.6; }
-
-.ghost-word {
-  position: absolute;
-  left: 0;
-  top: 40%;
-  margin: 0;
-  pointer-events: none;
-  font-size: 30px;
-  color: rgba(225, 235, 255, 0);
-  white-space: nowrap;
-}
-
-.ghost-word.on { animation: haunt 9s ease-in-out forwards; }
-
-@keyframes haunt {
-  0% { transform: translateX(4vw); color: rgba(225, 235, 255, 0); filter: blur(4px); }
-  40% { color: rgba(225, 235, 255, 0.09); filter: blur(1px); }
-  100% { transform: translateX(60vw); color: rgba(225, 235, 255, 0); filter: blur(6px); }
 }
 
 /* ── the book and its page ─────────────────────────────────────────── */
 
 .book {
   position: relative;
-  flex: 1;
+  flex: 0 1 auto;
   display: flex;
+  width: min(100%, 880px, 80vh);
+  height: min(100%, 1120px);
   min-width: 0;
   perspective: 1800px;
+  filter: drop-shadow(0 30px 40px rgba(0, 0, 0, 0.55));
 }
 
 .page {
@@ -496,17 +445,14 @@ html, body {
 /* ── stillness ─────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  .fog span, .glow, .bookmark, .stir span, .soak.on, .who.arrive, .ghost-word.on, .corner.calls::after { animation: none; }
+  .glow, .bookmark, .stir span, .soak.on, .who.arrive, .corner.calls::after { animation: none; }
   .corner::before { transition: none; }
 }
 
-:root.reduced .fog span,
 :root.reduced .glow,
 :root.reduced .bookmark,
 :root.reduced .stir span,
 :root.reduced .soak.on,
 :root.reduced .who.arrive,
-:root.reduced .ghost-word.on,
 :root.reduced .corner.calls::after { animation: none; }
 :root.reduced .corner::before { transition: none; }
-:root.reduced .ghost-word { display: none; }

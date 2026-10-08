@@ -309,6 +309,50 @@ describe('theme on the Zen root', () => {
 })
 
 describe('native chrome: held while Zen is shown, restored on leave (macOS)', () => {
+  it('Rosson 2026-10-08 (the Diary): stoplights "hidden" hides the native buttons, reserves nothing, and leaving shows them again', async () => {
+    h.page = zenPage({ chrome: { corners: 'system', stoplights: 'hidden', 'stoplight-offset': [0, 0] } })
+    await enterZen()
+    await waitFor(() => expect(lastNative('set_traffic_light_inset')).toMatchObject({ hidden: true }))
+    expect(root().getAttribute('data-zen-stoplights')).toBe('hidden')
+    expect(root().style.getPropertyValue('--zen-stoplight-rect')).toBe('0px 0px 0px 0px')
+    expect(root().style.getPropertyValue('--zen-stoplight-safe-top')).toBe('0px')
+    expect(root().style.getPropertyValue('--zen-stoplight-safe-left')).toBe('0px')
+    // Every re-apply keeps them hidden.
+    h.invokes.length = 0
+    window.dispatchEvent(new Event('resize'))
+    await nextFrame()
+    const insets = h.invokes.filter((i) => i.cmd === 'set_traffic_light_inset')
+    expect(insets.length).toBeGreaterThan(0)
+    for (const i of insets) expect(i.args).toMatchObject({ hidden: true })
+    // Leaving Zen (Settings over it) gives the window its buttons back.
+    act(() => useSettingsStore.setState({ settingsOpen: true }))
+    expect(lastNative('set_traffic_light_inset')).toMatchObject({ hidden: false })
+    act(() => useSettingsStore.setState({ settingsOpen: false }))
+  })
+
+  it('Rosson 2026-10-08 (the Diary): [layout] canvas "full" floats the top band over a bare, edge-to-edge page', async () => {
+    const full = zenPage() as { page: { layout: Record<string, unknown> } }
+    full.page.layout = { ...full.page.layout, canvas: 'full' }
+    h.page = full
+    await enterZen()
+    await waitFor(() => expect(document.querySelector('[data-zen-canvas="full"]')).not.toBeNull())
+    const band = document.querySelector<HTMLElement>('[data-zen-band-float]')
+    if (!band) throw new Error('no floating band')
+    expect(band.style.position).toBe('absolute')
+    const layout = document.querySelector<HTMLElement>('[data-zen-layout]')
+    expect(layout?.style.padding).toBe('0px')
+    const cols = [...document.querySelectorAll('[data-zen-column]')]
+    expect(cols.length).toBeGreaterThan(0)
+    for (const c of cols) expect(c.hasAttribute('data-zen-column-bare'), 'no glass box on a full canvas').toBe(true)
+    // A framed page (the default) keeps its row and its boxes.
+    cleanup()
+    h.page = zenPage()
+    await enterZen()
+    await waitFor(() => expect(document.querySelector('[data-zen-layout]')).not.toBeNull())
+    expect(document.querySelector('[data-zen-canvas]')).toBeNull()
+    expect(document.querySelector('[data-zen-band-float]')).toBeNull()
+  })
+
   it('enter takes Zen values; resize and fullscreen keep them; Settings and exit restore the Style', async () => {
     await enterZen()
     await waitFor(() => expect(lastNative('set_window_corner_radius')).toEqual({ radius: 0.5 }))
@@ -360,12 +404,12 @@ describe('native chrome: held while Zen is shown, restored on leave (macOS)', ()
     await enterZen()
     await waitFor(() => expect(lastNative('set_window_corner_radius')).toEqual({ radius: 0.5 }))
     h.invokes.length = 0
-    h.page = zenPage({ version: 'v2', chrome: { corners: 'system', stoplights: 'hidden', 'stoplight-offset': [0, 0] } })
+    h.page = zenPage({ version: 'v2', chrome: { corners: 'system', stoplights: 'triangle', 'stoplight-offset': [0, 0] } })
     await act(async () => {
       for (const fn of [...h.zenHandlers]) fn()
     })
     await waitFor(() => expect(lastNative('set_window_corner_radius')).toEqual({ radius: 0 }))
-    // `hidden` isn't a stoplight shape: square (last good) holds.
+    // `triangle` isn't a stoplight shape: square (last good) holds.
     expect(lastNative('set_traffic_light_inset')).toMatchObject({ x: 8, y: 11, square: true })
     // Never a flip through the Style (round lights) in between.
     expect(h.invokes.filter((i) => i.cmd === 'set_traffic_light_inset').some((i) => i.args.square === false)).toBe(false)

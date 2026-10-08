@@ -1,0 +1,53 @@
+# Zen theme "haunted": a candlelit desk in a dark, misty study (the Diary's
+# scene, Rosson 2026-10-08). Built into K2 (read-only). It sits on top of
+# "basic": anything not set here comes from there.
+#
+# The scene is the background image, drawn procedurally and checked in:
+# scripts/zen-themes/haunted-background.py (no outside art). It covers the
+# whole window behind every widget, so the Diary's book (or any other
+# widget) sits on the desk. The widget is never the scene: put the journal
+# on another theme, or this desk behind other widgets.
+schema = 1
+
+[theme]
+scheme = "dark"
+
+[colors.dark]
+canvas = "#0c0908"
+surface = "#17110d"
+surface-raised = "#221812"
+border = "#3a2a1e"
+text = "#e9dcc4"
+text-muted = "#a8957a"
+accent = "#d08a3c"
+accent-text = "#140d08"
+bubble-me = "#6b3a1c"
+bubble-me-text = "#f4e6cc"
+bubble-agent = "#221812"
+bubble-agent-text = "#e9dcc4"
+working = "#e0a050"
+idle = "#7d7266"
+needs-you = "#c44a2c"
+danger = "#d0503c"
+
+[shape]
+radius = 6
+bubble-radius = 8
+
+[terminal.dark]
+foreground = "#e9dcc4"
+background = "#0c0908"
+cursor = "#d08a3c"
+cursor-text = "#140d08"
+selection = "#3a2a1e"
+
+[chrome]
+# The study has no window frame: the stoplights hide while this theme
+# shows (leave with the ⋯ menu's Zen toggle or ⌃⌘Z; ⌘W and ⌘M still
+# close and minimize the window, and the menu bar keeps both).
+stoplights = "hidden"
+
+[background]
+image = "haunted-background.webp"
+fit = "cover"
+opacity = 1

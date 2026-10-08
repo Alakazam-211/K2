@@ -353,14 +353,16 @@ describe('the default template theme is the daemon’s built-in themes/basic.tom
 })
 
 describe('chrome block parsing', () => {
-  it('reads only known values; hidden lights, numeric radius and out-of-range offsets keep the last good', () => {
+  it('reads only known values; unknown lights, numeric radius and out-of-range offsets keep the last good', () => {
     expect(parseZenChrome({ corners: 'square', stoplights: 'square', 'stoplight-offset': [4, 24] })).toEqual({
       corners: 'square',
       stoplights: 'square',
       offset: [4, 24],
     })
     const last = { corners: 'square' as const, stoplights: 'square' as const, offset: [2, 2] as [number, number] }
-    expect(parseZenChrome({ corners: 12, stoplights: 'hidden', 'stoplight-offset': [30, 0] }, last)).toEqual(last)
+    expect(parseZenChrome({ corners: 12, stoplights: 'triangle', 'stoplight-offset': [30, 0] }, last)).toEqual(last)
+    // Rosson 2026-10-08 (the Diary): `hidden` is a value now.
+    expect(parseZenChrome({ stoplights: 'hidden' }, last)).toEqual({ ...last, stoplights: 'hidden' })
     expect(parseZenChrome(null)).toEqual(ZEN_DEFAULT_CHROME)
   })
 })

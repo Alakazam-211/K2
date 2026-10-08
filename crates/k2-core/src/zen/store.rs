@@ -1183,15 +1183,23 @@ impl ZenFiles {
         crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
     }
 
-    /// The theme a Garden shows (G16): its own pick, else the global one,
-    /// else `basic`. A pick whose theme is gone is reported in `missing`
-    /// and skipped. `garden` is a Garden id.
+    /// The theme a Garden shows (G16): its own pick, else its template's
+    /// default theme (a catalog Garden's `theme`, the Diary's haunted study;
+    /// scope `garden`, so a theme switch there becomes the Garden's own
+    /// pick), else the global one, else `basic`. A pick whose theme is gone
+    /// is reported in `missing` and skipped. `garden` is a Garden id.
     pub fn active_theme(&self, garden: Option<&str>) -> ActiveTheme {
         let a = self.read_active();
         let mut missing = None;
         let mut chain: Vec<(String, &'static str)> = Vec::new();
         if let Some(n) = garden.and_then(|id| a.gardens.get(id)) {
             chain.push((n.clone(), "garden"));
+        }
+        if let Some(t) = garden
+            .and_then(|id| self.gardens().into_iter().find(|g| g.id == id))
+            .and_then(|g| super::garden_catalog::template_theme(&g.template))
+        {
+            chain.push((t.to_string(), "garden"));
         }
         if let Some(n) = &a.theme {
             chain.push((n.clone(), "global"));
@@ -1390,14 +1398,25 @@ impl ZenFiles {
 
     /// The resolved `background` for the active theme, as a `data:` URL.
     /// A bad image reports its error and falls back to the theme's last good
-    /// image (`lastGood: true`), else to no background.
+    /// image (`lastGood: true`), else to no background. When the person's
+    /// file names no image, a built-in theme's own (compiled in, the
+    /// haunted Diary's study) is served.
     fn background_json(&self, name: &str, spec: &J, eff: &Effective, errors: &mut Vec<Diagnostic>) -> Option<J> {
-        let (file, mime, bytes, last_good) = match self.check_background(name, eff)? {
-            Ok((file, mime, bytes)) => (file, mime, bytes, false),
-            Err(d) => {
+        let (file, mime, bytes, last_good) = match self.check_background(name, eff) {
+            Some(Ok((file, mime, bytes))) => (file, mime, bytes, false),
+            Some(Err(d)) => {
                 errors.push(d);
                 let (file, mime, bytes) = self.last_good_background(name)?;
                 (file, mime, bytes, true)
+            }
+            None => {
+                let bg = super::builtin_theme(name)?.background?;
+                if spec["image"].as_str() != Some(bg.file) {
+                    return None;
+                }
+                let ext = schema::image_ext(bg.file)?;
+                let mime = schema::BACKGROUND_TYPES.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)?;
+                (bg.file.to_string(), mime, bg.bytes.to_vec(), false)
             }
         };
         use base64::Engine as _;

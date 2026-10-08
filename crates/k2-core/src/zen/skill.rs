@@ -150,7 +150,10 @@ Templates: `{TEMPLATE_ID}` (the texting page: Agents beside Conversation) and\n\
 `{BLANK_TEMPLATE_ID}` (empty). The template gives the page its layout, its widgets\n\
 and its controls until the file declares its own.\n\n\
 - `[layout]`: `kind` is {}; 1 to {MAX_COLUMNS} `[[layout.column]]`, each with `size`\n\
-  (percent, the sizes add up to 100) and `min-width` (px, 0 to {}).\n\
+  (percent, the sizes add up to 100) and `min-width` (px, 0 to {}). `canvas = \"full\"`\n\
+  gives the page the whole window: the top band floats over the columns, which lose\n\
+  their margin and glass box, and the theme's background shows behind everything\n\
+  (the Diary); the default is `framed`.\n\
 - `[[widget]]`: `id` (letters, digits, - and _; unique on the page), `kind`, `column` (0 is\n\
   the first; it must exist in the layout), and optional `[widget.props]`. At most {MAX_WIDGETS}\n\
   content widgets and {MAX_CHROME_WIDGETS} Zen controls.\n\
@@ -302,14 +305,17 @@ add a background image next to it if asked, run `k2 zen validate`, then\n\
     s.push_str("\nA bad image is reported with its file and line, and Zen keeps the theme's last good image.\n");
     s.push_str("\n### `[chrome]` (the window itself)\n\n");
     s.push_str(&format!("- `corners`: {} (macOS window corners).\n", ticks(CORNERS)));
-    s.push_str(&format!("- `stoplights`: {} (the macOS window buttons).\n", ticks(STOPLIGHTS)));
+    s.push_str(&format!(
+        "- `stoplights`: {} (the window buttons; `hidden` hides them while the theme shows: ⌃⌘Z or the page's Zen toggle leaves Zen, and ⌘W / ⌘M or the menu bar still close and minimize the window).\n",
+        ticks(STOPLIGHTS)
+    ));
     s.push_str(&format!(
         "- `stoplight-offset = [x, y]`: move the buttons right and down, 0 to {} px each.\n\n",
         fmt_num(STOPLIGHT_OFFSET_MAX)
     ));
     s.push_str(
-        "What chrome can't do: macOS doesn't let K2 hide, recolor, resize, reorder or\n\
-move the window buttons to the right (`stoplights = \"hidden\"` is an error).\n\
+        "What chrome can't do: K2 can't recolor, resize, reorder or move the window\n\
+buttons to the right (only shape, nudge, or `hidden`).\n\
 Corners are system or square only. The window is never transparent: no glass,\n\
 no blur, no desktop showing through. Linux and Windows have no native chrome to\n\
 theme; K2 draws their window controls and menu button in a corner Zen can't cover.\n\n",

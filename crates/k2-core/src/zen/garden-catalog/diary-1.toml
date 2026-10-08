@@ -22,12 +22,19 @@ order = 10
 # Rosson 2026-10-08: preinstalled for new users (setup seeds it once, after
 # Gardens 1 and 2; never appended to an existing user's Gardens).
 new_users = true
+# The scene lives in the theme, never in the widget (Rosson 2026-10-08): a
+# Diary Garden shows the built-in `haunted` study until the person picks
+# another theme for it.
+theme = "haunted"
 
 # No permissions (Rosson 2026-10-08): the Diary talks to the agents on
 # this computer the moment it's created.
 
+# The whole window is the page: the ⋯ menu floats over the book, no frame
+# or margin around it, and the haunted study shows behind everything.
 [layout]
 kind = "columns"
+canvas = "full"
 
 [[layout.column]]
 widget = "diary"

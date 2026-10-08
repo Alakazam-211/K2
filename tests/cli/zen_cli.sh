@@ -430,9 +430,13 @@ assert_eq "next goes to paper" "$out" "theme paper for this computer"
 capture zen theme next
 assert_eq "next goes to midnight" "$out" "theme midnight for this computer"
 capture zen theme next
+assert_eq "next goes to haunted (the Diary's study)" "$out" "theme haunted for this computer"
+capture zen theme next
 assert_eq "next wraps to basic" "$out" "theme basic for this computer"
 capture zen theme prev
-assert_eq "prev wraps to midnight" "$out" "theme midnight for this computer"
+assert_eq "prev wraps to haunted" "$out" "theme haunted for this computer"
+capture zen theme prev
+assert_eq "prev goes back to midnight" "$out" "theme midnight for this computer"
 capture zen theme set neon
 assert_eq "unknown theme exits 1" "$rc" "1"
 assert_contains "unknown theme says so" "$out" "no theme 'neon' on this computer; themes: basic, paper, midnight"
@@ -482,7 +486,7 @@ import json, sys
 d = json.load(sys.stdin)
 t = d["theme"]
 print(t["name"], t["builtin"], t["tokens"]["colors"]["dark"]["accent"], t["font"]["family"], "bg" if "background" in t else "nobg", ",".join(x["name"] for x in d["themes"]))')"
-assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg basic,paper,midnight,sunset"
+assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg basic,paper,midnight,haunted,sunset"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN")"
 assert_eq "GET theme/set is 405" "$code" "405"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" --data-raw '{"name":"neon"}')"

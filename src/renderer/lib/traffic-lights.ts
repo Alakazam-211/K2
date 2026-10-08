@@ -34,6 +34,9 @@ export type TrafficLightCommand = {
    * top bar but not the native buttons, so Rust re-centers them on it.
    */
   zoom: number
+  /** Zen `[chrome] stoplights = "hidden"` (the haunted Diary): AppKit hides
+   *  the three buttons; ⌘W / ⌘M and the menu bar still close and minimize. */
+  hidden: boolean
 }
 
 /** A finite zoom above 0, else 1. */
@@ -76,7 +79,7 @@ export function trafficLightOffsets(inset: number): { x: number; y: number } {
  * right and down; Zen's own inset (`ZEN_STOPLIGHT_INSET_PX`) and the 3px
  * title-bar nudge are added on top.
  */
-export type ZenTrafficLights = { square: boolean; x: number; y: number }
+export type ZenTrafficLights = { square: boolean; x: number; y: number; hidden?: boolean }
 
 /**
  * Shape ignores scheme, palette, and density (Square compact / regular /
@@ -101,6 +104,7 @@ export function trafficLightCommand(input: {
       y: zy + ZEN_STOPLIGHT_INSET_PX + TRAFFIC_LIGHT_Y_NUDGE_PX,
       square: input.zen.square,
       zoom: trafficLightZoom(input.zoom),
+      hidden: input.zen.hidden === true,
     }
   }
   const { x, y } = trafficLightOffsets(input.inset)
@@ -109,6 +113,7 @@ export function trafficLightCommand(input: {
     y,
     square: trafficLightShape(input.styleId) === 'square',
     zoom: trafficLightZoom(input.zoom),
+    hidden: false,
   }
 }
 
@@ -153,7 +158,7 @@ export function createTrafficLightController(opts: {
   let queued = false
 
   function key(cmd: TrafficLightCommand, zen: boolean): string {
-    return `${zen ? 'zen' : 'style'}|${cmd.x}|${cmd.y}|${cmd.square}|${cmd.zoom}`
+    return `${zen ? 'zen' : 'style'}|${cmd.x}|${cmd.y}|${cmd.square}|${cmd.zoom}|${cmd.hidden}`
   }
 
   function emit(cmd: TrafficLightCommand, inset: number, zen: boolean): void {

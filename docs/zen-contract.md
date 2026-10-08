@@ -263,6 +263,7 @@ schema = 1
 template = "k2.blank@1"            # or "k2.texting@1"
 [layout]
 kind = "columns"
+canvas = "framed"                  # or "full": the page is the whole window (the Diary)
 [[layout.column]]
 size = 40                          # percent; the sizes add up to 100
 min-width = 240                    # px, 0–800 (default 0)
@@ -506,7 +507,7 @@ key left out gets K2's default, which is the built-in `themes/basic.toml`;
   "background": { "dataUrl": "data:image/png;base64,…", "fit": "cover", "opacity": 1 }  // optional
 },
 "themes": [{ "name": "basic", "label": "Basic", "builtin": true, "user": false, "active": true }, …],   // the picker shows `label` (else the id with a capital) and sends `name`
-"chrome": { "corners": "system", "stoplights": "round", "stoplight-offset": [0, 0] },
+"chrome": { "corners": "system", "stoplights": "round", "stoplight-offset": [0, 0] },   // stoplights: round | square | hidden
 "motion": { "animations": { "<name>": { "on": true, "speed": 3, "bezier": [0.22, 1, 0.36, 1], "style": "popin 92%" }, … } }
 ```
 
@@ -631,7 +632,23 @@ the catalog's `bannedFields` (`path`, `sessionId`, `conversation_id`,
   page posts to that agent's Thread; the reply bleeds back in handwriting.
   Its page has no chrome but one ⋯ `menu` (top right) holding the Garden
   switcher and the Zen toggle, so the required-controls check reads the
-  menu's button (FC25); ⌃⌘Z still leaves Zen.
+  menu's button (FC25); ⌃⌘Z still leaves Zen. The widget is the journal
+  only; the room is the theme (below).
+- **The whole window** (Rosson 2026-10-08). `k2.diary@1`'s `[layout]` says
+  `canvas = "full"`: the top band (the ⋯ menu) floats over the page at the
+  window's top edge (still a drag area), the column has no margin and no
+  glass box, and the widget's frame is transparent with the book centred
+  and sized to the window. Its `[catalog]` says `theme = "haunted"`: a
+  built-in theme (`themes/haunted.toml`) whose background
+  (`haunted-background.webp`, ~17 KB, drawn by
+  `scripts/zen-themes/haunted-background.py`, no outside art) covers the
+  window behind everything, and whose `[chrome] stoplights = "hidden"`
+  hides the window buttons (⌘W / ⌘M and the menu bar still close and
+  minimize; ⌃⌘Z or the Zen toggle leaves Zen). A catalog `theme` is the
+  Garden's default: its own pick wins, then the template's theme, then the
+  global one (`active_theme`; scope `garden`, so a theme switch there
+  becomes the Garden's own pick). The study is anyone's theme, and the
+  journal sits on any theme.
 
 ### The widget in `GET /cli/zen/get`
 
@@ -955,4 +972,6 @@ this contract, where it reads more loosely or decides something:
     `stoplight-offset`); `--zen-stoplight-safe-*` include it, so the Garden
     switcher starts at 91px and the top band (at least 52px) stays below
     them. Leaving Zen restores the Style's position. Linux and Windows are
-    unchanged.
+    unchanged. With `stoplights = "hidden"` (2026-10-08) the native buttons
+    hide (`set_traffic_light_inset {hidden: true}`, kept on every re-apply),
+    Linux/Windows draw no cluster, and every `--zen-stoplight-safe-*` is 0.

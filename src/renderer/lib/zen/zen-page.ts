@@ -44,6 +44,10 @@ export interface ZenLayout {
   split: number[]
   /** Minimum px widths, one per column (0 = none). */
   minWidths: number[]
+  /** `[layout] canvas = "full"` (the Diary, Rosson 2026-10-08): the page
+   *  is the whole window: the top band floats over the columns, which lose
+   *  their margin and glass box. Absent = `framed`. */
+  canvas?: 'full'
 }
 
 /** Where a widget sits (Rosson 2026-10-06; prd-zen-freeform-chrome FC7):
@@ -365,9 +369,10 @@ function columnsLayout(raw: unknown[]): ZenLayout | null {
 function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
   const fallback = builtin.layout
   if (!isObj(raw)) return { ...fallback, split: [...fallback.split], minWidths: [...fallback.minWidths] }
+  const full = raw.canvas === 'full' ? ({ canvas: 'full' } as const) : {}
   if (!Array.isArray(raw.split) && Array.isArray(raw.columns)) {
     const cols = columnsLayout(raw.columns)
-    if (cols) return cols
+    if (cols) return { ...cols, ...full }
   }
   const split = Array.isArray(raw.split) ? raw.split.map(num).filter((n): n is number => n !== null && n > 0) : []
   const cols = split.length > 0 ? split : [...fallback.split]
@@ -378,7 +383,7 @@ function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
       ? cols.map(() => 0)
       : [...fallback.minWidths]
   while (mins.length < cols.length) mins.push(0)
-  return { kind: 'columns', split: cols, minWidths: mins.slice(0, cols.length) }
+  return { kind: 'columns', split: cols, minWidths: mins.slice(0, cols.length), ...full }
 }
 
 function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): ZenWidgetDecl[] {

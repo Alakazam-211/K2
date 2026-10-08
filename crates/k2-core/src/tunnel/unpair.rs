@@ -325,7 +325,12 @@ impl std::fmt::Display for ReportError {
 /// k2-connect control plane).
 ///
 /// Contract: `POST {control-plane}/tunnel/release`, `Authorization:
-/// Bearer <released token>`, JSON body `{"subdomain": ..., "deviceId": ...}`.
+/// Bearer <released token>`, JSON body
+/// `{"subdomain": ..., "deviceId": ..., "releasedAt": <RFC 3339>}`.
+/// `releasedAt` is the moment of the release on this device (the
+/// tombstone's `released_at`), also when a queued report is replayed later.
+/// The control plane refuses a missing value (409 `legacy_release`) and one
+/// older than 7 days (409 `stale_release`); both are terminal here.
 /// The control plane must refuse (409 `not_holder`) unless this token AND
 /// device id hold the name right now. As of 0.45.2 the endpoint does not
 /// exist (connect.k2.dev answers 404 for everything but `/subdomains*`),
@@ -334,17 +339,24 @@ pub fn report_upstream(
     subdomain: &str,
     device_id: Option<&str>,
     token: &str,
+    released_at: &str,
 ) -> Result<(), ReportError> {
     if token.trim().is_empty() {
         return Err(ReportError::Terminal(
             "no bearer token to authenticate the release report".to_string(),
         ));
     }
+    if chrono::DateTime::parse_from_rfc3339(released_at.trim()).is_err() {
+        return Err(ReportError::Terminal(format!(
+            "the release time {released_at:?} is not RFC 3339"
+        )));
+    }
     let base = super::subdomains::control_plane_base();
     let url = format!("{base}/tunnel/release");
     let body = serde_json::json!({
         "subdomain": subdomain,
         "deviceId": device_id,
+        "releasedAt": released_at.trim(),
     });
     // Connect timeout (0.45.1): a control plane that never answers the SYN
     // (a firewall that drops instead of refusing) fails in 5 s, not 20.
@@ -425,6 +437,9 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     //    queued for boot-time replay; terminal failure → recorded, never
     //    retried.
     let subdomain = cfg.subdomain.trim().to_string();
+    // The moment of release: recorded in the tombstone AND sent upstream, so
+    // a later replay reports the same time, not the time of the replay.
+    let released_at = chrono::Utc::now().to_rfc3339();
     let mut upstream_reported = false;
     let mut queued = false;
     let mut local_only = false;
@@ -442,7 +457,7 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
             )
         }
         ReleaseMode::Release => {
-            match report_upstream(&subdomain, cfg.device_id.as_deref(), &token) {
+            match report_upstream(&subdomain, cfg.device_id.as_deref(), &token, &released_at) {
                 Ok(()) => {
                     upstream_reported = true;
                     None
@@ -469,7 +484,7 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     // 3. Tombstone BEFORE deletion: if the deletes below fail halfway, the
     //    gate already refuses the identity (fail closed, never fail open).
     save(&UnpairTombstone {
-        released_at: chrono::Utc::now().to_rfc3339(),
+        released_at: released_at.clone(),
         subdomain: subdomain.clone(),
         device_id: cfg.device_id.clone(),
         token_sha256: token_fingerprint(&token),
@@ -551,7 +566,7 @@ pub fn replay_pending() -> Result<ReplayOutcome, String> {
                 .to_string(),
         )
     } else {
-        match report_upstream(&t.subdomain, t.device_id.as_deref(), &token) {
+        match report_upstream(&t.subdomain, t.device_id.as_deref(), &token, &t.released_at) {
             Ok(()) => {
                 t.upstream_reported = true;
                 t.pending_token = None; // scrub the secret the moment the report lands
@@ -684,6 +699,7 @@ mod tests {
     struct CountingControlPlane {
         addr: std::net::SocketAddr,
         hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
         thread: Option<std::thread::JoinHandle<()>>,
         _env: crate::test_env::EnvVar,
@@ -697,8 +713,9 @@ mod tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake control plane");
             let addr = listener.local_addr().expect("addr");
             let hits = Arc::new(AtomicUsize::new(0));
+            let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
             let stop = Arc::new(AtomicBool::new(false));
-            let (hits_t, stop_t) = (hits.clone(), stop.clone());
+            let (hits_t, bodies_t, stop_t) = (hits.clone(), bodies.clone(), stop.clone());
             let thread = std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     if stop_t.load(Ordering::SeqCst) {
@@ -709,11 +726,30 @@ mod tests {
                     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 2048];
-                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let header_end = loop {
+                        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break Some(i + 4);
+                        }
                         match s.read(&mut chunk) {
-                            Ok(0) | Err(_) => break,
+                            Ok(0) | Err(_) => break None,
                             Ok(n) => buf.extend_from_slice(&chunk[..n]),
                         }
+                    };
+                    if let Some(end) = header_end {
+                        let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        while buf.len() < end + len {
+                            match s.read(&mut chunk) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            }
+                        }
+                        let body = String::from_utf8_lossy(&buf[end..]).to_string();
+                        bodies_t.lock().expect("bodies lock").push(body);
                     }
                     let _ = s.write_all(
                         format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -725,11 +761,21 @@ mod tests {
                 super::super::subdomains::CONTROL_PLANE_BASE_ENV,
                 format!("http://{addr}"),
             );
-            Self { addr, hits, stop, thread: Some(thread), _env: env }
+            Self { addr, hits, bodies, stop, thread: Some(thread), _env: env }
         }
 
         fn hits(&self) -> usize {
             self.hits.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// The JSON bodies of every request seen, in order.
+        fn bodies(&self) -> Vec<serde_json::Value> {
+            self.bodies
+                .lock()
+                .expect("bodies lock")
+                .iter()
+                .map(|b| serde_json::from_str(b).unwrap_or_else(|e| panic!("body is not JSON ({e}): {b}")))
+                .collect()
         }
     }
 
@@ -804,6 +850,17 @@ mod tests {
             assert!(t.holder_at_release && t.upstream_reported && !t.local_only);
             assert_eq!(t.pending_token, None);
             assert!(!super::super::connector::status().running, "tunnel down after release");
+
+            // Wire contract: releasedAt is the tombstone's release time.
+            let bodies = cp.bodies();
+            assert_eq!(bodies.len(), 1, "{bodies:?}");
+            assert_eq!(bodies[0]["subdomain"], "rosson");
+            assert_eq!(bodies[0]["deviceId"], "dev-abc");
+            let sent = bodies[0]["releasedAt"]
+                .as_str()
+                .unwrap_or_else(|| panic!("releasedAt missing: {}", bodies[0]));
+            assert_eq!(sent, t.released_at, "releasedAt must equal the tombstone's released_at");
+            chrono::DateTime::parse_from_rfc3339(sent).expect("releasedAt is RFC 3339");
 
             let again = perform_release().expect("re-release");
             assert!(again.already_released);
@@ -966,6 +1023,23 @@ mod tests {
     }
 
     #[test]
+    fn replay_with_no_release_time_is_dropped_without_sending() {
+        // The control plane refuses a report without releasedAt (409
+        // legacy_release); never send one.
+        with_temp_home(|| {
+            let cp = CountingControlPlane::start(200);
+            save(&UnpairTombstone { released_at: String::new(), ..queued_holder_tombstone("tok-q") })
+                .expect("save");
+            match replay_pending().expect("replay") {
+                ReplayOutcome::Dropped(reason) => assert!(reason.contains("RFC 3339"), "{reason}"),
+                other => panic!("a release with no time must be dropped, got {other:?}"),
+            }
+            assert_eq!(cp.hits(), 0, "nothing sent without a release time");
+            assert_eq!(load().expect("load").expect("t").pending_token, None);
+        });
+    }
+
+    #[test]
     fn replay_transient_failure_keeps_the_queue() {
         with_temp_home(|| {
             with_dead_control_plane(|| {
@@ -1050,6 +1124,11 @@ mod tests {
             assert!(req.contains("Bearer tok-q"), "{req}");
             assert!(req.contains("\"subdomain\":\"rosson\""), "{req}");
             assert!(req.contains("\"deviceId\":\"dev-abc\""), "the holder check needs the device id\n{req}");
+            // A replay reports the time of the RELEASE, not of the replay.
+            assert!(
+                req.contains("\"releasedAt\":\"2026-07-12T00:00:00+00:00\""),
+                "releasedAt must be the tombstone's stored released_at\n{req}"
+            );
 
             let t = load().expect("load").expect("tombstone");
             assert!(t.upstream_reported);

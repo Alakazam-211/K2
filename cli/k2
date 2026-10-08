@@ -20004,6 +20004,8 @@ RUN
   Attached (default): output streams; the exit code is the command's.
   --detach prints a job id and returns. When it ends you get one line:
     [compute] job <id> on <node>: exit 1 after 6m12s. k2 compute logs <id> --tail 50
+  Longer than your shell tool's timeout? Use --detach. (If an attached
+  run gets killed, the job keeps going and you still get that line.)
   Code: the node checks out a commit (HEAD, or --sha REV) in a fresh
   worktree. Uncommitted work is NOT sent unless --dirty. A warm target
   dir per project keeps cargo incremental.

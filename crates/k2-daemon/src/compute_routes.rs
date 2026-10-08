@@ -1132,6 +1132,7 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
 
 fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
+    compute_ws::touch_follower(&j.id);
     let generation = params.get("generation").and_then(|g| g.parse::<i64>().ok()).unwrap_or(j.generation);
     let mut cursor = match params.get("cursor").and_then(|c| c.parse::<u64>().ok()) {
         Some(c) => c,

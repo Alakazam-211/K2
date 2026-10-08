@@ -420,6 +420,21 @@ async fn compute_end_to_end_with_the_real_node() {
     let (_, _, fin) = follow(port, &agent, &long).await;
     assert_eq!(fin["state"], "cancelled", "{fin}");
 
+    // Followed attached runs never sent a message …
+    assert_eq!(k2_daemon::compute_ws::test_sink_take(&agent_sid), Vec::<String>::new());
+    // … but an attached run nobody follows (the agent's shell tool timed
+    // out and killed the CLI) still reports back.
+    let r = post(port, "/cli/compute/run", &agent, run_body("n1", &["sh", "-c", "exit 5"], "client-0000000007")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sid = agent_sid.clone();
+    wait_for("message for an unfollowed attached run", 30, || {
+        let s = sid.clone();
+        Box::pin(async move { !k2_daemon::compute_ws::test_sink_peek(&s).is_empty() })
+    })
+    .await;
+    let msgs = k2_daemon::compute_ws::test_sink_take(&agent_sid);
+    assert!(msgs[0].contains(": exit 5"), "{msgs:?}");
+
     // The audit log has the story.
     let r = get(port, "/cli/compute/events", OWNER, "limit=200").await;
     let kinds: Vec<String> = j(&r)["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect();

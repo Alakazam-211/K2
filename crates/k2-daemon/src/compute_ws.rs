@@ -78,6 +78,30 @@ fn with_engine<T>(f: impl FnOnce(&mut Engine) -> T) -> T {
 /// Wakes log/state long-pollers (`/cli/compute/jobs/logs?wait=`).
 static CHANGE: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
 
+/// When each job's log was last polled (an attached CLI follows every
+/// ≤ 25 s); in memory only.
+static FOLLOWERS: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
+
+/// A follower just asked for `job_id`'s log.
+pub fn touch_follower(job_id: &str) {
+    let mut g = FOLLOWERS.lock().unwrap_or_else(|p| p.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    if m.len() > 4096 {
+        m.retain(|_, t| t.elapsed() < Duration::from_secs(600));
+    }
+    m.insert(job_id.to_string(), Instant::now());
+}
+
+/// Someone followed this job's log in the last 45 s.
+fn follower_recent(job_id: &str) -> bool {
+    FOLLOWERS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(job_id))
+        .is_some_and(|t| t.elapsed() < Duration::from_secs(45))
+}
+
 pub fn notify_change() {
     let (m, cv) = &CHANGE;
     let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
@@ -676,7 +700,12 @@ pub fn finalize(job_id: &str) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Some(job) = store::job_by_id(&conn, job_id) else { return };
-        if !job.is_terminal() || !job.detach || job.notified_at.is_some() {
+        // Detached jobs always get a message. An attached job gets one too
+        // when nobody is following its logs any more (the agent's shell
+        // tool timed out and killed `k2 compute run`): otherwise its result
+        // would only ever be found by polling.
+        let wants = job.detach || (job.session_id.is_some() && !follower_recent(&job.id));
+        if !job.is_terminal() || !wants || job.notified_at.is_some() {
             return;
         }
         store::mark_notified(&conn, job_id, compute::now());

@@ -788,6 +788,41 @@ cli_post_json() {
         -H "Content-Type: application/json" 2>/dev/null
 }
 
+# POST a JSON body read from STDIN (`--data-binary @-`). For bodies that
+# carry a secret (API keys): the body never sits on any process's argv
+# (argv is readable by every OS user via `ps`). The URL, with the token,
+# reaches curl as a config line on fd 3, so it is off curl's argv too.
+# Same wire request as cli_post_json.
+cli_post_json_stdin() {
+    local endpoint="$1"
+    local url="${BASE_URL}${endpoint}?token=${TOKEN}"
+    url="${url//\\/\\\\}"
+    url="${url//\"/\\\"}"
+    curl -s -K /dev/fd/3 -X POST \
+        --connect-timeout 5 --max-time 30 \
+        -H "Content-Type: application/json" \
+        --data-binary @- 2>/dev/null 3<<<"url = \"${url}\""
+}
+
+# Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
+# is a terminal (`read -rs`), else one line from the pipe. Never echoed.
+_cli_read_secret_stdin() {
+    local prompt="${1:-Paste the key: }"
+    _K2_SECRET=""
+    if [ -t 0 ]; then
+        printf '%s' "$prompt" >&2
+        IFS= read -rs _K2_SECRET || _K2_SECRET=""
+        echo >&2
+    else
+        IFS= read -r _K2_SECRET || true
+    fi
+}
+
+# One-line notice for the old key-on-the-command-line forms.
+_cli_warn_key_on_argv() {
+    echo "warning: passing a key on the command line is deprecated and will be refused in the next release; use --key-stdin" >&2
+}
+
 urlencode() {
     python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null || echo "$1"
 }
@@ -5684,10 +5719,47 @@ EOF
 # JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
 # empty key CLEARS the stored value. The key is staged into a microVM-backed
 # sandbox cell's guest env at spawn (per-workspace scoping). NEVER printed back.
+#   k2 workspace api-key <workspace> --key-stdin   key from stdin (hidden prompt
+#                                                  on a terminal, else one line)
+#   k2 workspace api-key <workspace>               clear the key
+#   k2 workspace api-key <workspace> <key>         deprecated (key on argv)
+# The key goes bash → python (stdin) → curl (stdin): never on any argv.
+_workspace_api_key_usage() {
+    echo "Usage: k2 workspace api-key <workspace> --key-stdin   (key read from stdin; never an argument)" >&2
+    echo "       k2 workspace api-key <workspace>               (no key: clears the stored key)" >&2
+}
+
 cmd_workspace_set_api_key() {
-    local target="${1:-}"
-    local key="${2:-}"
-    [[ -z "$target" ]] && { echo "Usage: k2 workspace api-key <workspace> <api-key>   (empty key clears)" >&2; exit 1; }
+    local from_stdin=0 args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --key-stdin) from_stdin=1; shift ;;
+            --help|-h) _workspace_api_key_usage; exit 0 ;;
+            --) shift; while [[ $# -gt 0 ]]; do args+=("$1"); shift; done ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    local target="${args[0]:-}"
+    local key="${args[1]:-}"
+    if [[ -z "$target" ]] || [[ ${#args[@]} -gt 2 ]]; then
+        _workspace_api_key_usage
+        exit 1
+    fi
+    if [ "$from_stdin" = "1" ]; then
+        if [[ ${#args[@]} -gt 1 ]]; then
+            echo "Error: give the key on stdin (--key-stdin) or not at all, not both." >&2
+            exit 2
+        fi
+        _cli_read_secret_stdin "Paste the API key: "
+        key="$_K2_SECRET"
+        _K2_SECRET=""
+        if [ -z "$key" ]; then
+            echo "Error: no key on stdin (to clear the key, run without --key-stdin and without a key)." >&2
+            exit 2
+        fi
+    elif [ -n "$key" ]; then
+        _cli_warn_key_on_argv
+    fi
     local resolved_path
     resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
         | python3 -c 'import json,sys
@@ -5699,11 +5771,11 @@ except Exception:
         resolved_path="$target"
     fi
     # Build the JSON body with python3 so the key is escaped correctly and is
-    # never interpolated into a shell/URL context.
-    local body
-    body=$(K2_AK_PATH="$resolved_path" K2_AK_KEY="$key" python3 -c 'import json,os
-print(json.dumps({"project": os.environ["K2_AK_PATH"], "key": os.environ.get("K2_AK_KEY","")}))')
-    cli_post_json "/cli/workspace/api-key" "$body" \
+    # never interpolated into a shell/URL context. The key reaches python on
+    # stdin (printf is a builtin: no argv) and the body reaches curl on stdin.
+    printf '%s' "$key" | K2_AK_PATH="$resolved_path" python3 -c 'import json,os,sys
+print(json.dumps({"project": os.environ["K2_AK_PATH"], "key": sys.stdin.read().strip()}))' \
+        | cli_post_json_stdin "/cli/workspace/api-key" \
         | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
@@ -5784,7 +5856,7 @@ PY
 
 # P3a (sandbox / K2-as-a-server) — OWNER-only API-key auth-tier management for
 # the external /v1/* surface. Subcommands:
-#   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
+#   k2 api-key create [--label L] [--key-stdin] \
 #                     [--provider anthropic|openai|google|xai] [--base-url U] \
 #                     [--workspaces '*'|ws1,ws2,...] \
 #                     [--allow host-sessions,canonical-message,sandboxes] \
@@ -5811,6 +5883,10 @@ PY
 #   k2 api-key create --label wiki-public-chat \
 #     --workspaces '<wiki-ws-slug>' \
 #     --allow host-sessions
+# --key-stdin reads the LLM credential from stdin (hidden prompt on a
+# terminal, else one line from a pipe); the key never rides any argv. The
+# old --anthropic-key K / --llm-key K forms still work this release but warn
+# (deprecated; refused in the next release).
 # The RAW key is printed exactly ONCE on create ("store it now, not shown
 # again"); it is never re-printed. The associated LLM credential (BYO cred;
 # --llm-key is the provider-neutral alias for --anthropic-key) is never echoed
@@ -5825,12 +5901,17 @@ cmd_api_key() {
     case "$sub" in
         create)
             local label="" anthropic="" provider="" base_url="" workspaces="" allow="" deny=""
+            local key_stdin=0 key_on_argv=0
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
-                    --anthropic-key) anthropic="${2:-}"; shift 2 ;;
+                    # The LLM credential is read from stdin (hidden prompt on
+                    # a terminal, else one line). Never an argument.
+                    --key-stdin)    key_stdin=1; shift ;;
+                    # Deprecated: the key on argv (readable via `ps`).
+                    --anthropic-key) anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
                     # W5: provider-neutral alias for the same credential slot.
-                    --llm-key)      anthropic="${2:-}"; shift 2 ;;
+                    --llm-key)      anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
                     --provider)     provider="${2:-}"; shift 2 ;;
                     --base-url)     base_url="${2:-}"; shift 2 ;;
                     --workspaces)   workspaces="${2:-}"; shift 2 ;;
@@ -5839,13 +5920,29 @@ cmd_api_key() {
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
+            if [ "$key_stdin" = "1" ]; then
+                if [ "$key_on_argv" = "1" ]; then
+                    echo "Error: give the LLM key with --key-stdin or --llm-key, not both." >&2
+                    exit 2
+                fi
+                _cli_read_secret_stdin "Paste the LLM API key: "
+                anthropic="$_K2_SECRET"
+                _K2_SECRET=""
+                if [ -z "$anthropic" ]; then
+                    echo "Error: --key-stdin given but no key on stdin." >&2
+                    exit 2
+                fi
+            elif [ "$key_on_argv" = "1" ] && [ -n "$anthropic" ]; then
+                _cli_warn_key_on_argv
+            fi
             # Build the JSON body via python3 so the (secret) LLM key is
-            # escaped correctly and never interpolated into a shell/URL context.
-            local body
-            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" python3 -c 'import json,os
+            # escaped correctly and never interpolated into a shell/URL
+            # context. The key reaches python on stdin (printf is a builtin:
+            # no argv) and the body reaches curl on stdin.
+            printf '%s' "$anthropic" | K2_AK_LABEL="$label" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" python3 -c 'import json,os,sys
 b={"label": os.environ.get("K2_AK_LABEL","")}
-k=os.environ.get("K2_AK_ANTH","")
-if k.strip(): b["anthropicKey"]=k
+k=sys.stdin.read().strip()
+if k: b["anthropicKey"]=k
 p=os.environ.get("K2_AK_PROVIDER","")
 if p.strip(): b["provider"]=p
 u=os.environ.get("K2_AK_BASE_URL","")
@@ -5865,8 +5962,8 @@ if a:
 d=os.environ.get("K2_AK_DENY","").strip()
 if d:
     b["deny"]=[s.strip() for s in d.split(",") if s.strip()]
-print(json.dumps(b))')
-            cli_post_json "/cli/api-keys/create" "$body" \
+print(json.dumps(b))' \
+                | cli_post_json_stdin "/cli/api-keys/create" \
                 | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
 try:
     d=json.load(sys.stdin)
@@ -5969,7 +6066,7 @@ except Exception as e:
         *)
             echo "Usage: k2 api-key <create|list|revoke|disable|enable>" >&2
             echo "" >&2
-            echo "  create  [--label L] [--anthropic-key K | --llm-key K]" >&2
+            echo "  create  [--label L] [--key-stdin]   (LLM key read from stdin; never an argument)" >&2
             echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
             echo "          [--workspaces '*'|ws1,ws2,...]" >&2
             echo "          [--allow host-sessions,canonical-message,sandboxes]" >&2

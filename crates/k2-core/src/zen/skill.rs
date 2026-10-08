@@ -80,11 +80,25 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
 - `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
 - `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**\n\
 - `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n\
+- `sync.json`, `news.json`, `.defaults/`: which Gardens sync with K2's defaults, which\n\
+  Garden news was seen, and K2's defaults that own-copy Gardens sit on. K2 writes\n\
+  them. **Never write sync.json, news.json or .defaults/**; read them with\n\
+  `k2 zen sync` and `k2 zen news`.\n\
 - Widget permissions live in K2's daemon, signed, and only the human makes one by\n\
   clicking Allow in the K2 app. **Never write grants.json**, `zen-grant.key` or\n\
   `pins.json`, never ask the human to paste a permission anywhere, and never try to\n\
   give yourself or a widget a permission. You may request one by telling the human\n\
   what and why; they review it in the app.\n\n\
+## Synced with K2's defaults, or its own copy\n\n\
+Each Garden's page (template, widget prop defaults, the frame) and theme (the\n\
+built-in layers under its theme) either sync with K2's defaults, following K2's\n\
+improvements, or are the Garden's own copy that no K2 update changes.\n\
+Editing a Garden's file never changes whether it syncs. A synced Garden follows\n\
+K2's improvements under your edits; to keep it exactly as it is, the person turns\n\
+sync off in Settings → Gardens (you can't: `k2 zen sync <garden> on|off` answers an\n\
+agent with 403 `zen_local_only`). Suggest it to the person when it matters.\n\
+`k2 zen sync` lists each Garden's state; `k2 zen sync <garden> preview` prints it as\n\
+if synced; `k2 zen news` lists new catalog Gardens. `k2 zen guide sync` has more.\n\n\
 ## Workflow\n\n\
 1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).\n\
 2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n\
@@ -97,7 +111,7 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
    prints the folder.\n\n\
 `k2 zen guide` is the user guide, and it needs no daemon: short pages (start with\n\
 `k2 zen guide gardens`; then `files`, `widgets`, `bands`, `required`, `menus`, `themes`,\n\
-`examples`, `undo`, `safe-mode`) and whole Garden files you can pipe into a Garden:\n\
+`sync`, `examples`, `undo`, `safe-mode`) and whole Garden files you can pipe into a Garden:\n\
 `k2 zen guide example --list`, then\n\
 `k2 zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`.\n\n\
 `k2 zen` talks only to the K2 on this computer (each person's Gardens live on\n\
@@ -237,7 +251,8 @@ add a background image next to it if asked, run `k2 zen validate`, then\n\
 - Unknown keys are errors, with the line and a \"did you mean\".\n\
 - No raw CSS, no selectors, no HTML, no fonts from the network.\n\
 - `[layout]`, `[[widget]]` and `template` belong only in `gardens/<id>.toml`.\n\
-- Agents never write grants.json, gardens.json, active.json or .history/: K2 owns them.\n\n",
+- Agents never write grants.json, gardens.json, active.json, sync.json, news.json,\n\
+  .defaults/ or .history/: K2 owns them.\n\n",
     );
 
     s.push_str("## Tokens\n\n### `[theme]`\n\n");

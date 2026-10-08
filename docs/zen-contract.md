@@ -728,6 +728,62 @@ sending off until the owner resumes it.
 No new event kind: a widget save, a grant, a revoke, a sending switch and a
 resume each emit exactly one payload-free `zen_changed` (UW12, UW37).
 
+## Garden sync with K2's defaults (zen-sync-v1)
+
+prd-zen-garden-sync-defaults-v1. A Garden file still holds only its
+changes; what it sits on is now per Garden. Each Garden's **page** (the
+template, the widget prop defaults, the frame) and **theme** (the built-in
+layers under its theme) is either **synced** (follows K2's improvements) or
+its **own copy** (resolves on an archived set of K2's defaults, so no K2
+update changes it). The Garden file is never rewritten. A daemon without
+`zen-sync-v1` in `/boot-status` has none of this: no switches, no card.
+
+| Call | Who | Body or query | Answer |
+|---|---|---|---|
+| `GET /cli/zen/sync` | Settings → Gardens; `k2 zen sync` | none | `{ok, liveDefaults, k2Version, previousDefaults, migratedAt, gardens: [SyncRow]}` |
+| `POST /cli/zen/garden/sync` | the person only (Settings, CLI) | `{garden, part: "page"\|"theme"\|"both", sync: bool}` · `{garden, undo: true}` · `{garden, keep: "previous", part?}` | `{ok, garden: SyncRow, changed, announced}`. A change emits ONE `zen_changed`. GET → 405 |
+| `GET /cli/zen/news` | the What's new side card; `k2 zen news` | none | `{ok, items: [NewsItem], copiesWithNewerDefault, liveDefaults, previousDefaults}`, unseen only, newest first |
+| `POST /cli/zen/news/seen` | closing What's new; the card's button | `{ids: [id]}` or `{all: true}` | `{ok, seen: [id]}`. GET → 405 |
+| `GET /cli/zen/get?garden=<id>&preview=page\|theme\|both` | Settings' Preview in Zen | as `get` | the Garden resolved as if those parts were synced; `sync.preview` names them. Writes nothing |
+
+Every route is owner-token only, like all of `/cli/zen/*`: an agent
+passport, a Connect login or an app pass gets 403 `zen_local_only`. Agents
+edit Garden files and suggest the switch to the person.
+
+`SyncRow`: `{id, name, index, page: Part, theme: Part, ownChanges: [key] |
+null (file doesn't parse), ownChangesError, undo: {parts, at} | null,
+keepPrevious: {page, theme}, themeName, themeLabel, themeBuiltin,
+themeBase: {name, label}, gardenTheme, damaged: [{defaults, message}]}`.
+`Part`: `{mode: "synced"|"copy", defaults?: "d-<16 hex>", since?, reason?,
+newerDefault, k2Version?}`; `newerDefault` is true for a copy whose synced
+look would differ.
+
+`NewsItem`: `{kind: "catalog", id: "catalog:<short>", short, label,
+description, template, version}` or `{kind: "update", id:
+"update:<liveFp>:<garden>", garden, gardenName, part, previous, at,
+keepPrevious}`. Skip kinds you don't know.
+
+`GET /cli/zen/get` adds two top-level fields:
+
+- `sync`: `{page: {mode, defaults?, since?, newerDefault}, theme: {…},
+  preview?}`;
+- `frame`: the frame values (GF1, `crates/k2-core/src/zen/frame.toml`) of
+  the page's defaults, with the control-check thresholds clamped to K2's
+  floor. The renderer reads it from 0.45.2 (S7); until then its constants
+  are pinned to frame.toml by `zen-frame-parity.test.ts`.
+
+`version` covers both. A synced page whose file names `k2.<short>@<n>`
+shows that family's newest shipped version; an own copy shows exactly the
+id it names, from its set. Anything a set doesn't have resolves live.
+
+Files (daemon-written; never edit, never watched): `sync.json`,
+`news.json`, `.defaults/<fp>.json` (one archived set per K2 release that
+changed a default; never pruned) and a per-Garden mirror
+`.history/gardens/<id>.toml/sync.json` that travels with delete. The
+one-time upgrade pass (the first Zen read after the first boot of 0.45.1)
+makes every Garden whose file sets anything its own copy, page and theme,
+and leaves every untouched Garden synced; it writes no Garden file.
+
 ## Contract changes from the PRD text (flagged for the renderer)
 
 The PRD's route contract is followed; these points were open in it or are

@@ -37,6 +37,16 @@ The Files drawer uses the **Seti** icon font for file-type glyphs
 When redistributing K2 builds that include the Seti font, ship the MIT
 notice (this section and/or `THIRD_PARTY_NOTICES.txt`).
 
+## Third-party: Public Suffix List (MPL-2.0) and BIP-39 word list (MIT)
+
+The vault (`crates/k2-vault`) embeds two data files:
+
+| | |
+|--|--|
+| **Public Suffix List** | `crates/k2-vault/data/public_suffix_list.dat`, from [publicsuffix.org](https://publicsuffix.org/list/public_suffix_list.dat), Mozilla Public License 2.0 (header kept in the file). Used to refuse wildcard hosts over shared suffixes. Refreshed each release. |
+| **BIP-39 English word list** | `crates/k2-vault/data/bip39-english.txt`, from [bitcoin/bips](https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt), MIT (per BIP-0039). Used for the 24-word vault recovery phrase. |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. |
+
 ## Third-party: wry (Apache-2.0 OR MIT)
 
 K2 vendors a patched copy of **wry** 0.57.0 under `third_party/wry` so a

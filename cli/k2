@@ -18807,11 +18807,14 @@ AGENT WORKING (activity:read)
     {"workspace":"<handle>","status":"working","since":1781812201000,
      "serverNow":1781812273000,
      "sessions":[{"agentName":"tab-…","paneGroupId":"…",
-                  "status":"working","since":1781812201000}]}
+                  "status":"working","since":1781812201000,
+                  "counts":{"subagents":2,"tools":14,"commands":5}}]}
   Frame (one session changed):
     {"kind":"session_activity_changed","workspace":"<handle>",
      "agentName":"tab-…","paneGroupId":"…"|null,"status":"working",
-     "since":1781812201000|null,"serverNow":1781812273000}
+     "since":1781812201000|null,
+     "counts":{"subagents":2,"tools":14,"commands":5},
+     "serverNow":1781812273000}
   status   working     the agent is on a turn, or watching background tasks
            permission  the agent waits for a person to approve a step
            idle        nothing running
@@ -18821,14 +18824,23 @@ AGENT WORKING (activity:read)
            turn; null otherwise (permission, idle, unknown, and background
            tasks only). Elapsed = serverNow - since; correct your clock by
            serverNow, never trust the device clock alone.
+  counts   numbers only (K2 0.45.2+; absent on older servers):
+           subagents  helper agents running now
+           tools      tool calls the agent started this turn
+           commands   the shell commands among those tools
+           tools and commands go back to 0 when a new turn starts and keep
+           the finished turn's numbers while idle. Show them while working.
   Room status is the busiest session: permission > working > unknown > idle.
   Since K2 0.45: the daemon's own activity (agent hooks), not terminal
   titles. permission and unknown are NEW words; older servers send only
   working and idle, and never since or serverNow. Treat any other word
   (a newer server) like unknown.
-  A frame goes out only when status or since changes. A session that goes
-  away sends idle once. No tool names, commands, files, thinking text,
-  subagent counts, paths or ids, ever: a pulse and a clock only.
+  A frame goes out only when status, since or counts change. A change to
+  counts alone goes out at most once a second per session (the last value
+  always arrives); a status change goes out at once with the latest counts.
+  A session that goes away sends idle once.
+  No tool names, commands, files, thinking text, paths or ids, ever: a
+  pulse, a clock and three numbers.
   WHAT THE APP MUST DO: open the socket, then GET the snapshot and replace
   your state with it. Pull the snapshot again on every socket (re)open,
   and when a {"kind":"resync"} frame arrives (the socket fell behind and

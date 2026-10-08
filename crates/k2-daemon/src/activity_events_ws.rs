@@ -5,9 +5,14 @@
 //! `activity_changed` on the session-event bus whose row belongs to the
 //! room becomes
 //! `{"kind":"session_activity_changed","workspace":"<handle>","agentName",
-//! "paneGroupId","status","since","serverNow"}`, and only when `status` or
-//! `since` changed for that session (tool calls, child counts and reasons
-//! never reach an app, not even as frame timing). `status` is
+//! "paneGroupId","status","since","counts","serverNow"}`, and only when
+//! `status`, `since` or `counts` changed for that session. `counts`
+//! (0.45.2) is `{subagents, tools, commands}`: live subagents, and this
+//! turn's lead tool calls and shell commands. Numbers only: tool names,
+//! arguments, text and reasons never reach an app. A counts-only change
+//! goes out at most once per second per session ([`COUNTS_THROTTLE_MS`],
+//! the last value always delivered); a status change goes out at once
+//! with the latest counts. `status` is
 //! `working` (working or monitoring) | `permission` (waiting) | `idle` |
 //! `unknown` (unverifiable: no evidence for 30 min, Q9); `since` is the
 //! turn start while the lead works a turn, else null. A removed row the
@@ -15,7 +20,7 @@
 //! belongs to the room when its project is the room, or (a session
 //! outside every registered project) when its path is the room root, a
 //! worktree root from `tree_roots`, or under one of those, on a path
-//! boundary. No path, id, reason, tool or child count is on the wire. The
+//! boundary. No path, id, reason or tool name is on the wire. The
 //! old title-only `session_activity_changed` bus event no longer feeds
 //! this socket (RL5 compat stays for older clients of the bus only).
 //! `GET /cli/activity/snapshot?workspace=` is the same projection for the
@@ -56,7 +61,7 @@ use k2_core::activity::Display;
 use k2_core::log_debug;
 use k2_core::skin::SkinPass;
 
-use crate::activity_events::RowView;
+use crate::activity_events::{ActivityCounts, RowView};
 use crate::fs_routes::{resolve_owner_workspace, resolve_skin_workspace, SkinWorkspace};
 use crate::session_events::{self, SessionEvent};
 
@@ -78,6 +83,10 @@ pub const SOCKET_CAPS: [&str; 3] = [
 /// AH20/AH29 refusal cap text: names every socket cap, so the 403 says
 /// `missing capability activity:read, heartbeats:read or tickets:read`.
 pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read or tickets:read";
+
+/// 0.45.2 — at most one counts-only `session_activity_changed` per session
+/// per this (ms); the last value always goes out (a trailing frame).
+pub const COUNTS_THROTTLE_MS: i64 = 1_000;
 
 /// AH31 — at most one roster-derived `heartbeat_changed` per room per this.
 pub const HEARTBEAT_COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -256,6 +265,9 @@ pub struct GuestSession {
     pub pane_group_id: Option<String>,
     pub status: &'static str,
     pub since: Option<i64>,
+    /// `counts` (0.45.2): live subagents, this turn's lead tool calls and
+    /// shell commands. Numbers only.
+    pub counts: ActivityCounts,
 }
 
 impl GuestSession {
@@ -265,12 +277,22 @@ impl GuestSession {
             pane_group_id: session_events::pane_group_id_from_agent(&view.agent_name),
             status: guest_status(view.display),
             since: guest_since(view),
+            counts: view.counts,
         }
     }
 
     /// The session went away.
     fn gone(prev: &GuestSession) -> Self {
-        Self { status: "idle", since: None, ..prev.clone() }
+        Self { status: "idle", since: None, counts: ActivityCounts::default(), ..prev.clone() }
+    }
+
+    /// Same app-visible state apart from `counts` (a counts-only change
+    /// is throttled; anything else goes out at once).
+    fn same_but_counts(&self, other: &GuestSession) -> bool {
+        self.agent_name == other.agent_name
+            && self.pane_group_id == other.pane_group_id
+            && self.status == other.status
+            && self.since == other.since
     }
 
     /// AP2 frame (§7.7).
@@ -282,6 +304,7 @@ impl GuestSession {
             "paneGroupId": self.pane_group_id,
             "status": self.status,
             "since": self.since,
+            "counts": self.counts.to_json(),
             "serverNow": server_now,
         })
         .to_string()
@@ -294,6 +317,7 @@ impl GuestSession {
             "paneGroupId": self.pane_group_id,
             "status": self.status,
             "since": self.since,
+            "counts": self.counts.to_json(),
         })
     }
 }
@@ -336,9 +360,20 @@ pub fn room_rows(project_id: &str) -> Vec<RowView> {
 
 /// What one socket last told its app, per session id, so a frame goes out
 /// only when the app-visible state changed (AP2).
+///
+/// Counts throttle (0.45.2): a change to `counts` alone goes out at most
+/// once per [`COUNTS_THROTTLE_MS`] per session; inside the window the
+/// newest state is held ([`GuestActivity::next_flush_at`]) and sent when
+/// the window ends ([`GuestActivity::flush_due`]), so the last value is
+/// never lost. Any other change (status, `since`) goes out at once and
+/// carries the latest counts. The clock is the caller's (`now`, unix ms).
 #[derive(Debug, Default)]
 pub struct GuestActivity {
     sent: HashMap<String, GuestSession>,
+    /// When this socket last sent a frame for each session.
+    sent_at: HashMap<String, i64>,
+    /// A counts-only change the throttle is holding: the newest state.
+    owed: HashMap<String, GuestSession>,
 }
 
 impl GuestActivity {
@@ -349,7 +384,41 @@ impl GuestActivity {
             .iter()
             .map(|v| (v.session_id.clone(), GuestSession::of(v)))
             .collect();
-        Self { sent }
+        Self { sent, ..Self::default() }
+    }
+
+    fn send(&mut self, sid: String, next: GuestSession, wire_workspace: &str, now: i64) -> String {
+        let frame = next.frame_json(wire_workspace, now);
+        self.owed.remove(&sid);
+        self.sent_at.insert(sid.clone(), now);
+        self.sent.insert(sid, next);
+        frame
+    }
+
+    /// When a held counts change is due, if one is held.
+    pub fn next_flush_at(&self) -> Option<i64> {
+        self.owed
+            .keys()
+            .map(|sid| self.sent_at.get(sid).copied().unwrap_or(i64::MIN / 2) + COUNTS_THROTTLE_MS)
+            .min()
+    }
+
+    /// The held counts changes whose window has ended by `now`, as frames
+    /// (oldest session id first).
+    pub fn flush_due(&mut self, wire_workspace: &str, now: i64) -> Vec<String> {
+        let mut due: Vec<String> = self
+            .owed
+            .keys()
+            .filter(|sid| self.sent_at.get(*sid).map_or(true, |t| now - t >= COUNTS_THROTTLE_MS))
+            .cloned()
+            .collect();
+        due.sort();
+        due.into_iter()
+            .filter_map(|sid| {
+                let next = self.owed.remove(&sid)?;
+                Some(self.send(sid, next, wire_workspace, now))
+            })
+            .collect()
     }
 
     /// The frame for one bus event, or `None` (other kind, other room, or
@@ -372,14 +441,28 @@ impl GuestActivity {
                 return None;
             }
             let next = GuestSession::of(&view);
-            if self.sent.get(&view.session_id) == Some(&next) {
-                return None;
+            let sid = view.session_id;
+            match self.sent.get(&sid) {
+                Some(prev) if *prev == next => {
+                    // Back to what the app already has: nothing is owed.
+                    self.owed.remove(&sid);
+                    return None;
+                }
+                Some(prev) if prev.same_but_counts(&next) => {
+                    let recent = self.sent_at.get(&sid).is_some_and(|t| server_now - t < COUNTS_THROTTLE_MS);
+                    if recent {
+                        self.owed.insert(sid, next);
+                        return None;
+                    }
+                }
+                _ => {}
             }
-            let frame = next.frame_json(wire_workspace, server_now);
-            self.sent.insert(view.session_id, next);
-            return Some(frame);
+            return Some(self.send(sid, next, wire_workspace, server_now));
         }
-        let prev = self.sent.remove(removed.as_deref()?)?;
+        let sid = removed.as_deref()?;
+        self.owed.remove(sid);
+        self.sent_at.remove(sid);
+        let prev = self.sent.remove(sid)?;
         (prev.status != "idle").then(|| GuestSession::gone(&prev).frame_json(wire_workspace, server_now))
     }
 }
@@ -480,7 +563,30 @@ pub async fn serve_activity_events_connection(
         } else {
             None
         };
+        // A counts change the throttle is holding: wake when it is due.
+        let counts_in = guest.next_flush_at().map(|at| {
+            let wait = at - chrono::Utc::now().timestamp_millis();
+            std::time::Duration::from_millis(wait.clamp(0, COUNTS_THROTTLE_MS) as u64)
+        });
         tokio::select! {
+            _ = async {
+                match counts_in {
+                    Some(wait) => tokio::time::sleep(wait).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                let now = chrono::Utc::now().timestamp_millis();
+                let mut closed = false;
+                for frame in guest.flush_due(&wire_workspace, now) {
+                    if write.send(Message::Text(frame)).await.is_err() {
+                        closed = true;
+                        break;
+                    }
+                }
+                if closed {
+                    break;
+                }
+            }
             _ = async {
                 match flush_at {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -727,6 +833,19 @@ mod tests {
     /// One `activity_changed` frame for a synthetic row (§7.2 subset the
     /// projection reads, plus fields an app must never see).
     fn row_event(sid: &str, agent: &str, project: Option<&str>, path: &str, display: &str, started: Option<i64>) -> SessionEvent {
+        row_event_counts(sid, agent, project, path, display, started, (0, 0, 0))
+    }
+
+    /// `counts` = (subagents, tools, commands).
+    fn row_event_counts(
+        sid: &str,
+        agent: &str,
+        project: Option<&str>,
+        path: &str,
+        display: &str,
+        started: Option<i64>,
+        counts: (u64, u64, u64),
+    ) -> SessionEvent {
         SessionEvent::ActivityChanged {
             seq: 1,
             instance_id: "test-instance".into(),
@@ -739,6 +858,7 @@ mod tests {
                 "display": display,
                 "lead": {"state": "working", "outcome": "none", "since": 1, "promptId": "p-secret"},
                 "children": {"subagents": 2, "shells": 1, "monitors": 0, "crons": 0, "owed": 0, "waiting": 0},
+                "counts": {"subagents": counts.0, "tools": counts.1, "commands": counts.2},
                 "turnStartedAt": started,
                 "evidenceAt": 5, "evidenceSource": "hook",
                 "reason": "tool_running",
@@ -794,8 +914,118 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["agentName", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
+            vec!["agentName", "counts", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
             "guest frame keys: {v}"
+        );
+        let mut counts: Vec<&str> = v["counts"].as_object().expect("counts object").keys().map(String::as_str).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec!["commands", "subagents", "tools"], "guest counts keys: {v}");
+        for k in counts {
+            assert!(v["counts"][k].is_u64(), "counts are numbers only: {v}");
+        }
+    }
+
+    fn counts_of(v: &serde_json::Value) -> (u64, u64, u64) {
+        let n = |k: &str| v["counts"][k].as_u64().unwrap_or_else(|| panic!("counts.{k}: {v}"));
+        (n("subagents"), n("tools"), n("commands"))
+    }
+
+    /// 0.45.2 throttle, with an injected clock: a burst of counts-only
+    /// changes is one frame now and one trailing frame with the last
+    /// value; a status change goes out at once with the latest counts.
+    #[test]
+    fn counts_only_changes_are_throttled_with_a_trailing_frame() {
+        let pid = "proj-throttle";
+        let path = "/w/throttle";
+        let mut g = GuestActivity::default();
+        let ev = |display: &str, c: (u64, u64, u64)| row_event_counts("s1", "tab-t", Some(pid), path, display, Some(100), c);
+        let parse = |t: String| -> serde_json::Value { serde_json::from_str(&t).expect("json") };
+
+        // A new session goes out at once.
+        let f = parse(g.on_event(pid, "room", &ev("working", (0, 1, 1)), 1_000).expect("first"));
+        assert_guest_frame_keys(&f);
+        assert_eq!(counts_of(&f), (0, 1, 1));
+        assert_eq!(g.next_flush_at(), None);
+
+        // A burst inside the window: nothing now, the newest is held.
+        for (t, c) in [(1_100, (0, 2, 1)), (1_200, (1, 3, 2)), (1_300, (1, 4, 2))] {
+            assert!(g.on_event(pid, "room", &ev("working", c), t).is_none(), "throttled at {t}");
+        }
+        assert_eq!(g.next_flush_at(), Some(2_000));
+        assert!(g.flush_due("room", 1_999).is_empty(), "not before the window ends");
+        let trailing = g.flush_due("room", 2_000);
+        assert_eq!(trailing.len(), 1, "one trailing frame");
+        let f = parse(trailing.into_iter().next().expect("trailing"));
+        assert_guest_frame_keys(&f);
+        assert_eq!(counts_of(&f), (1, 4, 2), "the last value is delivered");
+        assert_eq!(f["serverNow"], 2_000);
+        assert_eq!(g.next_flush_at(), None);
+        assert!(g.flush_due("room", 9_000).is_empty(), "sent once");
+
+        // Held again, then a status change: at once, with the latest counts.
+        assert!(g.on_event(pid, "room", &ev("working", (1, 5, 3)), 2_100).is_none());
+        let f = parse(g.on_event(pid, "room", &ev("waiting", (1, 6, 3)), 2_200).expect("status is immediate"));
+        assert_eq!((f["status"].as_str(), counts_of(&f)), (Some("permission"), (1, 6, 3)));
+        assert_eq!(g.next_flush_at(), None, "the status frame carried the held counts");
+
+        // Outside the window a counts change goes out at once.
+        assert!(g.on_event(pid, "room", &ev("waiting", (1, 7, 3)), 2_300).is_none());
+        let f = parse(g.on_event(pid, "room", &ev("waiting", (1, 8, 4)), 3_250).expect("window over"));
+        assert_eq!(counts_of(&f), (1, 8, 4));
+        assert_eq!(g.next_flush_at(), None);
+
+        // A held change that goes back to what the app has owes nothing.
+        assert!(g.on_event(pid, "room", &ev("waiting", (1, 9, 4)), 3_300).is_none());
+        assert!(g.on_event(pid, "room", &ev("waiting", (1, 8, 4)), 3_400).is_none());
+        assert_eq!(g.next_flush_at(), None);
+
+        // A removal drops anything held; the idle frame has zero counts.
+        assert!(g.on_event(pid, "room", &ev("waiting", (2, 9, 5)), 3_500).is_none());
+        let gone = parse(g.on_event(pid, "room", &removed_event("s1"), 3_600).expect("removal of a waiting row"));
+        assert_guest_frame_keys(&gone);
+        assert_eq!((gone["status"].as_str(), counts_of(&gone)), (Some("idle"), (0, 0, 0)));
+        assert_eq!(g.next_flush_at(), None);
+        assert!(g.flush_due("room", 10_000).is_empty());
+    }
+
+    /// Two sessions keep their own windows.
+    #[test]
+    fn counts_throttle_is_per_session() {
+        let pid = "proj-throttle-2";
+        let mut g = GuestActivity::default();
+        let ev = |sid: &str, c: (u64, u64, u64)| row_event_counts(sid, &format!("tab-{sid}"), Some(pid), "/w/t2", "working", Some(1), c);
+        assert!(g.on_event(pid, "room", &ev("a", (0, 1, 0)), 1_000).is_some());
+        assert!(g.on_event(pid, "room", &ev("b", (0, 1, 0)), 1_500).is_some());
+        assert!(g.on_event(pid, "room", &ev("a", (0, 2, 0)), 1_600).is_none());
+        assert!(g.on_event(pid, "room", &ev("b", (0, 2, 0)), 1_700).is_none());
+        assert_eq!(g.next_flush_at(), Some(2_000));
+        let first = g.flush_due("room", 2_000);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].contains("\"tab-a\""), "{first:?}");
+        assert_eq!(g.next_flush_at(), Some(2_500));
+        let second = g.flush_due("room", 2_500);
+        assert_eq!(second.len(), 1);
+        assert!(second[0].contains("\"tab-b\""), "{second:?}");
+    }
+
+    /// The snapshot's `sessions[]` entry is the frame minus its envelope
+    /// (`kind`, `workspace`, `serverNow`): same keys, same values.
+    #[test]
+    fn snapshot_entry_matches_the_frame() {
+        let ev = row_event_counts("s1", "tab-par", Some("p"), "/w/p", "working", Some(42), (2, 14, 5));
+        let SessionEvent::ActivityChanged { row: Some(row), .. } = &ev else { panic!("row event") };
+        let session = GuestSession::of(&RowView::from_json(row).expect("view"));
+        let mut frame: serde_json::Value = serde_json::from_str(&session.frame_json("room", 7)).expect("json");
+        assert_guest_frame_keys(&frame);
+        let obj = frame.as_object_mut().expect("object");
+        for envelope in ["kind", "workspace", "serverNow"] {
+            obj.remove(envelope).expect(envelope);
+        }
+        assert_eq!(frame, session.snapshot_json());
+        assert_eq!(
+            session.snapshot_json(),
+            serde_json::json!({"agentName": "tab-par", "paneGroupId": "par", "status": "working", "since": 42,
+                               "counts": {"subagents": 2, "tools": 14, "commands": 5}})
         );
     }
 
@@ -828,9 +1058,10 @@ mod tests {
         assert_eq!(
             f,
             serde_json::json!({"kind": "session_activity_changed", "workspace": handle, "agentName": "tab-p1",
-                               "paneGroupId": "p1", "status": "working", "since": 100, "serverNow": 777})
+                               "paneGroupId": "p1", "status": "working", "since": 100, "serverNow": 777,
+                               "counts": {"subagents": 0, "tools": 0, "commands": 0}})
         );
-        // A tool step or child change (same app-visible state): nothing.
+        // A reason or roster-only change (same app-visible state): nothing.
         assert!(send(&row_event("s1", "tab-p1", Some(&id), &path, "working", Some(100))).is_none());
         // A new turn while still working: `since` moves.
         assert_eq!(send(&row_event("s1", "tab-p1", Some(&id), &path, "working", Some(200))).expect("new turn")["since"], 200);
@@ -918,7 +1149,7 @@ mod tests {
                    (Some(handle_a.as_str()), Some("tab-ada"), Some("working"), Some(42)), "{v}");
         assert_eq!(v["paneGroupId"], "ada");
         assert!(v["serverNow"].as_i64().is_some_and(|t| t > 0), "{v}");
-        for secret in [path_a.as_str(), id_a.as_str(), sid_a.as_str(), "tool_running", "p-secret", "subagents", "hook"] {
+        for secret in [path_a.as_str(), id_a.as_str(), sid_a.as_str(), "tool_running", "p-secret", "children", "shells", "hook"] {
             assert!(!text.contains(secret), "{secret} must not reach an app: {text}");
         }
         assert!(take_text(&mut sock_a, Duration::from_millis(300)).await.is_none(), "room A never hears room B or compat");

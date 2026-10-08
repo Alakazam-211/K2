@@ -282,6 +282,10 @@ assert_contains "serverNow documented" "$apps_out" '"serverNow":1781812273000}'
 assert_contains "new words flagged" "$apps_out" "permission and unknown are NEW words"
 assert_contains "resync re-pull" "$apps_out" '{"kind":"resync"}'
 assert_contains "no tool detail for apps" "$apps_out" "No tool names, commands, files, thinking text"
+assert_contains "counts documented" "$apps_out" '"counts":{"subagents":2,"tools":14,"commands":5}'
+assert_contains "counts reset per turn" "$apps_out" "tools and commands go back to 0 when a new turn starts"
+assert_contains "counts throttle" "$apps_out" "A change to"
+assert_contains "counts throttle rate" "$apps_out" "counts alone goes out at most once a second per session"
 assert_contains "never the strip catch-up" "$apps_out" "Never /cli/thread/activity"
 assert_contains "app-tickets points at the section" "$tk_out" "AGENT WORKING"
 

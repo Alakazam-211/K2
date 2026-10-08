@@ -3686,9 +3686,10 @@ fn sorted_keys(v: &serde_json::Value) -> Vec<String> {
 fn assert_guest_frame(v: &serde_json::Value, room: &str) {
     assert_eq!(
         sorted_keys(v),
-        ["agentName", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
+        ["agentName", "counts", "kind", "paneGroupId", "serverNow", "since", "status", "workspace"],
         "guest frame keys: {v}"
     );
+    assert_eq!(sorted_keys(&v["counts"]), ["commands", "subagents", "tools"], "guest counts keys: {v}");
     assert_eq!(v["kind"], "session_activity_changed", "{v}");
     assert_eq!(v["workspace"], room, "{v}");
 }
@@ -3808,13 +3809,14 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         let sessions = v["sessions"].as_array().expect("sessions");
         assert_eq!(sessions.len(), 2, "docs sessions only: {v}");
         for s in sessions {
-            assert_eq!(sorted_keys(s), ["agentName", "paneGroupId", "since", "status"], "{s}");
+            assert_eq!(sorted_keys(s), ["agentName", "counts", "paneGroupId", "since", "status"], "{s}");
         }
+        let zero = serde_json::json!({"subagents": 0, "tools": 0, "commands": 0});
         assert_eq!(
             sessions,
             &vec![
-                serde_json::json!({"agentName": "tab-docsquiet", "paneGroupId": "docsquiet", "status": "idle", "since": null}),
-                serde_json::json!({"agentName": "tab-docswork", "paneGroupId": "docswork", "status": "working", "since": started}),
+                serde_json::json!({"agentName": "tab-docsquiet", "paneGroupId": "docsquiet", "status": "idle", "since": null, "counts": zero}),
+                serde_json::json!({"agentName": "tab-docswork", "paneGroupId": "docswork", "status": "working", "since": started, "counts": zero}),
             ],
             "{v}"
         );
@@ -3854,15 +3856,24 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         // ── T-S8b: guest frames on the room socket ──
         let mut sock = open_room_socket(gport, &docs, &cookie);
         std::thread::sleep(Duration::from_millis(200));
-        // A tool step (same app-visible state) and anna's turn: no frame.
+        // A tool step: one counts frame (numbers only, no tool name or
+        // command). Anna's turn is another room's: nothing.
         activity_hook(&work_sid, serde_json::json!({
             "hook_event_name": "PreToolUse", "prompt_id": "p1", "tool_name": "Bash",
             "tool_use_id": "toolu_s8", "tool_input": {"command": "cargo test"}
         }), now_ms());
         activity_hook(&anna_sid, serde_json::json!({"hook_event_name": "PreToolUse", "prompt_id": "p1", "tool_name": "Read", "tool_use_id": "toolu_a"}), now_ms());
+        let text = try_read_ws_text(&mut sock, Duration::from_secs(5)).expect("a counts frame for the tool step");
+        let f = json(&text);
+        assert_guest_frame(&f, &docs);
+        assert_eq!((f["agentName"].as_str(), f["status"].as_str(), f["since"].as_i64()), (Some("tab-docswork"), Some("working"), Some(started)), "{f}");
+        assert_eq!(f["counts"], serde_json::json!({"subagents": 0, "tools": 1, "commands": 1}), "{f}");
+        for secret in ["Bash", "cargo test", "toolu_s8", "tab-annawork"] {
+            assert!(!text.contains(secret), "{secret} must not reach an app: {text}");
+        }
         assert!(
             try_read_ws_text(&mut sock, Duration::from_millis(600)).is_none(),
-            "a tool step and another room's change send nothing to the app"
+            "another room's change sends nothing to the app"
         );
         // Waiting → permission (Q17), no since.
         activity_hook(&work_sid, serde_json::json!({"hook_event_name": "PermissionRequest", "prompt_id": "p1", "tool_name": "Bash"}), now_ms());

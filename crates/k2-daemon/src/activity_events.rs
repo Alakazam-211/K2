@@ -55,6 +55,31 @@ pub struct RowView {
     pub workspace_path: Option<String>,
     pub display: Display,
     pub turn_started_at: Option<i64>,
+    /// The row's `counts` (§7.2, 0.45.2): live subagents and this turn's
+    /// lead tool calls and shell commands.
+    pub counts: ActivityCounts,
+}
+
+/// Numbers only: live subagents, this turn's lead tool calls, and the
+/// shell commands among them (the row's `counts`; the app frame's too).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivityCounts {
+    pub subagents: u64,
+    pub tools: u64,
+    pub commands: u64,
+}
+
+impl ActivityCounts {
+    /// The row's `counts` object. A row without one (none today) reads
+    /// as zeros.
+    pub fn from_json(v: Option<&Value>) -> Self {
+        let n = |k: &str| v.and_then(|c| c.get(k)).and_then(Value::as_u64).unwrap_or(0);
+        Self { subagents: n("subagents"), tools: n("tools"), commands: n("commands") }
+    }
+
+    pub fn to_json(self) -> Value {
+        json!({ "subagents": self.subagents, "tools": self.tools, "commands": self.commands })
+    }
 }
 
 /// The wire word for a display (`Display::as_str`) back to the enum.
@@ -79,6 +104,7 @@ impl RowView {
             workspace_path: s("workspacePath"),
             display: parse_display(v.get("display")?.as_str()?)?,
             turn_started_at: v.get("turnStartedAt").and_then(Value::as_i64),
+            counts: ActivityCounts::from_json(v.get("counts")),
         })
     }
 }
@@ -531,6 +557,7 @@ mod tests {
             workspace_path: path.map(str::to_string),
             display: d,
             turn_started_at: started,
+            counts: ActivityCounts::default(),
         }
     }
 

@@ -21,11 +21,12 @@
 //! `activity:read` (else 403 `skin_room` / `missing capability
 //! activity:read`; no `workspace=` is 400):
 //! `{workspace, status, since, serverNow, sessions:[{agentName,
-//! paneGroupId, status, since}]}`. The words and `since` rule are the
-//! room socket's (`activity_events_ws`); the room `status` is the
+//! paneGroupId, status, since, counts}]}`. The words, `since` rule and
+//! `counts` (`{subagents, tools, commands}`, 0.45.2) are the room
+//! socket's (`activity_events_ws`); the room `status` is the
 //! highest-ranked display among its sessions (RL1) and `since` the
-//! earliest turn start among its working ones. No path, id, reason, tool
-//! or count.
+//! earliest turn start among its working ones. No path, id, reason or
+//! tool name.
 
 use std::collections::HashMap;
 

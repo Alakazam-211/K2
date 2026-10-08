@@ -141,6 +141,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/shared/AgentAccountsColumn.tsx',
   'components/Settings/sections/data-api.ts',
   'components/Settings/sections/email-api.ts',
+  // Settings → Vault is the window's server, like the other Settings pages.
+  'components/Settings/sections/vault-api.ts',
   'components/Sidebar/ActiveBar.tsx',
   'components/Sidebar/IconRail.tsx',
   'components/Sidebar/ProjectAvatar.tsx',

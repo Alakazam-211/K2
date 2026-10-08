@@ -28,6 +28,7 @@ import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
 import { DomainsSection, DOMAINS_MANIFEST } from './sections/DomainsSection'
 import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
+import { VaultSection, VAULT_MANIFEST } from './sections/VaultSection'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
@@ -102,6 +103,7 @@ export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[]
         { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'api-tokens', label: 'API Keys' },
+        { id: 'vault', label: 'Vault' },
         { id: 'companion', label: 'K2 Companion' },
       ],
     },
@@ -181,6 +183,7 @@ export default function Settings(): React.JSX.Element {
       ...K2_CONNECT_MANIFEST,
       ...DOMAINS_MANIFEST,
       ...API_TOKENS_MANIFEST,
+      ...VAULT_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
@@ -476,6 +479,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'api-tokens' && (
           <SectionErrorBoundary>
             <ApiTokensSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'vault' && (
+          <SectionErrorBoundary>
+            <VaultSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'projects' && (

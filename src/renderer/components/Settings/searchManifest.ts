@@ -124,6 +124,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   people: 'User Access',
   'user-templates': 'User Templates',
   'api-tokens': 'API Keys',
+  vault: 'Vault',
   'email-hosting': 'Email Hosting',
   'email-link': 'Email Link',
   data: 'Database',

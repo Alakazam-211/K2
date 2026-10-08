@@ -74,6 +74,8 @@ export type SettingsSection =
   /** Settings → K2 Server → User Templates (access_templates recipes). */
   | 'user-templates'
   | 'api-tokens'
+  /** Settings → K2 Server → Vault (prd-k2-vault-v1 §16.1, KV39). */
+  | 'vault'
   | 'email-hosting'
   | 'email-link'
   | 'data'

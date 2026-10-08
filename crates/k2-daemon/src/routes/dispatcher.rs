@@ -404,6 +404,93 @@ fn skin_login_throttle_key(
     }
 }
 
+/// LM4 — how far the daemon can vouch for the client behind a login.
+/// Only [`ClientTrust::Anonymous`] logins count toward, and are refused
+/// by, the global failed-login ceiling: those are the paths where one
+/// attacker can rotate per-IP buckets. Everything else keeps its per-IP
+/// bucket and the per-username lockout, and is never refused by the
+/// ceiling — so a spray from anywhere cannot lock the owner out of an
+/// edge-attested Connect login or the desktop app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientTrust {
+    /// This machine (plain loopback: desktop app, CLI, local agents).
+    Local,
+    /// A client address the daemon can vouch for: the edge-signed `ip=`
+    /// of an attested tunnel login, a LAN socket peer, or the right-most
+    /// hop of a proxy listed in `K2_LOGIN_TRUSTED_PROXIES`.
+    Vouched,
+    /// No trustworthy client address: an unattested tunnel login (or an
+    /// attestation with no usable IP), any app login over the tunnel, a
+    /// local reverse proxy that is not a configured trusted proxy, or a
+    /// LAN connection with no peer address.
+    Anonymous,
+}
+
+impl ClientTrust {
+    /// True when this login counts toward (and is refused by) the global
+    /// failed-login ceiling.
+    fn under_global_ceiling(self) -> bool {
+        self == ClientTrust::Anonymous
+    }
+}
+
+/// `Lan` trust (both doors): the socket peer is vouched for unless it is
+/// a loopback address — that is a local reverse proxy relaying someone
+/// else (reclassified by [`Ingress::reclassify_proxied`]), and its hop is
+/// only vouched for when the operator listed it as a trusted proxy and it
+/// actually named a non-loopback client.
+fn lan_client_trust(
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> ClientTrust {
+    match peer {
+        None => ClientTrust::Anonymous,
+        Some(p) if !p.is_loopback() => ClientTrust::Vouched,
+        Some(p) => {
+            let named_client = rightmost_forwarded_ip(headers_blob).is_some_and(|ip| !ip.is_loopback());
+            if trusted.contains(&p) && named_client {
+                ClientTrust::Vouched
+            } else {
+                ClientTrust::Anonymous
+            }
+        }
+    }
+}
+
+/// LM4 — [`ClientTrust`] for a Connect `/cli/auth/login`.
+fn login_client_trust(
+    ingress: Ingress,
+    attested_ip: Option<&str>,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> ClientTrust {
+    match ingress {
+        Ingress::Loopback => ClientTrust::Local,
+        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip) {
+            Some(_) => ClientTrust::Vouched,
+            None => ClientTrust::Anonymous,
+        },
+        Ingress::Lan => lan_client_trust(peer, headers_blob, trusted),
+    }
+}
+
+/// LM4 — [`ClientTrust`] for an app `/cli/skin/login`. The edge does not
+/// attest app logins, so every tunnel app login is anonymous.
+fn skin_login_client_trust(
+    ingress: Ingress,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> ClientTrust {
+    match ingress {
+        Ingress::Loopback => ClientTrust::Local,
+        Ingress::Tunnel => ClientTrust::Anonymous,
+        Ingress::Lan => lan_client_trust(peer, headers_blob, trusted),
+    }
+}
+
 #[cfg(test)]
 mod login_throttle_key_tests {
     use super::*;
@@ -601,6 +688,69 @@ mod login_throttle_key_tests {
         assert_eq!(parse_hop_ip("::ffff:198.51.100.2"), Some(ip("198.51.100.2")));
         assert_eq!(parse_hop_ip("unknown"), None);
         assert_eq!(parse_hop_ip(""), None);
+    }
+
+    /// LM4 — only logins with no trustworthy client address fall under the
+    /// global failed-login ceiling.
+    #[test]
+    fn global_ceiling_applies_only_to_anonymous_logins() {
+        let xff = "X-Forwarded-For: 203.0.113.90\r\n";
+        let lan_peer = Some(ip("192.168.1.40"));
+        let lo = Some(ip(LO));
+
+        // Connect.
+        assert_eq!(login_client_trust(Ingress::Loopback, None, lo, "", &[]), ClientTrust::Local);
+        assert_eq!(
+            login_client_trust(Ingress::Tunnel, Some("198.51.100.20"), lo, xff, &[]),
+            ClientTrust::Vouched,
+            "an edge-attested login is vouched for by the signed ip="
+        );
+        assert_eq!(
+            login_client_trust(Ingress::Tunnel, Some("-"), lo, xff, &[]),
+            ClientTrust::Anonymous,
+            "an attestation with no usable ip names no client"
+        );
+        assert_eq!(
+            login_client_trust(Ingress::Tunnel, None, lo, xff, &[]),
+            ClientTrust::Anonymous,
+            "an unattested tunnel login is anonymous whatever its headers say"
+        );
+        assert_eq!(login_client_trust(Ingress::Lan, None, lan_peer, xff, &[]), ClientTrust::Vouched);
+        assert_eq!(login_client_trust(Ingress::Lan, None, None, "", &[]), ClientTrust::Anonymous);
+        assert_eq!(
+            login_client_trust(Ingress::Lan, None, lo, xff, &[]),
+            ClientTrust::Anonymous,
+            "a local proxy that is not a configured trusted proxy"
+        );
+        assert_eq!(
+            login_client_trust(Ingress::Lan, None, lo, xff, &[ip(LO)]),
+            ClientTrust::Vouched,
+            "a configured trusted local proxy that names the client"
+        );
+        assert_eq!(
+            login_client_trust(Ingress::Lan, None, lo, "X-Forwarded-For: 127.0.0.1\r\n", &[ip(LO)]),
+            ClientTrust::Anonymous,
+            "a trusted proxy that only saw loopback does not know the client"
+        );
+        assert_eq!(
+            login_client_trust(Ingress::Lan, None, lo, "X-Real-IP: 203.0.113.9\r\n", &[ip(LO)]),
+            ClientTrust::Anonymous,
+            "no X-Forwarded-For: the proxy names no client"
+        );
+
+        // App (skin).
+        assert_eq!(skin_login_client_trust(Ingress::Loopback, lo, "", &[]), ClientTrust::Local);
+        assert_eq!(
+            skin_login_client_trust(Ingress::Tunnel, lo, xff, &[]),
+            ClientTrust::Anonymous,
+            "the edge never attests app logins"
+        );
+        assert_eq!(skin_login_client_trust(Ingress::Lan, lan_peer, xff, &[]), ClientTrust::Vouched);
+        assert_eq!(skin_login_client_trust(Ingress::Lan, lo, xff, &[]), ClientTrust::Anonymous);
+
+        assert!(ClientTrust::Anonymous.under_global_ceiling());
+        assert!(!ClientTrust::Vouched.under_global_ceiling());
+        assert!(!ClientTrust::Local.under_global_ceiling());
     }
 }
 
@@ -1074,7 +1224,38 @@ async fn handle_one_request(
             use k2_core::app_settings::ConnectLoginIngress as Mode;
             let mode = k2_core::app_settings::load().connect_login_ingress();
             match mode {
-                Mode::Any => { /* G2 `any`: old behaviour; audited as ingress=tunnel */ }
+                Mode::Any => {
+                    // G2 `any`: unattested logins keep the old behaviour
+                    // (audited as ingress=tunnel). A login that DOES carry
+                    // a valid edge attestation is treated as attested, as in
+                    // `edge` mode: it keys on the signed IP and stays exempt
+                    // from the LM4 anonymous-failure ceiling, so an
+                    // unattested spray cannot lock out logins through the
+                    // K2 edge. A bad or replayed attestation just falls
+                    // back to unattested (no 404 in this mode).
+                    let header = super::http::extract_header(
+                        &headers_blob,
+                        k2_core::edge_attest::HEADER_NAME,
+                    );
+                    if header.is_some_and(|h| !h.trim().is_empty()) {
+                        let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let expected_sub = k2_core::tunnel::config::load()
+                            .map(|c| c.subdomain.trim().to_ascii_lowercase())
+                            .unwrap_or_default();
+                        if let Ok(att) = k2_core::edge_attest::verify_with_host_hint(
+                            header,
+                            "POST",
+                            &path,
+                            &body,
+                            &expected_sub,
+                            None,
+                            k2_core::edge_attest::now_unix(),
+                        ) {
+                            attested = Some(att);
+                        }
+                        pre_read_body = Some(body);
+                    }
+                }
                 Mode::Off => {
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     let user = crate::connect_users_routes::login_body_username(&body);
@@ -3215,19 +3396,29 @@ async fn handle_one_request(
             // attested tunnel on the edge-signed IP; `any`-mode unattested
             // tunnel on the shared tunnel bucket (LM2). Forwarded headers
             // never pick the bucket on the tunnel (LM1).
+            let limiter = &state.login_limiter;
+            let trusted_proxies = trusted_proxies_from_env();
             let throttle_key = login_throttle_key(
                 ingress,
                 attested.as_ref().map(|a| a.ip.as_str()),
                 peer_ip(stream),
                 &headers_blob,
-                &trusted_proxies_from_env(),
+                &trusted_proxies,
             );
+            // LM4 — only logins with no trustworthy client address count
+            // toward (and are refused by) the global failed-login ceiling.
+            // Edge-attested and desktop logins never are.
+            let anonymous = login_client_trust(
+                ingress,
+                attested.as_ref().map(|a| a.ip.as_str()),
+                peer_ip(stream),
+                &headers_blob,
+                &trusted_proxies,
+            )
+            .under_global_ceiling();
             if let Some((bucket, limit, throttle_ip)) = throttle_key.connect_bucket() {
-                if crate::login_throttle::check_and_record_with_limit(
-                    &bucket,
-                    limit,
-                    k2_core::edge_attest::now_unix(),
-                ) == crate::login_throttle::Verdict::Limited
+                if limiter.check_and_record_with_limit(&bucket, limit, limiter.now())
+                    == crate::login_throttle::Verdict::Limited
                 {
                     let audit_ingress = match &attested {
                         Some(att) => format!("edge:{}", att.kid),
@@ -3245,14 +3436,8 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             }
-            // LM4 — global failed-login ceiling for remote listeners (LAN,
-            // reclassified local proxies, tunnel). Loopback never counts.
-            let remote_login = ingress != Ingress::Loopback;
-            if remote_login
-                && crate::login_throttle::global_ceiling_reached(
-                    crate::login_throttle::Door::Connect,
-                    k2_core::edge_attest::now_unix(),
-                )
+            if anonymous
+                && limiter.global_ceiling_reached(crate::login_throttle::Door::Connect, limiter.now())
             {
                 let audit_ingress = match &attested {
                     Some(att) => format!("edge:{}", att.kid),
@@ -3298,11 +3483,8 @@ async fn handle_one_request(
                 if web_mode { "web" } else { "api" },
             ));
             let r = reply.response;
-            if remote_login && r.status.starts_with("401") {
-                crate::login_throttle::record_global_failure(
-                    crate::login_throttle::Door::Connect,
-                    k2_core::edge_attest::now_unix(),
-                );
+            if anonymous && r.status.starts_with("401") {
+                limiter.record_global_failure(crate::login_throttle::Door::Connect, limiter.now());
             }
             // Fixed failure delay on the 401 path so successful logins
             // stay snappy. The per-IP cap (T1, above) is the limiter;
@@ -3366,30 +3548,30 @@ async fn handle_one_request(
             // their own table so a Connect spray does not 429 skin guests.
             // 429 does not bump `login_lockouts` and does not sleep 500ms.
             // The bucket never comes from a header on the tunnel (LM1).
+            let limiter = &state.login_limiter;
+            let trusted_proxies = trusted_proxies_from_env();
             let throttle_key = skin_login_throttle_key(
                 ingress,
                 peer_ip(stream),
                 &headers_blob,
-                &trusted_proxies_from_env(),
+                &trusted_proxies,
             );
             if let Some(bucket) = throttle_key.skin_bucket() {
-                if crate::login_throttle::check_and_record(
-                    &bucket,
-                    k2_core::edge_attest::now_unix(),
-                ) == crate::login_throttle::Verdict::Limited
+                if limiter.check_and_record(&bucket, limiter.now())
+                    == crate::login_throttle::Verdict::Limited
                 {
                     super::http::send_login_rate_limited(&mut *stream).await;
                     return DispatchOutcome::Done;
                 }
             }
-            // LM4 — global failed-login ceiling for remote listeners, its
-            // own budget so an app-login spray cannot close Connect.
-            let remote_login = ingress != Ingress::Loopback;
-            if remote_login
-                && crate::login_throttle::global_ceiling_reached(
-                    crate::login_throttle::Door::Skin,
-                    k2_core::edge_attest::now_unix(),
-                )
+            // LM4 — global failed-login ceiling for anonymous app logins
+            // only (no trustworthy client address), its own budget so an
+            // app-login spray cannot close Connect.
+            let anonymous =
+                skin_login_client_trust(ingress, peer_ip(stream), &headers_blob, &trusted_proxies)
+                    .under_global_ceiling();
+            if anonymous
+                && limiter.global_ceiling_reached(crate::login_throttle::Door::Skin, limiter.now())
             {
                 super::http::send_login_rate_limited(&mut *stream).await;
                 return DispatchOutcome::Done;
@@ -3405,11 +3587,8 @@ async fn handle_one_request(
                 token: None,
                 location: None,
             });
-            if remote_login && r.response.status.starts_with("401") {
-                crate::login_throttle::record_global_failure(
-                    crate::login_throttle::Door::Skin,
-                    k2_core::edge_attest::now_unix(),
-                );
+            if anonymous && r.response.status.starts_with("401") {
+                limiter.record_global_failure(crate::login_throttle::Door::Skin, limiter.now());
             }
             if r.response.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;

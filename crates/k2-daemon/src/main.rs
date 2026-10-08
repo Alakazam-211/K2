@@ -257,6 +257,11 @@ pub(crate) struct DaemonState {
     /// test harness so the `POST /cli/daemon/restart` happy-path can be
     /// asserted (200 + would-restart) WITHOUT ever firing a real restart.
     pub shutdown_tx: Option<broadcast::Sender<()>>,
+    /// The login limiter (per-IP buckets + LM4 anonymous-failure
+    /// ceiling) of THIS daemon. One per process in production, shared by
+    /// the main and tunnel-ingress listeners; one per in-process test
+    /// daemon, so tests never share limiter state.
+    pub login_limiter: Arc<crate::login_throttle::LoginLimiter>,
 }
 
 #[cfg(test)]
@@ -936,6 +941,7 @@ async fn async_main() {
         port,
         event_tx: event_tx.clone(),
         shutdown_tx: Some(shutdown_tx.clone()),
+        login_limiter: Arc::new(login_throttle::LoginLimiter::new()),
     };
     {
         let shutdown_tx_for_signal = shutdown_tx.clone();

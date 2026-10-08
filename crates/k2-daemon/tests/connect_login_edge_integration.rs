@@ -141,13 +141,10 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     std::fs::create_dir_all(tmp.join(".k2")).expect("create temp HOME");
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();
-    // The login limiter (and LM4's global failed-login ceiling) is
-    // process-wide; the tests in this binary share it. Start and leave
-    // every test with a clean one, so a sibling's failed-login burst
-    // can't 429 this test's first good login.
-    k2_daemon::login_throttle::reset();
+    // No limiter reset here: every `test_harness::start` daemon owns its
+    // own login limiter, so a sibling test's failed-login burst can never
+    // 429 this test's logins.
     f();
-    k2_daemon::login_throttle::reset();
     match prev {
         Some(p) => std::env::set_var("HOME", p),
         None => std::env::remove_var("HOME"),
@@ -1092,7 +1089,6 @@ fn assert_rate_limited(r: &Resp, what: &str) {
 async fn tunnel_sixth_attested_login_from_one_ip_is_429_argon2_skipped() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let signer = seed("throt0", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let ip = "198.51.100.10";
@@ -1134,7 +1130,6 @@ async fn tunnel_sixth_attested_login_from_one_ip_is_429_argon2_skipped() {
 async fn loopback_sixth_login_is_not_429() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let _s = seed("loopt", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let body = r#"{"username":"loopt","password":"WRONG"}"#;
@@ -1150,7 +1145,6 @@ async fn loopback_sixth_login_is_not_429() {
 async fn unsigned_tunnel_login_stays_404_not_429() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let _s = seed("scan", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let body = r#"{"username":"scan","password":"WRONG"}"#;
@@ -1172,7 +1166,6 @@ async fn unsigned_tunnel_login_stays_404_not_429() {
 async fn connect_ip_spray_does_not_429_skin_login() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let signer = seed("sprayc", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let ip = "198.51.100.11";
@@ -1225,7 +1218,6 @@ async fn connect_ip_spray_does_not_429_skin_login() {
 async fn attested_login_keys_on_signed_ip_not_forwarded_headers() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let signer = seed("lmone0", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let real = "198.51.100.30";
@@ -1279,7 +1271,7 @@ async fn attested_login_keys_on_signed_ip_not_forwarded_headers() {
         );
         assert_eq!(other.status, 401, "other signed IP is not limited; body={}", other.body);
         assert_eq!(
-            k2_daemon::login_throttle::tracked_keys(),
+            d.login_limiter.tracked_keys(),
             (2, 0),
             "exactly the two signed IPs are tracked; no header-derived bucket"
         );
@@ -1290,7 +1282,6 @@ async fn attested_login_keys_on_signed_ip_not_forwarded_headers() {
 async fn any_mode_unattested_tunnel_logins_share_tunnel_bucket_not_splice_peer() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let _s = seed("lmtwo", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         set_ingress_mode("any");
@@ -1306,14 +1297,14 @@ async fn any_mode_unattested_tunnel_logins_share_tunnel_bucket_not_splice_peer()
             );
         }
         assert_eq!(
-            k2_daemon::login_throttle::tracked_keys(),
+            d.login_limiter.tracked_keys(),
             (1, 0),
             "only the shared tunnel bucket is tracked (not 127.0.0.1, not the header)"
         );
         // The shared bucket still caps at its own limit.
         for _ in used..k2_daemon::login_throttle::TUNNEL_SHARED_LIMIT {
             assert_eq!(
-                k2_daemon::login_throttle::check_and_record_with_limit(
+                d.login_limiter.check_and_record_with_limit(
                     k2_daemon::login_throttle::TUNNEL_SHARED_KEY,
                     k2_daemon::login_throttle::TUNNEL_SHARED_LIMIT,
                     now(),
@@ -1336,20 +1327,19 @@ async fn any_mode_unattested_tunnel_logins_share_tunnel_bucket_not_splice_peer()
 async fn full_throttle_tables_do_not_429_new_clients() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let signer = seed("lmfull", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let cap = k2_daemon::login_throttle::CAPACITY;
         let t = now();
         for i in 0..(cap + 1_000) {
             let ip = format!("10.{}.{}.{}", (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
-            k2_daemon::login_throttle::check_and_record(&ip, t);
-            k2_daemon::login_throttle::check_and_record(
+            d.login_limiter.check_and_record(&ip, t);
+            d.login_limiter.check_and_record(
                 &k2_daemon::login_throttle::skin_ip_key(&ip),
                 t,
             );
         }
-        let (connect, skin) = k2_daemon::login_throttle::tracked_keys();
+        let (connect, skin) = d.login_limiter.tracked_keys();
         assert_eq!(connect, cap, "Connect table bounded at capacity");
         assert_eq!(skin, cap, "skin table bounded at capacity");
 
@@ -1373,7 +1363,7 @@ async fn full_throttle_tables_do_not_429_new_clients() {
             &["X-Forwarded-For: 198.51.100.41"],
         );
         assert_eq!(skin_r.status, 401, "fresh skin client after a flood; body={}", skin_r.body);
-        let (connect, skin) = k2_daemon::login_throttle::tracked_keys();
+        let (connect, skin) = d.login_limiter.tracked_keys();
         assert!(connect <= cap && skin <= cap, "still bounded: {connect}/{skin}");
     });
 }
@@ -1387,7 +1377,6 @@ async fn full_throttle_tables_do_not_429_new_clients() {
 async fn proxied_loopback_connect_login_is_capped_on_rightmost_hop() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let _s = seed("lm4cap", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         // LM15: distinct usernames, so the 3/15 username lockout can't be
@@ -1423,7 +1412,6 @@ async fn proxied_loopback_connect_login_is_capped_on_rightmost_hop() {
 async fn global_failed_login_ceiling_refuses_fresh_remote_clients_only() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let _s = seed("lm4glob", "password123", Role::Member);
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         // One real proxied failure counts toward the Connect ceiling...
@@ -1436,7 +1424,7 @@ async fn global_failed_login_ceiling_refuses_fresh_remote_clients_only() {
         );
         assert_eq!(first.status, 401, "first proxied attempt; body={}", first.body);
         assert!(
-            !k2_daemon::login_throttle::global_ceiling_reached(
+            !d.login_limiter.global_ceiling_reached(
                 k2_daemon::login_throttle::Door::Connect,
                 now(),
             ),
@@ -1444,13 +1432,13 @@ async fn global_failed_login_ceiling_refuses_fresh_remote_clients_only() {
         );
         // ...the rest of the window's failures arrive from elsewhere.
         for _ in 1..k2_daemon::login_throttle::GLOBAL_FAIL_LIMIT {
-            k2_daemon::login_throttle::record_global_failure(
+            d.login_limiter.record_global_failure(
                 k2_daemon::login_throttle::Door::Connect,
                 now(),
             );
         }
         assert!(
-            k2_daemon::login_throttle::global_ceiling_reached(
+            d.login_limiter.global_ceiling_reached(
                 k2_daemon::login_throttle::Door::Connect,
                 now(),
             ),
@@ -1490,5 +1478,174 @@ async fn global_failed_login_ceiling_refuses_fresh_remote_clients_only() {
             "a full Connect ceiling must not close the app door; body={}",
             skin.body
         );
+    });
+}
+
+/// LM4 fix — the global failed-login ceiling counts and refuses ONLY
+/// logins with no trustworthy client address. 100 failed anonymous logins
+/// (unattested tunnel + a local proxy that is not a configured trusted
+/// proxy) fill it; after that an edge-attested login with the right
+/// password still succeeds, and so does a desktop (plain loopback) login,
+/// while anonymous logins get 429 until the window passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn anonymous_spray_never_locks_out_attested_or_desktop_logins() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed("lm4owner", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        // `any`: unattested tunnel logins reach argon2 (and the ceiling);
+        // a login that carries a valid edge attestation is still attested.
+        set_ingress_mode("any");
+        let door = k2_daemon::login_throttle::Door::Connect;
+        let limit = k2_daemon::login_throttle::GLOBAL_FAIL_LIMIT;
+
+        // 100 failed anonymous logins, 10 at a time. 40 go over the tunnel
+        // unattested (under the shared tunnel bucket's 50), 60 through a
+        // local proxy, each naming its own client so no per-IP bucket
+        // trips: every 429 below comes from the ceiling.
+        const SPRAY: usize = 100;
+        const PARALLEL: usize = 10;
+        let statuses: Vec<u16> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..PARALLEL)
+                .map(|t| {
+                    let d = &d;
+                    scope.spawn(move || {
+                        let mut out = Vec::new();
+                        for k in 0..(SPRAY / PARALLEL) {
+                            let i = t * (SPRAY / PARALLEL) + k;
+                            let body = format!(r#"{{"username":"lm4spray{i}","password":"WRONG"}}"#);
+                            let r = if i % 5 < 2 {
+                                http(d.tunnel_port, "POST", LOGIN, Some(&body), &[])
+                            } else {
+                                let xff = format!("X-Forwarded-For: 198.18.{}.{}", i / 200, i % 200 + 1);
+                                http(d.port, "POST", LOGIN, Some(&body), &[&xff])
+                            };
+                            out.push(r.status);
+                        }
+                        out
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("spray thread"))
+                .collect()
+        });
+        assert_eq!(statuses.len(), SPRAY);
+        let failed = statuses.iter().filter(|s| **s == 401).count();
+        let limited = statuses.iter().filter(|s| **s == 429).count();
+        assert_eq!(failed + limited, SPRAY, "only 401 or 429 expected: {statuses:?}");
+        assert!(
+            (limit..limit + PARALLEL).contains(&failed),
+            "the ceiling admits {limit} failures (plus at most the in-flight batch); got {failed}: {statuses:?}"
+        );
+        assert!(
+            d.login_limiter.global_ceiling_reached(door, d.login_limiter.now()),
+            "100 anonymous failures fill the Connect ceiling"
+        );
+
+        // Anonymous logins are refused, even with the right password.
+        let good = r#"{"username":"lm4owner","password":"password123"}"#;
+        assert_rate_limited(
+            &http(d.tunnel_port, "POST", LOGIN, Some(good), &[]),
+            "unattested tunnel login once the ceiling is full",
+        );
+        assert_rate_limited(
+            &http(d.port, "POST", LOGIN, Some(good), &["X-Forwarded-For: 198.51.100.140"]),
+            "untrusted local proxy login once the ceiling is full",
+        );
+
+        // An edge-attested login with the right password still succeeds.
+        let attested_ok =
+            attested_login(&d, &signer, good, now(), &random_nonce(), "198.51.100.150", SUB, &[]);
+        assert_eq!(
+            attested_ok.status, 200,
+            "an attested login is exempt from the anonymous ceiling; body={}",
+            attested_ok.body
+        );
+        let last = audit_events_for("login").pop().expect("login audit");
+        assert_eq!(last["outcome"], "ok", "{last}");
+        assert!(last["ingress"].as_str().expect("ingress").starts_with("edge:"), "{last}");
+
+        // Attested failures neither count nor are refused by the ceiling.
+        let attested_bad = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"lm4attbad","password":"WRONG"}"#,
+            now(),
+            &random_nonce(),
+            "198.51.100.151",
+            SUB,
+            &[],
+        );
+        assert_eq!(attested_bad.status, 401, "attested wrong password is a 401; body={}", attested_bad.body);
+
+        // The desktop app (plain loopback) still logs in.
+        let desktop = http(d.port, "POST", LOGIN, Some(good), &[]);
+        assert_eq!(desktop.status, 200, "desktop login is exempt; body={}", desktop.body);
+
+        // Still refused shortly before the window ends...
+        d.login_limiter
+            .advance_clock_for_tests(k2_daemon::login_throttle::WINDOW_SECS - 30);
+        assert_rate_limited(
+            &http(d.tunnel_port, "POST", LOGIN, Some(good), &[]),
+            "unattested tunnel login inside the window",
+        );
+        // ...and admitted once it has passed.
+        d.login_limiter.advance_clock_for_tests(31);
+        assert!(
+            !d.login_limiter.global_ceiling_reached(door, d.login_limiter.now()),
+            "the failures aged out with the window"
+        );
+        let after = http(d.tunnel_port, "POST", LOGIN, Some(good), &[]);
+        assert_eq!(after.status, 200, "unattested login after the window; body={}", after.body);
+        let proxied = http(d.port, "POST", LOGIN, Some(good), &["X-Forwarded-For: 198.51.100.141"]);
+        assert_eq!(proxied.status, 200, "proxied login after the window; body={}", proxied.body);
+    });
+}
+
+/// LM4 fix — the app (skin) door: anonymous tunnel app failures fill the
+/// app ceiling; a desktop app login and the Connect door stay open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn anonymous_app_spray_closes_only_anonymous_app_logins() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed("lm4conn", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let limit = k2_daemon::login_throttle::GLOBAL_FAIL_LIMIT;
+        let mut failed = 0;
+        for i in 0..(limit + 5) {
+            let body = format!(r#"{{"username":"lm4app{i}","password":"WRONG"}}"#);
+            let r = http(d.tunnel_port, "POST", "/cli/skin/login", Some(&body), &[]);
+            match r.status {
+                401 => failed += 1,
+                429 => assert!(i >= limit, "app attempt {i} refused before the ceiling; body={}", r.body),
+                s => panic!("app attempt {i}: unexpected {s}; body={}", r.body),
+            }
+        }
+        assert_eq!(failed, limit, "exactly the ceiling's worth of app failures reach argon2");
+        assert!(d.login_limiter.global_ceiling_reached(
+            k2_daemon::login_throttle::Door::Skin,
+            d.login_limiter.now()
+        ));
+        let lo = http(
+            d.port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"lm4app-lo","password":"WRONG"}"#),
+            &[],
+        );
+        assert_eq!(lo.status, 401, "a local app login is exempt; body={}", lo.body);
+        let connect = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"lm4conn","password":"password123"}"#,
+            now(),
+            &random_nonce(),
+            "198.51.100.160",
+            SUB,
+            &[],
+        );
+        assert_eq!(connect.status, 200, "the Connect door stays open; body={}", connect.body);
     });
 }

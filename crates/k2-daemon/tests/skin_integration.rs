@@ -4372,7 +4372,6 @@ fn skin_lockout_failed_count(username: &str) -> i64 {
 async fn skin_sixth_login_with_forwarded_ip_is_429() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         let ip = "1.2.3.4";
@@ -4420,7 +4419,6 @@ async fn skin_sixth_login_with_forwarded_ip_is_429() {
 async fn skin_loopback_sixth_login_without_forwarded_header_is_not_429() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         let body = r#"{"username":"skloop","password":"WRONG"}"#;
@@ -4464,7 +4462,6 @@ fn skin_locked_until(username: &str) -> Option<i64> {
 async fn tunnel_skin_login_forged_forwarded_headers_create_no_bucket() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let tunnel = daemon.tunnel_port;
         // Same forged client IP well past the per-IP limit: no 429.
@@ -4492,7 +4489,7 @@ async fn tunnel_skin_login_forged_forwarded_headers_create_no_bucket() {
             assert_eq!(r.status, 401, "tunnel skin rotating attempt {i}; body={}", r.body);
         }
         assert_eq!(
-            k2_daemon::login_throttle::tracked_keys(),
+            daemon.login_limiter.tracked_keys(),
             (0, 0),
             "forged headers on the tunnel must not create throttle buckets"
         );
@@ -4503,7 +4500,6 @@ async fn tunnel_skin_login_forged_forwarded_headers_create_no_bucket() {
 async fn tunnel_skin_login_still_locks_username_after_three_failures() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         let tunnel = daemon.tunnel_port;
@@ -4553,7 +4549,6 @@ async fn tunnel_skin_login_still_locks_username_after_three_failures() {
 async fn loopback_skin_login_keys_on_rightmost_forwarded_hop_never_cf_header() {
     let _g = lock();
     with_temp_home(|| {
-        k2_daemon::login_throttle::reset();
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         for i in 1..=5 {
@@ -4577,7 +4572,7 @@ async fn loopback_skin_login_keys_on_rightmost_forwarded_hop_never_cf_header() {
         );
         assert_skin_rate_limited(&r, "6th skin login from proxy hop 1.2.3.5 (left hops rotated)");
 
-        k2_daemon::login_throttle::reset();
+        daemon.login_limiter.reset();
         for i in 1..=(k2_daemon::login_throttle::LIMIT + 1) {
             let r = http_host_ex(
                 port,
@@ -4589,7 +4584,7 @@ async fn loopback_skin_login_keys_on_rightmost_forwarded_hop_never_cf_header() {
             );
             assert_eq!(r.status, 401, "CF-Connecting-IP never keys the bucket; attempt {i}; body={}", r.body);
         }
-        assert_eq!(k2_daemon::login_throttle::tracked_keys(), (0, 0));
+        assert_eq!(daemon.login_limiter.tracked_keys(), (0, 0));
     });
 }
 

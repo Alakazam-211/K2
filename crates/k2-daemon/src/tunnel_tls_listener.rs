@@ -961,6 +961,7 @@ mod tests {
             port: 1,
             event_tx: Arc::new(event_tx),
             shutdown_tx: None,
+            login_limiter: Arc::new(crate::login_throttle::LoginLimiter::new()),
         });
         1
     }

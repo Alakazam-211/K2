@@ -256,6 +256,11 @@ pub struct DaemonState {
     /// in the test harness so `POST /cli/daemon/restart` can be asserted
     /// (200 + would-restart) WITHOUT firing a real restart.
     pub shutdown_tx: Option<broadcast::Sender<()>>,
+    /// The login limiter (per-IP buckets + LM4 anonymous-failure
+    /// ceiling) of THIS daemon. One per process in production, shared by
+    /// the main and tunnel-ingress listeners; one per in-process test
+    /// daemon, so tests never share limiter state.
+    pub login_limiter: Arc<crate::login_throttle::LoginLimiter>,
 }
 
 // ── #630 auth-route integration harness ─────────────────────────────
@@ -284,6 +289,8 @@ pub mod test_harness {
         /// dispatcher tagged `Ingress::Tunnel`. Connect here to exercise
         /// the tunnel gate exactly as the E2E splice / frpc would.
         pub tunnel_port: u16,
+        /// This daemon's own login limiter (both listeners share it).
+        pub login_limiter: Arc<crate::login_throttle::LoginLimiter>,
     }
 
     /// Bind an ephemeral `127.0.0.1:0` listener, mark boot-status
@@ -343,7 +350,11 @@ pub mod test_harness {
             // so gate + happy-path can be asserted without killing the test
             // process.
             shutdown_tx: None,
+            // Its own limiter: no other test daemon in this process can
+            // trip it, and the test can drive it through `TestDaemon`.
+            login_limiter: Arc::new(crate::login_throttle::LoginLimiter::new()),
         };
+        let login_limiter = state.login_limiter.clone();
 
         // Per-harness tunnel-ingress listener with THIS state (never the
         // process-wide record — each test has its own owner token).
@@ -372,6 +383,7 @@ pub mod test_harness {
             port,
             local_addr,
             tunnel_port,
+            login_limiter,
         }
     }
 }

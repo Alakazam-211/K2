@@ -1,0 +1,26 @@
+[package]
+name = "k2-node"
+# Versioned by k2-node-proto's PROTOCOL, not the product version.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 compute node runtime: runs a controller's jobs as its own OS user. Never links k2-core or k2-daemon (CN26)."
+
+[[bin]]
+name = "k2-node"
+path = "src/main.rs"
+
+[dependencies]
+k2-node-proto = { path = "../k2-node-proto" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "fs", "sync", "signal"] }
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

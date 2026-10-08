@@ -76,6 +76,9 @@ export const SESSION_EVENT_ROUTES = {
   publish_services_changed: { class: 'app', app: true, carried: true },
   workspace_resources_changed: { class: 'app', app: true, carried: true },
   tab_title_changed: { class: 'workspace', workspace: true, tabs: true },
+  // prd-thread-survives-tab-rename S3: a renamed chat's new Thread address
+  // (published on the Thread address bus).
+  session_address_changed: { class: 'workspace', workspace: true },
   tab_order_changed: { class: 'workspace', workspace: true, tabs: true },
   heartbeat_state_changed: { class: 'workspace', tabs: true },
   heartbeat_roster_changed: { class: 'workspace', tabs: true },

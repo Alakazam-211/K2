@@ -154,7 +154,8 @@ export function TerminalComposeBar({
   const threadAddr = sessionChrome?.overlayAddr ?? ''
   const [threadAddrError, setThreadAddrError] = useState<string | null>(null)
   useEffect(() => {
-    if (!sendOnThread || threadAddr.trim()) setThreadAddrError(null)
+    // A new address (the chat was renamed, S4) clears a stale send error.
+    setThreadAddrError(null)
   }, [sendOnThread, threadAddr])
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
@@ -475,7 +476,10 @@ export function TerminalComposeBar({
         const result = await postThreadCompose(scope, threadAddr, text, command)
         if (!result.ok) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
+          // Side finding C: say why, instead of a silent bounce.
+          setThreadAddrError(result.error)
         } else {
+          setThreadAddrError(null)
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''

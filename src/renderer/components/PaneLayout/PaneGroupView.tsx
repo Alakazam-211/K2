@@ -423,7 +423,7 @@ function SidecarAgentChrome({
   fallbackTitle: string
   children: React.ReactNode
 }): React.JSX.Element {
-  const overlay = useSidecarOverlayAddr(cwd, paneGroupId, attachAgentName)
+  const overlay = useSidecarOverlayAddr(cwd, paneGroupId, attachAgentName, conversationId)
   const title = overlay.title || fallbackTitle || 'agent'
   const addr = overlay.addr
   const agentName = attachAgentName || `tab-${terminalId}`

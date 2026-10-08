@@ -670,17 +670,40 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
   const handleRestore = useCallback(async (session: ChatSession) => {
     try {
-      await daemonCliPost(room.scope, 'chat/restore', {
+      const res = await daemonCliPost<{ note?: string }>(room.scope, 'chat/restore', {
         project_path: session.project || projectPath,
         provider: session.provider,
         session_id: session.sessionId,
       })
+      // TR6b: its name was taken while archived; it answers at its number.
+      if (res && typeof res.note === 'string' && res.note) showToast(res.note)
       await fetchSessions(false)
     } catch (err) {
       console.error('[chat-history] restore failed:', err)
       showToast(String(err))
     }
   }, [projectPath, fetchSessions, showToast])
+
+  // TR6c: old names stay reserved to their chat (a rename keeps every old
+  // address working). This frees them for other chats.
+  const handleReleaseNames = useCallback(async (session: ChatSession) => {
+    try {
+      const res = await daemonCliPost<{ released?: string[] }>(room.scope, 'chat/release-names', {
+        provider: session.provider,
+        session_id: session.sessionId,
+        project_path: session.project || projectPath,
+      })
+      const released = Array.isArray(res?.released) ? res.released : []
+      showToast(
+        released.length > 0
+          ? `Released old names: ${released.join(', ')}`
+          : 'This chat has no old names to release.',
+      )
+    } catch (err) {
+      console.error('[chat-history] release-names failed:', err)
+      showToast(String(err))
+    }
+  }, [projectPath, showToast])
 
   const handleTogglePin = useCallback(async (session: ChatSession) => {
     const key = `${session.provider}:${session.sessionId}`
@@ -789,6 +812,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       if (session.provider === 'claude') {
         items.push({ label: 'Archive', action: () => handleArchive(session) })
       }
+      items.push({ label: 'Release old names', action: () => handleReleaseNames(session) })
     }
     const closeMenu = () => {
       if (menuDiv.parentNode) menuDiv.remove()
@@ -828,7 +852,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       if (!menuDiv.contains(ev.target as Node)) closeMenu()
     }
     setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
-  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath, copyText, openContinue])
+  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, handleReleaseNames, projectPath, copyText, openContinue])
 
   const spawnHistoryContinue = useCallback(async (
     seed: ContinueSpawnRequest,
@@ -881,6 +905,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         provider: renamingSession.provider,
         session_id: renamingSession.sessionId,
         custom_name: renameValue.trim(),
+        // TR4: place the rename in this workspace.
+        ...(renamingSession.project || projectPath
+          ? { project_path: renamingSession.project || projectPath }
+          : {}),
       })
       const key = `${renamingSession.provider}:${renamingSession.sessionId}`
       const nextName = renameValue.trim()
@@ -999,7 +1027,9 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         command: config.command,
         args,
         locked: true,
-        conversationId: session.sessionId,
+        // TR20: a fork is a new conversation; its id is adopted later. The
+        // source id would share the source chat's Thread and Chats name.
+        ...(isCrossWorktree && config.command === 'claude' ? {} : { conversationId: session.sessionId }),
       })
       const st = room.tabs.getState()
       restampSessionTabs(

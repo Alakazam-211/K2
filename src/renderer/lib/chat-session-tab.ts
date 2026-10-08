@@ -125,6 +125,9 @@ export function findChatSessionInTab(
       if (stamped && (!sessionIds || sessionIds.has(stamped))) {
         return { sessionId: stamped, provider }
       }
+      // TR20: `--resume S --fork-session` mints a new conversation; `S` is
+      // the source chat's id (often another workspace's), never this tab's.
+      if (isForkArgv(td.args)) continue
       for (const arg of td.args ?? []) {
         if (sessionIds ? sessionIds.has(arg) : isUuidShape(arg)) {
           return { sessionId: arg, provider }
@@ -156,6 +159,34 @@ export function isAgentPtyTerminalItem(item: { type: string; data: unknown }): b
 }
 
 /** True when a tab looks like a harness session (N5). File / heartbeat / API stay false. */
+/** A Chat History fork (`--resume <id> --fork-session`): its own id is
+ *  only known once the daemon adopts the new transcript. */
+export function isForkArgv(args: readonly string[] | undefined): boolean {
+  return Boolean(args?.includes('--fork-session'))
+}
+
+/** TR15: a chat tab whose conversation id is not known yet (Codex/Hermes
+ *  before adoption, a fork) is renamed under its pane key; the daemon moves
+ *  pane-keyed names onto the id when it adopts it. */
+export function preAdoptionRenameTarget(
+  tab: Pick<Tab, 'isSystemAgent' | 'paneGroups'>,
+): { sessionId: string; provider: string } | null {
+  if (tab.isSystemAgent) return null
+  for (const [pgId, pg] of tab.paneGroups) {
+    for (const item of pg.items) {
+      if (item.type !== 'terminal') continue
+      const td = item.data as TerminalItemData
+      if (isExcludedTerminal(td)) continue
+      const provider = providerFromCommand(td.command)
+      if (!provider) continue
+      const agent = td.attachAgentName?.trim() ?? ''
+      const paneKey = agent.startsWith('tab-') ? agent.slice(4) : pgId
+      if (paneKey) return { sessionId: paneKey, provider }
+    }
+  }
+  return null
+}
+
 export function tabLooksLikeChatSession(tab: Pick<Tab, 'isSystemAgent' | 'paneGroups'>): boolean {
   if (tab.isSystemAgent) return false
   for (const [, pg] of tab.paneGroups) {
@@ -487,14 +518,19 @@ export async function persistChatRenameIfSessionTab(
 ): Promise<boolean> {
   const name = customName.trim()
   if (!name || !projectPath) return false
-  const hit = findChatSessionInTab(tab)
-  if (!hit?.sessionId) return false
-  const provider = hit.provider
-  if (!provider) return false
+  const found = findChatSessionInTab(tab)
+  const hit =
+    found?.sessionId && found.provider
+      ? { sessionId: found.sessionId, provider: found.provider }
+      : preAdoptionRenameTarget(tab)
+  if (!hit) return false
+  // TR4: the daemon places the rename in this workspace (an id can sit in
+  // two), and the rename moves the chat's Thread address (S3).
   await daemonCliPost(scope, 'chat/rename', {
-    provider,
+    provider: hit.provider,
     session_id: hit.sessionId,
     custom_name: name,
+    project_path: projectPath,
   })
   rememberChatCustomName(scope, hit.sessionId, name)
   return true

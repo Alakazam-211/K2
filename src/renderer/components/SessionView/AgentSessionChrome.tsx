@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
+import { subscribeThreadAddress, threadAddressChangeMatches } from '@/lib/thread-address-bus'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   beginSidecarRefresh,
@@ -37,6 +38,17 @@ interface AgentSessionChromeProps {
   children: ReactNode
 }
 
+/** The remembered Thread|Terminal view's key (TR14): the conversation;
+ *  before one is known (Codex before adoption, a fork) the pane, never the
+ *  address, which a rename changes. */
+export function sidecarViewKey(
+  conversationId: string | null,
+  agentName: string,
+  addr: string,
+): string {
+  return conversationId || paneGroupIdFromTabAgent(agentName) || agentName || addr
+}
+
 /**
  * Sidecar chrome (C6/C7/C10): handle + Thread|Terminal + refresh.
  * No history dropdown. TerminalPane stays mounted (C4) via display:none.
@@ -56,7 +68,7 @@ export function AgentSessionChrome({
   // Home M3 — refresh respawns on the room's server; a failed refresh drops
   // the tab from the room's strip.
   const room = useRoom()
-  const sessionKey = conversationId || addr || agentName
+  const sessionKey = sidecarViewKey(conversationId, agentName, addr)
   const {
     viewTab,
     setViewTab,
@@ -327,14 +339,42 @@ function sidecarOwnClipboard(row: DaemonHandleRow | undefined): string {
   return clipboard
 }
 
-/** Resolve overlay addr for a sidecar pane (handle clipboard). */
+/** Resolve overlay addr for a sidecar pane (handle clipboard).
+ *
+ *  Thread survives a tab rename (S4): the address is looked up again, in
+ *  place (no remount), when the daemon says this pane's address changed
+ *  (`session_address_changed`, the overlay `address` frame) or a Thread
+ *  call for the address it holds missed / answered `movedFrom`. */
 export function useSidecarOverlayAddr(
   projectPath: string,
   paneGroupId: string,
   attachAgentName?: string,
+  conversationId?: string | null,
 ): { title: string; addr: string } {
   const room = useRoom()
   const [state, setState] = useState({ title: '', addr: '' })
+  const addrRef = useRef('')
+  addrRef.current = state.addr
+  const relookupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return subscribeThreadAddress((change) => {
+      if (
+        !threadAddressChangeMatches(change, {
+          addr: addrRef.current,
+          conversationId: conversationId ?? null,
+          paneGroupId,
+        })
+      ) {
+        return
+      }
+      // A known new address shows at once; the list confirms it.
+      if (change.address && change.address.includes('/') && change.address !== addrRef.current) {
+        setState({ title: change.address, addr: change.address })
+      }
+      relookupRef.current?.()
+    })
+  }, [paneGroupId, conversationId])
 
   useEffect(() => {
     let cancelled = false
@@ -365,16 +405,23 @@ export function useSidecarOverlayAddr(
       }
       if (cancelled) return
       if (found) {
-        setState({ title: found, addr: found })
+        setState((prev) => (prev.addr === found ? prev : { title: found, addr: found }))
         return
       }
       schedule()
     }
 
+    relookupRef.current = () => {
+      if (cancelled) return
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+      void lookup()
+    }
     setState({ title: '', addr: '' })
     void lookup()
     return () => {
       cancelled = true
+      relookupRef.current = null
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [room, projectPath, paneGroupId, attachAgentName])

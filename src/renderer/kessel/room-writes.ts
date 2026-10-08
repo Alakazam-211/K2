@@ -56,6 +56,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
 
   // Chat history.
   'chat/rename': 'rename a chat on B',
+  'chat/release-names': 'release a chat’s old names on B',
   'chat/archive': 'archive a chat on B',
   'chat/restore': 'restore an archived chat on B',
   'chat/toggle-pin': 'pin a chat on B',

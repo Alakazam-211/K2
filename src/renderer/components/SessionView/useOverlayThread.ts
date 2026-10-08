@@ -27,6 +27,12 @@
 //      re-reads the whole Thread, merged by id. Nothing on screen goes
 //      away and nothing waits for a refresh (Rosson 2026-10-07: Codex's
 //      reply never showed, and a refresh lost the first message).
+//   5b. Thread survives a tab rename (prd-thread-survives-tab-rename S4,
+//      TR13): a renamed chat answers at a new address. An `addr` change
+//      that keeps the same conversation keeps items, socket and turn; only
+//      the address the HTTP calls send swaps (it lives in a ref). The
+//      overlay `address` frame, a `movedFrom` answer and a Thread 404 go to
+//      the Thread address bus so the views holding the old one follow.
 //   6. The working strip (prd-daemon-activity-and-thread-working-v1 S7,
 //      TW11): `activity` frames on the same socket feed `turn`, never
 //      `items`. They are ephemeral (`since_seq` never replays them), so
@@ -57,6 +63,37 @@ import {
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+import {
+  isThreadAddressMiss,
+  publishThreadAddress,
+  requestThreadAddressRelookup,
+} from '@/lib/thread-address-bus'
+
+/** What a Thread snapshot says about its address (S2/Q5). */
+interface SnapshotAddress {
+  addr: string
+  movedFrom: string
+  pastAddresses: string[]
+}
+
+function snapshotAddress(raw: unknown): SnapshotAddress {
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const past = Array.isArray(obj.pastAddresses)
+    ? obj.pastAddresses.filter((a): a is string => typeof a === 'string' && a.length > 0)
+    : []
+  return {
+    addr: typeof obj.addr === 'string' ? obj.addr : '',
+    movedFrom: typeof obj.movedFrom === 'string' ? obj.movedFrom : '',
+    pastAddresses: past,
+  }
+}
+
+/** A Thread answer named a newer address than the one sent: tell the
+ *  views holding the old one (they look it up again). */
+function noteMovedFrom(sent: string, raw: unknown): void {
+  const a = snapshotAddress(raw)
+  if (a.movedFrom && a.addr && a.addr !== sent) requestThreadAddressRelookup(sent, a.addr)
+}
 
 /** First reconnect delay (doubles to the cap, jittered). */
 let reconnectBaseMs = 1_000
@@ -105,6 +142,11 @@ export function useOverlayThread(opts: {
   /** The server reports Thread turns (`daemon-activity`). False: `turn` is
    *  always null, and a surface falls back to the row's activity (TW14). */
   turnsReported: boolean
+  /** The address this chat answers at now, per the daemon (S2). */
+  currentAddr: string
+  /** Its earlier addresses: old rows' `from`/`to` render as `currentAddr`
+   *  (Q5). Empty on an older daemon. */
+  pastAddresses: string[]
 } {
   const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
@@ -117,17 +159,49 @@ export function useOverlayThread(opts: {
   const [turn, setTurn] = useState<ThreadTurn | null>(null)
   /** Bumped when the address moved to another conversation: start over. */
   const [epoch, setEpoch] = useState(0)
+  const [addressInfo, setAddressInfo] = useState<{ currentAddr: string; pastAddresses: string[] }>({
+    currentAddr: '',
+    pastAddresses: [],
+  })
   const itemsRef = useRef(items)
   const hasMoreRef = useRef(false)
   const loadingOlderRef = useRef(false)
   const addrRef = useRef(addr)
+  /** The conversation the running view booted on ('' = none yet). */
+  const bootedConvRef = useRef('')
+  /** Re-read the loaded window + turn on the current `addrRef` (S4). */
+  const resyncRef = useRef<(() => void) | null>(null)
   itemsRef.current = items
   hasMoreRef.current = hasMore
   loadingOlderRef.current = loadingOlder
   addrRef.current = addr
 
+  const noteSnapshotAddress = useCallback((raw: unknown) => {
+    const a = snapshotAddress(raw)
+    if (!a.addr) return
+    setAddressInfo((prev) =>
+      prev.currentAddr === a.addr && prev.pastAddresses.join('\n') === a.pastAddresses.join('\n')
+        ? prev
+        : { currentAddr: a.addr, pastAddresses: a.pastAddresses },
+    )
+  }, [])
+
+  // S4/TR13: a new address for the SAME conversation swaps only what the
+  // HTTP calls send (addrRef) and re-reads; no teardown, no `loaded` flash.
+  // Before a conversation is known, a new address starts over.
+  const prevAddrRef = useRef(addr)
   useEffect(() => {
-    if (!enabled || !addr.trim()) {
+    if (prevAddrRef.current === addr) return
+    prevAddrRef.current = addr
+    if (bootedConvRef.current && resyncRef.current) {
+      resyncRef.current()
+    } else {
+      setEpoch((e) => e + 1)
+    }
+  }, [addr])
+
+  useEffect(() => {
+    if (!enabled || !addrRef.current.trim()) {
       setItems([])
       setError(null)
       setHasMore(false)
@@ -153,8 +227,9 @@ export function useOverlayThread(opts: {
     function catchUp(since: number): Promise<void> {
       catchUpChain = catchUpChain.then(async () => {
         if (cancelled) return
+        const sent = addrRef.current
         try {
-          const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, since_seq: since, limit: 0 })
+          const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, since_seq: since, limit: 0 })
           if (cancelled) return
           const snap = threadItemsFromSnapshot(raw)
           if (snap.conversation_id && conv && snap.conversation_id !== conv) {
@@ -163,8 +238,13 @@ export function useOverlayThread(opts: {
             setEpoch((e) => e + 1)
             return
           }
+          noteSnapshotAddress(raw)
+          noteMovedFrom(sent, raw)
           setItems((prev) => mergeThreadItems(prev, snap.items))
         } catch (e) {
+          // S4: an address that no longer resolves (older daemon after a
+          // rename): the sidecar view looks its address up again.
+          if (isThreadAddressMiss(e)) requestThreadAddressRelookup(sent)
           // The socket's reconnect (or the next focus) tries again.
           console.warn('[thread] catch-up failed:', e)
         }
@@ -179,7 +259,7 @@ export function useOverlayThread(opts: {
       if (cancelled || !scope.serverSupports('daemon-activity')) return
       const framesBefore = activityFrames
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'thread/activity', { addr })
+        const raw = await daemonCliGet<unknown>(scope, 'thread/activity', { addr: addrRef.current })
         // A frame that arrived meanwhile is newer than this answer.
         if (cancelled || activityFrames !== framesBefore) return
         setTurn((prev) => applyActivityCatchUp(prev, raw, Date.now()))
@@ -255,6 +335,21 @@ export function useOverlayThread(opts: {
             followMove(sock, movedTo)
             return
           }
+          if (frame.collection === 'address') {
+            // TR13: the chat was renamed; every view on it learns the name.
+            const address = typeof frame.address === 'string' ? frame.address : ''
+            const previous = typeof frame.previous === 'string' ? frame.previous : ''
+            if (address) {
+              setAddressInfo((prev) => ({
+                currentAddr: address,
+                pastAddresses: previous && !prev.pastAddresses.includes(previous)
+                  ? [...prev.pastAddresses, previous]
+                  : prev.pastAddresses,
+              }))
+              publishThreadAddress({ address, previous, conversationId: conv })
+            }
+            return
+          }
           if (frame.collection === 'activity') {
             activityFrames += 1
             const receivedAt = Date.now()
@@ -318,27 +413,39 @@ export function useOverlayThread(opts: {
     }
 
     async function boot(): Promise<void> {
+      const sent = addrRef.current
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr, limit: OVERLAY_PAGE_SIZE })
+        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, limit: OVERLAY_PAGE_SIZE })
         if (cancelled) return
         const snap = threadItemsFromSnapshot(raw)
         conv = snap.conversation_id || conversationId || ''
+        bootedConvRef.current = conv
         const snapNewest = newestSeq(snap.items)
         setItems(snap.items)
         setHasMore(snap.has_more)
         setResolvedConv(conv)
         setError(null)
         setLoaded(true)
+        noteSnapshotAddress(raw)
+        noteMovedFrom(sent, raw)
         if (!conv) return
         // Gap catch-up: whatever was written between the snapshot and the
         // subscribe.
         await connect(() => snapNewest)
       } catch (e) {
         if (!cancelled) {
+          if (isThreadAddressMiss(e)) requestThreadAddressRelookup(sent)
           setError(e instanceof Error ? e.message : String(e))
           setLoaded(true)
         }
       }
+    }
+
+    resyncRef.current = () => {
+      if (cancelled) return
+      lastResyncAt = Date.now()
+      void catchUp(resyncSince(itemsRef.current))
+      void catchUpTurn()
     }
 
     void boot()
@@ -349,6 +456,8 @@ export function useOverlayThread(opts: {
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
+      bootedConvRef.current = ''
+      resyncRef.current = null
       if (retryTimer !== null) clearTimeout(retryTimer)
       if (typeof window !== 'undefined') {
         window.removeEventListener('focus', wake)
@@ -361,7 +470,9 @@ export function useOverlayThread(opts: {
         ws = null
       }
     }
-  }, [scope, addr, conversationId, enabled, epoch])
+    // `addr` is read through addrRef: a rename keeps this view (S4).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, conversationId, enabled, epoch])
 
   // This window's own sends (any surface: the Agents page compose bar, Zen,
   // Home) land at once, merged by id with the socket's echo.
@@ -417,7 +528,11 @@ export function useOverlayThread(opts: {
           body?: string
           kind?: string
           conversation_id?: string
-        }>(scope, 'thread/post', { addr, text: trimmed, via: 'compose' })
+        }>(scope, 'thread/post', { addr, text: trimmed, via: 'compose' }).catch((e: unknown) => {
+          if (isThreadAddressMiss(e)) requestThreadAddressRelookup(addr)
+          throw e
+        })
+        noteMovedFrom(addr, res)
         if (res?.id && typeof res.seq === 'number') {
           const item: OverlayThreadItem = {
             collection: 'thread',
@@ -528,5 +643,7 @@ export function useOverlayThread(opts: {
     loaded,
     turn,
     turnsReported: scope.serverSupports('daemon-activity'),
+    currentAddr: addressInfo.currentAddr,
+    pastAddresses: addressInfo.pastAddresses,
   }
 }

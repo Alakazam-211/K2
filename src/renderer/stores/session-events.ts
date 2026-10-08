@@ -35,6 +35,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { notePoolSocketClose } from '@/lib/pool-hooks'
 import { CARRIED_KINDS, dispatchFrom, type DispatchTable } from '@/stores/session-event-kinds'
+import { publishThreadAddress } from '@/lib/thread-address-bus'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -271,6 +272,18 @@ export interface TabTitleChangedEvent {
    *  lock too. Optional for forward-compat with daemons that pre-date the
    *  `tab_titles.locked` column. */
   locked?: boolean
+}
+
+/** WORKSPACE-SCOPED — a chat's Thread address changed because it was
+ *  renamed (prd-thread-survives-tab-rename S3). The old address keeps
+ *  working; views swap the address they send to and show. */
+export interface SessionAddressChangedEvent {
+  kind: 'session_address_changed'
+  workspacePath: string
+  paneGroupId: string | null
+  conversationId: string
+  address: string
+  previousAddress: string
 }
 
 /** WORKSPACE-SCOPED — workspace tab-order/layout persistence advanced
@@ -545,6 +558,7 @@ export type SessionEventMessage =
   | PublishServicesChangedEvent
   | WorkspaceResourcesChangedEvent
   | TabTitleChangedEvent
+  | SessionAddressChangedEvent
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
   | HeartbeatRosterChangedEvent
@@ -666,6 +680,16 @@ const WORKSPACE_SOCKET_DISPATCH: DispatchTable<'workspace', SessionEventHandlers
   session_renamed: (h, m) => h.onRenamed?.(m),
   tab_title_changed: (h, m) => h.onTabTitleChanged?.(m),
   tab_order_changed: (h, m) => h.onTabOrderChanged?.(m),
+  // Every workspace socket feeds the Thread address bus; the sidecar
+  // Thread views listen there (no socket of their own).
+  session_address_changed: (_h, m) =>
+    publishThreadAddress({
+      address: m.address,
+      previous: m.previousAddress,
+      conversationId: m.conversationId,
+      paneGroupId: m.paneGroupId,
+      workspacePath: m.workspacePath,
+    }),
 }
 
 // ── Public API ───────────────────────────────────────────────────────────

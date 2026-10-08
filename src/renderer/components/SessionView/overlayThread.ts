@@ -1,6 +1,11 @@
 /** Overlay Thread snapshot + WS frame helpers. Thread pane never shows chatter. */
 
 import { daemonCliPost } from '@/lib/daemon-cli'
+import {
+  isThreadAddressMiss,
+  requestThreadAddressRelookup,
+  threadErrorText,
+} from '@/lib/thread-address-bus'
 import type { ServerScope } from '@/kessel/server-scope'
 
 export const OVERLAY_PAGE_SIZE = 25
@@ -55,6 +60,9 @@ export interface OverlayWsFrame {
   /** `collection: "moved"` only: the Thread's old and new conversation keys. */
   from?: string
   to?: string
+  /** `collection: "address"` only (rename, TR13): the new and old address. */
+  address?: string
+  previous?: string
 }
 
 /**
@@ -174,6 +182,10 @@ export type ThreadComposeResult =
  * into the agent's PTY (overlay_routes.rs). The Agents page compose bar and
  * Zen's compose both send through here. Throws on a transport error.
  */
+/** Compose-bar text when a Thread send's address no longer resolves. */
+export const THREAD_ADDRESS_MOVED =
+  "This chat's address changed. Looking up the new one; your draft is still here, send again."
+
 export async function postThreadCompose(
   scope: ServerScope,
   addr: string,
@@ -186,9 +198,24 @@ export async function postThreadCompose(
     via: 'compose',
   }
   if (command) body.command = command
-  const resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
+  let resp: Record<string, unknown>
+  try {
+    resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
+  } catch (e) {
+    // Thread survives a tab rename (S4): a 404 on this address (an older
+    // daemon after a rename) makes the sidecar view look it up again; the
+    // person sees why the send did not post (Side finding C).
+    if (isThreadAddressMiss(e)) {
+      requestThreadAddressRelookup(addr)
+      return { ok: false, error: THREAD_ADDRESS_MOVED }
+    }
+    return { ok: false, error: threadErrorText(e) }
+  }
   if (resp?.ok === false) {
     return { ok: false, error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }
+  }
+  if (typeof resp?.movedFrom === 'string' && typeof resp.addr === 'string' && resp.addr !== addr) {
+    requestThreadAddressRelookup(addr, resp.addr)
   }
   const item = overlayItemFromThreadPost(resp, text)
   if (item) ingestOverlayThreadItem(item)

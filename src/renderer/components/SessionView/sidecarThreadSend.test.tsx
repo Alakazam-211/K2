@@ -3,7 +3,7 @@
 // an error and leaves the draft. Fail loud — no skip.
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useSessionViewChrome } from './sessionViewChrome'
 
 const h = vi.hoisted(() => {
@@ -42,7 +42,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonHttpBase: () => 'http://127.0.0.1:1',
 }))
 
-import { AgentSessionChrome, SIDECAR_OVERLAY_ADDR_RETRY_MS, useSidecarOverlayAddr } from './AgentSessionChrome'
+import { AgentSessionChrome, SIDECAR_OVERLAY_ADDR_RETRY_MS, sidecarViewKey, useSidecarOverlayAddr } from './AgentSessionChrome'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 
 const NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -187,5 +187,99 @@ describe('sidecar thread send address', () => {
     expect(screen.getByTestId('sidecar-session-title').textContent).toBe('agent')
     expect(seenAddrs).not.toContain('sales')
     expect(seenAddrs).not.toContain('sales/reviewer')
+  })
+})
+
+describe('Thread survives a tab rename (S4)', () => {
+  beforeEach(() => {
+    cleanup()
+    h.listQueue.length = 0
+    h.sticky.current = []
+    h.daemonCliGet.mockClear()
+    h.daemonCliPost.mockReset()
+    h.daemonCliPost.mockImplementation(async () => ({ ok: true }))
+    seenAddrs.length = 0
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('test 15: session_address_changed for this pane swaps the address without a remount', async () => {
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
+    renderInPrimaryRoom(<Harness />)
+    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    const listsBefore = listCalls().length
+
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/reviewer' }]
+    const { publishThreadAddress } = await import('@/lib/thread-address-bus')
+    act(() => {
+      publishThreadAddress({
+        address: 'sales/reviewer',
+        previous: 'sales/1',
+        paneGroupId: 'pg-1',
+        conversationId: 'conv-x',
+        workspacePath: '/ws/sales',
+      })
+    })
+    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer'))
+    // Looked up again to confirm; same mounted compose box (no remount).
+    await waitFor(() => expect(listCalls().length).toBeGreaterThan(listsBefore))
+    expect(screen.getByRole('textbox')).toBe(box)
+
+    typeAndSend('and the lint')
+    await waitFor(() => {
+      expect(threadPosts()).toEqual([
+        ['thread/post', { addr: 'sales/reviewer', text: 'and the lint', via: 'compose' }],
+      ])
+    })
+  })
+
+  it('a change for another pane or address is ignored', async () => {
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
+    renderInPrimaryRoom(<Harness />)
+    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    const { publishThreadAddress } = await import('@/lib/thread-address-bus')
+    act(() => {
+      publishThreadAddress({ address: 'sales/other', previous: 'sales/2', paneGroupId: 'pg-2' })
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1')
+  })
+
+  it('tests 16 + 18: a Thread send that 404s shows why, keeps the draft, and re-looks-up; the next send uses the new address', async () => {
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
+    renderInPrimaryRoom(<Harness />)
+    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    h.daemonCliPost.mockImplementationOnce(async () => {
+      throw new Error(JSON.stringify({ ok: false, error: { code: 'not_found', hint: "unknown overlay addr 'sales/1'" } }))
+    })
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/reviewer' }]
+    const box = typeAndSend('and the lint')
+    await waitFor(() =>
+      expect(screen.getByTestId('compose-thread-addr-error').textContent).toMatch(/address changed/),
+    )
+    expect(box.value).toBe('and the lint')
+    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer'))
+    // The new address clears the stale error.
+    await waitFor(() => expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull())
+    typeAndSend('and the lint')
+    await waitFor(() => {
+      const posts = threadPosts()
+      expect(posts[posts.length - 1]).toEqual([
+        'thread/post',
+        { addr: 'sales/reviewer', text: 'and the lint', via: 'compose' },
+      ])
+    })
+  })
+
+  it('test 19: the remembered view is keyed on the conversation or pane, never the address', () => {
+    expect(sidecarViewKey('conv-1', 'tab-pg-1', 'sales/1')).toBe('conv-1')
+    expect(sidecarViewKey('conv-1', 'tab-pg-1', 'sales/reviewer')).toBe('conv-1')
+    // Before an id is known (Codex before adoption, a fork): the pane.
+    expect(sidecarViewKey(null, 'tab-pg-1', 'sales/1')).toBe('pg-1')
+    expect(sidecarViewKey(null, 'tab-pg-1', 'sales/reviewer')).toBe('pg-1')
   })
 })

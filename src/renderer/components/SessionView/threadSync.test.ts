@@ -509,3 +509,87 @@ describe('Thread sync: the working strip turn (S7)', () => {
     }
   })
 })
+
+describe('Thread sync: a renamed chat keeps its Thread (prd-thread-survives-tab-rename S4)', () => {
+  /** A view whose `addr` prop the test changes, like a rename does. */
+  async function mountRenamable(addr: string) {
+    const made = FakeSocket.all.length
+    const loadedSeen: boolean[] = []
+    const view = renderHook(
+      ({ a }: { a: string }) => {
+        const r = useOverlayThread({ scope: primaryScope(), addr: a, conversationId: 'conv-1', enabled: true })
+        loadedSeen.push(r.loaded)
+        return r
+      },
+      { initialProps: { a: addr } },
+    )
+    await waitFor(() => expect(FakeSocket.all.length).toBe(made + 1))
+    const sock = FakeSocket.all[made]
+    const before = server.catchUps.length
+    act(() => sock.open())
+    await waitFor(() => expect(server.catchUps.length).toBe(before + 1))
+    return { view, sock, loadedSeen }
+  }
+
+  it('test 17: a new address for the same conversation keeps items and socket, no loaded flash', async () => {
+    write('a1', 'sales/1', 'before the rename')
+    const { view, sock, loadedSeen } = await mountRenamable('sales/1')
+    expect(ids(view.result.current.items)).toEqual(['a1'])
+    const sockets = FakeSocket.all.length
+    const catchUpsBefore = server.catchUps.length
+    const flashFrom = loadedSeen.length
+
+    view.rerender({ a: 'sales/reviewer' })
+    // The swap re-reads on the NEW address, on the same socket.
+    await waitFor(() => expect(server.catchUps.length).toBe(catchUpsBefore + 1))
+    const lastGet = daemonCliGet.mock.calls.filter((c) => c[0] === 'thread').pop()
+    expect((lastGet?.[1] as Record<string, unknown>).addr).toBe('sales/reviewer')
+    expect(FakeSocket.all.length).toBe(sockets)
+    expect(sock.closed).toBe(false)
+    expect(ids(view.result.current.items)).toEqual(['a1'])
+    expect(loadedSeen.slice(flashFrom).every(Boolean)).toBe(true)
+
+    // A reply still lands live on the same socket.
+    broadcast(write('a2', 'sales/reviewer', 'after the rename'))
+    expect(ids(view.result.current.items)).toEqual(['a1', 'a2'])
+  })
+
+  it('an address frame names the new address and tells the views holding the old one', async () => {
+    const { subscribeThreadAddress } = await import('@/lib/thread-address-bus')
+    const seen: Array<{ address: string; previous: string }> = []
+    const off = subscribeThreadAddress((c) => seen.push({ address: c.address, previous: c.previous }))
+    try {
+      write('a1', 'sales/1', 'hello')
+      const { view, sock } = await mountRenamable('sales/1')
+      act(() => {
+        sock.onmessage?.({
+          data: JSON.stringify({ collection: 'address', seq: 0, id: 'conv-1', address: 'sales/reviewer', previous: 'sales/1' }),
+        })
+      })
+      expect(seen).toEqual([{ address: 'sales/reviewer', previous: 'sales/1' }])
+      expect(view.result.current.currentAddr).toBe('sales/reviewer')
+      expect(view.result.current.pastAddresses).toContain('sales/1')
+      expect(ids(view.result.current.items)).toEqual(['a1'])
+    } finally {
+      off()
+    }
+  })
+
+  it('test 16: a Thread post that 404s asks for one re-lookup and shows why', async () => {
+    const { subscribeThreadAddress } = await import('@/lib/thread-address-bus')
+    const seen: string[] = []
+    const off = subscribeThreadAddress((c) => seen.push(c.previous))
+    try {
+      daemonCliPost.mockImplementationOnce(async () => {
+        throw new Error(JSON.stringify({ ok: false, error: { code: 'not_found', hint: "unknown overlay addr 'sales/1'" } }))
+      })
+      const r = await postThreadCompose(primaryScope(), 'sales/1', 'and the lint')
+      expect(r.ok).toBe(false)
+      if (r.ok) throw new Error('unreachable')
+      expect(r.error).toMatch(/address changed/)
+      expect(seen).toEqual(['sales/1'])
+    } finally {
+      off()
+    }
+  })
+})

@@ -199,6 +199,7 @@ describe('persistChatRenameIfSessionTab', () => {
       provider: 'claude',
       session_id: SID,
       custom_name: 'Renamed',
+      project_path: '/tmp/proj',
     })
   })
 
@@ -219,6 +220,7 @@ describe('persistChatRenameIfSessionTab', () => {
       provider: 'claude',
       session_id: SID,
       custom_name: 'Code Review',
+      project_path: '/tmp/proj',
     })
   })
 
@@ -230,6 +232,7 @@ describe('persistChatRenameIfSessionTab', () => {
       provider: 'claude',
       session_id: SID,
       custom_name: 'Reviewer',
+      project_path: '/tmp/proj',
     })
   })
 
@@ -245,13 +248,46 @@ describe('persistChatRenameIfSessionTab', () => {
     expect(daemonMocks.daemonCliPost).toHaveBeenCalledTimes(0)
   })
 
-  it('returns false (skip-rename) when a believed session tab has no conversation id', async () => {
+  it('TR15: a chat tab with no conversation id yet is renamed under its pane key', async () => {
     const tab = terminalTab({
       data: { args: ['--dangerously-skip-permissions'], command: 'claude' },
     })
     expect(tabLooksLikeChatSession(tab)).toBe(true)
-    expect(await persistChatRenameIfSessionTab(primaryScope(), tab, 'Name', '/tmp/proj')).toBe(false)
-    expect(daemonMocks.daemonCliPost).toHaveBeenCalledTimes(0)
+    expect(await persistChatRenameIfSessionTab(primaryScope(), tab, 'Name', '/tmp/proj')).toBe(true)
+    expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
+      provider: 'claude',
+      session_id: 'pg-1',
+      custom_name: 'Name',
+      project_path: '/tmp/proj',
+    })
+    // The daemon's tab key wins over the layout's pane group id.
+    daemonMocks.daemonCliPost.mockClear()
+    const attached = terminalTab({
+      data: { args: [], command: 'codex', attachAgentName: 'tab-daemon-pane' },
+    })
+    expect(await persistChatRenameIfSessionTab(primaryScope(), attached, 'Name', '/tmp/proj')).toBe(true)
+    expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
+      provider: 'codex',
+      session_id: 'daemon-pane',
+      custom_name: 'Name',
+      project_path: '/tmp/proj',
+    })
+  })
+
+  it('TR20: a fork tab never renames the source chat (its --resume id is not its own)', async () => {
+    const SOURCE = '99999999-9999-4999-8999-999999999999'
+    const fork = terminalTab({
+      data: { args: ['--resume', SOURCE, '--fork-session'], command: 'claude' },
+    })
+    expect(findChatSessionInTab(fork)).toBeNull()
+    expect(findChatSessionInTab(fork, new Set([SOURCE]))).toBeNull()
+    expect(await persistChatRenameIfSessionTab(primaryScope(), fork, 'Mine', '/tmp/proj')).toBe(true)
+    expect(daemonMocks.daemonCliPost).toHaveBeenCalledWith('chat/rename', {
+      provider: 'claude',
+      session_id: 'pg-1',
+      custom_name: 'Mine',
+      project_path: '/tmp/proj',
+    })
   })
 
   it('does not treat file tabs as believed sessions', () => {

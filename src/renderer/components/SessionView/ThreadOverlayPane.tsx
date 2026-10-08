@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import { useRoom } from '@/components/Room/RoomContext'
 import { ThreadWorkingStrip } from './ThreadWorkingStrip'
+import { displayThreadAddress } from '@/lib/thread-address-bus'
 import {
   isVoidedHitl,
   type OverlayDoc,
@@ -32,7 +33,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   agentName,
   onStop,
 }: ThreadOverlayPaneProps): JSX.Element {
-  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn } = useOverlayThread({
+  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: useRoom().scope,
     addr,
@@ -216,6 +217,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
               item={it}
               nowSec={nowSec}
               fontSize={editorFontSize}
+              currentAddr={currentAddr}
+              pastAddresses={pastAddresses}
               onAnswer={(payload) => void answer(it.id, payload)}
               onVoid={() => void voidCard(it.id)}
             />
@@ -236,18 +239,26 @@ export function ThreadItemRow({
   item,
   nowSec,
   fontSize,
+  currentAddr,
+  pastAddresses,
   onAnswer,
   onVoid,
 }: {
   item: OverlayThreadItem
   nowSec?: number
   fontSize?: number
+  /** Q5: an old row stamped with this chat's earlier address shows the
+   *  current one (storage keeps what was stamped). */
+  currentAddr?: string
+  pastAddresses?: readonly string[]
   onAnswer?: (payload: { answer?: string; secret?: string }) => void
   onVoid?: () => void
 }): JSX.Element {
   const kind = item.doc.kind
   const owner = isHumanPost(item.doc)
-  const author = owner ? 'You' : item.doc.from || 'unknown'
+  const author = owner
+    ? 'You'
+    : displayThreadAddress(item.doc.from || '', currentAddr, pastAddresses) || 'unknown'
   const timeLabel = formatRelativeTime(
     item.doc.created_at,
     nowSec ?? Math.floor(Date.now() / 1000),

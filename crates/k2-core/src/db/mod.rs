@@ -58,6 +58,20 @@ pub fn open_with_resilience<P: AsRef<Path>>(path: P) -> Result<Connection> {
     Ok(conn)
 }
 
+/// [`open_with_resilience`] for a database inside the K2 home: a new file
+/// is created 0600 first (so SQLite's `-wal` / `-shm` inherit 0600), and
+/// an existing file plus its side files lose any group/other bits.
+pub fn open_private_with_resilience(path: &Path) -> Result<Connection> {
+    if let Err(e) = crate::private_home::prepare_private_db_file(path) {
+        crate::log_debug!("[db] WARN create {} owner-only: {e}", path.display());
+    }
+    let conn = open_with_resilience(path)?;
+    if let Err(e) = crate::private_home::restrict_db_files(path) {
+        crate::log_debug!("[db] WARN {e}");
+    }
+    Ok(conn)
+}
+
 /// Clone a handle to the process-wide SQLite connection. In production
 /// builds this panics (with a diagnostic) if called before
 /// [`init_database`] — which would only happen via a programming error,
@@ -249,9 +263,14 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
         .join(".k2");
     std::fs::create_dir_all(&db_dir)
         .map_err(|e| rusqlite::Error::InvalidParameterName(format!("Could not create ~/.k2 directory: {}", e)))?;
+    // Owner-only K2 home: the app may create it before the daemon's boot
+    // sweep runs, and `create_dir_all` honors the umask (0755).
+    if let Err(e) = crate::private_home::restrict_path(&db_dir) {
+        crate::log_debug!("[db] WARN {e}");
+    }
 
     let db_path = resolve_home_db_path(&db_dir);
-    let conn = open_with_resilience(&db_path)?;
+    let conn = open_private_with_resilience(&db_path)?;
 
     // Self-heal: clean orphan rows whose parent `projects` row was
     // deleted under earlier versions where FK enforcement was off
@@ -2430,6 +2449,56 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .unwrap();
         assert_eq!(fk, 1, "foreign_keys should be ON after open");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// 0.45.1 local-leak fix: a NEW K2-home database, and the `-wal` /
+    /// `-shm` SQLite creates for it later, come out 0600 under the
+    /// daemon's normal umask (022 → SQLite's default would be 0644). An
+    /// existing 0644 database plus side files are tightened on open.
+    #[cfg(unix)]
+    #[test]
+    fn open_private_creates_db_wal_and_shm_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| {
+            std::fs::metadata(p)
+                .unwrap_or_else(|e| panic!("stat {}: {e}", p.display()))
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let sib = crate::private_home::sibling;
+
+        let path = scratch_db_path();
+        assert!(!path.exists(), "scratch db must start absent");
+        let conn = open_private_with_resilience(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t (k TEXT); INSERT INTO t VALUES ('sk-live-secret');",
+        )
+        .unwrap();
+        // WAL mode keeps -wal and -shm on disk while the connection is open.
+        assert!(sib(&path, "-wal").exists(), "WAL file must exist after a write");
+        assert!(sib(&path, "-shm").exists(), "SHM file must exist after a write");
+        assert_eq!(mode(&path), 0o600, "db");
+        assert_eq!(mode(&sib(&path, "-wal")), 0o600, "wal");
+        assert_eq!(mode(&sib(&path, "-shm")), 0o600, "shm");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+
+        // Existing world-readable DB (0.45.0 shape) is tightened on open.
+        let path = scratch_db_path();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t (k TEXT);")
+                .unwrap();
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let conn = open_private_with_resilience(&path).unwrap();
+        conn.execute("INSERT INTO t VALUES ('x')", []).unwrap();
+        assert_eq!(mode(&path), 0o600, "existing db tightened");
+        assert_eq!(mode(&sib(&path, "-wal")), 0o600, "wal follows the db mode");
+        assert_eq!(mode(&sib(&path, "-shm")), 0o600, "shm follows the db mode");
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

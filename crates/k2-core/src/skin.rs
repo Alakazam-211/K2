@@ -995,6 +995,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
+    if let Err(e) = crate::private_home::prepare_private_db_file(path) {
+        crate::log_debug!("[skin] WARN create {} owner-only: {e}", path.display());
+    }
     let mut conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
     let _ = conn.execute_batch(
@@ -1139,12 +1142,10 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
     migrate_room_policy(&conn)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
-            crate::log_debug!("[skin] WARN chmod 0600 {}: {e}", path.display());
-        }
+    // skin.db AND its -wal/-shm: the WAL holds recent pages (guest
+    // password hashes, pass hashes) until a checkpoint.
+    if let Err(e) = crate::private_home::restrict_db_files(path) {
+        crate::log_debug!("[skin] WARN {e}");
     }
     Ok(conn)
 }

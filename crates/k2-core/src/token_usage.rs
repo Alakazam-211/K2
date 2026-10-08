@@ -241,6 +241,9 @@ fn open_ledger(path: &Path) -> Result<Connection, String> {
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
     }
+    if let Err(e) = crate::private_home::prepare_private_db_file(path) {
+        crate::log_debug!("[token-usage] WARN create {} owner-only: {e}", path.display());
+    }
     let conn = Connection::open(path).map_err(|e| format!("open ledger: {e}"))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|e| format!("ledger busy_timeout: {e}"))?;

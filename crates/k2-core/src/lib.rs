@@ -104,6 +104,7 @@ pub mod daemon_lifecycle;
 pub mod db;
 pub mod migration_home;
 pub mod paths;
+pub mod private_home;
 pub mod session_archive;
 pub mod migration_launchd;
 pub mod workspace_dir;

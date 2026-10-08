@@ -492,6 +492,20 @@ async fn async_main() {
         Err(e) => eprintln!("[daemon/boot] home migration FAILED: {e} — continuing on legacy layout"),
     }
 
+    // 0.45.1 — owner-only K2 home. Before this, ~/.k2 was 0755 and
+    // k2so.db / skin.db -wal / -shm were 0644, readable by every OS user
+    // on the machine. Tighten BEFORE the DB opens. Explicit modes, not a
+    // process umask: the umask would leak into every agent PTY and into
+    // workspace files the daemon writes. Unix only; no-op on Windows.
+    {
+        let report = k2_core::private_home::tighten_home();
+        if let Some(home) = dirs::home_dir() {
+            if let Some(line) = report.log_line(&home.join(".k2")) {
+                k2_core::log_debug!("{line}");
+            }
+        }
+    }
+
     // 0.40.43 — LINUX SELF-UPDATE: the boot half of the in-process binary
     // swap (see update_routes::verify_pending_update). Runs EARLY, before
     // any risky init, so a new binary that crash-loops still counts its

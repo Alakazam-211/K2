@@ -62,7 +62,13 @@ fn db() -> Result<&'static Database, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("overlay redb mkdir {}: {e}", parent.display()))?;
         }
-        Database::create(&path).map_err(|e| format!("overlay redb create {}: {e}", path.display()))
+        let db = Database::create(&path)
+            .map_err(|e| format!("overlay redb create {}: {e}", path.display()))?;
+        // Thread message bodies: owner-only (redb is one file, no WAL).
+        if let Err(e) = crate::private_home::restrict_path(&path) {
+            crate::log_debug!("[overlay] WARN {e}");
+        }
+        Ok(db)
     }) {
         Ok(db) => Ok(db),
         Err(e) => Err(e.clone()),

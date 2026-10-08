@@ -535,3 +535,60 @@ async fn a_dropped_connection_loses_no_log_lines() {
     running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
     drop(env);
 }
+
+/// CN11: through the tunnel ingress (what the relay delivers), both node
+/// sockets are reachable without an HTTP credential and refuse anything
+/// that isn't a valid signed handshake / one-time code — in the handler,
+/// never a dispatcher 404. With the flag off they 404 like every compute
+/// route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn node_sockets_fail_closed_over_the_tunnel() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let url = |p: &str| format!("ws://127.0.0.1:{}{p}", d.tunnel_port);
+    let refused = |code: &str| format!("\"code\":\"{code}\"");
+
+    // attach: an unknown key is refused by the handler.
+    let (mut ws, _) = tokio_tungstenite::connect_async(url("/cli/compute/attach")).await.expect("attach upgrades over the tunnel");
+    let key = k2_node_proto::crypto::SigningKey::generate().unwrap();
+    let hello = k2_node_proto::frames::HandshakeFrame::Hello(k2_node_proto::frames::Hello {
+        node_fp: key.fingerprint(),
+        protocol: k2_node_proto::PROTOCOL,
+        boot_id: "b".into(),
+        ledger_id: "l".into(),
+        nonce_n: k2_node_proto::crypto::nonce_b64().unwrap(),
+        node_version: "test".into(),
+    });
+    ws.send(Message::Text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+    let msg = ws.next().await.expect("an answer").expect("frame").into_text().unwrap();
+    assert!(msg.contains(&refused("unknown_node")), "{msg}");
+
+    // enroll: a made-up code is refused by the handler.
+    let (mut ws, _) = tokio_tungstenite::connect_async(url("/cli/compute/enroll")).await.expect("enroll upgrades over the tunnel");
+    let req = k2_node_proto::frames::HandshakeFrame::EnrollRequest(k2_node_proto::frames::EnrollRequest {
+        code_binding: k2_node_proto::pairing::code_binding("ABCDEFGHJK"),
+        node_public_key_pem: key.spki_pem(),
+        name: "x".into(),
+        labels: Default::default(),
+        protocol: k2_node_proto::PROTOCOL,
+        node_version: "test".into(),
+    });
+    ws.send(Message::Text(serde_json::to_string(&req).unwrap())).await.unwrap();
+    let msg = ws.next().await.expect("an answer").expect("frame").into_text().unwrap();
+    assert!(msg.contains(&refused("code_invalid")), "{msg}");
+
+    // Something that isn't a hello is refused too.
+    let (mut ws, _) = tokio_tungstenite::connect_async(url("/cli/compute/attach")).await.unwrap();
+    ws.send(Message::Text("{\"t\":\"assign\"}".into())).await.unwrap();
+    let msg = ws.next().await.expect("an answer").expect("frame").into_text().unwrap();
+    assert!(msg.contains(&refused("protocol_error")), "{msg}");
+
+    // Dark: with the flag off the sockets 404 before any upgrade.
+    std::env::remove_var("K2_COMPUTE");
+    let err = tokio_tungstenite::connect_async(url("/cli/compute/attach")).await.expect_err("no upgrade while dark");
+    assert!(err.to_string().contains("404"), "{err}");
+    drop(env);
+}

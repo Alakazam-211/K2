@@ -187,3 +187,17 @@ pub(crate) fn mail_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
+/// Deletes the singleton `mail_server` row on drop — even when the test
+/// panics, so a failed assertion never leaves a row the next test trips
+/// over. Declare it AFTER [`mail_server_test_lock`]'s guard.
+#[cfg(test)]
+pub(crate) struct MailServerRowCleanup;
+
+#[cfg(test)]
+impl Drop for MailServerRowCleanup {
+    fn drop(&mut self) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+    }
+}

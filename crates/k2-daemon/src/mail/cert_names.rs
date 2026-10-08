@@ -1084,6 +1084,196 @@ pub fn local_sha256(name: &str) -> Option<String> {
     crate::domains::status::pem_leaf_sha256(&pem.chain_pem)
 }
 
+// ── 0.45.1: this box's own addresses (A2 retry gate, A3 A row) ─────────
+
+/// A public IPv4: not loopback, private, link-local, CGNAT (100.64/10),
+/// unspecified or broadcast.
+pub fn is_public_v4(ip: &Ipv4Addr) -> bool {
+    let o = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || (o[0] == 100 && (o[1] & 0xc0) == 64))
+}
+
+/// A global unicast IPv6 (2000::/3).
+pub fn is_global_v6(ip: &Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xe000) == 0x2000
+}
+
+/// This box's public interface addresses (HF12/HF14): IPv4 bound to a
+/// local interface (an OVH failover IP counts) and global IPv6. Tests
+/// inject them; never the network.
+pub fn local_interface_addrs() -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
+    #[cfg(test)]
+    {
+        return TEST_LOCAL_ADDRS.with(|c| c.borrow().clone()).unwrap_or_default();
+    }
+    #[cfg(not(test))]
+    {
+        let mut v4 = Vec::new();
+        let mut v6 = Vec::new();
+        // SAFETY: getifaddrs fills a linked list we only read, then free.
+        unsafe {
+            let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+            if libc::getifaddrs(&mut head) != 0 {
+                return (v4, v6);
+            }
+            let mut cur = head;
+            while !cur.is_null() {
+                let addr = (*cur).ifa_addr;
+                if !addr.is_null() {
+                    match (*addr).sa_family as i32 {
+                        libc::AF_INET => {
+                            let sin = &*(addr as *const libc::sockaddr_in);
+                            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                            if is_public_v4(&ip) && !v4.contains(&ip) {
+                                v4.push(ip);
+                            }
+                        }
+                        libc::AF_INET6 => {
+                            let sin6 = &*(addr as *const libc::sockaddr_in6);
+                            let ip = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
+                            if is_global_v6(&ip) && !v6.contains(&ip) {
+                                v6.push(ip);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                cur = (*cur).ifa_next;
+            }
+            libc::freeifaddrs(head);
+        }
+        (v4, v6)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LOCAL_ADDRS: std::cell::RefCell<Option<(Vec<Ipv4Addr>, Vec<Ipv6Addr>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam: this box's interface addresses (default: none).
+#[cfg(test)]
+pub(crate) fn set_test_local_addrs(addrs: Option<(Vec<Ipv4Addr>, Vec<Ipv6Addr>)>) {
+    TEST_LOCAL_ADDRS.with(|c| *c.borrow_mut() = addrs);
+}
+
+/// "This box" from its own view: the public (egress) IPv4 plus every
+/// public interface IPv4; IPv6 = the global interface addresses only. A
+/// mail-host AAAA that is not one of them counts as elsewhere (unlike
+/// [`box_addrs`], which takes v6 from the mail host's own AAAA, HF12).
+pub fn box_addrs_local(public_ip: Option<&str>) -> BoxAddrs {
+    let (local_v4, v6) = local_interface_addrs();
+    let mut v4: Vec<Ipv4Addr> = public_ip
+        .and_then(|s| s.trim().parse::<Ipv4Addr>().ok())
+        .into_iter()
+        .collect();
+    for ip in local_v4 {
+        if !v4.contains(&ip) {
+            v4.push(ip);
+        }
+    }
+    BoxAddrs { v4, v6, source: "public-ip+interfaces" }
+}
+
+/// The cached public IPv4 (`mail_server.public_ipv4`, migration 0139).
+pub fn cached_public_ipv4() -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT public_ipv4 FROM mail_server WHERE id = 1", [], |r| {
+        r.get::<_, Option<String>>(0)
+    })
+    .ok()
+    .flatten()
+    .filter(|s| s.parse::<Ipv4Addr>().is_ok())
+}
+
+/// Record the public IPv4 (+ when). Ignores a non-IPv4 value.
+pub fn store_public_ipv4(ip: &str, at: i64) {
+    if ip.trim().parse::<Ipv4Addr>().is_err() {
+        return;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE mail_server SET public_ipv4 = ?1, public_ipv4_at = ?2 WHERE id = 1",
+        rusqlite::params![ip.trim(), at],
+    );
+}
+
+/// Read the public IPv4 now (checkip / ipify) and cache it. Never under
+/// `K2_AIRGAP` (HF14); tests never touch the network (seam).
+pub fn refresh_public_ipv4() -> Option<String> {
+    #[cfg(test)]
+    let airgap = TEST_AIRGAP.with(|c| *c.borrow());
+    #[cfg(not(test))]
+    let airgap = k2_core::airgap::enabled();
+    if airgap {
+        return None;
+    }
+    #[cfg(test)]
+    let ip = TEST_PUBLIC_IP.with(|c| c.borrow().clone());
+    #[cfg(not(test))]
+    let ip = {
+        use crate::mail::preflight::{PreflightEnv, RealPreflightEnv};
+        RealPreflightEnv.public_ip()
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Some(ip) = &ip {
+        store_public_ipv4(ip, now);
+    }
+    ip
+}
+
+/// [`refresh_public_ipv4`] when the cache is empty or older than an hour
+/// (`domain add` / `domain check` — user-triggered, never the poller).
+pub fn refresh_public_ipv4_if_stale() {
+    let at: Option<i64> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT public_ipv4_at FROM mail_server WHERE id = 1 AND public_ipv4 IS NOT NULL",
+            [],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if at.is_none_or(|t| now - t > 3600) {
+        let _ = refresh_public_ipv4();
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PUBLIC_IP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Per-thread air-gap pin (never the process env: parallel tests).
+    static TEST_AIRGAP: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_airgap(on: bool) {
+    TEST_AIRGAP.with(|c| *c.borrow_mut() = on);
+}
+
+/// Test seam: what "checkip" answers (default: nothing).
+#[cfg(test)]
+pub(crate) fn set_test_public_ip(ip: Option<&str>) {
+    TEST_PUBLIC_IP.with(|c| *c.borrow_mut() = ip.map(str::to_string));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1642,6 +1832,64 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(state_path()).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
+        }
+    }
+
+    /// 0.45.1: this box's own addresses — public IPv4 + public interface
+    /// IPv4s, IPv6 only from global interfaces (HF12/HF14).
+    #[test]
+    fn box_addrs_local_uses_interfaces_not_the_mail_hosts_aaaa() {
+        assert!(is_public_v4(&"203.0.113.7".parse().unwrap()));
+        for p in ["10.0.0.1", "192.168.1.20", "172.16.0.1", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0"] {
+            assert!(!is_public_v4(&p.parse().unwrap()), "{p}");
+        }
+        assert!(is_global_v6(&"2001:db8::1".parse().unwrap()));
+        assert!(!is_global_v6(&"fe80::1".parse().unwrap()));
+        assert!(!is_global_v6(&"::1".parse().unwrap()));
+        set_test_local_addrs(Some((vec!["198.51.100.9".parse().unwrap()], vec!["2001:db8::5".parse().unwrap()])));
+        let b = box_addrs_local(Some("203.0.113.7"));
+        assert_eq!(b.v4, vec!["203.0.113.7".parse::<Ipv4Addr>().unwrap(), "198.51.100.9".parse().unwrap()]);
+        assert_eq!(b.v6, vec!["2001:db8::5".parse::<Ipv6Addr>().unwrap()]);
+        set_test_local_addrs(None);
+        let b = box_addrs_local(None);
+        assert!(b.v4.is_empty() && b.v6.is_empty());
+    }
+
+    /// The IP cache: written by a refresh, never under air-gap, never
+    /// a non-IPv4 value; `refresh_if_stale` skips a fresh value.
+    #[test]
+    fn public_ipv4_cache_refresh_respects_air_gap() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _clean = crate::mail::MailServerRowCleanup;
+        let _ = k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.20', 1)",
+                [],
+            )
+            .expect("seed");
+        }
+        set_test_public_ip(Some("203.0.113.7"));
+        set_test_airgap(true);
+        assert_eq!(refresh_public_ipv4(), None, "air-gap: no lookup");
+        assert_eq!(cached_public_ipv4(), None);
+        set_test_airgap(false);
+        assert_eq!(refresh_public_ipv4().as_deref(), Some("203.0.113.7"));
+        assert_eq!(cached_public_ipv4().as_deref(), Some("203.0.113.7"));
+        // Fresh: not re-read even when checkip would now say otherwise.
+        set_test_public_ip(Some("203.0.113.8"));
+        refresh_public_ipv4_if_stale();
+        assert_eq!(cached_public_ipv4().as_deref(), Some("203.0.113.7"));
+        store_public_ipv4("not-an-ip", 5);
+        assert_eq!(cached_public_ipv4().as_deref(), Some("203.0.113.7"));
+        set_test_public_ip(None);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
         }
     }
 

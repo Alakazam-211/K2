@@ -482,6 +482,93 @@ pub fn verify_rows(
     summary
 }
 
+// ── 0.45.1 A3: the mail host's A row (never part of the summary) ───────
+
+/// What the mail host's address records say, graded against this box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailHostGrade {
+    /// `valid` | `missing` | `wrong` | `unknown` (the row states).
+    pub status: &'static str,
+    /// Live answers (`A <ip>`, `AAAA <ip> …`).
+    pub live: Vec<String>,
+    /// A live AAAA while this box has no global IPv6: not graded wrong
+    /// here (HF12), the doctor warns.
+    pub aaaa_note: Option<String>,
+}
+
+/// Grade `host`'s A (+ AAAA) against this box (pure over the resolver):
+/// - every A must be `expected` or a public IPv4 bound here (HF14: egress
+///   IP ≠ inbound IP on multi-IP boxes); none → missing;
+/// - an AAAA that is not one of this box's global IPv6 → wrong ("remove
+///   it": K2 sends over IPv4 only and PTR/SPF are IPv4); with no global
+///   IPv6 here at all the AAAA is noted, not graded (HF12).
+pub fn grade_mail_host(
+    resolver: &dyn DnsResolver,
+    host: &str,
+    expected: Option<std::net::Ipv4Addr>,
+    box_addrs: &super::cert_names::BoxAddrs,
+) -> MailHostGrade {
+    let mut ok_v4: Vec<std::net::Ipv4Addr> = box_addrs.v4.clone();
+    if let Some(ip) = expected {
+        if !ok_v4.contains(&ip) {
+            ok_v4.push(ip);
+        }
+    }
+    let (mut status, mut live) = match resolver.a(host) {
+        Ok(a) if a.is_empty() => (ST_MISSING, Vec::new()),
+        Ok(a) => {
+            let live: Vec<String> = a.iter().map(|ip| format!("A {ip}")).collect();
+            if ok_v4.is_empty() {
+                (ST_UNKNOWN, live)
+            } else if a.iter().all(|ip| ok_v4.contains(ip)) {
+                (ST_VALID, live)
+            } else {
+                (ST_WRONG, live)
+            }
+        }
+        Err(DnsError::NotFound) => (ST_MISSING, Vec::new()),
+        Err(DnsError::Other(_)) => (ST_UNKNOWN, Vec::new()),
+    };
+    let mut aaaa_note = None;
+    if let Ok(v6) = resolver.aaaa(host) {
+        for ip in v6 {
+            if box_addrs.v6.is_empty() {
+                live.push(format!("AAAA {ip}"));
+                aaaa_note = Some(format!(
+                    "{host} has AAAA {ip}, but this box has no global IPv6 — K2 sends over \
+                     IPv4 only; this AAAA sends IPv6 clients to {ip}"
+                ));
+            } else if !box_addrs.v6.contains(&ip) {
+                live.push(format!("AAAA {ip} — not this box, remove it"));
+                if status != ST_UNKNOWN {
+                    status = ST_WRONG;
+                }
+            } else {
+                live.push(format!("AAAA {ip}"));
+            }
+        }
+    }
+    MailHostGrade { status, live, aaaa_note }
+}
+
+/// Check the mail host's A row(s) (`a:<host>`) in place. Writes the row
+/// only — never the [`CheckSummary`] (HF13: a lookup error would set
+/// `any_unknown` and freeze a real verified→error flip; Q3: a bad A never
+/// changes the domain's status in 0.45.1, the doctor fails it).
+pub fn check_mail_host_rows(
+    resolver: &dyn DnsResolver,
+    rows: &mut [RecordRow],
+    box_addrs: &super::cert_names::BoxAddrs,
+    now: i64,
+) {
+    for row in rows.iter_mut().filter(|r| r.id.starts_with("a:")) {
+        let expected = row.expected.parse::<std::net::Ipv4Addr>().ok();
+        let g = grade_mail_host(resolver, &row.name.clone(), expected, box_addrs);
+        let live = if g.live.is_empty() { None } else { Some(g.live) };
+        set_state(row, g.status, live, now);
+    }
+}
+
 /// The domain status transition (pure — the regression rules live
 /// here): Verified needs MX + SPF + ≥1 DKIM (§6.3, DMARC never
 /// blocks); a pass with ANY unknown lookup can never regress; a
@@ -538,6 +625,11 @@ pub fn check_domain_now(
     // would stall every route)…
     let now = now_secs();
     let summary = verify_rows(resolver, &domain, &mut rows, now);
+    // 0.45.1 A3: the mail host's A row — graded, never in the summary.
+    let box_addrs = super::cert_names::box_addrs_local(
+        super::cert_names::cached_public_ipv4().as_deref(),
+    );
+    check_mail_host_rows(resolver, &mut rows, &box_addrs, now);
     let (new_status, regressed) = next_status(&row.status, &summary);
     let verified_at = if new_status == "verified" {
         row.verified_at.or(Some(now))
@@ -669,6 +761,9 @@ mod tests {
         mx: HashMap<String, Vec<MxHost>>,
         txt: HashMap<String, Vec<Vec<String>>>,
         broken: Vec<String>,
+        /// 0.45.1 A3: the mail host's A / AAAA answers.
+        a: HashMap<String, Vec<std::net::Ipv4Addr>>,
+        aaaa: HashMap<String, Vec<std::net::Ipv6Addr>>,
     }
 
     impl DnsResolver for FakeResolver {
@@ -684,10 +779,19 @@ mod tests {
             }
             self.txt.get(name).cloned().ok_or(DnsError::NotFound)
         }
-        fn a(&self, _name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
-            // S2 verification never issues A lookups — the doctor's
-            // own fakes cover them.
-            Err(DnsError::NotFound)
+        fn a(&self, name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
+            // S2 verification issues A lookups only for the 0.45.1 mail
+            // host row (`a:<host>`).
+            if self.broken.iter().any(|b| b == name) {
+                return Err(DnsError::Other("timeout".to_string()));
+            }
+            self.a.get(name).cloned().ok_or(DnsError::NotFound)
+        }
+        fn aaaa(&self, name: &str) -> Result<Vec<std::net::Ipv6Addr>, DnsError> {
+            if self.broken.iter().any(|b| b == name) {
+                return Err(DnsError::Other("timeout".to_string()));
+            }
+            self.aaaa.get(name).cloned().ok_or(DnsError::NotFound)
         }
         fn ptr(&self, _ip: std::net::IpAddr) -> Result<Vec<String>, DnsError> {
             Err(DnsError::NotFound)
@@ -1005,6 +1109,140 @@ mod tests {
         match check_domain_now(&resolver, "nope.example") {
             Err(domains::OpError::NotFound(_)) => {}
             other => panic!("must be NotFound, got {other:?}"),
+        }
+    }
+
+    // ── 0.45.1 A3: the mail host's A row ──
+
+    fn ip4(s: &str) -> std::net::Ipv4Addr {
+        s.parse().expect("ipv4")
+    }
+
+    fn ip6(s: &str) -> std::net::Ipv6Addr {
+        s.parse().expect("ipv6")
+    }
+
+    fn boxed(v4: &[&str], v6: &[&str]) -> crate::mail::cert_names::BoxAddrs {
+        crate::mail::cert_names::BoxAddrs {
+            v4: v4.iter().map(|s| ip4(s)).collect(),
+            v6: v6.iter().map(|s| ip6(s)).collect(),
+            source: "test",
+        }
+    }
+
+    /// match → valid; another IP → wrong; NXDOMAIN → missing; lookup
+    /// error → unknown; an interface-bound IP counts (HF14); a stray AAAA
+    /// → wrong when this box has global IPv6, a note when it has none.
+    #[test]
+    fn mail_host_a_grading() {
+        let host = "mail.acme.dev";
+        let expected = Some(ip4("203.0.113.7"));
+        let mut r = FakeResolver::default();
+        r.a.insert(host.into(), vec![ip4("203.0.113.7")]);
+        let g = grade_mail_host(&r, host, expected, &boxed(&[], &[]));
+        assert_eq!((g.status, g.live.clone()), (ST_VALID, vec!["A 203.0.113.7".to_string()]));
+        r.a.insert(host.into(), vec![ip4("198.51.100.9")]);
+        assert_eq!(grade_mail_host(&r, host, expected, &boxed(&[], &[])).status, ST_WRONG);
+        // HF14: the inbound IP is a failover IP bound on an interface.
+        assert_eq!(grade_mail_host(&r, host, expected, &boxed(&["198.51.100.9"], &[])).status, ST_VALID);
+        r.a.remove(host);
+        assert_eq!(grade_mail_host(&r, host, expected, &boxed(&[], &[])).status, ST_MISSING);
+        r.broken.push(host.into());
+        assert_eq!(grade_mail_host(&r, host, expected, &boxed(&[], &[])).status, ST_UNKNOWN);
+        r.broken.clear();
+        // No idea what this box is → can't grade an answer.
+        r.a.insert(host.into(), vec![ip4("203.0.113.7")]);
+        assert_eq!(grade_mail_host(&r, host, None, &boxed(&[], &[])).status, ST_UNKNOWN);
+        // Stray AAAA (HF12).
+        r.aaaa.insert(host.into(), vec![ip6("2001:db8::99")]);
+        let g = grade_mail_host(&r, host, expected, &boxed(&[], &["2001:db8::1"]));
+        assert_eq!(g.status, ST_WRONG, "{g:?}");
+        assert!(g.live.iter().any(|l| l.contains("remove it")), "{g:?}");
+        let g = grade_mail_host(&r, host, expected, &boxed(&[], &[]));
+        assert_eq!(g.status, ST_VALID, "no box IPv6: noted, not graded");
+        assert!(g.aaaa_note.as_deref().unwrap_or("").contains("IPv4 only"), "{g:?}");
+        r.aaaa.insert(host.into(), vec![ip6("2001:db8::1")]);
+        assert_eq!(grade_mail_host(&r, host, expected, &boxed(&[], &["2001:db8::1"])).status, ST_VALID);
+    }
+
+    /// HF13 / Q3: the A row is graded but never feeds the summary — a
+    /// lookup error can't freeze a real verified→error flip, and a bad A
+    /// alone never changes the domain's status.
+    #[test]
+    fn mail_host_a_row_never_feeds_the_summary() {
+        let mut rows = fixture_rows();
+        domains::apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), Some("203.0.113.7"));
+        let mut r = all_valid_resolver("acme.dev");
+        r.broken.push("mail.acme.dev".into());
+        let s = verify_rows(&r, "acme.dev", &mut rows, 1);
+        assert!(!s.any_unknown, "the A row is not a verify_rows row");
+        check_mail_host_rows(&r, &mut rows, &boxed(&[], &[]), 1);
+        let a = rows.iter().find(|x| x.id == "a:mail.acme.dev").expect("A row");
+        assert_eq!(a.status, ST_UNKNOWN);
+        assert_eq!(next_status("verified", &s), ("verified".to_string(), false));
+        // Missing A alone: still verified.
+        r.broken.clear();
+        check_mail_host_rows(&r, &mut rows, &boxed(&[], &[]), 2);
+        let a = rows.iter().find(|x| x.id == "a:mail.acme.dev").expect("A row");
+        assert_eq!(a.status, ST_MISSING);
+        assert_eq!(next_status("verified", &s).0, "verified");
+    }
+
+    /// End to end: a verified domain gets its A row on upgrade (read
+    /// time), the check grades it, and the domain stays verified with the
+    /// A record missing.
+    #[test]
+    fn check_domain_now_grades_the_a_row_without_flipping_a_verified_domain() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _clean = crate::mail::MailServerRowCleanup;
+        let domain = "a-row.example";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            let _ = conn.execute("DELETE FROM mail_domains WHERE domain = ?1", rusqlite::params![domain]);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, public_ipv4, \
+                 public_ipv4_at, updated_at) VALUES (1, 'running', '0.16.20', ?1, '203.0.113.7', 1, 1)",
+                rusqlite::params![format!("mail.{domain}")],
+            )
+            .expect("seed server");
+        }
+        let engine = FakeEngine { zone: ZONE_FIXTURE.replace("acme.dev", domain), ..FakeEngine::ok() };
+        let added = add_domain(&engine, domain).expect("add");
+        let ids: Vec<&str> = added["records"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).collect();
+        let a_pos = ids.iter().position(|i| *i == format!("a:mail.{domain}")).expect("A row present");
+        let ptr_pos = ids.iter().position(|i| *i == "ptr").expect("ptr");
+        assert!(a_pos < ptr_pos, "A prints before PTR: {ids:?}");
+        assert_eq!(added["records"][a_pos]["expected"], "203.0.113.7");
+
+        let mut resolver = all_valid_resolver(domain);
+        let rekey: Vec<(String, Vec<Vec<String>>)> =
+            resolver.txt.iter().map(|(k, v)| (k.replace("acme.dev", domain), v.clone())).collect();
+        resolver.txt = rekey.into_iter().collect();
+        resolver.mx.insert(domain.to_string(), vec![MxHost { preference: 10, exchange: format!("mail.{domain}.") }]);
+        let dmarc: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let row = load_domain(&conn, domain).unwrap();
+            domains::effective_rows(&conn, &row).iter().find(|r| r.id == "dmarc").unwrap().expected.clone()
+        };
+        resolver.txt.insert(format!("_dmarc.{domain}"), vec![vec![dmarc]]);
+        let v = check_domain_now(&resolver, domain).expect("check");
+        assert_eq!(v["status"], "verified", "{v}");
+        let a = v["records"].as_array().unwrap().iter().find(|r| r["type"] == "A").expect("A row").clone();
+        assert_eq!(a["status"], "missing", "{a}");
+        // Fixed at the DNS host → valid; the saved status survives a read.
+        resolver.a.insert(format!("mail.{domain}"), vec![ip4("203.0.113.7")]);
+        check_domain_now(&resolver, domain).expect("check 2");
+        let shown = domains::show_json(domain).expect("show");
+        let a = shown["records"].as_array().unwrap().iter().find(|r| r["type"] == "A").expect("A").clone();
+        assert_eq!(a["status"], "valid", "{a}");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_domains WHERE domain = ?1", rusqlite::params![domain]);
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
         }
     }
 }

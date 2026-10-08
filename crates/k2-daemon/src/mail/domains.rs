@@ -340,7 +340,7 @@ fn txt_row(id: &str, name: &str, purpose: &str, chunks: Vec<String>, category: &
 
 /// Human label for an advanced-drawer record (§6.5).
 fn advanced_purpose(name: &str, rtype: &str) -> String {
-    if name.contains("autoconfig") || name.contains("autodiscover") {
+    if name.contains("autoconfig") || name.contains("auto-config") || name.contains("autodiscover") {
         return "Mail client autoconfig (optional)".to_string();
     }
     if name.contains("mta-sts") {
@@ -352,9 +352,103 @@ fn advanced_purpose(name: &str, rtype: &str) -> String {
     match rtype {
         "TLSA" => "DANE (TLSA, optional)".to_string(),
         "SRV" => "Service discovery (SRV, optional)".to_string(),
-        "A" | "AAAA" => "Mail host address (optional here — set with the server hostname)".to_string(),
+        // Stalwart's zone never emits A/AAAA (0.45.1 A3); the mail host's A
+        // row is K2's own (`a:<host>`, see [`apply_mail_host_a_row`]).
+        "A" | "AAAA" => "Address record".to_string(),
         _ => "Advanced (optional)".to_string(),
     }
+}
+
+/// HF15: `ptr set` works only for K2 Cloud servers (a k2.dev K2X row).
+const PTR_PURPOSE: &str =
+    "Reverse DNS (K2 Cloud: `k2 hostmail ptr set`; self-hosted: at your VPS provider — not in this zone)";
+
+fn ptr_instruction(host: &str) -> String {
+    format!(
+        "Set the reverse DNS (PTR) of your server's IP to {host}. K2 Cloud: run `k2 hostmail \
+         ptr set`. Self-hosted: set it in your VPS provider's panel (Hetzner/DigitalOcean/…) — \
+         it cannot be set at your domain registrar"
+    )
+}
+
+/// The placeholder value of the mail host's A row while the box IPv4 is
+/// not cached yet (`k2 hostmail doctor` fills it).
+pub const A_PLACEHOLDER: &str = "<this server's public IPv4>";
+
+/// Row id of the mail host's A record.
+pub fn a_row_id(host: &str) -> String {
+    format!("a:{host}")
+}
+
+fn in_zone(name: &str, domain: &str) -> bool {
+    name == domain || name.ends_with(&format!(".{domain}"))
+}
+
+/// 0.45.1 A3: the mail host's A record. Stalwart's zone file never emits
+/// A/AAAA, so K2 adds the row at read time (every existing domain gets
+/// it, no zone re-fetch): value = the cached box IPv4
+/// (`mail_server.public_ipv4`), else a placeholder + the doctor hint.
+/// Added only when absent; a present row keeps its last check status
+/// unless the expected IP changed (HF13). No AAAA row: K2 sends over IPv4
+/// only (A1). Placed before the PTR row.
+pub fn apply_mail_host_a_row(
+    rows: &mut Vec<RecordRow>,
+    domain: &str,
+    hostname: Option<&str>,
+    box_ipv4: Option<&str>,
+) {
+    let Some(host) = hostname
+        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+    else {
+        return;
+    };
+    let id = a_row_id(&host);
+    // A hostname change leaves an old `a:` row behind: drop it.
+    rows.retain(|r| !r.id.starts_with("a:") || r.id == id);
+    let expected = box_ipv4
+        .map(str::trim)
+        .filter(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| A_PLACEHOLDER.to_string());
+    let mut purpose = if in_zone(&host, domain) {
+        "Mail host address — MX points here, the certificate needs it".to_string()
+    } else {
+        format!(
+            "Mail host address — set this in the zone of {host} (not {domain}); MX points \
+             here, the certificate needs it"
+        )
+    };
+    if expected == A_PLACEHOLDER {
+        purpose.push_str(" (run `k2 hostmail doctor` to fill in this server's IP)");
+    }
+    if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+        if row.expected != expected {
+            row.expected = expected.clone();
+            row.expected_display = expected;
+            row.status = ST_PENDING.to_string();
+            row.live = None;
+            row.checked_at = None;
+        }
+        row.purpose = purpose;
+        row.category = CAT_REQUIRED.to_string();
+        return;
+    }
+    let row = RecordRow {
+        id,
+        category: CAT_REQUIRED.to_string(),
+        rtype: "A".to_string(),
+        name: host,
+        purpose,
+        expected: expected.clone(),
+        expected_display: expected,
+        chunks: Vec::new(),
+        status: ST_PENDING.to_string(),
+        live: None,
+        checked_at: None,
+    };
+    let at = rows.iter().position(|r| r.id == "ptr").unwrap_or(rows.len());
+    rows.insert(at, row);
 }
 
 /// Classify parsed zone records into the §6.2 record table: MX + SPF +
@@ -486,10 +580,8 @@ pub fn build_rows(domain: &str, zone: &[ZoneRecord], hostname: Option<&str>) -> 
         category: CAT_INSTRUCTION.to_string(),
         rtype: "PTR".to_string(),
         name: host_label.clone(),
-        purpose: "Reverse DNS (set at your VPS provider, not in this zone)".to_string(),
-        expected: format!(
-            "Set the reverse DNS (PTR) of your server's IP to {host_label} in your VPS provider's panel (Hetzner/DigitalOcean/…) — it cannot be set at your domain registrar"
-        ),
+        purpose: PTR_PURPOSE.to_string(),
+        expected: ptr_instruction(&host_label),
         expected_display: String::new(),
         chunks: Vec::new(),
         status: ST_UNVERIFIABLE.to_string(),
@@ -555,9 +647,8 @@ pub fn apply_current_hostname_mx(rows: &mut [RecordRow], hostname: Option<&str>)
             row.expected_display = mx_expected.clone();
         } else if row.id == "ptr" {
             row.name = host.to_string();
-            row.expected = format!(
-                "Set the reverse DNS (PTR) of your server's IP to {host} in your VPS provider's panel (Hetzner/DigitalOcean/…) — it cannot be set at your domain registrar"
-            );
+            row.purpose = PTR_PURPOSE.to_string();
+            row.expected = ptr_instruction(host);
         }
     }
 }
@@ -636,6 +727,11 @@ pub fn render_zone_file(domain: &str, rows: &[RecordRow]) -> String {
     let mut out = format!("; K2 Mail DNS records for {domain}\n; records can take up to 48 h to propagate\n");
     for row in rows {
         if row.category == CAT_INSTRUCTION {
+            continue;
+        }
+        // The mail host's A row belongs in this zone file only when the
+        // host is in this zone and its value is known.
+        if row.id.starts_with("a:") && (row.expected == A_PLACEHOLDER || !in_zone(&row.name, domain)) {
             continue;
         }
         let rdata = if row.rtype == "TXT" { row.expected_display.clone() } else { row.expected.clone() };
@@ -729,6 +825,14 @@ pub fn effective_rows(conn: &Connection, row: &MailDomain) -> Vec<RecordRow> {
     apply_current_hostname_mx(&mut rows, hostname.as_deref());
     apply_current_hostname_advanced(&mut rows, hostname.as_deref());
     apply_dmarc_p_none(&mut rows, &row.domain);
+    // 0.45.1 A3: the mail host's A row from the cached box IPv4 (no network).
+    let box_ip: Option<String> = conn
+        .query_row("SELECT public_ipv4 FROM mail_server WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .ok()
+        .flatten();
+    apply_mail_host_a_row(&mut rows, &row.domain, hostname.as_deref(), box_ip.as_deref());
     rows
 }
 
@@ -1171,8 +1275,9 @@ pub(crate) mod tests {
     /// A realistic Stalwart-shaped dnsZoneFile for acme.dev — MX, SPF,
     /// two DKIM selectors (the RSA one split into multiple quoted
     /// strings, >255-char rdata), DMARC, and the advanced set
-    /// (autoconfig/autodiscover CNAMEs, MTA-STS, TLS-RPT, TLSA, SRV,
-    /// host A record). Comments + tabs + a parenthesized continuation
+    /// (autoconfig/autodiscover/mta-sts/ua-auto-config CNAMEs, MTA-STS,
+    /// TLS-RPT, TLSA, SRV — and NO A/AAAA: Stalwart never emits one, the
+    /// old fake `mail.acme.dev IN A` line misled, 0.45.1 A3). Comments + tabs + a parenthesized continuation
     /// exercise the parser's tolerance.
     ///
     /// LIVE-BOX FLAG: this fixture encodes our best model of Stalwart
@@ -1192,7 +1297,7 @@ _mta-sts.acme.dev.	86400	IN	TXT	"v=STSv1; id=1719000000"
 _smtp._tls.acme.dev.	86400	IN	TXT	"v=TLSRPTv1; rua=mailto:postmaster@acme.dev"
 _25._tcp.mail.acme.dev.	3600	IN	TLSA	3 1 1 5f4dbe28cbcae1f6e10bcc16b6e7bcd63c364bbdedcbc8ef58b5a8d4f6e0a9c1
 _jmap._tcp.acme.dev.	86400	IN	SRV	0 1 443 mail.acme.dev.
-mail.acme.dev.	3600	IN	A	203.0.113.7
+ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
 "#;
 
     /// A minimal fixture variant: no TTL, no class, lowercase type —
@@ -1221,10 +1326,14 @@ mail.acme.dev.	3600	IN	A	203.0.113.7
         assert_eq!(rsa.chunks.len(), 2, "split preserved");
         assert!(rsa.rdata.ends_with("IDAQAB"), "chunks joined for comparison");
         assert!(!rsa.rdata.contains("\" \""), "join has no quote residue");
-        // TLSA/SRV/A survive as advanced-typed records.
+        // TLSA/SRV/CNAME survive as advanced-typed records.
         assert!(recs.iter().any(|r| r.rtype == "TLSA"));
         assert!(recs.iter().any(|r| r.rtype == "SRV"));
-        assert!(recs.iter().any(|r| r.rtype == "A"));
+        assert!(recs.iter().any(|r| r.rtype == "CNAME" && r.name == "ua-auto-config.acme.dev"));
+        // 0.45.1 A3: Stalwart's zone never carries an A/AAAA row (its
+        // generator emits MX/SPF/DKIM/DMARC/TLS-RPT/MTA-STS/SRV/CAA/TLSA and
+        // the CNAMEs only) — K2 adds the mail host's A itself.
+        assert!(!recs.iter().any(|r| r.rtype == "A" || r.rtype == "AAAA"), "{recs:#?}");
     }
 
     #[test]
@@ -1255,6 +1364,73 @@ mail.acme.dev.	3600	IN	A	203.0.113.7
     }
 
     // ── Row building / classification ──
+
+    /// 0.45.1 A3: the mail host's A row — from the cached IP, placed
+    /// before the PTR row; a placeholder + the doctor hint without a
+    /// cache; "set in the zone of" for an out-of-zone host; a present
+    /// row keeps its status unless the IP changed (HF13).
+    #[test]
+    fn mail_host_a_row_is_added_at_read_time() {
+        let mut rows = fixture_rows();
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("Mail.Acme.dev."), Some("203.0.113.7"));
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(&ids[..7], &["mx", "spf", "dkim:202601e", "dkim:202601r", "dmarc", "a:mail.acme.dev", "ptr"]);
+        let a = &rows[5];
+        assert_eq!((a.rtype.as_str(), a.name.as_str(), a.expected.as_str()), ("A", "mail.acme.dev", "203.0.113.7"));
+        assert_eq!(a.category, CAT_REQUIRED);
+        assert_eq!(a.status, ST_PENDING);
+        assert!(a.purpose.contains("MX points here") && a.purpose.contains("certificate"), "{}", a.purpose);
+        // Only one A row, ever; a later read keeps the checked status.
+        rows[5].status = ST_VALID.to_string();
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), Some("203.0.113.7"));
+        assert_eq!(rows.iter().filter(|r| r.id.starts_with("a:")).count(), 1);
+        assert_eq!(rows[5].status, ST_VALID, "saved status survives");
+        // The box IP changed → back to pending with the new value.
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), Some("203.0.113.8"));
+        assert_eq!((rows[5].expected.as_str(), rows[5].status.as_str()), ("203.0.113.8", ST_PENDING));
+        // A hostname change replaces the row.
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("mx.acme.dev"), Some("203.0.113.8"));
+        let a_rows: Vec<&str> = rows.iter().filter(|r| r.id.starts_with("a:")).map(|r| r.id.as_str()).collect();
+        assert_eq!(a_rows, vec!["a:mx.acme.dev"]);
+
+        // No cached IP: placeholder + the doctor hint.
+        let mut rows = fixture_rows();
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), None);
+        let a = rows.iter().find(|r| r.id == "a:mail.acme.dev").expect("A row");
+        assert_eq!(a.expected, A_PLACEHOLDER);
+        assert!(a.purpose.contains("k2 hostmail doctor"), "{}", a.purpose);
+        assert!(!render_zone_file("acme.dev", &rows).contains(A_PLACEHOLDER), "never a placeholder in a zone file");
+
+        // Out-of-zone mail host.
+        let mut rows = fixture_rows();
+        apply_mail_host_a_row(&mut rows, "customer.example", Some("mail.lztek.io"), Some("203.0.113.7"));
+        let a = rows.iter().find(|r| r.id == "a:mail.lztek.io").expect("A row");
+        assert!(a.purpose.contains("set this in the zone of mail.lztek.io"), "{}", a.purpose);
+        assert!(!render_zone_file("customer.example", &rows).contains("mail.lztek.io.\t3600\tIN\tA"));
+        // In zone + known: the zone file carries it.
+        let mut rows = fixture_rows();
+        apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), Some("203.0.113.7"));
+        assert!(render_zone_file("acme.dev", &rows).contains("mail.acme.dev.\t3600\tIN\tA\t203.0.113.7"));
+        // No hostname: no row.
+        let mut rows = fixture_rows();
+        apply_mail_host_a_row(&mut rows, "acme.dev", None, Some("203.0.113.7"));
+        assert!(!rows.iter().any(|r| r.id.starts_with("a:")));
+    }
+
+    /// HF15 PTR copy; `ua-auto-config` labelled like `autoconfig`.
+    #[test]
+    fn ptr_copy_names_ptr_set_and_ua_auto_config_is_autoconfig() {
+        let rows = fixture_rows();
+        let ptr = rows.iter().find(|r| r.id == "ptr").expect("ptr");
+        assert!(ptr.purpose.contains("k2 hostmail ptr set") && ptr.purpose.contains("VPS provider"), "{}", ptr.purpose);
+        assert!(ptr.expected.contains("K2 Cloud: run `k2 hostmail ptr set`"), "{}", ptr.expected);
+        let ua = rows.iter().find(|r| r.name == "ua-auto-config.acme.dev").expect("ua-auto-config row");
+        assert_eq!(ua.purpose, "Mail client autoconfig (optional)");
+        let mut rows = rows;
+        apply_current_hostname_mx(&mut rows, Some("mx.acme.dev"));
+        let ptr = rows.iter().find(|r| r.id == "ptr").expect("ptr");
+        assert!(ptr.expected.contains("mx.acme.dev") && ptr.expected.contains("ptr set"), "{}", ptr.expected);
+    }
 
     #[test]
     fn fixture_rows_classify_into_the_prd_table() {

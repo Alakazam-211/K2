@@ -86,6 +86,9 @@ pub fn handle_domain_add(body: &[u8]) -> CliResponse {
         Ok(e) => e,
         Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
     };
+    // 0.45.1 A3: the mail host's A row shows this server's IPv4 (cached;
+    // never under air-gap).
+    crate::mail::cert_names::refresh_public_ipv4_if_stale();
     match domains::add_domain(&engine, &b.domain) {
         Ok(v) => ok_json(v),
         Err(e) => op_error_response(e),
@@ -155,6 +158,7 @@ pub fn handle_domain_check(body: &[u8]) -> CliResponse {
             return error_response("500 Internal Server Error", "dns_unavailable", &hint)
         }
     };
+    crate::mail::cert_names::refresh_public_ipv4_if_stale();
     match dns_verify::check_domain_now(&resolver, &b.domain) {
         Ok(v) => ok_json(v),
         Err(e) => op_error_response(e),

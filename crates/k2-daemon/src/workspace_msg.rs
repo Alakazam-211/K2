@@ -1337,9 +1337,8 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
 ///
 /// Tickets and other no-command callers keep this 3-arg form (empty
 /// command). The composer picker uses
-/// [`send_message_to_session_with_command`]. Tests-only until a non-test
-/// caller returns (dispatcher already uses the command form).
-#[cfg(test)]
+/// [`send_message_to_session_with_command`]. `k2 workspace swap-canonical`
+/// sends its handoff through this form.
 pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgResponse {
     send_message_to_session_with_command(session_id, from, text, "")
         .expect("empty composer slash command is always allowed")

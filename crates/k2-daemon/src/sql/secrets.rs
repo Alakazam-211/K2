@@ -3,7 +3,7 @@
 //! Copied from `mail/secrets.rs` (0600 tmp+rename). Not mail-secrets.json.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 pub trait SecretStore: Send + Sync {
@@ -71,23 +71,12 @@ impl FileSecretStore {
         }
     }
 
+    /// Created 0600 (missing parent dir 0700) — never write-then-chmod.
     fn save(&self, map: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
-        let dir = self
-            .path
-            .parent()
-            .ok_or_else(|| format!("{}: no parent dir", self.path.display()))?;
-        fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-        let tmp = dir.join(format!("db-secrets.json.tmp.{}", std::process::id()));
         let body = serde_json::to_string_pretty(&serde_json::Value::Object(map.clone()))
             .map_err(|e| format!("serialize db secrets: {e}"))?;
-        fs::write(&tmp, body.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        restrict_mode(&tmp);
-        fs::rename(&tmp, &self.path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            format!("rename into place {}: {e}", self.path.display())
-        })?;
-        restrict_mode(&self.path);
-        Ok(())
+        k2_core::fs_atomic::atomic_write_private(&self.path, body.as_bytes())
+            .map_err(|e| format!("write {}: {e}", self.path.display()))
     }
 }
 
@@ -133,15 +122,6 @@ impl SecretStore for FileSecretStore {
         Ok(())
     }
 }
-
-#[cfg(unix)]
-fn restrict_mode(file: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(file, fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-fn restrict_mode(_file: &Path) {}
 
 fn random_hex_12() -> String {
     let mut bytes = [0u8; 6];
@@ -213,6 +193,36 @@ mod tests {
             random_hex_12()
         ));
         (FileSecretStore::at(dir.join("db-secrets.json")), dir)
+    }
+
+    /// The store's directory and file are owner-only as soon as they
+    /// exist, and a pre-existing loose file is replaced by a 0600 one.
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_owner_only_dir_and_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| {
+            fs::metadata(p).expect("metadata").permissions().mode() & 0o777
+        };
+        let (store, dir) = temp_store();
+        assert!(!dir.exists(), "temp store dir must start absent");
+        let r = store.store("agent", "v1").expect("store");
+        assert!(r.starts_with("dbsec_"), "{r}");
+        assert_eq!(mode(&dir), 0o700, "store dir created by the write must be 0700");
+        assert_eq!(mode(&dir.join("db-secrets.json")), 0o600, "secrets file must be 0600");
+
+        fs::set_permissions(dir.join("db-secrets.json"), fs::Permissions::from_mode(0o644))
+            .expect("loosen");
+        store.store("agent", "v2").expect("store again");
+        assert_eq!(mode(&dir.join("db-secrets.json")), 0o600, "rewrite must land 0600");
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n != "db-secrets.json")
+            .collect();
+        assert!(leftovers.is_empty(), "no temp files left behind: {leftovers:?}");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

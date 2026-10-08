@@ -64,23 +64,17 @@ pub fn install(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<PathBuf
     Ok(dir)
 }
 
+/// Atomic write whose temp file is CREATED with `mode` (never written at
+/// the umask and chmod'ed afterwards), then renamed over `path`.
 pub(crate) fn write_tmp_rename(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
-    let tmp = path.with_extension(format!(
-        "tmp.{}",
-        std::process::id()
-    ));
-    fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))
-            .map_err(|e| format!("chmod {:o} {}: {e}", mode, tmp.display()))?;
-    }
-    fs::rename(&tmp, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("rename {}: {e}", path.display())
-    })?;
-    Ok(())
+    k2_core::fs_atomic::atomic_write_mode(path, bytes, mode)
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Persist the ACME account credentials (`certs/acme-account.json`),
+/// owner-only from creation.
+pub fn save_acme_account(body: &str) -> Result<(), String> {
+    write_tmp_rename(&acme_account_path(), body.as_bytes(), 0o600)
 }
 
 #[cfg(test)]
@@ -355,6 +349,23 @@ pub fn save_acme_config(cfg: &AcmeConfig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn acme_account_and_config_are_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let _home = crate::test_support::TempHome::new();
+        save_acme_account("{\"id\":\"x\"}").expect("save account");
+        save_acme_config(&AcmeConfig::default()).expect("save config");
+        for p in [acme_account_path(), acme_config_path()] {
+            let mode = fs::metadata(&p).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} must be 0600", p.display());
+        }
+        assert_eq!(
+            fs::read_to_string(acme_account_path()).expect("read"),
+            "{\"id\":\"x\"}"
+        );
+    }
 
     #[test]
     fn install_key_is_0600() {

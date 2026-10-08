@@ -78,21 +78,31 @@ pub fn put(workspace_id: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
         return Err("secret value must not be empty".to_string());
     }
     let path = secret_path(workspace_id, name)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("vault mkdir: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-        }
-    }
-    fs_atomic::atomic_write(&path, bytes).map_err(|e| format!("vault write: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("vault chmod 0600: {e}"))?;
-    }
+    let root = vault_root();
+    let ws_dir = path
+        .parent()
+        .ok_or_else(|| "vault path has no parent".to_string())?;
+    // Directories this call creates are 0700 from creation; ones that
+    // already existed (e.g. made by an older build at the umask) are
+    // tightened to 0700. Errors are loud: a secret is never written into
+    // a directory we could not make owner-only.
+    fs_atomic::create_private_dir_all(ws_dir).map_err(|e| format!("vault mkdir: {e}"))?;
+    restrict_dir(&root)?;
+    restrict_dir(ws_dir)?;
+    // The file is created 0600 (no umask window before a chmod).
+    fs_atomic::atomic_write_private(&path, bytes).map_err(|e| format!("vault write: {e}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_dir(dir: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("vault chmod 0700 {}: {e}", dir.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -133,6 +143,23 @@ mod tests {
         assert_eq!(got, b"s3cret-bytes");
         delete(&ws, "API_TOKEN").expect("delete");
         assert!(!exists(&ws, "API_TOKEN"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn put_writes_owner_only_file_and_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| {
+            fs::metadata(p).expect("metadata").permissions().mode() & 0o777
+        };
+        let ws = uuid::Uuid::new_v4().to_string();
+        put(&ws, "MODE_CHECK", b"bytes").expect("put");
+        let root = vault_root();
+        let file = root.join(&ws).join("MODE_CHECK");
+        assert_eq!(mode(&file), 0o600, "secret file must be 0600");
+        assert_eq!(mode(&root.join(&ws)), 0o700, "workspace dir must be 0700");
+        assert_eq!(mode(&root), 0o700, "vault root must be 0700");
+        delete(&ws, "MODE_CHECK").expect("delete");
     }
 
     #[test]

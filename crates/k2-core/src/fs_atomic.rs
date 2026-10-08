@@ -68,6 +68,80 @@ pub fn atomic_write_str(path: &Path, text: &str) -> std::io::Result<()> {
     atomic_write(path, text.as_bytes())
 }
 
+/// [`atomic_write`] for files that must carry a specific permission mode
+/// from the first byte (secrets, private keys). On unix the sibling temp
+/// file is opened `O_CREAT|O_EXCL` with `mode`, so it never exists at the
+/// process umask, and an existing entry at the temp name (file or
+/// symlink) makes the call fail instead of being followed. The mode is
+/// then set exactly on the open handle (umask can only have narrowed it)
+/// before any byte is written. The rename replaces the target inode, so
+/// the final file has `mode` regardless of what was there before.
+///
+/// The parent directory is created (at the umask) if missing, like
+/// [`atomic_write`]; use [`atomic_write_private`] when the directory must
+/// be owner-only too.
+pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    write_mode_then_rename(path, bytes, mode)
+}
+
+/// Owner-only atomic write: missing parent directories are created 0700
+/// and the file is created 0600 (see [`atomic_write_mode`]). Existing
+/// parent directories are left as they are.
+pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    create_private_dir_all(parent)?;
+    write_mode_then_rename(path, bytes, 0o600)
+}
+
+/// `create_dir_all` where every directory this call creates is 0700 at
+/// creation (no chmod window). Directories that already exist keep their
+/// mode.
+pub fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(dir)
+    }
+}
+
+fn write_mode_then_rename(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    let tmp = tempfile_path(path);
+    let write_result = (|| -> std::io::Result<()> {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(mode);
+        }
+        let mut f = opts.open(&tmp)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e
+    })
+}
+
 /// Atomically create or replace the symlink at `target`, pointing to
 /// `source`. Unlike a remove+create sequence, concurrent readers never
 /// observe a missing file — the new link overwrites the old in one rename.
@@ -289,5 +363,48 @@ mod tests {
             atomic_write_str(&p, &format!("tick {i}")).unwrap();
         }
         assert_eq!(fs::read_to_string(&p).unwrap(), "tick 255");
+    }
+
+    #[cfg(unix)]
+    fn mode_of(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(p).expect("metadata").permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_private_creates_owner_only_file_and_dirs() {
+        let dir = tmpdir();
+        let p = dir.join("a/b/secret.json");
+        atomic_write_private(&p, b"{}").expect("write");
+        assert_eq!(fs::read(&p).expect("read"), b"{}");
+        assert_eq!(mode_of(&p), 0o600, "file must be 0600");
+        assert_eq!(mode_of(&dir.join("a")), 0o700, "created dir must be 0700");
+        assert_eq!(mode_of(&dir.join("a/b")), 0o700, "created dir must be 0700");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_private_replaces_a_loose_file_with_an_owner_only_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmpdir();
+        let p = dir.join("secret.json");
+        fs::write(&p, "old").expect("seed");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).expect("chmod seed");
+        atomic_write_private(&p, b"new").expect("write");
+        assert_eq!(fs::read_to_string(&p).expect("read"), "new");
+        assert_eq!(mode_of(&p), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_mode_sets_the_exact_requested_mode() {
+        let dir = tmpdir();
+        let key = dir.join("privkey.pem");
+        let chain = dir.join("fullchain.pem");
+        atomic_write_mode(&key, b"k", 0o600).expect("key");
+        atomic_write_mode(&chain, b"c", 0o644).expect("chain");
+        assert_eq!(mode_of(&key), 0o600);
+        assert_eq!(mode_of(&chain), 0o644);
     }
 }

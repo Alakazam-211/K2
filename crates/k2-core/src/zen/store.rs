@@ -413,9 +413,12 @@ impl ZenFiles {
         ZenFiles { root: root.into() }
     }
 
-    /// This computer's `~/.k2/zen`.
+    /// This computer's `~/.k2/zen`. Under a test (and in a test daemon)
+    /// it panics when that is the real home's (GS46).
     pub fn local() -> Self {
-        ZenFiles::new(super::zen_root())
+        let root = super::zen_root();
+        super::sync::guard_real_home(&root);
+        ZenFiles::new(root)
     }
 
     pub fn root(&self) -> &Path {
@@ -711,6 +714,9 @@ impl ZenFiles {
             }
             self.write_list(&list)?;
             created_default = true;
+            if let Err(e) = self.sync_after_setup() {
+                crate::log_debug!("[zen/sync] after setup: {e}");
+            }
         } else if source != ListSource::File {
             self.write_list(&list)?;
         }
@@ -760,6 +766,9 @@ impl ZenFiles {
         self.write_stub_if_missing(&g)?;
         list.insert(pos, g.clone());
         self.write_list(&list)?;
+        if let Err(e) = self.news_mark_template_seen(&g.template) {
+            crate::log_debug!("[zen/sync] news for {}: {e}", g.id);
+        }
         Ok(g)
     }
 
@@ -831,6 +840,7 @@ impl ZenFiles {
         let mut record = serde_json::to_value(&g).map_err(|e| ZenError::Io(e.to_string()))?;
         record["deletedAt"] = json!(Self::now());
         record["snapshot"] = json!(snapshot);
+        self.sync_on_delete(&g.id, &mut record)?;
         let rec = dir.join(DELETED_RECORD);
         let body = serde_json::to_string_pretty(&record).map_err(|e| ZenError::Io(e.to_string()))?;
         crate::fs_atomic::atomic_write_str(&rec, &(body + "\n")).map_err(|e| io(e, &rec))?;
@@ -908,13 +918,26 @@ impl ZenFiles {
             self.write_list(&list)?;
         }
         self.prune(&f);
+        self.sync_follow_k2(&g.id)?;
+        if let Err(e) = self.news_mark_template_seen(tid) {
+            crate::log_debug!("[zen/sync] news for {}: {e}", g.id);
+        }
         Ok(TemplateOutcome { garden: g, template: tid, changed: true, snapshot: kept, replaced: own })
     }
 
     /// Check one file's text with the rules for its kind. A Garden page is
     /// checked against its own default template (G38).
     fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
-        self.check_src_in(f, text, base, Defaults::live())
+        self.check_src_in(f, text, base, &self.defaults_for(f))
+    }
+
+    /// The set a file is checked on: a Garden page's own (its sync state),
+    /// live for everything else.
+    fn defaults_for(&self, f: &ZenFile) -> std::sync::Arc<Defaults> {
+        match f {
+            ZenFile::Garden(id) => self.page_defaults(id),
+            _ => self.live_defaults(),
+        }
     }
 
     /// [`ZenFiles::check_src`] with a Garden page checked on the set `d`
@@ -936,7 +959,7 @@ impl ZenFiles {
     }
 
     fn check_text(&self, f: &ZenFile, text: &Result<String, String>, base: &Layer) -> Checked {
-        self.check_text_in(f, text, base, Defaults::live())
+        self.check_text_in(f, text, base, &self.defaults_for(f))
     }
 
     fn check_text_in(&self, f: &ZenFile, text: &Result<String, String>, base: &Layer, d: &Defaults) -> Checked {
@@ -1015,7 +1038,7 @@ impl ZenFiles {
 
     /// The live version of `f` over `base` (last-good semantics, Z13).
     pub fn effective(&self, f: &ZenFile, base: &Layer) -> Effective {
-        self.effective_in(f, base, Defaults::live())
+        self.effective_in(f, base, &self.defaults_for(f))
     }
 
     /// [`ZenFiles::effective`] with a Garden page checked on the set `d`.
@@ -1220,7 +1243,7 @@ impl ZenFiles {
             ZenFile::Theme(name) => Self::theme_parent(name).clone(),
             ZenFile::Zen => self.theme_stack(&self.active_theme(None).name).2,
             ZenFile::Garden(id) => {
-                let tbase = self.theme_stack(&self.active_theme(Some(id)).name).2;
+                let tbase = self.theme_stack_in(&self.theme_defaults(id), &self.active_theme(Some(id)).name).2;
                 let zen = self.effective(&ZenFile::Zen, &tbase);
                 schema::merge(&[&tbase, &zen.layer])
             }
@@ -1455,6 +1478,25 @@ impl ZenFiles {
     /// carries its folder's state and its effective grant (UW38), and
     /// Garden-file findings that need the folders join `errors`.
     pub fn resolve_with(&self, garden: Option<&str>, grants: &super::grants::GrantSnapshot) -> Result<J, ZenError> {
+        self.resolve_view_with(garden, grants, &super::sync::View::current())
+    }
+
+    /// [`ZenFiles::resolve`] through `view`, with no grants (the sync code's
+    /// comparisons: both sides see the same grants).
+    pub fn resolve_view(&self, garden: Option<&str>, view: &super::sync::View) -> Result<J, ZenError> {
+        self.resolve_view_with(garden, &super::grants::GrantSnapshot::empty(), view)
+    }
+
+    /// [`ZenFiles::resolve_with`] through `view`: the Garden's page and theme
+    /// on their sync state's defaults (or a preview / test override), plus
+    /// `frame` and, with `view.meta`, `sync` (prd-zen-garden-sync-defaults-v1
+    /// GS20, GS25, GS30). Writes nothing.
+    pub fn resolve_view_with(
+        &self,
+        garden: Option<&str>,
+        grants: &super::grants::GrantSnapshot,
+        view: &super::sync::View,
+    ) -> Result<J, ZenError> {
         self.require()?;
         let (index, entry) = match garden {
             Some(sel) => self.garden(sel)?,
@@ -1464,12 +1506,13 @@ impl ZenFiles {
             }
         };
         let id = entry.id.clone();
+        let gd = self.garden_defaults(&id, view);
         let active = self.active_theme(Some(&id));
-        let (parent, theme, tbase) = self.theme_stack(&active.name);
+        let (parent, theme, tbase) = self.theme_stack_in(&gd.theme, &active.name);
         let zen = self.effective(&ZenFile::Zen, &tbase);
         let base = schema::merge(&[&tbase, &zen.layer]);
         let gfile = ZenFile::Garden(id.clone());
-        let page = self.effective(&gfile, &base);
+        let page = self.effective_in(&gfile, &base, &gd.page);
         let user = schema::merge(&[&theme.layer, &zen.layer, &page.layer]);
         let rt = schema::resolve(&parent, &user);
 
@@ -1479,6 +1522,7 @@ impl ZenFiles {
         let mut warnings = theme.warnings.clone();
         warnings.extend(zen.warnings.iter().cloned());
         warnings.extend(page.warnings.iter().cloned());
+        warnings.extend(gd.warnings());
         if let Some(m) = &active.missing {
             warnings.push(Diagnostic {
                 file: ACTIVE_FILE.to_string(),
@@ -1510,7 +1554,8 @@ impl ZenFiles {
             theme_json["background"] = bg;
         }
         let garden_json = json!({ "id": id, "name": entry.name, "index": index + 1 });
-        let mut page_json = super::garden_page(&page.layer, &entry.template);
+        let (page_layer, page_template) = gd.page_layer(&page.layer, &entry.template);
+        let mut page_json = super::garden_page_in(&gd.page, &page_layer, &page_template);
         errors.extend(self.placement_diagnostics(
             &gfile.label(),
             &page_json,
@@ -1524,6 +1569,8 @@ impl ZenFiles {
             "theme": theme_json,
             "chrome": rt.chrome,
             "motion": rt.motion,
+            "frame": super::sync::frame_json(&gd.page),
+            "sync": if view.meta { self.sync_json(&id, &gd, view)? } else { J::Null },
         });
         let version = schema::fnv_hex(versioned.to_string().as_bytes());
         let last_good_at = [theme.at.clone(), zen.at.clone(), page.at.clone()].into_iter().flatten().max();
@@ -1541,6 +1588,8 @@ impl ZenFiles {
             "themes": self.themes_json(&active.name),
             "chrome": versioned["chrome"],
             "motion": versioned["motion"],
+            "frame": versioned["frame"],
+            "sync": versioned["sync"],
             "errors": errors,
             "warnings": warnings,
             "lastGoodAt": last_good_at,
@@ -1648,6 +1697,7 @@ impl ZenFiles {
         let mut state = serde_json::Map::new();
         state.insert(WIDGETS_DIR_KEY.to_string(), self.refresh_widgets()?);
         state.insert(GRANTS_KEY.to_string(), grants.fingerprint());
+        state.insert(super::sync::SYNC_FILE.to_string(), self.sync_fingerprint_state());
         state.insert(
             GARDENS_FILE.to_string(),
             serde_json::to_value(self.gardens()).map_err(|e| ZenError::Io(e.to_string()))?,
@@ -1811,6 +1861,9 @@ impl ZenFiles {
             },
         }
         self.prune(f);
+        if let (ZenFile::Garden(id), None) = (f, to) {
+            self.sync_follow_k2(id)?;
+        }
         Ok(ResetOutcome { file: f.label(), restored, snapshot: kept })
     }
 
@@ -1940,6 +1993,7 @@ impl ZenFiles {
         ));
         let total: usize = self.all_files().iter().map(|f| self.snapshots(f).len()).sum();
         checks.push(check("history", true, format!("{total} snapshot(s), {HISTORY_KEEP} kept per file")));
+        checks.extend(self.sync_doctor_checks());
         checks
     }
 }

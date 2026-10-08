@@ -660,7 +660,8 @@ pub fn zen_root() -> PathBuf {
 /// (`POST /cli/zen/setup` made it). Gates the `k2-zen` skill (Z18) and the
 /// watcher's boot start (Z61).
 pub fn is_set_up() -> bool {
-    ZenFiles::local().is_set_up()
+    // A read-only check: no real-home guard here (GS46 guards `ZenFiles::local`).
+    ZenFiles::new(zen_root()).is_set_up()
 }
 
 /// The built-in `basic` theme's layer. Every built-in must be clean (a

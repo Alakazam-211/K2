@@ -124,6 +124,12 @@ DEFAULT_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load
 SECOND_ID="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["gardens"][1]["id"])')"
 resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
 assert_contains "setup again makes nothing new" "$resp" '"createdDefault":false'
+# Setup also seeds the catalog's new-user Gardens (the Diary, Zen v2 B2;
+# its own tests cover that). This script's list checks are about Gardens 1
+# and 2, so the seeded ones go (kept in .history/, like any delete).
+for seeded in $(printf '%s' "$resp" | python3 -c 'import json,sys; print(" ".join(g["id"] for g in json.load(sys.stdin)["gardens"][2:]))'); do
+    curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/garden/delete?token=$TOKEN" -H 'Content-Type: application/json' --data-raw "{\"garden\":\"$seeded\"}" >/dev/null
+done
 capture zen path
 assert_eq "zen path exit" "$rc" "0"
 assert_eq "zen path prints the folder" "$out" "$ZEN"

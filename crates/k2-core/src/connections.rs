@@ -437,6 +437,13 @@ fn host_matches_peer(host: &str, peer: &crate::federation::FederationPeer) -> bo
     false
 }
 
+/// Whether a stored remote-connection `host` routes to `peer` (its
+/// subdomain, `<subdomain>.k2.dev`, or its saved base URL host). Scopes a
+/// peer's roster to that peer's own rows (CA6).
+pub fn host_routes_to_peer(host: &str, peer: &crate::federation::FederationPeer) -> bool {
+    host_matches_peer(host, peer)
+}
+
 /// 0.40.21: whether a **Trusted** federation peer is pinned that ROUTES to
 /// `host` (the right-hand side of a remote connection address).
 ///

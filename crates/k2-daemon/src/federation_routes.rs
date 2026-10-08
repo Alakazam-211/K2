@@ -1281,7 +1281,7 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         Ok(body) => {
             let parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-            lazy_heal_connections_from_roster_json(&parsed);
+            lazy_heal_connections_from_roster_json(&peer, &parsed);
             CliResponse::ok_json(
                 serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
             )
@@ -1292,7 +1292,11 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
 
 /// D10: rewrite stored connection agents that already match a roster
 /// handle or alias. Never attach leftover `sales` to "the only agent".
-fn lazy_heal_connections_from_roster_json(parsed: &serde_json::Value) {
+/// Only rows that point at `peer` are touched (CA6).
+fn lazy_heal_connections_from_roster_json(
+    peer: &k2_core::federation::FederationPeer,
+    parsed: &serde_json::Value,
+) {
     let agents = parsed
         .get("agents")
         .or_else(|| parsed.get("roster").and_then(|r| r.get("agents")))
@@ -1325,9 +1329,27 @@ fn lazy_heal_connections_from_roster_json(parsed: &serde_json::Value) {
     if roster.is_empty() {
         return;
     }
+    let host_matches = peer_row_host_matcher(peer);
+    let scope = k2_core::workspace::handle::RosterPeerScope {
+        fingerprint: &peer.fingerprint,
+        host_matches: &host_matches,
+    };
     let db = k2_core::db::shared();
     let conn = db.lock();
-    k2_core::workspace::handle::heal_remote_connections_from_roster(&conn, &roster);
+    k2_core::workspace::handle::heal_remote_connections_from_roster(&conn, &scope, &roster);
+}
+
+/// True for a stored remote-connection `host` that routes to `peer`: the
+/// host this daemon dials for it (what the send gate compares), or any
+/// spelling of its subdomain / saved base URL.
+fn peer_row_host_matcher(
+    peer: &k2_core::federation::FederationPeer,
+) -> impl Fn(&str) -> bool + '_ {
+    let dial_host = peer_host(peer);
+    move |h: &str| {
+        let n = k2_core::connections::normalize_remote_host(h);
+        (!n.is_empty() && n == dial_host) || k2_core::connections::host_routes_to_peer(h, peer)
+    }
 }
 
 /// GET `<base>/cli/federation/roster?fp&ts&sig` and return the body. Blocking

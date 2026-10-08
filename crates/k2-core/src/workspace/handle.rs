@@ -697,16 +697,45 @@ pub fn workspace_names(conn: &Connection, project_id: &str) -> Vec<String> {
     out
 }
 
+/// Which stored remote rows one peer's roster may touch (CA6).
+///
+/// A roster is signed by ONE peer, so it may only heal rows that point at
+/// that peer: rows whose host routes to it, and whose `peer_fingerprint`
+/// is empty or that peer's. Without this, peer A's roster could rename
+/// (or delete, on a UNIQUE clash) our rows that point at host B.
+pub struct RosterPeerScope<'a> {
+    /// The roster's peer fingerprint (verified pin).
+    pub fingerprint: &'a str,
+    /// True when a stored row's `host` routes to this peer.
+    pub host_matches: &'a dyn Fn(&str) -> bool,
+}
+
+impl RosterPeerScope<'_> {
+    /// Whether a stored `(host, peer_fingerprint)` belongs to this peer.
+    pub fn owns_row(&self, host: &str, peer_fingerprint: Option<&str>) -> bool {
+        let fp_ok = match peer_fingerprint.map(str::trim).filter(|s| !s.is_empty()) {
+            None => true,
+            Some(fp) => !self.fingerprint.trim().is_empty() && fp == self.fingerprint.trim(),
+        };
+        fp_ok && (self.host_matches)(host)
+    }
+}
+
 /// Lazy-heal stored remote rows whose agent already matches a roster
 /// handle or alias (D10). Never attaches leftover `sales` to "the only
-/// agent on that host" (D20).
+/// agent on that host" (D20). Only rows this peer owns are touched
+/// ([`RosterPeerScope`], CA6). A rename that would clash with another row
+/// of the same workspace keeps both rows and logs; it never deletes.
 pub fn heal_remote_connections_from_roster(
     conn: &Connection,
+    scope: &RosterPeerScope<'_>,
     roster: &[(String, Vec<String>)],
 ) {
-    let rows: Vec<(String, String, String, String)> = {
+    type Row = (String, String, String, String, Option<String>);
+    let rows: Vec<Row> = {
         let mut stmt = match conn.prepare(
-            "SELECT id, remote_addr, host, agent FROM workspace_remote_connections",
+            "SELECT id, remote_addr, host, agent, peer_fingerprint \
+             FROM workspace_remote_connections",
         ) {
             Ok(s) => s,
             Err(_) => return,
@@ -717,6 +746,7 @@ pub fn heal_remote_connections_from_roster(
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         }) {
             Ok(rows) => rows.flatten().collect(),
@@ -724,7 +754,10 @@ pub fn heal_remote_connections_from_roster(
         };
         mapped
     };
-    for (id, remote_addr, host, agent) in rows {
+    for (id, remote_addr, host, agent, peer_fp) in rows {
+        if !scope.owns_row(&host, peer_fp.as_deref()) {
+            continue;
+        }
         let mut matched: Option<&str> = None;
         for (handle, aliases) in roster {
             if roster_entry_matches(&agent, handle, aliases, "") {
@@ -751,9 +784,12 @@ pub fn heal_remote_connections_from_roster(
         ) {
             Ok(_) => {}
             Err(e) if e.to_string().contains("UNIQUE") => {
-                let _ = conn.execute(
-                    "DELETE FROM workspace_remote_connections WHERE id = ?1",
-                    params![id],
+                // The workspace already has a row under the canonical name.
+                // Keep both (the older canonical row and this one); never
+                // delete a connection because a peer's roster said so.
+                crate::log_debug!(
+                    "[handle] lazy heal {id}: {agent}::{host} → {canonical} clashes with an \
+                     existing row; kept both"
                 );
             }
             Err(e) => crate::log_debug!("[handle] lazy heal {id} failed: {e}"),
@@ -1230,8 +1266,10 @@ mod tests {
                 None,
             )
             .unwrap();
+            let host_ok = |h: &str| h == "peer.k2.dev";
             heal_remote_connections_from_roster(
                 &conn,
+                &RosterPeerScope { fingerprint: "fp-peer", host_matches: &host_ok },
                 &[("sales-team".into(), vec!["sales team".into()])],
             );
             let rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
@@ -1240,6 +1278,92 @@ mod tests {
             assert_eq!(match_row.agent, "sales-team");
             let leftover = rows.iter().find(|r| r.id == "heal-d20").expect("d20");
             assert_eq!(leftover.agent, "sales", "D20 leftover must stay");
+        }
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// CA6 / F2: peer A's roster never rewrites a row that points at host
+    /// B, nor a row bound to another peer's fingerprint on the same host.
+    #[test]
+    fn lazy_heal_is_scoped_to_the_rosters_peer() {
+        crate::db::init_for_tests();
+        let (id, path) = unique_dir("heal-scope");
+        insert_project(&id, "Heal Scope", &path);
+        // A second source workspace: one workspace can't hold two rows with
+        // the same address.
+        let (id2, path2) = unique_dir("heal-scope-2");
+        insert_project(&id2, "Heal Scope Two", &path2);
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            let mk = |src: &str, row_id: &str, agent: &str, host: &str, fp: Option<&str>| {
+                crate::db::schema::WorkspaceRemoteConnection::create(
+                    &conn,
+                    row_id,
+                    src,
+                    &format!("{agent}::{host}"),
+                    host,
+                    agent,
+                    fp,
+                )
+                .unwrap();
+            };
+            mk(&id, "scope-other-host", "sales-old", "scope-b.k2.dev", None);
+            mk(&id2, "scope-other-fp", "sales-old", "scope-a.k2.dev", Some("fp-someone-else"));
+            mk(&id, "scope-own", "sales-old", "scope-a.k2.dev", Some("fp-a"));
+            let host_ok = |h: &str| h == "scope-a.k2.dev";
+            heal_remote_connections_from_roster(
+                &conn,
+                &RosterPeerScope { fingerprint: "fp-a", host_matches: &host_ok },
+                &[("ceo".into(), vec!["sales-old".into()])],
+            );
+            let mut rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
+                .unwrap();
+            rows.extend(
+                crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id2).unwrap(),
+            );
+            let get = |row_id: &str| rows.iter().find(|r| r.id == row_id).expect(row_id).clone();
+            assert_eq!(get("scope-other-host").agent, "sales-old", "host B row untouched");
+            assert_eq!(get("scope-other-host").remote_addr, "sales-old::scope-b.k2.dev");
+            assert_eq!(get("scope-other-fp").agent, "sales-old", "other peer's row untouched");
+            assert_eq!(get("scope-own").agent, "ceo", "own peer's alias row heals");
+        }
+        std::fs::remove_dir_all(&path).ok();
+        std::fs::remove_dir_all(&path2).ok();
+    }
+
+    /// CA6: a heal rename that clashes with an existing row keeps both.
+    #[test]
+    fn lazy_heal_clash_keeps_both_rows() {
+        crate::db::init_for_tests();
+        let (id, path) = unique_dir("heal-clash");
+        insert_project(&id, "Heal Clash", &path);
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            for (row_id, agent) in [("clash-canonical", "sales"), ("clash-alias", "sales-old")] {
+                crate::db::schema::WorkspaceRemoteConnection::create(
+                    &conn,
+                    row_id,
+                    &id,
+                    &format!("{agent}::clash-a.k2.dev"),
+                    "clash-a.k2.dev",
+                    agent,
+                    None,
+                )
+                .unwrap();
+            }
+            let host_ok = |h: &str| h == "clash-a.k2.dev";
+            heal_remote_connections_from_roster(
+                &conn,
+                &RosterPeerScope { fingerprint: "fp-a", host_matches: &host_ok },
+                &[("sales".into(), vec!["sales-old".into()])],
+            );
+            let rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
+                .unwrap();
+            assert_eq!(rows.len(), 2, "clash must never delete a row: {rows:?}");
+            let alias = rows.iter().find(|r| r.id == "clash-alias").expect("alias row kept");
+            assert_eq!(alias.agent, "sales-old", "clashing row is left as it was");
         }
         std::fs::remove_dir_all(&path).ok();
     }

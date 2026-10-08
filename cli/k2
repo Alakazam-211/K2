@@ -10980,6 +10980,10 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault audit [NAME] [--since <rfc3339>]
   k2 vault requests                        Thread secret cards (pending / set / declined)
   k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
+  k2 vault env-file --secret NAME [--ttl 60]   a short-lived 0600 file for docker/podman --env-file
+  k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)
+  k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
+  k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start
   k2 vault doctor                          plaintext .env files, due rotations, problems
 
   People only (from your own terminal or SSH, not a K2 terminal):
@@ -11323,12 +11327,17 @@ cmd_vault() {
     fi
     local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
     local inject_header="" inject_format="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
-    local add_hosts=() rm_hosts=() pos=()
+    local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
+    local add_hosts=() rm_hosts=() pos=() use_secrets=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
             --system) system=1; shift ;;
             --yes) yes=1; shift ;;
+            --remove-original) remove_original=1; shift ;;
+            --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; use_secrets+=("$2"); shift 2 ;;
+            --env-file) [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }; env_file_opt="$2"; shift 2 ;;
+            --done) [ -n "${2:-}" ] || { echo "usage: --done <path>" >&2; exit 2; }; done_path="$2"; shift 2 ;;
             --scope|--kind|--for|--preset|--delivery|--ceiling|--describe|--rotate-every|--ttl|--inject-header|--inject-format|--to|--from|--as|--env-name|--file-name|--grant|--add|--remove|--since)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -11535,6 +11544,59 @@ f = v.get("findings") or []
 if not f: print("vault: nothing to fix")
 for x in f: print("%-7s %s" % (x.get("level"), x.get("message")))
 sys.exit(0 if v.get("ok") else 1)'
+            ;;
+        env-file)
+            local ej
+            ej="$(python3 -c 'import json,sys
+o={}
+if sys.argv[1]: o["done"]=sys.argv[1]
+if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
+o["secrets"]=[x for x in sys.argv[3:] if x]
+print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}")"
+            _vault_call POST env-file "$ej"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
+            ;;
+        import)
+            [ -n "$name" ] || { echo "usage: k2 vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original]" >&2; exit 2; }
+            local ij abs
+            abs="$(cd "$(dirname "$name")" 2>/dev/null && pwd)/$(basename "$name")"
+            ij="$(python3 -c 'import json,sys
+o=json.loads(sys.argv[1]); o["path"]=sys.argv[2]
+if sys.argv[3]: o["delivery"]=sys.argv[3]
+if sys.argv[4]=="1": o["removeOriginal"]=True
+print(json.dumps(o))' "$sj" "$abs" "$delivery" "$remove_original")"
+            _vault_call POST import "$ij"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("moved into the vault: %s" % (", ".join(v.get("moved") or []) or "nothing"))
+print("wrote %s (references only; safe to commit)" % v.get("envK2"))
+if not v.get("originalRemoved"):
+    print("the original .env is still there; delete it when you are ready (or --remove-original)")'
+            ;;
+        service)
+            [ -n "$name" ] || { echo "usage: k2 vault service <published service> [clean|legacy] [--env-file .env.k2]" >&2; exit 2; }
+            if [ -n "${pos[1]:-}" ] || [ -n "$env_file_opt" ]; then
+                _vault_call POST service "$(python3 -c 'import json,sys
+o={"service": sys.argv[1]}
+if sys.argv[2]: o["mode"]=sys.argv[2]
+if sys.argv[3]: o["envFile"]=sys.argv[3]
+print(json.dumps(o))' "$name" "${pos[1]:-}" "$env_file_opt")"
+            else
+                _vault_call GET service "service=$(urlencode "$name")"
+            fi
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: environment %s%s" % (v.get("service"), v.get("mode"), (", .env.k2 = " + v["envFile"]) if v.get("envFile") else ""))
+for s in v.get("secrets") or []:
+    print("  %s as %s%s" % (s.get("name"), s.get("delivery"), (" (" + s["envName"] + ")") if s.get("envName") else ""))
+if v.get("inheritedNames"):
+    print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
+if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
             [ -n "$name" ] || { echo "usage: k2 vault reveal NAME [--scope <s>]" >&2; exit 2; }
@@ -12877,6 +12939,28 @@ cmd_publish() {
             ;;
         frame)
             cmd_publish_frame "$@"
+            ;;
+        # K2 vault (§10.5): secrets a published service gets at start.
+        secret|secrets)
+            local act="${1:-}" label="${2:-}" sname="${3:-}"
+            case "$act" in
+                add)
+                    [ -n "$label" ] && [ -n "$sname" ] || { echo "usage: k2 publish secret add <service> NAME [--as file|env] [--env-name X] [--scope …]" >&2; exit 2; }
+                    shift 3
+                    cmd_vault grant "$sname" --to "service:$label" "$@" ;;
+                remove|rm)
+                    [ -n "$label" ] && [ -n "$sname" ] || { echo "usage: k2 publish secret remove <service> NAME [--scope …]" >&2; exit 2; }
+                    shift 3
+                    cmd_vault revoke "$sname" --from "service:$label" "$@" ;;
+                list|ls)
+                    [ -n "$label" ] || { echo "usage: k2 publish secret list <service>" >&2; exit 2; }
+                    cmd_vault service "$label" ;;
+                *) echo "usage: k2 publish secret add|remove|list <service> …" >&2; exit 2 ;;
+            esac
+            ;;
+        env)
+            [ -n "${1:-}" ] || { echo "usage: k2 publish env <service> [clean|legacy] [--env-file .env.k2]" >&2; exit 2; }
+            cmd_vault service "$@"
             ;;
         ""|help|--help|-h)
             _publish_usage

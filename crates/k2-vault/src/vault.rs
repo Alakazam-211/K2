@@ -1339,6 +1339,25 @@ impl LocalVault {
         self.grants_for(&conn, &keys, &row.meta.id)
     }
 
+    /// Every grant naming `consumer`, with the secret's name (people and
+    /// subsystems; e.g. a published service's bindings).
+    pub fn grants_to(&self, consumer: &Consumer) -> Result<Vec<(Grant, String)>> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let mut st = conn.prepare("SELECT * FROM grants WHERE consumer_kind = ?1 AND consumer_id = ?2")?;
+        let rows = st.query_map(params![consumer.kind.as_str(), consumer.id], |r| Ok(read_grant_raw(r)))?;
+        let mut out = vec![];
+        for r in rows {
+            let (g, mac) = r??;
+            if !hmac_verify(&keys.row, &grant_mac_input(&g), &mac) {
+                continue;
+            }
+            let name = self.find_row(&conn, &keys, &Selector::Id(g.secret_id.clone())).map(|r| r.meta.name).unwrap_or_default();
+            out.push((g, name));
+        }
+        Ok(out)
+    }
+
     // ── resolve ─────────────────────────────────────────────────────
 
     /// Effective deliveries for a requester: (delivery, env, file, hosts).
@@ -2445,9 +2464,26 @@ impl LocalVault {
             h2.gen += 1;
             write_header(&tx, &h2, &keys.header)?;
             tx.commit()?;
+            // The restored vault is this box's vault now: anchor it.
+            ks.set_anchor(&Anchor {
+                vault_id: Some(h2.vault_id.clone()),
+                gen: h2.gen,
+                audit_seq: Some(h2.audit_seq),
+                audit_mac: Some(hex(&h2.audit_mac)),
+            })?;
         }
         drop(keys);
         LocalVault::open(dir, ks, opts)
+    }
+
+    /// `VACUUM INTO` a new file (0600).
+    pub(crate) fn vacuum_into(&self, dest: &Path) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy().to_string()])?;
+        drop(conn);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600))?;
+        Ok(())
     }
 }
 

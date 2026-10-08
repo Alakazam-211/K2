@@ -47,6 +47,11 @@ pub fn classify_secret(rel_path: &str, abs_path: &Path) -> Option<SecretReason> 
     if path_is_env_secret(rel_path) {
         return Some(SecretReason::PathPattern);
     }
+    // K2 vault KV30: `.env.k2` holds `k2v://` references, safe to carry —
+    // unless a sensitive key in it holds a literal value.
+    if final_component(rel_path) == ".env.k2" && env_k2_has_literal_secret(abs_path) {
+        return Some(SecretReason::Content);
+    }
     if path_under_auth_dir(rel_path) {
         return Some(SecretReason::PathPattern);
     }
@@ -73,7 +78,53 @@ fn path_is_env_secret(rel_path: &str) -> bool {
     let name = final_component(rel_path);
     // `.env` exactly, or any `.env.<suffix>` (covers `.env.local`,
     // `.env.production`, `.env.production.local`, …).
-    name == ".env" || name.starts_with(".env.")
+    name == ".env" || (name.starts_with(".env.") && name != ".env.k2")
+}
+
+/// Sensitive key names that must hold a `k2v://` reference in `.env.k2`
+/// (mirrors the vault's sensitive-name lint).
+fn sensitive_key(k: &str) -> bool {
+    let k = k.to_ascii_uppercase();
+    k.ends_with("_API_KEY")
+        || k == "API_KEY"
+        || k.ends_with("_TOKEN")
+        || k.ends_with("_SECRET")
+        || k.contains("PASSWORD")
+        || k == "DATABASE_URL"
+        || k.ends_with("_DSN")
+}
+
+fn env_k2_has_literal_secret(abs_path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(abs_path) else { return true };
+    text.lines().any(|l| {
+        let l = l.trim().trim_start_matches("export ");
+        if l.starts_with('#') {
+            return false;
+        }
+        let Some((k, v)) = l.split_once('=') else { return false };
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        sensitive_key(k.trim()) && !v.is_empty() && !v.starts_with("k2v://")
+    })
+}
+
+#[cfg(test)]
+mod env_k2_tests {
+    use super::*;
+
+    #[test]
+    fn env_k2_with_references_is_kept_and_a_literal_secret_is_not() {
+        let dir = std::env::temp_dir().join(format!("k2-scrub-envk2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let refs = dir.join(".env.k2");
+        std::fs::write(&refs, "STRIPE_KEY=k2v://ws/sales/STRIPE_KEY\nPORT=3000\n").expect("write");
+        assert_eq!(classify_secret(".env.k2", &refs), None);
+        std::fs::write(&refs, "STRIPE_KEY=k2v://ws/sales/STRIPE_KEY\nDB_PASSWORD=hunter2hunter2\n").expect("write");
+        assert!(classify_secret(".env.k2", &refs).is_some());
+        let plain = dir.join(".env.local");
+        std::fs::write(&plain, "PORT=3000\n").expect("write");
+        assert_eq!(classify_secret(".env.local", &plain), Some(SecretReason::PathPattern));
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
 }
 
 /// Any path component equal to `.auth` → the whole subtree is secret

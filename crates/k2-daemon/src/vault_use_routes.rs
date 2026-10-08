@@ -26,11 +26,15 @@ use crate::vault::actor::VaultCaller;
 use crate::vault_routes::{refuse, selector, Sel};
 
 pub const FETCH: &str = "/cli/vault/fetch";
+pub const ENV_FILE: &str = "/cli/vault/env-file";
+pub const IMPORT: &str = "/cli/vault/import";
+/// GET: a published service's env mode and bindings; POST: change them.
+pub const SERVICE: &str = "/cli/vault/service";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[FETCH];
-/// POST-only routes among them.
-pub const POST_ROUTES: &[&str] = &[FETCH];
+pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE];
+/// POST-only routes among them (`service` serves both).
+pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT];
 
 pub fn is_route(path: &str) -> bool {
     ROUTES.contains(&path)
@@ -45,11 +49,15 @@ pub fn handle(
     path: &str,
     c: &VaultCaller,
     body: &[u8],
-    _params: &HashMap<String, String>,
+    params: &HashMap<String, String>,
     _ingress: &str,
 ) -> CliResponse {
     let r = match path {
         FETCH => fetch(vault, c, body),
+        ENV_FILE => env_file(vault, c, body),
+        IMPORT => import(vault, c, body),
+        SERVICE if body.is_empty() => service_get(vault, c, params),
+        SERVICE => service_set(c, body),
         _ => Err(VaultError::not_found("no such vault route")),
     };
     match r {
@@ -219,6 +227,177 @@ fn write_no_follow(p: &Path, bytes: &[u8]) -> Result<(), VaultError> {
         .open(p)
         .map_err(|e| VaultError::bad_request("out_not_writable", format!("can't write the output file ({})", e.kind())))?;
     f.write_all(bytes).map_err(|e| VaultError::internal(format!("write: {}", e.kind())))
+}
+
+// ── env-file (§10.6) ───────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvFileBody {
+    #[serde(default)]
+    secrets: Vec<String>,
+    ttl_secs: Option<u64>,
+    /// Remove a file made earlier.
+    done: Option<String>,
+}
+
+fn env_files_dir() -> Result<PathBuf, VaultError> {
+    let root = crate::vault::spawn::secrets_root()
+        .ok_or_else(|| VaultError::new("no_memory_fs", 409, "this machine has no memory-backed folder for secret files"))?;
+    let d = root.join("env-files");
+    k2_vault::fsutil::ensure_private_dir(&root)?;
+    k2_vault::fsutil::ensure_private_dir(&d)?;
+    Ok(d)
+}
+
+/// A 0600 env file for `docker run --env-file` / `podman run --env-file`,
+/// removed after `ttlSecs` (default 60) or on `done`.
+fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    let a = c.actor.agent().ok_or_else(|| VaultError::forbidden("use_env_file_as_agent", "env-file runs for an agent session"))?;
+    let b: EnvFileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let dir = env_files_dir()?;
+    if let Some(done) = b.done.as_deref() {
+        let p = Path::new(done);
+        if p.parent() != Some(dir.as_path()) {
+            return Err(VaultError::bad_request("not_an_env_file", "that isn't an env file K2 made"));
+        }
+        let _ = crate::vault::adopt::remove_old_copy(p);
+        return Ok(json!({ "ok": true, "removed": done }));
+    }
+    if b.secrets.is_empty() {
+        return Err(VaultError::bad_request("secret_required", "name the secrets: --secret NAME"));
+    }
+    let who = Requester::Session { workspace_id: a.workspace_id.clone(), session_id: c.session_id.clone() };
+    let mut lines = String::new();
+    for n in &b.secrets {
+        let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;
+        let r = vault.resolve(&sel, Use::Env, &who)?;
+        k2_vault::delivery::validate_env_file_value(r.value.expose())?;
+        let name = r.env_name.clone().unwrap_or_else(|| r.meta.name.clone());
+        k2_vault::delivery::validate_env_name(&name)?;
+        lines.push_str(&name);
+        lines.push('=');
+        lines.push_str(std::str::from_utf8(r.value.expose()).map_err(|_| VaultError::bad_request("not_text", "env values must be text"))?);
+        lines.push('\n');
+    }
+    let p = dir.join(format!("{}.env", k2_vault::crypto::base62(16)));
+    crate::vault::spawn::write_secret_file(&dir, p.file_name().and_then(|f| f.to_str()).unwrap_or("x.env"), lines.as_bytes())
+        .map_err(|e| VaultError::internal(format!("env file: {}", e.kind())))?;
+    let ttl = b.ttl_secs.unwrap_or(60).clamp(5, 3600);
+    let p2 = p.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(ttl));
+        let _ = crate::vault::adopt::remove_old_copy(&p2);
+    });
+    Ok(json!({ "ok": true, "path": p.display().to_string(), "ttlSecs": ttl }))
+}
+
+// ── import (§10.5) ─────────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportBody {
+    path: Option<String>,
+    scope: Option<String>,
+    workspace: Option<String>,
+    delivery: Option<String>,
+    #[serde(default)]
+    remove_original: bool,
+}
+
+/// Move each sensitive line of a `.env` into the vault and write `.env.k2`
+/// beside it (references + the non-secret lines). Never deletes the
+/// original unless asked (Q11).
+fn import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    let b: ImportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let rel = b.path.clone().ok_or_else(|| VaultError::bad_request("path_required", "which .env?"))?;
+    let ws_id = match (c.workspace_id(), b.workspace.as_deref()) {
+        (Some(own), _) => own.to_string(),
+        (None, Some(w)) => crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?,
+        (None, None) => return Err(VaultError::bad_request("workspace_required", "name the workspace the .env belongs to")),
+    };
+    let root = crate::vault::workspace_path(&ws_id).map(PathBuf::from).ok_or_else(|| VaultError::not_found("workspace folder not found"))?;
+    let p = jailed_path(&root, &rel)?;
+    let text = std::fs::read_to_string(&p).map_err(|_| VaultError::not_found("that .env isn't readable"))?;
+    let scope = crate::vault_routes::scope_for(c, b.scope.as_deref().or(Some("workspace")), Some(&ws_id), None)?;
+    let delivery = b.delivery.as_deref().map(k2_vault::Delivery::parse).transpose()?;
+    let mut out_lines = vec!["# Made by k2 vault import: references only, safe to commit.".to_string()];
+    let mut moved = vec![];
+    let mut kept = vec![];
+    for line in text.lines() {
+        let t = line.trim();
+        let Some((k, v)) = t.trim_start_matches("export ").split_once('=') else {
+            if !t.is_empty() {
+                out_lines.push(line.to_string());
+            }
+            continue;
+        };
+        let k = k.trim();
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        if t.starts_with('#') || v.is_empty() || k2_vault::refs::VaultRef::is_ref(v) || !k2_vault::delivery::is_sensitive_name(k) {
+            out_lines.push(line.to_string());
+            if !t.starts_with('#') && !v.is_empty() {
+                kept.push(k.to_string());
+            }
+            continue;
+        }
+        let kind = if k == "DATABASE_URL" || k.ends_with("_DSN") { k2_vault::Kind::Dsn } else { k2_vault::Kind::ApiKey };
+        let mut req = k2_vault::PutRequest::new(k2_vault::Namespace::User, scope.clone(), k, kind);
+        req.default_delivery = Some(delivery.unwrap_or(k2_vault::Delivery::Env));
+        req.delivery_ceiling = Some(k2_vault::Delivery::Env);
+        req.origin = format!("import:{rel}");
+        req.mode = k2_vault::PutMode::Upsert;
+        req.idempotent = true;
+        let o = vault.put(req, k2_vault::SecretBytes::from_slice(v.as_bytes()), &c.actor)?;
+        let r = crate::vault::display_ref(&o.meta).unwrap_or_default();
+        out_lines.push(format!("{k}={r}"));
+        moved.push(k.to_string());
+    }
+    let envk2 = p.with_file_name(".env.k2");
+    let mut body_out = out_lines.join("\n");
+    body_out.push('\n');
+    std::fs::write(&envk2, body_out).map_err(|e| VaultError::internal(format!("write .env.k2: {}", e.kind())))?;
+    if b.remove_original && !moved.is_empty() {
+        crate::vault::adopt::remove_old_copy(&p).map_err(|e| VaultError::internal(format!("remove: {}", e.kind())))?;
+    }
+    Ok(json!({ "ok": true, "moved": moved, "kept": kept, "envK2": envk2.display().to_string(), "originalRemoved": b.remove_original && !moved.is_empty() }))
+}
+
+// ── published service env (§10.5) ─────────────────────────────────
+
+fn service_get(vault: &Arc<LocalVault>, c: &VaultCaller, params: &HashMap<String, String>) -> Result<Value, VaultError> {
+    let label = params.get("service").cloned().unwrap_or_default();
+    let id = published_service_id(c, &label)?;
+    let se = crate::vault::publish_env::get(&id);
+    let grants: Vec<Value> = vault
+        .grants_to(&k2_vault::Consumer::published_service(id.clone()))?
+        .into_iter()
+        .map(|(g, name)| json!({ "name": name, "delivery": g.delivery, "envName": g.env_name, "fileName": g.file_name, "grantId": g.id }))
+        .collect();
+    Ok(json!({ "service": label, "id": id, "mode": se.mode, "envFile": se.env_file, "inheritedNames": se.inherited_names, "secrets": grants }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceBody {
+    service: Option<String>,
+    mode: Option<String>,
+    env_file: Option<String>,
+}
+
+fn service_set(c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    let b: ServiceBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let label = b.service.clone().ok_or_else(|| VaultError::bad_request("service_required", "which service?"))?;
+    let id = published_service_id(c, &label)?;
+    // Inheriting the daemon's whole environment is a widening: people only.
+    if b.mode.as_deref() == Some("legacy") && !c.actor.is_admin_human() {
+        return Err(VaultError::owner_confirm_required("only the owner can give a service the daemon's environment"));
+    }
+    if c.actor.is_member() {
+        return Err(VaultError::forbidden("vault_admin_required", "changing a service's environment needs an Owner or Admin"));
+    }
+    let se = crate::vault::publish_env::set(&id, b.mode.as_deref(), b.env_file.clone().map(Some)).map_err(|e| VaultError::bad_request("bad_mode", e))?;
+    Ok(json!({ "ok": true, "service": label, "mode": se.mode, "envFile": se.env_file, "restart": "restart the service to apply" }))
 }
 
 /// A published service's id from its label (`name`) or id. Agents see

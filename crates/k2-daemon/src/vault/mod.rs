@@ -19,6 +19,7 @@ pub mod keeper_client;
 #[cfg(target_os = "macos")]
 pub mod local_auth;
 pub mod mainrefs;
+pub mod publish_env;
 pub mod refstore;
 pub mod spawn;
 pub mod systemd_creds;
@@ -120,6 +121,7 @@ pub fn boot(home: &Path) {
             let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
             record_adoption(mainrefs::adopt(v));
             spawn::sweep_at_boot();
+            publish_env::seed_existing();
             start_ticker(v.clone());
             let nd = k2_vault::secret::set_non_dumpable();
             let _ = NON_DUMPABLE.set(nd);
@@ -320,6 +322,42 @@ pub fn auth_audit(event: &str, user: &str, outcome: &str, ingress: &str) {
         "-",
         "vault",
     ));
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use std::sync::Arc;
+
+    use k2_vault::keystore::fake::FakeKeyStore;
+    use k2_vault::keystore::file::FileKeyStore;
+    use k2_vault::{Actor, KeyStore, Kind, Namespace, PutRequest, Requester, Scope, SecretBytes, SecretStore, Selector, Use};
+
+    /// §7.2 "Upgrades in place": a vault on the file key moves to a better
+    /// store (here the fake standing in for the keeper/Keychain); values
+    /// survive; the file key is removed only after the reopen verified.
+    #[test]
+    fn file_key_vault_moves_to_a_better_store_in_place() {
+        let t = k2_vault::fsutil::TestDir::new("upgrade");
+        let home = t.path().to_path_buf();
+        let dir = super::vault_dir(&home);
+        {
+            let file: Arc<dyn KeyStore> = Arc::new(FileKeyStore::new(super::file_key_dir(&home)));
+            let v = k2_vault::LocalVault::open(&dir, file, k2_vault::OpenOptions { kdf: k2_vault::confirm::KdfCost::Floor }).expect("open on file key");
+            let mut r = PutRequest::new(Namespace::System, Scope::engine("x"), "K", Kind::Password);
+            r.default_delivery = Some(k2_vault::Delivery::None);
+            v.put(r, SecretBytes::from_slice(b"survives"), &Actor::System("t".into())).expect("put");
+        }
+        assert!(super::file_key_dir(&home).join("kek").exists());
+        let better = Arc::new(FakeKeyStore::new());
+        let v = super::open_with_upgrade(&dir, &home, better.clone() as Arc<dyn KeyStore>).expect("upgrade");
+        assert!(!super::file_key_dir(&home).join("kek").exists(), "file key removed after the move");
+        assert!(better.has_kek());
+        let got = v
+            .resolve(&Selector::system(Scope::engine("x"), "K"), Use::System, &Requester::System("t".into()))
+            .expect("value survives");
+        assert_eq!(got.value.expose(), b"survives");
+        assert_eq!(v.key_store().kind(), k2_vault::KeyHome::Fake);
+    }
 }
 
 #[cfg(test)]

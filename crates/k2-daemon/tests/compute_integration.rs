@@ -592,3 +592,84 @@ async fn node_sockets_fail_closed_over_the_tunnel() {
     assert!(err.to_string().contains("404"), "{err}");
     drop(env);
 }
+
+/// One raw HTTP/1.1 request over a per-cell socket → (status, body).
+async fn uds(sock: &Path, raw: String) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::UnixStream::connect(sock).await.expect("connect cell socket");
+    s.write_all(raw.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let status = text.lines().next().and_then(|l| l.split_whitespace().nth(1)).and_then(|x| x.parse().ok()).unwrap_or_else(|| panic!("no status: {text:?}"));
+    (status, text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default())
+}
+
+/// What an agent inside a K2 session actually uses: the per-cell socket.
+/// The agent verbs reach the compute handler there (workspace from the
+/// passport, the job remembers the calling session); owner verbs never
+/// pass the socket's allowlist.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn agents_use_compute_over_their_cell_socket() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "delta");
+    let layout = enrolled_node(&env, port, "n3").await;
+    let running = start_node(&layout).await;
+    wait_for("node online", 20, || Box::pin(async move { node_row(port, "n3").await["offer"].is_object() })).await;
+
+    // A session in this workspace with its cell socket.
+    let sid = SessionId::new();
+    let token = k2_daemon::session_token::mint_session_token(
+        &sid,
+        "pane-1",
+        HookPrincipal { workspace_uuid: ws.id.clone(), agent_address: "agent".into() },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    );
+    let listener = k2_daemon::cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
+    let sock = k2_daemon::cell_uds::cell_socket_path(&sid);
+    k2_daemon::cell_server::serve_cell(sid, listener, None);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let get_req = |pq: &str| format!("GET {pq} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\r\n");
+    let post_req = |p: &str, body: &Value| {
+        let b = body.to_string();
+        format!("POST {p} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}", b.len())
+    };
+
+    let (st, body) = uds(&sock, get_req("/cli/compute/nodes")).await;
+    assert_eq!(st, 403, "{body}");
+    assert!(body.contains("compute_off"), "the handler answered: {body}");
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200);
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "n3", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200);
+    let (st, body) = uds(&sock, get_req("/cli/compute/nodes")).await;
+    assert_eq!(st, 200, "{body}");
+    assert!(body.contains("\"name\":\"n3\""), "{body}");
+
+    let (st, body) = uds(&sock, post_req("/cli/compute/run", &run_body("n3", &["sh", "-c", "echo via-cell"], "client-0000000201"))).await;
+    assert_eq!(st, 200, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let job = v["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(v["job"]["sessionId"], sid.to_string(), "the job remembers the calling session");
+    let (out, _, fin) = follow(port, OWNER, &job).await;
+    assert_eq!(out, "via-cell\n");
+    assert_eq!(fin["exitCode"], 0);
+    let (st, body) = uds(&sock, get_req(&format!("/cli/compute/jobs/logs?job={job}&cursor=0"))).await;
+    assert_eq!(st, 200, "logs over the cell socket: {body}");
+
+    // Owner verbs: not on the cell socket's allowlist at all.
+    let (st, _) = uds(&sock, post_req("/cli/compute/nodes/enroll-code", &json!({"name": "evil"}))).await;
+    assert_eq!(st, 403);
+    let (st, _) = uds(&sock, post_req("/cli/compute/grants/set", &json!({"node": "n3", "workspace": ws.id}))).await;
+    assert_eq!(st, 403);
+    let (st, _) = uds(&sock, post_req("/cli/compute/local/pause", &json!({}))).await;
+    assert_eq!(st, 403, "an agent never pauses a node");
+
+    running.runner.abort();
+    running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+    drop(env);
+}

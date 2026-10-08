@@ -50,7 +50,7 @@ impl FileSecretStore {
     }
 
     /// The old JSON file as a map (adoption).
-    pub fn legacy_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    pub fn legacy_map(path: &std::path::Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
         Self { path: path.to_path_buf(), vault: None }.load()
     }
 

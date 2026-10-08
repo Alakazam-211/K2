@@ -862,6 +862,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/disable", Member),
     get("/cli/vault/doctor", Member),
     post("/cli/vault/enable", Member),
+    post("/cli/vault/fetch", Member),
     post("/cli/vault/get", Member),
     post("/cli/vault/grant", Member),
     post("/cli/vault/kek/rotate", Owner),

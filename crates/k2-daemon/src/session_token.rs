@@ -588,6 +588,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/audit",
         "/cli/vault/requests",
         "/cli/vault/doctor",
+        "/cli/vault/fetch",
         "/cli/llm/accounts/login/status",
         "/cli/llm/accounts/add",
         "/cli/llm/accounts/login",

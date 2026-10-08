@@ -10974,6 +10974,8 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
+  k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL
+                                           K2 makes the call and adds the key; you never see it
   k2 vault get NAME                        print a value (needs an api grant; it lands in your transcript)
   k2 vault audit [NAME] [--since <rfc3339>]
   k2 vault requests                        Thread secret cards (pending / set / declined)
@@ -11209,12 +11211,112 @@ _vault_confirm_token() {
     printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
 }
 
+# k2 vault fetch — K2 makes the HTTPS call and adds the secret where its
+# creator said; you never see the value. Echoes come back as [k2v:NAME].
+_vault_fetch() {
+    local url="" method="" max_bytes="" timeout="" include=0 out="" body_inline="" body_file="" ctype="" as_json=0
+    local secrets=() headers=() dst="" fmt=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --secret|-s) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; secrets+=("$2"); shift 2 ;;
+            -X|--method) [ -n "${2:-}" ] || { echo "usage: -X METHOD" >&2; exit 2; }; method="$2"; shift 2 ;;
+            -H|--header) [ -n "${2:-}" ] || { echo "usage: -H 'Name: value'" >&2; exit 2; }; headers+=("$2"); shift 2 ;;
+            -d|--data)
+                [ -n "${2:-}" ] || { echo "usage: -d 'text' | -d @file" >&2; exit 2; }
+                if [ "${2#@}" != "$2" ]; then body_file="${2#@}"; else body_inline="$2"; fi
+                shift 2 ;;
+            --json)
+                [ -n "${2:-}" ] || { echo "usage: --json @file | --json 'text'" >&2; exit 2; }
+                if [ "${2#@}" != "$2" ]; then body_file="${2#@}"; else body_inline="$2"; fi
+                ctype="application/json"; shift 2 ;;
+            --max-bytes) max_bytes="${2:-}"; shift 2 ;;
+            --timeout) timeout="${2:-}"; shift 2 ;;
+            --include-headers|-i) include=1; shift ;;
+            -o|--output) [ -n "${2:-}" ] || { echo "usage: -o file" >&2; exit 2; }; out="$2"; shift 2 ;;
+            --dst) dst="${2:-}"; shift 2 ;;
+            --fmt) fmt="${2:-}"; shift 2 ;;
+            --json-out) as_json=1; shift ;;
+            --help|-h)
+                cat <<'EOF'
+k2 vault fetch --secret NAME [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
+               [--max-bytes N] [--timeout S] [--include-headers] [-o file] URL
+
+K2 makes the call and adds the secret (header and format fixed by whoever
+created it); only to the secret's sites. Bodies over 64 KiB and -o output
+are files inside your workspace. Echoes of the value come back as [k2v:NAME].
+EOF
+                return 0 ;;
+            -*) echo "usage: unknown fetch flag '$1' (k2 vault fetch --help)" >&2; exit 2 ;;
+            *) [ -z "$url" ] || { echo "usage: one URL" >&2; exit 2; }; url="$1"; shift ;;
+        esac
+    done
+    [ -n "$url" ] || { echo "usage: k2 vault fetch --secret NAME URL" >&2; exit 2; }
+    [ "${#secrets[@]}" -gt 0 ] || { echo "usage: name the secret: --secret NAME" >&2; exit 2; }
+    [ -z "$ctype" ] || headers+=("Content-Type: $ctype")
+    [ -z "$body_file" ] || body_file="$(cd "$(dirname "$body_file")" 2>/dev/null && pwd)/$(basename "$body_file")"
+    [ -z "$out" ] || out="$(cd "$(dirname "$out")" 2>/dev/null && pwd)/$(basename "$out")"
+    local req
+    req="$(printf '%s' "$body_inline" | python3 -c '
+import base64, json, sys
+url, method, mb, to, inc, out, bfile, dst, fmt = sys.argv[1:10]
+rest = sys.argv[10:]
+i = rest.index("--")
+secrets, headers = rest[:i], rest[i+1:]
+o = {"url": url, "secrets": [], "headers": []}
+for s in secrets:
+    e = {"name": s}
+    if dst: e["dst"] = dst
+    if fmt: e["fmt"] = fmt
+    o["secrets"].append(e)
+for h in headers:
+    if ":" not in h:
+        print("usage: -H takes Name: value", file=sys.stderr); sys.exit(2)
+    k, v = h.split(":", 1)
+    o["headers"].append([k.strip(), v.strip()])
+if method: o["method"] = method
+if mb: o["maxBytes"] = int(mb)
+if to: o["timeoutSecs"] = int(to)
+if inc == "1": o["includeHeaders"] = True
+if out: o["out"] = out
+if bfile: o["bodyFile"] = bfile
+data = sys.stdin.buffer.read()
+if data: o["bodyB64"] = base64.b64encode(data).decode()
+print(json.dumps(o))' "$url" "$method" "$max_bytes" "$timeout" "$include" "$out" "$body_file" "$dst" "$fmt" "${secrets[@]}" -- "${headers[@]+"${headers[@]}"}")" || exit 2
+    _vault_call POST fetch "$req"
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+    printf '%s' "$_SC_BODY" | python3 -c '
+import base64, json, sys
+v = json.load(sys.stdin)
+inc = sys.argv[1] == "1"
+if inc:
+    print("HTTP %s" % v.get("status"))
+    for k, val in v.get("headers") or []:
+        print("%s: %s" % (k, val))
+    print()
+if v.get("out"):
+    print("wrote %s bytes to %s (status %s)" % (v.get("bytes"), v["out"], v.get("status")), file=sys.stderr)
+elif v.get("body") is not None:
+    sys.stdout.write(v["body"])
+elif v.get("bodyB64"):
+    sys.stdout.buffer.write(base64.b64decode(v["bodyB64"]))
+if v.get("truncated"):
+    print("\n(truncated at the size limit; --max-bytes or -o)", file=sys.stderr)
+st = int(v.get("status") or 0)
+if st >= 400 and not inc:
+    print("(HTTP %d)" % st, file=sys.stderr)
+' "$include"
+}
+
 cmd_vault() {
     local sub="${1:-}"
     case "$sub" in
         ""|help|--help|-h) _vault_usage; return 0 ;;
     esac
     shift
+    if [ "$sub" = "fetch" ]; then
+        _vault_fetch "$@"
+        return
+    fi
     if _wants_help "$@"; then
         _vault_usage
         return 0

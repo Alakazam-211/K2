@@ -272,6 +272,9 @@ _cli_tool_id_for_verb() {
         # LLM tokens (`k2 llm tokens`, alias `accounts`): an `id` tool, so inside a K2
         # terminal the daemon sees the session passport (read-only there).
         llm) echo "llm-accounts" ;;
+        # K2 vault: an `id` tool, so inside a K2 terminal the daemon sees the
+        # session passport (agent-level), never the owner token.
+        vault) echo "vault" ;;
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         # Calendars S3 (CAL23.4, security): `k2 calendar` rides the mail
@@ -311,7 +314,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -319,7 +322,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -8349,6 +8352,7 @@ print(d.get("id",""))
 
 cmd_thread_secret() {
     local target="" json="false" explicit_from="" name="" prompt="" dest=""
+    local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             secret) shift ;;
@@ -8365,6 +8369,15 @@ cmd_thread_secret() {
             --dest)
                 [[ $# -ge 2 ]] || { echo "Error: --dest requires a value" >&2; exit 1; }
                 dest="$2"; shift 2 ;;
+            # K2 vault (prd-k2-vault-v1 §10.1): what this agent proposes.
+            # The person can change all of it on the card.
+            --scope|--for|--delivery|--kind|--ttl)
+                [[ $# -ge 2 ]] || { echo "Error: $1 requires a value" >&2; exit 1; }
+                case "$1" in
+                    --scope) v_scope="$2" ;; --for) v_for="$2" ;; --delivery) v_delivery="$2" ;;
+                    --kind) v_kind="$2" ;; --ttl) v_ttl="$2" ;;
+                esac
+                shift 2 ;;
             --wait|--timeout)
                 echo "Error: thread cards are fire-and-forget; no --wait / --timeout" >&2
                 exit 1 ;;
@@ -8389,11 +8402,15 @@ cmd_thread_secret() {
     local from
     from="$(_thread_sender_from "$explicit_from")"
     local body
-    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" python3 -c 'import json,os
+    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" V_SCOPE="$v_scope" V_FOR="$v_for" V_DELIVERY="$v_delivery" V_KIND="$v_kind" V_TTL="$v_ttl" python3 -c 'import json,os
 obj={"addr":os.environ["ADDR"],"name":os.environ["NAME"],"from":os.environ.get("FROM","k2"),"dest":"vault"}
 p=os.environ.get("PROMPT") or ""
 if p:
     obj["prompt"]=p
+for k, env in (("scope","V_SCOPE"),("for","V_FOR"),("delivery","V_DELIVERY"),("kind","V_KIND"),("ttl","V_TTL")):
+    v=os.environ.get(env) or ""
+    if v:
+        obj[k]=v
 print(json.dumps(obj))
 ')
     local response
@@ -8441,6 +8458,11 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
+      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env]
+      [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
+      The value goes into the K2 vault; you get a k2v:// reference and use it with
+      `k2 vault fetch --secret NAME …`. The person can change the sites, the scope and
+      how you get it. Exact hosts only. More: k2 study vault
 
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
 sales = live alias for pinned Chat now. sales/reviewer is durable.
@@ -10832,6 +10854,603 @@ else:
     print("%s: server default is now %s" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
     print("Changing the server default token affects every chat that uses Server default on this server.")
 '
+}
+
+# ── k2 vault (prd-k2-vault-v1 §14) ──────────────────────────────────
+# One encrypted store for passwords, tokens and keys. Values are read from
+# stdin only (never an argument, never a URL). Agent verbs go over the
+# session passport (cell socket / scoped token); the steps that are for
+# people only (recovery key, vault password, reveal, key operations) go
+# over ~/.k2/vault.sock from a terminal outside K2.
+
+_vault_usage() {
+    cat <<'EOF'
+k2 vault — secrets for agents, without showing them the value
+
+  k2 vault status                          where the key lives, recovery, honest line
+  k2 vault list [--scope <s>] [--system]   names, scope, sites, delivery (never values)
+  k2 vault show NAME [--scope <s>]         one secret: sites, delivery, shares, recent use
+  k2 vault set NAME [options] < value      create, or a new version (value on stdin)
+  k2 vault rotate NAME < value             a new version
+  k2 vault hosts NAME --add <host> | --remove <host>
+  k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]
+  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>] [--env-name X]
+  k2 vault revoke NAME --from <who>        (or --grant <id>)
+  k2 vault disable|enable NAME             destroy NAME --yes
+  k2 vault get NAME                        print a value (needs an api grant; it lands in your transcript)
+  k2 vault audit [NAME] [--since <rfc3339>]
+  k2 vault requests                        Thread secret cards (pending / set / declined)
+  k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
+  k2 vault doctor                          plaintext .env files, due rotations, problems
+
+  People only (from your own terminal or SSH, not a K2 terminal):
+  k2 vault reveal NAME                     show a value (asks for a confirm)
+  k2 vault recovery show-once              make and show the recovery key once; type back 3 words
+  k2 vault recovery rotate                 replace the recovery key (asks for a confirm)
+  k2 vault confirm-password set            set the vault password used for confirms
+  k2 vault kek rotate | rekey              rotate the box key / the data key (owner, confirm)
+  k2 vault rollback NAME --to <version>    put an older version back (confirm)
+
+Scope (--scope): ws:<workspace> (default inside a workspace), server, session.
+set options:
+  --kind api_key|password|oauth_token|ssh_key|tls_key|dsn|url|generic   (default api_key)
+  --for <host>[,<host>]       sites this secret may be sent to (exact hosts)
+  --preset stripe|openai|anthropic|xai|gemini|github|slack|supabase
+                              fills the sites and where the key goes in a request
+  --inject-header <Name> --inject-format '<fmt with {}>'   where the key goes (header)
+  --delivery fetch|file|env|api   how agents get it (default fetch for keys)
+  --ceiling fetch|file|env|api    the loosest delivery allowed later
+  --describe <text>  --rotate-every <days>  --ttl <secs> (session scope)
+
+Where the key goes is fixed by whoever creates the secret (header and
+format); agents name the secret and K2 adds it. The presets fill this in
+for common key formats, so you usually just confirm.
+
+Agents: use `k2 vault fetch` (K2 makes the call and adds the key), never
+paste a key into a file or chat; ask a person with `k2 thread secret`.
+More: k2 study vault
+EOF
+}
+
+# Exit code for a vault refusal.
+_vault_exit_for() {
+    case "$1" in
+        200) echo 0 ;;
+        400|413|422) echo 2 ;;
+        401|403) echo 3 ;;
+        404) echo 4 ;;
+        *) echo 1 ;;
+    esac
+}
+
+_vault_fail() {
+    local status="$1" body="$2"
+    printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    e = json.loads(raw).get("error") or {}
+    if isinstance(e, dict):
+        print("%s: %s" % (e.get("code", "error"), e.get("hint", "")), file=sys.stderr)
+    else:
+        print(str(e), file=sys.stderr)
+except Exception:
+    print(raw[:300] or "the daemon did not answer", file=sys.stderr)
+'
+    exit "$(_vault_exit_for "$status")"
+}
+
+# _vault_call GET|POST <route-suffix> [json|query] → _SC_BODY/_SC_STATUS, fails loud.
+_vault_call() {
+    local method="$1" route="$2" payload="${3:-}"
+    _sidecar_split "$(_sidecar_send "$method" "/cli/vault/${route}" "$payload")"
+    if [ "$_SC_STATUS" != "200" ]; then
+        _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    fi
+}
+
+_vault_sock() { echo "${K2_HOME}/vault.sock"; }
+
+# People-only routes: refuse inside a K2 terminal, then talk to vault.sock.
+_vault_person_guard() {
+    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+        echo "owner_only: this is for a person, from your own terminal or SSH login, not a K2 terminal." >&2
+        echo "Agents: don't run it; tell your owner." >&2
+        exit 3
+    fi
+    if [ ! -S "$(_vault_sock)" ]; then
+        echo "vault_unavailable: $(_vault_sock) isn't there (is the K2 daemon running on this machine?)" >&2
+        exit 1
+    fi
+}
+
+# _vault_sock_call POST <route> <json> → _SC_BODY/_SC_STATUS (no exit).
+_vault_sock_call() {
+    local method="$1" route="$2" payload="${3:-}" tty="0" out
+    [ -t 0 ] && [ -t 1 ] && tty="1"
+    [ -t 0 ] && [ -t 2 ] && tty="1"
+    if [ "$method" = "GET" ]; then
+        out="$(curl -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
+            -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    else
+        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
+            -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
+            --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    fi
+    _sidecar_split "$out"
+}
+
+# Read a value from stdin (prompt without echo on a terminal) and print a
+# JSON body with it as valueB64. The value travels stdin→python→stdout→
+# curl stdin; never argv.
+_vault_body_with_value() {
+    local base_json="$1"
+    if [ -t 0 ]; then
+        local v=""
+        printf 'Value (not shown): ' >&2
+        IFS= read -rs v || v=""
+        echo >&2
+        [ -n "$v" ] || { echo "usage: no value on stdin" >&2; exit 2; }
+        printf '%s' "$v" | python3 -c '
+import base64, json, sys
+b = json.loads(sys.argv[1]); v = sys.stdin.buffer.read()
+b["valueB64"] = base64.b64encode(v).decode()
+print(json.dumps(b))' "$base_json"
+        v=""
+    else
+        python3 -c '
+import base64, json, sys
+b = json.loads(sys.argv[1]); v = sys.stdin.buffer.read()
+if v.endswith(b"\n") and v.count(b"\n") == 1:
+    v = v[:-1]
+if not v:
+    print("usage: no value on stdin", file=sys.stderr); sys.exit(2)
+b["valueB64"] = base64.b64encode(v).decode()
+print(json.dumps(b))' "$base_json"
+    fi
+}
+
+# Scope flag → JSON fields.
+_vault_scope_json() {
+    local s="${1:-}"
+    python3 -c '
+import json, sys
+s = sys.argv[1]
+o = {}
+if s.startswith("ws:") or s.startswith("workspace:"):
+    o["scope"] = "workspace"; o["workspace"] = s.split(":", 1)[1]
+elif s in ("server", "session", "workspace"):
+    o["scope"] = s
+elif s.startswith("session:"):
+    o["scope"] = "session"; o["session"] = s.split(":", 1)[1]
+elif s:
+    print("usage: --scope ws:<name>|server|session", file=sys.stderr); sys.exit(2)
+print(json.dumps(o))' "$s"
+}
+
+_vault_merge() {
+    python3 -c '
+import json, sys
+o = {}
+for a in sys.argv[1:]:
+    o.update(json.loads(a))
+print(json.dumps(o))' "$@"
+}
+
+_vault_render_list() {
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+items = v.get("secrets") or []
+if not items:
+    print("no secrets yet (k2 vault set NAME < value, or ask a person with k2 thread secret)")
+for m in items:
+    sc = m.get("scope") or {}
+    where = "server" if sc.get("kind") == "server" else ("ws:" + (m.get("workspace") or sc.get("id","")) if sc.get("kind") == "workspace" else sc.get("kind","") + ":" + sc.get("id","")[:8])
+    hosts = ",".join(h.split("://",1)[-1].rsplit(":",1)[0] for h in (m.get("hosts") or [])) or "-"
+    see = " (agent can see it)" if m.get("agentCanSee") else ""
+    ns = " [system]" if m.get("namespace") == "system" else ""
+    st = "" if m.get("status") == "active" else " [" + m.get("status","") + "]"
+    print("%-28s %-18s %-10s %-8s v%-3s %s%s%s%s" % (m.get("name"), where, m.get("kind"), m.get("defaultDelivery"), m.get("latestVersion"), hosts, see, ns, st))
+'
+}
+
+_vault_render_status() {
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v.get("open", True) and v.get("error"):
+    e = v["error"]; print("vault: closed — %s: %s" % (e.get("code"), e.get("hint"))); sys.exit(0)
+print("vault:          open")
+print("key:            %s (%s)" % (v.get("keyHomeLabel"), v.get("keyHome")))
+print("rollback guard: %s" % v.get("rollbackGuard"))
+print("recovery key:   %s" % v.get("recovery"))
+print("vault password: %s" % ("set" if v.get("confirmPassword") else "not set"))
+c = v.get("counts") or {}
+print("secrets:        %s yours, %s K2 system, %s shares, %s pending cards" % (c.get("user"), c.get("system"), c.get("grants"), c.get("pendingRequests")))
+if v.get("tamper") != "ok":
+    print("PROBLEM:        %s" % v.get("tamper"))
+if v.get("rollback"):
+    print("PROBLEM:        vault.db looks older than expected; the owner confirms in Settings → Vault")
+print()
+print(v.get("honest", ""))
+if v.get("recoveryHint"):
+    print(); print(v["recoveryHint"])
+'
+}
+
+# Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
+# Mac, else the vault password typed here). Prints the token.
+_vault_confirm_token() {
+    local action="$1" secret_id="${2:-}" label="${3:-}"
+    _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1]}))' "$action")"
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    local methods
+    methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
+    local body
+    case " $methods " in
+        *" local-auth "*)
+            echo "Approve on this Mac (Touch ID or your login password)…" >&2
+            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "local-auth", "label": sys.argv[3]}))' "$action" "$secret_id" "$label")"
+            ;;
+        *" vault-password "*)
+            local pw=""
+            printf 'Vault password: ' >&2
+            IFS= read -rs pw || pw=""
+            echo >&2
+            body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "vault-password", "password": sys.stdin.read()}))' "$action" "$secret_id")"
+            pw=""
+            ;;
+        *)
+            echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2
+            exit 3
+            ;;
+    esac
+    _vault_sock_call POST "confirm/finish" "$body"
+    body=""
+    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+}
+
+cmd_vault() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|help|--help|-h) _vault_usage; return 0 ;;
+    esac
+    shift
+    if _wants_help "$@"; then
+        _vault_usage
+        return 0
+    fi
+    local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
+    local inject_header="" inject_format="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
+    local add_hosts=() rm_hosts=() pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --system) system=1; shift ;;
+            --yes) yes=1; shift ;;
+            --scope|--kind|--for|--preset|--delivery|--ceiling|--describe|--rotate-every|--ttl|--inject-header|--inject-format|--to|--from|--as|--env-name|--file-name|--grant|--add|--remove|--since)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --scope) scope="$2" ;; --kind) kind="$2" ;; --for) hosts="$2" ;; --preset) preset="$2" ;;
+                    --delivery) delivery="$2" ;; --ceiling) ceiling="$2" ;; --describe) describe="$2" ;;
+                    --rotate-every) rotate_every="$2" ;; --ttl) ttl="$2" ;; --inject-header) inject_header="$2" ;;
+                    --inject-format) inject_format="$2" ;; --to)
+                        if [ "$sub" = "rollback" ]; then to_version="$2"; else to="$2"; fi ;;
+                    --from) from="$2" ;; --as) as_d="$2" ;; --env-name) env_name="$2" ;; --file-name) file_name="$2" ;;
+                    --grant) grant_id="$2" ;; --add) add_hosts+=("$2") ;; --remove) rm_hosts+=("$2") ;; --since) since="$2" ;;
+                esac
+                shift 2 ;;
+            --value|--value=*|--secret-value*)
+                echo "value_on_argv: values are read from stdin, never an argument (k2 vault set NAME < file)" >&2
+                exit 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 vault --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local sj
+    sj="$(_vault_scope_json "$scope")" || exit 2
+    local name="${pos[0]:-}"
+    local nj
+    nj="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]} if sys.argv[1] else {}))' "$name")"
+    [ "$system" = "1" ] && nj="$(_vault_merge "$nj" '{"system": true}')"
+    case "$sub" in
+        status)
+            _vault_call GET status
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            _vault_render_status
+            ;;
+        list|ls)
+            local q=""
+            [ "$system" = "1" ] && q="system=1"
+            if [ -n "$scope" ]; then
+                q="${q}${q:+&}$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); print(urllib.parse.urlencode(o))' "$sj")"
+            fi
+            _vault_call GET list "$q"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            _vault_render_list
+            ;;
+        show)
+            [ -n "$name" ] || { echo "usage: k2 vault show NAME [--scope <s>]" >&2; exit 2; }
+            _vault_call GET show "$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin); m = v.get("secret") or {}
+print("%s  (%s, %s, v%s, %s)" % (m.get("name"), m.get("kind"), m.get("status"), m.get("latestVersion"), m.get("ref") or "system"))
+print("sites:     %s" % (", ".join(m.get("hosts") or []) or "none (fetch is refused until a site is added)"))
+inj = m.get("inject") or {}
+if inj: print("goes in:   %s as %s" % (inj.get("dst"), inj.get("fmt")))
+print("delivery:  %s (at most %s)%s" % (m.get("defaultDelivery"), m.get("deliveryCeiling"), " — agents can see it" if m.get("agentCanSee") else ""))
+print("given by:  %s%s" % (m.get("createdBy"), " (a person)" if m.get("humanGiven") else ""))
+for g in v.get("grants") or []:
+    print("shared:    %s as %s%s" % (g.get("consumerLabel"), g.get("delivery"), (" env " + g["envName"]) if g.get("envName") else ""))
+for a in (v.get("audit") or [])[:10]:
+    print("  %s %s %s %s%s" % (a.get("ts"), a.get("action"), a.get("outcome"), a.get("actor"), (" x%d" % a["count"]) if a.get("count",1) > 1 else ""))
+'
+            ;;
+        set)
+            [ -n "$name" ] || { echo "usage: k2 vault set NAME [options] < value" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument (k2 vault set NAME < file)" >&2; exit 2; }
+            local opts
+            opts="$(python3 -c '
+import json, sys
+kind, hosts, preset, delivery, ceiling, describe, rot, ttl, ih, iformat = sys.argv[1:11]
+o = {}
+if kind: o["kind"] = kind
+if hosts: o["hosts"] = [h.strip() for h in hosts.split(",") if h.strip()]
+if preset: o["preset"] = preset
+if delivery: o["delivery"] = delivery
+if ceiling: o["ceiling"] = ceiling
+if describe: o["description"] = describe
+if rot: o["rotateEveryDays"] = int(rot)
+if ttl: o["ttlSecs"] = int(ttl)
+if ih or iformat:
+    o["inject"] = {"dst": "header:" + (ih or "Authorization"), "fmt": iformat or "{}"}
+print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$describe" "$rotate_every" "$ttl" "$inject_header" "$inject_format")" || exit 2
+            local body
+            body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj" "$opts")")" || exit 2
+            _vault_call POST set "$body"
+            body=""
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin); m = v.get("secret") or {}
+print("%s %s → %s (v%s)" % ("saved" if v.get("created") else "new version of", m.get("name"), v.get("ref"), m.get("latestVersion")))
+if v.get("trimmed"): print("(trimmed spaces/newlines around the value)")
+print("use: " + (v.get("use") or ""))'
+            ;;
+        rotate)
+            [ -n "$name" ] || { echo "usage: k2 vault rotate NAME < value" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2; }
+            local body
+            body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj")")" || exit 2
+            _vault_call POST rotate "$body"
+            body=""
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s is now v%s" % ((v.get("secret") or {}).get("name"), v.get("version")))'
+            ;;
+        hosts)
+            [ -n "$name" ] || { echo "usage: k2 vault hosts NAME --add <host> | --remove <host>" >&2; exit 2; }
+            local hj
+            hj="$(python3 -c 'import json,sys; a=[x for x in sys.argv[1].split("\n") if x]; r=[x for x in sys.argv[2].split("\n") if x]; print(json.dumps({"addHosts": a, "removeHosts": r}))' \
+                "$(printf '%s\n' "${add_hosts[@]+"${add_hosts[@]}"}")" "$(printf '%s\n' "${rm_hosts[@]+"${rm_hosts[@]}"}")")"
+            _vault_call POST policy "$(_vault_merge "$sj" "$nj" "$hj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s sites: %s" % (m.get("name"), ", ".join(m.get("hosts") or []) or "none"))'
+            ;;
+        delivery)
+            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]" >&2; exit 2; }
+            local dj
+            dj="$(python3 -c 'import json,sys; o={"delivery": sys.argv[1]};
+if sys.argv[2]: o["ceiling"]=sys.argv[2]
+print(json.dumps(o))' "${pos[1]}" "$ceiling")"
+            _vault_call POST policy "$(_vault_merge "$sj" "$nj" "$dj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s: %s (at most %s)" % (m.get("name"), m.get("defaultDelivery"), m.get("deliveryCeiling")))'
+            ;;
+        grant)
+            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>]" >&2; exit 2; }
+            local gj
+            gj="$(python3 -c 'import json,sys; o={"to": sys.argv[1]}
+for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4])):
+    if v: o[k]=v
+print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name")"
+            _vault_call POST grant "$(_vault_merge "$sj" "$nj" "$gj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            echo "shared ${name} with ${to}"
+            ;;
+        revoke)
+            local rj
+            rj="$(python3 -c 'import json,sys; o={}
+if sys.argv[1]: o["grantId"]=sys.argv[1]
+if sys.argv[2]: o["from"]=sys.argv[2]
+print(json.dumps(o))' "$grant_id" "$from")"
+            _vault_call POST revoke "$(_vault_merge "$sj" "$nj" "$rj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            echo "removed"
+            ;;
+        disable|enable)
+            [ -n "$name" ] || { echo "usage: k2 vault $sub NAME" >&2; exit 2; }
+            _vault_call POST "$sub" "$(_vault_merge "$sj" "$nj")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_SC_BODY"; exit 0; }
+            echo "${name}: ${sub}d"
+            ;;
+        destroy)
+            [ -n "$name" ] || { echo "usage: k2 vault destroy NAME --yes" >&2; exit 2; }
+            _vault_call POST destroy "$(_vault_merge "$sj" "$nj" "$( [ "$yes" = 1 ] && echo '{"yes": true}' || echo '{}')")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_SC_BODY"; exit 0; }
+            echo "${name}: destroyed on this box (backups made earlier keep it until they expire)"
+            ;;
+        get)
+            [ -n "$name" ] || { echo "usage: k2 vault get NAME" >&2; exit 2; }
+            _vault_call POST get "$(_vault_merge "$sj" "$nj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import base64,json,sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["valueB64"]))'
+            ;;
+        audit)
+            local q=""
+            if [ -n "$name" ]; then
+                q="$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+            fi
+            [ -n "$since" ] && q="${q}${q:+&}since=$(urlencode "$since")"
+            _vault_call GET audit "$q"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+for a in json.load(sys.stdin).get("audit") or []:
+    print("%s %-8s %-28s %-22s %s%s%s" % (a.get("ts"), a.get("action"), a.get("outcome"), a.get("actor"), a.get("targetHost") or "", (" x%d" % a["count"]) if a.get("count",1) > 1 else "", ""))'
+            ;;
+        requests)
+            _vault_call GET requests
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("requests") or []
+if not r: print("no secret cards yet")
+for x in r:
+    print("%s %-8s %-24s asked by %s" % (x.get("createdAt"), x.get("status"), x.get("name"), x.get("requestedBy")))'
+            ;;
+        presets)
+            _vault_call GET presets
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+for p in json.load(sys.stdin).get("presets") or []:
+    print("%-10s %-14s %-48s %s %s" % (p["id"], p["label"], ",".join(p["hosts"]) or "(your project host)", p["dst"], p["fmt"]))'
+            ;;
+        doctor)
+            _vault_call GET doctor
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+f = v.get("findings") or []
+if not f: print("vault: nothing to fix")
+for x in f: print("%-7s %s" % (x.get("level"), x.get("message")))
+sys.exit(0 if v.get("ok") else 1)'
+            ;;
+        reveal)
+            [ -n "$name" ] || { echo "usage: k2 vault reveal NAME [--scope <s>]" >&2; exit 2; }
+            _vault_person_guard
+            _vault_sock_call GET "show?$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            local sid
+            sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
+            local tok
+            tok="$(_vault_confirm_token reveal "$sid" "$name")" || exit 3
+            _vault_sock_call POST reveal "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")")"
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            printf '%s' "$_SC_BODY" | python3 -c 'import base64,json,sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["valueB64"])); print()'
+            ;;
+        recovery)
+            local act="${pos[0]:-status}"
+            case "$act" in
+                status)
+                    _vault_call GET status
+                    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("recovery key: %s%s" % (v.get("recovery"), (" (" + v["recoveryConfirmedAt"] + ")") if v.get("recoveryConfirmedAt") else "")); print(v.get("recoveryHint",""))'
+                    ;;
+                show-once|rotate)
+                    _vault_person_guard
+                    local rb='{}'
+                    if [ "$act" = "rotate" ]; then
+                        local tok
+                        tok="$(_vault_confirm_token recovery-rotate "" "recovery key")" || exit 3
+                        rb="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+                    fi
+                    _vault_sock_call POST "recovery/${act}" "$rb"
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    local rid
+                    rid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+                    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+w = v["phrase"].split(" ")
+print()
+print("Your vault recovery key (write it down, keep it offline; K2 keeps only the public half):")
+print()
+for i in range(0, 24, 4):
+    print("   " + "   ".join("%2d. %-9s" % (i + j + 1, w[i + j]) for j in range(4)))
+print()' >&2
+                    local words=() wd n
+                    for n in 3 11 20; do
+                        printf 'Type word %s: ' "$n" >&2
+                        IFS= read -r wd || wd=""
+                        words+=("$wd")
+                    done
+                    printf '\033[2J\033[H' >&2
+                    _vault_sock_call POST recovery/confirm "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "words": sys.argv[2:5]}))' "$rid" "${words[@]}")"
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    echo "recovery key confirmed. If it ever leaks: k2 vault recovery rotate, then k2 vault rekey."
+                    ;;
+                *) echo "usage: k2 vault recovery status|show-once|rotate" >&2; exit 2 ;;
+            esac
+            ;;
+        confirm-password)
+            [ "${pos[0]:-}" = "set" ] || { echo "usage: k2 vault confirm-password set" >&2; exit 2; }
+            _vault_person_guard
+            local tokj='{}'
+            _vault_sock_call GET status
+            if printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("confirmPassword") else 1)'; then
+                local tok
+                tok="$(_vault_confirm_token confirm-password-change "" "vault password")" || exit 3
+                tokj="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+            fi
+            local p1="" p2=""
+            printf 'New vault password (10+ characters): ' >&2; IFS= read -rs p1 || p1=""; echo >&2
+            printf 'Again: ' >&2; IFS= read -rs p2 || p2=""; echo >&2
+            [ -n "$p1" ] && [ "$p1" = "$p2" ] || { echo "usage: the two entries don't match" >&2; exit 2; }
+            local pb
+            pb="$(printf '%s' "$p1" | python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["password"]=sys.stdin.read(); print(json.dumps(o))' "$tokj")"
+            p1=""; p2=""
+            _vault_sock_call POST confirm-password/set "$pb"
+            pb=""
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            echo "vault password set. K2 only asks for it inside the K2 window or your own terminal."
+            ;;
+        kek|rekey)
+            local action route
+            if [ "$sub" = "kek" ]; then
+                [ "${pos[0]:-}" = "rotate" ] || { echo "usage: k2 vault kek rotate" >&2; exit 2; }
+                action="kek-rotate"; route="kek/rotate"
+            else
+                action="rekey"; route="rekey"
+            fi
+            _vault_person_guard
+            local tok
+            tok="$(_vault_confirm_token "$action" "" "")" || exit 3
+            _vault_sock_call POST "$route" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            echo "done"
+            ;;
+        rollback)
+            [ -n "$name" ] && [ -n "$to_version" ] || { echo "usage: k2 vault rollback NAME --to <version>" >&2; exit 2; }
+            _vault_person_guard
+            _vault_sock_call GET "show?$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            local sid tok
+            sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
+            tok="$(_vault_confirm_token rollback "$sid" "$name")" || exit 3
+            _vault_sock_call POST rollback "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1], "version": int(sys.argv[2])}))' "$tok" "$to_version")")"
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            echo "${name}: back to the value of v${to_version} (as a new version)"
+            ;;
+        *)
+            echo "usage: unknown vault verb '$sub' (k2 vault --help)" >&2
+            exit 2
+            ;;
+    esac
 }
 
 cmd_llm() {
@@ -15355,6 +15974,7 @@ cmd_help() {
         sidecar)                  _sidecar_usage ;;
         compute)                  _compute_usage ;;
         llm)                      _llm_accounts_usage ;;
+        vault)                    _vault_usage ;;
         feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
         calendar|cal)             cmd_help_calendar ;;
@@ -18567,7 +19187,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault"
 
 _study_usage() {
     cat <<'EOF'
@@ -18585,7 +19205,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute
+  llm-accounts  publish-framing  compute  vault
 EOF
 }
 
@@ -18616,6 +19236,7 @@ _study_title() {
         llm-accounts) echo "LLM tokens" ;;
         publish-framing) echo "Who may frame your App" ;;
         compute) echo "Compute nodes" ;;
+        vault) echo "Secrets (the vault)" ;;
         *) echo "" ;;
     esac
 }
@@ -18659,6 +19280,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   llm-accounts        leftover alias of llm-tokens
   publish-framing     Who may frame your App; the header for --cmd Apps
   compute             Run builds/tests on your owner's other machines; logs are data
+  vault               Secrets: fetch not paste; references; who sets what
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -18699,8 +19321,67 @@ _study_page() {
             ;;
         publish-framing) _study_page_publish_framing ;;
         compute) _study_page_compute ;;
+        vault) _study_page_vault ;;
         *) return 1 ;;
     esac
+}
+
+_study_page_vault() {
+    cat <<'EOF'
+k2 study vault — using secrets without seeing them
+
+THE RULE
+  Never paste a key into a file, a chat, a ticket or git. If you need one,
+  ask a person: k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com
+  The value goes straight into the vault; you get a reference back.
+
+HOW YOU GET A SECRET (delivery)
+  fetch   K2 makes the HTTPS call and adds the key. You never see it.
+          k2 vault fetch --secret STRIPE_KEY https://api.stripe.com/v1/charges
+          Only to the secret's sites. Where the key goes in the request
+          (header and format) was fixed by whoever created the secret —
+          you just name it. Echoes of the key come back as [k2v:NAME].
+  proxy   LLM CLIs get a local base URL + a placeholder key; K2 swaps in
+          the real key on the way out (the tool never sees it).
+  file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
+          You CAN read it — so can anything you run. Opt-in.
+  env     $NAME in new sessions. You can read it. Needs a respawn.
+  api     k2 vault get NAME prints it into your transcript. Rare.
+  Default for keys is fetch. "Agent can see this" in k2 vault list means
+  file/env/api.
+
+REFERENCES, NOT COPIES
+  k2v://ws/<workspace>/<NAME>   k2v://server/<NAME>
+  Safe anywhere a value would go: .env.k2, preset env, publish bindings,
+  tickets, wiki. `k2 db dsn --ref` prints the DB reference form.
+
+WHO SETS WHAT
+  The creator fixes the sites and where the key goes (k2 vault presets:
+  Stripe, OpenAI, Anthropic, xAI, Gemini, GitHub, Slack, Supabase fill this
+  in). Exact hosts only; wildcards are for people, and never over shared
+  suffixes (*.supabase.co, *.vercel.app, *.k2.dev are many owners).
+  You may narrow, lower or disable a secret a person gave you, and rotate
+  it with a new value from the provider (the owner is told, with undo).
+  You may not widen its sites, raise its delivery, share it, or read it
+  (vault_owner_confirm_required → ask the owner in Settings → Vault).
+  Secrets your workspace created are yours to widen.
+  "Allow managing server-wide secrets" (vault_manage) lets an IT agent
+  share server secrets with OTHER workspaces — never its own.
+
+PEOPLE ONLY
+  The recovery key, the vault password, reveal and key rotation are for
+  your owner, from their own terminal or Settings. If doctor/status says
+  "recovery: not confirmed", don't run it — tell your owner.
+
+HONEST LIMITS
+  Fetch can't stop a harmful call to the allowed site (use restricted
+  keys). On boxes where agents have admin rights, an agent that goes
+  looking for the vault's key can find it; the vault keeps secrets out of
+  chats, logs, git and copies, sends them only where they belong, and
+  logs every use.
+
+  k2 vault --help   k2 vault list   k2 vault doctor
+EOF
 }
 
 _study_page_what() {
@@ -42756,6 +43437,10 @@ EOF
     llm)
         # LLM tokens (`k2 llm tokens`; `k2 llm accounts` is an alias).
         shift; cmd_llm "$@"
+        ;;
+    vault)
+        # K2 vault (prd-k2-vault-v1 §14).
+        shift; cmd_vault "$@"
         ;;
     reserve)
         shift; cmd_reserve "$@"

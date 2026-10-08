@@ -133,7 +133,13 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     }
     k2_node::nlog!("shutting down: stopping running jobs");
     node.stop_all(k2_node_proto::frames::JobState::Interrupted, "node_shutdown");
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Give jobs their SIGTERM grace (10 s) to finish and record a receipt.
+    for _ in 0..60 {
+        if node.running_ids().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
     node.set_status_state("offline", None, Some("k2-node stopped".into()));
     Ok(())
 }

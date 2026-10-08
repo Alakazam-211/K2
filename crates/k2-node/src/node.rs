@@ -229,6 +229,17 @@ impl Node {
         for (j, g) in &changed {
             crate::nlog!("job {j} gen {g}: interrupted by a node reboot");
         }
+        // Same boot, new process: the old process's jobs can't be re-adopted.
+        for (j, g, pgid) in ledger.interrupt_open("node_restart", opts.clock.as_ref())? {
+            crate::nlog!("job {j} gen {g}: interrupted by a k2-node restart");
+            // The node user can only signal its own processes, so a reused
+            // pgid can only be another k2node process; never our own group,
+            // and never in --dev (there the user is a human).
+            let own = unsafe { (libc::getpid(), libc::getpgrp()) };
+            if let Some(p) = pgid.filter(|p| *p != own.0 && *p != own.1 && !opts.dev) {
+                runner::signal_group(p, libc::SIGKILL);
+            }
+        }
         let pin = identity::read_pin(&layout.pin())?;
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;

@@ -317,6 +317,30 @@ impl Ledger {
         Ok(out)
     }
 
+    /// After a restart within the same boot: every attempt still open
+    /// belonged to the previous `k2-node` process, which can't be
+    /// re-adopted (its pipes are gone). Mark them `interrupted/<reason>`
+    /// and return `(job_id, generation, pgid)` so the caller can kill
+    /// what's left of each process group.
+    pub fn interrupt_open(&self, reason: &str, clock: &dyn Clock) -> Result<Vec<(String, u32, Option<i32>)>, String> {
+        let mut st = self
+            .conn
+            .prepare("SELECT job_id, generation, pid, log_seq FROM jobs WHERE state NOT IN ('done','failed','cancelled','timeout','interrupted','unknown')")
+            .map_err(sqlerr)?;
+        let rows: Vec<(String, u32, Option<i64>, i64)> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map_err(sqlerr)?
+            .collect::<Result<_, _>>()
+            .map_err(sqlerr)?;
+        drop(st);
+        let mut out = Vec::new();
+        for (job, gen, pid, seq) in rows {
+            self.finish(&job, gen, JobState::Interrupted, Some(reason), None, None, seq as u64, clock.now())?;
+            out.push((job, gen, pid.map(|p| p as i32)));
+        }
+        Ok(out)
+    }
+
     /// Delete terminal rows that ended before `before`.
     pub fn prune(&self, before: i64) -> Result<usize, String> {
         self.conn
@@ -388,6 +412,21 @@ pub mod tests {
         let r = l.get("run", 1).unwrap().unwrap();
         assert_eq!((r.state, r.reason.as_deref()), (JobState::Interrupted, Some("node_reboot")));
         assert_eq!(l.get("done", 1).unwrap().unwrap().exit.unwrap().code, Some(0));
+    }
+
+    #[test]
+    fn restart_interrupts_what_the_old_process_left_open() {
+        let clock = FakeClock { t: Mutex::new(10), boot: Mutex::new("b1".into()) };
+        let l = Ledger::open_in_memory().unwrap();
+        l.insert(&assign("a", 1), &clock).unwrap();
+        l.set_running("a", 1, 4242, None, 11).unwrap();
+        l.insert(&assign("b", 1), &clock).unwrap();
+        l.finish("b", 1, JobState::Done, None, None, None, 0, 12).unwrap();
+        let v = l.interrupt_open("node_restart", &clock).unwrap();
+        assert_eq!(v, vec![("a".to_string(), 1, Some(4242))]);
+        let r = l.get("a", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Interrupted, Some("node_restart")));
+        assert_eq!(l.get("b", 1).unwrap().unwrap().state, JobState::Done);
     }
 
     #[test]

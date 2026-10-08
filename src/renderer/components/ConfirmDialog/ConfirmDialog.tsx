@@ -91,6 +91,9 @@ export default function ConfirmDialog(): React.JSX.Element | null {
             lineHeight: '1.5',
             marginBottom: 20,
             whiteSpace: 'pre-line',
+            // Long unbroken text (a pairing token) wraps inside the dialog.
+            overflowWrap: 'anywhere',
+            userSelect: 'text',
           }}
         >
           {message}

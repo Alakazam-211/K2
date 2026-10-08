@@ -23,6 +23,7 @@ import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-ret
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -438,17 +439,50 @@ interface PairV2Answer {
   base_url?: string
 }
 
+/** Asks the owner to compare this server's pairing code with the code the
+ *  other machine prints for `verifyCommand`. Resolves true only when they
+ *  confirmed the two codes match. */
+export type ConfirmPairingCode = (req: {
+  code: string
+  host: string
+  verifyCommand: string
+}) => Promise<boolean>
+
+/** The `k2pair3:` token `k2 fed pair-verify` takes (base64url JSON). */
+export function pairVerifyToken(reveal: unknown): string {
+  const json = JSON.stringify(reveal)
+  const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(json)))
+  return 'k2pair3:' + b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** The dialog the app shows for a plain-http remote (Settings → Pair). */
+export const confirmPairingCodeWithDialog: ConfirmPairingCode = ({ code, host, verifyCommand }) =>
+  useConfirmDialogStore.getState().confirm({
+    title: 'Compare pairing codes',
+    message:
+      `This server's pairing code is ${code}.\n\n` +
+      `"${host}" is reached over plain http, so this app can't check its answer by itself: ` +
+      `anything on the network path could change it. On ${host}, run:\n\n` +
+      `${verifyCommand}\n\n` +
+      `and check it prints the same code. Confirm only if the two codes match.`,
+    confirmLabel: 'Codes match',
+  })
+
 /** Pairing v2 (0.45.2): one commit-then-reveal exchange pins each server on
  *  the other, then both owners' confirms land with each server's own code.
- *  This app holds both owner logins, so it carries the four steps and
- *  compares the two codes itself: a mismatch means a key was changed in
- *  transit, and nothing is trusted. Returns the code. */
+ *  This app holds both owner logins, so it carries the four steps. Over
+ *  https (Connect) it compares the two codes itself: a mismatch means a key
+ *  was changed in transit, and nothing is trusted. Over plain http the
+ *  remote's answer could be forged on the way, so the owner compares this
+ *  server's code with the one the other machine prints (`confirmCode`).
+ *  Returns the code. */
 async function pairV2(
   host: string,
   localC: DaemonCreds,
   remoteC: DaemonCreds,
   local: { fingerprint: string; subdomain: string; baseUrl?: string },
   remote: { fingerprint: string; subdomain: string; baseUrl?: string },
+  confirmCode: ConfirmPairingCode,
 ): Promise<string> {
   const initBody: Record<string, string> = {}
   if (local.subdomain) initBody.subdomain = local.subdomain
@@ -484,18 +518,35 @@ async function pairV2(
     'federation/pair/v2/reveal',
     revealBody,
   )
-  const ver = await cliPost<{ sas?: string; peer_fingerprint?: string }>(
-    remoteC,
-    'federation/pair/v2/verify',
-    { reveal: rev?.reveal },
-  )
-  if (!rev?.sas || !ver?.sas || rev.sas !== ver.sas) {
-    throw new Error(
-      `The two servers computed different pairing codes, so a key was changed between them. ` +
-        `Nothing was trusted. Check the network path to "${host}" and pair again.`,
-    )
+  if (!rev?.sas || !rev.reveal) {
+    throw new Error('This server did not finish the pairing (no code). Nothing was trusted.')
   }
-  await cliPost(remoteC, 'federation/pair/confirm', { fingerprint: local.fingerprint, sas: ver.sas })
+  if (/^http:\/\//i.test(remoteC.base)) {
+    // Plain http: the owner runs the last step on the other machine and
+    // compares the codes by eye; that machine's own code is what counts.
+    const ok = await confirmCode({
+      code: rev.sas,
+      host,
+      verifyCommand: `k2 fed pair-verify ${pairVerifyToken(rev.reveal)}`,
+    })
+    if (!ok) {
+      throw new Error('Pairing cancelled: the codes were not confirmed. Nothing was trusted.')
+    }
+  } else {
+    const ver = await cliPost<{ sas?: string; peer_fingerprint?: string }>(
+      remoteC,
+      'federation/pair/v2/verify',
+      { reveal: rev.reveal },
+    )
+    if (!ver?.sas || rev.sas !== ver.sas) {
+      throw new Error(
+        `The two servers computed different pairing codes, so a key was changed between them. ` +
+          `Nothing was trusted. Check the network path to "${host}" and pair again.`,
+      )
+    }
+  }
+  // The remote confirm only succeeds when ITS own code equals this one.
+  await cliPost(remoteC, 'federation/pair/confirm', { fingerprint: local.fingerprint, sas: rev.sas })
   await cliPost(localC, 'federation/pair/confirm', { fingerprint: remote.fingerprint, sas: rev.sas })
   return rev.sas
 }
@@ -653,8 +704,10 @@ function advertisedLanBaseUrl(creds: DaemonCreds, pub: FederationPubkey): string
 export async function autoPairWithHost(
   host: string,
   /** `repair`: pair again even when both sides already trust each other
-   *  (upgrades a v1 pairing to the commit-then-reveal code). */
-  opts?: { repair?: boolean },
+   *  (upgrades a v1 pairing to the commit-then-reveal code).
+   *  `confirmCode`: how the owner compares codes for a plain-http remote
+   *  (default: the app's confirm dialog). */
+  opts?: { repair?: boolean; confirmCode?: ConfirmPairingCode },
 ): Promise<void> {
   // Distinguish an AUTH failure (403 — not an owner/admin, or not signed in)
   // from federation-off / unreachable (404 / network) so the copy is accurate.
@@ -731,6 +784,7 @@ export async function autoPairWithHost(
       subdomain: remoteSub,
       baseUrl: remoteIsLan ? remoteSavedBase : undefined,
     },
+    opts?.confirmCode ?? confirmPairingCodeWithDialog,
   )
 }
 

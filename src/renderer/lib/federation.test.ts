@@ -23,6 +23,20 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonHttpBase: vi.fn(() => LOCAL_BASE),
 }))
 
+// The owner confirms pairing codes (plain-http remotes prompt; 0.45.2).
+// Tests that check the prompt itself pass their own `confirmCode`.
+const dialogPrompts: Array<{ title: string; message: string }> = []
+vi.mock('@/stores/confirm-dialog', () => ({
+  useConfirmDialogStore: {
+    getState: () => ({
+      confirm: async (opts: { title: string; message: string }) => {
+        dialogPrompts.push(opts)
+        return true
+      },
+    }),
+  },
+}))
+
 // Saved remote address book — `rpm.k2.dev` is signed in (has a token).
 let hosts: Array<Record<string, unknown>> = []
 vi.mock('@/stores/connect-host', () => ({
@@ -382,7 +396,30 @@ describe('autoPairWithHost', () => {
       localSubdomain: '',
       localBaseUrl: 'http://192.168.1.40:38471',
     })
-    await autoPairWithHost('192.168.1.50')
+    const asked: Array<{ code: string; host: string; verifyCommand: string }> = []
+    await autoPairWithHost('192.168.1.50', {
+      confirmCode: async (req) => {
+        asked.push(req)
+        return true
+      },
+    })
+
+    // Plain http: the owner compares codes; the app never trusts the
+    // remote's own verify answer (it is not even asked).
+    expect(asked).toHaveLength(1)
+    expect(asked[0].code).toBe('424242')
+    expect(asked[0].host).toBe('192.168.1.50')
+    const token = asked[0].verifyCommand.replace(/^k2 fed pair-verify /, '')
+    expect(token.startsWith('k2pair3:')).toBe(true)
+    const b64 = token.slice('k2pair3:'.length).replace(/-/g, '+').replace(/_/g, '/')
+    expect(JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)))).toEqual({
+      v: 2,
+      session: 'S1',
+      fingerprint: 'LOCALFP',
+      nonce: 'A'.repeat(64),
+    })
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/v2/verify'))).toBe(false)
+    expect(rec.filter((r) => r.url.includes('/cli/federation/pair/confirm'))).toHaveLength(2)
 
     // LOCAL pins the REMOTE under the saved LAN host:port (reveal step).
     const reveal = rec.find((r) => r.url.includes('/cli/federation/pair/v2/reveal'))
@@ -401,6 +438,64 @@ describe('autoPairWithHost', () => {
     expect(respond?.body).toMatchObject({ offer: { base_url: 'http://192.168.1.40:38471', subdomain: '' } })
     expect(JSON.stringify(respond?.body)).not.toMatch(/k2\.dev/)
     expect(JSON.stringify(respond?.body)).not.toMatch(/127\.0\.0\.1|localhost/)
+  })
+
+  it('trusts nothing over plain http when the owner does not confirm the codes match', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '192.168.1.50',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    const rec = installFetch({
+      localPeers: [],
+      remotePeers: [],
+      localSubdomain: '',
+      localBaseUrl: 'http://192.168.1.40:38471',
+    })
+    await expect(
+      autoPairWithHost('192.168.1.50', { confirmCode: async () => false }),
+    ).rejects.toThrow(/codes were not confirmed/)
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/confirm'))).toBe(false)
+  })
+
+  it('shows the code, the command for the other machine and why, in the app dialog', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '192.168.1.50',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    installFetch({ localPeers: [], remotePeers: [], localSubdomain: '', localBaseUrl: 'http://192.168.1.40:38471' })
+    dialogPrompts.length = 0
+    await autoPairWithHost('192.168.1.50')
+    expect(dialogPrompts).toHaveLength(1)
+    expect(dialogPrompts[0].title).toBe('Compare pairing codes')
+    expect(dialogPrompts[0].message).toContain('424242')
+    expect(dialogPrompts[0].message).toContain('k2 fed pair-verify k2pair3:')
+    expect(dialogPrompts[0].message).toMatch(/plain http/)
+  })
+
+  it('compares codes automatically over https (no prompt)', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [] })
+    await autoPairWithHost('rpm.k2.dev', {
+      confirmCode: async () => {
+        throw new Error('https pairing must not prompt')
+      },
+    })
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/v2/verify'))).toBe(true)
   })
 
   it('fails loud when pairing to a LAN host and this Mac has no advertised URL', async () => {

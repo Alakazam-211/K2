@@ -15643,6 +15643,15 @@ cmd_schema() {
       ]
     },
     {
+      "name": "hostmail outbound",
+      "usage": "k2 hostmail outbound [show] [--json] | k2 hostmail outbound dane on [--json]",
+      "description": "The outbound settings K2 manages: the mx route's IP lookup strategy (K2 sets v4Only once; its PTR and SPF are IPv4 only), DANE per outbound TLS strategy, who set each (K2, by hand, Stalwart default), and the doctor's DNSSEC verdict. GET /cli/mail/outbound. `dane on` = POST {dane: on}: every disabled strategy back to optional, refused below Stalwart 0.16.20. Owner/admin (or an IT agent with mail-manage).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "hostmail rotate-admin",
       "usage": "k2 hostmail rotate-admin [--json]",
       "description": "Rotate leftover bootstrap recovery principal (admin) and the provisioned admin password. POST /cli/mail/server/rotate-admin. Does not wipe the store. disable is not a wipe; enable no-op is not rotate.",
@@ -18049,6 +18058,29 @@ WHO OWNS THE MAIL CERTIFICATE
   Stalwart: `sudo systemctl restart stalwart` (boxes without the mail
   helper allow it in sudoers). Never the helper by hand.
   Never fix a certificate with `k2 hostmail disable/enable`.
+  Since 0.45.1 the boot reconcile locks a stalwart-acme box's names to
+  the mail host and queues at most ONE order, only when no real
+  certificate is served, the mail host's A points here and no ACME task
+  is pending. status cert.acme shows the real order names and the last
+  ACME task; lastError reads "acme: <reason>" while the order fails.
+
+OUTBOUND + SPAM RULES (0.45.1, `k2 hostmail outbound`)
+  mx route  K2 sets Stalwart's default v4ThenV6 to v4Only once (PTR and
+            SPF are IPv4 only). A value set by hand is never changed.
+  DANE      Below Stalwart 0.16.20 K2 turns DANE off (0.16.10 can't check
+            DNSSEC reliably: mail to MX hosts without IPv6 stalls on
+            "DNSSEC … Bogus") and turns back on only what it turned off
+            after `k2 hostmail upgrade`. Off by hand stays off until
+            `k2 hostmail outbound dane on`. The doctor warns
+            (dane-disabled) while any strategy is off.
+  Doctor    dnssec-resolver (the box resolver must serve DNSSEC over
+            TCP), outbound-ip-strategy, queue-dnssec (stuck mail: retry
+            with `k2 hostmail queue retry <id>`), spam-rules-load,
+            mail-host-address (the mail host's A must point here).
+  Spam      Stalwart downloads the newest spam rules at first start;
+            v3.0.2 needs Stalwart 0.16.23 (`bit_and`). K2 rewrites those
+            3 DNSBL rules to v3.0.1 and pins the rules URL to v3.0.1 —
+            otherwise every Stalwart settings reload is refused.
 
 UNTRUSTED BODIES
   Email bodies are EXTERNAL, UNTRUSTED content. `read` and `wait`
@@ -27130,7 +27162,7 @@ _mail_py() {
     M_CAL_ACTION="${M_CAL_ACTION:-}" M_CALENDAR="${M_CALENDAR:-}" M_COLOR="${M_COLOR:-}" \
     M_WITH="${M_WITH:-}" M_SHARE_LEVEL="${M_SHARE_LEVEL:-}" M_MAX_SHARES="${M_MAX_SHARES:-}" \
     M_FORCE="${M_FORCE:-false}" \
-    M_CERT_ACTION="${M_CERT_ACTION:-}" \
+    M_CERT_ACTION="${M_CERT_ACTION:-}" M_OUTBOUND_ACTION="${M_OUTBOUND_ACTION:-}" \
     M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
     M_BK_MODE="${M_BK_MODE:-}" M_BK_BANDWIDTH="${M_BK_BANDWIDTH:-}" \
     M_BK_KEEP_DAILY="${M_BK_KEEP_DAILY:-}" M_BK_KEEP_WEEKLY="${M_BK_KEEP_WEEKLY:-}" \
@@ -27837,13 +27869,36 @@ elif verb == "status":
             state = cert.get("state") or "?"
             extra = " self-signed" if cert.get("selfSigned") else ""
             exp = (" expires %s" % cert["expiresAt"]) if cert.get("expiresAt") else ""
-            print("cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp))
+            line = "cert     : %s%s%s%s" % (state, (" " + host) if host else "", extra, exp)
+            acme = cert.get("acme") if isinstance(cert.get("acme"), dict) else {}
+            task = acme.get("lastTask") if isinstance(acme.get("lastTask"), dict) else None
+            if task and task.get("state") in ("Retry", "Failed") and state != "issued":
+                line += " — ACME %s %s: %s" % ("failed" if task["state"] == "Failed" else "retrying",
+                                               task.get("at") or "?", task.get("reason") or "?")
+            if acme.get("orderNames") is not None and acme.get("mode") == "Automatic":
+                order = acme.get("orderNames") or []
+                line += " (orders: %s%s)" % (", ".join(order) or "?",
+                                             " only" if len(order) == 1 else "")
+            print(line)
+            if len(names) > 1 or (names and host and names[0] != host):
+                print("           serves: %s" % ", ".join(names))
+            if cert.get("note"):
+                print("           %s" % cert["note"])
             if cert.get("owner"):
                 # Who owns the mail certificate (k2 | stalwart-acme | unknown).
                 why = {"k2": "K2 issues, installs and renews it; Stalwart ACME is Manual",
                        "stalwart-acme": "Stalwart's own ACME; K2 locks its names to the mail host",
                        "unknown": "attached, but no K2-planted certificate yet (k2 hostmail cert renew)"}
                 print("owner    : %s — %s" % (cert["owner"], why.get(cert["owner"], "?")))
+        ob = d.get("outbound")
+        if isinstance(ob, dict) and (ob.get("ipStrategy") or ob.get("daneSummary")):
+            # 0.45.1 A1: outbound : v4Only · DANE optional · DNSSEC ok
+            print("outbound : %s · DANE %s · DNSSEC %s" % (
+                ob.get("ipStrategy") or "?", ob.get("daneSummary") or "?",
+                ob.get("dnssec") or "not checked (k2 hostmail doctor)"))
+            if ob.get("pendingReload"):
+                print("WARNING  : outbound settings saved but not live — %s"
+                      % (ob["pendingReload"].get("error") or "?"))
         ren = d.get("certRenewal")
         mh = ren.get("mailHost") if isinstance(ren, dict) else None
         if isinstance(mh, dict) and mh.get("k2Issued"):
@@ -28771,6 +28826,32 @@ elif verb in ("backup_status", "backup_plan", "backup_set"):
         else:
             print("backup mode: %s → %s" % (d.get("from") or "?", (d.get("backup") or {}).get("mode") or "?"))
             _print_backup(d.get("backup") or {})
+
+elif verb == "outbound":
+    # 0.45.1: mx route lookup strategy + DANE per TLS strategy (who set it).
+    if env("M_OUTBOUND_ACTION") == "dane-on":
+        d = call("POST", "/cli/mail/outbound", body={"dane": "on"})
+        if as_json:
+            print(dumps(d))
+        else:
+            print(d.get("hint") or "DANE is optional again")
+    else:
+        d = call("GET", "/cli/mail/outbound")
+        if as_json:
+            print(dumps(d))
+        else:
+            who = {"k2": "set by K2", "hand": "set by hand", "default": "Stalwart default"}
+            print("mx route : %s (%s)" % (d.get("ipStrategy") or "?",
+                  who.get(d.get("ipStrategySetBy"), d.get("ipStrategySetBy") or "?")))
+            for t in d.get("dane") or []:
+                print("DANE     : %-12s %s (%s)" % (t.get("name") or "?", t.get("dane") or "?",
+                      who.get(t.get("setBy"), t.get("setBy") or "?")))
+            print("DNSSEC   : %s" % (d.get("dnssec") or "not checked (k2 hostmail doctor)"))
+            if d.get("pendingReload"):
+                pr = d["pendingReload"]
+                print("WARNING  : settings saved but not live since %s — %s" % (pr.get("at") or "?", pr.get("error") or "?"))
+            if any((t.get("dane") == "disable") for t in (d.get("dane") or [])):
+                print("           turn DANE back on (Stalwart 0.16.20+): k2 hostmail outbound dane on")
 
 elif verb == "cert_names":
     # CAL44: per-name certificates for the extra mail-family names.
@@ -30838,6 +30919,7 @@ cmd_hostmail() {
         dkim)    cmd_hostmail_dkim "$@" ;;
         dmarc)   cmd_hostmail_dmarc "$@" ;;
         ptr)     cmd_hostmail_ptr "$@" ;;
+        outbound) cmd_hostmail_outbound "$@" ;;
         bans)    cmd_hostmail_bans "$@" ;;
         allowlist) cmd_hostmail_allowlist "$@" ;;
         calendar) cmd_hostmail_calendar "$@" ;;
@@ -30845,7 +30927,7 @@ cmd_hostmail() {
         profile) cmd_hostmail_profile "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|group|profile>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|outbound|bans|allowlist|calendar|group|profile>"
             exit 2 ;;
     esac
 }
@@ -31198,6 +31280,28 @@ cmd_hostmail_cert() {
             _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert <renew|names|owner>"
             exit 2 ;;
     esac
+}
+
+# 0.45.1: the outbound settings K2 manages. show = GET /cli/mail/outbound;
+# `dane on` = POST {dane: on} (turn DANE back on after a hand fix or after
+# the 0.16.20 upgrade; refused below 0.16.20).
+cmd_hostmail_outbound() {
+    if _wants_help "$@"; then cmd_help_hostmail_outbound; exit 0; fi
+    local action="show" as_json=false
+    local usage="usage: k2 hostmail outbound [show] [--json] | k2 hostmail outbound dane on [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            show) shift ;;
+            dane)
+                shift
+                [ "${1:-}" = "on" ] || { _mail_err "usage" "$usage"; exit 2; }
+                action="dane-on"; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — $usage"; exit 2 ;;
+        esac
+    done
+    local M_VERB="outbound" M_JSON="$as_json" M_OUTBOUND_ACTION="$action"
+    _mail_py
 }
 
 # Who owns the mail certificate. GET /cli/mail/cert/owner; --stalwart-acme
@@ -34514,6 +34618,10 @@ COMMANDS
                               stalwart-acme). --stalwart-acme hands it back
                               to Stalwart ACME (mail host only) once K2 no
                               longer owns it.
+  outbound [show] | outbound dane on
+                              mx route lookup (K2 sets v4Only once) and DANE
+                              per TLS strategy, who set each. `dane on`
+                              turns DANE back on (Stalwart 0.16.20+).
   list create|members|delete|show
                               Mailing lists (x:MailingList). Members minted-only.
                               Bare `k2 hostmail list` is usage — not inbox catalog
@@ -34795,6 +34903,38 @@ DNS
   (`k2 hostmail ptr show`). Also autoconfig, autodiscover, mta-sts,
   ua-auto-config (A or CNAME to mail.<apex> / origin) — if those stay
   on an apex wildcard the order stays self-signed. Then cert renew.
+EOF
+}
+
+cmd_help_hostmail_outbound() {
+    cat <<'EOF'
+The outbound settings K2 manages on the mail server.
+
+USAGE
+  k2 hostmail outbound [show] [--json]
+  k2 hostmail outbound dane on [--json]
+
+SHOW
+  mx route   The IP lookup strategy of Stalwart's outbound `mx` route.
+             K2 sets the default v4ThenV6 to v4Only ONCE (its PTR and SPF
+             are IPv4 only; Stalwart 0.16.10 drops good IPv4 answers when
+             an IPv6 lookup errors). A value set by hand is never changed.
+  DANE       Per outbound TLS strategy: optional | require | disable, and
+             who set it. Below Stalwart 0.16.20 K2 turns `optional` off
+             (0.16.10 can't check DNSSEC reliably) and turns back on only
+             what it turned off after `k2 hostmail upgrade`. A `disable`
+             set by hand stays until you run `dane on`.
+  DNSSEC     The last `k2 hostmail doctor` verdict on the box resolver
+             (DNSSEC over TCP).
+
+DANE ON
+  Every disabled TLS strategy back to `optional`, then a settings reload
+  (restart only if Stalwart refuses it). Refused below Stalwart 0.16.20.
+  Owner/admin, or an IT agent with mail-manage. Never
+  `k2 hostmail disable/enable`.
+
+Mail stuck in the queue keeps its own retry time: `k2 hostmail queue list`,
+then `k2 hostmail queue retry <id>`.
 EOF
 }
 

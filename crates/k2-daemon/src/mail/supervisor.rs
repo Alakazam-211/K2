@@ -1121,22 +1121,6 @@ fn set_test_tls_cert(probe: Option<TlsProbe>, certs_dir: Option<bool>) {
 #[cfg(test)]
 pub(crate) struct TestTlsCertGuard;
 
-/// Test seam for other modules: the TLS probe captures a Let's
-/// Encrypt-looking leaf carrying `sans` (status reports `issued`).
-#[cfg(test)]
-pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
-    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
-    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
-    let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        .expect("SAN params");
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "R11");
-    dn.push(DnType::OrganizationName, "Let's Encrypt");
-    params.distinguished_name = dn;
-    let der = params.self_signed(&key).expect("sign").der().to_vec();
-    with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true)
-}
-
 #[cfg(test)]
 impl Drop for TestTlsCertGuard {
     fn drop(&mut self) {
@@ -3999,4 +3983,22 @@ mod tests {
             "expiresAt parsed: {v}"
         );
     }
+}
+
+// Kept below `mod tests`: domains::acme's scan reads everything above it
+// as production code, and this seam mints a (test) certificate.
+/// Test seam for other modules: the TLS probe captures a Let's
+/// Encrypt-looking leaf carrying `sans` (status reports `issued`).
+#[cfg(test)]
+pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+    let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .expect("SAN params");
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "R11");
+    dn.push(DnType::OrganizationName, "Let's Encrypt");
+    params.distinguished_name = dn;
+    let der = params.self_signed(&key).expect("sign").der().to_vec();
+    with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true)
 }

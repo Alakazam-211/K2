@@ -8,6 +8,7 @@ import { ConnectionGate } from './components/ConnectionGate'
 import { installExternalLinkHandler } from './lib/external-link-handler'
 import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { bootWebHostIfNeeded } from './web/boot-host'
+import { bootZenPausedStart, noteZenWidgetsHeartbeat } from './lib/zen/zen-widgets-running'
 
 // Hosted web over plain HTTP (LAN IP / remote vite:dev:web) is not a
 // secure context — crypto.randomUUID is missing and toast/tabs/transfer
@@ -25,11 +26,19 @@ installRandomUUIDPolyfill()
 // mid-session content-process death (e.g. the renderer crashing after
 // the laptop sleeps + wakes). `.catch` swallows the rejection in
 // non-Tauri/dev (browser) contexts where `invoke` has no backend.
+//
+// Zen v2 (prd-zen-user-widgets-v2 UW32, UW56): the watchdog is per window
+// (Tauri tells `renderer_heartbeat` which window called), and each beat
+// also counts toward a Garden's "custom widgets started fine" marker. At
+// boot this window asks whether the watchdog reloaded it, so a Garden whose
+// widgets froze the window opens with them paused.
 const beat = (): void => {
   void invoke('renderer_heartbeat').catch(() => {})
+  noteZenWidgetsHeartbeat()
 }
 beat()
 setInterval(beat, 3000)
+void bootZenPausedStart(() => invoke<number | null>('watchdog_take_reload_note'))
 
 // NOTE: do NOT statically import `./App` here. ConnectionGate uses
 // `import('./App')` dynamically only AFTER the daemon is verified

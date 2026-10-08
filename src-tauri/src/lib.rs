@@ -689,10 +689,27 @@ pub fn warm_http_pool_async() {}
 // heartbeat resumes, the watchdog re-arms — so it recovers launch
 // failures AND mid-session content-process deaths.
 //
-// Wall-clock millis of the last renderer heartbeat (0 = none yet).
-// SystemTime (not Instant) so a long sleep counts as elapsed time.
-static LAST_HEARTBEAT_MS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+// prd-zen-user-widgets-v2 UW32 / UW56: the watchdog is PER WINDOW. Each K2
+// UI window (`main`, `window-*`, `focus-*`) beats with its own label, and a
+// window silent past the threshold is reloaded on its own: a custom Garden
+// widget stuck in `while (true) {}` freezes only the window it runs in, and
+// the other windows keep their state. Wall-clock millis (SystemTime, not
+// Instant) so a long sleep counts as elapsed time.
+static WINDOW_BEATS: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::Mutex::new(None);
+// Windows the watchdog reloaded, label -> when. The renderer takes its note
+// at boot (`watchdog_take_reload_note`) so a Garden whose custom widgets
+// were running opens with them paused (UW32 step 2).
+static WATCHDOG_RELOAD_NOTES: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::Mutex::new(None);
+
+fn with_map<T>(
+    m: &std::sync::Mutex<Option<std::collections::HashMap<String, u64>>>,
+    f: impl FnOnce(&mut std::collections::HashMap<String, u64>) -> T,
+) -> T {
+    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(Default::default))
+}
 
 fn now_unix_millis() -> u64 {
     std::time::SystemTime::now()
@@ -702,11 +719,99 @@ fn now_unix_millis() -> u64 {
 }
 
 /// Renderer liveness heartbeat — invoked from `index.tsx` the moment the
-/// bundle executes and then on a ~3s timer. Stamps the watchdog so it
-/// knows the renderer JS is alive and never reloads a working window.
+/// bundle executes and then on a ~3s timer. Stamps the watchdog for THIS
+/// window (Tauri injects the calling window) so it knows that window's
+/// renderer JS is alive and never reloads a working window.
 #[tauri::command]
-fn renderer_heartbeat() {
-    LAST_HEARTBEAT_MS.store(now_unix_millis(), std::sync::atomic::Ordering::SeqCst);
+fn renderer_heartbeat(window: tauri::WebviewWindow) {
+    let label = window.label().to_string();
+    with_map(&WINDOW_BEATS, |m| m.insert(label, now_unix_millis()));
+}
+
+/// When the watchdog last reloaded the calling window (unix ms), taken
+/// once: the renderer asks at boot, and a Garden with custom widgets
+/// running before the reload opens with them paused (UW32).
+#[tauri::command]
+fn watchdog_take_reload_note(window: tauri::WebviewWindow) -> Option<u64> {
+    with_map(&WATCHDOG_RELOAD_NOTES, |m| m.remove(window.label()))
+}
+
+/// The K2 UI windows the watchdog guards (`k2_app_window.rs`): `main`,
+/// `window-<uuid>`, `focus-<project>`. Browser child webviews are not
+/// webview windows and never beat.
+fn is_watched_window(label: &str) -> bool {
+    label == "main" || label.starts_with("window-") || label.starts_with("focus-")
+}
+
+/// One window's watchdog state.
+#[derive(Debug, Default)]
+struct WindowWatch {
+    /// When the watchdog first saw the window: a window that never beat is
+    /// stale only once the threshold has passed since then (launch grace).
+    first_seen_ms: u64,
+    stale_streak: u32,
+    reloads: u32,
+    gave_up: bool,
+    /// The page to renavigate to when a reload can't help.
+    app_url: Option<url::Url>,
+}
+
+/// What to do with one window this tick.
+#[derive(Debug, PartialEq, Eq)]
+struct WindowTick {
+    label: String,
+    action: WatchdogAction,
+    /// Reloads in this stale episode before the tick (for the
+    /// "recovered after N reloads" line).
+    reloads_before: u32,
+}
+
+/// One watchdog tick over every open window. Pure (no webviews), so the
+/// per-window rules are unit-tested: a beating window is never touched
+/// while a silent one is reloaded; closed windows are forgotten; GiveUp
+/// fires once per stale episode.
+fn watchdog_tick(
+    now: u64,
+    open: &[String],
+    beats: &std::collections::HashMap<String, u64>,
+    states: &mut std::collections::HashMap<String, WindowWatch>,
+    stale_ms: u64,
+    min_stale_streak: u32,
+    max_reloads: u32,
+) -> Vec<WindowTick> {
+    states.retain(|label, _| open.contains(label));
+    let mut out = Vec::new();
+    for label in open.iter().filter(|l| is_watched_window(l)) {
+        let st = states
+            .entry(label.clone())
+            .or_insert_with(|| WindowWatch { first_seen_ms: now, ..Default::default() });
+        let since = beats.get(label).copied().unwrap_or(0).max(st.first_seen_ms);
+        let is_stale = now.saturating_sub(since) > stale_ms;
+        let reloads_before = st.reloads;
+        let mut action = watchdog_decision(is_stale, st.stale_streak, st.reloads, min_stale_streak, max_reloads);
+        match action {
+            WatchdogAction::Healthy => {
+                st.stale_streak = 0;
+                st.reloads = 0;
+                st.gave_up = false;
+            }
+            WatchdogAction::Watch => st.stale_streak += 1,
+            WatchdogAction::Reload => {
+                st.stale_streak += 1;
+                st.reloads += 1;
+            }
+            WatchdogAction::GiveUp => {
+                if st.gave_up {
+                    // Keep watching, but say it once per episode.
+                    action = WatchdogAction::Watch;
+                } else {
+                    st.gave_up = true;
+                }
+            }
+        }
+        out.push(WindowTick { label: label.clone(), action, reloads_before });
+    }
+    out
 }
 
 /// What the webview watchdog should do this tick. Pulled out as a pure
@@ -1614,29 +1719,42 @@ pub fn run() {
                 const _: fn(&tauri::AppHandle<tauri::Wry>) -> Result<(), String> = tray::install;
             }
 
-            // 0.39.x (Issue #6): webview liveness watchdog. See the
-            // doc on `renderer_heartbeat` above. Persistent: it recovers
-            // BOTH the launch black-screen (renderer JS never runs at
-            // startup) AND mid-session content-process death (e.g. the
-            // renderer crashing after the laptop sleeps + wakes), by
-            // tracking the renderer's heartbeat and reloading the webview
-            // from Rust when the heartbeat goes stale — then a native
-            // error sheet if reloads don't bring it back.
-            if let Some(win) = app.get_webview_window("main") {
+            // 0.39.x (Issue #6): webview liveness watchdog, PER WINDOW since
+            // Zen v2 (UW32, UW56). See the doc on `renderer_heartbeat`
+            // above. Persistent: it recovers the launch black-screen
+            // (renderer JS never runs at startup), mid-session
+            // content-process death (e.g. after the laptop sleeps + wakes),
+            // and a window frozen by a custom Garden widget, by tracking each
+            // window's heartbeat and reloading THAT window from Rust when its
+            // heartbeat goes stale — then a native error sheet if reloads
+            // don't bring it back.
+            {
                 let handle = app.handle().clone();
-                // Capture the app URL NOW, at spawn time, before anything can
-                // break — the hard-renavigate fallback below needs a known-good
-                // destination even when the webview's own URL has gone blank.
+                let dev_url = app.config().build.dev_url.clone();
+                let is_dev = tauri::is_dev();
+                let mut states: std::collections::HashMap<String, WindowWatch> = Default::default();
+                // Capture `main`'s app URL NOW, at spawn time, before anything
+                // can break — the hard-renavigate fallback below needs a
+                // known-good destination even when the webview's own URL has
+                // gone blank. Other windows are captured when first seen.
                 // Loopback hosts are rejected unless they are the exact
                 // configured `devUrl` in `tauri::is_dev()` — never recover to
                 // `http://127.0.0.1:8788`.
-                let app_url = crate::k2_app_window::watchdog_capture_app_url(
-                    win.url().ok().as_ref(),
-                    app.config().build.dev_url.as_ref(),
-                    tauri::is_dev(),
-                );
+                if let Some(win) = app.get_webview_window("main") {
+                    states.insert(
+                        "main".to_string(),
+                        WindowWatch {
+                            first_seen_ms: now_unix_millis(),
+                            app_url: crate::k2_app_window::watchdog_capture_app_url(
+                                win.url().ok().as_ref(),
+                                dev_url.as_ref(),
+                                is_dev,
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                }
                 std::thread::spawn(move || {
-                    use std::sync::atomic::Ordering;
                     // Check cadence. Recovery latency ≈ MIN_STALE_STREAK
                     // ticks once staleness begins (~6s).
                     const TICK: std::time::Duration = std::time::Duration::from_secs(3);
@@ -1650,120 +1768,115 @@ pub fn run() {
                     const MIN_STALE_STREAK: u32 = 2;
                     const MAX_RELOADS: u32 = 3;
 
-                    let mut stale_streak = 0u32;
-                    let mut reloads = 0u32;
-                    let mut gave_up = false;
                     loop {
                         std::thread::sleep(TICK);
-                        let last = LAST_HEARTBEAT_MS.load(Ordering::SeqCst);
-                        // last == 0 → renderer has never beaten yet (launch
-                        // window). Treat as stale so the launch case is
-                        // covered too.
-                        let is_stale = last == 0
-                            || now_unix_millis().saturating_sub(last) > STALE_MS;
-                        match watchdog_decision(
-                            is_stale,
-                            stale_streak,
-                            reloads,
-                            MIN_STALE_STREAK,
-                            MAX_RELOADS,
-                        ) {
-                            WatchdogAction::Healthy => {
-                                // Heartbeat present — renderer is alive.
-                                // Re-arm so a LATER crash (sleep/wake) is
-                                // caught fresh.
-                                if reloads > 0 {
-                                    log_debug!(
-                                        "[webview-watchdog] renderer recovered after {reloads} reload(s)"
-                                    );
+                        let windows: Vec<(String, tauri::WebviewWindow)> = handle
+                            .webview_windows()
+                            .into_iter()
+                            .filter(|(label, _)| is_watched_window(label))
+                            .collect();
+                        let open: Vec<String> = windows.iter().map(|(l, _)| l.clone()).collect();
+                        let beats = with_map(&WINDOW_BEATS, |m| {
+                            m.retain(|label, _| open.contains(label));
+                            m.clone()
+                        });
+                        let now = now_unix_millis();
+                        let plan = watchdog_tick(now, &open, &beats, &mut states, STALE_MS, MIN_STALE_STREAK, MAX_RELOADS);
+                        for tick in plan {
+                            let Some((_, win)) = windows.iter().find(|(l, _)| *l == tick.label) else {
+                                continue;
+                            };
+                            let label = tick.label.as_str();
+                            let reloads = tick.reloads_before + u32::from(tick.action == WatchdogAction::Reload);
+                            match tick.action {
+                                WatchdogAction::Healthy => {
+                                    // Heartbeat present — renderer is alive.
+                                    if tick.reloads_before > 0 {
+                                        log_debug!(
+                                            "[webview-watchdog] {label}: renderer recovered after {} reload(s)",
+                                            tick.reloads_before
+                                        );
+                                    }
+                                    if let Some(st) = states.get_mut(label) {
+                                        if st.app_url.is_none() {
+                                            st.app_url = crate::k2_app_window::watchdog_capture_app_url(
+                                                win.url().ok().as_ref(),
+                                                dev_url.as_ref(),
+                                                is_dev,
+                                            );
+                                        }
+                                    }
                                 }
-                                stale_streak = 0;
-                                reloads = 0;
-                                gave_up = false;
-                            }
-                            WatchdogAction::Watch => {
-                                stale_streak += 1;
-                            }
-                            WatchdogAction::Reload => {
-                                stale_streak += 1;
-                                reloads += 1;
-                                log_debug!(
-                                    "[webview-watchdog] renderer heartbeat stale — recovering webview \
-                                     (attempt {reloads}/{MAX_RELOADS})"
-                                );
-                                // ROOT CAUSE of the post-self-update black
-                                // screen: this used to be
-                                // `win.eval("window.location.reload()")`, which
-                                // needs a LIVE JS context in the very webview
-                                // it's trying to rescue — circular. When the
-                                // first navigation never commits (dead content
-                                // process after an update relaunch), all three
-                                // evals fail and the window stays black
-                                // (~/.k2/webview-watchdog.log proved exactly
-                                // that in the field). Recover natively instead:
-                                // WKWebView's reload works with a dead JS
-                                // context and respawns the content process.
-                                //
-                                // Native reload still needs a COMMITTED page to
-                                // reload, so when the current URL is blank /
-                                // off-app (nothing ever committed), or this is
-                                // the last budgeted attempt, escalate to a hard
-                                // renavigate to the app URL captured at spawn.
-                                let current_off_app = match win.url() {
-                                    // Can't even read the URL — treat the
-                                    // webview as off-app and renavigate.
-                                    Err(_) => true,
-                                    Ok(u) if u.as_str().is_empty() || u.as_str() == "about:blank" => true,
-                                    Ok(u) => match app_url.as_ref() {
-                                        Some(app) => u != *app,
-                                        None => false,
-                                    },
-                                };
-                                let last_attempt = reloads >= MAX_RELOADS;
-                                let renav_target = if last_attempt || current_off_app {
-                                    app_url.clone()
-                                } else {
-                                    None
-                                };
-                                if let Some(target) = renav_target {
-                                    let outcome = match win.navigate(target.clone()) {
-                                        Ok(()) => "ok".to_string(),
-                                        Err(e) => format!("err: {e}"),
-                                    };
+                                WatchdogAction::Watch => {}
+                                WatchdogAction::Reload => {
                                     log_debug!(
-                                        "[webview-watchdog] renavigate attempted to {target} \
-                                         (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
+                                        "[webview-watchdog] {label}: renderer heartbeat stale — recovering webview \
+                                         (attempt {reloads}/{MAX_RELOADS})"
                                     );
-                                    watchdog_field_log(&format!(
-                                        "renavigate attempted to {target} (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
-                                    ));
-                                } else {
-                                    let outcome = match win.reload() {
-                                        Ok(()) => "ok".to_string(),
-                                        Err(e) => format!("err: {e}"),
+                                    with_map(&WATCHDOG_RELOAD_NOTES, |m| m.insert(label.to_string(), now));
+                                    let app_url = states.get(label).and_then(|st| st.app_url.clone()).or_else(|| {
+                                        crate::k2_app_window::watchdog_capture_app_url(None, dev_url.as_ref(), is_dev)
+                                    });
+                                    // ROOT CAUSE of the post-self-update black
+                                    // screen: this used to be
+                                    // `win.eval("window.location.reload()")`, which
+                                    // needs a LIVE JS context in the very webview
+                                    // it's trying to rescue — circular. Recover
+                                    // natively instead: WKWebView's reload works
+                                    // with a dead JS context and respawns the
+                                    // content process.
+                                    //
+                                    // Native reload still needs a COMMITTED page to
+                                    // reload, so when the current URL is blank /
+                                    // off-app (nothing ever committed), or this is
+                                    // the last budgeted attempt, escalate to a hard
+                                    // renavigate to the window's app URL.
+                                    let current_off_app = match win.url() {
+                                        Err(_) => true,
+                                        Ok(u) if u.as_str().is_empty() || u.as_str() == "about:blank" => true,
+                                        Ok(u) => match app_url.as_ref() {
+                                            Some(app) => u != *app,
+                                            None => false,
+                                        },
                                     };
-                                    log_debug!(
-                                        "[webview-watchdog] native reload attempted \
-                                         (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
-                                    );
-                                    watchdog_field_log(&format!(
-                                        "native reload attempted (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
-                                    ));
+                                    let last_attempt = reloads >= MAX_RELOADS;
+                                    let renav_target = if last_attempt || current_off_app { app_url.clone() } else { None };
+                                    if let Some(target) = renav_target {
+                                        let outcome = match win.navigate(target.clone()) {
+                                            Ok(()) => "ok".to_string(),
+                                            Err(e) => format!("err: {e}"),
+                                        };
+                                        log_debug!(
+                                            "[webview-watchdog] {label}: renavigate attempted to {target} \
+                                             (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
+                                        );
+                                        watchdog_field_log(&format!(
+                                            "{label}: renavigate attempted to {target} (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
+                                        ));
+                                    } else {
+                                        let outcome = match win.reload() {
+                                            Ok(()) => "ok".to_string(),
+                                            Err(e) => format!("err: {e}"),
+                                        };
+                                        log_debug!(
+                                            "[webview-watchdog] {label}: native reload attempted \
+                                             (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
+                                        );
+                                        watchdog_field_log(&format!(
+                                            "{label}: native reload attempted (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
+                                        ));
+                                    }
                                 }
-                            }
-                            WatchdogAction::GiveUp => {
-                                // Show the error sheet + log ONCE per stale
-                                // episode (re-armed when a heartbeat
-                                // resumes). Keep watching, but stop
-                                // reloading so we never loop forever.
-                                if !gave_up {
-                                    gave_up = true;
+                                WatchdogAction::GiveUp => {
+                                    // Once per stale episode (`watchdog_tick`).
+                                    // Non-blocking, so the other windows stay
+                                    // watched while the sheet is up.
                                     log_debug!(
-                                        "[webview-watchdog] renderer still silent after {MAX_RELOADS} \
+                                        "[webview-watchdog] {label}: renderer still silent after {MAX_RELOADS} \
                                          recovery attempts — giving up; surfacing error sheet"
                                     );
                                     watchdog_field_log(&format!(
-                                        "renderer JS unresponsive; {MAX_RELOADS} native recovery attempts failed",
+                                        "{label}: renderer JS unresponsive; {MAX_RELOADS} native recovery attempts failed",
                                     ));
                                     use tauri_plugin_dialog::DialogExt;
                                     handle
@@ -1773,7 +1886,7 @@ pub fn run() {
                                              If this keeps happening, reinstalling the latest version usually fixes it.",
                                         )
                                         .title("K2 couldn't load")
-                                        .blocking_show();
+                                        .show(|_| {});
                                 }
                             }
                         }
@@ -1790,8 +1903,10 @@ pub fn run() {
             menu::window_open_ticket,
             // prd-zen-mode-v1 Z53: the View menu's Enter/Exit Zen Mode text.
             menu::set_zen_menu_label,
-            // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
+            // 0.39.x (Issue #6): webview liveness watchdog heartbeat
+            // (per window since Zen v2 UW56) and its reload note (UW32).
             renderer_heartbeat,
+            watchdog_take_reload_note,
             // 0.40.48 connection resilience — out-of-webview boot-status
             // arbiter (poisoned-pool tiebreaker) + user-initiated restart.
             commands::connection::remote_boot_probe,
@@ -2157,7 +2272,118 @@ pub fn run() {
 
 #[cfg(test)]
 mod webview_watchdog_tests {
-    use super::{watchdog_decision, WatchdogAction};
+    use super::{is_watched_window, watchdog_decision, watchdog_tick, WatchdogAction, WindowWatch};
+    use std::collections::HashMap;
+
+    fn labels(ls: &[&str]) -> Vec<String> {
+        ls.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn actions(plan: &[super::WindowTick]) -> Vec<(String, WatchdogAction)> {
+        plan.iter().map(|t| (t.label.clone(), clone_action(&t.action))).collect()
+    }
+
+    fn clone_action(a: &WatchdogAction) -> WatchdogAction {
+        match a {
+            WatchdogAction::Healthy => WatchdogAction::Healthy,
+            WatchdogAction::Watch => WatchdogAction::Watch,
+            WatchdogAction::Reload => WatchdogAction::Reload,
+            WatchdogAction::GiveUp => WatchdogAction::GiveUp,
+        }
+    }
+
+    /// TUW4.5: window A beating and window B silent → reload B only.
+    #[test]
+    fn per_window_a_beating_b_silent_reloads_only_b() {
+        const STALE: u64 = 9_000;
+        let open = labels(&["main", "window-b"]);
+        let mut states: HashMap<String, WindowWatch> = HashMap::new();
+        let mut beats: HashMap<String, u64> = HashMap::new();
+        let mut log = Vec::new();
+        // Both beat at t=0; then only main keeps beating every 3 s.
+        beats.insert("main".into(), 0);
+        beats.insert("window-b".into(), 0);
+        // The watchdog first sees both windows at t=1.
+        for step in 0..=6u64 {
+            let now = step * 3_000 + 1;
+            beats.insert("main".into(), now - 1);
+            let plan = watchdog_tick(now, &open, &beats, &mut states, STALE, 2, 3);
+            log.push(actions(&plan));
+        }
+        for tick in &log {
+            assert!(tick.iter().any(|(l, a)| l == "main" && *a == WatchdogAction::Healthy), "{log:?}");
+            assert!(tick.iter().all(|(l, a)| l != "main" || *a == WatchdogAction::Healthy), "main is never touched: {log:?}");
+        }
+        let b: Vec<WatchdogAction> = log
+            .iter()
+            .map(|t| t.iter().find(|(l, _)| l == "window-b").map(|(_, a)| clone_action(a)).expect("b ticked"))
+            .collect();
+        // b is fresh until 9 s pass since it was first seen (ticks 0-3),
+        // then Watch, Watch, Reload.
+        assert_eq!(
+            b,
+            vec![
+                WatchdogAction::Healthy,
+                WatchdogAction::Healthy,
+                WatchdogAction::Healthy,
+                WatchdogAction::Healthy,
+                WatchdogAction::Watch,
+                WatchdogAction::Watch,
+                WatchdogAction::Reload
+            ],
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_window_gets_the_launch_grace_then_is_watched_and_closed_windows_are_forgotten() {
+        let mut states: HashMap<String, WindowWatch> = HashMap::new();
+        let beats: HashMap<String, u64> = HashMap::new();
+        let open = labels(&["focus-p1"]);
+        // Never beat: fresh for 9 s from first sight.
+        assert_eq!(actions(&watchdog_tick(100_000, &open, &beats, &mut states, 9_000, 2, 3))[0].1, WatchdogAction::Healthy);
+        assert_eq!(actions(&watchdog_tick(109_000, &open, &beats, &mut states, 9_000, 2, 3))[0].1, WatchdogAction::Healthy);
+        assert_eq!(actions(&watchdog_tick(109_001, &open, &beats, &mut states, 9_000, 2, 3))[0].1, WatchdogAction::Watch);
+        assert!(states.contains_key("focus-p1"));
+        assert!(watchdog_tick(110_000, &[], &beats, &mut states, 9_000, 2, 3).is_empty());
+        assert!(states.is_empty(), "a closed window's state is dropped");
+    }
+
+    #[test]
+    fn give_up_is_said_once_per_episode_and_a_beat_rearms() {
+        let mut states: HashMap<String, WindowWatch> = HashMap::new();
+        let mut beats: HashMap<String, u64> = HashMap::new();
+        let open = labels(&["main"]);
+        beats.insert("main".into(), 1);
+        let mut seq = Vec::new();
+        for i in 0..=13u64 {
+            let plan = watchdog_tick(10_000 + i * 3_000, &open, &beats, &mut states, 9_000, 2, 3);
+            seq.push(clone_action(&plan[0].action));
+        }
+        let give_ups = seq.iter().filter(|a| **a == WatchdogAction::GiveUp).count();
+        let reloads = seq.iter().filter(|a| **a == WatchdogAction::Reload).count();
+        assert_eq!((reloads, give_ups), (3, 1), "{seq:?}");
+        beats.insert("main".into(), 60_000);
+        let plan = watchdog_tick(60_001, &open, &beats, &mut states, 9_000, 2, 3);
+        assert_eq!(plan[0].action, WatchdogAction::Healthy);
+        assert_eq!(plan[0].reloads_before, 3, "the recovery line can say how many reloads it took");
+        let st = states.get("main").expect("state");
+        assert_eq!((st.stale_streak, st.reloads, st.gave_up), (0, 0, false));
+    }
+
+    #[test]
+    fn only_k2_ui_windows_are_watched() {
+        for l in ["main", "window-1b2c", "focus-proj"] {
+            assert!(is_watched_window(l), "{l}");
+        }
+        for l in ["browser-1", "Main", "zen", ""] {
+            assert!(!is_watched_window(l), "{l}");
+        }
+        let mut states: HashMap<String, WindowWatch> = HashMap::new();
+        let plan = watchdog_tick(1, &labels(&["browser-1", "main"]), &HashMap::new(), &mut states, 9_000, 2, 3);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].label, "main");
+    }
 
     const MIN_STREAK: u32 = 2;
     const MAX_RELOADS: u32 = 3;

@@ -49,6 +49,9 @@ pub mod model_splice;
 // `agents/resume_chat.rs` — operates on workspace_sessions, naturally
 // workspace-scoped.
 pub mod resume_chat;
+// Swap the pinned chat onto another harness. Prepares the handoff only;
+// the daemon spawns via resume_chat's never-chatted path.
+pub mod canonical_swap;
 // Phase 2.5e: review queue — workspace-manager approval path for
 // agent worktrees (review_queue / review_approve / review_reject /
 // review_request_changes / agent_complete). Relocated from

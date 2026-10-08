@@ -241,6 +241,8 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     let shorts: Vec<&str> = v["templates"].as_array().expect("templates").iter().filter_map(|t| t["short"].as_str()).collect();
     assert_eq!(shorts, vec!["texting", "blank", "diary"]);
     assert_eq!(v["templates"][2]["needsGrant"]["widget"], "k2:diary@1");
+    assert_eq!(v["templates"][2]["needsGrant"]["scope"], "local", "the Diary is fixed to this computer");
+    assert!(v["templates"][2]["needsGrant"]["consent"].as_str().is_some_and(|c| c.contains("this computer")), "{v}");
     assert_eq!(v["templates"][2]["newUsers"], true);
 
     let (events, task) = zen_event_counter(port, &tok).await;
@@ -544,15 +546,46 @@ async fn tuwb_grants_are_owner_only_signed_and_fail_closed() {
         let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"Blank one","template":"blank","grant":{"scope":{"allHomes":true}}}"#));
         assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "blank has nothing to allow: {v}");
         let diary = k2_core::zen::builtin_widgets::parse_widget_ref(k2_core::zen::builtin_widgets::DIARY_WIDGET).expect("ref");
-        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"My diary","template":"diary","grant":{"scope":{"allHomes":true}}}"#));
-        if k2_core::zen::builtin_widgets::builtin_widget(&diary).is_some() {
-            assert_eq!(s, 200, "{v}");
-            assert_eq!(v["grant"]["caps"], json!(["agents:read", "thread:read", "thread:post"]), "{v}");
-            assert_eq!(v["grant"]["sending"], true);
-        } else {
-            // This branch has no k2:diary@1 compiled in yet (B1 ships it).
-            assert_eq!((s, v["error"].as_str()), (404, Some("unknown_widget")), "{v}");
+        assert!(k2_core::zen::builtin_widgets::builtin_widget(&diary).is_some(), "k2:diary@1 ships");
+        // Rosson 2026-10-08: the Diary sees only this computer's agents. Any
+        // other scope, or an entry on another server, is refused and leaves
+        // no Garden behind.
+        for refused in [
+            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"allHomes":true}}}"#,
+            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"allServers":true}}}"#,
+            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"server":"alice.example.test"}}}"#,
+            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"server":"local"},"entries":[{"server":"alice.example.test","room":"cortana"}]}}"#,
+        ] {
+            let (s, v) = owner("POST", "/cli/zen/garden/new", Some(refused));
+            assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{refused}: {v}");
         }
+        let (_, gs) = owner("GET", "/cli/zen/gardens", None);
+        assert!(!gs["gardens"].as_array().expect("gardens").iter().any(|g| g["name"] == "Wide diary"), "{gs}");
+        // The create click: the fixed scope, from the catalog, with no scope sent.
+        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"My diary","template":"diary","grant":{"entries":[{"server":"local","room":"cortana"}]}}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["grant"]["caps"], json!(["agents:read", "thread:read", "thread:post"]), "{v}");
+        assert_eq!(v["grant"]["sending"], true);
+        assert_eq!(v["grant"]["scope"], json!({"server": "local"}), "{v}");
+        // Sending the same scope explicitly works too.
+        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"Second diary","template":"diary","grant":{"scope":{"server":"local"}}}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["grant"]["scope"], json!({"server": "local"}), "{v}");
+        // The review dialog's route holds the Diary to the same scope.
+        let id = v["garden"]["id"].as_str().expect("id").to_string();
+        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={id}"), None);
+        let hash = g["page"]["widgets"][0]["hash"].as_str().expect("hash").to_string();
+        let regrant = |scope: &str, server: &str| {
+            format!(
+                r#"{{"garden":"{id}","placement":"diary","widget":"k2:diary@1","caps":["agents:read"],"scope":{scope},"entries":[{{"server":"{server}","room":"cortana"}}],"hash":"{hash}"}}"#
+            )
+        };
+        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"allServers":true}"#, "alice.example.test")));
+        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{v}");
+        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"server":"local"}"#, "alice.example.test")));
+        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "a remote entry on a local scope: {v}");
+        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"server":"local"}"#, "local")));
+        assert_eq!(s, 200, "{v}");
     });
 }
 

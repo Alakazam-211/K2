@@ -26,6 +26,8 @@
 //! [catalog.grant]                 # granted by the owner's create click (UWB22)
 //! widget = "k2:diary@1"
 //! caps = ["agents:read", "thread:read", "thread:post"]
+//! scope = "local"                 # optional: fixed to this computer's agents
+//! consent = "Diary can read your agents on this computer and post to their Threads."
 //!
 //! [layout]
 //! kind = "columns"
@@ -76,13 +78,53 @@ pub struct CatalogMeta {
 }
 
 /// What the owner's create click grants (UWB22): the page's built-in
-/// widget and its caps, Sending on, scope picked in the dialog.
+/// widget and its caps, Sending on. With `scope = "local"` the scope is
+/// fixed (Rosson 2026-10-08: the Diary sees only this computer's agents),
+/// so New Garden shows no scope picker: the create click is the consent,
+/// in the one `consent` sentence the modal shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogGrant {
     /// A versioned built-in, `k2:<name>@<n>`.
     pub widget: String,
     pub caps: Vec<String>,
+    /// A fixed scope: only [`FIXED_SCOPE_LOCAL`] (this computer's agents,
+    /// grant scope `{server: "local"}`). None = the person picks.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// The plain sentence New Garden shows beside Create ("Diary can read
+    /// your agents on this computer and post to their Threads.").
+    #[serde(default)]
+    pub consent: Option<String>,
+}
+
+/// `[catalog.grant] scope = "local"`: this computer's agents only.
+pub const FIXED_SCOPE_LOCAL: &str = "local";
+/// The host key of this computer's daemon in a grant scope and its entries
+/// (`{server: "local"}`; the renderer's `LOCAL_HOME_HOST`).
+pub const LOCAL_SERVER: &str = "local";
+/// Longest `consent` sentence, in characters.
+pub const CONSENT_MAX: usize = 160;
+
+impl CatalogGrant {
+    /// The grant scope a fixed `scope` stands for.
+    pub fn fixed_scope(&self) -> Option<super::grants::Scope> {
+        match self.scope.as_deref() {
+            Some(FIXED_SCOPE_LOCAL) => Some(super::grants::Scope::Server(LOCAL_SERVER.into())),
+            _ => None,
+        }
+    }
+}
+
+/// The scope a built-in widget is fixed to wherever it is placed, from the
+/// catalog entries that grant it (`k2:diary@1` → this computer only).
+/// None for a user widget or a built-in no catalog entry fixes.
+pub fn fixed_scope_for_widget(widget: &str) -> Option<super::grants::Scope> {
+    garden_catalog()
+        .iter()
+        .filter_map(|e| e.meta.grant.as_ref())
+        .filter(|g| g.widget == widget)
+        .find_map(CatalogGrant::fixed_scope)
 }
 
 /// One catalog entry: a template version plus its metadata.
@@ -128,6 +170,21 @@ pub fn parse_entry(file: &'static str, src: &'static str) -> Result<GardenCatalo
         }
         if let Some(bad) = g.caps.iter().find(|c| !super::USER_WIDGET_CAPS.contains(&c.as_str())) {
             return Err(format!("{file}: [catalog.grant] cap '{bad}' isn't available to custom widgets"));
+        }
+        if let Some(s) = &g.scope {
+            if s != FIXED_SCOPE_LOCAL {
+                return Err(format!(
+                    "{file}: [catalog.grant] scope is \"{FIXED_SCOPE_LOCAL}\" (this computer's agents) or left out"
+                ));
+            }
+        }
+        if let Some(c) = &g.consent {
+            let n = c.chars().count();
+            if c.trim().is_empty() || n > CONSENT_MAX || c.chars().any(char::is_control) {
+                return Err(format!(
+                    "{file}: [catalog.grant] consent is one plain sentence, 1 to {CONSENT_MAX} characters"
+                ));
+            }
         }
     }
     Ok(GardenCatalogEntry { file, template_id: want, version, meta, toml: src })
@@ -291,6 +348,41 @@ kind = "columns"
         assert!(parse_entry("diary-1.toml", cap).is_err(), "non-widget cap in the grant");
         let unpinned: &'static str = Box::leak(DIARY_FIXTURE.replace("k2:diary@1", "k2:diary").into_boxed_str());
         assert!(parse_entry("diary-1.toml", unpinned).is_err(), "grant widget must be versioned");
+        let wide: &'static str = Box::leak(
+            DIARY_FIXTURE.replace("\"thread:post\"]", "\"thread:post\"]\nscope = \"allServers\"").into_boxed_str(),
+        );
+        assert!(parse_entry("diary-1.toml", wide).is_err(), "a fixed scope is only \"local\"");
+        let long: &'static str = Box::leak(
+            DIARY_FIXTURE
+                .replace("\"thread:post\"]", &format!("\"thread:post\"]\nconsent = \"{}\"", "x".repeat(CONSENT_MAX + 1)))
+                .into_boxed_str(),
+        );
+        assert!(parse_entry("diary-1.toml", long).is_err(), "consent is one short sentence");
+        let blank: &'static str =
+            Box::leak(DIARY_FIXTURE.replace("\"thread:post\"]", "\"thread:post\"]\nconsent = \"  \"").into_boxed_str());
+        assert!(parse_entry("diary-1.toml", blank).is_err(), "consent can't be blank");
+    }
+
+    /// Rosson 2026-10-08: the Diary is a journal of THIS computer's agents.
+    /// Its catalog grant fixes the scope to `{server: "local"}` and carries
+    /// the one sentence New Garden shows; no scope picker, no agent chooser.
+    #[test]
+    fn the_shipped_diary_is_fixed_to_this_computer() {
+        let e = current_entries().into_iter().find(|e| e.meta.short == "diary").expect("the Diary ships");
+        let g = e.meta.grant.as_ref().expect("the Diary grants in the create click");
+        assert_eq!(g.scope.as_deref(), Some(FIXED_SCOPE_LOCAL));
+        assert_eq!(g.fixed_scope(), Some(crate::zen::grants::Scope::Server(LOCAL_SERVER.into())));
+        let consent = g.consent.as_deref().expect("a consent sentence");
+        assert!(consent.contains("this computer"), "{consent}");
+        assert_eq!(
+            fixed_scope_for_widget(crate::zen::builtin_widgets::DIARY_WIDGET),
+            Some(crate::zen::grants::Scope::Server("local".into()))
+        );
+        assert_eq!(fixed_scope_for_widget("agent-arcade"), None, "a user widget's scope is the person's pick");
+        let row = template_list().into_iter().find(|t| t.short == "diary").expect("listed");
+        let wire = serde_json::to_value(&row).expect("serializes");
+        assert_eq!(wire["needsGrant"]["scope"], "local");
+        assert_eq!(wire["needsGrant"]["consent"], consent);
     }
 
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped

@@ -65,7 +65,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[BuiltinWidget {
 /// order (TUWB6). A changed byte fails `released_builtins_never_change`:
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] =
-    &[("k2:diary@1", "c4f6e5a4e86937b29f429887f0ad451eaee854e08432ce67d2cac6b301cd9e64")];
+    &[("k2:diary@1", "9afb1f6a60a076e1ffabdd48abd699aae5eee6c5bf295f65d05074ea97ae27c6")];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
 pub fn builtin_widget_hash(w: &BuiltinWidget) -> String {
@@ -254,6 +254,22 @@ mod tests {
         }
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
         assert!(code <= 256 * 1024, "UW8: the Diary's code is {code} bytes");
+        // Rosson 2026-10-08: one page per agent on THIS computer. K2 binds
+        // the grant to `{server: "local"}`; the page list keeps only
+        // `<handle>::local` rows as a second lock.
+        assert!(js.contains("var LOCAL_HOST = 'local'") && js.contains(".filter(isLocal)"), "the Diary keeps local agents only");
+        // Pages turn by drag, click and keys; reduced motion stills it all.
+        for needle in ["'pointerdown'", "'pointermove'", "'ArrowRight'", "'ArrowLeft'", "'PageDown'", "rotateY("] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        let css = file("diary.css");
+        assert!(css.contains("@media (prefers-reduced-motion: reduce)") && css.contains(":root.reduced"), "reduced motion");
+        assert!(js.contains("if (reduced()) {"), "a reduced-motion turn is instant");
+        // Nothing but haunted controls on the page: no agent chooser, no
+        // theme or model buttons.
+        for bad in ["id=\"search\"", "id=\"back\"", "Contents", "theme.get", "theme.changed"] {
+            assert!(!html.contains(bad) && !js.contains(bad), "the Diary still has {bad}");
+        }
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

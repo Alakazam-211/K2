@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "name": "Diary",
-  "description": "Write to one agent at a time on a parchment page; the reply appears in handwriting.",
+  "description": "A haunted journal with one page per agent on this computer. Turn the page to write to another; the ink writes back.",
   "entry": "index.html",
   "caps": ["agents:read", "thread:read", "thread:post"],
   "reasons": {
-    "agents:read": "to list your agents on the contents page and show who is working",
-    "thread:read": "to show your conversation with each agent on the diary's pages",
-    "thread:post": "so what you write on the page is sent to that agent"
+    "agents:read": "to give each agent on this computer its own page, and show when it stirs or calls for you",
+    "thread:read": "to show your conversation with that agent on its page",
+    "thread:post": "so what you write on a page is sent to that agent"
   },
   "requires": {
     "libs": ["perfect-freehand@1", "font-caveat@5"]

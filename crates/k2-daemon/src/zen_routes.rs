@@ -385,7 +385,10 @@ struct NewGardenBody {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NewGardenGrant {
-    scope: J,
+    /// Left out for a catalog Garden whose scope is fixed (the Diary:
+    /// this computer's agents); any other scope for it is refused.
+    #[serde(default)]
+    scope: Option<J>,
     #[serde(default = "yes")]
     sending: bool,
     /// The rows the scope resolved to in the dialog (UWA8); may be empty.
@@ -425,8 +428,19 @@ fn handle_garden_new(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, Z
                 .find(|w| w["kind"] == "custom" && w["widget"] == entry.widget.as_str())
                 .and_then(|w| w["id"].as_str().map(str::to_string))
                 .ok_or_else(|| ZenError::Io(format!("template {tid} doesn't place {}", entry.widget)))?;
-            let scope = Scope::from_json(&g.scope).map_err(ZenError::BadRequest)?;
+            let scope = match (&g.scope, entry.fixed_scope()) {
+                (Some(s), fixed) => {
+                    let s = Scope::from_json(s).map_err(ZenError::BadRequest)?;
+                    check_fixed_scope(&entry.widget, &s, fixed.as_ref())?;
+                    s
+                }
+                (None, Some(fixed)) => fixed,
+                (None, None) => {
+                    return Err(ZenError::BadRequest("grant needs a scope: which agents the widget may see".into()))
+                }
+            };
             check_entries(&g.entries, &scope, &Default::default(), 0)?;
+            check_fixed_entries(&g.entries, &scope)?;
             let st = f.widget_bundle(&entry.widget)?;
             let caps: Vec<String> = entry.caps.iter().filter(|c| st.requested().contains(c)).cloned().collect();
             Some((placement, entry.widget, caps, scope, g.entries.clone(), g.sending, st.hash().to_string()))
@@ -524,6 +538,34 @@ fn check_entries(
         return Err(ZenError::BadRequest(
             "this placement asks for one agent (its agent prop); grant it an agent scope".into(),
         ));
+    }
+    Ok(())
+}
+
+/// A built-in whose catalog entry fixes its scope (the Diary: this
+/// computer's agents, Rosson 2026-10-08) takes only that scope, from
+/// New Garden and from the review dialog alike.
+fn check_fixed_scope(widget: &str, scope: &Scope, fixed: Option<&Scope>) -> Result<(), ZenError> {
+    match fixed {
+        Some(f) if f != scope => Err(ZenError::BadRequest(format!(
+            "{widget} sees only the agents on this computer: its scope is {}",
+            f.to_json()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// With a `{server: "local"}` scope every recorded entry is on this
+/// computer: a remote agent is never bound to a local-only widget.
+fn check_fixed_entries(entries: &[GrantEntry], scope: &Scope) -> Result<(), ZenError> {
+    let local = k2_core::zen::garden_catalog::LOCAL_SERVER;
+    if matches!(scope, Scope::Server(s) if s == local) {
+        if let Some(e) = entries.iter().find(|e| e.server != local) {
+            return Err(ZenError::BadRequest(format!(
+                "entries for a this-computer scope are all on server \"{local}\"; '{}' is on '{}'",
+                e.room, e.server
+            )));
+        }
     }
     Ok(())
 }
@@ -639,7 +681,9 @@ fn handle_widget_grant(body: &[u8], caller: &Caller, ingress: &str) -> Result<J,
         return Err(ZenError::BadRequest("caps is empty: there is nothing to allow".into()));
     }
     let scope = Scope::from_json(&b.scope).map_err(ZenError::BadRequest)?;
+    check_fixed_scope(&widget, &scope, k2_core::zen::garden_catalog::fixed_scope_for_widget(&widget).as_ref())?;
     check_entries(&b.entries, &scope, &ask, 1)?;
+    check_fixed_entries(&b.entries, &scope)?;
     let record = GrantRecord {
         garden,
         placement: b.placement,

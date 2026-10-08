@@ -52,8 +52,8 @@ beside the conversation with the one picked. **Garden 2** is empty: it's there\n
 for the human to ask you to build it. Garden 2 and every new Garden start\n\
 **empty**, with \"Ask your agents to add things to this Garden\", an Ask my\n\
 agent button and **Start with the default** (which turns that Garden into the\n\
-texting page). + New Garden asks the human: start with the default, or start\n\
-empty and ask you.\n\n\
+texting page). + New Garden opens one window: a name and the ready-made Gardens as\n\
+cards (the Diary, start with the default, or start empty and ask you).\n\n\
 When the human asks you to add something to a Garden, you edit that Garden's\n\
 file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
 `~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
@@ -521,9 +521,12 @@ returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
    <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit;\n\
    `k2 zen widget revoke` takes a grant away (taking power away is always allowed).\n\n\
 **The Diary** (`k2:diary@1`, the Diary Garden in New Garden) is the canonical example:\n\
-one agent at a time on a parchment page, replies written out in handwriting, a contents\n\
-page with search. Copy it with `k2 zen widget new my-diary --from k2:diary`; a\n\
-built-in widget itself never changes.\n\n\
+a haunted journal with one page per agent on this computer. The human turns the page\n\
+(drags or clicks a corner, or uses the arrow keys) to write to another agent; their ink\n\
+sinks in and the reply bleeds back in handwriting. K2 fixes its scope to this computer's\n\
+agents, and its Garden keeps only one ⋯ menu (the Garden switcher and the Zen toggle).\n\
+Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget itself\n\
+never changes.\n\n\
 Files K2 owns here too: **never write grants.json**, `zen-grant.key` or `pins.json`.\n\n",
     );
     s
@@ -570,7 +573,7 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
   64 KB per message, 8 live servers.\n\
 - WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs.\n\n\
 ### Examples to copy\n\n\
-- `k2:diary` (the Diary): a full widget with page turns, handwriting and search.\n\
+- `k2:diary` (the Diary): a full widget with draggable page turns, handwriting and reduced motion.\n\
 - `hello`: a clock and a greeting; the smallest widget.\n\
 - `arcade`: agents as characters; click one to talk.\n\n",
         m.cdn_hosts.join(", "),

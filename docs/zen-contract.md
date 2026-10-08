@@ -625,6 +625,13 @@ the catalog's `bannedFields` (`path`, `sessionId`, `conversation_id`,
   (`k2.diary@1`, widget `k2:diary@1`) is the first. Catalog Gardens are only
   added when the person picks one in New Garden; never appended to an
   existing list (R5 as changed).
+- **The Diary** (Rosson 2026-10-08) is a haunted journal: one page per
+  agent on this computer (`<handle>::local` rows only), turned by dragging
+  or clicking a page corner or with ←/→ and PageUp/PageDown. Writing on a
+  page posts to that agent's Thread; the reply bleeds back in handwriting.
+  Its page has no chrome but one ⋯ `menu` (top right) holding the Garden
+  switcher and the Zen toggle, so the required-controls check reads the
+  menu's button (FC25); ⌃⌘Z still leaves Zen.
 
 ### The widget in `GET /cli/zen/get`
 
@@ -669,7 +676,16 @@ rows, 64 KB request bodies, a GET on a POST route is 405.
 | `POST widget/sending` | `{garden, placement, on, reason?}` | turning on is owner-only, like a grant |
 | `POST widget/resume` | `{garden, placement}` | clears a runaway pause (owner only) |
 | `GET widget/grants` | — | the Settings list (`ZenWidgetGrantRow[]`) |
-| `GET templates` | — | `[{id, short, label, description, section, needsGrant, newUsers}]` |
+| `GET templates` | — | `[{id, short, label, description, section, needsGrant, newUsers}]`; `needsGrant` = `{widget, caps, scope, consent}`, `scope: "local"` = fixed to this computer's agents |
+
+**A catalog Garden's fixed scope** (Rosson 2026-10-08). A `[catalog.grant]`
+with `scope = "local"` (the Diary) is granted `{server: "local"}` and nothing
+else: `garden/new` takes `grant: {entries?, sending?}` (scope left out, or
+exactly `{server: "local"}`), and `widget/grant` for that built-in widget
+(`k2:diary@1`, wherever it is placed) refuses any other scope or an entry
+whose `server` isn't `local` (400 `bad_request`). A user's copy (`k2 zen
+widget new my-diary --from k2:diary`) is a folder widget: its scope is the
+person's pick, as for any widget.
 
 **Grants** (UWB3, UWB4): only the owner token makes one; agent passports,
 Connect logins and app passes get 403 `owner_only`. A grant is a row in the
@@ -819,15 +835,25 @@ this contract, where it reads more loosely or decides something:
    Keep that 404 for unknown Zen GET routes.
 2. **Setup.** After `POST /cli/zen/setup` the renderer re-reads
    `GET /cli/zen/gardens` instead of using `setup`'s `gardens`.
-3. **New Garden** (Rosson, 2026-10-04). After the name, the switcher offers
-   **Start with the default** (`template: "texting"`, Garden 1's layout;
-   the selected choice) or **Start empty and ask my agent**
-   (`template: "blank"`; the new Garden's empty-Garden widget then opens
-   Ask my agent by itself, once). It sends `{name, template}` and reads
-   `garden` from the answer; the window switches to it at once and the list
-   is re-read on the `zen_changed` that follows. Names are checked
-   case-insensitively before the choice, and a 409 `garden_exists` goes back
-   to the name with "You already have a Garden called “<name>”.".
+3. **New Garden** (Rosson, 2026-10-04; one modal since 2026-10-08). "+ New
+   Garden" in the switcher (or a `menu` holding it) closes the menu and
+   opens the New Garden modal (`ZenNewGardenModal`): a name field and the
+   templates as cards with a small sketch, the catalog first (the Diary
+   leads), then **Start with the default** (`template: "texting"`, Garden
+   1's layout) and **Start empty and ask my agent** (`template: "blank"`;
+   the new Garden's empty-Garden widget then opens Ask my agent by itself,
+   once). Pick a card, name it, Create: one step. The name follows the pick
+   until typed ("Diary", "Garden 4"). For K2's own catalog Gardens the
+   create click is the consent: the modal shows the catalog's one
+   `consent` sentence, and the same owner-only `garden/new` carries the
+   grant, scoped to this computer's agents (`{server: "local"}`, entries =
+   the local agents now). No scope picker. It sends `{name, template,
+   grant?}` and reads `garden` from the answer; the window switches to it at
+   once and the list is re-read on the `zen_changed` that follows. Names are
+   checked case-insensitively before the create, and a 409 `garden_exists`
+   stays in the modal with "You already have a Garden called “<name>”.".
+   Settings → Gardens' "+ New Garden" and its Garden catalog cards open the
+   same modal.
 3a. **Start with the default** (Rosson, 2026-10-04). The empty-Garden widget
    shows it next to Ask my agent only while the Garden is empty (the blank
    template with only its `garden-empty` widget). It sends

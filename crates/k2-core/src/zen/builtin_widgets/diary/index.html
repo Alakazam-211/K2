@@ -6,55 +6,50 @@
   <link rel="stylesheet" href="diary.css">
 </head>
 <body>
-  <main class="book" id="book" aria-live="polite">
-    <div class="ribbon" id="ribbon" aria-hidden="true"></div>
+  <div class="desk" id="desk">
+    <div class="fog" aria-hidden="true"><span></span><span></span></div>
+    <svg class="web" viewBox="0 0 120 120" aria-hidden="true">
+      <path d="M120 0 L52 68 M120 0 L84 92 M120 0 L28 34 M120 0 L104 116"/>
+      <path d="M104 0 Q110 10 120 16 M84 0 Q98 20 120 36 M62 0 Q84 34 120 58 M40 0 Q70 50 120 84"/>
+    </svg>
 
-    <section class="page contents" id="contents" aria-label="Contents">
-      <header class="page-head">
-        <h1 class="title" id="title">Diary</h1>
-        <p class="subtitle">Choose who to write to.</p>
-      </header>
-      <label class="search">
-        <span class="sr">Search your agents</span>
-        <input id="search" type="search" placeholder="Search…" autocomplete="off" spellcheck="false">
-      </label>
-      <ol class="toc" id="toc"></ol>
-      <p class="empty" id="toc-empty" hidden></p>
-    </section>
+    <main class="book" id="book" aria-live="polite">
+      <section class="page" id="page" aria-label="Diary page">
+        <div class="glow" aria-hidden="true"></div>
+        <header class="page-head">
+          <p class="caption" id="caption">this page belongs to</p>
+          <h1 class="who" id="who"></h1>
+          <svg class="flourish" viewBox="0 0 160 16" aria-hidden="true"><path id="flourish"/></svg>
+          <p class="mood" id="mood"></p>
+          <span class="bookmark" id="bookmark" title="Calling for you" hidden></span>
+        </header>
 
-    <section class="page leaf" id="leaf" aria-label="Diary page" hidden>
-      <header class="page-head leaf-head">
-        <button class="link back" id="back" type="button" title="Contents">Contents</button>
-        <div class="who">
-          <h2 class="agent" id="agent"></h2>
-          <p class="where" id="where"></p>
+        <div class="sheet" id="sheet">
+          <div class="entries" id="entries"></div>
+          <div class="stir" id="stir" hidden aria-label="The ink stirs"><span></span><span></span><span></span></div>
+          <p class="note" id="note" hidden></p>
+          <form class="pen" id="pen" hidden>
+            <label class="sr" for="ink" id="ink-label">Write to this agent</label>
+            <textarea id="ink" rows="3" placeholder="Write here…" spellcheck="true"></textarea>
+            <div class="soak" id="soak" aria-hidden="true"></div>
+            <div class="pen-row">
+              <span class="hint" id="hint">Enter, and the page drinks it</span>
+              <button class="seal" id="send" type="submit">seal</button>
+            </div>
+          </form>
         </div>
-        <span class="bookmark" id="bookmark" title="Needs you" hidden></span>
-      </header>
 
-      <div class="sheet" id="sheet">
-        <p class="date" id="date"></p>
-        <div class="entries" id="entries"></div>
-        <div class="shimmer" id="shimmer" hidden aria-label="Writing…"><span></span><span></span><span></span></div>
-        <p class="note" id="note" hidden></p>
-        <form class="pen" id="pen" hidden>
-          <label class="sr" for="ink">Write to this agent</label>
-          <textarea id="ink" rows="4" placeholder="Write here…" spellcheck="true"></textarea>
-          <div class="soak" id="soak" aria-hidden="true"></div>
-          <div class="pen-row">
-            <span class="hint" id="hint">Enter to send · Shift+Enter for a new line</span>
-            <button class="link send" id="send" type="submit">Send</button>
-          </div>
-        </form>
-      </div>
+        <footer class="page-foot">
+          <button class="whispers" id="whispers" type="button" aria-pressed="false">whispers: off</button>
+          <span class="folio" id="folio"></span>
+        </footer>
 
-      <footer class="page-foot">
-        <button class="turn" id="prev" type="button" title="Earlier page" aria-label="Earlier page">‹</button>
-        <span class="folio" id="folio"></span>
-        <button class="turn" id="next" type="button" title="Later page" aria-label="Later page">›</button>
-      </footer>
-    </section>
-  </main>
+        <button class="corner prev" id="prev" type="button" aria-label="Turn back a page"></button>
+        <button class="corner next" id="next" type="button" aria-label="Turn the page"></button>
+      </section>
+    </main>
+    <p class="ghost-word" id="ghost" aria-hidden="true"></p>
+  </div>
   <script src="diary.js"></script>
 </body>
 </html>

@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 // The built-in Diary widget, k2:diary@1 (prd-zen-user-widgets-v2 UWB21,
-// UWB24), run against a fake `k2` object: the contents page, search, the
-// handwriting reveal, sending, needs-you, page turns and history. The real
-// frame, bridge and caps are B4's (TUW3.x); this pins the widget's own
-// behaviour. Agent text must stay text: a label carrying markup never
-// becomes an element.
+// UWB24; the haunted Diary, Rosson 2026-10-08), run byte for byte against a
+// fake `k2` object with a hand-cranked frame clock. The real frame, bridge
+// and caps are B4's (TUW3.x); this pins the widget's own behaviour:
+//   - one page per agent on THIS computer: a remote server's row never gets
+//     a page, even when K2 hands it over;
+//   - turning the page (keys, a corner click, a corner drag) changes who you
+//     are writing to, and the Thread subscription follows the page;
+//   - writing on a page posts to that page's agent only; a refusal gives the
+//     words back and says why;
+//   - a new reply bleeds in as handwriting; a tap shows it all;
+//   - reduced motion: no turning leaf, the turn is instant, replies whole;
+//   - agent text stays text: a label carrying markup never becomes an element.
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,10 +36,10 @@ interface Row {
   avatar: string | null
 }
 
-const row = (n: number, extra: Partial<Row> = {}): Row => ({
-  address: `agent${n}::example.test`,
-  label: `Agent ${n}`,
-  index: n,
+const row = (handle: string, index: number, extra: Partial<Row> = {}): Row => ({
+  address: `${handle}::local`,
+  label: handle.charAt(0).toUpperCase() + handle.slice(1),
+  index,
   server: null,
   state: 'ok',
   stateLabel: null,
@@ -46,17 +53,20 @@ const row = (n: number, extra: Partial<Row> = {}): Row => ({
   ...extra,
 })
 
+/** An agent on another server: never a page. */
+const remote = (handle: string, index: number): Row => ({ ...row(handle, index), address: `${handle}::box.example.test`, server: 'box.example.test' })
+
 const item = (seq: number, body: string, mine: boolean, extra: Record<string, unknown> = {}) => ({
   seq,
   id: `m${seq}`,
-  doc: { id: `m${seq}`, kind: 'message', from: mine ? 'alice' : 'agent1', body, via: mine ? 'compose' : 'thread', created_at: 1_800_000_000 + seq, ...extra },
+  doc: { id: `m${seq}`, kind: 'message', from: mine ? 'alice' : 'agent', body, via: mine ? 'compose' : 'thread', created_at: 1_800_000_000 + seq, ...extra },
 })
 
 type Cb = (v: unknown) => void
 
 function harness(opts: { reduced?: boolean; can?: (v: string) => boolean } = {}) {
   let rowsCb: Cb | null = null
-  let threadCb: Cb | null = null
+  const threads = new Map<string, Cb>()
   let frames: Array<(t: number) => void> = []
   let now = 0
   const k2 = {
@@ -72,23 +82,17 @@ function harness(opts: { reduced?: boolean; can?: (v: string) => boolean } = {})
       }),
     },
     thread: {
-      subscribe: vi.fn((_a: string, cb: Cb) => {
-        threadCb = cb
-        return vi.fn()
+      subscribe: vi.fn((address: string, cb: Cb) => {
+        threads.set(address, cb)
+        return vi.fn(() => void threads.delete(address))
       }),
       read: vi.fn(async () => ({ items: [item(1, 'the very first words', false)], hasMore: false })),
       post: vi.fn(async () => ({ id: 'm99', seq: 99 })),
       answer: vi.fn(async () => null),
     },
-    conversation: { open: vi.fn(async () => null) },
-    theme: {
-      get: vi.fn(async () => ({ theme: { scheme: 'dark', vars: { '--zen-accent': '#123456' } }, chrome: { corners: null, stoplights: null }, motion: { reduced: false } })),
-      changed: vi.fn(() => () => {}),
-    },
   }
-  document.documentElement.removeAttribute('data-zen-scheme')
   document.documentElement.className = ''
-  document.body.innerHTML = HTML.slice(HTML.indexOf('<main'), HTML.indexOf('<script'))
+  document.body.innerHTML = HTML.slice(HTML.indexOf('<body>') + 6, HTML.indexOf('<script'))
   const win = { k2 } as unknown as Window
   const raf = (f: (t: number) => void) => {
     frames.push(f)
@@ -103,23 +107,40 @@ function harness(opts: { reduced?: boolean; can?: (v: string) => boolean } = {})
     () => {},
     perf,
   )
+  const $ = (id: string): HTMLElement => {
+    const el = document.getElementById(id)
+    if (!el) throw new Error(`no #${id}`)
+    return el
+  }
   return {
     k2,
     rows: (r: Row[]) => (rowsCb as Cb)(r),
-    view: (v: Record<string, unknown>) => (threadCb as Cb)({ address: 'agent1::example.test', phase: 'ready', note: null, hasMore: false, ...v }),
+    /** Push a Thread view to the open page's subscription. */
+    view(address: string, v: Record<string, unknown>) {
+      const cb = threads.get(address)
+      if (!cb) throw new Error(`no Thread subscription for ${address}; following: ${[...threads.keys()].join(', ')}`)
+      cb({ address, phase: 'ready', note: null, hasMore: false, turn: null, ...v })
+    },
+    following: () => [...threads.keys()],
     advance(ms: number) {
       now += ms
       const run = frames
       frames = []
       run.forEach((f) => f(now))
     },
-    $: (id: string) => document.getElementById(id) as HTMLElement,
+    /** Run frames until none are left (an animation finishing). */
+    settle() {
+      for (let i = 0; i < 200 && frames.length; i++) this.advance(16)
+    },
+    key: (key: string) => document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })),
+    who: () => $('who').textContent ?? '',
+    $,
   }
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
-describe('k2:diary@1', () => {
+describe('k2:diary@1, the haunted Diary', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
   })
@@ -127,94 +148,170 @@ describe('k2:diary@1', () => {
     vi.restoreAllMocks()
   })
 
-  it('lists agents on the contents page as text, and says it is ready once', () => {
-    const h = harness()
-    h.rows([row(1, { label: '<img src=x onerror=alert(1)>' }), row(2, { needsYou: true, activity: 'needs-you' })])
-    const lis = h.$('toc').querySelectorAll('li')
-    expect(lis).toHaveLength(2)
-    expect(lis[0].querySelector('.name')?.textContent).toBe('<img src=x onerror=alert(1)>')
-    expect(document.querySelector('#toc img')).toBeNull()
-    expect(lis[1].classList.contains('needs')).toBe(true)
-    h.rows([row(1), row(2)])
+  it('one page per agent on this computer: a remote agent never gets a page; labels stay text; ready once', () => {
+    const h = harness({ reduced: true })
+    h.rows([row('cortana', 0, { label: '<img src=x onerror=alert(1)>' }), remote('julie', 1), row('nora', 2)])
+    expect(h.who()).toBe('<img src=x onerror=alert(1)>')
+    expect(document.querySelector('#who img, .page img')).toBeNull()
+    expect(h.$('caption').textContent).toBe('you are writing to')
+    expect(h.$('folio').textContent).toBe('page i of ii')
+    expect(h.following()).toEqual(['cortana::local'])
+    // Every page, turned through: never Julie (box.example.test).
+    const seen = [h.who()]
+    for (let i = 0; i < 3; i++) {
+      h.key('ArrowRight')
+      seen.push(h.who())
+    }
+    expect([...new Set(seen)]).toEqual(['<img src=x onerror=alert(1)>', 'Nora'])
+    expect(h.k2.thread.subscribe.mock.calls.map((c) => c[0])).toEqual(['cortana::local', 'nora::local'])
+    expect(document.body.textContent).not.toContain('Julie')
+    h.rows([row('cortana', 0), remote('julie', 1), row('nora', 2)])
     expect(h.k2.ready).toHaveBeenCalledTimes(1)
-    expect(h.$('leaf').hidden).toBe(true)
   })
 
-  it('search filters the contents, and Enter opens the first match', () => {
-    const h = harness()
-    h.rows([row(1), row(2, { label: 'Scout', server: 'box.example.test' })])
-    const search = h.$('search') as HTMLInputElement
-    search.value = 'box'
-    search.dispatchEvent(new Event('input'))
-    expect(h.$('toc').querySelectorAll('li')).toHaveLength(1)
-    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
-    expect(h.k2.thread.subscribe).toHaveBeenCalledWith('agent2::example.test', expect.any(Function))
-    expect(h.k2.conversation.open).toHaveBeenCalledWith('agent2::example.test')
+  it('turning the page changes who you write to; your words go to that agent’s Thread only', async () => {
+    const h = harness({ reduced: true })
+    h.rows([row('cortana', 0), row('nora', 1)])
+    expect((h.$('prev') as HTMLButtonElement).disabled).toBe(true)
+    h.key('PageDown')
+    expect(h.who()).toBe('Nora')
+    expect(h.following()).toEqual(['nora::local'])
+    expect(h.$('ink-label').textContent).toBe('Write to Nora')
+    expect((h.$('next') as HTMLButtonElement).disabled).toBe(true)
+    h.view('nora::local', { items: [] })
+    const ink = h.$('ink') as HTMLTextAreaElement
+    ink.value = 'Who wrote here before me?'
+    ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(h.k2.thread.post).toHaveBeenCalledWith('nora::local', 'Who wrote here before me?')
+    expect(ink.value).toBe('')
+    await flush()
+    // A keyboard click on the back corner turns back; the pen follows.
+    h.$('prev').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+    expect(h.who()).toBe('Cortana')
+    h.view('cortana::local', { items: [] })
+    ink.value = 'And you?'
+    h.$('pen').dispatchEvent(new Event('submit', { cancelable: true }))
+    expect(h.k2.thread.post.mock.calls).toEqual([
+      ['nora::local', 'Who wrote here before me?'],
+      ['cortana::local', 'And you?'],
+    ])
   })
 
-  it('opens the only agent straight away; history is shown whole, a new reply is handwritten', () => {
+  it('arrows don’t turn the page while you are writing; PageDown does', () => {
+    const h = harness({ reduced: true })
+    h.rows([row('cortana', 0), row('nora', 1)])
+    h.view('cortana::local', { items: [] })
+    const ink = h.$('ink') as HTMLTextAreaElement
+    ink.value = 'half a thought'
+    ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    expect(h.who()).toBe('Cortana')
+    ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }))
+    expect(h.who()).toBe('Nora')
+    // The draft waits on its own page.
+    h.key('PageUp')
+    expect((h.$('ink') as HTMLTextAreaElement).value).toBe('half a thought')
+  })
+
+  it('with motion, a turn lifts the old page as a leaf over the new one, then follows the new Thread', () => {
     const h = harness()
-    h.rows([row(1)])
-    expect(h.k2.thread.subscribe).toHaveBeenCalledWith('agent1::example.test', expect.any(Function))
-    h.view({ items: [item(1, 'hello', true), item(2, 'old reply', false)] })
+    h.rows([row('cortana', 0), row('nora', 1)])
+    h.$('next').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+    const leaf = document.querySelector<HTMLElement>('.leaf.next')
+    expect(leaf).not.toBeNull()
+    // The leaf is a copy: no ids, nothing to focus.
+    expect(leaf?.querySelector('[id]')).toBeNull()
+    expect(h.who()).toBe('Nora')
+    expect(h.following()).toEqual(['cortana::local'])
+    h.advance(300)
+    expect(leaf?.style.transform).toMatch(/^rotateY\(-\d+(\.\d+)?deg\)$/)
+    h.settle()
+    expect(document.querySelector('.leaf')).toBeNull()
+    expect(h.following()).toEqual(['nora::local'])
+  })
+
+  it('grab the corner and drag: a tiny tug lifts nothing, a real drag turns the page', () => {
+    const h = harness()
+    h.rows([row('cortana', 0), row('nora', 1)])
+    const next = h.$('next')
+    next.setPointerCapture = () => {}
+    const pointer = (type: string, x: number): void =>
+      void next.dispatchEvent(Object.assign(new MouseEvent(type, { bubbles: true, clientX: x, button: 0 }), { pointerId: 1 }))
+    pointer('pointerdown', 300)
+    pointer('pointermove', 297)
+    expect(document.querySelector('.leaf')).toBeNull()
+    pointer('pointermove', 200)
+    expect(document.querySelector('.leaf.next')).not.toBeNull()
+    pointer('pointerup', 200)
+    h.settle()
+    expect(document.querySelector('.leaf')).toBeNull()
+    expect(h.who()).toBe('Nora')
+    expect(h.following()).toEqual(['nora::local'])
+  })
+
+  it('history is shown whole; a new reply bleeds in as handwriting; a tap shows it all', () => {
+    const h = harness()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [item(1, 'hello', true), item(2, 'old reply', false)] })
     expect(h.$('entries').textContent).toContain('old reply')
-    expect(document.querySelector('.entry.writing')).toBeNull()
-    const reply = 'A new reply, written out slowly in ink.'
-    h.view({ items: [item(1, 'hello', true), item(2, 'old reply', false), item(3, 'next', true), item(4, reply, false)] })
-    const writing = document.querySelector('.entry.writing .body') as HTMLElement
-    expect(writing).not.toBeNull()
+    expect(document.querySelector('.entry.bleeding')).toBeNull()
+    const reply = 'A new reply, bleeding through the paper.'
+    h.view('cortana::local', { items: [item(1, 'hello', true), item(2, 'old reply', false), item(3, 'next', true), item(4, reply, false)] })
+    const body = document.querySelector('.entry.bleeding .body') as HTMLElement
+    expect(body).not.toBeNull()
     h.advance(200)
-    expect((writing.textContent ?? '').length).toBeGreaterThan(0)
-    expect((writing.textContent ?? '').length).toBeLessThan(reply.length)
-    // A later push (the turn ends) keeps the pen going, not restarting it.
-    h.view({ items: [item(1, 'hello', true), item(2, 'old reply', false), item(3, 'next', true), item(4, reply, false)], turn: null })
-    expect(document.querySelector('.entry.writing')).not.toBeNull()
-    // A tap shows it all.
+    expect((body.textContent ?? '').length).toBeGreaterThan(0)
+    expect((body.textContent ?? '').length).toBeLessThan(reply.length)
+    // The wet edge of the ink is its own span.
+    expect(body.querySelector('.wet')?.textContent?.length).toBeGreaterThan(0)
+    // A later push (the turn ends) keeps the hand going, not restarting it.
+    h.view('cortana::local', { items: [item(1, 'hello', true), item(2, 'old reply', false), item(3, 'next', true), item(4, reply, false)], turn: null })
+    expect(document.querySelector('.entry.bleeding')).not.toBeNull()
     h.$('sheet').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    expect(document.querySelector('.entry.writing')).toBeNull()
+    expect(document.querySelector('.entry.bleeding')).toBeNull()
     expect(h.$('entries').textContent).toContain(reply)
   })
 
-  it('reduced motion writes replies at once', () => {
+  it('a page with no history still bleeds in its first reply', () => {
+    const h = harness()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [] })
+    expect(h.$('note').textContent).toBe('A blank page. Write something, and see what writes back.')
+    h.view('cortana::local', { items: [item(7, 'I have been waiting.', false)] })
+    expect(document.querySelector('.entry.bleeding')).not.toBeNull()
+  })
+
+  it('reduced motion: the turn is instant with no leaf, and replies arrive whole', () => {
     const h = harness({ reduced: true })
-    h.rows([row(1)])
-    h.view({ items: [item(1, 'hi', true)] })
-    h.view({ items: [item(1, 'hi', true), item(2, 'whole at once', false)] })
-    expect(document.querySelector('.entry.writing')).toBeNull()
+    h.rows([row('cortana', 0), row('nora', 1)])
+    expect(document.documentElement.classList.contains('reduced')).toBe(true)
+    h.$('next').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+    expect(document.querySelector('.leaf')).toBeNull()
+    expect(h.who()).toBe('Nora')
+    h.view('nora::local', { items: [item(1, 'hi', true)] })
+    h.view('nora::local', { items: [item(1, 'hi', true), item(2, 'whole at once', false)] })
+    expect(document.querySelector('.entry.bleeding')).toBeNull()
     expect(h.$('entries').textContent).toContain('whole at once')
   })
 
-  it('working shows the ink shimmer; needs-you lifts the bookmark', () => {
+  it('sending soaks the ink into the page and fades your words', async () => {
     const h = harness()
-    h.rows([row(1)])
-    h.view({ items: [item(1, 'hi', true)], turn: { state: 'working', since: 1 } })
-    expect(h.$('shimmer').hidden).toBe(false)
-    expect(h.$('bookmark').hidden).toBe(true)
-    h.view({ items: [item(1, 'hi', true)], turn: { state: 'needs-you', since: 1 } })
-    expect(h.$('shimmer').hidden).toBe(true)
-    expect(h.$('bookmark').hidden).toBe(false)
-  })
-
-  it('sending posts the text, soaks the ink into the page, and fades your words', async () => {
-    const h = harness()
-    h.rows([row(1)])
-    h.view({ items: [] })
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [] })
     const ink = h.$('ink') as HTMLTextAreaElement
     expect(h.$('pen').hidden).toBe(false)
-    ink.value = 'Dear agent, how goes it?'
+    ink.value = 'Dear Cortana, how goes it?'
     ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
-    expect(h.k2.thread.post).toHaveBeenCalledWith('agent1::example.test', 'Dear agent, how goes it?')
-    expect(ink.value).toBe('')
+    expect(h.k2.thread.post).toHaveBeenCalledWith('cortana::local', 'Dear Cortana, how goes it?')
     expect(h.$('soak').classList.contains('on')).toBe(true)
     await flush()
-    h.view({ items: [{ ...item(99, 'Dear agent, how goes it?', true), id: 'm99' }] })
+    h.view('cortana::local', { items: [{ ...item(99, 'Dear Cortana, how goes it?', true), id: 'm99' }] })
     expect(document.querySelector('.entry.mine.absorbed')).not.toBeNull()
   })
 
-  it('a refused post gives the words back and says why', async () => {
+  it('a refused post gives the words back and says why, in the Diary’s words', async () => {
     const h = harness()
-    h.rows([row(1)])
-    h.view({ items: [] })
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [] })
     h.k2.thread.post.mockRejectedValueOnce(Object.assign(new Error('off'), { code: 'sending_off' }))
     const ink = h.$('ink') as HTMLTextAreaElement
     ink.value = 'kept'
@@ -222,54 +319,61 @@ describe('k2:diary@1', () => {
     await flush()
     await flush()
     expect(ink.value).toBe('kept')
-    expect(h.$('note').textContent).toBe('Sending is turned off for this Diary.')
+    expect(h.$('note').textContent).toBe('The ink will not take: sending is turned off for this Diary.')
   })
 
-  it('pages turn back through history, then read older pages with beforeSeq', async () => {
-    const h = harness()
-    h.rows([row(1)])
-    h.view({ items: [item(5, 'first', true), item(6, 'r1', false), item(7, 'second', true), item(8, 'r2', false)], hasMore: true })
-    expect(h.$('folio').textContent).toBe('page 2 of 2')
-    expect((h.$('next') as HTMLButtonElement).disabled).toBe(true)
-    h.$('prev').click()
-    expect(h.$('folio').textContent).toBe('page 1 of 2')
-    expect(h.$('pen').hidden).toBe(true)
-    h.$('prev').click()
-    expect(h.k2.thread.read).toHaveBeenCalledWith('agent1::example.test', { beforeSeq: 5, limit: 50 })
+  it('working stirs the ink; needs-you lifts the bookmark, and the corner toward a calling page smoulders', () => {
+    const h = harness({ reduced: true })
+    h.rows([row('cortana', 0), row('mara', 1, { needsYou: true, activity: 'needs-you' })])
+    expect(h.$('next').classList.contains('calls')).toBe(true)
+    expect(h.$('prev').classList.contains('calls')).toBe(false)
+    h.view('cortana::local', { items: [item(1, 'hi', true)], turn: { state: 'working', since: 1 } })
+    expect(h.$('stir').hidden).toBe(false)
+    expect(h.$('mood').textContent).toBe('stirs…')
+    expect(h.$('bookmark').hidden).toBe(true)
+    h.view('cortana::local', { items: [item(1, 'hi', true)], turn: { state: 'needs-you', since: 1 } })
+    expect(h.$('stir').hidden).toBe(true)
+    expect(h.$('bookmark').hidden).toBe(false)
+    expect(h.$('mood').textContent).toBe('is calling for you')
+  })
+
+  it('scrolling to the top of a page reads older words with beforeSeq', async () => {
+    const h = harness({ reduced: true })
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [item(5, 'first', true), item(6, 'r1', false)], hasMore: true })
+    h.$('sheet').dispatchEvent(new Event('scroll'))
+    expect(h.k2.thread.read).toHaveBeenCalledWith('cortana::local', { beforeSeq: 5, limit: 50 })
     await flush()
     await flush()
-    expect(h.$('folio').textContent).toBe('page 1 of 3')
     expect(h.$('entries').textContent).toContain('the very first words')
-    h.$('next').click()
-    h.$('next').click()
-    expect(h.$('folio').textContent).toBe('page 3 of 3')
-    expect(h.$('pen').hidden).toBe(false)
   })
 
-  it('choice cards answer through thread.answer; secret cards stay in K2', async () => {
+  it('choice cards answer through thread.answer; secret cards stay in K2', () => {
     const h = harness()
-    h.rows([row(1)])
+    h.rows([row('cortana', 0)])
     const choice = { prompt: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }], allow_custom: false, status: 'pending' }
-    h.view({
+    h.view('cortana::local', {
       items: [item(1, 'q', true), item(2, '', false, { kind: 'ask', choice }), item(3, '', false, { kind: 'secret' })],
     })
     const yes = [...document.querySelectorAll('.choice button')].find((b) => b.textContent === 'Yes') as HTMLButtonElement
     yes.click()
-    expect(h.k2.thread.answer).toHaveBeenCalledWith('agent1::example.test', 'm2', 'Yes')
+    expect(h.k2.thread.answer).toHaveBeenCalledWith('cortana::local', 'm2', 'Yes')
     expect(h.$('entries').textContent).toContain('Answer it in K2’s Thread')
   })
 
-  it('takes the Garden theme', async () => {
-    harness()
-    await flush()
-    expect(document.documentElement.getAttribute('data-zen-scheme')).toBe('dark')
-    expect(document.documentElement.style.getPropertyValue('--zen-accent')).toBe('#123456')
+  it('no agents on this computer: a blank page that says so', () => {
+    const h = harness()
+    h.rows([remote('julie', 0)])
+    expect(h.$('caption').textContent).toBe('the pages are blank')
+    expect(h.$('note').textContent).toBe('No spirits dwell on this computer yet. Add an agent in K2, and a page will appear for it.')
+    expect(h.k2.thread.subscribe).not.toHaveBeenCalled()
+    expect(h.$('pen').hidden).toBe(true)
   })
 
   it('without agents:read it asks to be allowed, and is still ready', () => {
     const h = harness({ can: (v) => v !== 'agents.subscribe' })
     expect(h.k2.agents.subscribe).not.toHaveBeenCalled()
-    expect(h.$('toc-empty').textContent).toBe('Allow this Diary to see your agents to begin.')
+    expect(h.$('note').textContent).toBe('Allow this Diary in K2 to see the agents on this computer.')
     expect(h.k2.ready).toHaveBeenCalledTimes(1)
   })
 })

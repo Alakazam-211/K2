@@ -63,6 +63,11 @@ k2-core = { path = "../k2-core" }
 # templates, signed-build check). The helper binary itself is its own
 # crate (k2-root-helper) and is never linked here.
 k2-root-proto = { path = "../k2-root-proto" }
+# K2 vault (prd-k2-vault-v1): the store and its pure fetch policy; the daemon
+# does the I/O (`egress`, `vault_fetch`).
+k2-vault = { path = "../k2-vault" }
+# URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
+url = "2"
 
 # Cryptographic randomness for the per-boot hook auth token.
 getrandom = "0.2"

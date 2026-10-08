@@ -25,6 +25,9 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+pub mod gen;
+pub mod lint;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
 
@@ -279,6 +282,45 @@ mod tests {
         assert!(c.catalog_version >= 1, "catalogVersion starts at 1");
         assert!(!c.caps.is_empty());
         assert!(!c.errors.is_empty());
+    }
+
+    /// TUWA1/TUWA10 (UWA9): the Rust cap lists agree with the catalog.
+    /// `BRIDGE_CAPS` = the caps of every row with a builtin or registered
+    /// renderer binding; `USER_WIDGET_CAPS` = the caps marked `widget`;
+    /// the app pass's accepted caps = the caps marked `app`.
+    #[test]
+    fn rust_cap_lists_match_the_catalog() {
+        let c = catalog();
+        let mut bridge: Vec<&str> = gen::bridge_rows(c).iter().filter_map(|v| v.cap.as_deref()).collect();
+        bridge.sort_unstable();
+        bridge.dedup();
+        let mut want: Vec<&str> = crate::zen::BRIDGE_CAPS.to_vec();
+        want.sort_unstable();
+        assert_eq!(bridge, want, "BRIDGE_CAPS vs the catalog's bridge rows");
+        assert_eq!(c.caps_exposed_to(Exposure::Widget), crate::zen::USER_WIDGET_CAPS);
+        for cap in ["gardens:manage", "gardens:template", "agents:add", "app:navigate"] {
+            assert!(!crate::zen::USER_WIDGET_CAPS.contains(&cap), "{cap} is K2's own (UW69)");
+            assert!(c.cap(cap).is_some_and(|r| r.exposure.is_empty()), "{cap} is exposed to no one");
+        }
+        // `skin::ACCEPTED_CAPS` is private; its refusal message lists it.
+        let err = crate::skin::parse_caps(Some(&["nope:nope".to_string()])).expect_err("unknown cap refused");
+        let listed = err.split_once("accepted: ").map(|(_, l)| l).unwrap_or_else(|| panic!("no list in {err:?}"));
+        let accepted: Vec<&str> = listed.split(", ").collect();
+        assert_eq!(c.caps_exposed_to(Exposure::App), accepted, "ACCEPTED_CAPS vs the catalog's app caps");
+    }
+
+    /// TUWA1: every row's error codes and caps come from the shared tables,
+    /// and every renderer verb the bridge knows today has a row.
+    #[test]
+    fn every_widget_row_is_closed_and_known() {
+        let c = catalog();
+        let probs = lint::lint(c);
+        assert!(probs.is_empty(), "{}", probs.join("\n"));
+        for v in c.verbs_exposed_to(Exposure::Widget) {
+            assert!(v.cap.as_deref().is_none_or(|cap| crate::zen::USER_WIDGET_CAPS.contains(&cap)), "{}", v.verb);
+        }
+        assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
+        assert!(c.verb("thread.markRead").is_some_and(|v| v.exposure.is_empty()), "UW51: markRead stays none");
     }
 
     #[test]

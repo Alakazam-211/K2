@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 1,
+  "catalogVersion": 2,
   "caps": [
     {
       "name": "agents:read",
@@ -25,32 +25,54 @@
       "label": "Post to the Thread",
       "sentence": "Send messages to the agents in {where} as you (text only). You can turn sending off at any time."
     },
-    { "name": "agents:add", "label": "Open Add agent" },
-    { "name": "gardens:manage", "label": "Create, rename and delete Gardens" },
-    { "name": "gardens:template", "label": "Turn this Garden into a built-in page" },
-    { "name": "app:navigate", "label": "Switch the rail view" },
-    { "name": "files:read", "exposure": ["app"], "label": "Read files (also shows heartbeat instructions)" },
-    { "name": "files:write", "exposure": ["app"], "label": "Write files (not .k2/heartbeats)" },
-    { "name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates" },
-    { "name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets" },
-    { "name": "wiki:read", "exposure": ["app"], "label": "Read the wiki" },
-    { "name": "store:read", "exposure": ["app"], "label": "Read the workspace store" },
-    { "name": "store:write", "exposure": ["app"], "label": "Change dump-table rows" },
-    { "name": "activity:read", "exposure": ["app"], "label": "See when the agent is working" },
-    { "name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history" },
-    { "name": "heartbeats:write", "exposure": ["app"], "label": "Add, edit, turn on or off, archive and fire heartbeats" }
+    {"name": "agents:add", "label": "Open Add agent"},
+    {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
+    {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
+    {"name": "app:navigate", "label": "Switch the rail view"},
+    {"name": "files:read", "exposure": ["app"], "label": "Read files (also shows heartbeat instructions)"},
+    {"name": "files:write", "exposure": ["app"], "label": "Write files (not .k2/heartbeats)"},
+    {"name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates"},
+    {"name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets"},
+    {"name": "wiki:read", "exposure": ["app"], "label": "Read the wiki"},
+    {"name": "store:read", "exposure": ["app"], "label": "Read the workspace store"},
+    {"name": "store:write", "exposure": ["app"], "label": "Change dump-table rows"},
+    {"name": "activity:read", "exposure": ["app"], "label": "See when the agent is working"},
+    {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
+    {
+      "name": "heartbeats:write",
+      "exposure": ["app"],
+      "label": "Add, edit, turn on or off, archive and fire heartbeats"
+    }
   ],
   "errors": [
-    { "code": "cap_not_granted", "fields": ["cap", "room"], "doc": "The verb's cap isn't in this widget's effective caps (requested ∩ granted ∩ widget caps)." },
-    { "code": "not_bound", "fields": ["room"], "doc": "The address isn't one of the rows in this widget's granted scope." },
-    { "code": "rate_limited", "doc": "Over a per-widget budget (calls, subscriptions, live servers, gardens.switch)." },
-    { "code": "too_large", "doc": "A message or argument is over its size limit." },
-    { "code": "unknown_verb", "doc": "No such verb in the catalog." },
-    { "code": "verb_unavailable", "fields": ["feature"], "doc": "No implementation is registered, or the server lacks the row's feature." },
-    { "code": "verb_local", "doc": "A Garden-only verb called from an App. Never happens in a Garden." },
-    { "code": "not_exposed", "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)." },
-    { "code": "sending_off", "doc": "Sending is turned off for this widget (by you, or by the runaway guard)." },
-    { "code": "failed", "doc": "The call failed; the message says why." }
+    {
+      "code": "cap_not_granted",
+      "fields": ["cap", "room"],
+      "doc": "The verb's cap isn't in this widget's effective caps (requested ∩ granted ∩ widget caps)."
+    },
+    {
+      "code": "not_bound",
+      "fields": ["room"],
+      "doc": "The address isn't one of the rows in this widget's granted scope."
+    },
+    {
+      "code": "rate_limited",
+      "doc": "Over a per-widget budget (calls, subscriptions, live servers, gardens.switch)."
+    },
+    {"code": "too_large", "doc": "A message or argument is over its size limit."},
+    {"code": "unknown_verb", "doc": "No such verb in the catalog."},
+    {
+      "code": "verb_unavailable",
+      "fields": ["feature"],
+      "doc": "No implementation is registered, or the server lacks the row's feature."
+    },
+    {"code": "verb_local", "doc": "A Garden-only verb called from an App. Never happens in a Garden."},
+    {
+      "code": "not_exposed",
+      "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)."
+    },
+    {"code": "sending_off", "doc": "Sending is turned off for this widget (by you, or by the runaway guard)."},
+    {"code": "failed", "doc": "The call failed; the message says why."}
   ],
   "bannedFields": [
     "projectPath",
@@ -63,5 +85,1037 @@
     "auth",
     "token"
   ],
-  "verbs": []
+  "verbs": [
+    {
+      "verb": "agents.list",
+      "cap": "agents:read",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AgentRow",
+          "type": "object",
+          "properties": {
+            "address": {"type": "string"},
+            "label": {"type": "string"},
+            "index": {"type": "integer", "minimum": 0},
+            "server": {
+              "type": ["string", "null"],
+              "description": "The server's label, or null on this computer."
+            },
+            "state": {
+              "enum": [
+                "ok",
+                "checking",
+                "starting",
+                "offline",
+                "signing-in",
+                "sign-in",
+                "no-access",
+                "not-found",
+                "update",
+                "unreachable"
+              ]
+            },
+            "stateLabel": {"type": ["string", "null"]},
+            "detail": {"type": ["string", "null"]},
+            "working": {"type": "boolean"},
+            "needsYou": {"type": "boolean"},
+            "activity": {
+              "enum": ["working", "monitoring", "needs-you", "unverifiable", "idle", "unreachable", null]
+            },
+            "openable": {"type": "boolean"},
+            "selected": {"type": "boolean"},
+            "avatar": {"type": ["string", "null"], "description": "A data: URL, or null."},
+            "preview": {
+              "title": "AgentPreview",
+              "type": ["object", "null"],
+              "properties": {
+                "text": {"type": "string", "maxLength": 140},
+                "at": {"type": ["number", "null"], "description": "Seconds since the epoch."},
+                "from": {"type": "string"},
+                "mine": {"type": "boolean"},
+                "seq": {"type": ["integer", "null"]}
+              },
+              "required": ["text", "at", "from", "mine", "seq"],
+              "additionalProperties": false,
+              "description": "Only with thread:read."
+            },
+            "people": {
+              "type": "array",
+              "items": {
+                "title": "Person",
+                "type": "object",
+                "properties": {"user": {"type": "string"}, "name": {"type": "string"}},
+                "required": ["user", "name"],
+                "additionalProperties": false
+              },
+              "description": "Only with presence:read."
+            }
+          },
+          "required": [
+            "address",
+            "label",
+            "index",
+            "server",
+            "state",
+            "stateLabel",
+            "detail",
+            "working",
+            "needsYou",
+            "activity",
+            "openable",
+            "selected",
+            "avatar"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The agents in the widget's scope, with live status.",
+      "example": "const rows = await k2.agents.list()"
+    },
+    {
+      "verb": "agents.subscribe",
+      "cap": "agents:read",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "socket": {"path": "/cli/activity/events", "frame": "activity_changed", "refetch": "agents.list"}
+      },
+      "request": [],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AgentRow",
+          "type": "object",
+          "properties": {
+            "address": {"type": "string"},
+            "label": {"type": "string"},
+            "index": {"type": "integer", "minimum": 0},
+            "server": {
+              "type": ["string", "null"],
+              "description": "The server's label, or null on this computer."
+            },
+            "state": {
+              "enum": [
+                "ok",
+                "checking",
+                "starting",
+                "offline",
+                "signing-in",
+                "sign-in",
+                "no-access",
+                "not-found",
+                "update",
+                "unreachable"
+              ]
+            },
+            "stateLabel": {"type": ["string", "null"]},
+            "detail": {"type": ["string", "null"]},
+            "working": {"type": "boolean"},
+            "needsYou": {"type": "boolean"},
+            "activity": {
+              "enum": ["working", "monitoring", "needs-you", "unverifiable", "idle", "unreachable", null]
+            },
+            "openable": {"type": "boolean"},
+            "selected": {"type": "boolean"},
+            "avatar": {"type": ["string", "null"], "description": "A data: URL, or null."},
+            "preview": {
+              "title": "AgentPreview",
+              "type": ["object", "null"],
+              "properties": {
+                "text": {"type": "string", "maxLength": 140},
+                "at": {"type": ["number", "null"], "description": "Seconds since the epoch."},
+                "from": {"type": "string"},
+                "mine": {"type": "boolean"},
+                "seq": {"type": ["integer", "null"]}
+              },
+              "required": ["text", "at", "from", "mine", "seq"],
+              "additionalProperties": false,
+              "description": "Only with thread:read."
+            },
+            "people": {
+              "type": "array",
+              "items": {
+                "title": "Person",
+                "type": "object",
+                "properties": {"user": {"type": "string"}, "name": {"type": "string"}},
+                "required": ["user", "name"],
+                "additionalProperties": false
+              },
+              "description": "Only with presence:read."
+            }
+          },
+          "required": [
+            "address",
+            "label",
+            "index",
+            "server",
+            "state",
+            "stateLabel",
+            "detail",
+            "working",
+            "needsYou",
+            "activity",
+            "openable",
+            "selected",
+            "avatar"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The same rows as agents.list, pushed on every change.",
+      "example": "const off = k2.agents.subscribe((rows) => draw(rows))"
+    },
+    {
+      "verb": "agents.add",
+      "cap": "agents:add",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "opts", "type": "object", "default": {}}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Open K2's Add agent picker for the widget's Home; the human picks.",
+      "example": "bridge.call('agents.add', {anchor, toggle})"
+    },
+    {
+      "verb": "agents.home",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {"type": ["string", "null"]},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The Agents widget's own Home id (view state).",
+      "example": "bridge.call('agents.home')"
+    },
+    {
+      "verb": "agents.setHome",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "id", "type": "string"}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Switch the Agents widget's own Home (never the window's).",
+      "example": "bridge.call('agents.setHome', homeId)"
+    },
+    {
+      "verb": "agents.local",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The agents on this computer, for Ask my agent.",
+      "example": "bridge.call('agents.local')"
+    },
+    {
+      "verb": "presence.get",
+      "cap": "presence:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "Person",
+          "type": "object",
+          "properties": {"user": {"type": "string"}, "name": {"type": "string"}},
+          "required": ["user", "name"],
+          "additionalProperties": false
+        }
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Other people looking at one agent right now (never you).",
+      "example": "const people = await k2.presence.get(row.address)"
+    },
+    {
+      "verb": "presence.subscribe",
+      "cap": "presence:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "Person",
+          "type": "object",
+          "properties": {"user": {"type": "string"}, "name": {"type": "string"}},
+          "required": ["user", "name"],
+          "additionalProperties": false
+        }
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "The same list as presence.get, pushed on change.",
+      "example": "const off = k2.presence.subscribe(row.address, (people) => draw(people))"
+    },
+    {
+      "verb": "conversation.open",
+      "cap": "agents:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Show this agent in the built-in Conversation that follows the widget.",
+      "example": "await k2.conversation.open(row.address)"
+    },
+    {
+      "verb": "conversation.close",
+      "cap": "agents:read",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Clear the widget's pick.",
+      "example": "await k2.conversation.close()"
+    },
+    {
+      "verb": "thread.read",
+      "cap": "thread:read",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {"method": "GET", "route": "/cli/thread", "params": {"address": "addr", "limit": "limit"}}
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "beforeSeq": {"type": "integer"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "ThreadPage",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "ThreadItem",
+              "type": "object",
+              "properties": {
+                "seq": {"type": "integer"},
+                "id": {"type": "string"},
+                "doc": {
+                  "title": "ThreadDoc",
+                  "type": "object",
+                  "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "from": {"type": "string"},
+                    "to": {"type": ["string", "null"]},
+                    "created_at": {"type": "number"},
+                    "body": {"type": ["string", "null"]},
+                    "via": {"type": ["string", "null"]},
+                    "choice": {
+                      "title": "ChoiceCard",
+                      "type": ["object", "null"],
+                      "properties": {
+                        "prompt": {"type": "string"},
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "title": "ChoiceOption",
+                            "type": "object",
+                            "properties": {"label": {"type": "string"}},
+                            "required": ["label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_custom": {"type": "boolean"},
+                        "status": {"type": "string"},
+                        "answer": {"type": ["string", "null"]}
+                      },
+                      "required": ["prompt", "options", "allow_custom", "status"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["seq", "id", "doc"],
+              "additionalProperties": false
+            }
+          },
+          "hasMore": {"type": "boolean"}
+        },
+        "required": ["items", "hasMore"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "A page of the Thread, oldest first; beforeSeq pages back through history.",
+      "example": "const page = await k2.thread.read(row.address, {limit: 50})"
+    },
+    {
+      "verb": "thread.subscribe",
+      "cap": "thread:read",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "socket": {"path": "/cli/overlay/events", "frame": "thread", "refetch": "thread.read"}
+      },
+      "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
+      "response": {
+        "title": "ThreadView",
+        "type": "object",
+        "properties": {
+          "address": {"type": "string"},
+          "phase": {"enum": ["opening", "ready", "unavailable", "failed", "closed"]},
+          "note": {"type": ["string", "null"]},
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "ThreadItem",
+              "type": "object",
+              "properties": {
+                "seq": {"type": "integer"},
+                "id": {"type": "string"},
+                "doc": {
+                  "title": "ThreadDoc",
+                  "type": "object",
+                  "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "from": {"type": "string"},
+                    "to": {"type": ["string", "null"]},
+                    "created_at": {"type": "number"},
+                    "body": {"type": ["string", "null"]},
+                    "via": {"type": ["string", "null"]},
+                    "choice": {
+                      "title": "ChoiceCard",
+                      "type": ["object", "null"],
+                      "properties": {
+                        "prompt": {"type": "string"},
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "title": "ChoiceOption",
+                            "type": "object",
+                            "properties": {"label": {"type": "string"}},
+                            "required": ["label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_custom": {"type": "boolean"},
+                        "status": {"type": "string"},
+                        "answer": {"type": ["string", "null"]}
+                      },
+                      "required": ["prompt", "options", "allow_custom", "status"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "kind"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["seq", "id", "doc"],
+              "additionalProperties": false
+            }
+          },
+          "hasMore": {"type": "boolean"},
+          "turn": {
+            "title": "ThreadTurn",
+            "type": ["object", "null"],
+            "properties": {
+              "state": {"enum": ["working", "monitoring", "needs-you", "unverifiable"]},
+              "since": {
+                "type": "number",
+                "description": "Milliseconds since the epoch, on this computer's clock."
+              }
+            },
+            "required": ["state", "since"],
+            "additionalProperties": false,
+            "description": "Absent on a server without daemon-activity."
+          }
+        },
+        "required": ["address", "phase", "note", "items", "hasMore"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "rate_limited"],
+      "doc": "The live Thread with one agent and its working turn, pushed on every change.",
+      "example": "const off = k2.thread.subscribe(row.address, (view) => draw(view))"
+    },
+    {
+      "verb": "thread.markRead",
+      "cap": "thread:read",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "address", "type": "string", "description": "A row's address, handle::host."}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Reserved: no implementation (UW51).",
+      "example": "bridge.call('thread.markRead', address)"
+    },
+    {
+      "verb": "thread.post",
+      "cap": "thread:post",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {"method": "POST", "route": "/cli/thread/post", "params": {"address": "addr", "text": "text"}}
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "text", "type": "string", "maxLength": 4000}
+      ],
+      "response": {
+        "title": "Posted",
+        "type": "object",
+        "properties": {"id": {"type": ["string", "null"]}, "seq": {"type": ["integer", "null"]}},
+        "required": ["id", "seq"],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "verb_unavailable",
+        "failed",
+        "sending_off",
+        "rate_limited",
+        "too_large"
+      ],
+      "doc": "Send text to the agent as you (text only, no files).",
+      "example": "await k2.thread.post(row.address, 'How is it going?')"
+    },
+    {
+      "verb": "thread.answer",
+      "cap": "thread:post",
+      "exposure": ["widget"],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/answer",
+          "params": {"address": "addr", "cardId": "id", "choice": "answer"}
+        }
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "cardId", "type": "string"},
+        {"title": "choice", "type": "string"}
+      ],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "sending_off", "rate_limited"],
+      "doc": "Answer a choice card in the Thread (never a secret card).",
+      "example": "await k2.thread.answer(row.address, card.id, 'Yes')"
+    },
+    {
+      "verb": "thread.void",
+      "cap": "thread:post",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {
+        "renderer": {"impl": "registered"},
+        "http": {"method": "POST", "route": "/cli/thread/void", "params": {"address": "addr", "cardId": "id"}}
+      },
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "cardId", "type": "string"}
+      ],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Void a card in the Thread.",
+      "example": "bridge.call('thread.void', address, cardId)"
+    },
+    {
+      "verb": "compose.draft",
+      "cap": "thread:post",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "text", "type": "string", "maxLength": 4000}
+      ],
+      "response": {"type": "null"},
+      "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
+      "doc": "Set K2's message box for that agent; never sends.",
+      "example": "await k2.compose.draft(row.address, 'Ask for a status')"
+    },
+    {
+      "verb": "focusGroups.get",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The app's focus groups, for the Agents view.",
+      "example": "bridge.call('focusGroups.get')"
+    },
+    {
+      "verb": "focusGroups.set",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "id", "type": "string"}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Pick a focus group for the Agents view.",
+      "example": "bridge.call('focusGroups.set', id)"
+    },
+    {
+      "verb": "focusGroups.subscribe",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The focus groups, pushed on change.",
+      "example": "bridge.call('focusGroups.subscribe', cb)"
+    },
+    {
+      "verb": "app.open",
+      "cap": "app:navigate",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [{"title": "page", "enum": ["home", "agents", "projects", "tickets"]}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Switch the Garden's view in this window, inside Zen.",
+      "example": "bridge.call('app.open', 'agents')"
+    },
+    {
+      "verb": "app.current",
+      "cap": "app:navigate",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The Garden's current view.",
+      "example": "bridge.call('app.current')"
+    },
+    {
+      "verb": "app.subscribeCurrent",
+      "cap": "app:navigate",
+      "reach": "local",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The Garden's current view, pushed on change.",
+      "example": "bridge.call('app.subscribeCurrent', fn)"
+    },
+    {
+      "verb": "app.badges",
+      "cap": "app:navigate",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The top bar's Tickets badge.",
+      "example": "bridge.call('app.badges')"
+    },
+    {
+      "verb": "app.subscribe",
+      "cap": "app:navigate",
+      "reach": "local",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "The top bar's badges, pushed on change.",
+      "example": "bridge.call('app.subscribe', fn)"
+    },
+    {
+      "verb": "homes.list",
+      "cap": "agents:read",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Every Home's id and name, for the Agents widget's Home picker.",
+      "example": "bridge.homes.list()"
+    },
+    {
+      "verb": "gardens.list",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "GardenSummary",
+          "type": "object",
+          "properties": {
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "index": {"type": "integer", "minimum": 1}
+          },
+          "required": ["id", "name", "index"],
+          "additionalProperties": false
+        }
+      },
+      "errors": ["verb_unavailable", "failed"],
+      "doc": "Every Garden, in order.",
+      "example": "const gardens = await k2.gardens.list()"
+    },
+    {
+      "verb": "gardens.current",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {
+        "title": "GardenSummary",
+        "type": ["object", "null"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "index": {"type": "integer", "minimum": 1}
+        },
+        "required": ["id", "name", "index"],
+        "additionalProperties": false
+      },
+      "errors": ["verb_unavailable", "failed"],
+      "doc": "The Garden on screen.",
+      "example": "const here = await k2.gardens.current()"
+    },
+    {
+      "verb": "gardens.switch",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [{"title": "id", "type": "string"}],
+      "response": {"type": "null"},
+      "errors": ["rate_limited", "verb_unavailable", "failed"],
+      "doc": "Show another Garden (at most once every 2 s, never in the first 2 s).",
+      "example": "await k2.gardens.switch(gardens[1].id)"
+    },
+    {
+      "verb": "gardens.create",
+      "cap": "gardens:manage",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [
+        {"title": "name", "type": "string"},
+        {"title": "template", "enum": ["texting", "blank"], "default": "blank"},
+        {"title": "opts", "type": "object", "default": {}}
+      ],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Make a Garden (the Garden switcher only).",
+      "example": "bridge.gardens.create('Work')"
+    },
+    {
+      "verb": "gardens.rename",
+      "cap": "gardens:manage",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [{"title": "id", "type": "string"}, {"title": "name", "type": "string"}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Rename a Garden.",
+      "example": "bridge.call('gardens.rename', id, 'Work')"
+    },
+    {
+      "verb": "gardens.delete",
+      "cap": "gardens:manage",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [{"title": "id", "type": "string"}],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Delete a Garden (kept in .history).",
+      "example": "bridge.call('gardens.delete', id)"
+    },
+    {
+      "verb": "gardens.empty",
+      "cap": "gardens:template",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Whether the Garden on screen is the empty page.",
+      "example": "bridge.call('gardens.empty')"
+    },
+    {
+      "verb": "gardens.useTemplate",
+      "cap": "gardens:template",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-gardens-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [
+        {"title": "template", "enum": ["texting", "blank"]},
+        {"title": "opts", "type": "object", "default": {}}
+      ],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Turn the Garden on screen into a built-in template (Start with the default).",
+      "example": "bridge.call('gardens.useTemplate', 'texting', {force: false})"
+    },
+    {
+      "verb": "zen.exit",
+      "cap": null,
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Leave Zen in this window.",
+      "example": "bridge.zen.exit()"
+    },
+    {
+      "verb": "controls.bind",
+      "cap": null,
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [
+        {"title": "kind", "type": "string"},
+        {"title": "element"},
+        {"title": "gardenId", "type": "string", "default": ""}
+      ],
+      "response": {},
+      "errors": ["cap_not_granted", "verb_unavailable", "failed"],
+      "doc": "Bind a required control to an element K2 checks.",
+      "example": "bridge.controls.bind('zen-toggle', el)"
+    },
+    {
+      "verb": "theme.get",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "zen-v1",
+      "bindings": {"renderer": {"impl": "builtin"}},
+      "request": [],
+      "response": {
+        "title": "ThemeInfo",
+        "type": "object",
+        "properties": {
+          "theme": {
+            "title": "ThemeVars",
+            "type": "object",
+            "properties": {
+              "scheme": {"enum": ["light", "dark"]},
+              "vars": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "--zen-* CSS variable name to value."
+              }
+            },
+            "required": ["scheme", "vars"],
+            "additionalProperties": false
+          },
+          "chrome": {
+            "title": "WindowChrome",
+            "type": "object",
+            "properties": {
+              "corners": {"type": ["string", "null"]},
+              "stoplights": {"type": ["string", "null"]}
+            },
+            "required": ["corners", "stoplights"],
+            "additionalProperties": false
+          },
+          "motion": {
+            "title": "Motion",
+            "type": "object",
+            "properties": {"reduced": {"type": "boolean"}},
+            "required": ["reduced"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["theme", "chrome", "motion"],
+        "additionalProperties": false
+      },
+      "errors": ["verb_unavailable", "failed"],
+      "doc": "The page's theme: scheme and --zen-* values, the window's chrome table, and reduced motion.",
+      "example": "const {theme, motion} = await k2.theme.get()"
+    },
+    {
+      "verb": "theme.changed",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "read",
+      "kind": "event",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [],
+      "response": {
+        "title": "ThemeInfo",
+        "type": "object",
+        "properties": {
+          "theme": {
+            "title": "ThemeVars",
+            "type": "object",
+            "properties": {
+              "scheme": {"enum": ["light", "dark"]},
+              "vars": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "--zen-* CSS variable name to value."
+              }
+            },
+            "required": ["scheme", "vars"],
+            "additionalProperties": false
+          },
+          "chrome": {
+            "title": "WindowChrome",
+            "type": "object",
+            "properties": {
+              "corners": {"type": ["string", "null"]},
+              "stoplights": {"type": ["string", "null"]}
+            },
+            "required": ["corners", "stoplights"],
+            "additionalProperties": false
+          },
+          "motion": {
+            "title": "Motion",
+            "type": "object",
+            "properties": {"reduced": {"type": "boolean"}},
+            "required": ["reduced"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["theme", "chrome", "motion"],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "doc": "The same value as theme.get, pushed when the theme or motion changes.",
+      "example": "k2.theme.changed(({theme}) => paint(theme))"
+    }
+  ]
 }

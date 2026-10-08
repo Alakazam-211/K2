@@ -580,10 +580,17 @@ unset _k2_cli_wants_help
 [ "${1:-}" = "study" ] && _skip_conn_gate=1
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
 # `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
-# none of them talks to the daemon.
+# none of them talks to the daemon. Neither does `k2 zen widget grant`,
+# which only says who grants (prd-zen-user-widgets-v2 UW41).
 if [ "${1:-}" = "zen" ]; then
     case "${2:-}" in
         ""|guide|help|--help|-h) _skip_conn_gate=1 ;;
+        widget|widgets)
+            case "${3:-}" in grant|allow|""|help) _skip_conn_gate=1 ;; esac
+            for _a in "${@:2}"; do
+                case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
+            done
+            ;;
         *)
             for _a in "${@:2}"; do
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
@@ -17085,12 +17092,13 @@ cmd_schema() {
     },
     {
       "name": "zen",
-      "usage": "k2 zen <garden|theme|validate|reload|reset|history|doctor|path|guide> ...",
-      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
+      "usage": "k2 zen <garden|theme|widget|validate|reload|reset|history|doctor|path|guide> ...",
+      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; widgets/<name>/ custom widgets; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
       "args": [],
       "flags": [
         {"name": "--garden", "arg": "name|id", "description": "A Garden's page (gardens/<id>.toml) instead of zen.toml."},
         {"name": "--theme", "arg": "name", "description": "A theme bundle (themes/<name>/theme.toml) instead of zen.toml."},
+        {"name": "--widget", "arg": "name", "description": "validate/history/reset: a custom widget folder (widgets/<name>/)."},
         {"name": "--file", "arg": "zen.toml|gardens/<id>.toml|themes/<name>/theme.toml", "description": "Name the file directly."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
@@ -17109,7 +17117,7 @@ cmd_schema() {
     },
     {
       "name": "zen validate",
-      "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --file <file>] [--json]",
+      "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
       "description": "Validate what is on disk now; prints file:line:col: message per error and exits 1 on errors. Never changes what Zen shows.",
       "args": [],
       "flags": [
@@ -17127,8 +17135,8 @@ cmd_schema() {
     },
     {
       "name": "zen reset",
-      "usage": "k2 zen reset [--garden <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]",
-      "description": "Keep the current file as a snapshot, then restore a snapshot or clear your changes (a Garden goes back to its template's stub; an override of a built-in theme is removed). Never touches gardens.json, active.json or grants.json.",
+      "usage": "k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]",
+      "description": "Keep the current file as a snapshot, then restore a snapshot or clear your changes (a Garden goes back to its template's stub; an override of a built-in theme is removed; --widget restores a widget's code files, never its assets). Never touches gardens.json, active.json or widget grants.",
       "args": [],
       "flags": [
         {"name": "--to", "arg": "snapshot", "description": "Snapshot name from k2 zen history (default: the empty stub / K2's theme)."}
@@ -17136,7 +17144,7 @@ cmd_schema() {
     },
     {
       "name": "zen history",
-      "usage": "k2 zen history [--garden <name|id> | --theme <name> | --file <file>] [--json]",
+      "usage": "k2 zen history [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
       "description": "The last 20 good versions of each Zen file, newest first, including deleted Gardens (by id).",
       "args": [],
       "flags": [
@@ -17165,6 +17173,17 @@ cmd_schema() {
       ]
     },
     {
+      "name": "zen widget",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list|revoke <garden> <placement>|revoke --widget <name>> [--json]",
+      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement's grant; revoke takes grants away. There is no grant verb: k2 zen widget grant exits 1 with \"Only you can allow a widget, in the K2 app: open the Garden and click Review.\" The helpers a widget can call: k2 zen guide api.",
+      "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
+      "flags": [
+        {"name": "--from", "arg": "k2:diary|hello|arcade", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
+        {"name": "--widget", "arg": "name", "description": "revoke: every placement of this widget."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
       "name": "zen path",
       "usage": "k2 zen path",
       "description": "Print the Zen folder (~/.k2/zen on the daemon's computer).",
@@ -17174,7 +17193,7 @@ cmd_schema() {
     {
       "name": "zen guide",
       "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
-      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, examples, undo, safe-mode), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
+      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
       "args": [{"name": "topic|example", "required": false}, {"name": "name", "required": false}],
       "flags": [
         {"name": "--toml", "arg": null, "description": "example <name>: print only the Garden file, ready for > ~/.k2/zen/gardens/<id>.toml."},
@@ -38402,10 +38421,13 @@ USAGE
   k2 zen theme set <name> [--garden <name|id>] [--json]
   k2 zen theme set --garden <name|id> --clear
   k2 zen theme new <name> [--from <theme>] [--json]
-  k2 zen validate [--garden <name|id> | --theme <name> | --file <file>] [--json]
+  k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
+  k2 zen widget list [--json]
+  k2 zen widget revoke <garden> <placement> | --widget <name> [--json]
+  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen reload [--json]
-  k2 zen reset [--garden <name|id> | --theme <name> | --file <file>] [--to <snapshot>] [--json]
-  k2 zen history [--garden <name|id> | --theme <name> | --file <file>] [--json]
+  k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]
+  k2 zen history [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen doctor [--json]
   k2 zen path
   k2 zen guide [<topic>] [--json]
@@ -38425,6 +38447,14 @@ COMMANDS
             active); next/prev cycle them; set picks one; new copies a theme
             into ~/.k2/zen/themes/<name>/ for you to edit. K2's themes are
             basic, paper and midnight. An unknown name exits 1.
+  widget    Custom widgets: your own sealed HTML, CSS and JS in
+            ~/.k2/zen/widgets/<name>/. new copies a working example
+            (--from k2:diary, hello or arcade) and prints the folder; list
+            shows each widget's state, caps and every placement's grant;
+            revoke takes grants away (one placement, or --widget for all).
+            There is no grant: only the human allows a widget, in the K2
+            app (open the Garden and click Review). k2 zen guide api lists
+            the k2 object's helpers.
   validate  Check what is on disk now. Prints file:line:col: message for
             each error and exits 1; exits 0 when every file is clean.
   reload    Re-read now (the daemon also watches the folder) and print errors.
@@ -38437,8 +38467,8 @@ COMMANDS
   doctor    Check the folder, Garden list, templates, watcher and history.
   path      Print the Zen folder.
   guide     The user guide: short pages (gardens, files, widgets, bands,
-            required, menus, themes, examples, undo, safe-mode) and whole
-            example files to pipe into a Garden. Needs no daemon.
+            required, menus, themes, examples, undo, safe-mode, api) and
+            whole example files to pipe into a Garden. Needs no daemon.
 
 RULES
   New to Gardens? k2 zen guide. Moving controls? k2 zen guide bands, then
@@ -38447,6 +38477,8 @@ RULES
   Run `k2 zen validate --garden <id>` before you say it's done.
   Never write grants.json, gardens.json, active.json or .history/: K2 writes them.
   Agents request permissions from the human; they never grant them.
+  A custom widget: k2 zen validate --widget <name>, then tell the human to
+  open the Garden and click Review.
   Load the k2-zen skill for the page grammar, every widget prop and token.
 
 EXIT
@@ -38465,7 +38497,7 @@ EOF
 # zen_core Rust test checks every example with the daemon's own schema and
 # that the pages name every slot, align, edge and control kind.
 
-_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes examples undo safe-mode"
+_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes examples undo safe-mode api"
 _ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
 
 _zen_guide_usage() {
@@ -38478,7 +38510,7 @@ Short pages on building Zen Gardens. Works with no daemon running.
 
 Topics:
   gardens  files  widgets  bands  required  menus  themes  examples
-  undo  safe-mode
+  undo  safe-mode  api
 
   k2 zen guide                          the index (start here)
   k2 zen guide <topic>                  one page
@@ -38504,6 +38536,7 @@ _zen_guide_title() {
         examples) echo "Examples you can pipe" ;;
         undo) echo "Check, look back, put it back" ;;
         safe-mode) echo "Safe mode and the ways out" ;;
+        api) echo "The k2 object in a custom widget" ;;
         rail-top) echo "The nav rail in the top band" ;;
         quiet-top) echo "The top band without usage" ;;
         bottom-bar) echo "Controls in a bottom band" ;;
@@ -38544,6 +38577,7 @@ Start here: k2 zen guide gardens
   examples    Whole Garden files you can pipe into a Garden
   undo        validate, history, reset, reload, doctor; troubleshooting
   safe-mode   Every safe-mode line, its fix, and the ways out
+  api         The k2 object in a custom widget: every helper, by cap
 
   k2 zen guide <topic> [--json]
   k2 zen guide example <name> [--toml]
@@ -38607,13 +38641,15 @@ YOU EDIT
                              widgets, and theme tables for it alone
   zen.toml                   theme changes for every Garden
   themes/<name>/theme.toml   a theme bundle (and its background image)
+  widgets/<name>/            a custom widget (k2 zen guide api)
 
 NEVER WRITE (K2 writes them)
   gardens.json   the Garden list: use k2 zen garden
   active.json    the active theme: use k2 zen theme
   .history/      the last 20 good versions of each file
-  grants.json    widget permissions: only the app writes it, when the
-                 human clicks Allow. Agents request; they never grant.
+  grants.json    widget permissions live in K2's daemon, signed; only
+                 the human's Allow click makes one. Agents request;
+                 they never grant. Also never zen-grant.key or pins.json.
 
 LAYERS (a later file wins, key by key)
   1. K2's basic theme
@@ -39022,6 +39058,75 @@ Safe mode lasts until Try again, a change to the files, or leaving Zen.
 EOF
 }
 
+# `k2 zen guide api` (prd-zen-user-widgets-v2 UWA11) is generated from the
+# verb catalog by contract-gen. Nobody edits the fenced block by hand.
+# >>> generated by contract-gen: zen guide api (do not edit; run `cargo run -p k2-core --bin contract-gen`)
+_zen_guide_page_api() {
+    cat <<'EOF'
+k2 zen guide api — the k2 object in a custom widget
+
+A custom widget is a sealed page in a Garden: no network, no storage, no
+files. It reaches K2 only through window.k2, and each call needs a cap the
+human allowed in the K2 app (agents never grant). From K2's verb catalog,
+version 2.
+
+TEN EXAMPLES
+  const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
+  el.textContent = row.label                              // never innerHTML
+  await k2.conversation.open(row.address)  // the Conversation beside follows
+  k2.thread.subscribe(row.address, (v) => drawPage(v.items, v.turn))
+  const page = await k2.thread.read(row.address, {beforeSeq: first.seq})
+  await k2.thread.post(row.address, 'How is it going?')
+  if (k2.can('thread.post')) showSendButton()
+  k2.theme.changed(({theme}) => paint(theme.vars))
+  img.src = k2.asset('cat.png')                   // a file in the folder
+  k2.ready()                                     // once, after first draw
+
+EVERY HELPER, BY CAP (portable: the same call works in an App later;
+local: Garden only). Each line: helper, reach, feature, example, [errors]
+no cap
+  k2.gardens.list()                           local    zen-gardens-v1  const gardens = await k2.gardens.list()
+  k2.gardens.current()                        local    zen-gardens-v1  const here = await k2.gardens.current()
+  k2.gardens.switch(id)                       local    zen-gardens-v1  await k2.gardens.switch(gardens[1].id)  [rate_limited]
+  k2.theme.get()                              local    zen-v1          const {theme, motion} = await k2.theme.get()
+  k2.theme.changed(cb)                        local    zen-widgets-v1  k2.theme.changed(({theme}) => paint(theme))
+agents:read (See agents)
+  k2.agents.list()                            portable zen-v1          const rows = await k2.agents.list()
+  k2.agents.subscribe(cb)                     portable zen-v1          const off = k2.agents.subscribe((rows) => draw(rows))
+  k2.conversation.open(address)               local    zen-v1          await k2.conversation.open(row.address)  [not_bound]
+  k2.conversation.close()                     local    zen-v1          await k2.conversation.close()
+presence:read (See who is looking)
+  k2.presence.get(address)                    local    zen-v1          const people = await k2.presence.get(row.address)  [not_bound]
+  k2.presence.subscribe(address, cb)          local    zen-v1          const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
+thread:read (Read the Thread)
+  k2.thread.read(address, {beforeSeq, limit}) portable zen-v1          const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
+  k2.thread.subscribe(address, cb)            portable zen-v1          const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+thread:post (Post to the Thread)
+  k2.thread.post(address, text)               portable zen-v1          await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large]
+  k2.thread.answer(address, cardId, choice)   portable zen-v1          await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
+  k2.compose.draft(address, text)             local    zen-v1          await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+
+Every call may also fail with cap_not_granted, verb_unavailable, failed.
+
+ALSO ON k2
+  k2.call(verb, ...args), k2.subscribe(verb, ...args, cb) (alias k2.on):
+  the same verbs by name. k2.can(verb): advice for drawing; K2 still
+  checks every call. k2.ready() once drawn. k2.config, k2.widget,
+  k2.asset(name), k2.motion.reduced. A refused call rejects with K2Error
+  (.code, .message, .verb, .cap, .room, .feature). Subscribes return the
+  unsubscribe.
+
+RULES
+  textContent for anything an agent wrote, never innerHTML. No onclick=:
+  use addEventListener in a script file. Files via k2.asset(). Check with
+  k2 zen validate --widget <name>; the human allows it with Review.
+
+Types: sdk/generated/k2.d.ts in the K2 repo. Caps in K2's words: the
+k2-zen skill.
+EOF
+}
+# <<< generated
+
 _zen_guide_page() {
     case "$1" in
         index) _zen_guide_index ;;
@@ -39035,6 +39140,7 @@ _zen_guide_page() {
         examples) _zen_guide_page_examples ;;
         undo) _zen_guide_page_undo ;;
         safe-mode) _zen_guide_page_safe_mode ;;
+        api) _zen_guide_page_api ;;
         *) return 1 ;;
     esac
 }
@@ -39546,7 +39652,115 @@ elif verb == "theme-new":
     if d.get("copiedImage"):
         print("copied its background %s" % d["copiedImage"])
     print("edit it, check with k2 zen validate, use it with k2 zen theme set %s" % d.get("name"))
+elif verb == "widget-new":
+    name = d.get("name")
+    print(d.get("path"))
+    files = d.get("files") or []
+    if files:
+        print("files: %s" % ", ".join(files))
+    print("next: edit it, place it in a Garden with kind = \"custom\" and widget = \"%s\"," % name)
+    print("check with k2 zen validate --widget %s, then ask the human to open the Garden and click Review" % name)
+elif verb == "widget-list":
+    ws = d.get("widgets") or []
+    if not ws:
+        print("no custom widgets yet (k2 zen widget new <name> --from k2:diary)")
+    for w in ws:
+        caps = ", ".join(w.get("caps") or []) or "no caps"
+        title = w.get("title") or w.get("name")
+        print("%s  %s  (%s)  caps: %s" % (w.get("name"), w.get("state"), title, caps))
+        for e in (w.get("errors") or [])[:3]:
+            print("  " + diag(e))
+        placements = w.get("placements") or []
+        if not placements:
+            print("  not placed in any Garden")
+        for p in placements:
+            print("  %s/%s  %s" % (p.get("garden"), p.get("placement"), p.get("grant")))
+elif verb == "widget-revoke":
+    n = d.get("revoked")
+    if isinstance(n, list):
+        n = len(n)
+    print("revoked %s grant%s%s" % (n, "" if n == 1 else "s", "" if d.get("changed", True) else " (nothing to revoke)"))
 '
+}
+
+# k2 zen widget <new|list|revoke> (prd-zen-user-widgets-v2 UW41). Custom
+# widgets are folders under ~/.k2/zen/widgets/; the daemon owns their
+# grants. There is no grant verb: only the human allows a widget, in the
+# K2 app (UWB3).
+cmd_zen_widget() {
+    local verb="${1:-}"
+    shift || true
+    local as_json=false from="" widget="" raw body
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --from)
+                [ -n "${2:-}" ] || { echo "Error: --from needs an example: k2:diary, hello or arcade" >&2; exit 2; }
+                from="$2"; shift 2 ;;
+            --from=*) from="${1#*=}"; shift ;;
+            --widget)
+                [ -n "${2:-}" ] || { echo "Error: --widget needs a widget folder name" >&2; exit 2; }
+                widget="$2"; shift 2 ;;
+            --widget=*) widget="${1#*=}"; shift ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local n=${#pos[@]}
+    if [ "$verb" != "new" ] && [ -n "$from" ]; then
+        echo "Error: --from is for k2 zen widget new" >&2
+        exit 2
+    fi
+    if [ "$verb" != "revoke" ] && [ -n "$widget" ]; then
+        echo "Error: --widget is for k2 zen widget revoke (and k2 zen validate/history/reset)" >&2
+        exit 2
+    fi
+    case "$verb" in
+        new)
+            [ "$n" -eq 1 ] || { echo "Error: k2 zen widget new needs one name (lower-case letters, digits, - and _)" >&2; exit 2; }
+            body=$(ZN="${pos[0]}" ZF="$from" python3 -c '
+import json, os
+b = {"name": os.environ["ZN"]}
+if os.environ.get("ZF"):
+    b["from"] = os.environ["ZF"]
+print(json.dumps(b))
+')
+            raw=$(cli_post_json "/cli/zen/widget/new" "$body")
+            _zen_print widget-new "$as_json" "$raw"
+            ;;
+        list)
+            [ "$n" -eq 0 ] || { echo "Error: k2 zen widget list takes only --json" >&2; exit 2; }
+            raw=$(cli_request "/cli/zen/widgets")
+            _zen_print widget-list "$as_json" "$raw"
+            ;;
+        revoke)
+            if [ -n "$widget" ]; then
+                [ "$n" -eq 0 ] || { echo "Error: pass a Garden and a placement, or --widget <name>, not both" >&2; exit 2; }
+                body=$(ZW="$widget" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')
+            else
+                [ "$n" -eq 2 ] || { echo "Error: k2 zen widget revoke needs a Garden and a placement id, or --widget <name>" >&2; exit 2; }
+                body=$(ZG="${pos[0]}" ZP="${pos[1]}" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "placement": os.environ["ZP"]}))
+')
+            fi
+            raw=$(cli_post_json "/cli/zen/widget/revoke" "$body")
+            _zen_print widget-revoke "$as_json" "$raw"
+            ;;
+        grant|allow)
+            echo "Only you can allow a widget, in the K2 app: open the Garden and click Review." >&2
+            exit 1
+            ;;
+        ""|help|--help|-h)
+            cmd_help_zen
+            ;;
+        *)
+            echo "Unknown 'k2 zen widget' subcommand: $verb (new, list, revoke)" >&2
+            exit 2
+            ;;
+    esac
 }
 
 _zen_no_home() {
@@ -39556,9 +39770,13 @@ _zen_no_home() {
 
 # Parse --garden/--file/--theme/--to/--json into ZEN_* globals.
 _zen_args() {
-    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""
+    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --widget)
+                [ -n "${2:-}" ] || { echo "Error: --widget needs a widget folder name (see k2 zen widget list)" >&2; exit 2; }
+                ZEN_WIDGET_SEL="$2"; shift 2 ;;
+            --widget=*) ZEN_WIDGET_SEL="${1#*=}"; shift ;;
             --json) ZEN_AS_JSON=true; shift ;;
             --garden)
                 [ -n "${2:-}" ] || { echo "Error: --garden needs a Garden name or id (see k2 zen garden list)" >&2; exit 2; }
@@ -39584,8 +39802,9 @@ _zen_args() {
     [ -n "$ZEN_GARDEN_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_FILE_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_THEME_SEL" ] && n=$((n + 1))
+    [ -n "$ZEN_WIDGET_SEL" ] && n=$((n + 1))
     if [ "$n" -gt 1 ]; then
-        echo "Error: pass one of --garden, --theme or --file" >&2
+        echo "Error: pass one of --garden, --theme, --widget or --file" >&2
         exit 2
     fi
 }
@@ -39794,12 +40013,13 @@ cmd_zen() {
             [ -n "$ZEN_GARDEN_SEL" ] && q+=("garden=$(urlencode "$ZEN_GARDEN_SEL")")
             [ -n "$ZEN_FILE_SEL" ] && q+=("file=$(urlencode "$ZEN_FILE_SEL")")
             [ -n "$ZEN_THEME_SEL" ] && q+=("theme=$(urlencode "$ZEN_THEME_SEL")")
+            [ -n "$ZEN_WIDGET_SEL" ] && q+=("widget=$(urlencode "$ZEN_WIDGET_SEL")")
             raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
             _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
             ;;
         reload)
             _zen_args "$@"
-            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
+            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL$ZEN_WIDGET_SEL" ]; then
                 echo "Error: k2 zen reload takes only --json" >&2
                 exit 2
             fi
@@ -39809,10 +40029,10 @@ cmd_zen() {
         reset)
             _zen_args "$@"
             local body
-            body=$(ZG="$ZEN_GARDEN_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" ZM="$ZEN_THEME_SEL" python3 -c '
+            body=$(ZG="$ZEN_GARDEN_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" ZM="$ZEN_THEME_SEL" ZW="$ZEN_WIDGET_SEL" python3 -c '
 import json, os
 b = {}
-for k, e in (("garden", "ZG"), ("file", "ZF"), ("to", "ZT"), ("theme", "ZM")):
+for k, e in (("garden", "ZG"), ("file", "ZF"), ("to", "ZT"), ("theme", "ZM"), ("widget", "ZW")):
     if os.environ.get(e):
         b[k] = os.environ[e]
 print(json.dumps(b))
@@ -39822,7 +40042,7 @@ print(json.dumps(b))
             ;;
         doctor|path)
             _zen_args "$@"
-            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL" ]; then
+            if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL$ZEN_WIDGET_SEL" ]; then
                 echo "Error: k2 zen $sub takes only --json" >&2
                 exit 2
             fi
@@ -39838,6 +40058,9 @@ print(json.dumps(b))
             ;;
         theme|themes)
             cmd_zen_theme "$@"
+            ;;
+        widget|widgets)
+            cmd_zen_widget "$@"
             ;;
         pages)
             echo "Error: there is no 'k2 zen pages' any more: Zen pages are Gardens now. Use k2 zen garden list." >&2

@@ -577,6 +577,157 @@ The renderer holds its own app socket to the local daemon
 (`subscribeToActiveState(scopeForHost('local'))`) while Zen is on screen,
 whichever server the window is on.
 
+## Custom widgets (zen-widgets-v1)
+
+Source of truth: `.k2/prds/prd-zen-user-widgets-v2.md` (UW1–UW72, UWA1–UWA15,
+UWB1–UWB30, Rosson's answers in §12–§14.5, the day-0 interfaces in §15).
+A custom widget is the agent's own HTML, CSS and JS in
+`~/.k2/zen/widgets/<name>/`, placed with `[[widget]] kind = "custom"`, and run
+in a sealed frame. `/boot-status` `features` carries **`zen-widgets-v1`** when
+this daemon serves the routes below. An older local daemon answers 404
+`unknown zen route` on `widget/bundle`; the renderer then draws "K2 on this
+computer is older than this app. Update it to run custom widgets." in the
+widget's box (UW36, UW63).
+
+### Verbs, caps and errors: the verb catalog
+
+The verbs a widget may call, their caps, `portable`/`local`, the feature key
+that brought each one, their argument and answer shapes, and the shared error
+codes live in **one** place: `crates/k2-core/src/contract/catalog.json`
+(UWA1). Nothing here copies them. Read them as:
+
+- `k2 zen guide api`: every widget helper with its cap, reach, feature, a
+  one-line example and its errors (no daemon needed);
+- `sdk/generated/k2.d.ts`: the frame's `k2` object as TypeScript types;
+- `src/renderer/lib/zen/zen-verbs.generated.ts` (`ZEN_VERBS`,
+  `ZEN_CUSTOM_VERBS`) and `src/renderer/lib/k2-caps.generated.ts` (`K2_CAPS`
+  with each cap's Settings label and review-dialog sentence).
+
+All of them are written by `cargo run -p k2-core --bin contract-gen` and never
+edited by hand; `cargo test -p k2-core --lib contract::` and the vitest twin
+`lib/contract/contract-generated.test.ts` fail on drift. A widget verb's
+answer is the **guest projection** (UWA6): closed shapes, and no field named in
+the catalog's `bannedFields` (`path`, `sessionId`, `conversation_id`,
+`hostKey`, `token`, …). The catalog test checks every `http` binding against
+`ROUTES` (`crates/k2-daemon/tests/contract_routes.rs`).
+
+### Names
+
+- A **user widget** is a folder name (the theme-name rule: lower-case letters,
+  digits, `-`, `_`, up to 40).
+- A **built-in widget** is `k2:<name>@<n>` (`k2:diary@1`), compiled into
+  k2-core (`crates/k2-core/src/zen/builtin_widgets/`), never a folder, and
+  immutable per version: better code ships as `@2`. A Garden file names the
+  version; `k2 zen widget new my-diary --from k2:diary` copies the latest into
+  a user folder to edit.
+- A **catalog Garden** is a template `k2.<short>@<n>` from
+  `crates/k2-core/src/zen/garden-catalog/<short>-<n>.toml`. The Diary
+  (`k2.diary@1`, widget `k2:diary@1`) is the first. Catalog Gardens are only
+  added when the person picks one in New Garden; never appended to an
+  existing list (R5 as changed).
+
+### The widget in `GET /cli/zen/get`
+
+A custom placement is a content widget in `page.widgets`
+(`ZenCustomWidgetPayload` in `src/renderer/lib/zen/zen-custom-types.ts`):
+
+```json
+{ "id": "arcade", "kind": "custom", "widget": "agent-arcade", "column": 0,
+  "props": { "home": "Work", "config": {} },
+  "caps": ["agents:read"], "requested": ["agents:read", "thread:post"],
+  "source": "user", "name": "Agent Arcade", "description": "…",
+  "reasons": { "thread:post": "…" }, "libs": ["three@0.170"],
+  "hash": "<sha256 of the bundle without nonces>",
+  "state": "ok", "errors": [], "warnings": [],
+  "grant": { "state": "partial", "caps": ["agents:read"], "granted": ["agents:read"],
+             "scope": { "home": "<home id>" }, "entries": [{ "server": "…", "room": "…" }],
+             "sending": true, "paused": null, "grantedAt": "…", "widgetHash": "…" } }
+```
+
+- `caps` is the daemon's decision: requested ∩ granted ∩ widget caps (UW26).
+  The renderer intersects again and forces `source: "user"`.
+- `grant.state`: `none` (no grant), `invalid` (signature, key or widget
+  doesn't check out: caps `[]`), `review` (granted for another
+  `home`/`agent` ask), `partial` (the manifest asks for more; the granted
+  caps keep working), `granted`. K2 draws its review card for `none`,
+  `invalid` and `review` (`zenGrantNeedsReview`).
+- `state`: `ok`, `errors` (a newer edit has errors; the last good bundle is
+  served), `broken` (errors and no last good bundle).
+
+### Routes
+
+All on the local daemon under `/cli/zen/*`, owner token only, Member policy
+rows, 64 KB request bodies, a GET on a POST route is 405.
+
+| Route | Body / query | Answer |
+|---|---|---|
+| `GET widgets` | — | `{ok, widgets: [{name, title, description, caps, hash, state, errors, warnings, placements: [{garden, placement, grant}]}]}` |
+| `GET widget/bundle` | `?widget=<name or k2:…@n>` | `{ok, widget, hash, nonce, html, bytes}`; 404 `unknown_widget`; 409 `widget_broken` |
+| `POST widget/new` | `{name, from?}` (`hello`, `arcade`, `k2:diary`) | `{ok, name, path, files, changed}`; 409 `widget_exists`; 404 `zen_not_set_up` |
+| `POST widget/grant` | `{garden, placement, widget, caps, scope, entries, sending, hash}` | `{ok, grant, changed}`; 409 `widget_changed` when `hash` is stale |
+| `POST widget/revoke` | `{garden, placement}` or `{widget}` | `{ok, revoked, changed}` |
+| `POST widget/sending` | `{garden, placement, on, reason?}` | turning on is owner-only, like a grant |
+| `POST widget/resume` | `{garden, placement}` | clears a runaway pause (owner only) |
+| `GET widget/grants` | — | the Settings list (`ZenWidgetGrantRow[]`) |
+| `GET templates` | — | `[{id, short, label, description, section, needsGrant, newUsers}]` |
+
+**Grants** (UWB3, UWB4): only the owner token makes one; agent passports,
+Connect logins and app passes get 403 `owner_only`. A grant is a row in the
+daemon's database (migration 0138), signed HMAC-SHA256 with a key in
+`~/.k2/zen-grant.key` over the canonical form `k2-zen-grant/v2` (the `ask`,
+the placement's `home`/`agent` text, is signed too). A row edited by hand
+resolves `invalid`. `grants.json` is never a grant store and stays refused as
+a `reset`/`validate` target. There is no CLI grant: `k2 zen widget grant`
+exits 1 with "Only you can allow a widget, in the K2 app: open the Garden and
+click Review."
+
+`validate`, `history` and `reset` take `widget=` (GET) / `{widget}` (POST).
+`doctor` gains `widgets` and `grants` checks.
+
+### The frame protocol
+
+One `MessageChannel` per placement (UW15). On the frame's `load` the host
+posts, with one port:
+
+```json
+{ "k2": "hello", "v": 1, "caps": ["agents:read"], "features": ["zen-v1", "…"],
+  "widget": { "id": "arcade", "name": "Agent Arcade", "garden": "g-test0001" },
+  "config": {}, "motion": { "reduced": false } }
+```
+
+Then, over the port only:
+
+| Frame → host | Host → frame |
+|---|---|
+| `{id, verb, args}` | `{id, ok: true, value}` or `{id, ok: false, error: {code, message, cap?, room?, feature?}}` |
+| `{sub, verb, args}` | `{sub, value}` per push |
+| `{unsub}` | — |
+| `{ready: true}` (once drawn) | `{ping}` every 5 s after ready |
+| `{pong}` | — |
+| `{error: {message, stack?}}` | — |
+| `{chord}` (forwarded keys) | — |
+
+The frame's first script is `sdk/generated/k2-frame.js` (the shared runtime
+`sdk/k2-runtime.js` joined with the catalog's widget verb table as
+`K2_CONTRACT`), nonced with the bundle's nonce and outside the widget's code
+budget; at most 16 KB.
+
+### Limits (UW8, UW29, UWB8, UWB9, UWB13)
+
+Code (HTML + JS + CSS after inlining) 256 KB; each asset 1 MB, all assets
+2 MB; the bundle 3 MB; libraries (`requires.libs`, inlined after `k2.js`) up
+to 8 MB per widget, outside those. 6 custom widgets per page. Per widget: 60
+calls a second (burst 120), 16 live subscriptions, 64 KB per message, 8 live
+servers. Posts are text only, up to 4,000 characters, never files or
+secrets; the runaway guard (more than 120 posts in 10 minutes, or 20
+identical texts to one agent in 10 minutes) unloads the frame and turns
+sending off until the owner resumes it.
+
+### Events
+
+No new event kind: a widget save, a grant, a revoke, a sending switch and a
+resume each emit exactly one payload-free `zen_changed` (UW12, UW37).
+
 ## Contract changes from the PRD text (flagged for the renderer)
 
 The PRD's route contract is followed; these points were open in it or are

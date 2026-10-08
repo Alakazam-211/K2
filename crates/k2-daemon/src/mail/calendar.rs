@@ -49,6 +49,19 @@
 //! `email_alerts_need_send_level`. S3 creates no calendars (events only),
 //! so it is clear of the 0.16.10 per-user `Calendar/set` property bug.
 //!
+//! **Shared calendars (S4):** a grant on inbox A also covers the calendars
+//! other hosted mailboxes shared TO A — directly or through a group A is
+//! in — so an assistant with a grant on a person's inbox sees what that
+//! person sees. K2 enforces the rights itself (the admin key bypasses
+//! Stalwart's ACLs): [`shared_calendars`] reads each peer account's
+//! `shareWith`, matches A's account id and `memberGroupIds`, and takes
+//! the share ∩ the grant level — read = `mayReadItems`, free/busy =
+//! `mayReadFreeBusy` (only in `freebusy`), write = `mayWriteAll` + draft,
+//! delete = `mayDelete` (editor) + draft. Shared event ids are
+//! `ev_<b64(A \n jmap-id \n owner address)>`; the owner's account comes
+//! from K2's address rows and every use re-checks the live share. The
+//! draft guard applies against the calendar's owner.
+//!
 //! **Owner switch:** when the owner turned calendars off for hosted
 //! addresses (`k2 hostmail calendar disable`, `mail::dav`), every verb
 //! answers 409 `calendars_disabled`. The Stalwart permissions that switch
@@ -64,6 +77,7 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::mail::access::{self, Level, Source};
+use crate::mail::calendar_share::{HostedAddr, ShareRights};
 use crate::mail::jmap::StalwartClient;
 use crate::mail::messages::ReadError;
 
@@ -192,6 +206,11 @@ pub trait CalendarApi {
     /// `Principal/getAvailability` for the account's own principal.
     fn availability(&self, account: &str, utc_start: &str, utc_end: &str)
         -> Result<Vec<Value>, String>;
+    /// S4: `Calendar/get` WITH `shareWith` on another hosted account —
+    /// how K2 finds the calendars shared to an inbox.
+    fn calendars_shared(&self, account: &str) -> Result<Vec<Value>, String>;
+    /// S4: the inbox account's groups (`memberGroupIds`).
+    fn member_groups(&self, account: &str) -> Result<Vec<String>, String>;
 }
 
 impl CalendarApi for StalwartClient {
@@ -213,6 +232,12 @@ impl CalendarApi for StalwartClient {
     }
     fn set_no_scheduling(&self, account: &str, args: Value) -> Result<Value, String> {
         self.calendar_event_set_no_scheduling(account, args)
+    }
+    fn calendars_shared(&self, account: &str) -> Result<Vec<Value>, String> {
+        self.calendar_list_shares(account)
+    }
+    fn member_groups(&self, account: &str) -> Result<Vec<String>, String> {
+        self.account_member_groups(account)
     }
 }
 
@@ -271,6 +296,12 @@ pub struct CalInbox {
     pub address: String,
     /// The Stalwart account id — from the address row, never the client.
     pub account_id: String,
+    /// The caller's `k2 mail access` level on this inbox (S4: it caps
+    /// what a share allows — write/delete need draft).
+    pub level: Level,
+    /// S4: every OTHER active hosted mailbox (K2's rows) — the owners
+    /// whose calendars may be shared to this inbox. Never from the client.
+    pub peers: Vec<HostedAddr>,
 }
 
 fn gate_error(err: ReadError) -> CliResponse {
@@ -337,7 +368,12 @@ pub fn resolve_inbox(
             inbox.address
         )));
     };
-    Ok(CalInbox { address: inbox.address, account_id })
+    let peers = crate::mail::calendar_share::load_hosted()
+        .map_err(engine_err)?
+        .into_iter()
+        .filter(|h| h.account_id != account_id)
+        .collect();
+    Ok(CalInbox { address: inbox.address, account_id, level: inbox.your_level, peers })
 }
 
 pub fn encode_event_id(address: &str, jmap_id: &str) -> String {
@@ -355,21 +391,55 @@ pub fn decode_event_id(token: &str) -> Option<(String, String)> {
     Some((address.to_string(), id.to_string()))
 }
 
+/// S4: an event on a calendar SHARED to `viewer`, held by `owner`'s
+/// account: `ev_<b64(viewer \n jmap-id \n owner)>`. The owner is a hosted
+/// ADDRESS, resolved against K2's own rows — never an account id.
+pub fn encode_shared_event_id(viewer: &str, jmap_id: &str, owner: &str) -> String {
+    format!("{EVENT_ID_PREFIX}{}", B64URL.encode(format!("{viewer}\n{jmap_id}\n{owner}")))
+}
+
+/// Any event id → (inbox address, jmap id, owner address when shared).
+pub fn decode_event_ref(token: &str) -> Option<(String, String, Option<String>)> {
+    if let Some((a, id)) = decode_event_id(token) {
+        return Some((a, id, None));
+    }
+    let raw = token.trim().strip_prefix(EVENT_ID_PREFIX)?;
+    let s = String::from_utf8(B64URL.decode(raw).ok()?).ok()?;
+    match s.split('\n').collect::<Vec<_>>().as_slice() {
+        [v, id, o] if !v.is_empty() && !id.is_empty() && !o.is_empty() => {
+            let owner = (!v.eq_ignore_ascii_case(o)).then(|| o.to_string());
+            Some((v.to_string(), id.to_string(), owner))
+        }
+        _ => None,
+    }
+}
+
 /// Decode + gate an event id. Every gate failure is the same masked
 /// event-level `not_found` (the token's address is never confirmed).
+/// A shared event's owner must be an active hosted mailbox on this
+/// server; whether the inbox may see it is checked against the live
+/// shares by the verb ([`shared_event`]).
 fn resolve_event(
     project_id: &str,
     token: &str,
     need: Level,
-) -> Result<(CalInbox, String), CliResponse> {
-    let Some((address, jmap_id)) = decode_event_id(token) else {
+) -> Result<(CalInbox, String, Option<HostedAddr>), CliResponse> {
+    let Some((address, jmap_id, owner)) = decode_event_ref(token) else {
         return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
     };
-    match resolve_inbox(project_id, Some(&address), need) {
-        Ok(inbox) => Ok((inbox, jmap_id)),
-        Err(resp) if resp.status.starts_with("404") => Err(event_not_found(token)),
-        Err(resp) => Err(resp),
-    }
+    let inbox = match resolve_inbox(project_id, Some(&address), need) {
+        Ok(inbox) => inbox,
+        Err(resp) if resp.status.starts_with("404") => return Err(event_not_found(token)),
+        Err(resp) => return Err(resp),
+    };
+    let owner = match owner {
+        None => None,
+        Some(o) => match inbox.peers.iter().find(|p| p.address.eq_ignore_ascii_case(&o)) {
+            Some(p) => Some(p.clone()),
+            None => return Err(event_not_found(token)),
+        },
+    };
+    Ok((inbox, jmap_id, owner))
 }
 
 fn event_not_found(token: &str) -> CliResponse {
@@ -771,49 +841,6 @@ fn shape_calendar(c: &Value) -> Value {
 
 // ── Calendar ids (validated against the resolved account) ───────────────
 
-/// `--calendar <id|name>` → an id that belongs to `account`. An unknown
-/// value is a 400 listing the account's calendars (they're the caller's
-/// own, so nothing leaks).
-fn resolve_calendar(
-    api: &dyn CalendarApi,
-    account: &str,
-    raw: &str,
-) -> Result<String, CliResponse> {
-    let cals = api.calendars(account).map_err(engine_err)?;
-    let raw = raw.trim();
-    if let Some(c) = cals
-        .iter()
-        .find(|c| c.get("id").and_then(Value::as_str) == Some(raw))
-    {
-        return Ok(c["id"].as_str().unwrap_or_default().to_string());
-    }
-    let named: Vec<&Value> = cals
-        .iter()
-        .filter(|c| {
-            c.get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|n| n.trim().eq_ignore_ascii_case(raw))
-        })
-        .collect();
-    if named.len() == 1 {
-        return Ok(named[0]["id"].as_str().unwrap_or_default().to_string());
-    }
-    let list: Vec<String> = cals
-        .iter()
-        .map(|c| {
-            format!(
-                "{} ({})",
-                c.get("name").and_then(Value::as_str).unwrap_or("?"),
-                c.get("id").and_then(Value::as_str).unwrap_or("?")
-            )
-        })
-        .collect();
-    Err(usage(format!(
-        "no single calendar '{raw}' on this inbox — available: {}",
-        if list.is_empty() { "(none)".to_string() } else { list.join(", ") }
-    )))
-}
-
 /// The calendar a create lands in when `--calendar` is absent: the one
 /// marked `isDefault`, else the only calendar, else the first by
 /// `sortOrder`. `None` = the account has no calendar yet.
@@ -830,6 +857,299 @@ pub(crate) fn default_calendar(cals: &[Value]) -> Option<String> {
         .first()
         .and_then(|c| c.get("id").and_then(Value::as_str))
         .map(str::to_string)
+}
+
+// ── Calendars shared TO the inbox (S4) ──────────────────────────────────
+
+/// A calendar the inbox can use: its own, or one another hosted mailbox
+/// shared to it (directly or through a group the inbox is in).
+#[derive(Debug, Clone)]
+pub struct VisCal {
+    /// The mailbox whose account holds the calendar (from K2's rows).
+    pub owner: HostedAddr,
+    /// The calendar id on the owner's account.
+    pub id: String,
+    pub shared: bool,
+    /// Effective rights: the share's rights ∩ the caller's grant level.
+    pub rights: ShareRights,
+    /// The `Calendar/get` row (name, color, …).
+    pub raw: Value,
+}
+
+impl VisCal {
+    /// The id the CLI shows and takes: a shared calendar is
+    /// `<owner address>/<calendar id>` (ids are per account, so they can
+    /// repeat across owners).
+    pub fn display_id(&self) -> String {
+        if self.shared {
+            format!("{}/{}", self.owner.address, self.id)
+        } else {
+            self.id.clone()
+        }
+    }
+}
+
+fn can_write(level: Level) -> bool {
+    level >= Level::Draft
+}
+
+/// The inbox's own calendars: what the grant level allows.
+fn own_rights(level: Level) -> ShareRights {
+    ShareRights { free_busy: true, read: true, write: can_write(level), delete: can_write(level) }
+}
+
+/// share ∩ grant: writing and deleting also need the draft level.
+pub fn effective_rights(share: ShareRights, level: Level) -> ShareRights {
+    ShareRights {
+        write: share.write && can_write(level),
+        delete: share.delete && can_write(level),
+        ..share
+    }
+}
+
+fn rights_json(r: ShareRights) -> Value {
+    json!({ "freeBusy": r.free_busy, "read": r.read, "write": r.write, "delete": r.delete })
+}
+
+/// Calendars on OTHER hosted accounts whose `shareWith` names the inbox's
+/// account or one of its groups, with effective rights (only those that
+/// grant anything). K2 enforces these itself: the admin key bypasses
+/// Stalwart's ACLs, so every shared read/write below is checked against
+/// this list first.
+pub fn shared_calendars(api: &dyn CalendarApi, inbox: &CalInbox) -> Result<Vec<VisCal>, CliResponse> {
+    if inbox.peers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut grantees = vec![inbox.account_id.clone()];
+    grantees.extend(api.member_groups(&inbox.account_id).map_err(engine_err)?);
+    let mut out = Vec::new();
+    for peer in &inbox.peers {
+        if peer.account_id == inbox.account_id {
+            continue;
+        }
+        let cals = api
+            .calendars_shared(&peer.account_id)
+            .map_err(|e| engine_err(format!("calendars of {}: {e}", peer.address)))?;
+        for c in cals {
+            let Some(map) = c.get("shareWith").and_then(Value::as_object) else {
+                continue;
+            };
+            let mut share = ShareRights::default();
+            for g in &grantees {
+                if let Some(v) = map.get(g).filter(|v| !v.is_null()) {
+                    share = share.union(ShareRights::from_json(v));
+                }
+            }
+            let rights = effective_rights(share, inbox.level);
+            let Some(id) = c.get("id").and_then(Value::as_str).map(str::to_string) else {
+                continue;
+            };
+            if rights.any() {
+                out.push(VisCal { owner: peer.clone(), id, shared: true, rights, raw: c });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn share_rights_refused(what: &str) -> CliResponse {
+    error_response(
+        "403 Forbidden",
+        "share_rights",
+        &format!(
+            "{what} — this inbox's share of that calendar (or your `k2 mail access` level) \
+             doesn't allow it; ask your human (k2 hostmail calendar share … --write|--editor)"
+        ),
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Need {
+    Read,
+    Write,
+}
+
+#[derive(Debug)]
+enum Picked {
+    Own(String),
+    Shared(VisCal),
+}
+
+/// `--calendar <id|name|owner/id>` → one of the inbox's own calendars, or
+/// a calendar shared to it that has the needed right. An unknown value is
+/// a 400 listing what the inbox can see (nothing else leaks).
+fn pick_calendar(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    shared: &[VisCal],
+    raw: &str,
+    need: Need,
+) -> Result<Picked, CliResponse> {
+    let own = api.calendars(&inbox.account_id).map_err(engine_err)?;
+    let raw = raw.trim();
+    if let Some(c) = own.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(raw)) {
+        return Ok(Picked::Own(c["id"].as_str().unwrap_or_default().to_string()));
+    }
+    let usable = |v: &VisCal| match need {
+        Need::Read => v.rights.read,
+        Need::Write => v.rights.write,
+    };
+    let visible: Vec<&VisCal> = shared.iter().filter(|v| v.rights.read).collect();
+    let refuse = |v: &VisCal| {
+        share_rights_refused(&format!(
+            "calendar '{}' is shared with {} read-only",
+            v.display_id(),
+            inbox.address
+        ))
+    };
+    if let Some((o, id)) = raw.split_once('/') {
+        if let Some(v) =
+            visible.iter().find(|v| v.id == id && v.owner.address.eq_ignore_ascii_case(o))
+        {
+            return if usable(v) { Ok(Picked::Shared((*v).clone())) } else { Err(refuse(v)) };
+        }
+    }
+    let name_of = |c: &Value| c.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let mut named: Vec<Picked> = own
+        .iter()
+        .filter(|c| name_of(c).eq_ignore_ascii_case(raw))
+        .map(|c| Picked::Own(c["id"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    named.extend(
+        visible
+            .iter()
+            .filter(|v| name_of(&v.raw).eq_ignore_ascii_case(raw))
+            .map(|v| Picked::Shared((*v).clone())),
+    );
+    if named.len() == 1 {
+        return match named.pop() {
+            Some(Picked::Shared(v)) if !usable(&v) => Err(refuse(&v)),
+            Some(p) => Ok(p),
+            None => Err(engine_err("calendar pick vanished")),
+        };
+    }
+    let mut list: Vec<String> = own
+        .iter()
+        .map(|c| {
+            format!(
+                "{} ({})",
+                c.get("name").and_then(Value::as_str).unwrap_or("?"),
+                c.get("id").and_then(Value::as_str).unwrap_or("?")
+            )
+        })
+        .collect();
+    list.extend(visible.iter().map(|v| format!("{} ({})", name_of(&v.raw), v.display_id())));
+    Err(usage(format!(
+        "no single calendar '{raw}' on this inbox — available: {}",
+        if list.is_empty() { "(none)".to_string() } else { list.join(", ") }
+    )))
+}
+
+/// An event on a calendar SHARED to the inbox, shaped like the inbox's
+/// own (opaque 3-part id, calendar ids as the CLI shows them).
+fn shape_shared(ev: &Value, inbox: &CalInbox, owner: &HostedAddr, shared: &[VisCal], full: bool) -> Value {
+    let mut out = if full { shape_full(ev, &inbox.address) } else { shape_summary(ev, &inbox.address) };
+    out["id"] = json!(encode_shared_event_id(&inbox.address, stable_id(ev), &owner.address));
+    let ids: Vec<String> = calendar_ids(ev)
+        .into_iter()
+        .filter_map(|c| {
+            shared
+                .iter()
+                .find(|v| v.owner.account_id == owner.account_id && v.id == c && v.rights.read)
+                .map(VisCal::display_id)
+        })
+        .collect();
+    out["calendarIds"] = json!(ids);
+    out["owner"] = json!(owner.address);
+    out["shared"] = json!(true);
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Act {
+    Read,
+    Write,
+    Delete,
+}
+
+/// A STORED event on `owner`'s account that the inbox may `act` on
+/// through a share. Not on a calendar the inbox can read → the masked
+/// event-level 404; readable but without the right → 403 `share_rights`.
+/// Write/delete need the right on EVERY calendar the event is in.
+fn shared_event(
+    api: &dyn CalendarApi,
+    shared: &[VisCal],
+    owner: &HostedAddr,
+    jmap_id: &str,
+    token: &str,
+    act: Act,
+) -> Result<Value, CliResponse> {
+    let mine: Vec<&VisCal> =
+        shared.iter().filter(|v| v.owner.account_id == owner.account_id && v.rights.read).collect();
+    if mine.is_empty() {
+        return Err(event_not_found(token));
+    }
+    let ev = match get_one(api, &owner.account_id, jmap_id, FULL_PROPS) {
+        Ok(Some(e)) => e,
+        Ok(None) => return Err(event_not_found(token)),
+        Err(e) => return Err(engine_err(e)),
+    };
+    let cals = calendar_ids(&ev);
+    let find = |c: &String| mine.iter().find(|v| &v.id == c);
+    if cals.is_empty() || !cals.iter().any(|c| find(c).is_some()) {
+        return Err(event_not_found(token));
+    }
+    let ok = match act {
+        Act::Read => true,
+        Act::Write => cals.iter().all(|c| find(c).is_some_and(|v| v.rights.write)),
+        Act::Delete => cals.iter().all(|c| find(c).is_some_and(|v| v.rights.delete)),
+    };
+    if !ok {
+        return Err(share_rights_refused(match act {
+            Act::Delete => "deleting an event on a shared calendar needs the editor share (mayDelete) and draft level",
+            _ => "changing an event on a shared calendar needs a write share (mayWriteAll) and draft level",
+        }));
+    }
+    Ok(ev)
+}
+
+// ── wait state across accounts (S4) ─────────────────────────────────────
+
+/// A `wait` state covering several accounts: `k2s_<b64(json {account:
+/// state})>`. A plain state (S3) is the inbox's own account only.
+const STATES_PREFIX: &str = "k2s_";
+
+fn encode_states(states: &std::collections::BTreeMap<String, String>) -> String {
+    format!("{STATES_PREFIX}{}", B64URL.encode(json!(states).to_string()))
+}
+
+fn decode_states(raw: &str) -> Option<HashMap<String, String>> {
+    let b = B64URL.decode(raw.trim().strip_prefix(STATES_PREFIX)?).ok()?;
+    serde_json::from_slice::<HashMap<String, String>>(&b).ok()
+}
+
+/// Of `ids` on `owner`'s account, those on a calendar shared to the inbox
+/// with read.
+fn visible_ids(
+    api: &dyn CalendarApi,
+    shared: &[VisCal],
+    owner: &HostedAddr,
+    ids: &[String],
+) -> Result<Vec<String>, CliResponse> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let readable: Vec<&str> = shared
+        .iter()
+        .filter(|v| v.owner.account_id == owner.account_id && v.rights.read)
+        .map(|v| v.id.as_str())
+        .collect();
+    let evs = get_events(api, &owner.account_id, ids, &["id", "calendarIds"]).map_err(engine_err)?;
+    Ok(evs
+        .iter()
+        .filter(|e| calendar_ids(e).iter().any(|c| readable.contains(&c.as_str())))
+        .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect())
 }
 
 // ── Event reads ─────────────────────────────────────────────────────────
@@ -926,15 +1246,39 @@ pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// The inbox's own calendars plus the calendars shared to it (directly
+/// or through a group) that it may read, each with its owner and the
+/// effective rights (share ∩ grant). Free/busy-only shares are not
+/// listed (they show up in `freebusy` only).
 pub fn list_with(api: &dyn CalendarApi, inbox: &CalInbox) -> CliResponse {
-    match api.calendars(&inbox.account_id) {
-        Ok(cals) => ok_json(json!({
-            "ok": true,
-            "address": inbox.address,
-            "calendars": cals.iter().map(shape_calendar).collect::<Vec<_>>(),
-        })),
-        Err(e) => engine_err(e),
+    let own = match api.calendars(&inbox.account_id) {
+        Ok(c) => c,
+        Err(e) => return engine_err(e),
+    };
+    let shared = match shared_calendars(api, inbox) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let mut out: Vec<Value> = own
+        .iter()
+        .map(|c| {
+            let mut v = shape_calendar(c);
+            v["owner"] = json!(inbox.address);
+            v["shared"] = json!(false);
+            v["rights"] = rights_json(own_rights(inbox.level));
+            v
+        })
+        .collect();
+    for s in shared.iter().filter(|s| s.rights.read) {
+        let mut v = shape_calendar(&s.raw);
+        v["id"] = json!(s.display_id());
+        v["isDefault"] = json!(false);
+        v["owner"] = json!(s.owner.address);
+        v["shared"] = json!(true);
+        v["rights"] = rights_json(s.rights);
+        out.push(v);
     }
+    ok_json(json!({ "ok": true, "address": inbox.address, "calendars": out }))
 }
 
 // ── GET /cli/mail/calendar/events ───────────────────────────────────────
@@ -973,34 +1317,90 @@ pub fn events_with(
         Some(Ok(n)) if n >= 1 => n.min(MAX_EVENTS),
         _ => return usage(format!("invalid 'limit' — a number from 1 to {MAX_EVENTS}")),
     };
-    let calendar = match crate::cli::opt_param(params, "calendar") {
-        Some(raw) => match resolve_calendar(api, &inbox.account_id, &raw) {
-            Ok(id) => Some(id),
+    let shared = match shared_calendars(api, inbox) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    // Sources: the inbox's own account (all its calendars, or one), and
+    // each calendar shared to it with read (S4).
+    enum Src {
+        Own(Option<String>),
+        Shared(VisCal),
+    }
+    let (sources, calendar) = match crate::cli::opt_param(params, "calendar") {
+        Some(raw) => match pick_calendar(api, inbox, &shared, &raw, Need::Read) {
+            Ok(Picked::Own(id)) => (vec![Src::Own(Some(id.clone()))], Some(id)),
+            Ok(Picked::Shared(v)) => {
+                let shown = v.display_id();
+                (vec![Src::Shared(v)], Some(shown))
+            }
             Err(r) => return r,
         },
-        None => None,
+        None => {
+            let mut s = vec![Src::Own(None)];
+            s.extend(shared.iter().filter(|v| v.rights.read).cloned().map(Src::Shared));
+            (s, None)
+        }
     };
-    // Ask for one more than the page so `truncated` is honest.
-    let ids = match api.query(
-        &inbox.account_id,
-        window_query(&start, &end, calendar.as_deref(), limit + 1),
-    ) {
-        Ok(ids) => ids,
-        Err(e) => return query_err(e),
-    };
-    let truncated = ids.len() > limit;
-    let ids: Vec<String> = ids.into_iter().take(limit).collect();
-    let events = match get_events(api, &inbox.account_id, &ids, SUMMARY_PROPS) {
-        Ok(evs) => evs,
-        Err(e) => return engine_err(e),
-    };
+    let several = sources.len() > 1;
+    let mut rows: Vec<(Option<DateTime<Utc>>, Value)> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String, String)> = Default::default();
+    let mut truncated = false;
+    for src in &sources {
+        let (account, cal) = match src {
+            Src::Own(c) => (inbox.account_id.as_str(), c.as_deref()),
+            Src::Shared(v) => (v.owner.account_id.as_str(), Some(v.id.as_str())),
+        };
+        // Ask for one more than the page so `truncated` is honest.
+        let ids = match api.query(account, window_query(&start, &end, cal, limit + 1)) {
+            Ok(ids) => ids,
+            Err(e) => return query_err(e),
+        };
+        truncated |= ids.len() > limit;
+        let ids: Vec<String> = ids.into_iter().take(limit).collect();
+        let events = match get_events(api, account, &ids, SUMMARY_PROPS) {
+            Ok(evs) => evs,
+            Err(e) => return engine_err(e),
+        };
+        for ev in &events {
+            let span = event_utc_span(ev).0;
+            if let Src::Shared(v) = src {
+                // An event in two calendars shared to the inbox shows once.
+                let key = (
+                    v.owner.account_id.clone(),
+                    stable_id(ev).to_string(),
+                    span.map(|d| rfc3339_utc(&d)).unwrap_or_default(),
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+            }
+            let shaped = match src {
+                Src::Own(_) => {
+                    let mut e = shape_summary(ev, &inbox.address);
+                    if several {
+                        e["owner"] = json!(inbox.address);
+                        e["shared"] = json!(false);
+                    }
+                    e
+                }
+                Src::Shared(v) => shape_shared(ev, inbox, &v.owner, &shared, false),
+            };
+            rows.push((span, shaped));
+        }
+    }
+    if several {
+        rows.sort_by_key(|(s, _)| *s);
+    }
+    truncated |= rows.len() > limit;
+    rows.truncate(limit);
     ok_json(json!({
         "ok": true,
         "address": inbox.address,
         "start": rfc3339_utc(&start),
         "end": rfc3339_utc(&end),
         "calendar": calendar,
-        "events": events.iter().map(|e| shape_summary(e, &inbox.address)).collect::<Vec<_>>(),
+        "events": rows.into_iter().map(|(_, e)| e).collect::<Vec<_>>(),
         "truncated": truncated,
     }))
 }
@@ -1018,12 +1418,38 @@ pub fn handle_show(params: &HashMap<String, String>) -> CliResponse {
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id) = match resolve_event(&project_id, &token, Level::Read) {
+    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Read) {
         Ok(v) => v,
         Err(r) => return r,
     };
     match engine() {
-        Ok(api) => show_with(&api, &inbox, &jmap_id, &token),
+        Ok(api) => match &owner {
+            None => show_with(&api, &inbox, &jmap_id, &token),
+            Some(o) => show_shared_with(&api, &inbox, o, &jmap_id, &token),
+        },
+        Err(r) => r,
+    }
+}
+
+/// `show` of an event on a calendar shared to the inbox (S4): only when
+/// the event is on a calendar the inbox may read right now.
+pub fn show_shared_with(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    owner: &HostedAddr,
+    jmap_id: &str,
+    token: &str,
+) -> CliResponse {
+    let shared = match shared_calendars(api, inbox) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match shared_event(api, &shared, owner, jmap_id, token, Act::Read) {
+        Ok(ev) => ok_json(json!({
+            "ok": true,
+            "address": inbox.address,
+            "event": shape_shared(&ev, inbox, owner, &shared, true),
+        })),
         Err(r) => r,
     }
 }
@@ -1100,14 +1526,31 @@ pub fn freebusy_with(
         Ok(w) => w,
         Err(r) => return r,
     };
-    let (spans, source, truncated) =
+    let (mut spans, source, mut truncated) =
         match api.availability(&inbox.account_id, &rfc3339_utc(&start), &rfc3339_utc(&end)) {
             Ok(list) => (availability_spans(&list, start, end), "availability", false),
-            Err(_) => match busy_from_events(api, inbox, start, end) {
+            Err(_) => match busy_from_events(api, &inbox.account_id, None, start, end) {
                 Ok((spans, truncated)) => (spans, "events", truncated),
                 Err(r) => return r,
             },
         };
+    // S4: plus every calendar shared to the inbox with at least
+    // free/busy, from its events on the owner's account (busy times only).
+    let shared = match shared_calendars(api, inbox) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let fb: Vec<&VisCal> = shared.iter().filter(|v| v.rights.free_busy).collect();
+    for v in &fb {
+        match busy_from_events(api, &v.owner.account_id, Some(&v.id), start, end) {
+            Ok((s, t)) => {
+                spans.extend(s);
+                truncated |= t;
+            }
+            Err(r) => return r,
+        }
+    }
+    let source = if fb.is_empty() { source.to_string() } else { format!("{source}+shared") };
     let busy = merge_busy(spans);
     ok_json(json!({
         "ok": true,
@@ -1123,6 +1566,7 @@ pub fn freebusy_with(
             }))
             .collect::<Vec<_>>(),
         "source": source,
+        "sharedCalendars": fb.len(),
         "truncated": truncated,
     }))
 }
@@ -1163,18 +1607,19 @@ fn availability_spans(list: &[Value], start: DateTime<Utc>, end: DateTime<Utc>) 
 /// secret ones (Stalwart's availability rules), as spans.
 fn busy_from_events(
     api: &dyn CalendarApi,
-    inbox: &CalInbox,
+    account: &str,
+    calendar: Option<&str>,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<(Vec<BusySpan>, bool), CliResponse> {
     let ids = api
-        .query(&inbox.account_id, window_query(&start, &end, None, FREEBUSY_MAX_EVENTS + 1))
+        .query(account, window_query(&start, &end, calendar, FREEBUSY_MAX_EVENTS + 1))
         .map_err(query_err)?;
     let truncated = ids.len() > FREEBUSY_MAX_EVENTS;
     let ids: Vec<String> = ids.into_iter().take(FREEBUSY_MAX_EVENTS).collect();
     let events = get_events(
         api,
-        &inbox.account_id,
+        account,
         &ids,
         &[
             "id", "baseEventId", "start", "duration", "timeZone", "utcStart", "utcEnd",
@@ -1295,7 +1740,144 @@ fn id_list(v: Option<&Value>) -> Vec<String> {
 /// budget ran out. Without `since`, the current state is read first
 /// (`CalendarEvent/get ids:[]`), so only changes AFTER the call count.
 /// `elapsed`/`sleep` are injected (tests run instantly).
+///
+/// S4: when calendars are shared to the inbox, each owner account with a
+/// readable shared calendar is watched too (created/updated ids filtered
+/// to those calendars; destroyed ids cannot be checked after deletion and
+/// are passed on as opaque ids), and the state becomes one `k2s_…` token
+/// covering every account.
 pub fn wait_with(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    since: Option<&str>,
+    timeout_secs: u64,
+    elapsed: &mut dyn FnMut() -> u64,
+    sleep: &mut dyn FnMut(std::time::Duration),
+) -> CliResponse {
+    let shared = match shared_calendars(api, inbox) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let mut owners: Vec<HostedAddr> = Vec::new();
+    for v in shared.iter().filter(|v| v.rights.read) {
+        if !owners.iter().any(|o| o.account_id == v.owner.account_id) {
+            owners.push(v.owner.clone());
+        }
+    }
+    let since = since.map(str::trim).filter(|s| !s.is_empty());
+    let given: Option<HashMap<String, String>> = match since {
+        Some(s) if s.starts_with(STATES_PREFIX) => match decode_states(s) {
+            Some(m) => Some(m),
+            None => return usage("invalid --since-state — use the state a wait printed"),
+        },
+        _ => None,
+    };
+    if owners.is_empty() {
+        let own = match &given {
+            Some(m) => m.get(&inbox.account_id).cloned(),
+            None => since.map(str::to_string),
+        };
+        return wait_own(api, inbox, own.as_deref(), timeout_secs, elapsed, sleep);
+    }
+    let given = given.unwrap_or_else(|| {
+        since
+            .map(|s| HashMap::from([(inbox.account_id.clone(), s.to_string())]))
+            .unwrap_or_default()
+    });
+    let mut accounts: Vec<(String, Option<HostedAddr>)> = vec![(inbox.account_id.clone(), None)];
+    accounts.extend(owners.iter().map(|o| (o.account_id.clone(), Some(o.clone()))));
+    let mut states: std::collections::BTreeMap<String, String> = Default::default();
+    for (acct, _) in &accounts {
+        let st = match given.get(acct) {
+            Some(s) => s.clone(),
+            None => match api.get(acct, &[], None) {
+                Ok(reply) => match reply.get("state").and_then(Value::as_str) {
+                    Some(s) => s.to_string(),
+                    None => return engine_err("CalendarEvent/get: reply has no state"),
+                },
+                Err(e) => return engine_err(e),
+            },
+        };
+        states.insert(acct.clone(), st);
+    }
+    let (mut created, mut updated, mut destroyed) = (Vec::new(), Vec::new(), Vec::new());
+    loop {
+        for (acct, owner) in &accounts {
+            let mut state = states.get(acct).cloned().unwrap_or_default();
+            let (mut c, mut u, mut d) = (Vec::new(), Vec::new(), Vec::new());
+            loop {
+                let reply = match api.changes(acct, &state) {
+                    Ok(r) => r,
+                    Err(e) if e.contains("cannotCalculateChanges") => {
+                        return error_response(
+                            "409 Conflict",
+                            "state_expired",
+                            "the server can no longer list changes since that state — re-read \
+                             with 'k2 calendar events' and wait again without --since-state",
+                        )
+                    }
+                    Err(e) => return engine_err(e),
+                };
+                c.extend(id_list(reply.get("created")));
+                u.extend(id_list(reply.get("updated")));
+                d.extend(id_list(reply.get("destroyed")));
+                if let Some(ns) = reply.get("newState").and_then(Value::as_str) {
+                    state = ns.to_string();
+                }
+                if !reply.get("hasMoreChanges").and_then(Value::as_bool).unwrap_or(false) {
+                    break;
+                }
+            }
+            states.insert(acct.clone(), state);
+            match owner {
+                None => {
+                    let enc = |i: &String| encode_event_id(&inbox.address, i);
+                    created.extend(c.iter().map(enc));
+                    updated.extend(u.iter().map(enc));
+                    destroyed.extend(d.iter().map(enc));
+                }
+                Some(o) => {
+                    let enc = |i: &String| encode_shared_event_id(&inbox.address, i, &o.address);
+                    let c = match visible_ids(api, &shared, o, &c) {
+                        Ok(v) => v,
+                        Err(r) => return r,
+                    };
+                    let u = match visible_ids(api, &shared, o, &u) {
+                        Ok(v) => v,
+                        Err(r) => return r,
+                    };
+                    created.extend(c.iter().map(enc));
+                    updated.extend(u.iter().map(enc));
+                    destroyed.extend(d.iter().map(enc));
+                }
+            }
+        }
+        if !(created.is_empty() && updated.is_empty() && destroyed.is_empty()) {
+            return ok_json(json!({
+                "ok": true,
+                "timedOut": false,
+                "address": inbox.address,
+                "state": encode_states(&states),
+                "created": created,
+                "updated": updated,
+                "destroyed": destroyed,
+                "sharedAccounts": owners.len(),
+            }));
+        }
+        if elapsed() + WAIT_POLL_SECS > timeout_secs {
+            return ok_json(json!({
+                "ok": true,
+                "timedOut": true,
+                "address": inbox.address,
+                "state": encode_states(&states),
+            }));
+        }
+        sleep(std::time::Duration::from_secs(WAIT_POLL_SECS));
+    }
+}
+
+/// The S3 long-poll on the inbox's own account (plain state).
+fn wait_own(
     api: &dyn CalendarApi,
     inbox: &CalInbox,
     since: Option<&str>,
@@ -1532,18 +2114,39 @@ pub fn create_with(api: &dyn CalendarApi, inbox: &CalInbox, b: &WriteBody) -> Cl
             return usage(format!("'{z}' is not an IANA time zone name (e.g. America/Los_Angeles)"));
         }
     }
-    let cals = match api.calendars(&inbox.account_id) {
-        Ok(c) => c,
-        Err(e) => return engine_err(e),
-    };
+    // S4: `--calendar` may name a calendar shared to the inbox with
+    // write; the event then lives on the OWNER's account.
+    let mut target: Option<VisCal> = None;
     let calendar_id = match b.calendar.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(raw) => match resolve_calendar(api, &inbox.account_id, raw) {
-            Ok(id) => id,
-            Err(r) => return r,
-        },
-        None => match default_calendar(&cals) {
-            Some(id) => id,
-            None => {
+        Some(raw) => {
+            let shared = match shared_calendars(api, inbox) {
+                Ok(s) => s,
+                Err(r) => return r,
+            };
+            match pick_calendar(api, inbox, &shared, raw, Need::Write) {
+                Ok(Picked::Own(id)) => id,
+                Ok(Picked::Shared(v)) => {
+                    // On someone else's calendar the only participant a
+                    // draft event may name is that calendar's owner.
+                    let others = non_owner_participants(b.participants.as_ref(), &v.owner.address);
+                    if !others.is_empty() {
+                        return invites_need_send(&format!(
+                            "this event names {} participant(s) besides {}",
+                            others.len(),
+                            v.owner.address
+                        ));
+                    }
+                    let id = v.id.clone();
+                    target = Some(v);
+                    id
+                }
+                Err(r) => return r,
+            }
+        }
+        None => match api.calendars(&inbox.account_id).map(|cals| default_calendar(&cals)) {
+            Err(e) => return engine_err(e),
+            Ok(Some(id)) => id,
+            Ok(None) => {
                 return error_response(
                     "409 Conflict",
                     "no_calendar",
@@ -1556,6 +2159,10 @@ pub fn create_with(api: &dyn CalendarApi, inbox: &CalInbox, b: &WriteBody) -> Cl
             }
         },
     };
+    let account = target
+        .as_ref()
+        .map(|v| v.owner.account_id.clone())
+        .unwrap_or_else(|| inbox.account_id.clone());
     let mut ev = json!({
         "@type": "Event",
         "calendarIds": { calendar_id.clone(): true },
@@ -1576,7 +2183,7 @@ pub fn create_with(api: &dyn CalendarApi, inbox: &CalInbox, b: &WriteBody) -> Cl
         }
     }
     let reply = match api.set_no_scheduling(
-        &inbox.account_id,
+        &account,
         json!({ "create": { "k2new": ev }, "sendSchedulingMessages": false }),
     ) {
         Ok(r) => r,
@@ -1588,7 +2195,22 @@ pub fn create_with(api: &dyn CalendarApi, inbox: &CalInbox, b: &WriteBody) -> Cl
     let Some(new_id) = reply.pointer("/created/k2new/id").and_then(Value::as_str) else {
         return engine_err("CalendarEvent/set create: no created id in reply");
     };
-    let event = get_one(api, &inbox.account_id, new_id, SUMMARY_PROPS)
+    if let Some(v) = &target {
+        let event = get_one(api, &account, new_id, SUMMARY_PROPS)
+            .ok()
+            .flatten()
+            .map(|e| shape_shared(&e, inbox, &v.owner, std::slice::from_ref(v), false));
+        return ok_json(json!({
+            "ok": true,
+            "address": inbox.address,
+            "owner": v.owner.address,
+            "id": encode_shared_event_id(&inbox.address, new_id, &v.owner.address),
+            "calendarId": v.display_id(),
+            "event": event,
+            "emailSent": false,
+        }));
+    }
+    let event = get_one(api, &account, new_id, SUMMARY_PROPS)
         .ok()
         .flatten()
         .map(|e| shape_summary(&e, &inbox.address));
@@ -1646,12 +2268,12 @@ pub fn handle_update(body: &[u8]) -> CliResponse {
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id) = match resolve_event(&project_id, &token, Level::Draft) {
+    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Draft) {
         Ok(v) => v,
         Err(r) => return r,
     };
     match engine() {
-        Ok(api) => update_with(&api, &inbox, &jmap_id, &token, &b),
+        Ok(api) => update_at(&api, &inbox, owner.as_ref(), &jmap_id, &token, &b),
         Err(r) => r,
     }
 }
@@ -1671,12 +2293,20 @@ fn stored_event_guard(
         Ok(None) => return Err(event_not_found(token)),
         Err(e) => return Err(engine_err(e)),
     };
-    let mut others = non_owner_participants(stored.get("participants"), &inbox.address);
+    participants_guard(&stored, &inbox.address, what)?;
+    Ok(stored)
+}
+
+/// CAL20 on a STORED event: participants other than `owner` (the
+/// calendar's owner mailbox), or an organizer who isn't `owner`, need
+/// the send level.
+fn participants_guard(stored: &Value, owner: &str, what: &str) -> Result<(), CliResponse> {
+    let mut others = non_owner_participants(stored.get("participants"), owner);
     // An invitation someone else organized counts too, even when its
     // participant list was reduced to the owner.
     if let Some(org) = stored.get("organizerCalendarAddress").and_then(Value::as_str) {
         let org = strip_mailto(org);
-        if !org.is_empty() && org != inbox.address.to_ascii_lowercase() && !others.contains(&org) {
+        if !org.is_empty() && org != owner.to_ascii_lowercase() && !others.contains(&org) {
             others.push(org);
         }
     }
@@ -1684,12 +2314,31 @@ fn stored_event_guard(
         return Err(invites_need_send(&format!(
             "{what}: this event has {} participant(s) besides {}",
             others.len(),
-            inbox.address
+            owner
         )));
     }
-    Ok(stored)
+    Ok(())
 }
 
+/// A shared event the inbox may `act` on, then CAL20 against the
+/// calendar's OWNER. Returns the stored event and the shared view.
+fn shared_write_guard(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    owner: &HostedAddr,
+    jmap_id: &str,
+    token: &str,
+    act: Act,
+    what: &str,
+) -> Result<(Value, Vec<VisCal>), CliResponse> {
+    let shared = shared_calendars(api, inbox)?;
+    let stored = shared_event(api, &shared, owner, jmap_id, token, act)?;
+    participants_guard(&stored, &owner.address, what)?;
+    Ok((stored, shared))
+}
+
+/// The inbox's own account (S3 entry point; tests drive it).
+#[cfg(test)]
 pub fn update_with(
     api: &dyn CalendarApi,
     inbox: &CalInbox,
@@ -1697,12 +2346,28 @@ pub fn update_with(
     token: &str,
     b: &WriteBody,
 ) -> CliResponse {
-    let others = non_owner_participants(b.participants.as_ref(), &inbox.address);
+    update_at(api, inbox, None, jmap_id, token, b)
+}
+
+/// `update` of an event on the inbox's own account (`owner` None) or on
+/// a calendar shared to it (S4: the share needs write, the grant draft;
+/// the write goes to the OWNER's account).
+pub fn update_at(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    owner: Option<&HostedAddr>,
+    jmap_id: &str,
+    token: &str,
+    b: &WriteBody,
+) -> CliResponse {
+    let owner_addr = owner.map(|o| o.address.as_str()).unwrap_or(&inbox.address);
+    let account = owner.map(|o| o.account_id.as_str()).unwrap_or(&inbox.account_id);
+    let others = non_owner_participants(b.participants.as_ref(), owner_addr);
     if !others.is_empty() {
         return invites_need_send(&format!(
             "this update names {} participant(s) besides {}",
             others.len(),
-            inbox.address
+            owner_addr
         ));
     }
     if has_email_alert(b.alerts.as_ref()) {
@@ -1741,9 +2406,17 @@ pub fn update_with(
         None => None,
     };
     // CAL20: the STORED event decides, not the request.
-    let stored = match stored_event_guard(api, inbox, jmap_id, token, "update refused") {
-        Ok(ev) => ev,
-        Err(r) => return r,
+    let (stored, shared) = match owner {
+        None => match stored_event_guard(api, inbox, jmap_id, token, "update refused") {
+            Ok(ev) => (ev, Vec::new()),
+            Err(r) => return r,
+        },
+        Some(o) => {
+            match shared_write_guard(api, inbox, o, jmap_id, token, Act::Write, "update refused") {
+                Ok(v) => v,
+                Err(r) => return r,
+            }
+        }
     };
     let mut patch = serde_json::Map::new();
     if let Some(t) = b.title.as_deref() {
@@ -1803,7 +2476,7 @@ pub fn update_with(
         return usage("nothing to update — pass at least one of title/start/end/timeZone/location/notes");
     }
     let reply = match api.set_no_scheduling(
-        &inbox.account_id,
+        account,
         json!({ "update": { jmap_id: Value::Object(patch) }, "sendSchedulingMessages": false }),
     ) {
         Ok(r) => r,
@@ -1812,10 +2485,10 @@ pub fn update_with(
     if let Some(msg) = set_error("CalendarEvent/set update", &reply, "notUpdated") {
         return set_failure(msg);
     }
-    let event = get_one(api, &inbox.account_id, jmap_id, SUMMARY_PROPS)
-        .ok()
-        .flatten()
-        .map(|e| shape_summary(&e, &inbox.address));
+    let event = get_one(api, account, jmap_id, SUMMARY_PROPS).ok().flatten().map(|e| match owner {
+        None => shape_summary(&e, &inbox.address),
+        Some(o) => shape_shared(&e, inbox, o, &shared, false),
+    });
     ok_json(json!({
         "ok": true,
         "address": inbox.address,
@@ -1842,24 +2515,45 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id) = match resolve_event(&project_id, &token, Level::Draft) {
+    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Draft) {
         Ok(v) => v,
         Err(r) => return r,
     };
     match engine() {
-        Ok(api) => delete_with(&api, &inbox, &jmap_id, &token),
+        Ok(api) => delete_at(&api, &inbox, owner.as_ref(), &jmap_id, &token),
         Err(r) => r,
     }
 }
 
+/// The inbox's own account (S3 entry point; tests drive it).
+#[cfg(test)]
 pub fn delete_with(api: &dyn CalendarApi, inbox: &CalInbox, jmap_id: &str, token: &str) -> CliResponse {
+    delete_at(api, inbox, None, jmap_id, token)
+}
+
+/// `delete` on the inbox's own account, or on a calendar shared to it
+/// (S4: the share needs mayDelete — the editor level — and the grant
+/// draft; IT10).
+pub fn delete_at(
+    api: &dyn CalendarApi,
+    inbox: &CalInbox,
+    owner: Option<&HostedAddr>,
+    jmap_id: &str,
+    token: &str,
+) -> CliResponse {
     // CAL20: a draft delete of a participant event would leave attendees
     // without a CANCEL — refuse on the STORED event.
-    if let Err(r) = stored_event_guard(api, inbox, jmap_id, token, "delete refused") {
+    let guard = match owner {
+        None => stored_event_guard(api, inbox, jmap_id, token, "delete refused").map(|_| ()),
+        Some(o) => shared_write_guard(api, inbox, o, jmap_id, token, Act::Delete, "delete refused")
+            .map(|_| ()),
+    };
+    if let Err(r) = guard {
         return r;
     }
+    let account = owner.map(|o| o.account_id.as_str()).unwrap_or(&inbox.account_id);
     let reply = match api.set_no_scheduling(
-        &inbox.account_id,
+        account,
         json!({ "destroy": [jmap_id], "sendSchedulingMessages": false }),
     ) {
         Ok(r) => r,
@@ -1901,6 +2595,19 @@ mod tests {
         set_reply: Option<Value>,
         /// (method, account, args)
         calls: RefCell<Vec<(String, String, Value)>>,
+        // ── S4: other accounts (calendars shared to the inbox) ──
+        /// account → its calendars WITH shareWith.
+        shared: HashMap<String, Vec<Value>>,
+        /// The inbox account's groups.
+        groups: Vec<String>,
+        /// account → jmap id → stored event (overrides `events`).
+        acct_events: HashMap<String, HashMap<String, Value>>,
+        /// account → query ids (overrides `query_ids`).
+        acct_query: HashMap<String, Vec<String>>,
+        /// account → state (overrides `state`).
+        acct_state: HashMap<String, String>,
+        /// account → queued `changes` replies (overrides `changes`).
+        acct_changes: RefCell<HashMap<String, VecDeque<Result<Value, String>>>>,
     }
 
     impl Fake {
@@ -1926,20 +2633,39 @@ mod tests {
             self.record("CalendarEvent/query", account, args);
             match &self.query_err {
                 Some(e) => Err(e.clone()),
-                None => Ok(self.query_ids.clone()),
+                None => Ok(self
+                    .acct_query
+                    .get(account)
+                    .cloned()
+                    .unwrap_or_else(|| self.query_ids.clone())),
             }
         }
         fn get(&self, account: &str, ids: &[String], props: Option<&[&str]>) -> Result<Value, String> {
             self.record("CalendarEvent/get", account, json!({ "ids": ids, "properties": props }));
-            let list: Vec<Value> = ids.iter().filter_map(|i| self.events.get(i).cloned()).collect();
-            Ok(json!({ "list": list, "state": self.state }))
+            let store = self.acct_events.get(account).unwrap_or(&self.events);
+            let list: Vec<Value> = ids.iter().filter_map(|i| store.get(i).cloned()).collect();
+            let state = self.acct_state.get(account).unwrap_or(&self.state);
+            Ok(json!({ "list": list, "state": state }))
         }
         fn changes(&self, account: &str, since: &str) -> Result<Value, String> {
             self.record("CalendarEvent/changes", account, json!({ "sinceState": since }));
+            if let Some(q) = self.acct_changes.borrow_mut().get_mut(account) {
+                return q.pop_front().unwrap_or_else(|| {
+                    Ok(json!({ "newState": since, "created": [], "updated": [], "destroyed": [] }))
+                });
+            }
             self.changes
                 .borrow_mut()
                 .pop_front()
                 .unwrap_or_else(|| Ok(json!({ "newState": since, "created": [], "updated": [], "destroyed": [] })))
+        }
+        fn calendars_shared(&self, account: &str) -> Result<Vec<Value>, String> {
+            self.record("Calendar/get+shareWith", account, Value::Null);
+            Ok(self.shared.get(account).cloned().unwrap_or_default())
+        }
+        fn member_groups(&self, account: &str) -> Result<Vec<String>, String> {
+            self.record("x:Account/get memberGroupIds", account, Value::Null);
+            Ok(self.groups.clone())
         }
         fn set_no_scheduling(&self, account: &str, args: Value) -> Result<Value, String> {
             self.record("CalendarEvent/set", account, args);
@@ -1956,7 +2682,12 @@ mod tests {
     const OWNER: &str = "cal-owner@example.com";
 
     fn inbox() -> CalInbox {
-        CalInbox { address: OWNER.to_string(), account_id: "acct-1".to_string() }
+        CalInbox {
+            address: OWNER.to_string(),
+            account_id: "acct-1".to_string(),
+            level: Level::Send,
+            peers: Vec::new(),
+        }
     }
 
     /// `CliResponse` isn't `Debug`: unwrap with the status + body shown.
@@ -2159,7 +2890,9 @@ mod tests {
         let a1 = addr("one");
         seed_hosted(&p, &a1, "send", Some("acct-row-1"));
         let got = must(resolve_inbox(&p, None, Level::Read), "one owned");
-        assert_eq!(got, CalInbox { address: a1.clone(), account_id: "acct-row-1".into() });
+        assert_eq!((got.address.as_str(), got.account_id.as_str()), (a1.as_str(), "acct-row-1"));
+        assert_eq!(got.level, Level::Send, "the owner's primary level");
+        assert!(got.peers.iter().all(|p| p.account_id != "acct-row-1"), "peers exclude itself");
         // >1 owned → 400 usage naming both.
         let a2 = addr("two");
         seed_hosted(&p, &a2, "send", Some("acct-row-2"));
@@ -2246,8 +2979,9 @@ mod tests {
         let a = addr("ids");
         seed_hosted(&owner, &a, "send", Some("acct-ids"));
         let tok = encode_event_id(&a, "e1");
-        let (inbox, jid) = must(resolve_event(&owner, &tok, Level::Read), "own");
+        let (inbox, jid, shared_owner) = must(resolve_event(&owner, &tok, Level::Read), "own");
         assert_eq!((inbox.account_id.as_str(), jid.as_str()), ("acct-ids", "e1"));
+        assert!(shared_owner.is_none());
         let r = resolve_event(&other, &tok, Level::Read).expect_err("foreign");
         assert!(r.status.starts_with("404"));
         let hint = body_of(&r)["error"]["hint"].as_str().unwrap_or("").to_string();
@@ -2578,7 +3312,9 @@ mod tests {
         let b = body_of(&list_with(&fake, &inbox()));
         assert_eq!(b["calendars"][0], json!({
             "id": "c1", "name": "Main", "description": null, "color": "#0a0",
-            "isDefault": true, "timeZone": null
+            "isDefault": true, "timeZone": null,
+            "owner": OWNER, "shared": false,
+            "rights": { "freeBusy": true, "read": true, "write": true, "delete": true },
         }));
         assert_eq!(fake.calls_of("Calendar/get")[0].0, "acct-1");
     }
@@ -2823,5 +3559,408 @@ mod tests {
         assert!(non_owner_participants(None, OWNER).is_empty());
         assert!(has_email_alert(Some(&json!([{ "action": "EMAIL" }]))));
         assert!(!has_email_alert(Some(&json!({ "a": { "action": "display" } }))));
+    }
+
+    // ── S4: calendars shared TO the inbox ───────────────────────────────
+
+    const BOSS: &str = "boss@example.com";
+
+    fn peer(address: &str, account: &str) -> HostedAddr {
+        HostedAddr { address: address.to_string(), account_id: account.to_string() }
+    }
+
+    fn shared_inbox(level: Level) -> CalInbox {
+        CalInbox {
+            address: OWNER.to_string(),
+            account_id: "acct-1".to_string(),
+            level,
+            peers: vec![peer(BOSS, "acct-b"), peer("other@example.com", "acct-x")],
+        }
+    }
+
+    fn share(level: &str) -> Value {
+        crate::mail::calendar_share::ShareLevel::parse(level).expect("level").rights()
+    }
+
+    /// boss@ (acct-b) shares: c-r read to the inbox, c-w write to group
+    /// g-team (the inbox is a member), c-e editor to the inbox, c-fb
+    /// free/busy to the inbox; c-priv is not shared and c-other is shared
+    /// with someone else. other@ (acct-x) shares nothing with the inbox.
+    fn shared_fake() -> Fake {
+        let cal = |id: &str, name: &str, sw: Value| json!({ "id": id, "name": name, "shareWith": sw });
+        let mut f = Fake {
+            calendars: vec![json!({ "id": "own-1", "name": "Mine", "isDefault": true })],
+            groups: vec!["g-team".to_string()],
+            ..Default::default()
+        };
+        f.shared.insert(
+            "acct-b".to_string(),
+            vec![
+                cal("c-r", "Boss read", json!({ "acct-1": share("read") })),
+                cal("c-w", "Team", json!({ "g-team": share("write") })),
+                cal("c-e", "Boss editor", json!({ "acct-1": share("editor") })),
+                cal("c-fb", "Boss busy", json!({ "acct-1": share("freebusy") })),
+                cal("c-priv", "Private", Value::Null),
+                cal("c-other", "Someone else's", json!({ "acct-z": share("read") })),
+            ],
+        );
+        f.shared.insert(
+            "acct-x".to_string(),
+            vec![cal("x-1", "X", json!({ "acct-q": share("editor") }))],
+        );
+        f
+    }
+
+    fn boss_event(id: &str, cal: &str) -> Value {
+        let mut e = plain_event(id);
+        e["calendarIds"] = json!({ cal: true });
+        e
+    }
+
+    fn with_boss_events(f: &mut Fake, evs: &[(&str, &str)]) {
+        let m = evs.iter().map(|(i, c)| (i.to_string(), boss_event(i, c))).collect();
+        f.acct_events.insert("acct-b".to_string(), m);
+    }
+
+    #[test]
+    fn shared_event_tokens_round_trip_and_stay_apart_from_own_ids() {
+        let own = encode_event_id(OWNER, "e1");
+        assert_eq!(decode_event_ref(&own), Some((OWNER.into(), "e1".into(), None)));
+        let sh = encode_shared_event_id(OWNER, "e1", BOSS);
+        assert_eq!(decode_event_ref(&sh), Some((OWNER.into(), "e1".into(), Some(BOSS.into()))));
+        assert_eq!(decode_event_id(&sh), None, "an S3 decoder never mistakes a shared id");
+        let selfish = encode_shared_event_id(OWNER, "e1", OWNER);
+        assert_eq!(decode_event_ref(&selfish), Some((OWNER.into(), "e1".into(), None)));
+        let four = format!("ev_{}", B64URL.encode("a\nb\nc\nd"));
+        assert_eq!(decode_event_ref(&four), None);
+    }
+
+    #[test]
+    fn list_shows_own_and_shared_calendars_with_effective_rights() {
+        let f = shared_fake();
+        let b = body_of(&list_with(&f, &shared_inbox(Level::Send)));
+        let cals = b["calendars"].as_array().cloned().unwrap_or_default();
+        let ids: Vec<&str> = cals.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["own-1", "boss@example.com/c-r", "boss@example.com/c-w", "boss@example.com/c-e"],
+            "free/busy-only, private and other people's shares are not listed"
+        );
+        let rights = |id: &str| {
+            cals.iter().find(|c| c["id"] == id).map(|c| c["rights"].clone()).unwrap_or(Value::Null)
+        };
+        assert_eq!(rights("own-1"), json!({ "freeBusy": true, "read": true, "write": true, "delete": true }));
+        assert_eq!(
+            rights("boss@example.com/c-r"),
+            json!({ "freeBusy": true, "read": true, "write": false, "delete": false })
+        );
+        assert_eq!(
+            rights("boss@example.com/c-w"),
+            json!({ "freeBusy": true, "read": true, "write": true, "delete": false }),
+            "group-mediated write share"
+        );
+        assert_eq!(
+            rights("boss@example.com/c-e"),
+            json!({ "freeBusy": true, "read": true, "write": true, "delete": true })
+        );
+        let team = cals.iter().find(|c| c["id"] == "boss@example.com/c-w").cloned().unwrap_or_default();
+        assert_eq!(team["owner"], BOSS);
+        assert_eq!(team["shared"], true);
+        assert_eq!(team["name"], "Team");
+        assert_eq!(cals[0]["owner"], OWNER);
+        assert_eq!(cals[0]["shared"], false);
+
+        // A read grant caps every share (and the own calendars) at read.
+        let b = body_of(&list_with(&f, &shared_inbox(Level::Read)));
+        for c in b["calendars"].as_array().cloned().unwrap_or_default() {
+            assert_eq!(c["rights"]["write"], false, "{c}");
+            assert_eq!(c["rights"]["delete"], false, "{c}");
+        }
+        // Not in the group → the group share is gone.
+        let mut f = shared_fake();
+        f.groups.clear();
+        let b = body_of(&list_with(&f, &shared_inbox(Level::Send)));
+        assert!(!b.to_string().contains("c-w"), "{b}");
+        // No peers → S3 behaviour, no extra calls.
+        let f = shared_fake();
+        let _ = list_with(&f, &inbox());
+        assert!(f.calls_of("Calendar/get+shareWith").is_empty());
+        assert!(f.calls_of("x:Account/get memberGroupIds").is_empty());
+    }
+
+    #[test]
+    fn events_merge_own_and_readable_shared_calendars_only() {
+        let mut f = shared_fake();
+        f.query_ids = vec!["o1".to_string()];
+        f.events = HashMap::from([("o1".to_string(), plain_event("o1"))]);
+        f.acct_query.insert("acct-b".to_string(), vec!["b1".to_string()]);
+        with_boss_events(&mut f, &[("b1", "c-r")]);
+        let b = body_of(&events_with(&f, &shared_inbox(Level::Read), &params(&[]), now()));
+        let targets: Vec<(String, Value)> = f
+            .calls_of("CalendarEvent/query")
+            .into_iter()
+            .map(|(a, q)| (a, q["filter"]["inCalendar"].clone()))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                ("acct-1".to_string(), Value::Null),
+                ("acct-b".to_string(), json!("c-r")),
+                ("acct-b".to_string(), json!("c-w")),
+                ("acct-b".to_string(), json!("c-e")),
+            ],
+            "own account + each readable shared calendar; never c-fb, c-priv or acct-x"
+        );
+        let evs = b["events"].as_array().cloned().unwrap_or_default();
+        assert_eq!(evs.len(), 2, "own + one shared, deduplicated: {b}");
+        let sh = evs.iter().find(|e| e["shared"] == true).cloned().unwrap_or_default();
+        assert_eq!(sh["owner"], BOSS);
+        assert_eq!(sh["calendarIds"], json!(["boss@example.com/c-r"]));
+        assert_eq!(
+            decode_event_ref(sh["id"].as_str().unwrap_or("")),
+            Some((OWNER.to_string(), "b1".to_string(), Some(BOSS.to_string())))
+        );
+
+        // --calendar: a free/busy-only share is not visible; a shared one by name is.
+        let mut f = shared_fake();
+        f.acct_query.insert("acct-b".to_string(), Vec::new());
+        let r = events_with(
+            &f,
+            &shared_inbox(Level::Read),
+            &params(&[("calendar", "boss@example.com/c-fb")]),
+            now(),
+        );
+        assert_eq!(code_of(&r), "usage", "{}", r.body);
+        let r = events_with(&f, &shared_inbox(Level::Read), &params(&[("calendar", "Team")]), now());
+        assert!(r.status.starts_with("200"), "{}", r.body);
+        assert_eq!(body_of(&r)["calendar"], "boss@example.com/c-w");
+        let last = f.calls_of("CalendarEvent/query").pop().map(|(a, q)| (a, q["filter"]["inCalendar"].clone()));
+        assert_eq!(last, Some(("acct-b".to_string(), json!("c-w"))));
+    }
+
+    #[test]
+    fn show_of_a_shared_event_needs_a_readable_calendar() {
+        let mut f = shared_fake();
+        with_boss_events(&mut f, &[("b-r", "c-r"), ("b-priv", "c-priv"), ("b-fb", "c-fb")]);
+        let inbox = shared_inbox(Level::Read);
+        let boss = peer(BOSS, "acct-b");
+        let r = show_shared_with(&f, &inbox, &boss, "b-r", "ev_t");
+        assert!(r.status.starts_with("200"), "{}", r.body);
+        assert_eq!(body_of(&r)["event"]["owner"], BOSS);
+        for id in ["b-priv", "b-fb", "nope"] {
+            let r = show_shared_with(&f, &inbox, &boss, id, "ev_t");
+            assert!(r.status.starts_with("404"), "{id}: {}", r.body);
+        }
+        // Nothing shared from that owner: masked without reading its events.
+        let r = show_shared_with(&f, &inbox, &peer("other@example.com", "acct-x"), "x-ev", "ev_t");
+        assert!(r.status.starts_with("404"));
+        assert!(!f.calls_of("CalendarEvent/get").iter().any(|(a, _)| a == "acct-x"));
+    }
+
+    #[test]
+    fn shared_writes_need_the_share_right_and_the_draft_grant() {
+        let boss = peer(BOSS, "acct-b");
+        let body = write_body(json!({ "project": "x", "id": "ev_t", "title": "Moved" }));
+        // (calendar, grant level, update allowed, delete allowed)
+        for (cal, level, upd, del) in [
+            ("c-r", Level::Draft, false, false),
+            ("c-w", Level::Draft, true, false),
+            ("c-e", Level::Draft, true, true),
+            ("c-w", Level::Read, false, false),
+            ("c-e", Level::Read, false, false),
+        ] {
+            let inbox = shared_inbox(level);
+            let mut f = shared_fake();
+            with_boss_events(&mut f, &[("ev1", cal)]);
+            let r = update_at(&f, &inbox, Some(&boss), "ev1", "ev_t", &body);
+            if upd {
+                assert!(r.status.starts_with("200"), "update {cal} {level:?}: {}", r.body);
+                let sets = f.calls_of("CalendarEvent/set");
+                assert_eq!(sets.len(), 1);
+                assert_eq!(sets[0].0, "acct-b", "the write goes to the owner's account");
+                assert_eq!(sets[0].1["sendSchedulingMessages"], false);
+            } else {
+                assert_eq!(code_of(&r), "share_rights", "update {cal} {level:?}: {}", r.body);
+                assert_no_set(&f);
+            }
+            let mut f = shared_fake();
+            with_boss_events(&mut f, &[("ev1", cal)]);
+            let r = delete_at(&f, &inbox, Some(&boss), "ev1", "ev_t");
+            if del {
+                assert!(r.status.starts_with("200"), "delete {cal} {level:?}: {}", r.body);
+                let sets = f.calls_of("CalendarEvent/set");
+                assert_eq!(sets[0].0, "acct-b");
+                assert_eq!(sets[0].1["destroy"], json!(["ev1"]));
+            } else {
+                assert_eq!(code_of(&r), "share_rights", "delete {cal} {level:?}: {}", r.body);
+                assert_no_set(&f);
+            }
+        }
+        // Not on a calendar shared to the inbox: the masked 404.
+        let mut f = shared_fake();
+        with_boss_events(&mut f, &[("ev1", "c-priv")]);
+        let r = update_at(&f, &shared_inbox(Level::Send), Some(&boss), "ev1", "ev_t", &body);
+        assert!(r.status.starts_with("404"), "{}", r.body);
+        assert_no_set(&f);
+        // A participant other than the calendar's owner still needs send.
+        let mut f = shared_fake();
+        let mut ev = boss_event("ev1", "c-e");
+        ev["participants"] = json!({ "p": { "calendarAddress": "mailto:guest@example.org" } });
+        f.acct_events.insert("acct-b".to_string(), HashMap::from([("ev1".to_string(), ev)]));
+        let r = delete_at(&f, &shared_inbox(Level::Send), Some(&boss), "ev1", "ev_t");
+        assert_eq!(code_of(&r), "invites_need_send_level", "{}", r.body);
+        assert_no_set(&f);
+    }
+
+    #[test]
+    fn create_on_a_shared_calendar_lands_on_the_owners_account() {
+        let f = Fake {
+            set_reply: Some(json!({ "created": { "k2new": { "id": "new1" } } })),
+            ..shared_fake()
+        };
+        let r = create_with(&f, &shared_inbox(Level::Draft), &create_body(json!({ "calendar": "Team" })));
+        assert!(r.status.starts_with("200"), "{}", r.body);
+        let sets = f.calls_of("CalendarEvent/set");
+        assert_eq!(sets[0].0, "acct-b");
+        assert_eq!(sets[0].1["create"]["k2new"]["calendarIds"], json!({ "c-w": true }));
+        assert_eq!(sets[0].1["sendSchedulingMessages"], false);
+        let b = body_of(&r);
+        assert_eq!(b["calendarId"], "boss@example.com/c-w");
+        assert_eq!(b["owner"], BOSS);
+        assert_eq!(
+            decode_event_ref(b["id"].as_str().unwrap_or("")),
+            Some((OWNER.to_string(), "new1".to_string(), Some(BOSS.to_string())))
+        );
+        // A read-only share refuses before any write.
+        let f = shared_fake();
+        let r = create_with(
+            &f,
+            &shared_inbox(Level::Draft),
+            &create_body(json!({ "calendar": "boss@example.com/c-r" })),
+        );
+        assert_eq!(code_of(&r), "share_rights", "{}", r.body);
+        assert_no_set(&f);
+        // On someone else's calendar, even the inbox itself is an invitee.
+        let f = shared_fake();
+        let r = create_with(
+            &f,
+            &shared_inbox(Level::Draft),
+            &create_body(json!({ "calendar": "Team", "participants": [OWNER] })),
+        );
+        assert_eq!(code_of(&r), "invites_need_send_level", "{}", r.body);
+        assert_no_set(&f);
+    }
+
+    #[test]
+    fn freebusy_unions_own_and_every_calendar_shared_with_free_busy() {
+        let mut f = shared_fake();
+        f.availability = Some(Ok(vec![json!({
+            "utcStart": "2026-10-08T09:00:00Z", "utcEnd": "2026-10-08T10:00:00Z", "busyStatus": "confirmed"
+        })]));
+        f.acct_query.insert("acct-b".to_string(), vec!["fb1".to_string()]);
+        let mut ev = boss_event("fb1", "c-fb");
+        ev["utcStart"] = json!("2026-10-08T14:00:00Z");
+        ev["utcEnd"] = json!("2026-10-08T15:00:00Z");
+        ev["title"] = json!("Secret board meeting");
+        f.acct_events.insert("acct-b".to_string(), HashMap::from([("fb1".to_string(), ev)]));
+        let p = params(&[("start", "2026-10-08"), ("end", "2026-10-09")]);
+        let b = body_of(&freebusy_with(&f, &shared_inbox(Level::Read), &p, now()));
+        assert_eq!(b["source"], "availability+shared");
+        assert_eq!(b["sharedCalendars"], 4, "c-r, c-w, c-e and c-fb all allow free/busy");
+        assert_eq!(b["busy"], json!([
+            { "start": "2026-10-08T09:00:00Z", "end": "2026-10-08T10:00:00Z", "status": "busy" },
+            { "start": "2026-10-08T14:00:00Z", "end": "2026-10-08T15:00:00Z", "status": "busy" },
+        ]));
+        assert!(!b.to_string().contains("Secret"), "titles never leave freebusy");
+        let shared_q: Vec<Value> = f
+            .calls_of("CalendarEvent/query")
+            .into_iter()
+            .filter(|(a, _)| a == "acct-b")
+            .map(|(_, q)| q["filter"]["inCalendar"].clone())
+            .collect();
+        assert!(shared_q.contains(&json!("c-fb")), "{shared_q:?}");
+        assert!(!shared_q.contains(&json!("c-priv")) && !shared_q.contains(&json!("c-other")));
+    }
+
+    #[test]
+    fn wait_watches_shared_owners_and_filters_to_visible_calendars() {
+        let mut f = shared_fake();
+        f.state = "own0".to_string();
+        f.acct_state.insert("acct-b".to_string(), "b0".to_string());
+        with_boss_events(&mut f, &[("e-vis", "c-r"), ("e-priv", "c-priv")]);
+        f.acct_changes.borrow_mut().insert(
+            "acct-b".to_string(),
+            VecDeque::from([Ok(json!({
+                "newState": "b1", "created": ["e-vis", "e-priv"], "updated": [], "destroyed": ["gone"]
+            }))]),
+        );
+        let mut elapsed = || 0u64;
+        let mut sleep = |_d: std::time::Duration| {};
+        let b = body_of(&wait_with(&f, &shared_inbox(Level::Read), None, 30, &mut elapsed, &mut sleep));
+        assert_eq!(b["timedOut"], false, "{b}");
+        assert_eq!(
+            b["created"],
+            json!([encode_shared_event_id(OWNER, "e-vis", BOSS)]),
+            "an event on an unshared calendar never surfaces"
+        );
+        assert_eq!(b["destroyed"], json!([encode_shared_event_id(OWNER, "gone", BOSS)]));
+        let state = b["state"].as_str().unwrap_or("").to_string();
+        let m = decode_states(&state).expect("composite state");
+        assert_eq!(m.get("acct-1").map(String::as_str), Some("own0"));
+        assert_eq!(m.get("acct-b").map(String::as_str), Some("b1"));
+
+        // The next call resumes each account from that state (no re-read).
+        let f2 = shared_fake();
+        let clock = std::cell::Cell::new(0u64);
+        let mut elapsed = || clock.get();
+        let mut sleep = |d: std::time::Duration| clock.set(clock.get() + d.as_secs());
+        let b = body_of(&wait_with(&f2, &shared_inbox(Level::Read), Some(&state), 3, &mut elapsed, &mut sleep));
+        assert_eq!(b["timedOut"], true, "{b}");
+        let since: Vec<(String, Value)> = f2
+            .calls_of("CalendarEvent/changes")
+            .into_iter()
+            .map(|(a, v)| (a, v["sinceState"].clone()))
+            .take(2)
+            .collect();
+        assert_eq!(since, vec![("acct-1".to_string(), json!("own0")), ("acct-b".to_string(), json!("b1"))]);
+        assert!(f2.calls_of("CalendarEvent/get").is_empty(), "no state re-read");
+
+        // A composite state on an inbox with nothing shared falls back to its own part.
+        let f3 = Fake::default();
+        let mut elapsed = || 99u64;
+        let mut sleep = |_d: std::time::Duration| {};
+        let b = body_of(&wait_with(&f3, &inbox(), Some(&state), 3, &mut elapsed, &mut sleep));
+        assert_eq!(b["state"], "own0");
+        assert_eq!(f3.calls_of("CalendarEvent/changes")[0].1["sinceState"], "own0");
+        // A broken composite token is a usage error.
+        let r = wait_with(&f3, &inbox(), Some("k2s_!!"), 3, &mut elapsed, &mut sleep);
+        assert_eq!(code_of(&r), "usage");
+    }
+
+    #[test]
+    fn shared_event_ids_resolve_the_owner_from_k2_rows_never_the_client() {
+        let (p, _) = insert_project("sh-ev");
+        let (q, _) = insert_project("sh-own");
+        let (other, _) = insert_project("sh-oth");
+        let me = addr("me");
+        let boss = addr("boss");
+        seed_hosted(&p, &me, "send", Some("acct-me-x"));
+        seed_hosted(&q, &boss, "send", Some("acct-boss-x"));
+        let tok = encode_shared_event_id(&me, "e1", &boss);
+        let (inbox, jid, owner) = must(resolve_event(&p, &tok, Level::Read), "shared");
+        assert_eq!((inbox.account_id.as_str(), jid.as_str()), ("acct-me-x", "e1"));
+        assert_eq!(
+            owner.map(|o| o.account_id),
+            Some("acct-boss-x".to_string()),
+            "the owner's account comes from its address row"
+        );
+        // An owner that isn't an active hosted mailbox: masked.
+        let tok2 = encode_shared_event_id(&me, "e1", "stranger@example.org");
+        assert!(resolve_event(&p, &tok2, Level::Read).expect_err("unknown owner").status.starts_with("404"));
+        // Another workspace's inbox as the viewer: masked like S3.
+        assert!(resolve_event(&other, &tok, Level::Read).expect_err("foreign").status.starts_with("404"));
+        // Write bodies never carry an account.
+        assert!(serde_json::from_value::<WriteBody>(json!({ "project": "x", "accountId": "acct-boss-x" })).is_err());
+        cleanup(&[&p, &q, &other]);
     }
 }

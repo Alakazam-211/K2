@@ -18033,7 +18033,9 @@ AGENT SURFACE
                    read/draft mail grants now also cover calendars:
                    read = list/events/show/freebusy/wait; draft =
                    create/update/delete WITHOUT email (participant
-                   events and email alarms need send: exit 3).
+                   events and email alarms need send: exit 3). Also the
+                   calendars shared TO that inbox, limited by the share
+                   (read/write/editor/free-busy) and your level.
 
 OWNER VERBS — EXIT 3 (leftover M6)
   uninstall, domain remove, oauth/link admin, mail-manage toggle,
@@ -33228,7 +33230,8 @@ def dumps(obj):
 # 3 = needs your human: owner-only, calendars turned off by the owner,
 # or an action that needs the 'send' level (invites, email alarms).
 NEEDS_HUMAN = ("gated", "forbidden", "owner_only", "calendars_disabled",
-               "invites_need_send_level", "email_alerts_need_send_level")
+               "invites_need_send_level", "email_alerts_need_send_level",
+               "share_rights")
 
 def die(err, exit_code=None):
     if isinstance(err, str):
@@ -33298,6 +33301,8 @@ def when(e):
 
 def print_event_line(e):
     extras = ""
+    if e.get("shared"):
+        extras += " · shared by %s" % e.get("owner")
     if e.get("recurring"):
         extras += " · repeats"
     if e.get("participants"):
@@ -33336,8 +33341,12 @@ if verb == "list":
         if not cals:
             print("No calendars on %s." % d.get("address", "?"))
         for c in cals:
-            print("%s · %s%s" % (c.get("id", ""), c.get("name") or "(unnamed)",
-                  " · default" if c.get("isDefault") else ""))
+            r = c.get("rights") or {}
+            can = [k for k in ("read", "write", "delete") if r.get(k)]
+            print("%s · %s%s%s · %s" % (c.get("id", ""), c.get("name") or "(unnamed)",
+                  " · default" if c.get("isDefault") else "",
+                  (" · shared by %s" % c.get("owner")) if c.get("shared") else "",
+                  "/".join(can) or "free/busy"))
 
 elif verb == "events":
     params = scoped({"start": env("C_FROM"), "end": env("C_TO"),
@@ -33552,6 +33561,18 @@ and draft mail grants now also cover that inbox's calendars:
          so draft-level create/update/delete of such an event exits 3.
 Linked (your human's own IMAP) inboxes have no calendar here (hosted_only).
 
+SHARED CALENDARS
+  A grant on an inbox also covers every calendar SHARED to that inbox (by
+  `k2 hostmail calendar share`, directly or through a group): you see what
+  the person sees. Rights = the share AND your grant level:
+    read share         list · events · show · freebusy · wait
+    write share        + create/update events (needs draft)
+    editor share       + delete events (needs draft)
+    free/busy share    freebusy only (not listed)
+  `list` shows each calendar's owner and rights; a shared calendar's id is
+  <owner>/<id> (use it, or its name, with --calendar). Event ids carry the
+  calendar's owner. Without the right: exit 3 (share_rights).
+
 USAGE
   k2 calendar list     [<address>]
   k2 calendar events   [<address>] [--from <t>] [--to <t>] [--calendar <id|name>] [--limit N]
@@ -33577,8 +33598,8 @@ TIMES
   --tz sets the event's time zone (default: Etc/UTC).
 
 WAIT
-  Long-polls until an event changes (created/updated/destroyed), then prints
-  the ids and the new state. Pass --since-state <state> on the next call so
+  Long-polls until an event changes (created/updated/destroyed) on the
+  inbox's own or shared calendars, then prints the ids and the new state. Pass --since-state <state> on the next call so
   no change is missed. One call waits max 900 s (default 300): on timeout
   nothing is printed on stdout, the stderr hint carries the state, exit 2 —
   loop the call.

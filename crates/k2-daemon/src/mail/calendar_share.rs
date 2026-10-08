@@ -165,6 +165,41 @@ pub fn level_of(v: &Value) -> &'static str {
     "custom"
 }
 
+/// What a share lets its grantee do, as the agent view reads it
+/// (commit 2 uses this): read = mayReadItems, freeBusy = mayReadFreeBusy
+/// or mayReadItems, write = mayWriteAll, delete = mayDelete (IT10).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShareRights {
+    pub free_busy: bool,
+    pub read: bool,
+    pub write: bool,
+    pub delete: bool,
+}
+
+impl ShareRights {
+    pub fn from_json(v: &Value) -> Self {
+        let t = true_rights(Some(v));
+        let read = t.contains("mayReadItems");
+        Self {
+            free_busy: read || t.contains("mayReadFreeBusy"),
+            read,
+            write: t.contains("mayWriteAll"),
+            delete: t.contains("mayDelete"),
+        }
+    }
+    pub fn union(self, o: Self) -> Self {
+        Self {
+            free_busy: self.free_busy || o.free_busy,
+            read: self.read || o.read,
+            write: self.write || o.write,
+            delete: self.delete || o.delete,
+        }
+    }
+    pub fn any(self) -> bool {
+        self.free_busy || self.read || self.write || self.delete
+    }
+}
+
 // ── Directory (Stalwart accounts) ───────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1854,6 +1889,18 @@ mod tests {
                              "mayWriteOwn": false, "mayUpdatePrivate": false, "mayRSVP": false,
                              "mayShare": false, "mayDelete": false });
         assert_eq!(level_of(&stored), "read");
+        assert_eq!(
+            ShareRights::from_json(&stored),
+            ShareRights { free_busy: true, read: true, write: false, delete: false }
+        );
+        assert_eq!(
+            ShareRights::from_json(&ShareLevel::FreeBusy.rights()),
+            ShareRights { free_busy: true, read: false, write: false, delete: false }
+        );
+        assert_eq!(
+            ShareRights::from_json(&ShareLevel::Editor.rights()),
+            ShareRights { free_busy: true, read: true, write: true, delete: true }
+        );
     }
 
     #[test]

@@ -2389,6 +2389,21 @@ impl StalwartClient {
             .ok_or_else(|| "x:Account/get: reply has no list".to_string())
     }
 
+    /// One account's `memberGroupIds` (a set object `{"<groupId>": true}`)
+    /// as a list of group ids.
+    pub(crate) fn account_member_groups(&self, account_id: &str) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({ "ids": [account_id], "properties": ["memberGroupIds"] }),
+        )?;
+        let row = resp
+            .get("list")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.iter().find(|r| r.get("id").and_then(|v| v.as_str()) == Some(account_id)))
+            .ok_or_else(|| format!("x:Account/get: account '{account_id}' not in the reply list"))?;
+        Ok(set_object_keys(row.get("memberGroupIds")))
+    }
+
     /// `x:Account/set` create `{"@type":"Group","name","domainId"}`
     /// (0.16 `GroupAccount`, `registry/schema/structs.rs:2964`), with
     /// optional `permissions` (Merge — e.g. `emailReceive` off).

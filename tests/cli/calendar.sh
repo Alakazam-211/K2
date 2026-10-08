@@ -28,7 +28,8 @@ help="$("$K2" calendar --help)"
 for want in 'k2 calendar list' 'events' 'freebusy' 'wait' 'create' 'update' 'delete' \
             'existing read' 'draft mail grants now also cover' 'NEVER any email' \
             "'send' level" 'hosted_only' 'k2 hostmail calendar enable' \
-            '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES'; do
+            '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES' 'SHARED CALENDARS' \
+            '<owner>/<id>' 'share_rights' 'editor share'; do
   printf '%s' "$help" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
 [ "$("$K2" cal --help)" = "$help" ] || fail "k2 cal --help must equal k2 calendar --help"
@@ -213,12 +214,18 @@ grep -q '"code":"timeout"' "$WORK/err" || fail "wait timeout code: $(cat "$WORK/
 grep -q 'since-state s9' "$WORK/err" || fail "wait timeout hint must carry the state"
 
 # Needs-your-human codes exit 3; hosted_only exits 2; engine errors exit 1.
-for code in invites_need_send_level calendars_disabled email_alerts_need_send_level owner_only; do
+for code in invites_need_send_level calendars_disabled email_alerts_need_send_level owner_only share_rights; do
   set_reply /cli/mail/calendar/delete 409 "{\"ok\":false,\"error\":{\"code\":\"$code\",\"hint\":\"h\"}}"
   set +e; k2 calendar delete ev_abc >/dev/null 2>"$WORK/err"; rc=$?; set -e
   [ "$rc" -eq 3 ] || fail "$code must exit 3, got $rc"
   grep -q "\"code\":\"$code\"" "$WORK/err" || fail "$code must be JSON on stderr"
 done
+# S4: a calendar shared to the inbox shows its owner and rights.
+set_reply /cli/mail/calendar/list 200 '{"ok":true,"address":"ops@example.com","calendars":[{"id":"c1","name":"Main","isDefault":true,"owner":"ops@example.com","shared":false,"rights":{"freeBusy":true,"read":true,"write":true,"delete":true}},{"id":"boss@example.com/c9","name":"Team","isDefault":false,"owner":"boss@example.com","shared":true,"rights":{"freeBusy":true,"read":true,"write":true,"delete":false}}]}'
+out="$(k2 calendar list)"
+printf '%s' "$out" | grep -q '^c1 · Main · default · read/write/delete$' || fail "own list row: $out"
+printf '%s' "$out" | grep -q '^boss@example.com/c9 · Team · shared by boss@example.com · read/write$' \
+  || fail "shared list row: $out"
 set_reply /cli/mail/calendar/list 400 '{"ok":false,"error":{"code":"hosted_only","hint":"linked"}}'
 set +e; k2 calendar list me@example.com >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" -eq 2 ] || fail "hosted_only must exit 2, got $rc"

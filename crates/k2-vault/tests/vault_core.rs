@@ -641,11 +641,99 @@ fn placeholders_resolve_by_hash_and_die_with_the_session() {
     let ks = Arc::new(FakeKeyStore::new());
     let v = open(&t, &ks);
     let o = put_user(&v, Scope::workspace("ws1"), "A", SENTINEL, &["api.anthropic.com"], &Actor::Owner);
-    let tok = v.placeholder_mint(&o.meta.id, "sess-1", "anthropic", None).expect("mint");
-    assert_eq!(v.placeholder_lookup(&tok).expect("lookup"), (o.meta.id.clone(), "sess-1".into(), "anthropic".into()));
+    let tok = v.placeholder_mint(&o.meta.id, "ws1", "sess-1", "anthropic", None).expect("mint");
+    assert_eq!(
+        v.placeholder_lookup(&tok).expect("lookup"),
+        k2_vault::Placeholder {
+            secret_id: o.meta.id.clone(),
+            workspace_id: "ws1".into(),
+            session_id: "sess-1".into(),
+            provider: "anthropic".into(),
+        }
+    );
     assert!(!contains(&file_bytes(&t), tok.as_bytes()), "only the hash is stored");
     v.placeholders_drop_session("sess-1").expect("drop");
     assert_eq!(v.placeholder_lookup(&tok).err().expect("gone").code, "placeholder_unknown");
+}
+
+#[test]
+fn proxy_items_list_only_proxy_deliveries_for_that_session() {
+    let t = TestDir::new("proxy-items");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let put = |name: &str, d: Delivery| {
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), name, Kind::ApiKey);
+        r.hosts = vec!["api.anthropic.com".into()];
+        r.default_delivery = Some(d);
+        v.put(r, SecretBytes::from_slice(format!("{SENTINEL}-{name}").as_bytes()), &Actor::Owner).expect("put")
+    };
+    put("ON_PROXY", Delivery::Proxy);
+    put("ON_FETCH", Delivery::Fetch);
+    put("ON_ENV", Delivery::Env);
+    let items = v.proxy_items(&session("ws1")).expect("items");
+    assert_eq!(items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), vec!["ON_PROXY"]);
+    assert_eq!(items[0].hosts, vec!["https://api.anthropic.com:443".to_string()]);
+    assert!(v.proxy_items(&session("ws2")).expect("items").is_empty(), "another workspace gets nothing");
+
+    // A server secret reaches a session only through a grant.
+    let mut r = PutRequest::new(Namespace::User, Scope::server(), "SERVER_KEY", Kind::ApiKey);
+    r.hosts = vec!["api.openai.com".into()];
+    r.default_delivery = Some(Delivery::Proxy);
+    let o = v.put(r, SecretBytes::from_slice(b"k2test-server-value-123"), &Actor::Owner).expect("put");
+    let who = Requester::Session { workspace_id: "ws2".into(), session_id: Some("sess-9".into()) };
+    assert!(v.proxy_items(&who).expect("items").is_empty());
+    v.grant(
+        GrantRequest {
+            selector: Selector::Id(o.meta.id.clone()),
+            consumer: Consumer::session("sess-9"),
+            delivery: Delivery::Proxy,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        &Actor::System("llm-wallet".into()),
+    )
+    .expect("grant");
+    assert_eq!(v.proxy_items(&who).expect("items").iter().map(|i| i.name.clone()).collect::<Vec<_>>(), vec!["SERVER_KEY"]);
+    v.resolve(&Selector::Id(o.meta.id.clone()), Use::Proxy(&origin("https://api.openai.com/v1")), &who)
+        .expect("granted session resolves on the proxy");
+
+    // Session end drops the grant K2 made; an owner's grant stays.
+    v.grant(
+        GrantRequest {
+            selector: Selector::Id(o.meta.id.clone()),
+            consumer: Consumer::session("sess-owner"),
+            delivery: Delivery::Proxy,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        &Actor::Owner,
+    )
+    .expect("owner grant");
+    let tok = v.placeholder_mint(&o.meta.id, "ws2", "sess-9", "openai", None).expect("mint");
+    v.placeholders_drop_session("sess-9").expect("drop");
+    assert_eq!(v.placeholder_lookup(&tok).expect_err("gone").code, "placeholder_unknown");
+    let e = v
+        .resolve(&Selector::Id(o.meta.id.clone()), Use::Proxy(&origin("https://api.openai.com/v1")), &who)
+        .err()
+        .expect("grant gone with the session");
+    assert_eq!(e.code, "not_granted");
+    let left = v.grants(&Selector::Id(o.meta.id.clone()), &Actor::Owner).expect("grants");
+    assert_eq!(left.iter().map(|g| g.consumer.id.as_str()).collect::<Vec<_>>(), vec!["sess-owner"]);
+
+    // Boot sweep: every placeholder goes.
+    let a = v.placeholder_mint(&o.meta.id, "ws2", "sess-a", "openai", None).expect("mint");
+    let b = v.placeholder_mint(&o.meta.id, "ws3", "sess-b", "openai", None).expect("mint");
+    v.placeholders_drop_all().expect("drop all");
+    for tok in [a, b] {
+        assert_eq!(v.placeholder_lookup(&tok).expect_err("gone").code, "placeholder_unknown");
+    }
+    assert!(v.placeholder_mint(&o.meta.id, "", "sess-c", "openai", None).is_err(), "workspace required");
 }
 
 #[test]

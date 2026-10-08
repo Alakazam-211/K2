@@ -575,6 +575,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",
+        // `k2 workspace swap-canonical`: the handler classifies the
+        // passport like the sidecar routes. An agent may swap only its
+        // own workspace's pinned chat, stamped as itself (not the owner);
+        // a shell tab passport is a human and may swap any workspace.
+        "/cli/workspace/swap-canonical",
         // Skin roster GET + manage mutations (`k2 skin` / `k2 skin-token`).
         // Exact paths only — never prefix `/cli/skin/` (front-door / hydra
         // stay owner even when the Agent-tab toggle is ON). POST mutate is
@@ -1705,6 +1710,8 @@ mod tests {
         // #58 Phase-1 close: publish is the +1 allowlist delta; subscribe
         // (read-only WS) and resolve are NOT widened onto the scoped token.
         assert!(is_agent_verb("/cli/awareness/publish"));
+        // The swap handler scopes an agent passport to its own workspace.
+        assert!(is_agent_verb("/cli/workspace/swap-canonical"));
         // C2: workspace-addressed terminal read is peer-gated agent verb.
         assert!(
             is_agent_verb("/cli/terminal/read"),

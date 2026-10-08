@@ -61,7 +61,7 @@ pub struct AgentCaller {
 }
 
 impl Caller {
-    fn audit_user(&self) -> String {
+    pub(crate) fn audit_user(&self) -> String {
         match self {
             Caller::Owner => "owner".to_string(),
             Caller::Login { username } => format!("login:{username}"),

@@ -4608,13 +4608,21 @@ cmd_workspace_swap_canonical() {
         recent|full) ;;
         *) echo "mode must be recent or full" >&2; exit 2 ;;
     esac
-    local notes=""
     if [[ -n "$notes_file" ]]; then
         if [[ ! -f "$notes_file" ]]; then
             echo "Error: file not found: $notes_file" >&2
             exit 1
         fi
-        notes=$(cat "$notes_file")
+    fi
+    # Inside a K2 terminal the daemon must see this session's passport,
+    # never the owner token: an agent may swap only its own workspace's
+    # pinned chat, and its handoff is stamped as from that agent.
+    local auth_token="$TOKEN"
+    if [ -n "$(_hook_sock)" ] && ! _cli_skip_uds; then
+        if [ -z "${SCOPED_TOKEN:-}" ]; then
+            _cli_require_session_passport "workspace swap-canonical"
+        fi
+        auth_token="$SCOPED_TOKEN"
     fi
     local resolved_path
     resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
@@ -4626,21 +4634,26 @@ except Exception:
     if [ -z "$resolved_path" ]; then
         resolved_path="$target"
     fi
-    local body
-    body=$(SWAP_PROJECT="$resolved_path" SWAP_PROVIDER="$agent" SWAP_MODE="$mode" SWAP_NOTES="$notes" python3 -c '
+    # The notes file is read by python and the body goes to curl on stdin,
+    # so a long file never hits the per-argument / environment size limit.
+    local out rc=0
+    out=$(SWAP_PROJECT="$resolved_path" SWAP_PROVIDER="$agent" SWAP_MODE="$mode" SWAP_NOTES_FILE="$notes_file" python3 -c '
 import json, os
+notes = ""
+path = os.environ.get("SWAP_NOTES_FILE", "")
+if path:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        notes = f.read()
 print(json.dumps({
     "project": os.environ.get("SWAP_PROJECT", ""),
     "provider": os.environ.get("SWAP_PROVIDER", ""),
     "mode": os.environ.get("SWAP_MODE", "recent"),
-    "notes": os.environ.get("SWAP_NOTES", ""),
+    "notes": notes,
 }))
-')
-    local out rc=0
-    out=$(curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=${TOKEN}" \
+' | curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
         --connect-timeout 5 --max-time 120 \
         -H "Content-Type: application/json" \
-        --data-raw "$body" 2>/dev/null) || rc=$?
+        --data-binary @- 2>/dev/null) || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         echo "Error: could not reach the daemon" >&2
         exit 1

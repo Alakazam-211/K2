@@ -2084,38 +2084,60 @@ async fn handle_one_request(
         }
         // POST /cli/workspace/swap-canonical — replace the pinned chat
         // with a never-chatted session of another harness and send the
-        // transcript handoff into it. Owner/member token only. Skin
-        // guests cannot kill the canonical PTY. Body:
+        // transcript handoff into it. Body:
         // {project, provider, mode?, notes?}.
+        //
+        // Auth (classified like `k2 sidecar`): owner token, a Connect
+        // login (role floor Member in route_policy), or a K2 session
+        // passport. An agent passport may swap only its own workspace,
+        // and its handoff is stamped as from that agent. App passes, API
+        // keys, and API cells are refused (skin guests cannot kill the
+        // canonical PTY).
         "/cli/workspace/swap-canonical" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                "/cli/workspace/swap-canonical",
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if matches!(
+                caller,
+                crate::sidecar_routes::Caller::WrongCredential
+                    | crate::sidecar_routes::Caller::Invalid
+            ) {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"swap-canonical is not allowed for skin guests"}"#,
-                )
-                .await;
+                let r = crate::pinned_chat::handle_swap_canonical(&[], &caller, ingress.as_str());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Notes are capped at 32,000 characters downstream; 256 KiB
+            // covers that in any UTF-8 plus the JSON around it.
+            let body_bytes = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                crate::pinned_chat::SWAP_CANONICAL_MAX_BODY,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(_) => {
+                    super::http::send_response(
+                        &mut *stream,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"error":{"code":"body_too_large","hint":"swap-canonical bodies are at most 256 KiB"},"swapped":false}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let ingress_label = ingress.as_str().to_string();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::pinned_chat::handle_swap_canonical(&body_bytes)
+                crate::pinned_chat::handle_swap_canonical(&body_bytes, &caller, &ingress_label)
             })
             .await
             .unwrap_or_else(|e| {

@@ -22,6 +22,7 @@ const USAGE: &str = "k2-node — K2 compute node runtime
   k2-node policy show [--config-dir DIR] [--home DIR]
   k2-node policy set key=value... [--config-dir DIR] [--home DIR]
   k2-node install-files --os linux|macos --binary PATH --home DIR --config-dir DIR --user NAME --group NAME --out DIR
+  k2-node check-home <dir>        (installer: refuse a home that runs K2)
   k2-node version
 
 Agents never run this: they use `k2 compute` on their K2 server.";
@@ -93,13 +94,7 @@ fn passwd_home() -> Option<PathBuf> {
 
 /// CN25: never run as a user who runs K2 itself.
 fn k2_files_in_home() -> Vec<String> {
-    let Some(h) = passwd_home() else { return vec![] };
-    ["daemon.port", "daemon.token", "heartbeat.port", "heartbeat.token"]
-        .iter()
-        .map(|f| h.join(".k2").join(f))
-        .filter(|p| p.exists())
-        .map(|p| p.display().to_string())
-        .collect()
+    passwd_home().map(|h| k2_node::paths::k2_files_in(&h)).unwrap_or_default()
 }
 
 fn who(a: &Args) -> String {
@@ -248,6 +243,17 @@ fn cmd_policy(a: &Args) -> Result<(), String> {
     }
 }
 
+/// Installer helper: exit 1 when `<dir>/.k2` holds K2 daemon files (CN25).
+fn cmd_check_home(a: &Args) -> Result<(), String> {
+    let dir = a.positional.get(1).ok_or("check-home <home dir>")?;
+    let found = k2_node::paths::k2_files_in(std::path::Path::new(dir));
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{dir} belongs to a user who runs K2 ({}); a compute node needs its own user", found.join(", ")))
+    }
+}
+
 fn cmd_install_files(a: &Args) -> Result<(), String> {
     let p = k2_node::install::InstallParams {
         binary: a.need("binary")?,
@@ -286,6 +292,7 @@ async fn main() -> ExitCode {
         Some("resume") => cmd_control(&a, Control::Active),
         Some("policy") => cmd_policy(&a),
         Some("install-files") => cmd_install_files(&a),
+        Some("check-home") => cmd_check_home(&a),
         Some("version") => {
             println!("k2-node {NODE_VERSION} (protocol {})", k2_node_proto::PROTOCOL);
             Ok(())

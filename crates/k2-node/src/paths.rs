@@ -91,6 +91,20 @@ impl Layout {
     }
 }
 
+/// The K2 daemon files that mark a user who runs K2 itself (CN25). A
+/// compute node must never run as (or be installed for) such a user.
+pub const PROD_FILES: &[&str] = &["daemon.port", "daemon.token", "heartbeat.port", "heartbeat.token"];
+
+/// Which of [`PROD_FILES`] exist under `<home>/.k2`.
+pub fn k2_files_in(home: &Path) -> Vec<String> {
+    PROD_FILES
+        .iter()
+        .map(|f| home.join(".k2").join(f))
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .collect()
+}
+
 /// Validate a job's relative working directory: relative, no `..`, no NUL.
 pub fn safe_relative(p: &str) -> Option<PathBuf> {
     let path = Path::new(p);
@@ -118,6 +132,15 @@ mod tests {
         assert!(safe_relative("a/../../b").is_none());
         assert!(safe_relative("/etc").is_none());
         assert!(safe_relative("").is_none());
+    }
+
+    #[test]
+    fn k2_files_found_under_dot_k2() {
+        let d = crate::util::temp_dir("prodfiles");
+        assert!(k2_files_in(&d).is_empty());
+        std::fs::create_dir_all(d.join(".k2")).unwrap();
+        std::fs::write(d.join(".k2/heartbeat.token"), "x").unwrap();
+        assert_eq!(k2_files_in(&d), vec![d.join(".k2/heartbeat.token").display().to_string()]);
     }
 
     #[test]

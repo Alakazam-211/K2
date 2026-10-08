@@ -583,6 +583,120 @@ pub fn roster_entry_matches(want: &str, handle: &str, aliases: &[String], worksp
     !workspace_name.trim().is_empty() && want_n == normalize_address_token(workspace_name)
 }
 
+// ── One loose federated-name matcher (CA2) ─────────────────────────────
+//
+// Three folds of a typed agent name are live today: the `cli/k2` roster
+// lookup (`norm`: Unicode letters kept, `.` dropped), the daemon tray
+// resolver (non-alphanumeric runs → `-`, so `.` → `-`), and
+// `normalize_address_token` (ASCII address token). A sender that resolved
+// a name with any of them puts the name as typed into the signed `to`.
+// The receiver must accept it whenever ANY fold of the typed name equals
+// ANY fold of one of the workspace's own names, so no message an older
+// sender addressed correctly is refused.
+
+/// The daemon tray resolver's fold: trim, ASCII-lowercase, `_` → `-`, each
+/// run of non-ASCII-alphanumerics → one `-`, outer `-` trimmed.
+pub fn dash_fold_name(s: &str) -> String {
+    let t = s.trim().to_ascii_lowercase().replace('_', "-");
+    let mut out = String::new();
+    let mut dash = false;
+    for c in t.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// The `cli/k2` remote-msg roster fold (`slugify` + `norm` in the embedded
+/// Python): raw lowercase when the name has a path/control character;
+/// otherwise whitespace → `-`, keep letters/digits/`-`, collapse `--`.
+/// Falls back to the raw lowercase form when the slug is empty.
+pub fn cli_fold_name(s: &str) -> String {
+    let raw = s.trim().to_lowercase();
+    if s.chars().any(|c| matches!(c, '/' | ':' | '\\' | '\0') || (c as u32) < 32) {
+        return raw;
+    }
+    let collapse = |t: &str| -> String {
+        let mut t = t.to_string();
+        while t.contains("--") {
+            t = t.replace("--", "-");
+        }
+        t
+    };
+    let t = s.trim().to_lowercase().replace('_', "-");
+    let t = t.split_whitespace().collect::<Vec<_>>().join("-");
+    let t = collapse(&t);
+    let t: String = t.trim_matches('-').chars().filter(|c| c.is_alphanumeric() || *c == '-').collect();
+    let t = collapse(&t);
+    let t = t.trim_matches('-').to_string();
+    if t.is_empty() {
+        raw
+    } else {
+        t
+    }
+}
+
+/// Every fold a K2 sender may have applied to `s` (non-empty, deduped).
+pub fn name_folds(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(4);
+    for f in [
+        s.trim().to_lowercase(),
+        normalize_address_token(s),
+        dash_fold_name(s),
+        cli_fold_name(s),
+    ] {
+        if !f.is_empty() && !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// True when `a` and `b` name the same thing under any sender's fold.
+/// Different tokens (`sales` vs `sales-team`) still do not match (D20).
+pub fn names_loosely_match(a: &str, b: &str) -> bool {
+    let fb = name_folds(b);
+    name_folds(a).iter().any(|x| fb.contains(x))
+}
+
+/// Every name the workspace `project_id` answers to from its own DB rows:
+/// `projects.handle`, its derived address name, every alias, and
+/// `projects.name`. The caller adds `resolve_agent_name` (which takes the
+/// DB lock itself, so it can't run under `conn`).
+pub fn workspace_names(conn: &Connection, project_id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        let s = s.trim().to_string();
+        if !s.is_empty() && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    if let Ok((handle, name)) = conn.query_row(
+        "SELECT handle, name FROM projects WHERE id = ?1",
+        params![project_id],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        if let Some(h) = handle {
+            push(h);
+        }
+        push(name);
+    } else {
+        return Vec::new();
+    }
+    if let Ok(addr) = project_handle(conn, project_id) {
+        push(addr);
+    }
+    for a in aliases_for(conn, project_id) {
+        push(a);
+    }
+    out
+}
+
 /// Lazy-heal stored remote rows whose agent already matches a roster
 /// handle or alias (D10). Never attaches leftover `sales` to "the only
 /// agent on that host" (D20).
@@ -743,6 +857,56 @@ mod tests {
         let dbh = db::shared();
         let conn = dbh.lock();
         aliases_for(&conn, id)
+    }
+
+    /// CA2: each sender fold, pinned to what the CLI / tray resolver / address
+    /// token produce today.
+    #[test]
+    fn sender_folds_match_live_normalizers() {
+        assert_eq!(dash_fold_name(" Seoca.Old_x "), "seoca-old-x");
+        assert_eq!(cli_fold_name(" Seoca.Old_x "), "seocaold-x");
+        assert_eq!(cli_fold_name("Press  Agent"), "press-agent");
+        assert_eq!(cli_fold_name("a/b"), "a/b", "path chars keep the raw lowercase form");
+        assert_eq!(cli_fold_name("..."), "...", "empty slug falls back to raw");
+        assert_eq!(normalize_address_token("Seoca.Old_x"), "seocaold-x");
+        assert_eq!(
+            name_folds("Seoca.Old"),
+            vec!["seoca.old".to_string(), "seocaold".to_string(), "seoca-old".to_string()]
+        );
+    }
+
+    #[test]
+    fn names_loosely_match_crosses_folds_but_not_d20() {
+        assert!(names_loosely_match("seoca.old", "seoca-old"), "tray fold");
+        assert!(names_loosely_match("seoca.old", "seocaold"), "cli fold");
+        assert!(names_loosely_match("Press Agent", "press-agent"));
+        assert!(names_loosely_match("QUILLIFY-WEBSITE", "quillify-website"));
+        assert!(!names_loosely_match("sales", "sales-team"), "D20");
+        assert!(!names_loosely_match("", ""), "empty never matches");
+        assert!(!names_loosely_match("seoca", "quillify-website"));
+    }
+
+    #[test]
+    fn workspace_names_lists_handle_name_and_aliases() {
+        db::init_for_tests();
+        let path = format!("/tmp/k2-wsnames-{}", uuid::Uuid::new_v4());
+        let id = uuid::Uuid::new_v4().to_string();
+        let u = &id[..8];
+        let handle = format!("wsn-{u}");
+        let alias = format!("wsn-old-{u}");
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                params![id, "WSN Display", path, handle],
+            )
+            .unwrap();
+            insert_alias_or_ignore(&conn, &id, &alias);
+            let names = workspace_names(&conn, &id);
+            assert_eq!(names, vec![handle.clone(), "WSN Display".to_string(), alias.clone()]);
+            assert!(workspace_names(&conn, "no-such-id").is_empty());
+        }
     }
 
     #[test]

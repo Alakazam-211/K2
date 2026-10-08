@@ -265,8 +265,8 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
 
     // The recipient is EXACTLY the signed `to` agent — never a different
     // workspace. Resolve its workspace UUID → registered project path.
-    let ws_id = match &signal.to {
-        AgentAddress::Agent { workspace, .. } => workspace.0.clone(),
+    let (ws_id, to_name) = match &signal.to {
+        AgentAddress::Agent { workspace, name } => (workspace.0.clone(), name.clone()),
         other => {
             return json_err(
                 "400 Bad Request",
@@ -276,13 +276,23 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     };
     let project_path = match resolve_project_path_by_id(&ws_id) {
         Some(p) => p,
-        None => {
-            return json_err(
-                "404 Not Found",
-                format!("addressed workspace '{ws_id}' is not registered on this server"),
-            );
-        }
+        None => return unknown_agent_response(),
     };
+
+    // RECEIVER GATE (CA1). The signed `to` names a workspace AND an agent.
+    // Deliver only when that workspace is one this server lists to peers
+    // (its own roster rules) and the name is one of that workspace's names.
+    // This holds whatever the sender's own connection gate decided, and it
+    // covers live text and tray packages alike. Same 404 as an unknown id,
+    // so the answer never tells a peer which hidden workspaces exist; the
+    // sender's drain dead-letters any 4xx.
+    if !roster::accepts_inbound(&ws_id, &project_path, &to_name) {
+        k2_core::log_debug!(
+            "[federation] inbound refused: peer {} addressed a name/workspace pair this server does not list",
+            ingested.peer_fingerprint
+        );
+        return unknown_agent_response();
+    }
 
     // Sender attribution `<sender-agent>::<peer-host>` — always `::`, never
     // `@`. Using `@` made receiving agents reach for `k2 mail` instead of
@@ -376,6 +386,21 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             })
             .to_string(),
         )
+    }
+}
+
+/// 404 for a signed `to` that does not name an agent this server lists.
+/// `error` stays a string (the drain and older senders read it as one);
+/// `code` is the stable machine reason.
+pub(crate) fn unknown_agent_response() -> CliResponse {
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "unknown_agent: no agent by that name at that address on this server",
+            "code": "unknown_agent",
+        })
+        .to_string(),
     }
 }
 
@@ -935,19 +960,8 @@ fn peer_matches_user_host(peer: &k2_core::federation::FederationPeer, host: &str
 }
 
 fn slugify_agent(s: &str) -> String {
-    let t = s.trim().to_ascii_lowercase().replace('_', "-");
-    let mut out = String::new();
-    let mut dash = false;
-    for c in t.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c);
-            dash = false;
-        } else if !dash {
-            out.push('-');
-            dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
+    // One definition with the receiver gate's matcher (CA2).
+    k2_core::workspace::handle::dash_fold_name(s)
 }
 
 fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<String, String> {
@@ -1421,12 +1435,22 @@ mod tests {
 
     /// Register a local project row; returns its UUID. The verified `to`
     /// address carries this UUID and `handle_inbound` resolves it → path.
+    ///
+    /// The workspace is one this server lists to peers (the receiver gate
+    /// refuses anything else): its persona names the agent `bob` (the name
+    /// `seal_msg_to` / `seal_tray_to` address) and "Allow agents to create
+    /// connections" is on. `agent_enabled` stays 0, so live delivery reports
+    /// `no_agent_mode` and never wakes a session.
     fn register_project(path: &str) -> String {
+        let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(path);
+        std::fs::create_dir_all(persona.parent().unwrap()).unwrap();
+        std::fs::write(&persona, "---\nname: bob\n---\n# bob\n").unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
-            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            "INSERT INTO projects (id, name, path, agents_can_create_connections) \
+             VALUES (?1, ?2, ?3, 1)",
             rusqlite::params![id, "fed-recv-ws", path],
         )
         .unwrap();
@@ -1743,6 +1767,268 @@ mod tests {
             let bytes = seal_msg_to(&uuid::Uuid::new_v4().to_string(), &key, "peer", "nowhere");
             let resp = handle_inbound(&bytes);
             assert_eq!(resp.status, "404 Not Found", "unknown workspace must reject: {}", resp.body);
+        });
+    }
+
+    // ── Receiver gate: the target workspace and name must match ──
+
+    /// How a test workspace is exposed under this box's roster rules.
+    #[derive(Clone, Copy)]
+    ///
+    /// Remote Access (live drive) is deliberately not used here: it would
+    /// route a delivered message to `deliver_live`, which may wake a session.
+    /// "Connections only" lists the workspace without that path.
+    enum Exposure {
+        /// Only "Allow agents to create connections" ON (listed in the
+        /// roster; live text is declined, tray lands).
+        ConnectionsOnly,
+        /// Neither flag (and the app master is off under the temp HOME) →
+        /// hidden from the roster.
+        Hidden,
+    }
+
+    /// Register a CONFIGURED workspace (`agent_enabled = 1`) with an
+    /// explicit display name + handle and the given exposure. Returns
+    /// (id, path). The path exists on disk so tray packages can land.
+    fn register_agent_ws(name: &str, handle: &str, exposure: Exposure) -> (String, String) {
+        let path = temp_ws_path();
+        std::fs::create_dir_all(&path).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let conns = match exposure {
+            Exposure::ConnectionsOnly => 1,
+            Exposure::Hidden => 0,
+        };
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle, agent_enabled, \
+             allow_remote_instruct, agents_can_create_connections) \
+             VALUES (?1, ?2, ?3, ?4, 1, 0, ?5)",
+            rusqlite::params![id, name, path, handle, conns],
+        )
+        .unwrap();
+        (id, path)
+    }
+
+    /// Seal a live `Msg` addressed to `(ws_id, to_name)` from a pinned peer.
+    fn seal_msg_named(ws_id: &str, to_name: &str, key: &rcgen::KeyPair, text: &str) -> Vec<u8> {
+        let signal = AgentSignal::new(
+            AgentAddress::Agent {
+                workspace: WorkspaceId("/src/cortana".into()),
+                name: "cortana".into(),
+            },
+            AgentAddress::Agent {
+                workspace: WorkspaceId(ws_id.into()),
+                name: to_name.into(),
+            },
+            SignalKind::Msg { text: text.into() },
+        );
+        federation::seal(&signal, key, "peer", 8).unwrap()
+    }
+
+    /// Seal a tray package addressed to `(ws_id, to_name)` from a pinned peer.
+    fn seal_tray_named(ws_id: &str, to_name: &str, key: &rcgen::KeyPair) -> Vec<u8> {
+        let signal = AgentSignal::new(
+            AgentAddress::Agent {
+                workspace: WorkspaceId("/src/cortana".into()),
+                name: "cortana".into(),
+            },
+            AgentAddress::Agent {
+                workspace: WorkspaceId(ws_id.into()),
+                name: to_name.into(),
+            },
+            SignalKind::Custom {
+                kind: federation::TRAY_SIGNAL_KIND.to_string(),
+                payload: serde_json::to_value(&brief_tray()).unwrap(),
+            },
+        )
+        .with_delivery(Delivery::Inbox);
+        federation::seal(&signal, key, "peer", 8).unwrap()
+    }
+
+    /// The workspace id and the agent name in `to` must belong together:
+    /// a name from one workspace with another workspace's id is refused.
+    #[test]
+    fn inbound_refuses_name_that_belongs_to_a_different_workspace() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let (_seoca_id, _seoca_path) =
+                register_agent_ws("Seoca", "seoca", Exposure::ConnectionsOnly);
+            let (x_id, x_path) =
+                register_agent_ws("Other", "other-agent", Exposure::ConnectionsOnly);
+
+            let key = pin_trusted_peer("peer");
+            // Live text: name = seoca, workspace = X.
+            let bytes = seal_msg_named(&x_id, "seoca", &key, "not for you");
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "404 Not Found", "mismatched id must be refused: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["code"], "unknown_agent", "{}", resp.body);
+
+            // Tray package: same mismatched pair → refused, nothing lands in X.
+            let bytes = seal_tray_named(&x_id, "seoca", &key);
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "404 Not Found", "mismatched tray must be refused: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["code"], "unknown_agent", "{}", resp.body);
+            assert!(
+                k2_core::inbox::list_root(Path::new(&x_path)).is_empty(),
+                "a refused tray must not write X's inbox"
+            );
+        });
+    }
+
+    /// Short unique suffix: the test DB is shared, and handles/aliases are
+    /// unique across it.
+    fn uniq() -> String {
+        uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+    }
+
+    /// Every name a correct sender may put in `to.name` still delivers:
+    /// the handle, an alias (an old handle), the display name with spaces,
+    /// the persona's agent name, and each sender fold (`cli/k2` drops `.`,
+    /// the daemon tray resolver turns it into `-`).
+    #[test]
+    fn inbound_accepts_every_name_of_the_addressed_workspace() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let u = uniq();
+            let handle = format!("quillify-website-{u}");
+            let display = format!("Seoca Press {u}");
+            let alias = format!("seoca.old.{u}");
+            let persona_name = format!("seoca-{u}");
+            let (w_id, w_path) = register_agent_ws(&display, &handle, Exposure::ConnectionsOnly);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::handle::insert_alias_or_ignore(&conn, &w_id, &alias);
+                assert_eq!(
+                    k2_core::workspace::handle::aliases_for(&conn, &w_id),
+                    vec![alias.clone()],
+                    "alias fixture must be stored"
+                );
+            }
+            let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&w_path);
+            std::fs::create_dir_all(persona.parent().unwrap()).unwrap();
+            std::fs::write(&persona, format!("---\nname: {persona_name}\n---\n")).unwrap();
+
+            let names = vec![
+                handle.clone(),                       // handle
+                handle.to_ascii_uppercase(),          // case
+                alias.clone(),                        // alias, as stored
+                format!("seoca-old-{u}"),             // alias, daemon tray fold
+                format!("seocaold{u}"),               // alias, cli/k2 fold
+                display.clone(),                      // display name with spaces
+                format!("seoca-press-{u}"),           // display name, slugged
+                persona_name.clone(),                 // resolved agent name
+            ];
+            let key = pin_trusted_peer("peer");
+            for (i, name) in names.iter().enumerate() {
+                let bytes = seal_tray_named(&w_id, name, &key);
+                let resp = handle_inbound(&bytes);
+                assert_eq!(resp.status, "200 OK", "name {name:?} must deliver: {}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+                assert_eq!(v["mode"], "inbox", "name {name:?}: {}", resp.body);
+                assert_eq!(v["delivered"], true, "name {name:?}: {}", resp.body);
+                assert_eq!(
+                    k2_core::inbox::list_root(Path::new(&w_path)).len(),
+                    i + 1,
+                    "name {name:?}: one package per delivery"
+                );
+            }
+
+            // Live text by handle passes the gate too (declined only because
+            // Remote Access is off — the consent gate, not the receiver gate).
+            let bytes = seal_msg_named(&w_id, &handle, &key, "hello");
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "declined", "{}", resp.body);
+        });
+    }
+
+    /// A name that is merely close (`sales` vs `sales-team`, D20) is not one
+    /// of the workspace's names.
+    #[test]
+    fn inbound_refuses_a_near_miss_name() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let u = uniq();
+            let (w_id, w_path) =
+                register_agent_ws("Sales Team", &format!("sales-team-{u}"), Exposure::ConnectionsOnly);
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_tray_named(&w_id, &format!("sales-{u}"), &key);
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["code"], "unknown_agent", "{}", resp.body);
+            assert!(k2_core::inbox::list_root(Path::new(&w_path)).is_empty());
+        });
+    }
+
+    /// A workspace this server does not list to peers is refused by id even
+    /// with its own correct handle — live text and tray — and the answer is
+    /// the same as for an id that does not exist.
+    #[test]
+    fn inbound_refuses_hidden_workspace_even_with_its_own_name() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let u = uniq();
+            let handle = format!("hidden-{u}");
+            let (h_id, h_path) = register_agent_ws("Hidden", &handle, Exposure::Hidden);
+            assert!(
+                !k2_core::federation::roster::is_visible(&h_path),
+                "fixture must be hidden from the roster"
+            );
+            let key = pin_trusted_peer("peer");
+
+            let resp = handle_inbound(&seal_msg_named(&h_id, &handle, &key, "hi"));
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+            let hidden_body = resp.body.clone();
+
+            let resp = handle_inbound(&seal_tray_named(&h_id, &handle, &key));
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+            assert!(
+                k2_core::inbox::list_root(Path::new(&h_path)).is_empty(),
+                "a hidden workspace must not receive a tray package"
+            );
+
+            let resp = handle_inbound(&seal_msg_named(
+                &uuid::Uuid::new_v4().to_string(),
+                &handle,
+                &key,
+                "hi",
+            ));
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+            assert_eq!(
+                resp.body, hidden_body,
+                "hidden and unregistered must answer identically"
+            );
+            assert_eq!(resp.body, unknown_agent_response().body);
+        });
+    }
+
+    /// A refusal is terminal: the message id is not recorded as seen, so it
+    /// is the sender's drain (which dead-letters 4xx) that ends it — and a
+    /// later, correctly addressed message is unaffected.
+    #[test]
+    fn inbound_refusal_is_not_recorded_as_delivered() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let u = uniq();
+            let (x_id, _x_path) =
+                register_agent_ws("X", &format!("x-{u}"), Exposure::ConnectionsOnly);
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_msg_named(&x_id, &format!("someone-else-{u}"), &key, "hi");
+            let env: federation::FederationEnvelope = serde_json::from_slice(&bytes).unwrap();
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+            let store = PeerStore::load().unwrap();
+            let fp = store.list()[0].fingerprint.clone();
+            assert!(
+                !k2_core::federation::seen::already_seen(&fp, &env.payload.msg_uuid),
+                "a refused message must not be marked delivered"
+            );
         });
     }
 

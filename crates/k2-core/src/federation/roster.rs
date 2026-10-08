@@ -91,20 +91,7 @@ pub fn build_local_roster() -> LocalRoster {
     let master_remote = crate::app_settings::load().allow_remote_instruct;
     let projects = crate::projects_ops::projects_list().unwrap_or_default();
     for p in projects {
-        if !master_remote {
-            let ws_remote =
-                crate::workspace::settings::get_allow_remote_instruct(&p.path);
-            let ws_conn =
-                crate::workspace::settings::agents_can_create_connections_for_path(&p.path);
-            if !ws_remote && !ws_conn {
-                continue;
-            }
-        }
-        if let Some(agent) = crate::workspace::agent_identity::resolve_agent_name(&p.path) {
-            let agent = agent.trim().to_string();
-            if agent.is_empty() {
-                continue;
-            }
+        if let Some(agent) = visible_agent_name(&p.path, master_remote) {
             // Roster `agent` is the handle (D8). Prefer projects.handle;
             // fall back to resolve_agent_name (AGENT.md `name:` after
             // migrate, or basename for unmigrated test rows).
@@ -129,6 +116,58 @@ pub fn build_local_roster() -> LocalRoster {
         }
     }
     LocalRoster { agents }
+}
+
+/// The roster exposure rule for one workspace (see [`build_local_roster`]):
+/// contact permission (app master, per-workspace Remote Access, or Allow
+/// agents to create connections) AND a configured agent. Returns the
+/// trimmed resolved agent name when visible.
+fn visible_agent_name(project_path: &str, master_remote: bool) -> Option<String> {
+    if !master_remote {
+        let ws_remote = crate::workspace::settings::get_allow_remote_instruct(project_path);
+        let ws_conn =
+            crate::workspace::settings::agents_can_create_connections_for_path(project_path);
+        if !ws_remote && !ws_conn {
+            return None;
+        }
+    }
+    crate::workspace::agent_identity::resolve_agent_name(project_path)
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+}
+
+/// True when the workspace at `project_path` is listed in this daemon's
+/// roster — the same rule [`build_local_roster`] applies.
+pub fn is_visible(project_path: &str) -> bool {
+    visible_agent_name(project_path, crate::app_settings::load().allow_remote_instruct).is_some()
+}
+
+/// Receiver gate for a verified federated signal addressed to
+/// `(workspace_id, to_name)` (CA1). Accepts only when the workspace is
+/// visible under this daemon's roster rules AND `to_name` is one of its
+/// names (handle, alias, `projects.name`, resolved agent name) under any
+/// sender fold ([`names_loosely_match`](crate::workspace::handle::names_loosely_match)).
+/// Fail-closed: an unknown id, a hidden workspace or a foreign name → false.
+pub fn accepts_inbound(workspace_id: &str, project_path: &str, to_name: &str) -> bool {
+    if to_name.trim().is_empty() {
+        return false;
+    }
+    let master_remote = crate::app_settings::load().allow_remote_instruct;
+    let Some(agent) = visible_agent_name(project_path, master_remote) else {
+        return false;
+    };
+    let mut names = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::workspace::handle::workspace_names(&conn, workspace_id)
+    };
+    if names.is_empty() {
+        return false;
+    }
+    names.push(agent);
+    names
+        .iter()
+        .any(|n| crate::workspace::handle::names_loosely_match(to_name, n))
 }
 
 /// The exact challenge bytes signed/verified for a roster request. Binds the
@@ -343,6 +382,69 @@ mod tests {
                 roster.agents.iter().all(|a| a.workspace_id != conf_id),
                 "workspace without remote contact permission must be hidden"
             );
+        });
+    }
+
+    /// `is_visible` is the roster's own rule: a workspace is visible exactly
+    /// when `build_local_roster` lists it.
+    #[test]
+    fn is_visible_agrees_with_the_roster_projection() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let listed = unique_ws_path("vis-listed");
+            insert_project("vis-listed", &listed, 1);
+            crate::workspace::settings::update_project_setting(&listed, "allow_remote_instruct", "1")
+                .expect("opt in");
+            let no_contact = unique_ws_path("vis-nocontact");
+            insert_project("vis-nocontact", &no_contact, 1);
+            let no_agent = unique_ws_path("vis-noagent");
+            insert_project("vis-noagent", &no_agent, 0);
+            crate::workspace::settings::update_project_setting(&no_agent, "allow_remote_instruct", "1")
+                .expect("opt in");
+
+            let roster = build_local_roster();
+            let projects = crate::projects_ops::projects_list().expect("list projects");
+            for path in [&listed, &no_contact, &no_agent] {
+                let id = &projects.iter().find(|p| &p.path == path).expect("registered").id;
+                let in_roster = roster.agents.iter().any(|a| &a.workspace_id == id);
+                assert_eq!(is_visible(path), in_roster, "is_visible vs roster for {path}");
+            }
+            assert!(is_visible(&listed));
+            assert!(!is_visible(&no_contact));
+            assert!(!is_visible(&no_agent));
+        });
+    }
+
+    /// `accepts_inbound`: the workspace's own names pass; another
+    /// workspace's name, an empty name and a hidden workspace do not.
+    #[test]
+    fn accepts_inbound_needs_a_visible_workspace_and_one_of_its_names() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let a_path = unique_ws_path("acc-a");
+            let a_id = insert_project("Alpha Agent", &a_path, 1);
+            crate::workspace::settings::update_project_setting(&a_path, "allow_remote_instruct", "1")
+                .expect("opt in");
+            let b_path = unique_ws_path("acc-b");
+            let b_id = insert_project("Bravo Agent", &b_path, 1);
+            crate::workspace::settings::update_project_setting(&b_path, "allow_remote_instruct", "1")
+                .expect("opt in");
+            let a_base = std::path::Path::new(&a_path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+
+            assert!(accepts_inbound(&a_id, &a_path, "Alpha Agent"));
+            assert!(accepts_inbound(&a_id, &a_path, "alpha-agent"));
+            assert!(accepts_inbound(&a_id, &a_path, &a_base), "resolved agent name (basename)");
+            assert!(!accepts_inbound(&a_id, &a_path, "Bravo Agent"), "B's name at A's id");
+            assert!(!accepts_inbound(&b_id, &b_path, "Alpha Agent"), "A's name at B's id");
+            assert!(!accepts_inbound(&a_id, &a_path, "  "), "empty name");
+
+            crate::workspace::settings::update_project_setting(&a_path, "allow_remote_instruct", "0")
+                .expect("opt out");
+            assert!(!accepts_inbound(&a_id, &a_path, "Alpha Agent"), "hidden workspace");
         });
     }
 

@@ -798,6 +798,49 @@ mod tests {
         assert!(dead[0].reason.contains("remote_instruction_disabled"), "got: {}", dead[0].reason);
     }
 
+    /// The receiver gate's refusal (404 `unknown_agent`, the exact response
+    /// `handle_inbound` returns) is dead-lettered with a readable reason —
+    /// visible for inspection, never retried forever, and later messages for
+    /// the same peer are not held behind it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_dead_letters_receiver_unknown_agent_refusal() {
+        let _home = crate::test_support::TempHome::new();
+        let refusal = crate::federation_routes::unknown_agent_response();
+        assert_eq!(refusal.status, "404 Not Found");
+        let body: &'static str = Box::leak(refusal.body.into_boxed_str());
+        assert_eq!(
+            classify(404, body),
+            Disposition::DeadLetter(
+                "peer rejected: HTTP 404: unknown_agent: no agent by that name at that address on this server"
+                    .to_string()
+            )
+        );
+        let (port, mut rx) = spawn_stub("404 Not Found", body).await;
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+
+        let fp = pin_trusted();
+        let base = chrono::Utc::now();
+        enqueue_msg(&fp, "refused one", base - chrono::Duration::seconds(60));
+        enqueue_msg(&fp, "refused two", base);
+
+        let fp2 = fp.clone();
+        let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(outcome, DrainOutcome::Drained { delivered: 0, dead_lettered: 2 });
+        assert!(outbox::list_for_peer(&fp).is_empty(), "a refusal must leave the queue");
+        let dead = outbox::list_dead_for_peer(&fp);
+        assert_eq!(dead.len(), 2, "each refusal must be dead-lettered for inspection");
+        for d in &dead {
+            assert!(d.reason.contains("unknown_agent"), "got: {}", d.reason);
+        }
+        let mut dials = 0;
+        while rx.try_recv().is_ok() {
+            dials += 1;
+        }
+        assert_eq!(dials, 2, "each refused message is dialed exactly once");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drain_treats_replay_reject_as_prior_delivery() {
         let _home = crate::test_support::TempHome::new();

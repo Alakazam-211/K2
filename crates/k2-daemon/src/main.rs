@@ -73,6 +73,7 @@ mod fs_routes;
 mod fs_live;
 mod charter_compose_watch;
 mod notify_bound;
+mod zen_lib_routes;
 mod zen_routes;
 mod zen_watch;
 mod grid_emitter;

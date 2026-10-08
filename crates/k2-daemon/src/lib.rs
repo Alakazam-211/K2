@@ -55,6 +55,7 @@ pub mod fs_live;
 pub mod charter_compose_watch;
 pub mod notify_bound;
 // Zen Mode v1 (prd-zen-mode-v1 S1): `/cli/zen/*` + the `~/.k2/zen` watcher.
+pub mod zen_lib_routes;
 pub mod zen_routes;
 pub mod zen_watch;
 pub mod grid_emitter;

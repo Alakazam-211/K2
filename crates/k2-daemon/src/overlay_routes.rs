@@ -869,6 +869,19 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
     }
     let answer = opt_param(params, "answer").or_else(|| opt_param(params, "option"));
     let secret = opt_param(params, "secret").or_else(|| opt_param(params, "value"));
+    // KV8: only a person answers a secret card. Any session passport
+    // (agent harness, plain shell tab, API cell) is refused, whichever
+    // door it came through (TCP passport or the cell socket).
+    if principal.is_some() {
+        let is_secret_card = secret.is_some()
+            || match overlay::card_is_secret(&resolved.conversation_id, &card_id) {
+                Ok(b) => b,
+                Err(e) => return card_error(e),
+            };
+        if is_secret_card {
+            return secret_card_human_only();
+        }
+    }
     let secret_bytes = secret.as_deref().map(str::as_bytes);
     match overlay::answer_card(
         &resolved.conversation_id,
@@ -901,7 +914,31 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
             }
             CliResponse::ok_json(body.to_string())
         }
-        Err(e) => error_json("400 Bad Request", "usage", e),
+        Err(e) => card_error(e),
+    }
+}
+
+/// KV8 refusal: a session passport tried to answer a secret card.
+fn secret_card_human_only() -> CliResponse {
+    error_json(
+        "403 Forbidden",
+        "secret_card_human_only",
+        "only a person can answer a secret card (from the Thread tab, a Connect login or an app); \
+         agents and K2 terminal tabs cannot",
+    )
+}
+
+/// Map a card store error: a card that is no longer pending is 409
+/// `card_not_pending` (its answer is final); anything else is usage.
+fn card_error(e: String) -> CliResponse {
+    if e == overlay::CARD_NOT_PENDING {
+        error_json(
+            "409 Conflict",
+            "card_not_pending",
+            "this card was already answered or dismissed",
+        )
+    } else {
+        error_json("400 Bad Request", "usage", e)
     }
 }
 
@@ -948,7 +985,7 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
                 .to_string(),
             )
         }
-        Err(e) => error_json("400 Bad Request", "usage", e),
+        Err(e) => card_error(e),
     }
 }
 
@@ -1387,6 +1424,133 @@ mod tests {
     fn json_body(resp: &CliResponse) -> serde_json::Value {
         serde_json::from_str(&resp.body)
             .unwrap_or_else(|e| panic!("response JSON parse failed: {e}; body={}", resp.body))
+    }
+
+    fn post_json(path: &str, params: &HashMap<String, String>, body: serde_json::Value) -> CliResponse {
+        dispatch_post(path, params, body.to_string().as_bytes())
+    }
+
+    fn passport_params(project_id: &str, from: &str) -> HashMap<String, String> {
+        params_of(&[
+            (crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"),
+            ("project_id", project_id),
+            ("from", from),
+        ])
+    }
+
+    fn assert_error_code(resp: &CliResponse, status: &str, code: &str) {
+        assert_eq!(resp.status, status, "{}", resp.body);
+        let v = json_body(resp);
+        assert_eq!(v["error"]["code"], code, "{v}");
+    }
+
+    /// KV8: a session passport (agent, shell tab, API cell) never answers
+    /// a secret card — stamped params (cell socket / TCP stamp) and the
+    /// request-scoped principal slot both refuse, with or without a value,
+    /// and nothing reaches the vault. A person (no passport) still can,
+    /// and a second answer is 409 with the first value kept.
+    #[test]
+    fn secret_card_answer_is_human_only_and_final() {
+        let handle = format!("ovlkv8{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let name = "KV8_TOKEN";
+        let posted = post_json(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "name": name, "from": "k2" }),
+        );
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+
+        for key in ["secret", "value"] {
+            let mut body = serde_json::json!({ "addr": handle, "id": id });
+            body[key] = serde_json::json!("agent-typed");
+            let resp = post_json(
+                "/cli/thread/answer",
+                &passport_params(&project_id, &handle),
+                body,
+            );
+            assert_error_code(&resp, "403 Forbidden", "secret_card_human_only");
+        }
+        let no_value = post_json(
+            "/cli/thread/answer",
+            &passport_params(&project_id, &handle),
+            serde_json::json!({ "addr": handle, "id": id }),
+        );
+        assert_error_code(&no_value, "403 Forbidden", "secret_card_human_only");
+        let slot = crate::caller_workspace::with_request_principal(
+            Some(crate::session_token::HookPrincipal {
+                workspace_uuid: project_id.clone(),
+                agent_address: handle.clone(),
+            }),
+            || {
+                post_json(
+                    "/cli/thread/answer",
+                    &HashMap::new(),
+                    serde_json::json!({ "addr": handle, "id": id, "secret": "slot-typed" }),
+                )
+            },
+        );
+        assert_error_code(&slot, "403 Forbidden", "secret_card_human_only");
+        assert!(
+            !k2_core::overlay::vault::exists(&project_id, name),
+            "no refused answer may reach the vault"
+        );
+
+        let human = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": id, "secret": "human-typed" }),
+        );
+        assert_eq!(human.status, "200 OK", "{}", human.body);
+        assert_eq!(json_body(&human)["status"], "set");
+
+        let again = post_json(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": id, "secret": "second-try" }),
+        );
+        assert_error_code(&again, "409 Conflict", "card_not_pending");
+        let void_after = post_json(
+            "/cli/thread/void",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": id }),
+        );
+        assert_error_code(&void_after, "409 Conflict", "card_not_pending");
+        assert_eq!(
+            k2_core::overlay::vault::debug_read(&project_id, name).expect("vault"),
+            b"human-typed",
+            "the first human answer is final"
+        );
+    }
+
+    /// KV8 is scoped to secret cards: an agent may still tap its own
+    /// choice card (unchanged behaviour).
+    #[test]
+    fn passport_may_still_answer_a_choice_card() {
+        let handle = format!("ovlkv8c{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let ask = post_json(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Ship it?",
+                "options": "Go,Stop",
+                "from": "k2",
+            }),
+        );
+        assert_eq!(ask.status, "200 OK", "{}", ask.body);
+        let id = json_body(&ask)["id"].as_str().expect("id").to_string();
+        let tap = post_json(
+            "/cli/thread/answer",
+            &passport_params(&project_id, &handle),
+            serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
+        );
+        assert_eq!(tap.status, "200 OK", "{}", tap.body);
+        assert_eq!(json_body(&tap)["status"], "answered");
     }
 
     #[test]

@@ -240,6 +240,16 @@ pub struct CardCallback {
     pub inject_line: String,
 }
 
+/// Error text for answering or voiding a card that is no longer pending
+/// (answered, set, voided or expired). Routes map it to 409
+/// `card_not_pending`; a stored answer is never overwritten.
+pub const CARD_NOT_PENDING: &str = "card is not pending";
+
+/// Whether `card_id` in this conversation is a secret card (any status).
+pub fn card_is_secret(conversation_id: &str, card_id: &str) -> Result<bool, String> {
+    Ok(thread_item(conversation_id, card_id)?.doc.secret.is_some())
+}
+
 /// Tap an option (or custom) / submit a secret.
 pub fn answer_card(
     conversation_id: &str,
@@ -273,7 +283,7 @@ pub fn answer_card(
         }
         format!("secret {name} set")
     } else {
-        return Err("card is not pending".to_string());
+        return Err(CARD_NOT_PENDING.to_string());
     };
     store::put_doc(&doc)?;
     Ok(CardCallback {
@@ -288,7 +298,7 @@ pub fn answer_card(
 /// Explicit dismiss (secret X / chrome dismiss).
 pub fn void_card(
     conversation_id: &str,
-    project_id: &str,
+    _project_id: &str,
     card_id: &str,
 ) -> Result<CardCallback, String> {
     let _guard = WRITE.lock();
@@ -301,14 +311,15 @@ pub fn void_card(
         }
         "card voided — human replied in chat".to_string()
     } else if doc.is_pending_secret() {
-        let name = doc.secret.as_ref().expect("pending secret").name.clone();
-        vault::delete(project_id, &name)?;
+        // A pending card never wrote a value, so voiding it deletes
+        // nothing: a stored value under the same name belongs to an
+        // earlier, answered card and must survive.
         if let Some(s) = doc.secret.as_mut() {
             s.status = "voided".to_string();
         }
         "card voided — human replied in chat".to_string()
     } else {
-        return Err("card is not pending".to_string());
+        return Err(CARD_NOT_PENDING.to_string());
     };
     store::put_doc(&doc)?;
     Ok(CardCallback {
@@ -324,7 +335,7 @@ pub fn void_card(
 /// that choice; every other pending card voids. Secrets are never scraped.
 pub fn apply_prose(
     conversation_id: &str,
-    project_id: &str,
+    _project_id: &str,
     text: &str,
 ) -> Result<Vec<CardCallback>, String> {
     let trimmed = text.trim();
@@ -362,8 +373,7 @@ pub fn apply_prose(
                 });
             }
         } else if doc.is_pending_secret() {
-            let name = doc.secret.as_ref().expect("pending secret").name.clone();
-            vault::delete(project_id, &name)?;
+            // Pending = never written; keep any earlier answer's value.
             if let Some(s) = doc.secret.as_mut() {
                 s.status = "voided".to_string();
             }
@@ -893,6 +903,57 @@ mod tests {
         assert!(
             !vault::exists(&project_id, "OTHER_TOKEN"),
             "dismiss/void must leave vault empty"
+        );
+    }
+
+    /// An answered secret card is final: a second answer is refused with
+    /// [`CARD_NOT_PENDING`] and the stored value is unchanged; a later
+    /// card with the same name that is voided (button or prose) does not
+    /// delete the earlier answer.
+    #[test]
+    fn answered_secret_card_is_never_overwritten_or_deleted() {
+        let project_id = seed_project("ovl-final");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let (first, _) =
+            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
+                .expect("post first");
+        assert!(card_is_secret(&conv, &first.id).expect("kind"), "secret card");
+        answer_card(&conv, &project_id, &first.id, None, Some(b"human-value".as_slice()))
+            .expect("first answer");
+
+        let again = answer_card(&conv, &project_id, &first.id, None, Some(b"overwrite".as_slice()))
+            .expect_err("second answer must be refused");
+        assert_eq!(again, CARD_NOT_PENDING);
+        assert_eq!(
+            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault"),
+            b"human-value",
+            "a refused second answer must not touch the stored value"
+        );
+        let void_after = void_card(&conv, &project_id, &first.id)
+            .expect_err("voiding an answered card must be refused");
+        assert_eq!(void_after, CARD_NOT_PENDING);
+
+        let (second, _) =
+            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
+                .expect("post same-name card");
+        void_card(&conv, &project_id, &second.id).expect("void pending same-name card");
+        assert_eq!(
+            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault after void"),
+            b"human-value",
+            "voiding a pending same-name card must not delete the earlier answer"
+        );
+
+        let (third, _) =
+            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
+                .expect("post third");
+        let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
+        assert!(voided.iter().any(|cb| cb.doc_id == third.id), "prose voids the pending card");
+        assert_eq!(
+            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault after prose"),
+            b"human-value",
+            "a prose void must not delete the earlier answer"
         );
     }
 

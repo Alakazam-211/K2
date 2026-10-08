@@ -432,8 +432,10 @@ describe('Settings → Gardens: the section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }))
     await settle()
     expect(h.reveals).toEqual(['/Users/r/.k2/zen'])
-    // Every request went to this computer's daemon.
-    expect(zenCalls().map(([m, k, r]) => [m, k, r])).toEqual([
+    // Every request went to this computer's daemon (the Garden sync reads,
+    // zen/sync and zen/news, are ZenGardenSyncControls' own and tested there).
+    expect(zenCalls().every(([, k]) => k === 'local')).toBe(true)
+    expect(zenCalls().filter(([, , r]) => r !== 'zen/sync' && r !== 'zen/news').map(([m, k, r]) => [m, k, r])).toEqual([
       ['GET', 'local', 'zen/gardens'],
       ['GET', 'local', 'zen/status'],
       ['GET', 'local', 'zen/theme/list'],

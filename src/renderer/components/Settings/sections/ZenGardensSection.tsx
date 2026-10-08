@@ -12,6 +12,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
+import { ZenGardenSettingsNews, ZenGardenSyncControls } from './ZenGardenSyncControls'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import {
@@ -326,6 +327,7 @@ function GardenRow({
           </button>
         </div>
       )}
+      <ZenGardenSyncControls garden={garden} />
       <div className="ml-12">
         <InlineError text={error} testId={`zen-garden-error-${garden.id}`} />
       </div>
@@ -872,6 +874,7 @@ export function ZenGardensSection(): React.JSX.Element {
             <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
               Your Gardens
             </h3>
+            <ZenGardenSettingsNews />
             <ol className="border-t border-[var(--color-border)]">
               {st.gardens.map((g) => (
                 <GardenRow

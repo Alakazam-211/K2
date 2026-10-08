@@ -32,3 +32,31 @@ describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
     expect(toggle).not.toContain('workspace/set')
   })
 })
+
+// K2 vault (prd-k2-vault-v1 §16.1, KV39): "Allow managing server-wide
+// secrets" sits next to the row above and writes through the same
+// Admin route with toggle `vault_manage`.
+describe('Agent-tab "Allow managing server-wide secrets" toggle', () => {
+  it('has a manifest id and posts agent-access/set vault_manage', () => {
+    expect(src).toContain("id: 'projects.agents-can-manage-vault'")
+    expect(src).toContain('data-settings-id="projects.agents-can-manage-vault"')
+    expect(src).toContain('<AgentsManageVaultToggle project={project} />')
+    expect(src.indexOf('<AgentsManageVaultToggle project={project} />')).toBeGreaterThan(
+      src.indexOf('<AgentsManageAgentsToggle project={project} />'),
+    )
+    expect(src).toContain('Allow managing server-wide secrets')
+    const start = src.indexOf('function AgentsManageVaultToggle')
+    expect(start).toBeGreaterThan(0)
+    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
+    expect(toggle).toContain("toggle: 'vault_manage'")
+    expect(toggle).toContain('value: next')
+    expect(toggle).toContain('workspace: project.path')
+    expect(toggle).toContain('agentsCanManageVault: next ? 1 : 0')
+    expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
+    expect(toggle).not.toContain('fetchProjects(')
+    expect(toggle).not.toContain('workspace/set')
+    // Never claim agents can't read secrets (prd §18).
+    expect(toggle).not.toMatch(/agents can.t read/i)
+  })
+})

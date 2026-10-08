@@ -273,6 +273,10 @@ interface Project {
   // Lets the main agent open and stop sidecars. Written via POST
   // /cli/agent-access/set (Admin; not workspace/set).
   agentsCanManageAgents?: number
+  // K2 vault (prd-k2-vault-v1 §16.1, 0146) — "Allow managing server-wide
+  // secrets" (0/1, default 0). Written via POST /cli/agent-access/set
+  // `toggle: 'vault_manage'` (Admin; not workspace/set).
+  agentsCanManageVault?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

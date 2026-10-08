@@ -183,10 +183,11 @@ fn seed_tab_row(pid: &str, cwd: &str, agent: &str, command: &str, sid: &str, arg
 fn workspace(label: &str) -> (String, String) {
     let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let pid = format!("codex-nd-{label}-{n}");
-    let cwd = std::env::current_exe()
-        .expect("test binary")
-        .parent()
-        .expect("dir")
+    // Under the test's StubHome (taken first in every test), so the dir is
+    // unique per run and removed with it; it used to be a fixed name next
+    // to the test binary that every run re-used and none removed.
+    let home = std::env::var_os("HOME").expect("StubHome sets HOME");
+    let cwd = std::path::PathBuf::from(home)
         .join(format!("ws-{pid}"))
         .to_string_lossy()
         .into_owned();

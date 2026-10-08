@@ -991,6 +991,20 @@ pub fn sessions_store_path() -> PathBuf {
     config_dir().join("connect-sessions.json")
 }
 
+/// The temp file `save_sessions` writes before renaming into place
+/// (`~/.k2/connect-sessions.json.tmp.<pid>`).
+fn sessions_store_tmp_path_inner() -> PathBuf {
+    config_dir().join(format!("connect-sessions.json.tmp.{}", std::process::id()))
+}
+
+/// Test seam: the session store's temp-write path for THIS process.
+/// Tests inject a write failure by pre-creating it as a non-empty
+/// directory (EISDIR fails even for root; chmod does not).
+#[cfg(any(test, feature = "test-util"))]
+pub fn sessions_store_tmp_path() -> PathBuf {
+    sessions_store_tmp_path_inner()
+}
+
 /// Compute the hex SHA-256 digest of a session token.
 fn token_digest(token: &str) -> String {
     let mut hasher = Sha256::new();
@@ -1044,7 +1058,7 @@ fn save_sessions(store: &SessionStore) -> Result<(), String> {
     let dir = config_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let file = sessions_store_path();
-    let tmp = dir.join(format!("connect-sessions.json.tmp.{}", std::process::id()));
+    let tmp = sessions_store_tmp_path_inner();
     let body = serde_json::to_string_pretty(store).map_err(|e| format!("serialize store: {e}"))?;
     fs::write(&tmp, body.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     restrict_mode(&tmp);
@@ -2354,38 +2368,25 @@ mod tests {
         });
     }
 
-    #[cfg(unix)]
     #[test]
     fn clear_lockout_write_failure_keeps_the_entry() {
-        use std::os::unix::fs::PermissionsExt;
         with_temp_home(|| {
             assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
             assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
             assert_eq!(check_and_record("stuck", "x"), LoginOutcome::BadCreds);
             assert!(is_locked("stuck"));
-            let dir = config_dir();
-            let mode = fs::metadata(&dir)
-                .expect("stat .k2")
-                .permissions()
-                .mode();
-            struct Restore {
-                dir: std::path::PathBuf,
-                mode: u32,
-            }
-            impl Drop for Restore {
-                fn drop(&mut self) {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(&self.dir, fs::Permissions::from_mode(self.mode));
-                }
-            }
-            let _restore = Restore {
-                dir: dir.clone(),
-                mode,
-            };
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).expect("chmod 0555");
+            // Inject the write failure structurally: the store's temp path
+            // is a non-empty directory, so `fs::write` fails with EISDIR
+            // for every user (root ignores chmod, so 0555 would not).
+            let blocker = sessions_store_tmp_path();
+            fs::create_dir_all(blocker.join("block")).expect("create blocker dir");
             let err = clear_lockout("stuck").expect_err("unwritable session store");
             assert!(!err.is_empty(), "store error must be non-empty");
-            drop(_restore);
+            assert!(
+                err.contains(&blocker.display().to_string()),
+                "error names the temp path: {err}"
+            );
+            fs::remove_dir_all(&blocker).expect("remove blocker dir");
             assert!(is_locked("stuck"), "failed write must leave the lock");
             assert_eq!(lockout_failed_count("stuck"), 0, "live lock stores failed_count 0");
             assert!(

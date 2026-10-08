@@ -379,87 +379,108 @@ mod path_enrichment_tests {
     //! installed tools like `claude` failed with ENOENT until the
     //! `enrich_path_from_login_shell` helper landed in 0.35.1.
     //!
-    //! These tests run in `cargo test`'s shell-inherited (rich) PATH
-    //! by default, so we can't rely on the ambient env to reproduce the
-    //! bug — we deliberately pave PATH down to the launchd default
-    //! before calling the helper, then assert it widens.
+    //! Hermetic: `$SHELL` points at a FAKE login shell (a temp script)
+    //! that prints a known, marked PATH. The real login shell is never
+    //! run, so the result never depends on whoever runs the suite (their
+    //! rc files, or whether `/bin/zsh` exists: the Linux gate box has no
+    //! zsh, and `env -i` leaves `SHELL` unset).
     use super::*;
-    use std::sync::Mutex;
+    use std::path::{Path, PathBuf};
 
-    /// `std::env::set_var` is not thread-safe and these tests mutate it
-    /// directly. Serialize them so they don't race each other when the
-    /// test runner uses multiple threads.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const SPARSE: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-    /// Lock + recover from poison so a panic in one test doesn't
-    /// fail the next one with an opaque PoisonError.
-    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    /// A temp dir holding an executable `login-shell` script with `body`.
+    /// The script ignores its `-ilc <probe>` arguments.
+    struct FakeShell {
+        dir: PathBuf,
     }
 
-    fn with_sparse_path<F: FnOnce()>(f: F) {
-        let _g = lock_env();
-        let original = std::env::var("PATH").ok();
-        // Standard launchd default — what `/Applications/K2SO.app` and
-        // the daemon actually see in production after a fresh install.
-        std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
-        f();
-        match original {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
+    impl FakeShell {
+        fn new(body: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join(format!("k2-fake-shell-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("create fake shell dir");
+            let script = dir.join("login-shell");
+            std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write fake shell");
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake shell");
+            Self { dir }
         }
+
+        fn path(&self) -> PathBuf {
+            self.dir.join("login-shell")
+        }
+    }
+
+    impl Drop for FakeShell {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Run `enrich_path_from_login_shell` with `PATH` paved down to the
+    /// launchd default and `SHELL` = `shell`, under the crate-wide env
+    /// lock. Returns the resulting PATH; restores both vars after.
+    fn enrich_with(shell: &Path) -> String {
+        let _env = crate::test_env::lock();
+        let _path = crate::test_env::EnvVar::set("PATH", SPARSE);
+        let _shell = crate::test_env::EnvVar::set("SHELL", shell);
+        enrich_path_from_login_shell();
+        std::env::var("PATH").expect("PATH set after enrich")
+    }
+
+    fn marked(path: &str) -> String {
+        format!(
+            "printf '%s' '{}{path}{}'",
+            terminal::login_path::LOGIN_PATH_BEGIN,
+            terminal::login_path::LOGIN_PATH_END
+        )
     }
 
     #[test]
     fn enrich_path_widens_sparse_launchd_default() {
-        with_sparse_path(|| {
-            let before = std::env::var("PATH").unwrap();
-            assert_eq!(before, "/usr/bin:/bin:/usr/sbin:/sbin");
-            enrich_path_from_login_shell();
-            let after = std::env::var("PATH").unwrap();
-            // The login shell's PATH is set in the user's rc files. We
-            // assert the helper produced *something different and longer*
-            // — the exact contents are user-environment-specific.
-            assert_ne!(
-                before, after,
-                "expected enrich_path_from_login_shell to widen PATH; got the same launchd-default value"
-            );
-            assert!(
-                after.len() > before.len(),
-                "expected widened PATH to be longer than launchd default; got before={before} after={after}"
-            );
-        });
+        let shell = FakeShell::new(&format!(
+            "echo 'Last login: noise from an rc file'\n{}",
+            marked("/opt/k2-test/bin:/usr/bin:/bin")
+        ));
+        assert_eq!(enrich_with(&shell.path()), "/opt/k2-test/bin:/usr/bin:/bin");
+    }
+
+    #[test]
+    fn enrich_path_ignores_a_junk_preamble() {
+        // The 0.45.0 smoke bug: zsh printed ~11 KB of completion-function
+        // source before the PATH. Only the marked PATH may be adopted.
+        let shell = FakeShell::new(&format!(
+            "i=0\nwhile [ $i -lt 200 ]; do echo 'compdump () {{ local _d_file _d_f _d_bks _d_line _d_als _d_files _d_name _d_tmp; }}'; i=$((i+1)); done\n{}",
+            marked("/opt/k2-test/bin:/usr/bin:/bin")
+        ));
+        assert_eq!(enrich_with(&shell.path()), "/opt/k2-test/bin:/usr/bin:/bin");
+    }
+
+    #[test]
+    fn enrich_path_keeps_path_when_the_shell_fails() {
+        let shell = FakeShell::new(&format!("{}\nexit 3", marked("/opt/k2-test/bin:/usr/bin")));
+        assert_eq!(enrich_with(&shell.path()), SPARSE, "non-zero exit leaves PATH alone");
+    }
+
+    #[test]
+    fn enrich_path_keeps_path_when_the_shell_is_missing() {
+        let missing = std::env::temp_dir().join(format!("k2-no-such-shell-{}", uuid::Uuid::new_v4()));
+        assert_eq!(enrich_with(&missing), SPARSE, "spawn failure leaves PATH alone");
     }
 
     #[test]
     fn enrich_path_safe_to_call_multiple_times() {
-        // Production calls the helper exactly once at startup, so
-        // strict idempotency isn't required — but it must be safe to
-        // invoke repeatedly without crashing or producing an empty
-        // PATH. (Some users' rc files reorder dirs across invocations,
-        // so equality across calls is too strict an assertion.)
-        let _g = lock_env();
-        let before = std::env::var("PATH").unwrap_or_default();
+        let shell = FakeShell::new(&marked("/opt/k2-test/bin:/usr/bin:/bin"));
+        let _env = crate::test_env::lock();
+        let _path = crate::test_env::EnvVar::set("PATH", SPARSE);
+        let _shell = crate::test_env::EnvVar::set("SHELL", shell.path());
         enrich_path_from_login_shell();
-        let after_one = std::env::var("PATH").unwrap_or_default();
+        let after_one = std::env::var("PATH").expect("PATH after first enrich");
         enrich_path_from_login_shell();
-        let after_two = std::env::var("PATH").unwrap_or_default();
-        assert!(
-            !after_one.is_empty(),
-            "PATH must not become empty after first enrich (before={before})"
-        );
-        assert!(
-            !after_two.is_empty(),
-            "PATH must not become empty after second enrich"
-        );
-        // Bound any drift: a second call shouldn't massively grow the
-        // string (e.g. by re-prepending user dirs over and over). 2x
-        // headroom catches real runaway growth without flaking on
-        // legitimate reordering.
-        assert!(
-            after_two.len() < after_one.len() * 2,
-            "second enrich call doubled PATH length — likely a runaway prepend"
-        );
+        let after_two = std::env::var("PATH").expect("PATH after second enrich");
+        assert_eq!(after_one, "/opt/k2-test/bin:/usr/bin:/bin");
+        assert_eq!(after_two, after_one, "a second call must not grow or change PATH");
     }
 }
 
@@ -467,3 +488,8 @@ mod path_enrichment_tests {
 // production daemon (inherited session env, or the real home's port/token).
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_isolation;
+
+// Quiet-gate PRD §5.3 (0.45.1): the ONE lock + RAII guards for env
+// mutation in tests (HOME, PATH, SHELL, K2_*). k2-daemon re-uses it.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_env;

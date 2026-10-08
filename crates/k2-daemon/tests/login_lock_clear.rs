@@ -560,34 +560,11 @@ async fn box_unlock_session_store_write_failure_is_500() {
         );
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
-        let dir = connect_users::sessions_store_path()
-            .parent()
-            .expect("sessions dir")
-            .to_path_buf();
-        let mode = std::fs::metadata(&dir)
-            .expect("stat .k2")
-            .permissions()
-            .mode();
-        struct Restore {
-            dir: std::path::PathBuf,
-            mode: u32,
-        }
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &self.dir,
-                    std::fs::Permissions::from_mode(self.mode),
-                );
-            }
-        }
-        let restore = Restore {
-            dir: dir.clone(),
-            mode,
-        };
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))
-            .expect("chmod 0555");
+        // Inject the write failure structurally: the session store's
+        // temp path (same pid: the daemon runs in-process) is a non-empty
+        // directory, so the write fails with EISDIR even for root.
+        let blocker = connect_users::sessions_store_tmp_path();
+        std::fs::create_dir_all(blocker.join("block")).expect("create blocker dir");
         let r = post_unlock_box(port, OWNER_TOKEN, "stuck");
         assert_eq!(r.status, 500, "write failure must be 500; {}", r.body);
         let v = json(&r.body);
@@ -597,7 +574,7 @@ async fn box_unlock_session_store_write_failure_is_500() {
             "must not answer cleared:false for a lock that is still there: {}",
             r.body
         );
-        drop(restore);
+        std::fs::remove_dir_all(&blocker).expect("remove blocker dir");
         assert!(
             connect_users::is_locked("stuck"),
             "failed write must leave the lock"

@@ -91,8 +91,9 @@ pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
     }
 
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!("create {} (for {}): {e}", parent.display(), target.display())
+        })?;
     }
     write_exec(target, CLI_CONTENT)?;
     Ok(Some(target.to_path_buf()))
@@ -149,14 +150,7 @@ mod tests {
     use super::*;
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "k2-cli-stage-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let p = std::env::temp_dir().join(format!("k2-cli-stage-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -245,19 +239,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    // Write failures are injected STRUCTURALLY (a path under a regular
+    // file -> ENOTDIR/EEXIST, or a directory where the file goes ->
+    // EISDIR). chmod-based injection does nothing when the suite runs as
+    // root (the Linux gate does), so it must never be used here.
+
     #[test]
     #[cfg(unix)]
     fn unwritable_primary_falls_back() {
-        use std::os::unix::fs::PermissionsExt;
-        // Simulate the nsi/rpmavs trap: a STALE CLI file the daemon user
-        // cannot open for write (0444 stands in for root-owned 0755 —
-        // it's the FILE perms that deny the write, not the directory).
+        // Simulate the nsi/rpmavs trap: the primary location cannot be
+        // written by the daemon user. Here its parent "directory" is a
+        // regular file, which fails for every user, root included.
         let dir = tmp_dir("fallback");
-        let ro = dir.join("ro-bin");
-        std::fs::create_dir_all(&ro).unwrap();
-        let primary = ro.join("k2");
-        std::fs::write(&primary, "#!/bin/bash\nK2_CLI_VERSION=\"0.0.1\"\necho old\n").unwrap();
-        std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let blocker = dir.join("ro-bin");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let primary = blocker.join("k2");
 
         let fallback = dir.join("home-local-bin").join("k2");
         let out = stage_cli_with_fallback(&primary, Some(&fallback))
@@ -269,12 +265,34 @@ mod tests {
             "current CLI must land at the fallback"
         );
         assert_eq!(mode_of(&fallback), 0o755, "fallback CLI must be executable");
-        assert!(
-            std::fs::read_to_string(&primary).unwrap().contains("0.0.1"),
-            "unwritable primary is left as-is"
+        assert_eq!(
+            std::fs::read(&blocker).unwrap(),
+            b"not a directory",
+            "the blocking file is left byte-identical"
         );
 
-        std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unwritable_existing_primary_falls_back() {
+        // The stale-install variant: something already sits at the
+        // primary path and cannot be overwritten. A DIRECTORY named `k2`
+        // makes the write fail with EISDIR, even for root.
+        let dir = tmp_dir("fallback-isdir");
+        let primary = dir.join("bin").join("k2");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::write(primary.join("keep"), b"untouched").unwrap();
+
+        let fallback = dir.join("home-local-bin").join("k2");
+        let out = stage_cli_with_fallback(&primary, Some(&fallback))
+            .expect("fallback stage must succeed");
+        assert_eq!(out, Some(fallback.clone()));
+        assert_eq!(std::fs::read_to_string(&fallback).unwrap(), CLI_CONTENT);
+        assert!(primary.is_dir(), "the blocking directory is left in place");
+        assert_eq!(std::fs::read(primary.join("keep")).unwrap(), b"untouched");
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -295,21 +313,19 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn no_fallback_surfaces_the_primary_error() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tmp_dir("no-fallback");
-        let ro = dir.join("ro-bin");
-        std::fs::create_dir_all(&ro).unwrap();
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let primary = ro.join("k2");
+        let blocker = dir.join("ro-bin");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let primary = blocker.join("k2");
 
         let err = stage_cli_with_fallback(&primary, None)
-            .expect_err("no fallback → the write error must surface");
+            .expect_err("no fallback -> the write error must surface");
         assert!(
             err.contains(&primary.display().to_string()),
             "error names the primary path: {err}"
         );
+        assert_eq!(std::fs::read(&blocker).unwrap(), b"not a directory");
 
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

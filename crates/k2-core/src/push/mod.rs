@@ -145,17 +145,17 @@ impl PushEvent {
     }
 
     /// The mobile deep-link `data` object ([`K2Cloud`] payloads): IDs
-    /// + a `kind` discriminator ONLY — tap-to-open navigates on these,
+    /// + a `kind` discriminator ([`PUSH_KIND_TICKET`] / [`PUSH_KIND_PROJECT`]) ONLY — tap-to-open navigates on these,
     /// content is pulled in-app (feedback PRD §8.6).
     pub fn data(&self) -> serde_json::Value {
         match self {
             Self::FeedbackCreated { feedback_id, .. }
             | Self::FeedbackCommented { feedback_id, .. } => serde_json::json!({
-                "kind": "ticket",
+                "kind": PUSH_KIND_TICKET,
                 "feedbackId": feedback_id,
             }),
             Self::ProjectMessageCreated { group_id, .. } => serde_json::json!({
-                "kind": "project",
+                "kind": PUSH_KIND_PROJECT,
                 "groupId": group_id,
             }),
             // Legacy desktop-era events carry no mobile deep link.
@@ -165,6 +165,14 @@ impl PushEvent {
         }
     }
 }
+
+/// Push `data.kind` for a ticket event (created / commented). The wire
+/// value is `"ticket"` since the 2026-07-23 Tickets rebrand (`ec845928`);
+/// the mobile companion routes on it. Never `"feedback"`.
+pub const PUSH_KIND_TICKET: &str = "ticket";
+
+/// Push `data.kind` for a project-group chat message.
+pub const PUSH_KIND_PROJECT: &str = "project";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for
@@ -571,6 +579,14 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
+    /// The one place the wire literals are spelled out: the mobile
+    /// companion routes on these exact strings.
+    #[test]
+    fn push_kind_wire_values_are_stable() {
+        assert_eq!(PUSH_KIND_TICKET, "ticket");
+        assert_eq!(PUSH_KIND_PROJECT, "project");
+    }
+
     #[test]
     fn c4_events_render_generic_title_and_deep_link_data() {
         let e = PushEvent::FeedbackCreated {
@@ -583,7 +599,7 @@ mod tests {
         assert_eq!(e.action_url(), "");
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "ticket", "feedbackId": "fb-123" })
+            serde_json::json!({ "kind": PUSH_KIND_TICKET, "feedbackId": "fb-123" })
         );
 
         let e = PushEvent::ProjectMessageCreated {
@@ -595,7 +611,7 @@ mod tests {
         assert_eq!(e.action_url(), "");
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "project", "groupId": "pg-9" })
+            serde_json::json!({ "kind": PUSH_KIND_PROJECT, "groupId": "pg-9" })
         );
 
         // Legacy desktop-era events carry no mobile deep link.
@@ -715,7 +731,7 @@ mod tests {
         assert_eq!(body["payload"]["body"], "cortana needs you on a ticket");
         assert_eq!(
             body["payload"]["data"],
-            serde_json::json!({ "kind": "feedback", "feedbackId": "fb-77" })
+            serde_json::json!({ "kind": PUSH_KIND_TICKET, "feedbackId": "fb-77" })
         );
         let devices = body["devices"].as_array().expect("devices array");
         let mine = devices

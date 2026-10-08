@@ -13,9 +13,10 @@
 //!                           [`FLUSH_EVERY`] samples the histogram prints a
 //!                           p50 / p99 / mean / count / min / max line.
 //!
-//! Instrumentation is gated on [`is_enabled`]: true whenever K2SO is a debug
-//! build OR the `K2SO_PERF` environment variable is set (any non-empty value).
-//! In release builds without the env var, every macro body short-circuits and
+//! Instrumentation is gated on [`is_enabled`]: true only when the `K2SO_PERF`
+//! environment variable is set (any non-empty value other than `0`; since
+//! 0.36.2 debug builds are no longer auto-on). Without the env var, every
+//! macro body short-circuits and
 //! the cost is a single `Instant::now()` call plus a boolean check — not free,
 //! but small enough to leave in permanently.
 //!
@@ -52,12 +53,30 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 /// made other tracing (e.g. `[legacy-per-agent-heartbeat]`) hard to
 /// spot. If you actually want a perf measurement run, set the env.
 pub fn is_enabled() -> bool {
+    #[cfg(test)]
+    match TEST_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+        TEST_OFF => return false,
+        TEST_ON => return true,
+        _ => {}
+    }
     *ENABLED.get_or_init(|| {
         std::env::var("K2SO_PERF")
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
     })
 }
+
+// Test override of the gate (unset / off / on). The real gate is read from
+// the env once into a `OnceLock`, so a test that flipped `K2SO_PERF` would
+// race every other test in the binary (and the first reader would win).
+#[cfg(test)]
+const TEST_UNSET: u8 = 0;
+#[cfg(test)]
+const TEST_OFF: u8 = 1;
+#[cfg(test)]
+const TEST_ON: u8 = 2;
+#[cfg(test)]
+static TEST_ENABLED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(TEST_UNSET);
 
 fn hists() -> &'static Mutex<HashMap<&'static str, Histogram>> {
     HISTS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -246,17 +265,59 @@ mod tests {
         assert_eq!(h.summary_line("empty"), "empty — no samples");
     }
 
+    /// Serializes the tests that flip the gate override, and restores it
+    /// to "unset" on drop (even when the test panics).
+    struct GateOverride {
+        _lock: parking_lot::MutexGuard<'static, ()>,
+    }
+
+    impl GateOverride {
+        fn set(on: bool) -> Self {
+            static LOCK: Mutex<()> = parking_lot::const_mutex(());
+            let lock = LOCK.lock();
+            TEST_ENABLED.store(if on { TEST_ON } else { TEST_OFF }, std::sync::atomic::Ordering::SeqCst);
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for GateOverride {
+        fn drop(&mut self) {
+            TEST_ENABLED.store(TEST_UNSET, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     #[test]
-    fn guard_records_on_drop() {
-        // Clear any state from prior tests.
-        hists().lock().clear();
+    fn guard_records_on_drop_when_enabled() {
+        // Unique histogram name: never `hists().clear()`, which would wipe
+        // other tests' samples.
+        const NAME: &str = "perf_test_guard_records_on_drop_when_enabled";
+        let _gate = GateOverride::set(true);
         {
-            let _g = HistGuard::new("guard_test");
+            let _g = HistGuard::new(NAME);
             std::thread::sleep(Duration::from_millis(1));
         }
         let map = hists().lock();
-        let h = map.get("guard_test").expect("guard should record");
+        let h = map.get(NAME).expect("guard should record when perf is enabled");
         assert_eq!(h.count, 1);
         assert!(h.samples[0] >= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn record_is_a_no_op_when_disabled() {
+        // Guards the 2026-07-22 log-flood fix: with perf off, neither the
+        // guard nor a direct `record` may touch the histograms.
+        const NAME: &str = "perf_test_record_is_a_no_op_when_disabled";
+        let _gate = GateOverride::set(false);
+        assert!(!is_enabled());
+        {
+            let _g = HistGuard::new(NAME);
+        }
+        for _ in 0..(FLUSH_EVERY * 2) {
+            record(NAME, Duration::from_micros(5));
+        }
+        assert!(
+            hists().lock().get(NAME).is_none(),
+            "disabled perf must not record anything"
+        );
     }
 }

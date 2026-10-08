@@ -983,7 +983,12 @@ impl LocalVault {
         let stamp = actor.stamp();
         let mut m = row.meta.clone();
         if m.status == SecretStatus::Destroyed {
-            return Err(VaultError::conflict("secret_destroyed", "that secret was destroyed; pick a new name"));
+            // K2's own refs are reused by name (a deleted mailbox's id can
+            // come back); a person's or agent's name stays retired.
+            if !(actor.is_system() && m.namespace == Namespace::System) {
+                return Err(VaultError::conflict("secret_destroyed", "that secret was destroyed; pick a new name"));
+            }
+            m.status = SecretStatus::Active;
         }
         let mut owner_notice = false;
         {

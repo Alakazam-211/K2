@@ -2695,7 +2695,9 @@ mod tests {
                 rusqlite::params![&id, "Sales Team", &path],
             )
             .unwrap();
-            k2_core::workspace::handle::backfill_workspace_handles(&conn);
+            // One row only: the whole-table sweep would rewrite every
+            // other test's workspace on the shared test DB.
+            k2_core::workspace::handle::backfill_project_handle(&conn, &id).expect("backfill");
         }
         let handle = {
             let db = k2_core::db::shared();

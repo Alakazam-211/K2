@@ -4974,6 +4974,7 @@ mod tests {
     #[test]
     fn detect_active_session_dispatches_grok_and_hermes() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("dispatch-grok-hermes");
         let home = dirs::home_dir().unwrap();
 
@@ -5000,6 +5001,7 @@ mod tests {
     #[test]
     fn list_all_sessions_includes_grok_and_hermes() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("list-grok-hermes");
         let home = dirs::home_dir().unwrap();
 
@@ -5027,6 +5029,7 @@ mod tests {
     #[test]
     fn get_storage_paths_reports_grok_dirs_and_hermes_db() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("storage-grok-hermes");
         let home = dirs::home_dir().unwrap();
 
@@ -5069,6 +5072,7 @@ mod tests {
     #[test]
     fn parse_claude_sessions_returns_empty_when_history_file_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-empty");
         // fresh HOME → no ~/.claude/history.jsonl → empty Vec, not Err
         let sessions = parse_claude_sessions(None).expect("must not error");
@@ -5078,6 +5082,7 @@ mod tests {
     #[test]
     fn parse_claude_sessions_parses_seeded_history() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-seeded");
         // Build ~/.claude/history.jsonl with two entries — same
         // session_id repeated to exercise the SessionAccumulator
@@ -5104,6 +5109,7 @@ mod tests {
     #[test]
     fn parse_claude_sessions_filters_by_project() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-filter");
         let claude_dir = dirs::home_dir().unwrap().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -5130,6 +5136,7 @@ mod tests {
     #[test]
     fn parse_claude_sessions_unions_disk_when_history_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-disk-only");
         let home = dirs::home_dir().unwrap();
         let project = "/Users/z/proj-disk-only";
@@ -5171,6 +5178,7 @@ mod tests {
     #[test]
     fn parse_claude_sessions_unions_history_and_disk() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-hist-disk");
         let home = dirs::home_dir().unwrap();
         let project = "/Users/z/proj-hist-disk";
@@ -5218,6 +5226,7 @@ mod tests {
     #[test]
     fn parse_cursor_sessions_returns_empty_when_chats_dir_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-empty");
         let sessions = parse_cursor_sessions(None).expect("must not error");
         assert!(sessions.is_empty());
@@ -5226,6 +5235,7 @@ mod tests {
     #[test]
     fn parse_cursor_ide_sessions_returns_empty_when_workspace_storage_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-ide-empty");
         let sessions = parse_cursor_ide_sessions(None).expect("must not error");
         assert!(sessions.is_empty());
@@ -5234,6 +5244,7 @@ mod tests {
     #[test]
     fn parse_gemini_sessions_returns_empty_when_tmp_dir_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("gemini-empty");
         let sessions = parse_gemini_sessions(None).expect("must not error");
         assert!(sessions.is_empty());
@@ -5242,6 +5253,7 @@ mod tests {
     #[test]
     fn parse_codex_sessions_returns_empty_when_sessions_dir_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("codex-empty");
         let sessions = parse_codex_sessions(None).expect("must not error");
         assert!(sessions.is_empty());
@@ -5250,6 +5262,7 @@ mod tests {
     #[test]
     fn list_all_sessions_returns_empty_for_clean_home() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("all-empty");
         let sessions = list_all_sessions(None).expect("must not error");
         assert!(
@@ -5261,6 +5274,7 @@ mod tests {
     #[test]
     fn get_storage_paths_reports_none_for_clean_home() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("storage-empty");
         let paths = get_storage_paths("/some/project").expect("get_storage_paths");
         assert!(paths.claude_history_file.is_none(), "got: {paths:?}");
@@ -5277,6 +5291,7 @@ mod tests {
     #[test]
     fn get_storage_paths_picks_up_claude_history_file_when_present() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("storage-claude");
         let claude_dir = dirs::home_dir().unwrap().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -5295,6 +5310,7 @@ mod tests {
     #[test]
     fn discover_ide_sessions_returns_empty_when_cursor_workspace_storage_missing() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("ide-empty");
         let sessions = discover_ide_sessions("/proj").expect("must not error");
         assert!(sessions.is_empty());
@@ -5312,6 +5328,7 @@ mod tests {
     #[test]
     fn rename_session_and_get_custom_names_round_trip() {
         let _g = UNIT6_DB_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let sid = format!("u6-rn-{}-{}", std::process::id(), uuid::Uuid::new_v4());
         rename_session("claude", &sid, "My Pinned Chat").expect("rename");
         let names = get_custom_names().expect("get_custom_names");
@@ -5333,6 +5350,7 @@ mod tests {
     #[test]
     fn rename_session_rejects_slug_collision_with_disk_only_chat() {
         let _g = UNIT6_DB_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let a = format!("u6-disk-a-{}-{}", std::process::id(), uuid::Uuid::new_v4());
         let b = format!("u6-disk-b-{}-{}", std::process::id(), uuid::Uuid::new_v4());
         rename_session("claude", &a, "Disk Only Collider").expect("first disk-only rename");
@@ -5356,6 +5374,7 @@ mod tests {
     #[test]
     fn rename_session_rejects_slash_and_colon() {
         let _g = UNIT6_DB_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let sid = format!("u6-rn-slash-{}-{}", std::process::id(), uuid::Uuid::new_v4());
         let err = rename_session("claude", &sid, "sales/reviewer")
             .expect_err("slash in custom_name must fail loud");
@@ -5374,6 +5393,7 @@ mod tests {
     #[test]
     fn list_all_sessions_overlays_custom_name_without_mutating_title() {
         let _home = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _db = UNIT6_DB_LOCK.lock();
         let _h = U6HomeGuard::new("list-custom-name");
         let home = dirs::home_dir().expect("home");
@@ -5446,6 +5466,7 @@ mod tests {
     #[test]
     fn toggle_pin_writes_and_clears_pinned_flag() {
         let _g = UNIT6_DB_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let sid = format!("u6-pin-{}-{}", std::process::id(), uuid::Uuid::new_v4());
         let key = format!("cursor:{}", sid);
         // Pin it.
@@ -5484,6 +5505,7 @@ mod tests {
     #[test]
     fn parse_cursor_sessions_dedupes_chat_id_across_hash_dirs() {
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-dedup");
         let cursor_chats = dirs::home_dir().unwrap().join(".cursor").join("chats");
         // Two project-hash dirs, same chat_id under each.
@@ -5525,6 +5547,7 @@ mod tests {
         // .jsonl with the same session id and an early vs. late
         // timestamp — the late one must win.
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("pi-dedup");
         let sessions_root = dirs::home_dir()
             .unwrap()
@@ -5576,6 +5599,7 @@ mod tests {
         // the SAME `payload.id`. Without dedup the history list shows
         // one row per resume.
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("codex-dedup");
         let sessions_root = dirs::home_dir().unwrap().join(".codex").join("sessions");
         let day_a = sessions_root.join("2026").join("01").join("01");
@@ -5625,6 +5649,7 @@ mod tests {
         // ones with the same composerId but different lastUpdatedAt
         // values to confirm dedup keeps the latest.
         let _g = UNIT6_HOME_LOCK.lock();
+        let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-ide-dedup");
         let workspace_dir = dirs::home_dir()
             .unwrap()

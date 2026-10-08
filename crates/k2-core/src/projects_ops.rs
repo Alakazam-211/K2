@@ -279,12 +279,18 @@ fn next_tab_order(conn: &rusqlite::Connection) -> i64 {
 pub fn projects_list() -> Result<Vec<Project>, String> {
     let db = db::shared();
     let conn = db.lock();
+    projects_list_on(&conn)
+}
+
+/// [`projects_list`] on an explicit connection (one snapshot: callers
+/// that compare it with `Project::list` hold one lock for both).
+pub fn projects_list_on(conn: &rusqlite::Connection) -> Result<Vec<Project>, String> {
     // Filter out the internal audit sentinels (`_orphan`, `_broadcast`).
     // They're seeded into `projects` only to satisfy the activity-feed
     // FK and must never appear in the user-facing workspace sidebar.
     // The unfiltered `Project::list` below stays intact for internal
     // callers (heartbeat/agent scanning, dedup/import, migrations).
-    let projects = Project::list(&conn)
+    let projects = Project::list(conn)
         .map_err(|e| e.to_string())?
         .into_iter()
         .filter(|p| !db::AUDIT_SENTINEL_IDS.contains(&p.id.as_str()))
@@ -1088,18 +1094,20 @@ mod tests {
     /// differ by exactly the two sentinel rows.
     #[test]
     fn projects_list_hides_audit_sentinels_but_project_list_keeps_them() {
-        // init_for_tests() seeds `_orphan` + `_broadcast` (see
-        // db::init_for_tests). Add a real workspace so the user-facing
-        // surface is non-empty either way.
-        db::init_for_tests();
-        ensure_project(
-            "real-ws-projects-ops",
-            "/tmp/k2so-projects-ops-test",
-            "RealOne",
-        );
+        // A scoped DB seeds `_orphan` + `_broadcast` (like the shared
+        // one) and holds only this test's rows. Add a real workspace so
+        // the user-facing surface is non-empty either way.
+        let _scoped_db = db::scoped_for_test();
+        let ws_path = std::env::temp_dir().join(format!("k2-projects-ops-{}", uuid::Uuid::new_v4()));
+        ensure_project("real-ws-projects-ops", &ws_path.to_string_lossy(), "RealOne");
+
+        // Both surfaces read from ONE snapshot (one lock): two separate
+        // reads would see rows another thread inserted in between.
+        let db_handle = db::shared();
+        let conn = db_handle.lock();
 
         // UI-facing surface: sentinels filtered out, real workspace present.
-        let visible = projects_list().expect("projects_list ok");
+        let visible = projects_list_on(&conn).expect("projects_list ok");
         let visible_ids: Vec<&str> = visible.iter().map(|p| p.id.as_str()).collect();
         assert!(
             !visible_ids.contains(&"_orphan"),
@@ -1116,8 +1124,6 @@ mod tests {
 
         // Internal surface: the raw Project::list() STILL returns the
         // sentinels (internal callers depend on a complete row set).
-        let db_handle = db::shared();
-        let conn = db_handle.lock();
         let raw_ids: Vec<String> = Project::list(&conn)
             .expect("Project::list ok")
             .into_iter()
@@ -1177,7 +1183,7 @@ mod tests {
     /// `projects_list()` hides them.
     #[test]
     fn projects_list_with_workspaces_embeds_arrays_hides_sentinels() {
-        db::init_for_tests();
+        let _scoped_db = db::scoped_for_test();
         ensure_project(
             "embed-ws-proj",
             "/tmp/k2-embed-ws-proj",
@@ -1289,7 +1295,7 @@ mod tests {
             s.default_agent = stamped_preset.into();
             crate::app_settings::save(&s).expect("save global settings");
 
-            db::init_for_tests();
+            let _scoped_db = db::scoped_for_test();
             let path = format!("/tmp/k2so-stamp-test/{}", Uuid::new_v4());
             let created =
                 projects_create("StampMe", &path, None).expect("projects_create ok");
@@ -1400,7 +1406,7 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_ex_default_plants() {
-        db::init_for_tests();
+        let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("default-on");
         let path = dir.to_string_lossy().into_owned();
         match projects_add_from_path_ex(&path, true, true, false) {
@@ -1429,7 +1435,7 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_ex_seed_agents_md_false_does_not_plant() {
-        db::init_for_tests();
+        let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("generate-off");
         let path = dir.to_string_lossy().into_owned();
         match projects_add_from_path_ex(&path, true, false, false) {
@@ -1463,7 +1469,7 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_twice_is_c2_copy_one_row() {
-        db::init_for_tests();
+        let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("add-twice");
         let path = dir.to_string_lossy().into_owned();
         match projects_add_from_path_ex(&path, false, false, false) {
@@ -1489,7 +1495,7 @@ mod tests {
 
     #[test]
     fn projects_add_without_git_twice_is_c2_copy_one_row() {
-        db::init_for_tests();
+        let _scoped_db = db::scoped_for_test();
         let dir = std::env::temp_dir().join(format!(
             "k2-proj-nogit-{}-{}",
             std::process::id(),

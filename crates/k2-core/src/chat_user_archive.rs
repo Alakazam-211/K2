@@ -412,10 +412,9 @@ mod tests {
     use super::*;
     use crate::chat_history::{list_all_sessions, resolve_claude_session_file};
     use crate::themes::HOME_LOCK;
-    use std::sync::Mutex;
-
-    // Serialize DB-touching tests against the shared in-memory DB.
-    static ARCHIVE_DB_LOCK: Mutex<()> = Mutex::new(());
+    // Each DB-touching test runs on its own scoped in-memory DB
+    // (`db::scoped_for_test`), so archived rows never leak into another
+    // test's `list_all_sessions`.
 
     struct TempDir {
         path: PathBuf,
@@ -482,7 +481,7 @@ mod tests {
     #[test]
     fn archive_move_and_restore_round_trip() {
         let _home_lock = HOME_LOCK.lock();
-        let _db = ARCHIVE_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::db::scoped_for_test();
         let home = HomeGuard::new("roundtrip");
         let project = home.path().join("proj");
         fs::create_dir_all(&project).unwrap();
@@ -512,7 +511,7 @@ mod tests {
     #[test]
     fn soft_archive_when_live_file_missing() {
         let _home_lock = HOME_LOCK.lock();
-        let _db = ARCHIVE_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::db::scoped_for_test();
         let home = HomeGuard::new("soft");
         let project = home.path().join("proj");
         fs::create_dir_all(&project).unwrap();
@@ -532,7 +531,7 @@ mod tests {
     #[test]
     fn list_synthesizes_archived_after_move() {
         let _home_lock = HOME_LOCK.lock();
-        let _db = ARCHIVE_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::db::scoped_for_test();
         let home = HomeGuard::new("synth");
         let project = home.path().join("proj");
         fs::create_dir_all(&project).unwrap();
@@ -557,7 +556,7 @@ mod tests {
     #[test]
     fn dual_query_keeps_archived_when_active_overflows_cap() {
         let _home_lock = HOME_LOCK.lock();
-        let _db = ARCHIVE_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::db::scoped_for_test();
         let home = HomeGuard::new("dual");
         let project = home.path().join("proj");
         fs::create_dir_all(&project).unwrap();
@@ -608,7 +607,7 @@ mod tests {
 
     #[test]
     fn rejects_non_claude_provider() {
-        let _db = ARCHIVE_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::db::scoped_for_test();
         let err = archive_user_session("/tmp/p", "cursor", "x", "t", 0).unwrap_err();
         assert!(err.contains("claude"), "got: {err}");
     }

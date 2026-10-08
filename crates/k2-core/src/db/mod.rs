@@ -93,6 +93,10 @@ pub fn open_private_with_resilience(path: &Path) -> Result<Connection> {
 /// before each SQL operation. Hold the lock for the duration of a
 /// transaction block, then drop the guard to release the write queue.
 pub fn shared() -> Arc<ReentrantMutex<Connection>> {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(scoped) = scoped_handle() {
+        return scoped;
+    }
     if let Some(handle) = SHARED.get() {
         return handle.clone();
     }
@@ -111,7 +115,92 @@ pub fn shared() -> Arc<ReentrantMutex<Connection>> {
 /// `init_database`). Callers that can fall back (inject flow) use this
 /// instead of panicking.
 pub fn try_shared() -> Option<Arc<ReentrantMutex<Connection>>> {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(scoped) = scoped_handle() {
+        return Some(scoped);
+    }
     SHARED.get().cloned()
+}
+
+// ── Scoped per-test DB (quiet-gate PRD §5.1, 0.45.1) ─────────────────
+//
+// `shared()` under test is ONE in-memory DB for the whole test binary
+// (~2,200 tests). Any test that asserts a whole-table property (empty,
+// exact set, count) or runs a whole-table sweep is then order-dependent.
+// `scoped_for_test()` installs a fresh, migrated, seeded in-memory DB in a
+// THREAD-LOCAL slot that `shared()` / `try_shared()` / `init_for_tests()`
+// check first, for as long as the guard lives.
+
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static SCOPED: std::cell::RefCell<Option<Arc<ReentrantMutex<Connection>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-util"))]
+fn scoped_handle() -> Option<Arc<ReentrantMutex<Connection>>> {
+    SCOPED.with(|s| s.borrow().clone())
+}
+
+/// Guard returned by [`scoped_for_test`]. Restores the previous slot (the
+/// process-wide test DB, or an outer scoped DB) on drop.
+#[cfg(any(test, feature = "test-util"))]
+#[must_use = "the scoped DB is uninstalled when the guard drops"]
+pub struct TestDbGuard {
+    handle: Arc<ReentrantMutex<Connection>>,
+    prev: Option<Arc<ReentrantMutex<Connection>>>,
+    // Thread-local slot: the guard must drop on the thread that made it.
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl TestDbGuard {
+    /// The scoped connection (the same one `shared()` returns on this
+    /// thread). Pass it explicitly to code that runs on other threads.
+    pub fn handle(&self) -> Arc<ReentrantMutex<Connection>> {
+        self.handle.clone()
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for TestDbGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        SCOPED.with(|s| *s.borrow_mut() = prev);
+    }
+}
+
+/// Test-only: give THIS THREAD its own fresh in-memory DB (fully migrated
+/// and seeded, exactly like the process-wide test DB) until the returned
+/// guard drops. `db::shared()` on this thread returns it; other threads
+/// (spawned threads, tokio worker threads) still see the process-wide test
+/// DB, so a test whose code under test hops threads must pass
+/// [`TestDbGuard::handle`] explicitly or stay on the shared DB.
+///
+/// Use it for every test that asserts on a whole table (empty, exact set,
+/// row count) or runs a whole-table sweep (`backfill_workspace_handles`,
+/// orphan purge): on the shared DB those see every other test's rows.
+/// Inside a scoped DB fixed ids and names are safe.
+#[cfg(any(test, feature = "test-util"))]
+pub fn scoped_for_test() -> TestDbGuard {
+    let conn = fresh_test_connection();
+    let handle = Arc::new(ReentrantMutex::new(conn));
+    let prev = SCOPED.with(|s| s.borrow_mut().replace(handle.clone()));
+    TestDbGuard { handle, prev, _not_send: std::marker::PhantomData }
+}
+
+/// A fresh in-memory connection, migrated + seeded like the shared one.
+#[cfg(any(test, feature = "test-util"))]
+fn fresh_test_connection() -> Connection {
+    let conn = Connection::open(":memory:").expect("in-memory SQLite open failed");
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .expect("set busy_timeout");
+    let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+    run_migrations(&conn).expect("test migrations");
+    seed_agent_presets(&conn).expect("test seed");
+    seed_audit_sentinels(&conn).expect("test audit sentinels");
+    crate::workspace::handle::backfill_workspace_handles(&conn);
+    conn
 }
 
 /// Test-only: populate SHARED with an in-memory SQLite that's been
@@ -131,18 +220,13 @@ pub fn try_shared() -> Option<Arc<ReentrantMutex<Connection>>> {
 /// without first calling `init_database()`.
 #[cfg(any(test, feature = "test-util"))]
 pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
+    if let Some(scoped) = scoped_handle() {
+        return scoped;
+    }
     if let Some(handle) = SHARED.get() {
         return handle.clone();
     }
-    let conn = Connection::open(":memory:")
-        .expect("in-memory SQLite open failed");
-    conn.busy_timeout(std::time::Duration::from_millis(5000))
-        .expect("set busy_timeout");
-    let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
-    run_migrations(&conn).expect("test migrations");
-    seed_agent_presets(&conn).expect("test seed");
-    seed_audit_sentinels(&conn).expect("test audit sentinels");
-    crate::workspace::handle::backfill_workspace_handles(&conn);
+    let conn = fresh_test_connection();
     let handle = Arc::new(ReentrantMutex::new(conn));
     match SHARED.set(handle.clone()) {
         Ok(()) => handle,
@@ -326,15 +410,7 @@ pub(crate) fn bootstrap_test_db_at<P: AsRef<Path>>(path: P) -> Result<()> {
 /// collide with other tests in the same process.
 #[cfg(test)]
 pub(crate) fn isolated_test_connection() -> Connection {
-    let conn = Connection::open(":memory:").expect("open :memory:");
-    conn.busy_timeout(std::time::Duration::from_millis(5000))
-        .expect("busy_timeout");
-    let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
-    run_migrations(&conn).expect("migrations");
-    seed_agent_presets(&conn).expect("seed");
-    seed_audit_sentinels(&conn).expect("audit sentinels");
-    crate::workspace::handle::backfill_workspace_handles(&conn);
-    conn
+    fresh_test_connection()
 }
 
 /// Self-heal sweep: remove rows in FK-bearing project-child tables
@@ -2937,4 +3013,51 @@ mod tests {
     // that 0039 immediately collapses + table-renames a few steps
     // later. Equivalent regression coverage for the current shape
     // lives in `schema::tests::workspace_session_*`.
+
+    // ── scoped_for_test (quiet-gate PRD §5.1) ────────────────────────
+
+    fn project_ids(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("SELECT id FROM projects ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn scoped_db_is_fresh_isolated_and_restored() {
+        let global = init_for_tests();
+        let marker = format!("scoped-db-probe-{}", uuid::Uuid::new_v4());
+        {
+            let guard = scoped_for_test();
+            let h = shared();
+            assert!(Arc::ptr_eq(&h, &guard.handle()), "shared() returns the scoped DB");
+            assert!(Arc::ptr_eq(&init_for_tests(), &guard.handle()));
+            assert!(Arc::ptr_eq(&try_shared().expect("scoped"), &guard.handle()));
+            let conn = h.lock();
+            // Only the seeded sentinels: no other test's rows.
+            assert_eq!(project_ids(&conn), vec!["_broadcast".to_string(), "_orphan".to_string()]);
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'n', '/nonexistent/k2-scoped-db')",
+                params![marker],
+            )
+            .unwrap();
+            {
+                // Nested scope: its own DB, then the outer one comes back.
+                let inner = scoped_for_test();
+                assert!(!Arc::ptr_eq(&shared(), &guard.handle()));
+                assert!(!project_ids(&inner.handle().lock()).contains(&marker));
+            }
+            assert!(Arc::ptr_eq(&shared(), &guard.handle()));
+            // Other threads keep the process-wide DB.
+            let other = std::thread::spawn(|| {
+                let h = shared();
+                let ids = project_ids(&h.lock());
+                ids
+            })
+            .join()
+            .unwrap();
+            assert!(!other.contains(&marker), "other threads never see the scoped DB");
+        }
+        assert!(Arc::ptr_eq(&shared(), &global), "the guard restores the shared DB");
+        assert!(!project_ids(&global.lock()).contains(&marker));
+    }
 }

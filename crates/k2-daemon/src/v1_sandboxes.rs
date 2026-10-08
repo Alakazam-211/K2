@@ -1040,11 +1040,13 @@ mod tests {
         let uniq = uuid::Uuid::new_v4();
         let path = format!("/tmp/k2-v1ws-slug-{uniq}");
         let pretty = format!("V1 Slug Team {uniq}");
-        let _id = insert_project(&pretty, &path);
+        let id = insert_project(&pretty, &path);
         {
+            // One row only: the whole-table sweep would rewrite every
+            // other test's workspace on the shared test DB.
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::workspace::handle::backfill_workspace_handles(&conn);
+            k2_core::workspace::handle::backfill_project_handle(&conn, &id).expect("backfill");
         }
         let handle = {
             let db = k2_core::db::shared();

@@ -263,6 +263,22 @@ pub fn backfill_workspace_handles(conn: &Connection) {
     rewrite_remote_connection_agents(conn);
 }
 
+/// The §8 backfill for ONE project row (by id). Same steps as
+/// [`backfill_workspace_handles`] applies to every row, without touching
+/// any other project (or its AGENT.md). Tests on the shared test DB use
+/// this instead of the whole-table sweep, which would race every other
+/// test's workspaces.
+pub fn backfill_project_handle(conn: &Connection, project_id: &str) -> Result<(), String> {
+    let (name, path, handle): (String, String, Option<String>) = conn
+        .query_row(
+            "SELECT name, path, handle FROM projects WHERE id = ?1",
+            params![project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| format!("project {project_id}: {e}"))?;
+    backfill_one(conn, project_id, &name, &path, handle.as_deref())
+}
+
 fn backfill_one(
     conn: &Connection,
     id: &str,
@@ -1095,8 +1111,46 @@ mod tests {
     }
 
     #[test]
+    fn backfill_project_handle_touches_only_that_row() {
+        let _scoped_db = crate::db::scoped_for_test();
+        let (id_a, path_a) = unique_dir("one-a");
+        let (id_b, path_b) = unique_dir("one-b");
+        let pretty_a = unique_pretty(&id_a, "Row A");
+        let pretty_b = unique_pretty(&id_b, "Row B");
+        insert_project(&id_a, &pretty_a, &path_a);
+        insert_project(&id_b, &pretty_b, &path_b);
+        write_agent_md(&path_b, "", "untouched-name");
+        let md_b_before = std::fs::read_to_string(workspace_agent_md_path(&path_b)).expect("md b");
+
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            backfill_project_handle(&conn, &id_a).expect("backfill a");
+            let b_handle: Option<String> = conn
+                .query_row("SELECT handle FROM projects WHERE id = ?1", params![id_b], |r| r.get(0))
+                .expect("row b");
+            assert_eq!(b_handle, None, "the other row keeps no handle");
+            assert!(
+                backfill_project_handle(&conn, "no-such-project").is_err(),
+                "an unknown id is an error, not a silent no-op"
+            );
+        }
+        assert_eq!(handle_of(&id_a), slugify_address_token(&pretty_a).expect("slug"));
+        assert_eq!(
+            std::fs::read_to_string(workspace_agent_md_path(&path_b)).expect("md b after"),
+            md_b_before,
+            "the other row's AGENT.md is not rewritten"
+        );
+        std::fs::remove_dir_all(&path_a).expect("cleanup a");
+        std::fs::remove_dir_all(&path_b).expect("cleanup b");
+    }
+
+    #[test]
     fn backfill_sales_team_copies_pretty_then_slugs() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("sales");
         let pretty = unique_pretty(&id, "Sales Team");
         insert_project(&id, &pretty, &path);
@@ -1141,7 +1195,10 @@ mod tests {
 
     #[test]
     fn backfill_copies_missing_display_name_then_slugs() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("nodisp");
         let pretty = unique_pretty(&id, "QA Bot");
         insert_project(&id, &pretty, &path);
@@ -1167,7 +1224,10 @@ mod tests {
 
     #[test]
     fn backfill_already_slugged_does_not_suffix() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("slugged");
         let token = format!("slugged{}", &id[..8]);
         insert_project(&id, &token, &path);
@@ -1183,7 +1243,10 @@ mod tests {
 
     #[test]
     fn backfill_collision_suffixes_second() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id_a, path_a) = unique_dir("col-a");
         let (id_b, path_b) = unique_dir("col-b");
         let pretty = unique_pretty(&id_a, "Collide Team");
@@ -1214,7 +1277,10 @@ mod tests {
 
     #[test]
     fn backfill_two_cortana_folders_skips_second_basename_alias() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let suffix = uuid::Uuid::new_v4();
         let dir_a = std::env::temp_dir().join(format!("Cortana-a-{}", suffix));
         let dir_b = std::env::temp_dir().join(format!("Cortana-b-{}", suffix));
@@ -1251,7 +1317,10 @@ mod tests {
 
     #[test]
     fn set_display_does_not_change_handle_or_name_colon() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("disp");
         let pretty = unique_pretty(&id, "Sales Team");
         insert_project(&id, &pretty, &path);
@@ -1276,7 +1345,10 @@ mod tests {
 
     #[test]
     fn set_handle_aliases_previous() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("set-h");
         let pretty = unique_pretty(&id, "Sales Team");
         insert_project(&id, &pretty, &path);
@@ -1301,7 +1373,10 @@ mod tests {
 
     #[test]
     fn set_handle_collision_names_other_workspace() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id_a, path_a) = unique_dir("uniq-a");
         let (id_b, path_b) = unique_dir("uniq-b");
         insert_project(&id_a, "Alpha", &path_a);
@@ -1326,7 +1401,10 @@ mod tests {
 
     #[test]
     fn resolve_order_handle_alias_name_basename() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("resolve");
         let pretty = unique_pretty(&id, "Sales Team");
         insert_project(&id, &pretty, &path);
@@ -1358,7 +1436,10 @@ mod tests {
 
     #[test]
     fn resolve_ambiguous_display_is_fail_closed() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id_a, path_a) = unique_dir("ambig-a");
         let (id_b, path_b) = unique_dir("ambig-b");
         let pretty = unique_pretty(&id_a, "Ambig Sales");
@@ -1389,7 +1470,10 @@ mod tests {
 
     #[test]
     fn lazy_heal_rewrites_matching_row_leaves_d20() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("heal");
         insert_project(&id, "Sales Team", &path);
         {
@@ -1648,7 +1732,10 @@ mod tests {
 
     #[test]
     fn create_path_mints_handle() {
-        crate::db::init_for_tests();
+        // Own DB: backfill_workspace_handles sweeps EVERY project row
+        // (and rewrites each one's AGENT.md), so on the shared DB it
+        // races every other test's workspaces.
+        let _scoped_db = crate::db::scoped_for_test();
         let (id, path) = unique_dir("create");
         {
             let dbh = db::shared();

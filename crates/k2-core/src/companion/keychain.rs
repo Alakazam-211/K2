@@ -88,6 +88,12 @@ fn acl_trusted_apps() -> Vec<String> {
 
 #[cfg(target_os = "macos")]
 pub fn delete_password_hash() {
+    // Test builds (k2-core's own tests, and k2-daemon tests through the
+    // `test-util` dev feature) must never touch the developer's real login
+    // keychain: `settings/reset` tests reach this.
+    if cfg!(any(test, feature = "test-util")) {
+        return;
+    }
     let _ = std::process::Command::new("security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
         .output();

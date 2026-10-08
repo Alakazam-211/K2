@@ -59,6 +59,58 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     "agentHooks",
 ];
 
+/// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may
+/// write: what the daemon listens on and advertises (`listenLan`, and the
+/// LAN-mode `lanScope` / `lanAdvertise` names, gated before they exist),
+/// air-gap, the push gateway and the companion block. An Admin or Member
+/// login touching any of them gets an atomic 403 with nothing written.
+/// Agent passports never reach `/cli/settings/*` (`token_ok` refuses them).
+const OWNER_ONLY_KEYS: &[&str] = &[
+    "listenLan",
+    "lanScope",
+    "lanAdvertise",
+    "airgap",
+    "pushGatewayUrl",
+    "pushGatewayToken",
+    "companion",
+];
+
+/// Who is writing settings, resolved by the dispatcher from the request
+/// credential: the owner token or an Owner login, an Admin login, or any
+/// other accepted login (Member).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsActor {
+    Member,
+    Admin,
+    Owner,
+}
+
+impl SettingsActor {
+    /// Resolve from the effective auth query — the same resolvers the
+    /// route gates use (`owner_role_identity`, `token_is_owner_or_admin`).
+    pub fn from_query(query: &str, owner_token: &str) -> Self {
+        if crate::routes::http::owner_role_identity(query, owner_token).is_some() {
+            SettingsActor::Owner
+        } else if crate::routes::http::token_is_owner_or_admin(query, owner_token) {
+            SettingsActor::Admin
+        } else {
+            SettingsActor::Member
+        }
+    }
+
+    fn can_manage(self) -> bool {
+        !matches!(self, SettingsActor::Member)
+    }
+}
+
+fn forbidden(msg: String) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": msg }).to_string(),
+    }
+}
+
 /// Handler for `GET /cli/settings/get`.
 ///
 /// Token check happens in `main.rs` before this is called. Returns
@@ -85,14 +137,14 @@ pub fn handle_settings_get() -> CliResponse {
 /// fields differ from disk, every live companion session is
 /// invalidated before this handler returns.
 ///
-/// `actor_can_manage` is the dispatcher-resolved owner-or-admin bit
-/// (`token_is_owner_or_admin` — the same tier the federation management
-/// routes use). When the partial touches ANY [`REMOTE_ACCESS_KEYS`] entry
-/// and the actor is a Member, the WHOLE request is rejected 403 with
-/// nothing written — atomic, so a mixed gated+ungated payload can never
-/// half-apply and leave the caller guessing which keys landed. Other
-/// settings keys keep the pre-existing any-authenticated-user behavior.
-pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliResponse {
+/// `actor` is the dispatcher-resolved [`SettingsActor`]. When the partial
+/// touches ANY [`OWNER_ONLY_KEYS`] entry and the actor is not the Owner,
+/// or ANY [`REMOTE_ACCESS_KEYS`] entry and the actor is a Member, the
+/// WHOLE request is rejected 403 with nothing written — atomic, so a
+/// mixed gated+ungated payload can never half-apply and leave the caller
+/// guessing which keys landed. Other settings keys keep the pre-existing
+/// any-authenticated-user behavior.
+pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse {
     let partial: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -105,18 +157,16 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
     // Owner decree: "Only Admin and Owner can enable federation." Gate on
     // key PRESENCE (not value) — a Member force-disabling the owner's
     // federation is the same class of unauthorized remote-access write.
-    if !actor_can_manage {
+    if actor != SettingsActor::Owner {
+        if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
+            return forbidden(format!("updating \"{gated}\" requires the Owner role"));
+        }
+    }
+    if !actor.can_manage() {
         if let Some(gated) = REMOTE_ACCESS_KEYS.iter().find(|k| partial.get(**k).is_some()) {
-            return CliResponse {
-                status: "403 Forbidden",
-                content_type: "application/json",
-                body: serde_json::json!({
-                    "error": format!(
-                        "updating \"{gated}\" requires the Owner or Admin role"
-                    )
-                })
-                .to_string(),
-            };
+            return forbidden(format!(
+                "updating \"{gated}\" requires the Owner or Admin role"
+            ));
         }
     }
     // TODO grant announce — if partial flips dnsManageEnabled false→true,
@@ -162,7 +212,15 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
 /// session — matching the pre-Unit-7a Tauri `settings_reset` body
 /// exactly. POST (not GET) because the call is destructive and
 /// shouldn't be reachable via a browser-cached idempotent fetch.
-pub fn handle_settings_reset() -> CliResponse {
+///
+/// LM5: Owner only (route floor Owner in `route_policy.rs`; this check is
+/// the defence in depth). A reset rewrites every gated key at once —
+/// re-opening the browser door, the tunnel login ingress, LAN and
+/// air-gap — so a non-Owner gets 403 with nothing changed.
+pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
+    if actor != SettingsActor::Owner {
+        return forbidden("resetting settings requires the Owner role".to_string());
+    }
     match k2_core::app_settings::reset() {
         Ok(defaults) => {
             // Reset returns federation to its default (OFF) — sync it.
@@ -197,12 +255,21 @@ mod tests {
         crate::routes::http::token_is_owner_or_admin(query, owner_token)
     }
 
+    /// Admin or Member from the manage bit (callers that never mean Owner).
+    fn tier(can_manage: bool) -> SettingsActor {
+        if can_manage {
+            SettingsActor::Admin
+        } else {
+            SettingsActor::Member
+        }
+    }
+
     #[test]
     fn owner_token_may_write_federation_enabled() {
         with_temp_home(|| {
             let cm = can_manage("token=ownertok", "ownertok");
             assert!(cm, "owner token must resolve to the manage tier");
-            let r = handle_settings_update(br#"{"federationEnabled":true}"#, cm);
+            let r = handle_settings_update(br#"{"federationEnabled":true}"#, tier(cm));
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(
                 k2_core::app_settings::load().federation_enabled,
@@ -219,7 +286,7 @@ mod tests {
             let tok = connect_users::create_session("adminu");
             let cm = can_manage(&format!("token={tok}"), "ownertok");
             assert!(cm, "Admin session must resolve to the manage tier");
-            let r = handle_settings_update(br#"{"federationEnabled":true}"#, cm);
+            let r = handle_settings_update(br#"{"federationEnabled":true}"#, tier(cm));
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(k2_core::app_settings::load().federation_enabled);
         });
@@ -237,7 +304,7 @@ mod tests {
             let cm = can_manage("token=ownertok", "ownertok");
             assert!(cm, "owner token must resolve to the manage tier");
 
-            let r = handle_settings_update(br#"{"apiEnabled":true}"#, cm);
+            let r = handle_settings_update(br#"{"apiEnabled":true}"#, tier(cm));
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(
                 k2_core::app_settings::load().api_enabled,
@@ -249,7 +316,7 @@ mod tests {
             );
 
             // …and back OFF (also restores process state for other tests).
-            let r = handle_settings_update(br#"{"apiEnabled":false}"#, cm);
+            let r = handle_settings_update(br#"{"apiEnabled":false}"#, tier(cm));
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(!k2_core::app_settings::load().api_enabled);
             assert!(
@@ -264,11 +331,11 @@ mod tests {
     #[test]
     fn reset_returns_api_enabled_to_off_and_syncs_mirror() {
         with_temp_home(|| {
-            let r = handle_settings_update(br#"{"apiEnabled":true}"#, true);
+            let r = handle_settings_update(br#"{"apiEnabled":true}"#, SettingsActor::Owner);
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(k2_core::app_settings::api_enabled_setting());
 
-            let r = handle_settings_reset();
+            let r = handle_settings_reset(SettingsActor::Owner);
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert!(!k2_core::app_settings::load().api_enabled);
             assert!(
@@ -302,7 +369,7 @@ mod tests {
                 br#"{"remoteSessionsEnabled":true}"#.as_slice(),
                 br#"{"webClientEnabled":false}"#.as_slice(),
             ] {
-                let r = handle_settings_update(body, cm);
+                let r = handle_settings_update(body, tier(cm));
                 assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
                 assert!(
                     r.body.contains("Owner or Admin"),
@@ -337,7 +404,7 @@ mod tests {
         with_temp_home(|| {
             // Member tier (can_manage=false) writing a key OUTSIDE
             // REMOTE_ACCESS_KEYS keeps today's token_ok-only behavior.
-            let r = handle_settings_update(br#"{"defaultAgent":"codex"}"#, false);
+            let r = handle_settings_update(br#"{"defaultAgent":"codex"}"#, SettingsActor::Member);
             assert_eq!(r.status, "200 OK", "got: {}", r.body);
             assert_eq!(k2_core::app_settings::load().default_agent, "codex");
         });
@@ -350,12 +417,128 @@ mod tests {
             // request is rejected — the ungated key must not half-apply.
             let r = handle_settings_update(
                 br#"{"federationEnabled":true,"defaultAgent":"codex"}"#,
-                false,
+                SettingsActor::Member,
             );
             assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
             let s = k2_core::app_settings::load();
             assert!(!s.federation_enabled, "gated key must be unchanged");
             assert_eq!(s.default_agent, "claude", "ungated key must be unchanged too");
+        });
+    }
+
+    /// Sessions for each login tier, resolved the way the dispatcher does.
+    fn session_actor(username: &str, role: connect_users::Role) -> SettingsActor {
+        connect_users::add_user(username, "password1").expect("add");
+        connect_users::set_role(username, role).expect("role");
+        let tok = connect_users::create_session(username);
+        SettingsActor::from_query(&format!("token={tok}"), "ownertok")
+    }
+
+    #[test]
+    fn actor_resolves_owner_admin_member() {
+        with_temp_home(|| {
+            assert_eq!(
+                SettingsActor::from_query("token=ownertok", "ownertok"),
+                SettingsActor::Owner
+            );
+            assert_eq!(
+                session_actor("ownerlogin", connect_users::Role::Owner),
+                SettingsActor::Owner
+            );
+            assert_eq!(
+                session_actor("adminlogin", connect_users::Role::Admin),
+                SettingsActor::Admin
+            );
+            assert_eq!(
+                session_actor("memberlogin", connect_users::Role::Member),
+                SettingsActor::Member
+            );
+        });
+    }
+
+    /// LM5: listen / air-gap / push gateway / companion keys are Owner
+    /// only. Admin and Member get an atomic 403 and nothing changes.
+    #[test]
+    fn owner_only_keys_refused_for_admin_and_member() {
+        with_temp_home(|| {
+            let admin = session_actor("adminlm5", connect_users::Role::Admin);
+            let member = session_actor("memberlm5", connect_users::Role::Member);
+            assert_eq!(admin, SettingsActor::Admin);
+            assert_eq!(member, SettingsActor::Member);
+            for actor in [admin, member] {
+                for body in [
+                    br#"{"listenLan":true}"#.as_slice(),
+                    br#"{"listenLan":false}"#.as_slice(),
+                    br#"{"lanScope":"any"}"#.as_slice(),
+                    br#"{"lanAdvertise":"http://10.0.0.5:1"}"#.as_slice(),
+                    br#"{"airgap":true}"#.as_slice(),
+                    br#"{"airgap":false}"#.as_slice(),
+                    br#"{"pushGatewayUrl":"https://evil.example"}"#.as_slice(),
+                    br#"{"pushGatewayToken":"t"}"#.as_slice(),
+                    br#"{"companion":{}}"#.as_slice(),
+                    br#"{"listenLan":true,"defaultAgent":"codex"}"#.as_slice(),
+                ] {
+                    let r = handle_settings_update(body, actor);
+                    assert_eq!(r.status, "403 Forbidden", "{actor:?}: got {}", r.body);
+                    assert!(
+                        r.body.contains("requires the Owner role"),
+                        "{actor:?}: error must name the Owner role, got {}",
+                        r.body
+                    );
+                }
+            }
+            let s = k2_core::app_settings::load();
+            assert!(!s.listen_lan, "403 must leave listenLan off");
+            assert!(!s.airgap, "403 must leave airgap off");
+            assert_eq!(s.push_gateway_url, None);
+            assert_eq!(s.push_gateway_token, None);
+            assert_eq!(s.default_agent, "claude", "mixed payload must not half-apply");
+            // An Admin still manages the remote-access keys.
+            let r = handle_settings_update(br#"{"federationEnabled":false}"#, admin);
+            assert_eq!(r.status, "200 OK", "Admin keeps its tier: {}", r.body);
+        });
+    }
+
+    #[test]
+    fn owner_may_write_owner_only_keys() {
+        with_temp_home(|| {
+            let r = handle_settings_update(
+                br#"{"pushGatewayUrl":"https://push.example"}"#,
+                SettingsActor::Owner,
+            );
+            assert_eq!(r.status, "200 OK", "got: {}", r.body);
+            assert_eq!(
+                k2_core::app_settings::load().push_gateway_url.as_deref(),
+                Some("https://push.example")
+            );
+        });
+    }
+
+    /// LM5: a reset re-opens the browser door and flips the tunnel login
+    /// ingress back to default, so only the Owner may do it. Admin and
+    /// Member get 403 and every value stays as the Owner left it.
+    #[test]
+    fn reset_is_owner_only_and_non_owner_changes_nothing() {
+        with_temp_home(|| {
+            let r = handle_settings_update(
+                br#"{"webClientEnabled":false,"connectLoginIngress":"off","defaultAgent":"codex"}"#,
+                SettingsActor::Owner,
+            );
+            assert_eq!(r.status, "200 OK", "owner setup: {}", r.body);
+            let admin = session_actor("adminreset", connect_users::Role::Admin);
+            let member = session_actor("memberreset", connect_users::Role::Member);
+            for actor in [admin, member] {
+                let r = handle_settings_reset(actor);
+                assert_eq!(r.status, "403 Forbidden", "{actor:?}: got {}", r.body);
+                assert!(r.body.contains("Owner role"), "{}", r.body);
+                let s = k2_core::app_settings::load();
+                assert!(!s.web_client_enabled, "{actor:?} reset must not re-enable the web client");
+                assert_eq!(s.connect_login_ingress, "off", "{actor:?} reset must not reopen ingress");
+                assert_eq!(s.default_agent, "codex", "{actor:?} reset must change nothing");
+            }
+            let r = handle_settings_reset(SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "owner reset: {}", r.body);
+            assert!(k2_core::app_settings::load().web_client_enabled, "owner reset restores defaults");
         });
     }
 }

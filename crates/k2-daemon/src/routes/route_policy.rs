@@ -653,7 +653,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sessions/v2/spawn", Member),
     get("/cli/settings", Member),
     get("/cli/settings/get", Member),
-    post("/cli/settings/reset", Member),
+    // LM5: a reset rewrites every gated key (web client, tunnel login
+    // ingress, LAN, air-gap) at once — Owner only.
+    post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     get("/cli/sidecar/list", Member),

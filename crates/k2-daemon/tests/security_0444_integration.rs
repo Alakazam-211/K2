@@ -834,3 +834,80 @@ async fn thread_activity_get_refuses_foreign_origin_cookies() {
         is_catch_up(&r, "owner token with foreign Origin");
     });
 }
+
+// ── LM5 (prd-small-security-0451 fix 6): owner-only settings ──────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settings_reset_and_owner_only_keys_need_the_owner() {
+    let _g = lock();
+    with_temp_home(|_| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let tag = &uuid::Uuid::new_v4().to_string()[..6];
+        let member = provision(d.port, &format!("lm5m{tag}"), "member");
+        let admin = provision(d.port, &format!("lm5a{tag}"), "admin");
+        let (id, _) = seed_ws(&format!("lm5{tag}"));
+        let passport = mint_passport(&id);
+
+        let post = |path: &str, tok: &str, body: &str| {
+            req(d.port, "POST", &format!("{path}?token={tok}"), "127.0.0.1", &[], Some(body))
+        };
+        let settings = || {
+            let r = req(
+                d.port,
+                "GET",
+                &format!("/cli/settings/get?token={OWNER_TOKEN}"),
+                "127.0.0.1",
+                &[],
+                None,
+            );
+            assert_eq!(r.status, 200, "settings/get; {}", r.body);
+            json(&r.body)
+        };
+
+        let r = post(
+            "/cli/settings/update",
+            OWNER_TOKEN,
+            r#"{"webClientEnabled":false,"connectLoginIngress":"off"}"#,
+        );
+        assert_eq!(r.status, 200, "owner setup; {}", r.body);
+
+        // Reset: Member and Admin are below the Owner floor.
+        for (who, tok) in [("Member", member.as_str()), ("Admin", admin.as_str())] {
+            let r = post("/cli/settings/reset", tok, "{}");
+            assert_eq!(r.status, 403, "{who} reset; {}", r.body);
+            assert_eq!(json(&r.body)["error"], "role_required", "{who} reset; {}", r.body);
+            let s = settings();
+            assert_eq!(s["webClientEnabled"], false, "{who} reset re-enabled the web client: {s}");
+            assert_eq!(s["connectLoginIngress"], "off", "{who} reset reopened ingress: {s}");
+        }
+        let bearer = format!("Authorization: Bearer {passport}");
+        let r = req(d.port, "POST", "/cli/settings/reset", "127.0.0.1", &[&bearer], Some("{}"));
+        assert_eq!(r.status, 403, "passport reset; {}", r.body);
+        assert_eq!(settings()["webClientEnabled"], false, "passport reset changed settings");
+
+        // Owner-only keys: Admin and Member refused, passport refused.
+        for (who, tok) in [("Member", member.as_str()), ("Admin", admin.as_str())] {
+            for body in [r#"{"listenLan":true}"#, r#"{"airgap":true}"#, r#"{"lanScope":"any"}"#] {
+                let r = post("/cli/settings/update", tok, body);
+                assert_eq!(r.status, 403, "{who} {body}; {}", r.body);
+            }
+        }
+        let r = req(
+            d.port,
+            "POST",
+            "/cli/settings/update",
+            "127.0.0.1",
+            &[&bearer],
+            Some(r#"{"listenLan":true}"#),
+        );
+        assert_eq!(r.status, 403, "passport listenLan; {}", r.body);
+        let s = settings();
+        assert_eq!(s["listenLan"], false, "listenLan changed: {s}");
+        assert_eq!(s["airgap"], false, "airgap changed: {s}");
+
+        // The Owner still resets.
+        let r = post("/cli/settings/reset", OWNER_TOKEN, "{}");
+        assert_eq!(r.status, 200, "owner reset; {}", r.body);
+        assert_eq!(settings()["webClientEnabled"], true, "owner reset restores defaults");
+    });
+}

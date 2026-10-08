@@ -3826,11 +3826,14 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            let actor_can_manage =
-                super::http::token_is_owner_or_admin(&query, state.token.as_str());
+            // LM5: owner-only keys need the Owner; remote-access keys
+            // need Owner or Admin (both enforced key-aware in the handler).
+            let actor = crate::settings_routes::SettingsActor::from_query(
+                &query,
+                state.token.as_str(),
+            );
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result =
-                crate::settings_routes::handle_settings_update(&body_bytes, actor_can_manage);
+            let result = crate::settings_routes::handle_settings_update(&body_bytes, actor);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
@@ -3853,7 +3856,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let _ = stream.read(&mut buf).await;
-            let result = crate::settings_routes::handle_settings_reset();
+            // LM5: Owner only (route floor Owner + handler check).
+            let actor = crate::settings_routes::SettingsActor::from_query(
+                &query,
+                state.token.as_str(),
+            );
+            let result = crate::settings_routes::handle_settings_reset(actor);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

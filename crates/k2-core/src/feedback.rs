@@ -196,8 +196,8 @@ pub fn create_with_brief(
             new.session_kind,
             new.agent_name.trim(),
             kind,
-            title,
-            body,
+            crate::redaction::redact(&title),
+            crate::redaction::redact_opt(body.as_deref()),
             options_json,
             priority,
             now,
@@ -207,7 +207,7 @@ pub fn create_with_brief(
     tx.execute(
         "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![uuid::Uuid::new_v4().to_string(), id, new.agent_name.trim(), seed, now],
+        params![uuid::Uuid::new_v4().to_string(), id, new.agent_name.trim(), crate::redaction::redact(&seed), now],
     )
     .map_err(|e| format!("feedback seed comment insert failed: {e}"))?;
     if let Some(brief) = &brief {
@@ -623,7 +623,7 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
     conn.execute(
         "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![comment_id, id, author, body_t, now],
+        params![comment_id, id, author, crate::redaction::redact(body_t), now],
     )
     .map_err(|e| format!("comment insert failed: {e}"))?;
     Ok(FeedbackComment {

@@ -17020,7 +17020,7 @@ cmd_schema() {
     },
     {
       "name": "db dsn",
-      "usage": "k2 db dsn [--json] [--workspace <ws>]",
+      "usage": "k2 db dsn [--ref] [--json] [--workspace <ws>]",
       "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (owned first, else first grant). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
       "args": [],
       "flags": [
@@ -40107,6 +40107,8 @@ elif verb == "dsn":
         params["test"] = "1"
     if os.environ.get("D_ACTOR"):
         params["actor"] = os.environ["D_ACTOR"]
+    if os.environ.get("D_REF") == "true":
+        params["ref"] = "1"
     status, raw = request("GET", "/cli/db/dsn", params)
     d = load(raw)
 elif verb == "migrate":
@@ -40231,7 +40233,7 @@ elif verb == "create":
     if cap:
         print("cap %s/%s used" % (cap.get("used"), cap.get("cap")))
 elif verb == "dsn":
-    print(d.get("dsn") or "")
+    print(d.get("ref") or d.get("dsn") or "")
 elif verb == "list":
     dbs = d.get("databases") or []
     print("%s database(s)" % len(dbs))
@@ -40459,11 +40461,12 @@ cmd_db() {
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="list" D_JSON="$as_json" _db_py ;;
         dsn|creds)
-            local test=false actor=""
+            local test=false actor="" vref=false
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --test) test=true; shift ;;
+                    --ref) vref=true; shift ;;
                     --actor) actor="${2:-}"; shift 2 ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
@@ -40472,7 +40475,7 @@ cmd_db() {
                 _db_err "usage" "--actor must be migrator"
                 exit 2
             fi
-            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" _db_py ;;
+            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" D_REF="$vref" _db_py ;;
         migrate)
             while [ $# -gt 0 ]; do
                 case "$1" in

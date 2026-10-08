@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use k2_vault::inject::{self, Inject};
-use k2_vault::vault::{CardAnswer, VaultStatus};
+use k2_vault::vault::VaultStatus;
 use k2_vault::{
     Actor, AuditQuery, Consumer, ConsumerKind, Delivery, GrantRequest, HumanProof, Kind, ListFilter, LocalVault,
     Namespace, PolicyPatch, PutMode, PutRequest, Requester, Scope, ScopeKind, SecretBytes, SecretMeta, SecretStore,
@@ -1259,13 +1259,6 @@ fn restore(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> R
     vault.acknowledge_rollback(&c.actor, &proof)?;
     crate::vault::auth_audit("vault-restore", &c.actor.stamp(), "ok rollback acknowledged", ingress);
     Ok(json!({ "ok": true }))
-}
-
-/// A secret card answer from the Thread (`/cli/thread/answer`, §10.1):
-/// the value goes straight into the vault. Called by `overlay_routes`.
-pub fn answer_secret_card(card_id: &str, value: SecretBytes, ans: &CardAnswer, actor: &Actor) -> Result<k2_vault::vault::CardResult, VaultError> {
-    let vault = crate::vault::get()?;
-    vault.request_answer(card_id, value, ans, actor)
 }
 
 #[cfg(test)]

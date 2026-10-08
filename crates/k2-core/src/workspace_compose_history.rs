@@ -101,7 +101,8 @@ pub fn record_compose_send(
     body: &str,
     author: &str,
 ) -> Result<Option<String>, String> {
-    let body = body.trim();
+    let redacted = crate::redaction::redact(body.trim());
+    let body = redacted.as_str();
     if body.is_empty() {
         return Ok(None);
     }
@@ -153,7 +154,8 @@ pub fn record_compose_send_for_cwd(
     body: &str,
     author: &str,
 ) -> Result<Option<String>, String> {
-    let body = body.trim();
+    let redacted = crate::redaction::redact(body.trim());
+    let body = redacted.as_str();
     if body.is_empty() {
         return Ok(None);
     }

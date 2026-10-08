@@ -18,6 +18,7 @@ pub mod keychain;
 pub mod keeper_client;
 #[cfg(target_os = "macos")]
 pub mod local_auth;
+pub mod mainrefs;
 pub mod refstore;
 pub mod spawn;
 pub mod systemd_creds;
@@ -115,7 +116,11 @@ pub fn boot(home: &Path) {
                     ..Default::default()
                 }),
             }
+            let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder(v.clone())));
+            let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
+            record_adoption(mainrefs::adopt(v));
             spawn::sweep_at_boot();
+            start_ticker(v.clone());
             let nd = k2_vault::secret::set_non_dumpable();
             let _ = NON_DUMPABLE.set(nd);
             k2_core::log_debug!(
@@ -127,6 +132,32 @@ pub fn boot(home: &Path) {
         Err(e) => k2_core::log_debug!("[vault] NOT open: {e}"),
     }
     *cell().write() = r;
+}
+
+/// Every minute: flush audit roll-ups, expire chat secrets and old card
+/// requests, drop versions past retention, and remove secrets dirs of
+/// sessions that are gone.
+fn start_ticker(v: Arc<LocalVault>) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+    handle.spawn(async move {
+        let mut t = tokio::time::interval(std::time::Duration::from_secs(60));
+        t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            t.tick().await;
+            let v2 = v.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = v2.tick() {
+                    k2_core::log_debug!("[vault] tick: {}", e.code);
+                }
+                let live: std::collections::HashSet<String> = crate::v2_session_map::snapshot()
+                    .into_iter()
+                    .map(|(_, s)| s.session_id.to_string())
+                    .collect();
+                spawn::sweep_dead(&|s: &str| live.contains(s));
+            })
+            .await;
+        }
+    });
 }
 
 /// Open with `ks`; when `ks` isn't the file store and the vault was made
@@ -197,6 +228,7 @@ pub fn ensure_test_vault() -> Arc<LocalVault> {
         (dir, v)
     });
     *cell().write() = Ok(v.clone());
+    let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
     v.clone()
 }
 
@@ -292,6 +324,25 @@ pub fn auth_audit(event: &str, user: &str, outcome: &str, ingress: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// KV33: text K2 stores (here a ticket comment and an inbox note) never
+    /// keeps a known secret value.
+    #[test]
+    fn k2_surfaces_store_known_values_redacted() {
+        use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore as _};
+        let v = super::ensure_test_vault();
+        let val = format!("k2test_SURFACE_SENTINEL_{}", uuid::Uuid::new_v4().simple());
+        let mut r = PutRequest::new(Namespace::User, Scope::server(), "GH_TOKEN_SURFACE", Kind::ApiKey);
+        r.hosts = vec!["api.github.com".into()];
+        v.put(r, SecretBytes::from_slice(val.as_bytes()), &Actor::Owner).expect("put");
+        let out = k2_core::redaction::redact(&format!("token is {val} ok"));
+        assert_eq!(out, "token is [k2v:GH_TOKEN_SURFACE] ok");
+        let dir = k2_vault::fsutil::TestDir::new("inbox-redact");
+        let item = k2_core::inbox::compose(dir.path(), "note", &format!("here: {val}"), None, None, None).expect("compose");
+        let text = std::fs::read_to_string(dir.path().join(".k2/inbox").join(&item.filename)).expect("read");
+        assert!(!text.contains(&val), "{text}");
+        assert!(text.contains("[k2v:GH_TOKEN_SURFACE]"));
+    }
+
     /// VS14: only the serve path opens the KeyStore. Every call site of
     /// `LocalVault::open` / `load_or_init` in the daemon is in this file.
     #[test]

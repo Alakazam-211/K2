@@ -257,7 +257,58 @@ pub fn handle_timer_entries_export(params: &HashMap<String, String>) -> CliRespo
 // ── Presets ───────────────────────────────────────────────────────────
 
 pub fn handle_presets_list() -> CliResponse {
-    serialized(dops::presets_list())
+    redact_preset_env(serialized(dops::presets_list()))
+}
+
+/// K2 vault (§10.4, KV22): preset env keys with sensitive names must hold a
+/// `k2v://` reference, not a value.
+fn lint_preset_env(env: Option<&str>) -> Result<(), CliResponse> {
+    let Some(raw) = env.filter(|e| !e.trim().is_empty()) else { return Ok(()) };
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(raw) else { return Ok(()) };
+    for (k, v) in m {
+        let Some(v) = v.as_str() else { continue };
+        if k2_vault::delivery::is_sensitive_name(&k) && !v.trim().is_empty() && !k2_vault::refs::VaultRef::is_ref(v) {
+            return Err(CliResponse {
+                status: "400 Bad Request",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": { "code": "use_a_vault_ref", "hint": format!(
+                    "{k} looks like a secret; save it with `k2 vault set {k} --scope server < value` and put k2v://server/{k} here"
+                ) } })
+                .to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// KV22: list/get never show a sensitive preset env value (Members can
+/// read presets); references show as they are.
+fn redact_preset_env(mut r: CliResponse) -> CliResponse {
+    fn scrub(p: &mut serde_json::Value) {
+        let Some(env) = p.get("env").and_then(|e| e.as_str()).map(str::to_string) else { return };
+        let Ok(serde_json::Value::Object(mut m)) = serde_json::from_str::<serde_json::Value>(&env) else { return };
+        let mut changed = false;
+        for (k, v) in m.iter_mut() {
+            if let Some(s) = v.as_str() {
+                if k2_vault::delivery::is_sensitive_name(k) && !s.is_empty() && !k2_vault::refs::VaultRef::is_ref(s) {
+                    *v = serde_json::Value::String("[hidden]".into());
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            p["env"] = serde_json::Value::String(serde_json::Value::Object(m).to_string());
+        }
+    }
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
+        match &mut v {
+            serde_json::Value::Array(a) => a.iter_mut().for_each(scrub),
+            o @ serde_json::Value::Object(_) => scrub(o),
+            _ => {}
+        }
+        r.body = v.to_string();
+    }
+    r
 }
 
 // ── Window state ──────────────────────────────────────────────────────
@@ -652,7 +703,7 @@ pub fn handle_presets_get(params: &HashMap<String, String>) -> CliResponse {
         return CliResponse::bad_request("Missing 'id' parameter");
     }
     match dops::presets_get(&id) {
-        Ok(Some(p)) => ok_serialized(p),
+        Ok(Some(p)) => redact_preset_env(ok_serialized(p)),
         Ok(None) => CliResponse::not_found(),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -679,6 +730,9 @@ pub fn handle_presets_create(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Err(r) = lint_preset_env(b.env.as_deref()) {
+        return r;
+    }
     serialized(dops::presets_create_full(
         b.id.as_deref(),
         &b.label,
@@ -722,6 +776,9 @@ pub fn handle_presets_update(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Err(r) = lint_preset_env(b.env.as_deref()) {
+        return r;
+    }
     serialized(dops::presets_update_full(
         &b.id,
         b.label.as_deref(),

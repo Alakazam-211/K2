@@ -396,9 +396,44 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
                     );
                 }
             }
+            if truthy_param(params, "ref") && !migrator {
+                return dsn_ref(&project_id, &v, test);
+            }
             ok_json(v)
         }
         Err(e) => ops_err(e),
+    }
+}
+
+/// `k2 db dsn --ref` (K2 vault Q12): keep the DSN as a `user` secret
+/// `DATABASE_URL` in the workspace and return only its `k2v://`
+/// reference (for `.env.k2`, publish bindings). The plain `k2 db dsn`
+/// keeps returning the agent's own DSN.
+fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
+    use k2_vault::SecretStore as _;
+    let Some(dsn) = v.get("dsn").and_then(|d| d.as_str()).filter(|d| !d.is_empty()) else {
+        return err_json("500 Internal Server Error", "engine", "no DSN to keep");
+    };
+    let vault = match crate::vault::get() {
+        Ok(x) => x,
+        Err(e) => return err_json("503 Service Unavailable", "vault_not_open", e.hint),
+    };
+    let name = if test { "DATABASE_URL_TEST" } else { "DATABASE_URL" };
+    let mut r = k2_vault::PutRequest::new(k2_vault::Namespace::User, k2_vault::Scope::workspace(project_id), name, k2_vault::Kind::Dsn);
+    r.default_delivery = Some(k2_vault::Delivery::Env);
+    r.delivery_ceiling = Some(k2_vault::Delivery::Env);
+    r.origin = "system:db".into();
+    r.description = "this workspace's database (k2 db dsn --ref)".into();
+    r.mode = k2_vault::PutMode::Upsert;
+    r.idempotent = true;
+    r.human_given_override = Some(false);
+    match vault.put(r, k2_vault::SecretBytes::from_slice(dsn.as_bytes()), &k2_vault::Actor::System("db".into())) {
+        Ok(out) => ok_json(serde_json::json!({
+            "ok": true,
+            "ref": crate::vault::display_ref(&out.meta),
+            "name": name,
+        })),
+        Err(e) => err_json("500 Internal Server Error", "vault", e.hint),
     }
 }
 

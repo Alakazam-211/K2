@@ -170,6 +170,10 @@ pub struct Project {
     /// only by `POST /cli/agent-access/set` (Admin). Fail-closed.
     #[serde(default)]
     pub agents_can_manage_agents: i64,
+    /// K2 vault (migration 0149) — "Allow managing server-wide secrets"
+    /// (`vault_manage`). Written only by `POST /cli/agent-access/set`.
+    #[serde(default)]
+    pub agents_can_manage_vault: i64,
 }
 
 impl Project {
@@ -185,7 +189,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -231,6 +235,7 @@ impl Project {
                 agents_can_manage_skin: row.get(30).unwrap_or(0),
                 mail_manage_enabled: row.get(31).unwrap_or(0),
                 agents_can_manage_agents: row.get(32).unwrap_or(0),
+                agents_can_manage_vault: row.get(33).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -241,7 +246,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -287,6 +292,7 @@ impl Project {
                     agents_can_manage_skin: row.get(30).unwrap_or(0),
                     mail_manage_enabled: row.get(31).unwrap_or(0),
                     agents_can_manage_agents: row.get(32).unwrap_or(0),
+                agents_can_manage_vault: row.get(33).unwrap_or(0),
                 })
             },
         )
@@ -3198,6 +3204,9 @@ impl ActivityFeedEntry {
             "INSERT INTO activity_feed (project_id, actor, event_type, from_workspace, to_workspace, to_project_id, summary, metadata, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch())",
         )?;
+        // K2 vault KV33: never keep a known secret value in the feed.
+        let summary = crate::redaction::redact_opt(summary);
+        let metadata = crate::redaction::redact_opt(metadata);
         stmt.execute(params![project_id, actor, event_type, from_workspace, to_workspace, to_project_id, summary, metadata])?;
         Ok(conn.last_insert_rowid())
     }

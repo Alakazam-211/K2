@@ -237,6 +237,10 @@ pub fn compose(
     if title.trim().is_empty() {
         return Err("title is required".to_string());
     }
+    // K2 vault KV33: known secret values never land in an inbox note.
+    let title_r = crate::redaction::redact(title);
+    let body_r = crate::redaction::redact(body);
+    let (title, body) = (title_r.as_str(), body_r.as_str());
     let root = inbox_root(workspace);
     fs::create_dir_all(&root).map_err(|e| format!("create inbox dir: {e}"))?;
 

@@ -1217,18 +1217,16 @@ pub fn db_active_cap_for_path(project_path: &str) -> u32 {
 pub fn get_workspace_api_key(project_path: &str) -> Option<String> {
     let db = crate::db::shared();
     let conn = db.lock();
-    let raw: Option<String> = conn
+    let raw: Option<(Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT anthropic_api_key FROM projects WHERE path = ?1",
+            "SELECT anthropic_api_key, anthropic_secret_ref FROM projects WHERE path = ?1",
             rusqlite::params![project_path],
-            |row| row.get::<_, Option<String>>(0),
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
         )
-        .ok()
-        .flatten();
-    match raw {
-        Some(k) if !k.trim().is_empty() => Some(k.trim().to_string()),
-        _ => None,
-    }
+        .ok();
+    drop(conn);
+    let (plain, sref) = raw?;
+    crate::secret_refs::read(plain, sref)
 }
 
 /// Read the PER-WORKSPACE sandbox FS mode for `project_path` (Sandbox v2, PRD
@@ -1260,6 +1258,35 @@ pub fn set_workspace_api_key(project_id: &str, key: &str) -> Result<(), String> 
     let conn = db.lock();
     // Empty → NULL (clear); otherwise store the trimmed key.
     let trimmed = key.trim();
+    // K2 vault (0148): with the vault holder, the key goes into the vault
+    // and only its reference is stored; the plaintext column stays NULL.
+    if let Some(h) = crate::secret_refs::holder() {
+        let old: Option<String> = conn
+            .query_row(
+                "SELECT anthropic_secret_ref FROM projects WHERE id = ?1",
+                rusqlite::params![project_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| format!("Project not found in DB: id={}", project_id))?;
+        let sref = if trimmed.is_empty() {
+            if let Some(o) = old.filter(|o| !o.is_empty()) {
+                h.delete(&o);
+            }
+            None
+        } else {
+            Some(h.store_workspace_key(project_id, trimmed)?)
+        };
+        let rows = conn
+            .execute(
+                "UPDATE projects SET anthropic_api_key = NULL, anthropic_secret_ref = ?1 WHERE id = ?2",
+                rusqlite::params![sref, project_id],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?;
+        if rows == 0 {
+            return Err(format!("Project not found in DB: id={}", project_id));
+        }
+        return Ok(());
+    }
     let stored: Option<&str> = if trimmed.is_empty() { None } else { Some(trimmed) };
     let rows = conn
         .execute(

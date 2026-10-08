@@ -55,6 +55,10 @@ pub mod agent_hooks;
 pub mod app_settings;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
 pub mod runtime_dir;
+/// Redaction of known secret values in K2-stored text (K2 vault KV33).
+pub mod redaction;
+/// K2 vault references for LLM keys kept in the main DB (0148).
+pub mod secret_refs;
 pub mod chat_history;
 pub mod chat_continue;
 pub mod chat_overlay;

@@ -37,9 +37,9 @@
 //! - **Never auto-appended (R5).** Existing users' Garden lists are never
 //!   changed on upgrade. A catalog Garden appears only when the person picks
 //!   it in New Garden (or Start with the default).
-//! - **New users (open question).** Setup seeds Gardens 1 and 2, then every
-//!   entry with `new_users = true`, in `order`. Diary ships with `false`;
-//!   preinstalling it is the one-line flip of that key.
+//! - **New users.** Setup seeds Gardens 1 and 2, then every
+//!   entry with `new_users = true`, in `order`, once, on an empty list. The
+//!   Diary ships with `true` (Rosson 2026-10-08).
 //! - **Immutable per version.** A released `<short>-<n>.toml` page never
 //!   changes; a better page is `<short>-<n+1>.toml`, and the catalog offers
 //!   the highest version of each `short` (a synced Garden shows it; an own
@@ -48,7 +48,7 @@
 //!   table is metadata: it is not part of the page and not in the page hash,
 //!   so `label`, `description`, `order` and `new_users` may change.
 //! - A Garden file may name any catalog template id (`template =
-//!   "k2.diary@1"`); B2 widens the `TEMPLATE_IDS` check to the catalog.
+//!   "k2.diary@1"`); `schema::is_template_id` accepts every catalog id.
 
 use std::sync::OnceLock;
 

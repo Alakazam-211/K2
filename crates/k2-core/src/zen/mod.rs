@@ -23,9 +23,15 @@
 //!   Gardens) is the daemon's own.
 //!
 //! The stack for one Garden: built-in `basic` → built-in `<active>` →
-//! `themes/<active>/theme.toml` → `zen.toml` → `gardens/<id>.toml`. `grants.json` is reserved for v2 widget grants: v1 never
-//! reads or writes it, and only the daemon may ever write it, in answer to
-//! a click in the K2 app (Z19). No route, CLI verb or agent can grant.
+//! `themes/<active>/theme.toml` → `zen.toml` → `gardens/<id>.toml`.
+//!
+//! Zen v2 (prd-zen-user-widgets-v2): `widgets/<name>/` holds custom
+//! widgets an agent writes ([`widgets`], [`bundle`], [`widget_store`]);
+//! a Garden places one with `kind = "custom"`. What a widget may do is a
+//! signed row in the daemon's database ([`grants`]), made only by the
+//! owner's click in the K2 app; `grants.json` is never read or written.
+//! Ready-made Gardens (the Diary) are data in [`garden_catalog`], and every
+//! built-in default is read through [`Defaults`] (sync-defaults D0).
 //!
 //! - [`schema`]: tokens, ranges, validation with `file:line:col`, resolve.
 //! - [`store`]: the folder: setup, Gardens, last-good, history, reset.

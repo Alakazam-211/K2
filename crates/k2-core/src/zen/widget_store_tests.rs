@@ -135,6 +135,12 @@ fn the_refresh_fingerprint_moves_once_per_change() {
     assert_ne!(b, c, "a JS save moves it");
     fs::write(f.widget_dir("clock").join("hello.js"), "k2.ready()\n").expect("same bytes");
     assert_eq!(c, f.refresh().expect("fp"), "the same bytes move nothing");
+    let m = f.widget_dir("clock").join("manifest.json");
+    let text = fs::read_to_string(&m).expect("manifest").replace("\"Hello\"", "\"Hello again\"");
+    fs::write(&m, text).expect("rename");
+    let c2 = f.refresh().expect("fp");
+    assert_ne!(c, c2, "a manifest-only change (the name) moves it");
+    let c = c2;
     let key = GrantKey::from_bytes([3; 32]);
     let snap = GrantSnapshot { rows: Vec::new(), key: Some(key), key_error: None };
     assert_ne!(c, f.refresh_with(&snap).expect("fp"), "grants are in the fingerprint");

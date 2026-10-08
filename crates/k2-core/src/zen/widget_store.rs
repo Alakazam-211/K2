@@ -446,6 +446,8 @@ impl ZenFiles {
         }
         Ok(json!({
             "hash": st.hash(),
+            // The manifest is outside the bundle (name, caps, reasons, libs).
+            "manifest": st.manifest.as_ref().map(widgets::manifest_json),
             "state": st.state.as_str(),
             "errors": st.errors,
             "warnings": st.warnings,
@@ -695,8 +697,11 @@ impl ZenFiles {
             }
             let id = w["id"].as_str().unwrap_or_default();
             let widget = w["widget"].as_str().unwrap_or_default();
+            // Only what the file itself declares is the file's finding; a
+            // template's widget shows its own state on the page.
+            let Some(i) = index_of(id) else { continue };
             if self.check_now(widget).is_none() {
-                let (line, col) = index_of(id).map_or((1, 1), |i| at(format!("page.widget.{i}.widget")));
+                let (line, col) = at(format!("page.widget.{i}.widget"));
                 let message = if widget.starts_with(builtin_widgets::BUILTIN_PREFIX) {
                     format!("this K2 has no built-in widget '{widget}'; update K2, or name one it has")
                 } else {
@@ -714,9 +719,10 @@ impl ZenFiles {
                 continue;
             };
             let st = self.widget_status(custom["widget"].as_str().unwrap_or_default());
+            let id = w["id"].as_str().unwrap_or_default();
+            let Some(i) = index_of(id) else { continue };
             if st.manifest.is_some() && !st.requested().iter().any(|c| c == "agents:read") {
-                let id = w["id"].as_str().unwrap_or_default();
-                let (line, col) = index_of(id).map_or((1, 1), |i| at(format!("page.widget.{i}.props.agents")));
+                let (line, col) = at(format!("page.widget.{i}.props.agents"));
                 out.push(Diagnostic {
                     file: file.to_string(),
                     line,

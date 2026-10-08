@@ -10,7 +10,7 @@
 //!      (destructive verbs never fire from a bare POST); with it, the
 //!      device identity is DELETED (tunnel.json gone), the
 //!      `~/.k2/unpaired.json` tombstone is written (upstream revocation
-//!      queued — the control plane is pointed at a dead port), and
+//!      queued — the control plane is a test server that answers 503), and
 //!      status/config report `released: true`.
 //!
 //! Auth/method tiers (owner-token-only, POST-only) are pinned in
@@ -121,34 +121,21 @@ fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
 }
 
 /// Redirect `$HOME` to a fresh tempdir AND point the control plane at a
-/// dead local port (upstream release reports fail fast + offline-queue —
-/// a unit test must never dial the real connect.k2.dev). Caller holds
-/// `TEST_LOCK`.
+/// test-owned server that answers 503 (upstream release reports fail fast
+/// and take the offline-queue path; a unit test must never dial the real
+/// connect.k2.dev). Not a dead port: on a host whose firewall drops
+/// loopback RSTs a connect to `127.0.0.1:9` hangs past the read timeout.
+/// Caller holds `TEST_LOCK`; the env guards hold the shared env lock.
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev_home = std::env::var_os("HOME");
-    let cp_var = k2_core::tunnel::subdomains::CONTROL_PLANE_BASE_ENV;
-    let prev_cp = std::env::var_os(cp_var);
-    std::env::set_var(cp_var, "http://127.0.0.1:9");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir()
-        .join(format!("k2-tunnel-unpair-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&tmp).expect("create temp HOME");
-    std::env::set_var("HOME", &tmp);
-
+    // TempHome first: its prod-isolation check refuses an inherited
+    // K2_CONNECT_BASE, which this helper then sets on purpose.
+    let _home = k2_core::test_env::TempHome::new();
+    let control_plane = k2_core::test_env::ErrorHttpServer::start(503);
+    let _cp = k2_core::test_env::EnvVar::set(
+        k2_core::tunnel::subdomains::CONTROL_PLANE_BASE_ENV,
+        control_plane.url(),
+    );
     f();
-
-    match prev_home {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    match prev_cp {
-        Some(p) => std::env::set_var(cp_var, p),
-        None => std::env::remove_var(cp_var),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 fn futures_block<F: std::future::Future>(fut: F) -> F::Output {

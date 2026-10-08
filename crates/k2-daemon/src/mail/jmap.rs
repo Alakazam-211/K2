@@ -7046,8 +7046,11 @@ mod s3_account_tests {
         let patch = &set["methodCalls"][0][1]["update"]["e"];
         assert_eq!(patch, &serde_json::json!({ "permissions": perms }));
 
-        // Empty id list never dials.
-        let idle = StalwartClient::new("http://127.0.0.1:9", "k2-test-key");
+        // Empty id list never dials. The URL is a test server that
+        // answers 503, so a dial would fail fast and loudly (a dead port
+        // such as :9 can hang where loopback RSTs are dropped).
+        let down = k2_core::test_env::ErrorHttpServer::start(503);
+        let idle = StalwartClient::new(down.url(), "k2-test-key");
         assert!(idle.account_get_permissions(&[]).expect("empty").is_empty());
     }
 

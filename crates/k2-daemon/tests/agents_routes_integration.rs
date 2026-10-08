@@ -143,6 +143,8 @@ fn write_agent_md(project: &Path, name: &str) {
 #[tokio::test(flavor = "current_thread")]
 async fn launch_requires_agent_param() {
     let _g = lock();
+    // Hermetic: a temp HOME (test builds refuse a real agent CLI anyway).
+    let _home = k2_core::test_env::TempHome::new();
     init_for_tests();
     let resp = agents_routes::handle_agents_launch(&params(&[]), "/tmp");
     assert_eq!(resp.status, "400 Bad Request");
@@ -152,6 +154,8 @@ async fn launch_requires_agent_param() {
 #[tokio::test(flavor = "current_thread")]
 async fn delegate_requires_target_param() {
     let _g = lock();
+    // Hermetic: a temp HOME (test builds refuse a real agent CLI anyway).
+    let _home = k2_core::test_env::TempHome::new();
     init_for_tests();
     let resp = agents_routes::handle_agents_delegate(
         &params(&[("file", "/tmp/x.md")]),
@@ -164,6 +168,8 @@ async fn delegate_requires_target_param() {
 #[tokio::test(flavor = "current_thread")]
 async fn delegate_requires_file_param() {
     let _g = lock();
+    // Hermetic: a temp HOME (test builds refuse a real agent CLI anyway).
+    let _home = k2_core::test_env::TempHome::new();
     init_for_tests();
     let resp = agents_routes::handle_agents_delegate(
         &params(&[("target", "alpha")]),
@@ -180,6 +186,8 @@ async fn delegate_requires_file_param() {
 #[tokio::test(flavor = "current_thread")]
 async fn launch_fresh_agent_registers_in_session_map() {
     let _g = lock();
+    // Hermetic: a temp HOME (test builds refuse a real agent CLI anyway).
+    let _home = k2_core::test_env::TempHome::new();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -242,6 +250,11 @@ async fn launch_fresh_agent_registers_in_session_map() {
 #[tokio::test(flavor = "current_thread")]
 async fn delegate_creates_worktree_and_spawns_session() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();

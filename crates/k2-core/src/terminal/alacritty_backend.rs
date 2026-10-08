@@ -354,7 +354,34 @@ impl TerminalManager {
         };
 
         // Set shell and optional command
-        if let Some(ref user_command) = command {
+        if let Some(ref requested_command) = command {
+            // The same spawn guard as the v2 path (daemon_pty.rs): under a
+            // test shim dir the program resolves ONLY to the shim; a test
+            // build or a temp HOME never runs a real agent CLI (the legacy
+            // path used to hand any command straight to the login shell).
+            // Production (no env, real HOME) keeps the command verbatim and
+            // computes no PATH.
+            let spawn_guard = crate::terminal::agent_spawn_guard::GuardEnv::from_process();
+            let guard_search = if spawn_guard.shim_dirs.is_some()
+                || spawn_guard.test_build
+                || spawn_guard.home_is_temp()
+            {
+                crate::terminal::login_path::augmented_path(
+                    &crate::terminal::login_path::process_path(),
+                )
+            } else {
+                String::new()
+            };
+            let guarded_command = crate::terminal::agent_spawn_guard::resolve_program(
+                requested_command,
+                &guard_search,
+                &spawn_guard,
+            )
+            .map_err(|msg| {
+                log_debug!("{} terminal={}", msg, id);
+                msg
+            })?;
+            let user_command = &guarded_command;
             let mut shell_cmd = shell_escape_arg(user_command);
             // Same shared-app-server guard as the v2 path (daemon_pty.rs):
             // a Codex TUI gets `--no-daemon` when the binary supports it.

@@ -138,6 +138,11 @@ fn seed_inbox_work(project: &Path, agent: &str, slug: &str) {
 #[tokio::test(flavor = "current_thread")]
 async fn scheduler_fire_returns_json_shape_even_when_nothing_to_launch() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -161,6 +166,11 @@ async fn scheduler_fire_returns_json_shape_even_when_nothing_to_launch() {
 #[tokio::test(flavor = "current_thread")]
 async fn triage_summary_is_readonly_and_plaintext() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -192,6 +202,11 @@ async fn triage_summary_is_readonly_and_plaintext() {
 #[tokio::test(flavor = "current_thread")]
 async fn triage_with_flag_on_spawns_via_session_stream() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -225,6 +240,11 @@ async fn triage_with_flag_on_spawns_via_session_stream() {
 #[tokio::test(flavor = "current_thread")]
 async fn triage_with_flag_off_does_not_land_in_session_map() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -279,6 +299,11 @@ fn set_meta(key: &str, value: &str) {
 async fn tick_stamps_name_their_source() {
     use k2_core::db::schema::SchedulerMeta;
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
 
     let old = "2000-01-01T00:00:00+00:00";
@@ -379,6 +404,11 @@ fn overdue_rows(project_id: &str, name: &str) -> Vec<k2_core::db::schema::Heartb
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_agent_is_named_and_overdue_audits_once_per_episode() {
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();
@@ -434,6 +464,11 @@ async fn no_agent_is_named_and_overdue_audits_once_per_episode() {
 async fn overdue_without_ticks_names_no_ticks_and_a_fire_closes_the_episode() {
     use k2_core::db::schema::SchedulerMeta;
     let _g = lock();
+    // Hermetic: a temp HOME, and agent CLIs resolve only to `exec cat`
+    // shims (test builds refuse a real `claude`; the workspace default
+    // agent is `claude`).
+    let _home = k2_core::test_env::TempHome::new();
+    let _agents = k2_core::test_env::AgentShim::install();
     init_for_tests();
     clear_projects();
     drain_session_map();

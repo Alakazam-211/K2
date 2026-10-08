@@ -702,9 +702,28 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
+    // UWB12a: a Garden widget's post for the person carries `origin`. It is
+    // only the person's own post (unbound via=compose, not an app pass, not
+    // a bound agent); anything else naming an origin is refused.
+    let origin = match params.get("origin") {
+        None => None,
+        Some(raw) => {
+            if request_skin().is_some() || bound || via != "compose" {
+                return usage("origin is only for the person's own post from a Garden widget (via=compose)");
+            }
+            let v: serde_json::Value = match serde_json::from_str(raw) {
+                Ok(v) => v,
+                Err(_) => return usage("origin must be {widget, garden}"),
+            };
+            match overlay::WidgetOrigin::parse(&v) {
+                Ok(o) => Some(o),
+                Err(e) => return usage(e),
+            }
+        }
+    };
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::post_thread(
+    match overlay::post_thread_with_origin(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
@@ -712,6 +731,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         &resolved.addr,
         &text,
         &via,
+        origin.clone(),
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
@@ -725,11 +745,15 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 );
                 let turn = ThreadTurn::new(&resolved, &item.id, received_at);
                 inject_thread_compose(&resolved, &from, &text, &command, turn);
-                let _ = k2_core::workspace_compose_history::record_compose_send(
-                    &resolved.project_id,
-                    &text,
-                    &from,
-                );
+                // A widget's posts never fill the person's compose history
+                // (UWB12a: a busy widget would flood the last 50).
+                if origin.is_none() {
+                    let _ = k2_core::workspace_compose_history::record_compose_send(
+                        &resolved.project_id,
+                        &text,
+                        &from,
+                    );
+                }
             } else if request_skin().is_some() {
                 inject_skin_thread(&resolved, &from, &text, ThreadTurn::new(&resolved, &item.id, received_at));
             } else {
@@ -747,6 +771,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "kind": item.doc.kind,
                     "body": item.doc.body,
                     "via": item.doc.via,
+                    "widget": item.doc.widget,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
                 }),
@@ -1369,7 +1394,9 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
                     params.insert(k.clone(), s.to_string());
                 } else if val.is_number() || val.is_boolean() {
                     params.insert(k.clone(), val.to_string());
-                } else if val.is_array() {
+                } else if val.is_array() || (val.is_object() && k == "origin") {
+                    // `origin` (UWB12a) is the one object field a Thread
+                    // post takes; it rides as its JSON text.
                     params.insert(k.clone(), val.to_string());
                 }
             }
@@ -1709,6 +1736,95 @@ mod tests {
         assert!(
             injects.iter().any(|l| l == &want),
             "compose must inject [from user] [thread:addr] msg into the PTY; want {want:?} got {injects:?}"
+        );
+    }
+
+    #[test]
+    fn widget_post_stores_origin_wakes_the_agent_and_skips_compose_history() {
+        let handle = format!("ovlwidget{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let body = format!("from-arcade-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": body,
+                "via": "compose",
+                "origin": {"widget": "Agent Arcade", "garden": "g-test0001"},
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(post.status, "200 OK", "post failed: {}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["via"], "compose", "still the person's own post: {posted}");
+        assert_eq!(
+            posted["widget"],
+            serde_json::json!({"widget": "Agent Arcade", "garden": "g-test0001"})
+        );
+
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        let snap = json_body(&get);
+        let item = snap["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["doc"]["body"] == body.as_str())
+            .unwrap_or_else(|| panic!("stored post missing: {snap}"))
+            .clone();
+        assert_eq!(item["doc"]["widget"]["widget"], "Agent Arcade", "{item}");
+        assert_eq!(item["doc"]["widget"]["garden"], "g-test0001", "{item}");
+
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id)
+            .expect("compose history");
+        assert!(
+            hist.iter().all(|e| e.body != body),
+            "a widget post must not enter compose history: {hist:?}"
+        );
+        let author = crate::workspace_msg::resolve_owner_from();
+        let want = format_thread_compose_pty_line(&author, &handle, &body);
+        assert!(
+            recorded_injects().iter().any(|l| l == &want),
+            "a widget post wakes the agent like the person's own post"
+        );
+    }
+
+    #[test]
+    fn widget_origin_is_refused_off_the_persons_own_post_or_when_malformed() {
+        let handle = format!("ovlworig{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let origin = serde_json::json!({"widget": "Agent Arcade", "garden": "g-test0001"});
+        let cases = [
+            serde_json::json!({"addr": handle, "text": "a", "origin": origin}),
+            serde_json::json!({"addr": handle, "text": "b", "via": "thread", "origin": origin}),
+            serde_json::json!({"addr": handle, "text": "c", "via": "compose", "origin": {"widget": "A"}}),
+            serde_json::json!({"addr": handle, "text": "d", "via": "compose", "origin": {"widget": "", "garden": "g"}}),
+            serde_json::json!({"addr": handle, "text": "e", "via": "compose", "origin": {"widget": "A", "garden": "g", "x": 1}}),
+            serde_json::json!({"addr": handle, "text": "f", "via": "compose", "origin": "Agent Arcade"}),
+        ];
+        for body in cases {
+            let post = dispatch_post("/cli/thread/post", &HashMap::new(), body.to_string().as_bytes());
+            assert_eq!(post.status, "400 Bad Request", "{body} -> {}", post.body);
+        }
+        // A bound agent caller can't claim to be a widget.
+        let mut params = HashMap::new();
+        params.insert(crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
+        params.insert("project_id".to_string(), project_id.clone());
+        params.insert("from".to_string(), handle.clone());
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({"addr": handle, "text": "g", "via": "compose", "origin": origin}),
+        );
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        let snap = json_body(&get);
+        assert_eq!(
+            snap["items"].as_array().map(Vec::len),
+            Some(0),
+            "nothing refused was stored: {snap}"
         );
     }
 

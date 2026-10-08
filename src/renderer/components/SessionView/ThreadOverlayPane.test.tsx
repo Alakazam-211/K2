@@ -166,6 +166,46 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.getByText('code').tagName).toBe('CODE')
   })
 
+  it('names the Garden widget that sent a post for you (UWB12a)', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 3,
+      id: 't-widget',
+      doc: {
+        id: 't-widget',
+        kind: 'text',
+        from: 'alice',
+        via: 'compose',
+        created_at: Math.floor(Date.now() / 1000),
+        body: 'hello from the arcade',
+        widget: { widget: 'Agent Arcade', garden: 'g-test0001' },
+      },
+    }
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
+    expect(screen.getByText('You · via Agent Arcade')).not.toBeNull()
+    expect(screen.queryByText('You')).toBeNull()
+  })
+
+  it('ignores a widget origin on a post that is not yours', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 4,
+      id: 't-agent-widget',
+      doc: {
+        id: 't-agent-widget',
+        kind: 'text',
+        from: 'cortana',
+        via: 'thread',
+        created_at: Math.floor(Date.now() / 1000),
+        body: 'agent reply',
+        widget: { widget: 'Agent Arcade', garden: 'g-test0001' },
+      },
+    }
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
+    expect(screen.getByText('cortana')).not.toBeNull()
+    expect(screen.queryByText(/via Agent Arcade/)).toBeNull()
+  })
+
   it('does not paint via=thread from=owner as You', () => {
     const item: OverlayThreadItem = {
       collection: 'thread',

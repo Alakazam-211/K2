@@ -34,6 +34,9 @@ export interface OverlayDoc {
   via?: string | null
   choice?: OverlayChoice | null
   secret?: OverlaySecret | null
+  /** Set when a Garden widget sent this post for the person
+   *  (prd-zen-user-widgets-v2 UWB12a; daemon feature `thread-widget-origin`). */
+  widget?: { widget: string; garden: string } | null
 }
 
 export interface OverlayThreadItem {

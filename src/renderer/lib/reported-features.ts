@@ -34,6 +34,13 @@ export const REPORTED_FEATURES = {
    *  renders those rows; a server without the key gets RL13 (its
    *  `session_activity_changed` stream as-is). */
   'daemon-activity': 'daemon-activity',
+  /** prd-zen-user-widgets-v2 UWB12a: `POST /cli/thread/post` takes
+   *  `origin: {widget, garden}` on a person's own post (via=compose) from a
+   *  Garden widget; the daemon stores it on the doc as `widget` and keeps the
+   *  post out of the compose history. Send `origin` only to servers that
+   *  list this key (an older server refuses nothing but drops the field and
+   *  records the post in compose history). */
+  'thread-widget-origin': 'thread-widget-origin',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

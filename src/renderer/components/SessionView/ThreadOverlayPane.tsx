@@ -256,8 +256,12 @@ export function ThreadItemRow({
 }): JSX.Element {
   const kind = item.doc.kind
   const owner = isHumanPost(item.doc)
+  // UWB12a: a post a Garden widget sent for you says which widget.
+  const viaWidget = owner ? item.doc.widget?.widget?.trim() : ''
   const author = owner
-    ? 'You'
+    ? viaWidget
+      ? `You · via ${viaWidget}`
+      : 'You'
     : displayThreadAddress(item.doc.from || '', currentAddr, pastAddresses) || 'unknown'
   const timeLabel = formatRelativeTime(
     item.doc.created_at,

@@ -15,7 +15,6 @@
 use std::fs;
 use std::path::Path;
 
-use super::agent_identity::workspace_agent_path;
 use crate::chat_continue::{
     build_continue_seed, ContinueMode, ContinueSeedRequest, CONTINUE_FRAMING,
 };
@@ -23,8 +22,23 @@ use crate::workspace::provider_resume::{
     provider_resume_for_command, provider_resume_for_provider,
 };
 
-/// File name under the workspace agent dir (`.k2/agent/` or `.k2so/agent/`).
+/// File name under the workspace's handoff dir (`.k2/handoffs/`, or
+/// `.k2so/handoffs/` when that is the workspace dot dir).
 pub const HANDOFF_FILE_NAME: &str = "CANONICAL-HANDOFF.md";
+
+/// Directory under the workspace dot dir that holds handoffs. The file
+/// carries transcript text, so it is written 0600 and the directory gets
+/// a `*` `.gitignore` (like `.k2/sidecars/`): a workspace that tracks
+/// `.k2/` never commits it. `.k2/agent/` is not used because ROLE.md
+/// lives there and is often committed.
+pub const HANDOFF_DIR_NAME: &str = "handoffs";
+
+/// Where [`prepare_canonical_swap`] writes the handoff for a workspace.
+pub fn handoff_path_for(project_path: &str) -> std::path::PathBuf {
+    crate::workspace_dot_dir(project_path)
+        .join(HANDOFF_DIR_NAME)
+        .join(HANDOFF_FILE_NAME)
+}
 
 /// Extra notes are capped so a swap request cannot hand the new chat a
 /// multi-megabyte paste. The transcript seed has its own caps.
@@ -79,7 +93,7 @@ pub fn prepare_canonical_swap(
         _ => (None, Some("no saved canonical session".to_string())),
     };
 
-    let handoff_path = workspace_agent_path(project_path).join(HANDOFF_FILE_NAME);
+    let handoff_path = handoff_path_for(project_path);
     let handoff_display = handoff_path.display().to_string();
     let message = compose_message(
         seed.as_deref(),
@@ -211,11 +225,34 @@ fn compose_message(
 }
 
 fn write_handoff(path: &Path, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("create handoff dir: {err}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "handoff path has no parent".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| format!("create handoff dir: {err}"))?;
+    let ignore = parent.join(".gitignore");
+    if !ignore.exists() {
+        fs::write(&ignore, "*\n").map_err(|err| format!("write handoff .gitignore: {err}"))?;
     }
-    let tmp = path.with_extension("md.tmp");
-    fs::write(&tmp, body).map_err(|err| format!("write handoff: {err}"))?;
+    // A unique temp name, so two swaps at once never share one, and
+    // 0600 from creation, so the transcript is never world-readable.
+    let tmp = parent.join(format!(".{HANDOFF_FILE_NAME}.{}.tmp", uuid::Uuid::new_v4()));
+    {
+        use std::io::Write;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts
+            .open(&tmp)
+            .map_err(|err| format!("write handoff: {err}"))?;
+        if let Err(err) = file.write_all(body.as_bytes()) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("write handoff: {err}"));
+        }
+    }
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         format!("save handoff: {err}")
@@ -388,6 +425,48 @@ mod tests {
             Some((Some(session_id.to_string()), "grok".to_string())),
             "prepare must not retarget the canonical row"
         );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handoff_is_private_gitignored_and_outside_the_agent_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_guard, home) = HomeGuard::new("private");
+        crate::db::init_for_tests();
+        let project = home.join("ws");
+        std::fs::create_dir_all(project.join(".k2").join("agent")).unwrap();
+        let path = project.to_string_lossy().to_string();
+        insert_project(&path);
+
+        let prep = prepare_canonical_swap(&path, "claude", "recent", "secret-ish notes")
+            .expect("prep");
+        let expected = project.join(".k2").join("handoffs").join(HANDOFF_FILE_NAME);
+        assert_eq!(prep.handoff_path, expected.display().to_string());
+        let mode = std::fs::metadata(&expected).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "handoff mode {mode:o}");
+        assert_eq!(
+            std::fs::read_to_string(project.join(".k2").join("handoffs").join(".gitignore"))
+                .unwrap(),
+            "*\n"
+        );
+        assert!(
+            !project.join(".k2").join("agent").join(HANDOFF_FILE_NAME).exists(),
+            "the handoff never lands next to ROLE.md"
+        );
+
+        // A second swap replaces the file, stays 0600, and leaves no temp.
+        prepare_canonical_swap(&path, "grok", "recent", "second").expect("prep 2");
+        assert!(std::fs::read_to_string(&expected).unwrap().contains("second"));
+        let mode = std::fs::metadata(&expected).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "handoff mode after replace {mode:o}");
+        let mut names: Vec<String> = std::fs::read_dir(project.join(".k2").join("handoffs"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec![".gitignore".to_string(), HANDOFF_FILE_NAME.to_string()]);
         let _ = std::fs::remove_dir_all(&home);
     }
 

@@ -45,6 +45,8 @@
 import type { ZenControlRegistry, ZenBindKind } from './zen-controls'
 import type { ZenResolvedPage } from './zen-page'
 import { BLANK_TEMPLATE_ID } from './zen-page'
+import type { ZenGardenNewRequest } from './zen-custom-types'
+import { isZenTemplateShort } from './zen-templates'
 
 export const ZEN_VERBS = {
   'agents.list': 'agents:read',
@@ -133,13 +135,17 @@ export interface ZenHomeSummary {
 
 /** What a Garden starts as, or turns into (Rosson 2026-10-04): `texting`
  *  is Garden 1's page ("the default"), `blank` the empty page an agent
- *  builds. */
-export type ZenGardenTemplate = 'texting' | 'blank'
+ *  builds; the Garden catalog adds more by short name (`diary`,
+ *  prd-zen-user-widgets-v2 UWB23, R5), read from `GET /cli/zen/templates`.
+ *  The daemon refuses a name it doesn't know. */
+export type ZenGardenTemplate = 'texting' | 'blank' | (string & {})
 
 /** `gardens.create` options: `ask` opens Ask my agent on the new (empty)
- *  Garden once it shows. */
+ *  Garden once it shows; `grant` allows a catalog Garden's widget in the
+ *  same owner click (UWB22). */
 export interface ZenGardenCreateOptions {
   ask?: boolean
+  grant?: ZenGardenNewRequest['grant']
 }
 
 /** What `gardens.useTemplate` did: `changed` is false when the Garden
@@ -206,14 +212,14 @@ const BUILTIN_VERBS = new Set<ZenVerb>([
   'theme.get',
 ])
 
-const GARDEN_TEMPLATES: readonly ZenGardenTemplate[] = ['texting', 'blank']
-
+/** A template's short name: `texting`, `blank`, or a catalog Garden's that
+ *  this computer's daemon lists (UWB23, `zen-templates.ts`). */
 function needTemplate(verb: ZenVerb, v: unknown, optional: boolean): ZenGardenTemplate | undefined {
   if (v === undefined && optional) return undefined
-  if (typeof v !== 'string' || !GARDEN_TEMPLATES.includes(v as ZenGardenTemplate)) {
-    throw new ZenBridgeError('unknown_verb', verb, 'needs a template: texting or blank')
+  if (!isZenTemplateShort(v)) {
+    throw new ZenBridgeError('unknown_verb', verb, 'needs a template: texting, blank or a ready-made Garden')
   }
-  return v as ZenGardenTemplate
+  return v
 }
 
 /** Whether a resolved page is the empty Garden: the blank template showing

@@ -35,6 +35,10 @@ const h = vi.hoisted(() => ({
   sockets: [] as string[],
   reveals: [] as string[],
   label: 'main',
+  /** `GET widget/grants` rows; null = the daemon has no such route. */
+  grants: null as null | Array<Record<string, unknown>>,
+  /** `GET templates` rows; null = the daemon has no such route. */
+  templates: null as null | Array<Record<string, unknown>>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -85,6 +89,14 @@ function fakeGet(route: string): unknown {
       themes: h.themes.map((name) => ({ name, builtin: true, user: false, summary: '', active: name === h.global })),
     }
   }
+  if (route === 'zen/widget/grants') {
+    if (h.grants === null) throw new Error('unknown zen route')
+    return { ok: true, grants: h.grants }
+  }
+  if (route === 'zen/templates') {
+    if (h.templates === null) throw new Error('unknown zen route')
+    return { ok: true, templates: h.templates }
+  }
   throw new Error(`unexpected GET ${route}`)
 }
 
@@ -113,7 +125,8 @@ function fakePost(route: string, body: Record<string, unknown>): unknown {
     case 'zen/garden/new': {
       const name = String(body.name)
       if (h.gardens.some((g) => g.name.toLowerCase() === name.toLowerCase())) throw new Error('garden_exists')
-      const template = body.template === 'texting' ? 'k2.texting@1' : 'k2.blank@1'
+      const template =
+        body.template === 'texting' ? 'k2.texting@1' : body.template === 'diary' ? 'k2.diary@1' : 'k2.blank@1'
       h.gardens.push({ id: `g-new${h.gardens.length}`, name, template, theme: null })
       return { ok: true, garden: gardenJson(h.gardens[h.gardens.length - 1], h.gardens.length - 1) }
     }
@@ -135,6 +148,16 @@ function fakePost(route: string, body: Record<string, unknown>): unknown {
       const g = findGarden(String(body.garden))
       h.gardens.splice(h.gardens.indexOf(g), 1)
       return { ok: true }
+    }
+    case 'zen/widget/revoke':
+    case 'zen/widget/sending':
+    case 'zen/widget/resume': {
+      const i = (h.grants ?? []).findIndex((g) => g.garden === body.garden && g.placement === body.placement)
+      if (i < 0) throw new Error('unknown_grant')
+      if (route === 'zen/widget/revoke') h.grants?.splice(i, 1)
+      else if (route === 'zen/widget/sending') (h.grants as Array<Record<string, unknown>>)[i].sending = body.on
+      else (h.grants as Array<Record<string, unknown>>)[i].paused = null
+      return { ok: true, changed: true }
     }
     case 'zen/theme/set': {
       if (body.clear === true) {
@@ -201,6 +224,8 @@ import {
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import Settings, { settingsNav } from '../Settings'
 import { ZenGardensSection } from './ZenGardensSection'
+import { __resetZenTemplatesForTests } from '@/lib/zen/zen-templates'
+import { useHomesStore } from '@/stores/homes'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -269,6 +294,9 @@ beforeEach(() => {
   window.location.hash = ''
   setPlatform('MacIntel')
   __resetZenSettingsForTests()
+  __resetZenTemplatesForTests()
+  h.grants = null
+  h.templates = null
   // A light section underneath, so only the sidebar and Gardens matter.
   useSettingsStore.setState({ settingsOpen: true, activeSection: 'keybindings' })
 })
@@ -409,7 +437,13 @@ describe('Settings → Gardens: the section', () => {
       ['GET', 'local', 'zen/gardens'],
       ['GET', 'local', 'zen/status'],
       ['GET', 'local', 'zen/theme/list'],
+      // prd-zen-user-widgets-v2: widget permissions and the Garden catalog
+      // (this daemon has neither route: both quietly absent).
+      ['GET', 'local', 'zen/widget/grants'],
+      ['GET', 'local', 'zen/templates'],
     ])
+    expect(document.querySelector('[data-zen-settings-grants]')).toBeNull()
+    expect(document.querySelector('[data-zen-settings-catalog]')).toBeNull()
     // Every clickable element is a pointer.
     for (const b of document.querySelectorAll('[data-zen-gardens-section] button')) {
       expect(b.className, b.textContent ?? '').toContain('cursor-pointer')
@@ -586,5 +620,99 @@ describe('Settings → Gardens: the section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
     expect(screen.queryByTestId('zen-gardens-load-error')).toBeNull()
+  })
+})
+
+describe('Settings → Gardens: the Garden catalog and widget permissions (prd-zen-user-widgets-v2)', () => {
+  const STARTS = [
+    { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', needsGrant: null, newUsers: true },
+    { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'e', section: 'start', needsGrant: null, newUsers: true },
+  ]
+  const DIARY = {
+    id: 'k2.diary@1',
+    short: 'diary',
+    label: 'Diary',
+    description: 'One agent at a time, in ink.',
+    section: 'catalog',
+    needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'] },
+    newUsers: false,
+  }
+  let savedHomes: ReturnType<typeof useHomesStore.getState>['homes']
+
+  beforeEach(() => {
+    savedHomes = useHomesStore.getState().homes
+    useHomesStore.setState({
+      homes: [{ id: 'home-work', name: 'Work', rows: [{ address: 'alice::local', workspaceId: 'w1', label: 'Alice' }] }],
+      selectedId: 'home-work',
+    })
+  })
+  afterEach(() => {
+    useHomesStore.setState({ homes: savedHomes })
+  })
+
+  it('R5: the Diary is a catalog choice in + New Garden; it asks for a scope and sends the grant in the same click', async () => {
+    h.templates = [...STARTS, DIARY]
+    h.grants = []
+    await mountSection()
+    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Notebook' } })
+    expect(document.querySelector('[data-zen-settings-catalog]')?.textContent).toContain('Ready-made Gardens')
+    fireEvent.click(document.querySelector('[data-zen-settings-catalog-choice="diary"]') as HTMLElement)
+    const grant = document.querySelector('[data-zen-settings-catalog-grant="diary"]') as HTMLElement
+    expect(grant).not.toBeNull()
+    expect(grant.textContent).toContain('See the agents in Work:')
+    // Sending is on by default (R6).
+    expect((grant.querySelector('[data-zen-sending-choice]') as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(document.querySelector('[data-zen-settings-catalog-create]') as HTMLElement)
+    await waitFor(() => expect(rowNames()).toHaveLength(4))
+    expect(row(rowNames()[3]).textContent).toContain('Diary')
+    expect(zenPosts()).toEqual([
+      ['zen/garden/new', { name: 'Notebook', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true } }],
+    ])
+  })
+
+  it('R5: nothing is ever appended; the plain starts post no grant', async () => {
+    h.templates = [...STARTS, DIARY]
+    h.grants = []
+    await mountSection()
+    expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
+    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start with the default' }))
+    await waitFor(() => expect(rowNames()).toHaveLength(4))
+    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Garden 4', template: 'texting' }]])
+  })
+
+  it('UWB3: the permissions list: sending off, resume, turn off, all on the local daemon', async () => {
+    h.grants = [
+      {
+        garden: 'g-2',
+        placement: 'arcade',
+        widget: 'agent-arcade',
+        state: 'granted',
+        caps: ['agents:read', 'thread:post'],
+        scope: { home: 'home-work' },
+        entries: [{ server: 'local', room: 'alice' }],
+        sending: true,
+        paused: { at: '2026-10-08T00:00:00Z', reason: 'runaway' },
+        grantedAt: '2026-10-08T00:00:00Z',
+      },
+    ]
+    await mountSection()
+    const item = document.querySelector('[data-zen-settings-grant="g-2/arcade"]') as HTMLElement
+    expect(item.textContent).toContain('agent-arcade')
+    expect(item.textContent).toContain('in Garden 2')
+    expect(item.textContent).toContain('Work · See agents, Post to the Thread · paused by K2')
+    fireEvent.click(item.querySelector('[data-zen-settings-grant-sending="on"]') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-zen-settings-grant-sending="off"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-zen-settings-grant-resume]') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-zen-settings-grant-resume]')).toBeNull())
+    fireEvent.click(document.querySelector('[data-zen-settings-grant-revoke]') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-zen-settings-grants-empty]')).not.toBeNull())
+    expect(zenPosts()).toEqual([
+      ['zen/widget/sending', { garden: 'g-2', placement: 'arcade', on: false, reason: 'user' }],
+      ['zen/widget/resume', { garden: 'g-2', placement: 'arcade' }],
+      ['zen/widget/revoke', { garden: 'g-2', placement: 'arcade' }],
+    ])
+    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
   })
 })

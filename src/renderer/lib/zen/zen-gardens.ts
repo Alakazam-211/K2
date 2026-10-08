@@ -230,7 +230,12 @@ export async function createZenGarden(
   let garden: ZenGarden
   try {
     garden = parseZenGardenNew(
-      await daemonCliPost<unknown>(zenLocalScope(), 'zen/garden/new', { name: clean, template }),
+      await daemonCliPost<unknown>(
+        zenLocalScope(),
+        'zen/garden/new',
+        // UWB22: a catalog Garden's widget is allowed in the same owner click.
+        opts.grant ? { name: clean, template, grant: opts.grant } : { name: clean, template },
+      ),
     )
   } catch (err) {
     throw err instanceof ZenPageParseError ? err : mapError(err, clean)

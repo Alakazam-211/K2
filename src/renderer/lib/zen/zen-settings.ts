@@ -32,6 +32,16 @@ import { zenAvailable } from './zen-platform'
 import { zenLocalScope, zenLoadFailure, type ZenLoadFailure } from './zen-api'
 import { parseZenGardens, zenGardenClashText, type ZenGarden } from './zen-gardens'
 import { ZenPageParseError } from './zen-page'
+import { loadZenTemplates, zenTemplateName } from './zen-templates'
+import {
+  listZenWidgetGrants,
+  resumeZenWidget,
+  revokeZenWidget,
+  setZenWidgetSending,
+  zenWidgetError,
+  type ZenWidgetError,
+} from './zen-custom-grants'
+import type { ZenGardenNewRequest, ZenWidgetGrantRow } from './zen-custom-types'
 
 /** One Garden as Settings shows it: the list entry plus its own theme pick. */
 export interface ZenSettingsGarden extends ZenGarden {
@@ -55,11 +65,18 @@ export type ZenSettingsState = {
   /** `~/.k2/zen` as the daemon resolved it. */
   path: string | null
   failure: ZenLoadFailure | null
+  /** Widget permissions (`GET widget/grants`, prd-zen-user-widgets-v2
+   *  UWB3c); null when this computer's daemon has no custom widgets. */
+  grants: ZenWidgetGrantRow[] | null
+  /** Why the permissions list couldn't be read (shown in its section). */
+  grantsError: string | null
 }
 
 const EMPTY: ZenSettingsState = {
   status: 'idle',
   setUp: false,
+  grants: null,
+  grantsError: null,
   gardens: [],
   themes: [],
   globalTheme: null,
@@ -88,9 +105,8 @@ export function useZenGardensSettingsShown(): boolean {
 
 /** What a template is called in Settings. */
 export function zenTemplateLabel(template: string): string {
-  if (template === 'k2.texting@1') return 'Default layout'
-  if (template === 'k2.blank@1') return 'Empty'
-  return template || 'Unknown'
+  // One list for every template name (UWB23): the starts, then the catalog.
+  return zenTemplateName(template)
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -151,10 +167,26 @@ export async function loadZenSettings(): Promise<ZenSettingsState> {
     const list = parseZenSettingsGardens(gardensRaw)
     let themes: ZenSettingsTheme[] = []
     let globalTheme: string | null = null
+    let grants: ZenWidgetGrantRow[] | null = null
+    let grantsError: string | null = null
     if (list.setUp) {
-      const t = parseZenThemeList(await daemonCliGet<unknown>(scope, 'zen/theme/list'))
+      const [themeRaw, grantsRead] = await Promise.all([
+        daemonCliGet<unknown>(scope, 'zen/theme/list'),
+        // Widget permissions and the Garden catalog never fail the section.
+        listZenWidgetGrants().then(
+          (rows) => ({ rows, error: null as ZenWidgetError | null }),
+          (error: unknown) => ({ rows: null, error: zenWidgetError(error) }),
+        ),
+        loadZenTemplates(),
+      ])
+      const t = parseZenThemeList(themeRaw)
       themes = t.themes
       globalTheme = t.global
+      if (grantsRead.rows) grants = grantsRead.rows
+      else if (grantsRead.error?.code !== 'older_daemon') {
+        grants = []
+        grantsError = grantsRead.error?.message ?? null
+      }
     }
     next = {
       status: 'ready',
@@ -164,6 +196,8 @@ export async function loadZenSettings(): Promise<ZenSettingsState> {
       globalTheme,
       path: parseStatusPath(statusRaw),
       failure: null,
+      grants,
+      grantsError,
     }
   } catch (err) {
     next = { ...useZenSettingsStore.getState(), status: 'failed', failure: zenLoadFailure(err) }
@@ -226,12 +260,43 @@ export function setupZenGardens(): Promise<void> {
   return post('zen/setup', {})
 }
 
-export type ZenNewGardenTemplate = 'texting' | 'blank'
+/** A template's short name: `texting`, `blank` or a catalog Garden's (UWB23). */
+export type ZenNewGardenTemplate = 'texting' | 'blank' | (string & {})
 
 /** + New Garden. `texting` = "Start with the default", `blank` = "Start
- *  empty and ask my agent". Does not switch any Zen window to it. */
-export function createZenSettingsGarden(name: string, template: ZenNewGardenTemplate): Promise<void> {
-  return post('zen/garden/new', { name, template }, name)
+ *  empty and ask my agent", or a ready-made Garden from the catalog; one
+ *  that runs a widget carries its grant in the same click (UWB22). Does
+ *  not switch any Zen window to it. */
+export function createZenSettingsGarden(
+  name: string,
+  template: ZenNewGardenTemplate,
+  grant?: ZenGardenNewRequest['grant'],
+): Promise<void> {
+  return post('zen/garden/new', grant ? { name, template, grant } : { name, template }, name)
+}
+
+/** Settings → Gardens → Widget permissions: Turn off (always allowed). */
+export function revokeZenSettingsGrant(garden: string, placement: string): Promise<void> {
+  return grantAction(() => revokeZenWidget({ garden, placement }))
+}
+
+/** The Sending switch from Settings (UWB9). */
+export function setZenSettingsGrantSending(garden: string, placement: string, on: boolean): Promise<void> {
+  return grantAction(() => setZenWidgetSending({ garden, placement, on, reason: 'user' }))
+}
+
+/** Resume after the runaway guard (owner only). */
+export function resumeZenSettingsGrant(garden: string, placement: string): Promise<void> {
+  return grantAction(() => resumeZenWidget({ garden, placement }))
+}
+
+async function grantAction(run: () => Promise<void>): Promise<void> {
+  try {
+    await run()
+  } catch (err) {
+    throw new Error(zenWidgetError(err).message)
+  }
+  await loadZenSettings()
 }
 
 export function renameZenSettingsGarden(id: string, name: string): Promise<void> {

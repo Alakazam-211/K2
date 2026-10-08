@@ -9,6 +9,7 @@ import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingC
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
 import { useServerSupports } from '@/lib/server-capabilities'
+import { K2_CAPS } from '@/lib/k2-caps.generated'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -75,21 +76,12 @@ export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as co
 export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS] as const
 export type SkinCap = (typeof SKIN_CAP_CHOICES)[number]
 
-/** What each cap lets an app do in a room — the checkbox tooltip. */
-export const SKIN_CAP_LABELS: Record<SkinCap, string> = {
-  'thread:read': 'Read the Thread',
-  'thread:post': 'Post to the Thread',
-  'files:read': 'Read files (also shows heartbeat instructions)',
-  'files:write': 'Write files (not .k2/heartbeats)',
-  'tickets:read': 'Read tickets and get live ticket updates',
-  'tickets:post': 'Open, answer, assign and set status on tickets',
-  'wiki:read': 'Read the wiki',
-  'store:read': 'Read the workspace store',
-  'store:write': 'Change dump-table rows',
-  'activity:read': 'See when the agent is working',
-  'heartbeats:read': 'See heartbeats: schedule, next fire, history',
-  'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
-}
+/** What each cap lets an app do in a room — the checkbox tooltip. From the
+ *  one shared cap table (prd-zen-user-widgets-v2 UWA9, `k2-caps.generated`),
+ *  the same words the Garden review dialog's table holds. */
+export const SKIN_CAP_LABELS: Record<SkinCap, string> = Object.fromEntries(
+  SKIN_CAP_CHOICES.map((cap) => [cap, K2_CAPS[cap].label]),
+) as Record<SkinCap, string>
 
 /** AH24: the heartbeat caps are offered only when the server ships them. */
 export function skinCapChoices(appHeartbeats: boolean): readonly SkinCap[] {

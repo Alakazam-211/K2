@@ -824,3 +824,22 @@ describe('SkinAccessSection', () => {
     expect(h.daemonCliPost.mock.calls.map((c) => c[0])).not.toContain('skin/users')
   })
 })
+
+describe('TUWA10: Settings → Apps reads the shared cap table', () => {
+  it('SKIN_CAP_LABELS equals today’s twelve labels, word for word', () => {
+    expect(SKIN_CAP_LABELS).toEqual({
+      'thread:read': 'Read the Thread',
+      'thread:post': 'Post to the Thread',
+      'files:read': 'Read files (also shows heartbeat instructions)',
+      'files:write': 'Write files (not .k2/heartbeats)',
+      'tickets:read': 'Read tickets and get live ticket updates',
+      'tickets:post': 'Open, answer, assign and set status on tickets',
+      'wiki:read': 'Read the wiki',
+      'store:read': 'Read the workspace store',
+      'store:write': 'Change dump-table rows',
+      'activity:read': 'See when the agent is working',
+      'heartbeats:read': 'See heartbeats: schedule, next fire, history',
+      'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
+    })
+  })
+})

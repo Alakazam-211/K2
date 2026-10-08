@@ -50,8 +50,17 @@ pub fn handle_address_notice(body: &[u8]) -> CliResponse {
     // The peer-store transaction lock makes load → apply → save one step, so
     // two notices from the same peer cannot both pass the seq check. A
     // notice that changes nothing writes nothing.
+    let local = match notice::LocalIdentity::current() {
+        Ok(l) => l,
+        Err(e) => {
+            return json_status(
+                "500 Internal Server Error",
+                serde_json::json!({ "error": format!("local identity: {e}"), "code": "store_error" }),
+            )
+        }
+    };
     let tx = PeerStore::transact(|store| {
-        let applied = notice::apply(store, body, Utc::now())?;
+        let applied = notice::apply(store, body, &local, Utc::now())?;
         let label = store
             .get(&applied.fingerprint)
             .map(|p| p.label.clone())
@@ -283,6 +292,7 @@ mod tests {
             let n = notice::AddressNotice {
                 v: notice::NOTICE_VERSION,
                 fingerprint: f.clone(),
+                to_fingerprint: federation::local_fingerprint().expect("local fp"),
                 old_address: PeerAddress::new("afs", ""),
                 new_address: PeerAddress::new("k2n1-m4", ""),
                 issued_at: Utc::now().to_rfc3339(),

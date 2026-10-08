@@ -12,7 +12,8 @@
 //! ## Wire (`POST /cli/federation/address`, JSON)
 //!
 //! ```json
-//! { "notice": { "v": 1, "fingerprint": "<sha256 spki hex>",
+//! { "notice": { "v": 2, "fingerprint": "<sha256 spki hex>",
+//!               "to_fingerprint": "<the receiving server's fingerprint>",
 //!               "old_address": { "subdomain": "afs", "base_url": "" },
 //!               "new_address": { "subdomain": "k2n1-m4", "base_url": "" },
 //!               "issued_at": "<RFC 3339>", "seq": 1760000000000 },
@@ -22,7 +23,9 @@
 //! ## Receiver rules ([`apply`])
 //!
 //! unknown fingerprint → 403 `unknown_peer` (nothing changes); not Trusted →
-//! 403; bad signature → 403; `issued_at` older than 7 days → 409
+//! 403; bad signature → 403; a notice addressed to another server
+//! (`to_fingerprint` is not this server's) → 403 `wrong_recipient`;
+//! `issued_at` older than 7 days → 409
 //! `stale_notice`, more than 5 min ahead → 400 `issued_in_future`; `seq` at or
 //! below the last accepted seq from that peer → 409 `replay`. Then, per field
 //! that changed (`old != new`, `new` non-empty): the stored value is updated
@@ -65,8 +68,9 @@ use super::peers::{
     PeerStore, PeerTrust,
 };
 
-/// Notice wire version.
-pub const NOTICE_VERSION: u32 = 1;
+/// Notice wire version. v2 binds the notice to its receiver
+/// (`to_fingerprint`); the receiver accepts only v2.
+pub const NOTICE_VERSION: u32 = 2;
 /// Signature domain separation: these bytes precede the canonical JSON.
 pub const NOTICE_SIG_PREFIX: &str = "k2-federation-address-notice-v1\n";
 /// A notice older than this is refused by the receiver, and the sender
@@ -114,6 +118,9 @@ impl PeerAddress {
 pub struct AddressNotice {
     pub v: u32,
     pub fingerprint: String,
+    /// The server this notice is for. A notice captured from one peer is
+    /// refused by any other.
+    pub to_fingerprint: String,
     pub old_address: PeerAddress,
     pub new_address: PeerAddress,
     /// RFC 3339.
@@ -187,6 +194,7 @@ pub enum NoticeError {
     Stale,
     InFuture,
     Replay { seq: u64, last: u64 },
+    WrongRecipient,
     AddressMismatch,
     Store(String),
 }
@@ -198,7 +206,9 @@ impl NoticeError {
             Self::Decode(_) | Self::UnsupportedVersion(_) | Self::BadTime(_) | Self::InFuture => {
                 "400 Bad Request"
             }
-            Self::UnknownPeer | Self::NotTrusted | Self::Key(_) | Self::BadSignature => "403 Forbidden",
+            Self::UnknownPeer | Self::NotTrusted | Self::Key(_) | Self::BadSignature | Self::WrongRecipient => {
+                "403 Forbidden"
+            }
             Self::Stale | Self::Replay { .. } | Self::AddressMismatch => "409 Conflict",
             Self::Store(_) => "500 Internal Server Error",
         }
@@ -216,6 +226,7 @@ impl NoticeError {
             Self::Stale => "stale_notice",
             Self::InFuture => "issued_in_future",
             Self::Replay { .. } => "replay",
+            Self::WrongRecipient => "wrong_recipient",
             Self::AddressMismatch => "address_mismatch",
             Self::Store(_) => "store_error",
         }
@@ -237,6 +248,7 @@ impl std::fmt::Display for NoticeError {
             Self::Replay { seq, last } => {
                 write!(f, "seq {seq} is not newer than the last accepted seq {last}")
             }
+            Self::WrongRecipient => write!(f, "this notice is addressed to another server"),
             Self::AddressMismatch => write!(
                 f,
                 "this server stores a different address for that peer than the notice's old address"
@@ -294,9 +306,28 @@ fn field_step(stored: &str, old: &str, new: &str, same: fn(&str, &str) -> bool) 
     }
 }
 
+/// The receiving server, as [`apply`] needs it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalIdentity {
+    /// This server's federation fingerprint.
+    pub fingerprint: String,
+}
+
+impl LocalIdentity {
+    /// This server: its identity-key fingerprint.
+    pub fn current() -> Result<Self, String> {
+        Ok(Self { fingerprint: super::identity::fingerprint()? })
+    }
+}
+
 /// Receiver: verify `body` and apply it to `store` (the caller saves the
-/// store on `Ok`). Pure apart from the store mutation.
-pub fn apply(store: &mut PeerStore, body: &[u8], now: DateTime<Utc>) -> Result<Applied, NoticeError> {
+/// store when [`Applied::wrote`]). Pure apart from the store mutation.
+pub fn apply(
+    store: &mut PeerStore,
+    body: &[u8],
+    local: &LocalIdentity,
+    now: DateTime<Utc>,
+) -> Result<Applied, NoticeError> {
     let signed: SignedAddressNotice =
         serde_json::from_slice(body).map_err(|e| NoticeError::Decode(e.to_string()))?;
     let n = &signed.notice;
@@ -308,6 +339,9 @@ pub fn apply(store: &mut PeerStore, body: &[u8], now: DateTime<Utc>) -> Result<A
     verify(&signed, &peer.public_key_pem)?;
     if peer.trust != PeerTrust::Trusted {
         return Err(NoticeError::NotTrusted);
+    }
+    if n.to_fingerprint.trim() != local.fingerprint {
+        return Err(NoticeError::WrongRecipient);
     }
     let issued = DateTime::parse_from_rfc3339(n.issued_at.trim())
         .map_err(|e| NoticeError::BadTime(e.to_string()))?
@@ -589,6 +623,7 @@ pub fn due(key: &KeyPair, now: DateTime<Utc>) -> Result<Vec<DueNotice>, String> 
         let notice = AddressNotice {
             v: NOTICE_VERSION,
             fingerprint: my_fp.clone(),
+            to_fingerprint: fp.clone(),
             old_address: row.peer_known.clone(),
             new_address: row.target.clone(),
             issued_at: row.issued_at.to_rfc3339(),
@@ -764,6 +799,12 @@ mod tests {
     use crate::federation::FederationPeer;
     use crate::tunnel::test_support::with_temp_home;
 
+    const LOCAL_FP: &str = "local-fp";
+
+    fn local() -> LocalIdentity {
+        LocalIdentity { fingerprint: LOCAL_FP.to_string() }
+    }
+
     fn keypair() -> KeyPair {
         KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("gen key")
     }
@@ -784,6 +825,7 @@ mod tests {
         AddressNotice {
             v: NOTICE_VERSION,
             fingerprint: fp(k),
+            to_fingerprint: LOCAL_FP.to_string(),
             old_address: PeerAddress::new(old.0, old.1),
             new_address: PeerAddress::new(new.0, new.1),
             issued_at: at.to_rfc3339(),
@@ -830,7 +872,7 @@ mod tests {
         let now = Utc::now();
         let s = sign(&notice(&k, ("afs", ""), ("k2n1-m4", ""), 10, now), &k).expect("sign");
 
-        let applied = apply(&mut store, &body(&s), now).expect("apply");
+        let applied = apply(&mut store, &body(&s), &local(), now).expect("apply");
         assert_eq!(applied.changed, vec!["subdomain"]);
         let after = store.get(&f).expect("peer");
         assert_eq!(after.subdomain, "k2n1-m4");
@@ -847,6 +889,40 @@ mod tests {
     }
 
     #[test]
+    fn a_notice_for_another_server_is_refused() {
+        // A notice the sender addressed to C, replayed at D (both pinned the
+        // sender) changes nothing at D.
+        let k = keypair();
+        let mut store_d = PeerStore::default();
+        let f = trusted(&mut store_d, &k, "afs", "");
+        let before = store_d.get(&f).expect("peer").clone();
+        let mut n = notice(&k, ("afs", ""), ("evil", ""), 3, Utc::now());
+        n.to_fingerprint = "fp-of-c".to_string();
+        let s = sign(&n, &k).expect("sign");
+        let d = LocalIdentity { fingerprint: "fp-of-d".to_string() };
+        let err = apply(&mut store_d, &body(&s), &d, Utc::now()).expect_err("wrong recipient");
+        assert_eq!(err, NoticeError::WrongRecipient);
+        assert_eq!(err.status(), "403 Forbidden");
+        assert_eq!(store_d.get(&f).expect("peer"), &before);
+        // At C it applies.
+        let mut store_c = PeerStore::default();
+        trusted(&mut store_c, &k, "afs", "");
+        let c = LocalIdentity { fingerprint: "fp-of-c".to_string() };
+        apply(&mut store_c, &body(&s), &c, Utc::now()).expect("right recipient");
+    }
+
+    #[test]
+    fn a_v1_notice_is_refused() {
+        let k = keypair();
+        let mut store = PeerStore::default();
+        trusted(&mut store, &k, "afs", "");
+        let mut n = notice(&k, ("afs", ""), ("b", ""), 3, Utc::now());
+        n.v = 1;
+        let s = sign(&n, &k).expect("sign");
+        assert_eq!(apply(&mut store, &body(&s), &local(), Utc::now()), Err(NoticeError::UnsupportedVersion(1)));
+    }
+
+    #[test]
     fn a_notice_that_changes_nothing_writes_nothing() {
         let k = keypair();
         let mut store = PeerStore::default();
@@ -854,7 +930,7 @@ mod tests {
         let before = store.get(&f).expect("peer").clone();
         // The peer already stores the new address.
         let s = sign(&notice(&k, ("afs", ""), ("k2n1-m4", ""), 7, Utc::now()), &k).expect("sign");
-        let a = apply(&mut store, &body(&s), Utc::now()).expect("no-op is accepted");
+        let a = apply(&mut store, &body(&s), &local(), Utc::now()).expect("no-op is accepted");
         assert!(!a.wrote, "{a:?}");
         assert!(a.changed.is_empty());
         assert_eq!(store.get(&f).expect("peer"), &before, "not even the seq moves");
@@ -877,7 +953,7 @@ mod tests {
             notice: n,
             sig: base64::engine::general_purpose::STANDARD.encode(sig.as_ref()),
         };
-        assert_eq!(apply(&mut store, &body(&forged), Utc::now()), Err(NoticeError::BadSignature));
+        assert_eq!(apply(&mut store, &body(&forged), &local(), Utc::now()), Err(NoticeError::BadSignature));
         assert_eq!(store.get(&f).expect("peer"), &snapshot);
     }
 
@@ -889,7 +965,7 @@ mod tests {
         let f = trusted(&mut store, &k, "afs", "");
         let snapshot = store.list().to_vec();
         let s = sign(&notice(&stranger, ("afs", ""), ("evil", ""), 5, Utc::now()), &stranger).expect("sign");
-        let err = apply(&mut store, &body(&s), Utc::now()).expect_err("unknown");
+        let err = apply(&mut store, &body(&s), &local(), Utc::now()).expect_err("unknown");
         assert_eq!(err, NoticeError::UnknownPeer);
         assert_eq!(err.status(), "403 Forbidden");
         assert_eq!(store.list(), snapshot.as_slice());
@@ -913,11 +989,11 @@ mod tests {
             notice: n,
             sig: base64::engine::general_purpose::STANDARD.encode(sig.as_ref()),
         };
-        assert_eq!(apply(&mut store, &body(&forged), Utc::now()), Err(NoticeError::BadSignature));
+        assert_eq!(apply(&mut store, &body(&forged), &local(), Utc::now()), Err(NoticeError::BadSignature));
         assert_eq!(store.list(), snapshot.as_slice());
         // A's own notice only ever moves A.
         let s = sign(&notice(&a, ("alpha", ""), ("alpha2", ""), 6, Utc::now()), &a).expect("sign");
-        apply(&mut store, &body(&s), Utc::now()).expect("apply");
+        apply(&mut store, &body(&s), &local(), Utc::now()).expect("apply");
         assert_eq!(store.get(&fa).expect("a").subdomain, "alpha2");
         assert_eq!(store.get(&fb).expect("b").subdomain, "bravo");
     }
@@ -929,15 +1005,15 @@ mod tests {
         let f = trusted(&mut store, &k, "afs", "");
         let now = Utc::now();
         let first = sign(&notice(&k, ("afs", ""), ("b", ""), 100, now), &k).expect("sign");
-        apply(&mut store, &body(&first), now).expect("first");
+        apply(&mut store, &body(&first), &local(), now).expect("first");
         // The exact same bytes again.
         assert_eq!(
-            apply(&mut store, &body(&first), now),
+            apply(&mut store, &body(&first), &local(), now),
             Err(NoticeError::Replay { seq: 100, last: 100 })
         );
         // An older seq moving it back.
         let older = sign(&notice(&k, ("b", ""), ("afs", ""), 99, now), &k).expect("sign");
-        let err = apply(&mut store, &body(&older), now).expect_err("older");
+        let err = apply(&mut store, &body(&older), &local(), now).expect_err("older");
         assert_eq!(err.code(), "replay");
         assert_eq!(store.get(&f).expect("peer").subdomain, "b");
     }
@@ -949,11 +1025,11 @@ mod tests {
         trusted(&mut store, &k, "afs", "");
         let now = Utc::now();
         let stale = sign(&notice(&k, ("afs", ""), ("b", ""), 1, now - Duration::days(8)), &k).expect("sign");
-        assert_eq!(apply(&mut store, &body(&stale), now), Err(NoticeError::Stale));
+        assert_eq!(apply(&mut store, &body(&stale), &local(), now), Err(NoticeError::Stale));
         let future = sign(&notice(&k, ("afs", ""), ("b", ""), 2, now + Duration::minutes(10)), &k).expect("sign");
-        assert_eq!(apply(&mut store, &body(&future), now), Err(NoticeError::InFuture));
+        assert_eq!(apply(&mut store, &body(&future), &local(), now), Err(NoticeError::InFuture));
         let ok = sign(&notice(&k, ("afs", ""), ("b", ""), 3, now - Duration::days(6)), &k).expect("sign");
-        apply(&mut store, &body(&ok), now).expect("6 days old is inside the window");
+        apply(&mut store, &body(&ok), &local(), now).expect("6 days old is inside the window");
     }
 
     #[test]
@@ -962,11 +1038,11 @@ mod tests {
         let mut store = PeerStore::default();
         let f = store.upsert(FederationPeer::pin("p", "afs", k.public_key_pem()).expect("pin"));
         let s = sign(&notice(&k, ("afs", ""), ("b", ""), 1, Utc::now()), &k).expect("sign");
-        assert_eq!(apply(&mut store, &body(&s), Utc::now()), Err(NoticeError::NotTrusted));
+        assert_eq!(apply(&mut store, &body(&s), &local(), Utc::now()), Err(NoticeError::NotTrusted));
         store.set_trust(&f, PeerTrust::Trusted);
         // The owner here stores another name than the notice's old address.
         let s = sign(&notice(&k, ("other", ""), ("b", ""), 2, Utc::now()), &k).expect("sign");
-        assert_eq!(apply(&mut store, &body(&s), Utc::now()), Err(NoticeError::AddressMismatch));
+        assert_eq!(apply(&mut store, &body(&s), &local(), Utc::now()), Err(NoticeError::AddressMismatch));
         assert_eq!(store.get(&f).expect("peer").subdomain, "afs");
         assert_eq!(store.get(&f).expect("peer").address_seq, 0);
     }
@@ -981,7 +1057,7 @@ mod tests {
             &k,
         )
         .expect("sign");
-        let a = apply(&mut store, &body(&s), Utc::now()).expect("apply");
+        let a = apply(&mut store, &body(&s), &local(), Utc::now()).expect("apply");
         assert_eq!(a.changed, vec!["subdomain", "base_url"]);
         let p = store.get(&f).expect("peer");
         assert_eq!(p.subdomain, "k2n1-m4");
@@ -1071,7 +1147,7 @@ mod tests {
             let mut receiver = PeerStore::default();
             let my_fp_at_peer = trusted(&mut receiver, &me, "afs", "");
             let t1 = t0 + Duration::seconds(31);
-            let res = drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, t1) {
+            let res = drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer) }, t1) {
                 Ok(_) => SendResult::Http(200, "{}".to_string()),
                 Err(e) => SendResult::Http(409, e.to_string()),
             })
@@ -1156,7 +1232,7 @@ mod tests {
             let mut receiver = PeerStore::default();
             let f = trusted(&mut receiver, &me, "a", "");
             let t1 = t0 + Duration::seconds(2);
-            drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, t1) {
+            drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer) }, t1) {
                 Ok(_) => SendResult::Http(200, "{}".into()),
                 Err(e) => SendResult::Http(409, e.to_string()),
             })

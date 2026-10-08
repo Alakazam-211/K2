@@ -104,8 +104,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `activity` (prd-daemon-activity-and-thread-working-v1 S5).
 /// v12 = custom widgets (prd-zen-user-widgets-v2 UW42, UWB2, UWB25): the
 /// folder, manifest, placing, "you can't grant", the `k2` object, and
-/// "what's available"; the verb lists come from the verb catalog. (If look
-/// versions lands first, the integrator gives this the next free number.)
+/// "what's available"; the verb lists come from the verb catalog. Garden
+/// sync's text (synced vs own copy, `k2 zen sync` / `k2 zen news`, never
+/// write sync.json/news.json/.defaults/) rides the same v12.
 pub const SKILL_VERSION_ZEN: u32 = 12;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow

@@ -59,12 +59,33 @@ pub fn file_key_dir(home: &Path) -> PathBuf {
     vault_dir(home).join("key")
 }
 
+/// True when `k2_home` is the account's own `~/.k2` (password-database
+/// home, not `$HOME`) and no test harness marker is set.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn keychain_home(k2_home: &Path, real_home: Option<&Path>) -> bool {
+    if std::env::var_os("K2_TEST_AGENT_SHIM_DIR").is_some() {
+        return false;
+    }
+    let Some(real) = real_home else { return false };
+    let want = real.join(".k2");
+    match (std::fs::canonicalize(k2_home), std::fs::canonicalize(&want)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => k2_home == want,
+    }
+}
+
 /// The key store this box should use now.
 pub fn select_key_store(home: &Path) -> Arc<dyn KeyStore> {
     #[cfg(target_os = "macos")]
     {
-        let _ = home;
-        Arc::new(keychain::KeychainKeyStore::new())
+        // The login Keychain belongs to the account's own K2 home. A daemon
+        // started with another HOME (a test harness, a temp home) keeps its
+        // box key in a file there instead, so it never reads or replaces
+        // the account's real vault key.
+        if keychain_home(home, k2_core::agent_hooks::install::passwd_home().as_deref()) {
+            return Arc::new(keychain::KeychainKeyStore::new());
+        }
+        Arc::new(FileKeyStore::new(file_key_dir(home)))
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -392,6 +413,22 @@ mod upgrade_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A daemon on another HOME (tests, temp homes) never uses the
+    /// account's login Keychain; the account's own ~/.k2 does (outside a
+    /// test harness).
+    #[test]
+    fn only_the_accounts_own_home_uses_the_keychain() {
+        let d = k2_vault::fsutil::TestDir::new("kc-home");
+        let real = d.path().join("real");
+        std::fs::create_dir_all(real.join(".k2")).expect("mkdir");
+        let other = d.path().join("other").join(".k2");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        assert!(!super::keychain_home(&other, Some(&real)));
+        assert!(!super::keychain_home(&real.join(".k2"), None));
+        let marked = std::env::var_os("K2_TEST_AGENT_SHIM_DIR").is_some();
+        assert_eq!(super::keychain_home(&real.join(".k2"), Some(&real)), !marked);
+    }
+
     /// KV33: text K2 stores (here a ticket comment and an inbox note) never
     /// keeps a known secret value.
     #[test]

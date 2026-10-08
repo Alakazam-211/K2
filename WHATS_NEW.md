@@ -3,6 +3,35 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.1 — Gardens you build
+
+- **Build your own Zen widgets.** Ask an agent (or write it yourself) and a widget appears in your Garden, running in a sealed frame that can't reach the network or your files. You decide what each widget may see and do: open the Garden and click Review. Widgets that post to Thread show as "You · via <widget>". A standard library ships with K2 (three.js, Phaser, D3, ECharts, Lottie, Tone.js, Leaflet, KaTeX and more), and other libraries download on first use. `k2 zen widget new` gets an agent started.
+- **The Garden catalog, starting with Diary.** Settings → Gardens has a catalog you can browse and add from. Diary, a handwritten journal Garden, is the first entry; new users get it preinstalled. A small card next to What's new tells you when a new Garden arrives.
+- **Your Gardens stay yours.** Each Garden is either synced to K2's default (it gets our improvements) or your own copy (it never changes on update). Choose per Garden in Settings → Gardens. Gardens you customized became your own copy on this update, so nothing changed on screen.
+- **Thread survives a tab rename.** Renaming a chat or sidecar keeps its Thread working: old addresses still reach it, replies show the new address, and the agent is told its new name. Chats opened from history get their own Thread.
+- **Agents can use calendars.** `k2 calendar` lists, reads and drafts events on hosted inboxes (never sends invites on its own). Owners and IT agents can create groups and shared team calendars with `k2 hostmail group` and `k2 hostmail calendar share`. An assistant agent with access to a person's inbox sees that person's shared calendars.
+- **Hosted mail, steadier.** Mail to providers without IPv6 no longer gets stuck. `k2 hostmail status` shows the real certificate names and the last certificate error, `domain add` lists the A records you need, and spam rules that newer rule downloads broke are repaired. New: `k2 hostmail outbound`. `k2 hostmail backup plan` measures how much space a backup would need.
+- **Domains go live by themselves.** After you switch a domain's nameservers to K2, the server notices within minutes; no more `k2 domain refresh`.
+- **Message any agent by either name.** `k2 msg` works with a workspace's handle and its agent name. `k2 agent hire --name` keeps the name you give it.
+- **Move a chat to another tool.** `k2 workspace swap-canonical` moves a workspace's main chat to another AI tool and hands over the recent conversation. Thanks to Sterling Long (Luzzotica) for this one.
+
+**Security**
+- Published Apps can no longer be shown inside other websites. If you embed your App on your own site, allow it with `k2 publish frame <app> --allow https://your.site` (owner only). Apps published with `--cmd` run their own server: `k2 publish ps` warns when one sends no frame protection.
+- Stronger login protection against password spraying, without ever locking out your own logins through K2.
+- Only a person can answer a secret card, and an answered card can't be changed.
+- K2's own folder and databases are readable only by you, and tokens never appear on a command line.
+- Messages between servers are only delivered to workspaces and names that server actually lists.
+- Network, air-gap and companion settings, and "Reset settings", are owner-only.
+
+**Fixes**
+- Switching LLM tokens on a Mac works with large Claude logins, and every swap is checked and rolled back if anything goes wrong. If a swap failed on 0.45.0, sign that token in again.
+- Settings → LLMs shows the server you're looking at, not this computer.
+- A file that's too large gets a clear "too large" error instead of a dropped connection.
+
+**After updating**
+- If you saved a connection as `agent.md::<server>`, add it again with the agent's name.
+- Servers with the Postgres add-on get the safer database helper the next time the helper is reinstalled.
+
 ## 0.45.0 — See your agents work
 
 - **Thread shows the agent working.** While an agent works, Thread shows a live strip under your message: the time since you asked, the current step ("Running a command", "Thinking… 8s"), any subagents, and a Stop button. It stays up after the reply while subagents or background tasks are still running, and says plainly when the agent is stuck on a permission prompt or a question.

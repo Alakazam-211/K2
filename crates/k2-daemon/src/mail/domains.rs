@@ -1720,6 +1720,9 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
         // The returned table carries the read-time A row from
         // mail_server.public_ipv4 (0.45.1 A3); hold the mail_server lock so
         // a sibling test's seed can't change it between the two reads.
+        // `acme.dev` is also the domain the supervisor tests provision (under
+        // the mail lock); without it their row raced this one ("already
+        // added", seen on the Mac run).
         let _g = crate::mail::mail_server_test_lock();
         let engine = FakeEngine::ok();
         // Punycode + case + FQDN dot at the API boundary (pre-mortem

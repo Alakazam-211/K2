@@ -3118,11 +3118,7 @@ mod tests {
 
     impl StubHome {
         fn new() -> Self {
-            let exe = std::env::current_exe().expect("test binary path");
-            let home = exe
-                .parent()
-                .expect("test binary dir")
-                .join(format!("k2-v2spawn-home-{}", uuid::Uuid::new_v4().simple()));
+            let home = crate::test_support::stub_home_dir("v2spawn");
             std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME");
             let home_var = k2_core::test_env::EnvVar::set("HOME", &home);
             assert!(

@@ -37,6 +37,33 @@ pub(crate) fn lock_home() -> k2_core::test_env::EnvLock {
     k2_core::test_env::lock()
 }
 
+/// A fresh (not yet created) `$HOME` path for tests that exec an
+/// absolute-path stub: it must sit OUTSIDE the OS temp roots, because the
+/// temp-HOME spawn belt refuses non-system programs there. Next to the test
+/// binary when that dir is not under a temp root; otherwise (a target dir
+/// under `/tmp`, as on a dev Mac) under `/var/tmp`, which the guard does not
+/// treat as temp. Unique per call; the caller removes it.
+pub(crate) fn stub_home_dir(tag: &str) -> std::path::PathBuf {
+    use k2_core::terminal::agent_spawn_guard::GuardEnv;
+    let name = format!("k2-{tag}-home-{}", uuid::Uuid::new_v4().simple());
+    let is_temp = |dir: &std::path::Path| {
+        GuardEnv { home: Some(dir.join(&name)), ..GuardEnv::from_process() }.home_is_temp()
+    };
+    let exe = std::env::current_exe().expect("test binary path");
+    let beside_binary = exe.parent().expect("test binary dir").to_path_buf();
+    let base = if !is_temp(&beside_binary) {
+        beside_binary
+    } else {
+        std::path::PathBuf::from("/var/tmp")
+    };
+    assert!(
+        !is_temp(&base),
+        "no stub HOME location outside the OS temp roots (tried beside the test binary and \
+         /var/tmp); is TMPDIR=/var/tmp?"
+    );
+    base.join(name)
+}
+
 /// RATCHET (quiet-gate PRD §5.3): no raw env mutation in k2-daemon `src/`.
 /// Tests change env only through `k2_core::test_env` guards (the one env
 /// lock, restore on drop). Production sites are listed with their counts;

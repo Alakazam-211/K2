@@ -191,8 +191,10 @@ pub mod upstream_dial;
 pub mod update_routes;
 pub mod v2_session_map;
 pub mod v2_spawn;
-// K2 vault V4 (prd-k2-vault-v1 KV18, VS5): the single outbound gate.
+// K2 vault V4 (prd-k2-vault-v1 KV18, VS5/VS6): the single outbound gate and
+// the fetch engine built on it.
 pub mod egress;
+pub mod vault_fetch;
 pub mod wake_headless;
 pub mod watchdog;
 pub mod workspace_layouts_dedup;

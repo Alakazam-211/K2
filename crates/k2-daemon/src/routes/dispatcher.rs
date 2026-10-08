@@ -3092,6 +3092,13 @@ async fn handle_one_request(
                     }
                 }
             } else {
+                // Consume the peeked GET head. Without this the keep-alive
+                // loop answered the same GET again and again on one socket
+                // (a client that read late got several bodies glued
+                // together: tunnel_disable_unpair_integration, ~1 in 3
+                // runs under CPU load). The keep-alive ratchet missed it
+                // because the POST branch above does consume.
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                 match k2_core::tunnel::get_config_view() {
                     Ok(view) => crate::cli::CliResponse::ok_json(
                         serde_json::to_string(&view)

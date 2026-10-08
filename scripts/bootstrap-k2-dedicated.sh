@@ -70,6 +70,34 @@ RAW_BASE="https://raw.githubusercontent.com/Alakazam-211/K2/main"
 log() { printf '\033[1;35m[dedicated]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[dedicated] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Credentials never ride curl's argv (any OS user can read argv with `ps`).
+# k2_curl hands curl its URL (the owner token stays in the query, exactly
+# as before), an optional Authorization header and an optional body as a
+# config on stdin (`curl --config -`). printf is a builtin: nothing here
+# puts the values on an argv. The wire request is unchanged.
+#   k2_curl URL BODY BEARER [curl args...]   (BODY/BEARER may be "")
+_curl_cfg_quote() {
+	# \ and " escaped, newline -> \n (curl's config parser undoes exactly
+	# that). sed reads the value on stdin; the sentinel x keeps a trailing
+	# newline. Same behaviour on every bash (no ${s//} backslash quirks).
+	local s
+	s="$(printf '%sx' "$1" | LC_ALL=C sed -e 's/[\\"]/\\&/g' -e '$!s/$/\\n/' | LC_ALL=C tr -d '\n')"
+	printf '"%s"' "${s%x}"
+}
+k2_curl() {
+	local url="$1" body="$2" bearer="$3"
+	shift 3
+	{
+		printf 'url = %s\n' "$(_curl_cfg_quote "$url")"
+		if [ -n "$bearer" ]; then
+			printf 'header = %s\n' "$(_curl_cfg_quote "Authorization: Bearer $bearer")"
+		fi
+		if [ -n "$body" ]; then
+			printf 'data = %s\n' "$(_curl_cfg_quote "$body")"
+		fi
+	} | curl --config - "$@"
+}
+
 [ "$(id -u)" = "0" ] || die "run as root"
 case "$(uname -m)" in
 	x86_64|amd64) ARCH="amd64" ;;
@@ -310,7 +338,7 @@ for _ in $(seq 1 90); do
 	if [ -n "$PORT" ] && [ -n "$TOKEN" ]; then
 		BASE="http://127.0.0.1:${PORT}"
 		if curl -fsS "$BASE/boot-status" 2>/dev/null | grep -q '"phase":"ready"'; then
-			AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/cli/auth/whoami?token=$TOKEN")
+			AUTH_CODE=$(k2_curl "$BASE/cli/auth/whoami?token=$TOKEN" "" "" -s -o /dev/null -w '%{http_code}')
 			[ "$AUTH_CODE" = "200" ] && break
 		fi
 	fi
@@ -391,24 +419,24 @@ case "$SBX" in
 		if [ "$K2_SPAWN_PROBE" = "1" ]; then
 			log "boot-status has no api.sandboxes (pre-0.40.30 daemon) — running spawn probe"
 			PROBE_OK=1
-			CREATE=$(curl -sS -X POST "$BASE/cli/api-keys/create?token=$TOKEN" \
-				-H 'Content-Type: application/json' \
-				-d '{"label":"k2-dedicated-bootstrap-probe"}' 2>/dev/null || echo '{}')
+			CREATE=$(k2_curl "$BASE/cli/api-keys/create?token=$TOKEN" \
+				'{"label":"k2-dedicated-bootstrap-probe"}' "" -sS -X POST \
+				-H 'Content-Type: application/json' 2>/dev/null || echo '{}')
 			PKEY=$(printf '%s' "$CREATE" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("key",""))' 2>/dev/null || true)
 			PID_KEY=$(printf '%s' "$CREATE" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
 			if [ -n "$PKEY" ]; then
 				PRES=$(mktemp)
-				PCODE=$(curl -sS -o "$PRES" -w '%{http_code}' -X POST "$BASE/v1/sandboxes" \
-					-H "Authorization: Bearer $PKEY" -H 'Content-Type: application/json' \
-					-d '{"prompt":"k2 dedicated bootstrap acceptance probe","timeout_secs":60}' \
+				PCODE=$(k2_curl "$BASE/v1/sandboxes" \
+					'{"prompt":"k2 dedicated bootstrap acceptance probe","timeout_secs":60}' "$PKEY" \
+					-sS -o "$PRES" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
 					|| echo 000)
 				if [ "$PCODE" = "200" ] && grep -q '"sessionId"' "$PRES"; then
 					PROBE_OK=0
 				fi
 				rm -f "$PRES"
 				# revoke the probe key (best-effort)
-				[ -n "$PID_KEY" ] && curl -sS -X POST "$BASE/cli/api-keys/revoke?token=$TOKEN" \
-					-H 'Content-Type: application/json' -d "{\"id\":\"$PID_KEY\"}" >/dev/null 2>&1 || true
+				[ -n "$PID_KEY" ] && k2_curl "$BASE/cli/api-keys/revoke?token=$TOKEN" \
+					"{\"id\":\"$PID_KEY\"}" "" -sS -X POST -H 'Content-Type: application/json' >/dev/null 2>&1 || true
 			fi
 			check "spawn probe: POST /v1/sandboxes spawned a real microVM cell" "$PROBE_OK" \
 				"got HTTP ${PCODE:-n/a} (409 = daemon fail-closed: sandbox stack or feature unavailable)"

@@ -60,6 +60,7 @@ import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import type { ZenControlCheck, ZenRect } from '@/lib/zen/zen-controls'
 import { ZenErrorBoundary } from './ZenErrorBoundary'
 import { ZenConfigErrorBanner, ZenSafeBanner } from './ZenBanners'
+import { useZenSyncPreviewBar } from './ZenSyncPreviewBar'
 import { ZenChromeCluster, zenClusterSide } from './ZenChromeCluster'
 import { ZenPage } from './ZenPage'
 import { ZenK2ChromeContext, type ZenK2Chrome } from './ZenTemplateControls'
@@ -407,11 +408,12 @@ export function ZenRoot(): React.JSX.Element {
     [themes, activeTheme, themePick, themeError, inSafeMode],
   )
 
+  const syncPreviewBar = useZenSyncPreviewBar(inSafeMode ? null : gardenId)
   const banner = safe ? (
     <ZenSafeBanner cause={safe} onTryAgain={clearSafeMode} onExit={exitZen} />
   ) : page && page.errors.length > 0 ? (
     <ZenConfigErrorBanner issue={page.errors[0]} />
-  ) : null
+  ) : syncPreviewBar
 
   return (
     <div

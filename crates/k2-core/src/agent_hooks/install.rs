@@ -116,8 +116,9 @@ fn gemini_settings_path(home: &Path) -> PathBuf {
 /// It reads ALL of stdin, forwards at most 1 MiB as the `POST /hook/event`
 /// body (a larger payload goes as headers only, `X-K2-Hook-Truncated: 1`
 /// plus the event name), tries the per-cell socket with the scoped Bearer
-/// and then loopback TCP with the disk owner token, prints nothing, and
-/// always exits 0. The payload is held in memory only, never in a file.
+/// and then loopback TCP with the same scoped Bearer (never the owner
+/// token), prints nothing, and always exits 0. The payload is held in
+/// memory only, never in a file.
 pub fn generate_hook_script(daemon_version: &str) -> String {
     format!(
         r#"#!/bin/bash
@@ -179,6 +180,10 @@ HDR=(-H "Content-Type: application/json"
 # the Authorization header goes in a curl config on fd 3 (a here-string;
 # stdin carries the payload). Tokens hold no `"` or `\`, so no escaping.
 
+# Only the session passport authenticates a hook; without one, nothing
+# is sent.
+[ -z "$SCOPED" ] && exit 0
+
 # Per-cell socket first, with the scoped token as a Bearer header.
 if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
     if printf '%s' "$BODY" | curl -sf -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
@@ -189,15 +194,15 @@ if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
     fi
 fi
 
-# Loopback TCP with the owner token from disk (read at exec time, so a
-# daemon restart with a new port or token never strands a long session).
+# Retry over loopback TCP with the SAME passport (the cell socket can be
+# stale after a daemon restart; the port is read at exec time). The
+# daemon accepts the passport there only for this session's own pane.
 PORT="$(cat "$HOME/.k2/heartbeat.port" 2>/dev/null)"
 [ -z "$PORT" ] && exit 0
-TOKEN="$(cat "$HOME/.k2/heartbeat.token" 2>/dev/null)"
 printf '%s' "$BODY" | curl -s -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
     "${{HDR[@]}}" \
     --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1 \
-    3<<<"header = \"Authorization: Bearer $TOKEN\""
+    3<<<"header = \"Authorization: Bearer $SCOPED\""
 exit 0
 "#,
         max_body = super::envelope::MAX_BODY_BYTES,
@@ -1360,7 +1365,8 @@ mod tests {
         assert_eq!(body, payload.as_bytes(), "body must be byte-identical");
     }
 
-    /// No socket: loopback TCP with the disk owner token. Over 1 MiB: a
+    /// A stale cell socket: the retry goes over loopback TCP with the SAME
+    /// session passport, never the owner token on disk. Over 1 MiB: a
     /// header-only post naming the event.
     #[cfg(unix)]
     #[test]
@@ -1377,18 +1383,66 @@ mod tests {
         payload.push_str("\"}");
         let (code, stdout, _) = run_script(
             home.path(),
-            &[("K2SO_PANE_ID", "pane-tcp"), ("K2_HOOK_AGENT_PID", "77")],
+            &[
+                ("K2SO_PANE_ID", "pane-tcp"),
+                ("K2_HOOK_AGENT_PID", "77"),
+                ("K2_HOOK_SOCK", "/tmp/k2-stale-no-such.sock"),
+                ("K2_HOOK_TOKEN", "sid.scoped-tcp"),
+            ],
             payload.as_bytes(),
         );
         let raw = server.join().expect("server");
         assert_eq!(code, 0);
         assert!(stdout.is_empty());
         let (head, body) = split_request(&raw);
-        assert!(head.contains("authorization: bearer owner-tok"), "{head}");
+        assert!(head.contains("authorization: bearer sid.scoped-tcp"), "{head}");
+        assert!(!head.contains("owner-tok"), "owner token must never be sent: {head}");
         assert!(head.contains("x-k2-pane: pane-tcp"));
         assert!(head.contains("x-k2-hook-truncated: 1"));
         assert!(head.contains("x-k2-hook-event: posttooluse"), "{head}");
         assert!(body.is_empty(), "a truncated post carries no body");
+    }
+
+    /// No session passport: the script sends nothing at all (it never
+    /// falls back to the owner token on disk).
+    #[cfg(unix)]
+    #[test]
+    fn t_s1b_script_without_a_passport_sends_nothing() {
+        let home = TempHome::new("s1b-nopass");
+        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-tok").unwrap();
+        std::fs::write(home.path().join(".k2/daemon.token"), "owner-tok").unwrap();
+        let (code, stdout, _) = run_script(
+            home.path(),
+            &[("K2_PANE_ID", "pane-nopass")],
+            b"{\"hook_event_name\":\"Stop\"}",
+        );
+        assert_eq!(code, 0);
+        assert!(stdout.is_empty());
+        listener.set_nonblocking(true).expect("nonblocking");
+        match listener.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => panic!("accept: {e}"),
+            Ok((_, peer)) => panic!("the script must not connect without a passport (peer {peer})"),
+        }
+    }
+
+    /// The generated script never reads the owner token files.
+    #[test]
+    fn script_never_references_the_owner_token() {
+        let s = generate_hook_script("0.44.3");
+        for needle in ["heartbeat.token", "daemon.token", "$TOKEN"] {
+            assert!(!s.contains(needle), "hook script must not reference {needle}");
+        }
+        assert!(s.contains("heartbeat.port"), "the TCP retry still reads the port");
+        assert_eq!(
+            s.matches("Authorization: Bearer $SCOPED").count(),
+            2,
+            "both arms carry only the session passport"
+        );
     }
 
     /// The daemon down: exit 0 fast, nothing printed. No pane: no post.
@@ -1461,7 +1515,8 @@ mod tests {
         assert!(head.contains("authorization: bearer sid.scoped-argv-secret"), "{head}");
         assert_eq!(body, b"{\"hook_event_name\":\"Stop\"}", "stdin payload still the body");
 
-        // Arm 2: loopback TCP with the disk owner token.
+        // Arm 2: loopback TCP retry with the SAME session passport (no
+        // socket); the owner token on disk is never read.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
@@ -1469,17 +1524,23 @@ mod tests {
         let server = serve_one(ServerSock::Tcp(listener), "204 No Content");
         let (code, _, _) = run_script(
             home.path(),
-            &[("PATH", &path_env), ("K2_PANE_ID", "pane-argv")],
+            &[
+                ("PATH", &path_env),
+                ("K2_PANE_ID", "pane-argv"),
+                ("K2_HOOK_TOKEN", "sid.tcp-argv-secret"),
+            ],
             b"{\"hook_event_name\":\"Stop\"}",
         );
         let raw = server.join().expect("server");
         assert_eq!(code, 0);
         let (head, _) = split_request(&raw);
-        assert!(head.contains("authorization: bearer owner-argv-secret"), "{head}");
+        assert!(head.contains("authorization: bearer sid.tcp-argv-secret"), "{head}");
+        assert!(!head.contains("owner-argv-secret"), "owner token must never be sent: {head}");
 
         let log = std::fs::read_to_string(&argv_log).expect("the shim must have run");
         assert_eq!(log.lines().count(), 2, "one curl per arm: {log}");
         assert!(!log.contains("scoped-argv-secret"), "scoped token on curl argv: {log}");
+        assert!(!log.contains("tcp-argv-secret"), "passport on curl argv: {log}");
         assert!(!log.contains("owner-argv-secret"), "owner token on curl argv: {log}");
         assert!(!log.to_ascii_lowercase().contains("authorization"), "{log}");
     }

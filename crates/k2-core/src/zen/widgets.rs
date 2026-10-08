@@ -55,6 +55,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "zen-sync-v1",
     "thread-latest",
     "thread-widget-origin",
+    "thread-address-stable",
     "daemon-activity",
 ];
 

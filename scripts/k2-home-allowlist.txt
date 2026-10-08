@@ -19,3 +19,7 @@ cli/k2 :: K2_HOME="${HOME}/.k2so"
 # compat symlink still works (0.40.33/34 regression class). Not app code.
 scripts/vm-newuser-pair-guest.sh :: *
 scripts/vm-newuser-pair-smoke.sh :: *
+# Owner-only permission sweep (0.45.1): a REAL legacy ~/.k2so dir from a
+# mixed-version install still holds an old k2so.db, so the sweep tightens
+# it too. Reads/chmods only; never creates or writes ~/.k2so.
+crates/k2-core/src/private_home.rs :: home.join(".k2so")
